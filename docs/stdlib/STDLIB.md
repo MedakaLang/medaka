@@ -161,6 +161,7 @@ and prepended to every program by the compiler.
   - `abs : a -> a` — absolute value
   - `signum : a -> a` — sign as `-1`, `0`, or `1`
   - `fromInt : Int -> a` — convert an `Int` literal to this numeric type
+  - `rem : a -> a -> a` — signed remainder (backs `%`)
 
 - ✅ `Bounded a` — types with a minimum and maximum value
   - `minBound : a` — smallest representable value

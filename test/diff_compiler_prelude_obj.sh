@@ -96,62 +96,8 @@ trap 'rm -rf "$W"' EXIT
 # twins below deliberately use RDict and must be rejected by BOTH native paths;
 # choosing either visible declaration by bare method name silently changes the
 # source call's saturation.
-cat > "$W/arity_static.mdk" <<'MDK'
-interface Forge a where
-  add : a -> a
-
-impl Forge Int where
-  add x = x + 100
-
-forge : Int -> Int
-forge x = add x
-
-main = println (forge 23)
-MDK
-
-cat > "$W/arity_dynamic_direct.mdk" <<'MDK'
-interface Forge a where
-  add : a -> a
-
-impl Forge Int where
-  add x = x + 100
-
-forge : Forge a => a -> a
-forge x = add x
-
-main = println (forge 23)
-MDK
-
-cat > "$W/arity_dynamic_value.mdk" <<'MDK'
-interface Forge a where
-  add : a -> a
-
-impl Forge Int where
-  add x = x + 100
-
-forge : Forge a => a -> a
-forge x =
-  let f = add
-  f x
-
-main = println (forge 23)
-MDK
-
-cat > "$W/arity_dynamic_three_args.mdk" <<'MDK'
-interface Forge a where
-  add : a -> a -> a -> a
-
-impl Forge Int where
-  add x y z = x + y + z
-
-forge : Forge a => a -> a -> a -> a
-forge x y z = add x y z
-
-main = println (forge 1 2 3)
-MDK
-
 SAMPLE="$SAMPLE
-$W/arity_static.mdk"
+$ROOT/test/prelude_obj_fixtures/arity_static.mdk"
 printf '123\n' > "$W/arity_static.expected"
 
 checked=0
@@ -189,7 +135,7 @@ expectArityReject() {
   fi
 }
 
-for src in "$W"/arity_dynamic_*.mdk; do
+for src in "$ROOT"/test/prelude_obj_fixtures/arity_dynamic_*.mdk; do
   label="$(basename "$src" .mdk)"
   expected=123
   [ "$label" = arity_dynamic_three_args ] && expected=6
@@ -235,7 +181,7 @@ for OPT in -O0 -O2; do
       diff "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out" | head -10
     fi
   done
-  for src in "$W"/arity_dynamic_*.mdk; do
+  for src in "$ROOT"/test/prelude_obj_fixtures/arity_dynamic_*.mdk; do
     expectArityReject inline "$src" "$OPT" "$pobj"
     expectArityReject prebuilt "$src" "$OPT" "$pobj"
   done
