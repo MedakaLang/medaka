@@ -26,7 +26,7 @@
 #     test/build_diff_fixtures/tail_over_application_arity_conformance.mdk
 #   * constrained-function (CDict) under/exact/over-application and tail calls ->
 #     test/build_diff_fixtures/dict_call_arity_conformance.mdk
-# Both are auto-enrolled by the corpus `*.mdk` glob, so their verdicts are read
+# These are auto-enrolled by the corpus `*.mdk` glob, so their verdicts are read
 # out of the corpus scan rather than paying a second build. #1034 and #826 were
 # likewise fixed and deleted; the report-only rows that named them are gone with
 # their paths.
@@ -42,13 +42,13 @@
 # R8: a corpus program that fails to BUILD is silently dropped from the scan
 # with no trace in the report (the failed-build message went to stderr only).
 # build_one now also appends the label to a build-failures tally, and the
-# summary prints an n_build_failures count. A build failure on either named
-# regression fixture (REG_1101_LABEL / REG_1648_LABEL) is a hard FAIL — a
-# regression fixture that didn't build is UNSCANNED, not "clean".
+# summary prints an n_build_failures count. A build failure on any named
+# regression fixture (REG_1101_LABEL / REG_1648_LABEL / DICT_LABEL) is a hard
+# FAIL — a regression fixture that didn't build is UNSCANNED, not "clean".
 #
 # Usage:  sh test/diff_compiler_call_arity.sh
 # Exit:   0 the regression fixtures are clean and present (and a nonzero corpus
-#           was scanned, and neither regression fixture failed to build);
+#           was scanned, and no regression fixture failed to build);
 #         1 a regression fixture WAS flagged, missing, or failed to build, or
 #           the corpus was empty;
 #         2 native medaka/emitter missing, no C compiler, or no python3.
@@ -213,6 +213,7 @@ REG_1648_PRESENT="$(cd "$FIX" && ls -- impl_requires_dict_arity_conformance.mdk 
 # for surplus, musttail only for an exact self-tail call, and ordinary recursion
 # when the self-call is nested under arithmetic.
 DICT_LABEL="corpus-dict_call_arity_conformance"
+DICT_SKEW="$(grep "^$DICT_LABEL: " "$CORPUS_OUT" 2>/dev/null)"
 DICT_PRESENT="$(cd "$FIX" && ls -- dict_call_arity_conformance.mdk 2>/dev/null)"
 DICT_IR="$WORK/$DICT_LABEL.bin.ll"
 DICT_SHAPE_FAIL=0
@@ -340,6 +341,7 @@ echo "-- #1648 regression (impl-\`requires\` dict-param arity, FIXED) --"
 echo "1648 regression fixture : $([ -n "$REG_1648" ] && echo "FLAGGED  ($REG_1648)" || echo clean)"
 echo ""
 echo "-- constrained-function call shapes --"
+echo "CDict skew fixture  : $([ -n "$DICT_SKEW" ] && echo "FLAGGED  ($DICT_SKEW)" || echo clean)"
 echo "CDict shape fixture : $([ "$DICT_SHAPE_FAIL" -eq 0 ] && echo clean || echo FAILED)"
 
 fail=0
@@ -376,7 +378,7 @@ if [ "$n_programs_scanned" -eq 0 ]; then
   fail=1
 fi
 
-# R8: a build failure on either named regression fixture means it was never
+# R8: a build failure on any named regression fixture means it was never
 # SCANNED — that is not "clean", and reporting it as clean would be a false pass.
 if grep -qx "$REG_1101_LABEL" "$BUILD_FAILURES_OUT" 2>/dev/null; then
   echo "FAIL: #1101 regression fixture (tail_over_application_arity_conformance.mdk)"
@@ -390,6 +392,10 @@ if grep -qx "$REG_1648_LABEL" "$BUILD_FAILURES_OUT" 2>/dev/null; then
 fi
 if [ "$DICT_SHAPE_FAIL" -ne 0 ]; then
   echo "FAIL: constrained-function under/exact/over/tail call shape assertion failed."
+  fail=1
+fi
+if [ -n "$DICT_SKEW" ]; then
+  echo "FAIL: constrained-function call/define arity skew detected: $DICT_SKEW"
   fail=1
 fi
 
