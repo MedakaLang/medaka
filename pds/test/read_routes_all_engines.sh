@@ -20,6 +20,12 @@
 # and needs no state: the two non-XRPC well-known paths as their own route
 # class, every other non-XRPC path still 404ing, and every repository-bearing
 # read refusing cleanly on an unconfigured server instead of answering.
+#
+# The second cell group (#2912) is the APPVIEW-PROXY seam, here for the same
+# reason: deciding whether a client's `atproto-proxy` header may have a service
+# credential minted for it reads the registry and the account and no store, so
+# all three engines can grade it. The socket half — a real proxied read, a real
+# stalled upstream, the limiter's charge — is pds/test/serve_e2e.sh's.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
@@ -45,6 +51,11 @@ require_empty() {
 
 DID='did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9'
 DIDDOC='{"@context":["https://www.w3.org/ns/did/v1"],"id":"did:web:pds.example","service":[{"id":"#atproto_pds","type":"AtprotoPersonalDataServer","serviceEndpoint":"https://pds.example"}]}'
+# The ONE appview the proxy cells are configured for, and the `jti` every
+# admitted credential must carry: the hex of the driver's fixed per-request
+# nonce, 32 characters wide, written out here rather than recomputed.
+AVDID='did:web:appview.example'
+JTI='05101b26313c47525d68737e89949faa'
 
 # The expected transcript is hand-authored here, not captured: each line is the
 # answer the atproto route is DEFINED to give, decided before anything ran.
@@ -67,7 +78,21 @@ CELL get-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL get-latest-commit-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged
 CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged
-cells: 18/18 repository-free routes
+CELL proxy-header-absent PASS decision=not-proxied signed=none
+CELL proxy-admitted-timeline PASS decision=admitted target=/xrpc/app.bsky.feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000
+CELL proxy-admitted-service-fragment PASS decision=admitted target=/xrpc/app.bsky.actor.getProfile?actor=$DID iss=$DID aud=$AVDID#bsky_appview lxm=app.bsky.actor.getProfile jti=$JTI iat=1700000000
+CELL proxy-header-name-case-insensitive PASS decision=admitted target=/xrpc/app.bsky.feed.getAuthorFeed?actor=$DID iss=$DID aud=$AVDID lxm=app.bsky.feed.getAuthorFeed jti=$JTI iat=1700000000
+CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none
+CELL proxy-audience-not-a-did PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy does not name a service DID signed=none
+CELL proxy-header-repeated PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy must not be repeated signed=none
+CELL proxy-protected-method-unregistered PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.admin.deleteAccount signed=none
+CELL proxy-protected-method-registered PASS decision=refused status=400 error=InvalidRequest message=this server answers com.atproto.server.createSession itself and does not proxy it signed=none
+CELL proxy-forward-on-local-miss PASS decision=not-proxied signed=none
+CELL proxy-pds-hosted-preferences PASS decision=not-proxied signed=none
+CELL proxy-no-appview-configured PASS decision=refused status=400 error=InvalidRequest message=No service configured for app.bsky.feed.getTimeline signed=none
+CELL proxy-forwardable-requires-get PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET signed=none
+CELL proxy-header-on-well-known PASS decision=not-proxied signed=none
+cells: 32/32 repository-free routes and proxy dispositions
 TOTAL: PASS
 EOF
 
@@ -86,7 +111,13 @@ check_cells() {
     || fail "$label missed the resolveHandle cell"
   grep -F -q 'CELL get-repo-unconfigured PASS status=400 error=RepoNotFound' "$output" \
     || fail "$label missed the unconfigured sync.getRepo refusal"
-  grep -F -q 'cells: 18/18 repository-free routes' "$output" || fail "$label cell count is incomplete"
+  grep -F -q "CELL proxy-admitted-timeline PASS decision=admitted target=/xrpc/app.bsky.feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI" "$output" \
+    || fail "$label missed the admitted proxied read's claim set"
+  grep -F -q 'CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none' "$output" \
+    || fail "$label missed the confused-deputy refusal"
+  grep -F -q 'CELL proxy-protected-method-registered PASS decision=refused' "$output" \
+    || fail "$label missed the refusal of a method this server answers itself"
+  grep -F -q 'cells: 32/32 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
@@ -151,8 +182,48 @@ grep -F -q 'CELL wellknown-did-json FAIL' "$WORK/mutated.out" || {
   fail 'did:web hostname mutation failed for an unrelated reason'
 }
 
+# ── second direct-red mutation: the confused deputy itself ──────────────────
+# Point the "foreign" service DID at the configured appview, so the cell that
+# asks what happens to a header naming somebody else is instead asking about a
+# header naming the one permitted audience. The seam then admits it and prints a
+# claim set where the transcript expects `signed=none`.
+#
+# This is the mutation that matters for #2912: a grading of the audience that
+# compared nothing would pass the refusal cell by coincidence, because the
+# refusal and the admission are both "something happened". Only an expectation
+# that names the WHOLE outcome — claims or none — can tell them apart, and this
+# mutation is what proves the expectation does.
+mkdir -p "$WORK/mutation-audience"
+cp -R "$ROOT/pds" "$WORK/mutation-audience/pds"
+
+python3 - "$WORK/mutation-audience/pds/test/read_routes_all_engines_main.mdk" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+old = 'foreignServiceDid = "did:web:other.example"'
+new = 'foreignServiceDid = "did:web:appview.example"'
+text = path.read_text()
+if text.count(old) != 1:
+    raise SystemExit(f'mutation anchor count is {text.count(old)}, expected 1')
+path.write_text(text.replace(old, new))
+PY
+
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-audience/pds/test/read_routes_all_engines_main.mdk" -o "$WORK/mutated-audience" > "$WORK/mutated-audience-build.log" 2>&1 || {
+  cat "$WORK/mutated-audience-build.log" >&2
+  fail 'foreign-audience mutation failed to build'
+}
+if "$WORK/mutated-audience" > "$WORK/mutated-audience.out" 2>&1; then
+  fail 'foreign-audience mutation unexpectedly passed'
+fi
+grep -F -q 'CELL proxy-foreign-audience FAIL decision=admitted' "$WORK/mutated-audience.out" || {
+  cat "$WORK/mutated-audience.out" >&2
+  fail 'foreign-audience mutation failed for an unrelated reason'
+}
+
 cmp "$WORK/source-pristine.mdk" "$SOURCE" \
   || fail 'read_routes_all_engines_main.mdk (the live source of truth) was left modified by the mutation test — it should only ever touch the throwaway mutation-tree copy'
 
 echo 'MUTATION did-web-hostname PASS direct-red'
-echo 'PASS: PDS repository-free read routes — 18/18 named cells; eval == native == Wasm; direct-red mutation; bytes restored'
+echo 'MUTATION proxy-foreign-audience PASS direct-red'
+echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 32/32 named cells; eval == native == Wasm; two direct-red mutations; bytes restored'

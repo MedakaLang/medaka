@@ -66,12 +66,20 @@ import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
 import lib.repo.{Repo, repoCommitCid, repoExportBlocks, repoLatestCommit}
 import lib.sync_event.{syncCommitEventFor, syncCommitFrame}
 import lib.resource_limits.{rateLimitWindowSeconds}
+import lib.proxy.{
+  UpstreamAnswer,
+  proxyUpstreamFailureResponse,
+  proxyUpstreamResponse,
+}
 import lib.server_core.{
+  ProxyAdmission(..),
+  ProxyDecision(..),
   RequestContext(..),
   Server,
   UpgradeAdmission(..),
   UpgradeDecision(..),
   accountDid,
+  classifyProxy,
   classifyUpgrade,
   handleBytes,
   serverAccount,
@@ -94,6 +102,7 @@ import lib.xrpc.{
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileWrite}
+import shell.egress.{Egress, egressAppview, egressCall}
 import shell.eventlog.{
   eventLogDiscardStaged,
   eventLogNextSequence,
@@ -529,6 +538,8 @@ classMessage CreateSessionClass =
   "too many createSession attempts for this identity in the current window"
 classMessage RepoExportClass =
   "too many repository exports for this identity in the current window"
+classMessage ProxyClass =
+  "too many proxied appview reads for this identity in the current window"
 
 intHeader : String -> Int -> Header
 intHeader name value = match makeHeader name (toUtf8 "\{value}")
@@ -711,20 +722,44 @@ export
 readBufferLive : ReadBuffer -> Array Int
 readBufferLive buf = sliceClamped 0 (readBufferLen buf) (readBufferBacking buf)
 
-{- | Accept connections until the listener fails or is closed, running each on
-   its own task, never more than `maxConcurrentConnections` at a time.
-   `trustedProxy` is `--trusted-proxy`'s value, unchanged for the life of the
-   listener: whether this process's peer is a configured trusted proxy is an
-   operator assertion about the deployment, not a per-connection fact this
-   process can observe. -}
+{- | The deployment facts that are fixed for the life of the listener, travelling
+   as one value because they travel together through every function below.
+
+   `TrustedProxy` is `--trusted-proxy`'s value: whether this process's peer is a
+   configured trusted proxy is an operator assertion about the deployment, not a
+   per-connection fact this process can observe. The `Egress` is `None` unless
+   `--appview-did` and `--egress-port` were both given, and `None` is what makes
+   a server configured for no appview answer every `atproto-proxy` header the
+   way it did before there was an outbound path at all.
+
+   One value rather than two parameters, for the reason `admissionClasses`
+   states about its own arguments: these are threaded through eleven functions
+   whose argument lists are already long, and a pair of them crossed at one
+   call site would charge the wrong identity or sign for the wrong appview
+   while every signature still typechecked. -}
+export data Serving = Serving TrustedProxy (Option Egress)
+
+export
+makeServing : TrustedProxy -> Option Egress -> Serving
+makeServing trustedProxy egress = Serving trustedProxy egress
+
+export
+servingTrustedProxy : Serving -> TrustedProxy
+servingTrustedProxy (Serving trustedProxy _) = trustedProxy
+
+servingEgress : Serving -> Option Egress
+servingEgress (Serving _ egress) = egress
+
+-- | Accept connections until the listener fails or is closed, running each on
+-- its own task, never more than `maxConcurrentConnections` at a time.
 export
 runServer : Server ->
   String ->
   Ref Store ->
   Listener ->
-  TrustedProxy ->
+  Serving ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-runServer server dir storeRef lis trustedProxy = defer
+runServer server dir storeRef lis serving = defer
   active <- liftIO (u => Ref 0)
   unframed <- liftIO (u => Ref 0)
   subscriptions <- liftIO (u => Ref 0)
@@ -738,7 +773,7 @@ runServer server dir storeRef lis trustedProxy = defer
     unframed
     limiterRef
     (SubscriptionCensus subscriptions)
-    trustedProxy
+    serving
 
 acceptLoop : Server ->
   String ->
@@ -748,9 +783,9 @@ acceptLoop : Server ->
   Ref Int ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-acceptLoop server dir storeRef lis active unframed limiterRef census trustedProxy =
+acceptLoop server dir storeRef lis active unframed limiterRef census serving =
   defer
     accepted <- A.accept lis
     acceptStep
@@ -762,7 +797,7 @@ acceptLoop server dir storeRef lis active unframed limiterRef census trustedProx
       unframed
       limiterRef
       census
-      trustedProxy
+      serving
       accepted
 
 acceptStep : Server ->
@@ -773,11 +808,11 @@ acceptStep : Server ->
   Ref Int ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Result String Connection ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
 acceptStep _ _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
-acceptStep server dir storeRef lis active unframed limiterRef census trustedProxy (Ok conn) =
+acceptStep server dir storeRef lis active unframed limiterRef census serving (Ok conn) =
   -- Both ceilings close the connection the same way, without a read:
   -- answering it would need the very socket work either ceiling exists to
   -- bound. A connection is charged to the un-framed census here, before it
@@ -785,16 +820,7 @@ acceptStep server dir storeRef lis active unframed limiterRef census trustedProx
   if !active >= maxConcurrentConnections
     || !unframed >= maxUnframedConnections then defer
     _ <- A.close conn
-    acceptLoop
-      server
-      dir
-      storeRef
-      lis
-      active
-      unframed
-      limiterRef
-      census
-      trustedProxy
+    acceptLoop server dir storeRef lis active unframed limiterRef census serving
   else
     let () = active := !active + 1
     let () = unframed := !unframed + 1
@@ -806,7 +832,7 @@ acceptStep server dir storeRef lis active unframed limiterRef census trustedProx
           storeRef
           limiterRef
           census
-          trustedProxy
+          serving
           conn
           active
           unframed)
@@ -819,7 +845,7 @@ acceptStep server dir storeRef lis active unframed limiterRef census trustedProx
         unframed
         limiterRef
         census
-        trustedProxy
+        serving
 
 -- Both counters are decremented on every exit path because the close and the
 -- decrement are the continuation of the loop, not something inside it. The
@@ -831,12 +857,12 @@ serveConnection : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   Ref Int ->
   Ref Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> Unit
-serveConnection server dir storeRef limiterRef census trustedProxy conn active unframed =
+serveConnection server dir storeRef limiterRef census serving conn active unframed =
   defer
     held <- liftIO (u => Ref True)
     _ <- connectionLoop
@@ -845,7 +871,7 @@ serveConnection server dir storeRef limiterRef census trustedProxy conn active u
       storeRef
       limiterRef
       census
-      trustedProxy
+      serving
       conn
       (UnframedSlot unframed held)
       (readBufferNew ())
@@ -868,13 +894,13 @@ connectionLoop : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-connectionLoop server dir storeRef limiterRef census trustedProxy conn slot pending firstRequest =
+connectionLoop server dir storeRef limiterRef census serving conn slot pending firstRequest =
   defer
     deadline <- deadlineAfter requestTimeout
     headerDeadline <- deadlineAfter headerTimeout
@@ -884,7 +910,7 @@ connectionLoop server dir storeRef limiterRef census trustedProxy conn slot pend
       storeRef
       limiterRef
       census
-      trustedProxy
+      serving
       conn
       slot
       (Deadlines headerDeadline deadline)
@@ -903,7 +929,7 @@ frameLoop : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   Deadlines ->
@@ -911,7 +937,7 @@ frameLoop : Server ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-frameLoop server dir storeRef limiterRef census trustedProxy conn slot deadlines buf scan firstRequest =
+frameLoop server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   let scanned =
     scanRequestBoundaryWithin (readBufferBacking buf) (readBufferLen buf) 0 scan
   match scanned
@@ -923,7 +949,7 @@ frameLoop server dir storeRef limiterRef census trustedProxy conn slot deadlines
         storeRef
         limiterRef
         census
-        trustedProxy
+        serving
         conn
         slot
         buf
@@ -943,7 +969,7 @@ frameLoop server dir storeRef limiterRef census trustedProxy conn slot deadlines
         storeRef
         limiterRef
         census
-        trustedProxy
+        serving
         conn
         slot
         deadlines
@@ -958,7 +984,7 @@ framePending : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   Deadlines ->
@@ -966,7 +992,7 @@ framePending : Server ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-framePending server dir storeRef limiterRef census trustedProxy conn slot deadlines buf scan firstRequest =
+framePending server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   match deadlines
     Deadlines headerDeadline deadline => defer
       late <- expired deadline
@@ -982,7 +1008,7 @@ framePending server dir storeRef limiterRef census trustedProxy conn slot deadli
           storeRef
           limiterRef
           census
-          trustedProxy
+          serving
           conn
           slot
           deadlines
@@ -995,7 +1021,7 @@ readMore : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   Deadlines ->
@@ -1003,7 +1029,7 @@ readMore : Server ->
   HttpScan ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-readMore server dir storeRef limiterRef census trustedProxy conn slot deadlines buf scan firstRequest =
+readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
     received <- A.recvWithin (silenceBudget scan) conn readChunkBytes
     match received
@@ -1019,7 +1045,7 @@ readMore server dir storeRef limiterRef census trustedProxy conn slot deadlines 
             storeRef
             limiterRef
             census
-            trustedProxy
+            serving
             conn
             slot
             deadlines
@@ -1051,14 +1077,14 @@ respond : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   ReadBuffer ->
   Int ->
   Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-respond server dir storeRef limiterRef census trustedProxy conn slot buf boundary firstRequest =
+respond server dir storeRef limiterRef census serving conn slot buf boundary firstRequest =
   defer
     nowSeconds <- liftIO (u => floatToInt (now ()))
     respondAt
@@ -1067,7 +1093,7 @@ respond server dir storeRef limiterRef census trustedProxy conn slot buf boundar
       storeRef
       limiterRef
       census
-      trustedProxy
+      serving
       conn
       slot
       buf
@@ -1080,7 +1106,7 @@ respondAt : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   ReadBuffer ->
@@ -1088,7 +1114,7 @@ respondAt : Server ->
   Bool ->
   Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-respondAt server dir storeRef limiterRef census trustedProxy conn slot buf boundary firstRequest nowSeconds =
+respondAt server dir storeRef limiterRef census serving conn slot buf boundary firstRequest nowSeconds =
   let parsed = parseRequestAt (readBufferBacking buf) 0 boundary
   let keepAlive = match parsed
     Ok request => requestKeepAlive request
@@ -1097,7 +1123,7 @@ respondAt server dir storeRef limiterRef census trustedProxy conn slot buf bound
   let charged =
     applyRateLimit
       limiterRef
-      (admissionIdentity trustedProxy parsed)
+      (admissionIdentity (servingTrustedProxy serving) parsed)
       (admissionClasses firstRequest parsed)
       nowSeconds
   match charged
@@ -1108,7 +1134,7 @@ respondAt server dir storeRef limiterRef census trustedProxy conn slot buf bound
         storeRef
         limiterRef
         census
-        trustedProxy
+        serving
         conn
         slot
         rest
@@ -1125,7 +1151,7 @@ respondAt server dir storeRef limiterRef census trustedProxy conn slot buf bound
             storeRef
             limiterRef
             census
-            trustedProxy
+            serving
             conn
             slot
             rest
@@ -1137,31 +1163,181 @@ respondAt server dir storeRef limiterRef census trustedProxy conn slot buf bound
             storeRef
             limiterRef
             census
-            trustedProxy
+            serving
             conn
             slot
             rest
             False
             (serializeResponse refusal)
         NotAnUpgrade => defer
-          response <- liftIO (u =>
-            applyRequest
-              server
-              dir
-              storeRef
-              (sliceClamped 0 boundary (readBufferBacking buf)))
-          sendAndContinue
-            server
-            dir
-            storeRef
-            limiterRef
-            census
-            trustedProxy
-            conn
-            slot
-            rest
-            keepAlive
-            response
+          proxy <- liftIO (u =>
+            proxyDecisionFor server serving nowSeconds parsed)
+          match proxy
+            ProxyAdmitted admission =>
+              forwardProxied
+                server
+                dir
+                storeRef
+                limiterRef
+                census
+                serving
+                conn
+                slot
+                rest
+                keepAlive
+                nowSeconds
+                (admissionIdentity (servingTrustedProxy serving) parsed)
+                admission
+            ProxyRefused refusal =>
+              sendAndContinue
+                server
+                dir
+                storeRef
+                limiterRef
+                census
+                serving
+                conn
+                slot
+                rest
+                keepAlive
+                (serializeResponse refusal)
+            NotProxied => defer
+              response <- liftIO (u =>
+                applyRequest
+                  server
+                  dir
+                  storeRef
+                  (sliceClamped 0 boundary (readBufferBacking buf)))
+              sendAndContinue
+                server
+                dir
+                storeRef
+                limiterRef
+                census
+                serving
+                conn
+                slot
+                rest
+                keepAlive
+                response
+
+{- | Whether this request asked to be proxied, asked of the pure core
+   (`lib.server_core`'s `classifyProxy`) after the upgrade question and before
+   `applyRequest`.
+
+   A buffer that did not parse never asked: `classifyProxy` grades a `Request`,
+   and there is not one. A server with no configured appview is handed `None`
+   and refuses every `atproto-proxy` header, which is what keeps a deployment
+   that configured no appview answering exactly as it did before.
+
+   The nonce drawn here is what identifies any token minted for this request
+   (`jti`), so it comes from `osEntropyBytes` per request, the same source
+   `upgradeDecision` and `applyRequest` draw their own from. -}
+proxyDecisionFor : Server ->
+  Serving ->
+  Int ->
+  Result HttpParseFailure Request ->
+  <Rand> ProxyDecision
+proxyDecisionFor _ _ _ (Err _) = NotProxied
+proxyDecisionFor server serving nowSeconds (Ok request) =
+  classifyProxy
+    server
+    RequestContext {
+      nowSeconds = nowSeconds,
+      nonce = osEntropyBytes requestNonceBytes,
+    }
+    (map egressAppview (servingEgress serving))
+    request
+
+{- | Make the one outbound call an admitted proxied read authorizes, and answer
+   the client with what came back.
+
+   The `ProxyClass` charge is taken HERE and not in `admissionClasses`, because
+   only this point knows that a forward is actually going to happen: the class
+   bounds outbound calls, and charging it from the nsid alone would charge a
+   request that the audience check then refused, or one a server with no
+   configured appview was never going to forward. A refusal at the class costs
+   the client a 429 and this server no outbound work at all.
+
+   Nothing about the call is decided here. `admission` already carries the
+   target and the exact claim set, both produced by the pure classifier; this
+   function chooses the identity it charges and nothing else.
+
+   `None` for the egress is unreachable — a `ProxyAdmitted` decision is only
+   produced when an `AppviewPolicy` was supplied, and the only source of one is
+   a configured `Egress` — and it is answered 502 rather than by a panic: a
+   reachability argument is not a reason to add a crash path to the one
+   function a client can reach over the network. -}
+forwardProxied : Server ->
+  String ->
+  Ref Store ->
+  Ref RateLimitState ->
+  SubscriptionCensus ->
+  Serving ->
+  Connection ->
+  UnframedSlot ->
+  ReadBuffer ->
+  Bool ->
+  Int ->
+  ClientIdentity ->
+  ProxyAdmission ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+forwardProxied server dir storeRef limiterRef census serving conn slot rest keepAlive nowSeconds identity admission =
+  match applyRateLimit limiterRef identity [ProxyClass] nowSeconds
+    Some refusal =>
+      sendAndContinue
+        server
+        dir
+        storeRef
+        limiterRef
+        census
+        serving
+        conn
+        slot
+        rest
+        keepAlive
+        (serializeResponse refusal)
+    None => match servingEgress serving
+      None =>
+        sendAndContinue
+          server
+          dir
+          storeRef
+          limiterRef
+          census
+          serving
+          conn
+          slot
+          rest
+          keepAlive
+          (serializeResponse proxyUpstreamFailureResponse)
+      Some egress => defer
+        answered <- egressCall egress admission.target admission.serviceAuth
+        sendAndContinue
+          server
+          dir
+          storeRef
+          limiterRef
+          census
+          serving
+          conn
+          slot
+          rest
+          keepAlive
+          (proxyAnswerBytes answered)
+
+{- | The bytes a proxied read answers with.
+
+   Every way the call could fail collapses to one 502: which of them happened —
+   the proxy refused the connection, a budget ran out, the answer did not decode
+   — is this server's business and tells a client nothing it can act on, and
+   distinguishing them in the body would describe this deployment's internals to
+   whoever asked. -}
+proxyAnswerBytes : Result String UpstreamAnswer -> Array Int
+proxyAnswerBytes (Err _) = serializeResponse proxyUpstreamFailureResponse
+proxyAnswerBytes (Ok answer) = match proxyUpstreamResponse answer
+  Err _ => serializeResponse proxyUpstreamFailureResponse
+  Ok response => serializeResponse response
 
 {- | Whether this request is a subscription upgrade, asked of the pure core
    (`lib.server_core`'s `classifyUpgrade`) before `applyRequest` is called.
@@ -1216,13 +1392,13 @@ admitSubscription : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   ReadBuffer ->
   UpgradeAdmission ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-admitSubscription server dir storeRef limiterRef census trustedProxy conn slot rest admission =
+admitSubscription server dir storeRef limiterRef census serving conn slot rest admission =
   if not (claimSubscription census) then
     sendAndContinue
       server
@@ -1230,7 +1406,7 @@ admitSubscription server dir storeRef limiterRef census trustedProxy conn slot r
       storeRef
       limiterRef
       census
-      trustedProxy
+      serving
       conn
       slot
       rest
@@ -1263,14 +1439,14 @@ sendAndContinue : Server ->
   Ref Store ->
   Ref RateLimitState ->
   SubscriptionCensus ->
-  TrustedProxy ->
+  Serving ->
   Connection ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
   Array Int ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-sendAndContinue server dir storeRef limiterRef census trustedProxy conn slot rest keepAlive responseBytes =
+sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive responseBytes =
   defer
     sent <- A.sendAllWithin writeTimeout conn responseBytes
     match sent
@@ -1283,7 +1459,7 @@ sendAndContinue server dir storeRef limiterRef census trustedProxy conn slot res
             storeRef
             limiterRef
             census
-            trustedProxy
+            serving
             conn
             slot
             rest

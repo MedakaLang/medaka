@@ -12,12 +12,20 @@ MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 SERVE_SRC="$ROOT/pds/serve.mdk"
 CLIENT_SRC="$ROOT/pds/test/serve_client_main.mdk"
 SUBSCRIBE_SRC="$ROOT/pds/test/serve_subscribe_main.mdk"
+STUB_SRC="$ROOT/pds/test/appview_stub_main.mdk"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-serve-e2e.XXXXXX")
 SERVER_PID=""
+# The stub appviews the proxy cases forward to. They outlive individual servers
+# (one stub serves several cases), so they are cleaned up here rather than case
+# by case, and an abandoned one would hold a port for the rest of the run.
+STUB_PIDS=""
 
 cleanup() {
   [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null
+  for pid in $STUB_PIDS; do
+    kill "$pid" 2>/dev/null || true
+  done
   rm -rf "$WORK"
 }
 trap cleanup EXIT HUP INT TERM
@@ -78,6 +86,13 @@ then
   fail 'native serve_subscribe_main.mdk build failed'
 fi
 
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$STUB_SRC" \
+  -o "$WORK/appview" > "$WORK/build_appview.log" 2>&1
+then
+  cat "$WORK/build_appview.log" >&2
+  fail 'native appview_stub_main.mdk build failed'
+fi
+
 # ── fixed fixture identity, mirroring store_persistence_main's convention ──
 DID='did:plc:servee2egatefixture00001'
 HANDLE='alice.test'
@@ -117,6 +132,17 @@ TOKEN_SECRET_HEX='7f1c0a6d2b93e45880ac31f6d5e27b04913ca8e6f27d4b51a03c8e19d6b472
 # and `printf %s\n` leaves, and the server strips exactly one.
 PASSWORD='s-sessions e2e gate password'
 
+# The ONE service an `atproto-proxy` header may name on the proxy servers below,
+# and a second DID no server here is configured for: the confused-deputy case is
+# entirely about the difference between them.
+APPVIEW_DID='did:web:appview.test'
+ATTACKER_DID='did:web:attacker.example'
+# The stub answers 203 rather than 200 deliberately. The status a proxied read
+# returns must be the APPVIEW's, so a PDS that composed its own 200 around a
+# forwarded body would pass a case expecting 200 and fails this one.
+STUB_STATUS=203
+TIMELINE='/xrpc/app.bsky.feed.getTimeline?limit=2'
+
 DATA="$WORK/data"
 mkdir -p "$DATA"
 printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
@@ -145,6 +171,38 @@ wait_for_port() {
     sleep 0.1
   done
   return 1
+}
+
+# The same readiness contract as `wait_for_port`, for a stub appview: it binds
+# port 0 and names the port the kernel gave it, so no case has to guess a free
+# one. `$1` is the log of its stdout, `$2` the pid to watch.
+wait_for_stub_port() {
+  logfile=$1
+  pid=$2
+  i=0
+  while [ "$i" -lt 100 ]; do
+    if grep -F 'appview-stub: listening on 127.0.0.1:' "$logfile" >/dev/null 2>&1
+    then
+      sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$logfile" | head -1
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    i=$((i + 1))
+    sleep 0.1
+  done
+  return 1
+}
+
+# How many calls a stub appview has logged. The confused-deputy case turns on
+# this count NOT moving, so it is read the same way before and after.
+stub_calls() {
+  if [ -f "$1" ]; then
+    grep -c '^call ' "$1" || true
+  else
+    echo 0
+  fi
 }
 
 start_server() {
@@ -1210,4 +1268,215 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, and the accepted non-loopback-plus-trusted-proxy combination actually binding and serving'
+# ── sixth and seventh --data dirs: the appview proxy (#2912) ────────────────
+# A proxied read is the first thing this server does that makes an OUTBOUND call
+# and the first thing that signs with the account's repo key for an audience a
+# CLIENT named. Both halves are graded: what a forwarded call carries and what it
+# cost (cases 44, 45, 47), and what a silent upstream can do to everything else
+# the process is in the middle of (case 46).
+#
+# Two stubs and two servers, because one stub must never answer and a server's
+# egress port is fixed when it starts.
+
+"$WORK/appview" answer 0 "$WORK/stub.log" "$STUB_STATUS" \
+  >"$WORK/stub.out" 2>"$WORK/stub.err" &
+STUB_ANSWER_PID=$!
+STUB_PIDS="$STUB_PIDS $STUB_ANSWER_PID"
+STUBPORT=$(wait_for_stub_port "$WORK/stub.out" "$STUB_ANSWER_PID") || {
+  cat "$WORK/stub.err" >&2
+  fail 'the stub appview did not report readiness'
+}
+
+DATAPX="$WORK/data-proxy"
+mkdir -p "$DATAPX"
+# `--trusted-proxy` is on for case 47 alone, which needs two distinct client
+# identities to show the proxied-read ceiling refuses one without refusing the
+# other. Cases 44-46 send no `X-Forwarded-For` and so share the one `direct`
+# bucket, exactly as they would on a server without the flag.
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATAPX" --port 0 --init --trusted-proxy \
+  --appview-did "$APPVIEW_DID" --egress-port "$STUBPORT" \
+  >"$WORK/servepx.out" 2>"$WORK/servepx.err" &
+SERVER_PID=$!
+PORTPX=$(wait_for_port "$WORK/servepx.out") || {
+  cat "$WORK/servepx.err" >&2
+  fail 'proxy server did not report readiness'
+}
+require_empty "$WORK/servepx.err" 'proxy server startup'
+
+# 44. a proxied read end to end: the answer a client gets back is the stub
+#    appview's own — its status code, not a 200 this server composed — and the
+#    credential it was reached with names the configured audience and the
+#    requested method. The `aud`/`lxm` assertion is made TWICE over, on two
+#    sides: in the stub's log, which is what the appview saw, and in the body
+#    the stub echoed them into, which is what the client saw. A PDS that
+#    answered a proxied read out of its own state would fail both.
+client proxy-read "$PORTPX" "$APPVIEW_DID" "$TIMELINE" "$STUB_STATUS" \
+  '"lxm":"app.bsky.feed.getTimeline"' \
+  || fail 'case 44: a proxied read did not return the appview answer'
+grep -F -q "call aud=$APPVIEW_DID lxm=app.bsky.feed.getTimeline iss=$DID" \
+  "$WORK/stub.log" || {
+  cat "$WORK/stub.log" >&2
+  fail 'case 44: the credential the appview received did not name the configured audience and the requested method'
+}
+grep -F -q "target=$TIMELINE" "$WORK/stub.log" \
+  || fail 'case 44: the forwarded target was not the client'"'"'s own'
+
+# 44b. a header naming a SERVICE OF the configured DID (`did:web:x#bsky_appview`)
+#    is proxied, and the credential's audience is the BARE DID: `aud` is a DID,
+#    and the service id is not part of it. A peer checking `aud` against its own
+#    DID would refuse a token carrying the fragment, so this is the difference
+#    between a proxied read that works against a real appview and one that 401s.
+client proxy-read "$PORTPX" "$APPVIEW_DID#bsky_appview" "$TIMELINE" \
+  "$STUB_STATUS" '"appview":"stub"' \
+  || fail 'case 44b: a header naming a service of the configured DID was not proxied'
+if grep -F -q '#bsky_appview' "$WORK/stub.log"; then
+  cat "$WORK/stub.log" >&2
+  fail 'case 44b: the service fragment reached the credential the appview was handed'
+fi
+
+# 44c. every credential has its own `jti`, 32 hex characters of it. A constant
+#    one is a replayable credential, and a gate that only asserted the claim was
+#    PRESENT would accept one.
+JTI1=$(sed -n 's/^call .* jti=\([0-9a-f]*\) .*/\1/p' "$WORK/stub.log" | sed -n 1p)
+JTI2=$(sed -n 's/^call .* jti=\([0-9a-f]*\) .*/\1/p' "$WORK/stub.log" | sed -n 2p)
+[ "${#JTI1}" -eq 32 ] \
+  || fail "case 44c: jti is ${#JTI1} characters wide, expected 32"
+[ "$JTI1" != "$JTI2" ] \
+  || fail 'case 44c: two proxied reads were signed with the same jti'
+
+# 45. THE CONFUSED DEPUTY (#2912's S0). `atproto-proxy` is client-controlled and
+#    it names the audience a credential is minted for, so every one of these
+#    must be refused with NOTHING SIGNED: a service this server does not proxy
+#    to, a method it answers itself, and a method it neither serves nor forwards.
+#    Each is graded on the refusal's own MESSAGE and not just its status — all
+#    three are 400 InvalidRequest, so a status-only assertion could not tell
+#    which defense fired, or whether any did.
+#
+#    "Nothing was signed" is asserted structurally by the pure cells
+#    (`pds/test/read_routes_all_engines.sh`: a refusal carries no claim set, and
+#    the `proxy-foreign-audience` mutation proves that cell discriminates). What
+#    is added here is that no call LEFT this box — and the final read is what
+#    makes that absence mean something: it proves the stub's log was live and
+#    writable at that moment, so the three missing lines are three calls that
+#    were never made rather than three lines that could not be written.
+CALLS_BEFORE=$(stub_calls "$WORK/stub.log")
+client proxy-read "$PORTPX" "$ATTACKER_DID" "$TIMELINE" 400 \
+  'atproto-proxy names a service this server does not proxy to' \
+  || fail 'case 45: a header naming another service was not refused'
+client proxy-read "$PORTPX" "$APPVIEW_DID" \
+  '/xrpc/com.atproto.server.createSession' 400 'does not proxy it' \
+  || fail 'case 45: a method this server answers itself was not refused'
+client proxy-read "$PORTPX" "$APPVIEW_DID" \
+  '/xrpc/com.atproto.admin.deleteAccount' 400 \
+  'No service configured for com.atproto.admin.deleteAccount' \
+  || fail 'case 45: a method this server neither serves nor forwards was not refused'
+CALLS_AFTER=$(stub_calls "$WORK/stub.log")
+[ "$CALLS_BEFORE" = "$CALLS_AFTER" ] || {
+  cat "$WORK/stub.log" >&2
+  fail "case 45: a refused request still reached the appview ($CALLS_BEFORE -> $CALLS_AFTER calls)"
+}
+client proxy-read "$PORTPX" "$APPVIEW_DID" "$TIMELINE" "$STUB_STATUS" \
+  '"appview":"stub"' \
+  || fail 'case 45: the proxy stopped working after a refusal'
+CALLS_LIVE=$(stub_calls "$WORK/stub.log")
+[ "$CALLS_LIVE" -eq $((CALLS_AFTER + 1)) ] \
+  || fail 'case 45: the stub log did not record the call that immediately followed the refusals, so its silence during them proves nothing'
+
+# 47. the proxied-read class: one inbound request became one outbound call, so
+#    the amplification is metered. Driven over ONE connection (the connections
+#    class is charged per connection and its ceiling is lower, so a
+#    connection-per-request flood would observe that one instead), followed by a
+#    plain read from the SAME identity and a proxied read from a SECOND one —
+#    the class has to be independent and per-identity, not merely a lower global
+#    number.
+wait_for_window_room
+client rl-proxy "$PORTPX" 203.0.113.61 "$APPVIEW_DID" "$TIMELINE" 61 429 \
+  || fail 'case 47: the proxied-read class did not refuse at its ceiling'
+client rl-req "$PORTPX" 203.0.113.61 1 200 \
+  || fail 'case 47: a plain read was refused by the proxied-read ceiling'
+client rl-proxy "$PORTPX" 203.0.113.62 "$APPVIEW_DID" "$TIMELINE" 1 "$STUB_STATUS" \
+  || fail "case 47: a second identity was refused by the first one's ceiling"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servepx.err" 'proxy server (post-run)'
+require_empty "$WORK/stub.err" 'stub appview'
+
+# 46. HEAD-OF-LINE BLOCKING. The outbound call runs on the same cooperative
+#    scheduler as the accept loop, so an upstream that accepts and never answers
+#    is a denial of service against everything else in flight unless every wait
+#    on that call parks. Three things must keep working while one connection is
+#    stuck on a silent appview: an open `subscribeRepos` subscription (which must
+#    still receive live events, so the writes that produce them must also still
+#    be accepted and persisted), an unrelated plain read, and the stalled call
+#    itself, which is owed its own answer — a 502 — rather than being held
+#    forever.
+#
+#    The discriminator is the `kill -0`: the unrelated work is required to have
+#    completed WHILE the proxied call was still outstanding. A server that
+#    serialized them would finish the stalled call first, and that check is what
+#    this case would otherwise be unable to distinguish.
+"$WORK/appview" stall 0 >"$WORK/stall.out" 2>"$WORK/stall.err" &
+STUB_STALL_PID=$!
+STUB_PIDS="$STUB_PIDS $STUB_STALL_PID"
+STALLPORT=$(wait_for_stub_port "$WORK/stall.out" "$STUB_STALL_PID") || {
+  cat "$WORK/stall.err" >&2
+  fail 'case 46: the stalling stub appview did not report readiness'
+}
+
+DATAHOL="$WORK/data-proxy-stall"
+mkdir -p "$DATAHOL"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATAHOL" --port 0 --init \
+  --appview-did "$APPVIEW_DID" --egress-port "$STALLPORT" \
+  >"$WORK/servehol.out" 2>"$WORK/servehol.err" &
+SERVER_PID=$!
+PORTHOL=$(wait_for_port "$WORK/servehol.out") || {
+  cat "$WORK/servehol.err" >&2
+  fail 'case 46: the stalled-upstream server did not report readiness'
+}
+require_empty "$WORK/servehol.err" 'case 46 startup'
+
+HOLLOGIN=$(client login "$PORTHOL" "$HANDLE" "$PASSWORD") \
+  || fail 'case 46: login against the stalled-upstream server'
+HOLACCESS=${HOLLOGIN%% *}
+
+client proxy-read "$PORTHOL" "$APPVIEW_DID" "$TIMELINE" 502 '' \
+  >"$WORK/stalled.out" 2>&1 &
+STALLED_PID=$!
+# Long enough for the request to have been received and the outbound connection
+# dialed, and far short of the outbound call's own budget.
+sleep 0.5
+
+subclient live "$PORTHOL" "$HOLACCESS" "$DID" "$COLLECTION" pxlive \
+  || fail 'case 46: a subscription stopped receiving live events while a proxied call was stalled'
+client query "$PORTHOL" "$DID" \
+  || fail 'case 46: an unrelated read was not answered while a proxied call was stalled'
+
+kill -0 "$STALLED_PID" 2>/dev/null || {
+  cat "$WORK/stalled.out" >&2
+  fail 'case 46: the stalled proxied call had already finished, so nothing was proven about what runs alongside one — either the server serialized them, or the unrelated work took longer than the outbound silence budget'
+}
+wait "$STALLED_PID" || {
+  cat "$WORK/stalled.out" >&2
+  fail 'case 46: a stalled upstream was not answered 502'
+}
+# Its own graded line, which went to a file rather than this transcript because
+# it was driven in the background. Printed here so the run reads in order.
+cat "$WORK/stalled.out"
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servehol.err" 'case 46 (post-run)'
+require_empty "$WORK/stall.err" 'stalling stub appview'
+
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, a confused-deputy refusal for an unconfigured audience, for a method this server answers itself and for one it neither serves nor forwards — none of them reaching the appview, proven live by the call that immediately followed, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, and the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity'

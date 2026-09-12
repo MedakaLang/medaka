@@ -20,15 +20,29 @@
    either, so both are graded here in full.
 
    No cell may change the `Store`: every one of them asserts the successor is
-   still the empty, unconfigured store. -}
+   still the empty, unconfigured store.
 
+   The second group of cells grades the APPVIEW-PROXY seam (`classifyProxy`),
+   which belongs here for the same reason: it reads the route registry and the
+   account and no store at all, so the question "may a service credential be
+   minted for this client's `atproto-proxy` header" is answerable on all three
+   engines. Those cells never reach a socket — what they assert is the decision
+   itself, including that a refused request carries no claim set for anything to
+   sign. -}
+
+import http.{Request, parseRequest, serializeResponse}
 import json.{Json(..), jObject, get, parse}
 import string.{contains, fromUtf8, split, toUtf8}
 import lib.handlers.{pdsServer}
+import lib.jwt.{ServiceAuthRequest}
+import lib.proxy.{AppviewPolicy, makeAppviewPolicy}
 import lib.server_core.{
   Account,
+  ProxyAdmission,
+  ProxyDecision(..),
   RequestContext(..),
   Server,
+  classifyProxy,
   handleBytes,
   makeAccount,
 }
@@ -122,6 +136,18 @@ errorCode bytes = match parse (bodyText bytes)
     _ => "<no-error-field>"
   Err _ => "<unparseable-body>"
 
+-- The proxy cells grade the refusal MESSAGE as well as the code, because every
+-- refusal this seam can raise carries the same 400 `InvalidRequest`: the
+-- message is the only thing that says whether a request was refused for the
+-- audience it named or for the method it asked for, and those are different
+-- claims about what was not signed.
+errorMessage : Array Int -> String
+errorMessage bytes = match parse (bodyText bytes)
+  Ok value => match get "message" value
+    Some (JString text) => text
+    _ => "<no-message-field>"
+  Err _ => "<unparseable-body>"
+
 -- ── cells ───────────────────────────────────────────────────────────────────
 
 {- | A cell is a request against the empty store. `state=unchanged` is the
@@ -165,11 +191,253 @@ failCell label request expectedStatus expectedCode =
   let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next
   check label ok "status=\{status} error=\{code} state=unchanged"
 
+-- ── the appview-proxy seam ──────────────────────────────────────────────────
+
+{- | The one appview these cells are configured to proxy to, and a SECOND
+   service DID nothing here is configured for.
+
+   The confused-deputy cells turn entirely on the difference between the two: a
+   header naming the second must be refused with nothing signed, and a cell
+   that printed a claim set for it would be exactly the defect the seam exists
+   to prevent. The transcript is therefore graded on the whole outcome string —
+   a refusal prints `signed=none` and an admission prints the claims, so the
+   two can never be confused for each other. -}
+configuredAppviewDid : String
+configuredAppviewDid = "did:web:appview.example"
+
+foreignServiceDid : String
+foreignServiceDid = "did:web:other.example"
+
+configuredPolicy : Option AppviewPolicy
+configuredPolicy = match makeAppviewPolicy configuredAppviewDid
+  Ok policy => Some policy
+  Err message => panic "read_routes: appview policy setup failed: \{message}"
+
+-- A server with no `--appview-did` at all, which is what every deployment that
+-- has not configured an appview runs.
+noPolicy : Option AppviewPolicy
+noPolicy = None
+
+proxyRequest : String -> String -> String -> Array Int
+proxyRequest verb header target =
+  toUtf8
+    "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\natproto-proxy: \{header}\r\n\r\n"
+
+-- Field names are case-insensitive on the wire, so the seam must find the
+-- header under the spelling a client chose rather than the one it expects.
+proxyMixedCaseRequest : String -> Array Int
+proxyMixedCaseRequest target =
+  toUtf8
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAtproto-Proxy: \{configuredAppviewDid}\r\n\r\n"
+
+-- Two fields, the first naming the configured appview and the second naming
+-- somewhere else. A seam that took the first would be proxying a request whose
+-- audience the client left ambiguous.
+proxyRepeatedRequest : String -> Array Int
+proxyRepeatedRequest target =
+  toUtf8
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\natproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
+
+mustRequest : Array Int -> Request
+mustRequest bytes = match parseRequest bytes
+  Ok request => request
+  Err message =>
+    panic "read_routes: proxy cell request did not frame: \{message}"
+
+lxmText : Option String -> String
+lxmText None = "<absent>"
+lxmText (Some nsid) = nsid
+
+claimText : ServiceAuthRequest -> String
+claimText claims =
+  "iss=\{claims.iss} aud=\{claims.aud} lxm=\{lxmText claims.lxm} jti=\{claims.jti} iat=\{intToString claims.iat}"
+
+proxyOutcome : ProxyDecision -> String
+proxyOutcome NotProxied = "decision=not-proxied signed=none"
+proxyOutcome (ProxyRefused response) =
+  let bytes = serializeResponse response
+  "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
+proxyOutcome (ProxyAdmitted admission) =
+  "decision=admitted target=\{admission.target} \{claimText admission.serviceAuth}"
+
+proxyCell : String -> Option AppviewPolicy -> Array Int -> String -> <IO> Int
+proxyCell label policy bytes expected =
+  let decision = classifyProxy mustServer testContext policy (mustRequest bytes)
+  let got = proxyOutcome decision
+  check label (got == expected) got
+
 xrpc : String -> String
 xrpc rest = "/xrpc/\{rest}"
 
 identityRoute : String -> String
 identityRoute query = xrpc "com.atproto.identity.resolveHandle\{query}"
+
+{- | `jti` as the admitted cells expect it: `testNonce` hex-encoded.
+
+   A literal, not a recomputation. It is what makes the admitted cells assert
+   that the credential's one unique value comes from the request's own nonce and
+   is the 32 hex characters
+   `pds/test/vectors/pds_service_auth_shape_corpus.txt` records — a cell that
+   re-encoded the nonce here would assert neither. -}
+expectedJti : String
+expectedJti = "05101b26313c47525d68737e89949faa"
+
+notProxiedLine : String
+notProxiedLine = "decision=not-proxied signed=none"
+
+admittedLine : String -> String -> String -> String
+admittedLine target aud nsid =
+  "decision=admitted target=\{target} iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000"
+
+refusedLine : String -> String -> String -> String
+refusedLine status code message =
+  "decision=refused status=\{status} error=\{code} message=\{message} signed=none"
+
+invalidRequestLine : String -> String
+invalidRequestLine message = refusedLine "400" "InvalidRequest" message
+
+timelineTarget : String
+timelineTarget = xrpc "app.bsky.feed.getTimeline?limit=2"
+
+{- | The proxy-disposition half of this file: the same request bytes the socket
+   shell frames, graded at the pure seam that decides whether anything may be
+   signed for them.
+
+   It lives here rather than in a gate of its own because every cell is
+   repository-free — `classifyProxy` reads the registry and the account, never
+   the store — so all three engines can run it for the price of the cells
+   themselves. -}
+runProxyCells : <IO> Int
+runProxyCells =
+  let profileTarget = xrpc "app.bsky.actor.getProfile?actor=\{accountDidText}"
+  let authorFeedTarget =
+    xrpc "app.bsky.feed.getAuthorFeed?actor=\{accountDidText}"
+  let absent =
+    proxyCell
+      "proxy-header-absent"
+      configuredPolicy
+      (getRequest timelineTarget)
+      notProxiedLine
+  let admitted =
+    proxyCell
+      "proxy-admitted-timeline"
+      configuredPolicy
+      (proxyRequest "GET" configuredAppviewDid timelineTarget)
+      (admittedLine
+        timelineTarget
+        configuredAppviewDid
+        "app.bsky.feed.getTimeline")
+  let fragment =
+    proxyCell
+      "proxy-admitted-service-fragment"
+      configuredPolicy
+      (proxyRequest "GET" "\{configuredAppviewDid}#bsky_appview" profileTarget)
+      (admittedLine
+        profileTarget
+        "\{configuredAppviewDid}#bsky_appview"
+        "app.bsky.actor.getProfile")
+  let mixedCase =
+    proxyCell
+      "proxy-header-name-case-insensitive"
+      configuredPolicy
+      (proxyMixedCaseRequest authorFeedTarget)
+      (admittedLine
+        authorFeedTarget
+        configuredAppviewDid
+        "app.bsky.feed.getAuthorFeed")
+  let foreign =
+    proxyCell
+      "proxy-foreign-audience"
+      configuredPolicy
+      (proxyRequest "GET" foreignServiceDid timelineTarget)
+      (invalidRequestLine
+        "atproto-proxy names a service this server does not proxy to")
+  let notADid =
+    proxyCell
+      "proxy-audience-not-a-did"
+      configuredPolicy
+      (proxyRequest "GET" "https://appview.example" timelineTarget)
+      (invalidRequestLine "atproto-proxy does not name a service DID")
+  let repeated =
+    proxyCell
+      "proxy-header-repeated"
+      configuredPolicy
+      (proxyRepeatedRequest timelineTarget)
+      (invalidRequestLine "atproto-proxy must not be repeated")
+  let protectedUnregistered =
+    proxyCell
+      "proxy-protected-method-unregistered"
+      configuredPolicy
+      (proxyRequest
+        "GET"
+        configuredAppviewDid
+        (xrpc "com.atproto.admin.deleteAccount"))
+      (invalidRequestLine
+        "No service configured for com.atproto.admin.deleteAccount")
+  let protectedRegistered =
+    proxyCell
+      "proxy-protected-method-registered"
+      configuredPolicy
+      (proxyRequest
+        "GET"
+        configuredAppviewDid
+        (xrpc "com.atproto.server.createSession"))
+      (invalidRequestLine
+        "this server answers com.atproto.server.createSession itself and does not proxy it")
+  let localMiss =
+    proxyCell
+      "proxy-forward-on-local-miss"
+      configuredPolicy
+      (proxyRequest
+        "GET"
+        configuredAppviewDid
+        (xrpc
+          "com.atproto.repo.getRecord?repo=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka-a"))
+      notProxiedLine
+  let pdsHosted =
+    proxyCell
+      "proxy-pds-hosted-preferences"
+      configuredPolicy
+      (proxyRequest
+        "GET"
+        configuredAppviewDid
+        (xrpc "app.bsky.actor.getPreferences"))
+      notProxiedLine
+  let unconfigured =
+    proxyCell
+      "proxy-no-appview-configured"
+      noPolicy
+      (proxyRequest "GET" configuredAppviewDid timelineTarget)
+      (invalidRequestLine "No service configured for app.bsky.feed.getTimeline")
+  let needsGet =
+    proxyCell
+      "proxy-forwardable-requires-get"
+      configuredPolicy
+      (proxyRequest "POST" configuredAppviewDid timelineTarget)
+      (refusedLine
+        "405"
+        "MethodNotAllowed"
+        "a proxied XRPC method requires GET")
+  let wellKnown =
+    proxyCell
+      "proxy-header-on-well-known"
+      configuredPolicy
+      (proxyRequest "GET" configuredAppviewDid "/.well-known/did.json")
+      notProxiedLine
+  absent
+    + admitted
+    + fragment
+    + mixedCase
+    + foreign
+    + notADid
+    + repeated
+    + protectedUnregistered
+    + protectedRegistered
+    + localMiss
+    + pdsHosted
+    + unconfigured
+    + needsGet
+    + wellKnown
 
 runCells : <IO> Unit
 runCells =
@@ -283,8 +551,10 @@ runCells =
       (getRequest (xrpc "com.atproto.repo.listMissingBlobs"))
       "404"
       "NotFound"
+  let proxied = runProxyCells
   let cells =
-    didJson
+    proxied
+      + didJson
       + atprotoDid
       + wellKnownPost
       + wellKnownFramed
@@ -302,8 +572,10 @@ runCells =
       + latestCommit
       + readNeedsGet
       + unregistered
-  let () = println "cells: \{intToString cells}/18 repository-free routes"
-  if cells == 18 then
+  let () =
+    println
+      "cells: \{intToString cells}/32 repository-free routes and proxy dispositions"
+  if cells == 32 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

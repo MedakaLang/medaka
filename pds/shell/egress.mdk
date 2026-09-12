@@ -1,0 +1,237 @@
+{- | The outbound half of a proxied read: one loopback call to the local egress
+   proxy, driven over the same cooperative scheduler the inbound accept loop
+   runs on.
+
+   Nothing here decides WHETHER to call. `lib.server_core`'s `classifyProxy`
+   has already graded the audience and the method and produced the exact claim
+   set a token must carry; this module signs that claim set, serializes the
+   request with `lib.httpclient`, and returns what came back. A call this
+   module can make is a call that passed every check, because the only way to
+   obtain the `ServiceAuthRequest` it signs is for that grading to have
+   admitted the request.
+
+   THE ADDRESS IS ALWAYS LOOPBACK and is not configurable. Under P5 the egress
+   proxy runs on this box (`docs/ops/PDS-DEPLOY.md`), so a host flag would add
+   no deployment this design has, and leaving it out is containment as well as
+   simplicity: a defect anywhere in the audience grading still cannot send a
+   credential bearing this account's identity anywhere but to a listener on
+   this machine. The egress proxy is therefore a reverse proxy pinned to the
+   one configured appview, not a forwarding proxy that routes on `Host` — the
+   `Host` this module sends is the proxy's own loopback address.
+
+   EVERY WAIT PARKS. The connect is one synchronous syscall to a listener on
+   this machine; every byte after it moves through `net_async`, which parks the
+   task on would-block instead of blocking the thread. That is the whole
+   requirement this module exists to satisfy: a stalled or slow-dripping
+   appview suspends the ONE connection that asked to be proxied, and the accept
+   loop, every unrelated in-flight request, and every open firehose
+   subscription keep running. Two budgets bound it — a per-read silence budget
+   and a whole-call deadline — because either alone leaves the other's hole,
+   exactly as `pds/shell/server.mdk`'s inbound pair does: a peer that sends
+   nothing is closed on the first, and one that dribbles a byte per budget is
+   closed only by the second. -}
+
+import async.{Async, Wait, deadlineAfter, expired, liftIO}
+import lib.httpclient.{
+  findHeader,
+  makeRequestHeader,
+  parseResponse,
+  responseBody,
+  responseHeaders,
+  responseReason,
+  responseStatus,
+  serializeRequest,
+}
+import lib.jwt.{ServiceAuthRequest, mintServiceToken}
+import lib.proxy.{AppviewPolicy, UpstreamAnswer(..)}
+import lib.resource_limits.{maxHttpClientWireBytes}
+import lib.sign.{SecretKey}
+import net.{Connection, connect}
+import net_async as A
+import time.{Duration, seconds}
+import vector.{Vector}
+import vector as V
+
+-- | The loopback address the egress proxy is reached at. See the module header
+-- for why this is a constant and not a flag.
+egressAddress : String
+egressAddress = "127.0.0.1"
+
+{- | How long one outbound read may find nothing before the call is abandoned.
+   The outbound analogue of `pds/shell/server.mdk`'s `bodyProgressTimeout`, and
+   a progress budget in the same sense: a response that keeps arriving restarts
+   it. -}
+upstreamSilenceTimeout : Duration
+upstreamSilenceTimeout = seconds 5
+
+{- | How long one whole outbound call may take, however many reads it takes.
+   Deliberately far below the inbound `requestTimeout`: a client waiting on a
+   proxied read is owed an answer — a 502 is an answer — rather than a
+   connection held for as long as the inbound lifecycle would allow. -}
+upstreamCallTimeout : Duration
+upstreamCallTimeout = seconds 10
+
+-- | How long writing the outbound request may take.
+upstreamWriteTimeout : Duration
+upstreamWriteTimeout = seconds 10
+
+-- | Bytes asked for per outbound read.
+upstreamChunkBytes : Int
+upstreamChunkBytes = 65536
+
+{- | Everything a proxied call needs that is not in the request: the egress
+   proxy's loopback port, the one appview this server proxies to, and the
+   account's own repo signing key.
+
+   The key has no accessor. It enters through `makeEgress` and leaves only as a
+   signature over a claim set `lib.server_core` built, so no other module can
+   sign anything with it, and nothing can render it. -}
+export data Egress = Egress Int AppviewPolicy SecretKey
+
+export
+makeEgress : Int -> AppviewPolicy -> SecretKey -> Egress
+makeEgress port appview signingKey = Egress port appview signingKey
+
+-- | The one appview this server proxies to, for the pure classifier that has
+-- to compare a client's header against it.
+export
+egressAppview : Egress -> AppviewPolicy
+egressAppview (Egress _ appview _) = appview
+
+egressPort : Egress -> Int
+egressPort (Egress port _ _) = port
+
+-- The `Host` field's value: the egress proxy's own address. See the module
+-- header on why that is the right value rather than the appview's hostname.
+egressHostValue : Egress -> String
+egressHostValue egress = "\{egressAddress}:\{intToString (egressPort egress)}"
+
+{- | The outbound request bytes.
+
+   The bearer credential is assembled by CONCATENATION rather than
+   interpolation, deliberately: `pds/test/lib_boundary.sh` grades the shell for
+   secrets reaching a string interpolation, and a minted token belongs to that
+   class whether or not the grep's word list happens to name it.
+
+   Not one inbound header is relayed. The three fields sent are this server's
+   own, so there is nothing a client can put in a header that reaches the
+   appview, and `lib.httpclient` owns every framing field besides. -}
+egressRequestBytes : Egress -> String -> String -> Result String (Array Int)
+egressRequestBytes egress target minted = do
+  authorization <- makeRequestHeader "authorization" ("Bearer " ++ minted)
+  accept <- makeRequestHeader "accept" "application/json"
+  closing <- makeRequestHeader "connection" "close"
+  serializeRequest
+    "GET"
+    target
+    (egressHostValue egress)
+    [authorization, accept, closing]
+    [||]
+
+{- | Decode one complete upstream buffer.
+
+   `lib.httpclient`'s parser wants the whole response at once and owns every
+   ceiling on what it decodes, so this module re-checks none of them: the one
+   bound it adds is on the buffer it accumulates BEFORE the parser can see it
+   (`maxHttpClientWireBytes`), which is a quantity no decoded ceiling can
+   express. -}
+decodeUpstream : Array Int -> Result String UpstreamAnswer
+decodeUpstream buffer = match parseResponse buffer
+  Err message => Err "egress: upstream response was not decodable: \{message}"
+  Ok response =>
+    Ok
+      (UpstreamAnswer
+        (responseStatus response)
+        (responseReason response)
+        (findHeader "content-type" (responseHeaders response))
+        (responseBody response))
+
+-- Read until the peer closes, which is what `connection: close` asked it to
+-- do: the parser needs a complete response and cannot be handed a prefix.
+collectUpstream : Wait ->
+  Connection ->
+  Vector Int ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+collectUpstream deadline conn acc = defer
+  late <- expired deadline
+  if late then
+    deferPure (Err "egress: the upstream call exceeded its budget")
+  else defer
+    received <- A.recvWithin upstreamSilenceTimeout conn upstreamChunkBytes
+    collectStep deadline conn acc received
+
+collectStep : Wait ->
+  Connection ->
+  Vector Int ->
+  Result String (Array Int) ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+collectStep _ _ _ (Err message) =
+  deferPure (Err "egress: upstream read failed: \{message}")
+collectStep deadline conn acc (Ok bytes) =
+  if arrayLength bytes == 0 then
+    deferPure (decodeUpstream (V.toArray acc))
+  else
+    let () = V.pushArray bytes acc
+    let (_, collected) = V.rawParts acc
+    if collected > maxHttpClientWireBytes then
+      deferPure
+        (Err
+          "egress: upstream response exceeds the \{intToString maxHttpClientWireBytes}-byte wire ceiling")
+    else
+      collectUpstream deadline conn acc
+
+exchange : Connection ->
+  Array Int ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+exchange conn bytes = defer
+  deadline <- deadlineAfter upstreamCallTimeout
+  sent <- A.sendAllWithin upstreamWriteTimeout conn bytes
+  match sent
+    Err message =>
+      deferPure (Err "egress: upstream request could not be sent: \{message}")
+    Ok () => collectUpstream deadline conn (V.new ())
+
+-- The connection is closed on every path out, success and failure alike, which
+-- is why the exchange's outcome is held and returned after the close rather
+-- than returned from inside it.
+opened : Connection ->
+  Array Int ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+opened conn bytes = defer
+  outcome <- exchange conn bytes
+  _ <- A.close conn
+  deferPure outcome
+
+{- | Make one proxied call and return what the appview answered.
+
+   The verb is GET and is not a parameter: `classifyProxy` admits only XRPC
+   queries and refuses every other method, so a verb argument here would be a
+   second place the verb is decided and the two could disagree. No request body
+   is forwarded for the same reason.
+
+   `Err` is every way the call can fail to produce an answer — the token could
+   not be minted, the target the client sent is not a serializable origin-form
+   target, the proxy refused the connection, a budget ran out, the response did
+   not decode. The caller turns all of them into one 502: which of them
+   happened is this server's business and not the client's. -}
+export
+egressCall : Egress ->
+  String ->
+  ServiceAuthRequest ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+egressCall (Egress port appview signingKey) target serviceAuth =
+  match mintServiceToken signingKey serviceAuth
+    Err message =>
+      deferPure (Err "egress: could not mint a service credential: \{message}")
+    Ok minted =>
+      match egressRequestBytes (Egress port appview signingKey) target minted
+        Err message =>
+          deferPure
+            (Err "egress: outbound request is not serializable: \{message}")
+        Ok bytes => defer
+          connected <- liftIO (u => connect egressAddress port)
+          match connected
+            Err message =>
+              deferPure
+                (Err "egress: could not reach the egress proxy: \{message}")
+            Ok conn => opened conn bytes
