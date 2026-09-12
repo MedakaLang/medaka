@@ -7,6 +7,7 @@
 import io.{getEnvOr, runVerb}
 import list.{dropWhile, reverse, somes, takeWhile}
 import string.{contains, lines, startsWith, stripSuffix, toLower, unlines}
+import regex.{Regex, mustCompile, isMatch}
 import test_process.{boundedVerb, boundedVerbSeconds, medakaBin, scratchDir}
 import test.{
   Expectation,
@@ -61,10 +62,25 @@ boundedInTree secs cmd args =
     "env"
     (["MEDAKA_ROOT=\{root}", "MEDAKA_EMITTER=\{emitterBin}", cmd] ++ args)
 
+rejectionRe : Regex
+rejectionRe = mustCompile "(?i)(type error|parse error)|^error:"
+
+{- | Whether a `check` output line reads as a rejection, case-insensitively.
+
+   > rejectionLine "Type error: something"
+   True
+   > rejectionLine "PARSE ERROR near foo"
+   True
+   > rejectionLine "error: something went wrong"
+   True
+   > rejectionLine "Error: mismatch"
+   True
+   > rejectionLine "unexpected error: xyz"
+   False
+   > rejectionLine "warning: this is fine"
+   False -}
 rejectionLine : String -> Bool
-rejectionLine line =
-  let l = toLower line
-  contains "type error" l || contains "parse error" l || startsWith "error:" l
+rejectionLine line = isMatch rejectionRe line
 
 firstErrorLine : String -> String
 firstErrorLine out = match filter (contains "error" << toLower) (lines out)

@@ -19,6 +19,7 @@
 import list.{reverse}
 import string.{trim, lines, toInt, startsWith, drop, indexOf, contains}
 import core.{Display}
+import regex.{Regex, mustCompile, find as reFind}
 
 -- # The document
 
@@ -245,19 +246,24 @@ parseKvScalar tok key
 -- lint-disable-next-line rule-clone-type
 data Header = HTable String | HArrayTable String
 
+arrayTableRe : Regex
+arrayTableRe = mustCompile "^\\[\\[(.+)\\]\\]$"
+
+tableRe : Regex
+tableRe = mustCompile "^\\[(.+)\\]$"
+
 -- Detect a section header and classify it, or return None.
 -- `[[t]]` is checked first: it also satisfies the `[t]` shape.
 parseHeader : String -> Option Header
-parseHeader s =
-  let n = stringLength s
-  if n >= 4 && stringSlice 0 2 s == "[[" && stringSlice (n - 2) n s == "]]" then
-    Some (HArrayTable (trim (stringSlice 2 (n - 2) s)))
-  else if n >= 2
-    && stringSlice 0 1 s == "["
-    && stringSlice (n - 1) n s == "]" then
-    Some (HTable (trim (stringSlice 1 (n - 1) s)))
-  else
-    None
+parseHeader s = match reFind arrayTableRe s
+  Some m => match m.groups
+    (Some g) :: [] => Some (HArrayTable (trim g.text))
+    _ => None
+  None => match reFind tableRe s
+    Some m => match m.groups
+      (Some g) :: [] => Some (HTable (trim g.text))
+      _ => None
+    None => None
 
 -- Qualify a key relative to the current section.  Every section qualifies;
 -- `[package]` is not special.

@@ -80,7 +80,8 @@ import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
 import list.{dropWhile, reverse, somes, sort}
 import path.{basename, dirname, stem}
-import string.{contains, endsWith, lines, split, startsWith, unlines}
+import string.{contains, endsWith, join, lines, split, startsWith, unlines}
+import regex.{escape, mustCompile, isFullMatch}
 import test.{Expectation, fail, pass}
 import test_process.{
   boundedVerb, medakaBin, medakaRoot, scratchDir, spawnTimeoutSeconds
@@ -368,7 +369,7 @@ entryIn spec d = match listDir d
     n :: _ => Ok "\{d}/\{n}"
 
 {- | Whether the file name `name` matches `spec`: a literal file name, or a
-   name with ONE `*` standing for any run of characters.
+   name with `*` standing for any run of characters.
 
    The two spellings are the two the retired scripts used — `ls
    "$dir"main_*.mdk | head -1` and a bare `"$dir/main.mdk"` — kept apart
@@ -385,12 +386,8 @@ entryIn spec d = match listDir d
    > matchesSpec "main.mdk" "main.extra.mdk"
    False -}
 matchesSpec : String -> String -> Bool
-matchesSpec spec name = match split "*" spec
-  [pre, post] =>
-    startsWith pre name
-      && endsWith post name
-      && stringLength name >= stringLength pre + stringLength post
-  _ => spec == name
+matchesSpec spec name =
+  isFullMatch (mustCompile (join ".*" (map escape (split "*" spec)))) name
 
 -- | The expected value for one fixture, read from its committed golden.
 goldenOf : Row -> String -> <FileRead "_", IO> Result String String

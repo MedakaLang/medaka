@@ -22,6 +22,7 @@
 
 import math.{floorDiv}
 import string.{sliceClamped, toInt}
+import regex.{Regex, mustCompile, find as reFind}
 
 -- # Durations
 
@@ -264,37 +265,40 @@ isoFields (Some y) (Some mo) (Some d) (Some h) (Some mi) (Some sec) =
     None
 isoFields _ _ _ _ _ _ = None
 
+isoRe : Regex
+isoRe = mustCompile "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"
+
 {- | The date and time written in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`, or
    `None`.
 
    Exactly the form `formatIso` produces is accepted, and nothing else: no
-   other time zone, no missing zero padding, no lowercase `t`.
+   other time zone, no missing zero padding, no lowercase `t` or `z`, and no
+   extra trailing characters.
 
    > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
    Some 0
    > parseIso "2024-13-05T07:08:09Z"
+   None
+   > parseIso "2024-03-05T07:08:09z"
+   None
+   > parseIso "2024-03-05T07:08:09Z1"
    None -}
 export
 parseIso : String -> Option DateTime
-parseIso s =
-  if stringLength s == 20
-    && sliceClamped 4 5 s == "-"
-    && sliceClamped 7 8 s == "-"
-    && sliceClamped 10 11 s == "T"
-    && sliceClamped 13 14 s == ":"
-    && sliceClamped 16 17 s == ":"
-    && sliceClamped 19 20 s
-      == "Z" then match (isoFields
-    (toInt (sliceClamped 0 4 s))
-    (toInt (sliceClamped 5 7 s))
-    (toInt (sliceClamped 8 10 s))
-    (toInt (sliceClamped 11 13 s))
-    (toInt (sliceClamped 14 16 s))
-    (toInt (sliceClamped 17 19 s)))
-    Some dt => if formatIso dt == s then Some dt else None
-    None => None
-  else
-    None
+parseIso s = match reFind isoRe s
+  None => None
+  Some m => match m.groups
+    (Some gy) :: (Some gmo) :: (Some gd) :: (Some gh) :: (Some gmi) :: (Some gs) :: [] =>
+      let y = toInt gy.text
+      let mo = toInt gmo.text
+      let d = toInt gd.text
+      let h = toInt gh.text
+      let mi = toInt gmi.text
+      let sec = toInt gs.text
+      match isoFields y mo d h mi sec
+        Some dt => if formatIso dt == s then Some dt else None
+        None => None
+    _ => None
 
 -- > parseIso "2024-03-05T07:08:09Z" == Some (DateTime { year = 2024, month = 3, day = 5, hour = 7, minute = 8, second = 9 })
 -- True
