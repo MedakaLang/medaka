@@ -8,7 +8,8 @@ directNum x = x + 0
 
 blockRecNum : Num a => a -> a
 blockRecNum x =
-  let local = _ => x + 0
+  -- Keep function-let syntax: its isFun flag selects blockRecLet's producer.
+  let local _ = x + 0
   local ()
 
 blockLetNum : Num a => a -> a
@@ -30,7 +31,7 @@ groupNum x = local ()
 -- A root created by the boundary has no outer determination channel and still
 -- defaults to Int. These five functions exercise the same producer routes.
 blockRecOwn _ =
-  let local = _ => 1
+  let local _ = 1
   local ()
 
 blockLetOwn _ =
@@ -44,6 +45,22 @@ inferLetOwn _ = let local = 1 in local
 groupOwn _ = local ()
   where
     local _ = 1
+
+-- The emitter reconstructs each lifted closure capture's low-level type. These
+-- controls keep its concrete Int, concrete Float, and nonnumeric layout arms
+-- distinct from the polymorphic numeric capture exercised above.
+capturedInt : Int -> Int
+capturedInt x =
+  let local _ = x + 1
+  local ()
+
+capturedFloat : Float -> Float
+capturedFloat x = let local _ = x + 0.25 in local ()
+
+capturedPair : String -> Bool -> (String, Bool)
+capturedPair text flag = local ()
+  where
+    local _ = (text, flag)
 
 -- Top-level SCC defaulting remains unrestricted in this slice. The expansive
 -- Ref keeps the function weakly monomorphic, and its application fixes n to Int.
@@ -62,4 +79,7 @@ main =
   println (inferRecOwn () == 1)
   println (inferLetOwn () == 1)
   println (groupOwn () == 1)
+  println (capturedInt 41 == 42)
+  println (capturedFloat 2.0 == 2.25)
+  println (capturedPair "kept" True == ("kept", True))
   println n
