@@ -155,12 +155,14 @@ fi
 #                           (diff_compiler_lexer.sh MIGRATED to the # TOKENS section of
 #                           test/diff_compiler_snapshot_frontend.sh, #81 R4; lex_main
 #                           survives because those three still drive it)
-#   parse_main            — diff_compiler_parse_errors.sh
-#   parse_result_main     — diff_compiler_parse_result.sh
+#   parse_main            — diff_compiler_check (test/diff_compiler_check_test.mdk):
+#                           a sibling test, not a Row/Leg — the driver's pass condition
+#                           is a non-zero exit, the opposite of every Row's.
+#   parse_result_main     — diff_compiler_check, same file, same reason.
 #   (parse/desugar/mark:  MIGRATED to test/diff_compiler_snapshot_frontend.sh — the
 #                         snapshot runner calls the stages in-process, so those five
 #                         gates need no probe binary at all.  parse_main survives only
-#                         because diff_compiler_parse_errors.sh still drives it.)
+#                         because diff_compiler_check still drives it.)
 #   origin_agreement_main — diff_compiler_origin_agreement.sh (#1110): drives the
 #                           flat / single-module / graph elaboration entry points over
 #                           ONE loader graph and diffs the resulting agreement table.
@@ -172,9 +174,10 @@ fi
 #                           multi-module emit seam and prints transport receipts.
 #   anf_identity_main     — diff_compiler_anf_identity.sh (#1400 X-A): validates
 #                           and serializes the non-authoritative StableNodeId substrate.
-#   resolve_main          — diff_compiler_resolve.sh
-#   resolve_batch         — diff_compiler_resolve_batch.sh
-#   resolve_modules_main  — diff_compiler_resolve_modules.sh
+#   resolve_main          — diff_compiler_check, same file: a Row over resolveLeg.
+#   resolve_batch         — diff_compiler_check, same file, batched.
+#   resolve_modules_main  — diff_compiler_check, same file: a Row over the
+#                           `OrderedModules`-shaped resolve_module_fixtures.
 #   ── Phase 2 §2b typecheck/check/error gates ──
 #   typecheck_main          — diff_compiler_typecheck_errors.sh
 #                             (was also _typecheck.sh + _panic_errors.sh — migrated to the
@@ -184,11 +187,11 @@ fi
 #                              diff_compiler_snapshot_prelude.sh dump, per-fixture user
 #                              schemes to # TYPES_USER; typecheck_golden_batch had no other
 #                              consumer, so its oracle + entry source went with them)
-#   check_main              — diff_compiler_typecheck_errors.sh (driver B) / diff_compiler_check.sh
-#   check_batch             — diff_compiler_check_batch.sh
-#   check_modules_main      — diff_compiler_check_modules.sh
+#   check_main              — diff_compiler_typecheck_errors.sh (driver B) / diff_compiler_check
+#   check_batch             — diff_compiler_check (batched leg)
+#   check_modules_main      — diff_compiler_check (multi-module leg)
 #   check_all_main          — diff_compiler_selfproc.sh (LEG A)
-#   check_match_main        — diff_compiler_check_match.sh
+#   check_match_main        — diff_compiler_check (match-exhaustiveness leg)
 #   exhaust_main            — diff_compiler_exhaust.sh
 #   lint_main               — diff_compiler_lint.sh (added by the lint workstream)
 #   diagnostics_main        — diff_compiler_diagnostics.sh
@@ -402,10 +405,13 @@ if [ "${1:-}" = "--for" ]; then
   # "matched no gates" for a shard whose patterns are all outside test/.)
   #
   # A `kind = "native"` registry entry (#2591) has no `.sh` for those globs to
-  # find, so it resolves by registry NAME and the gate IS its `run` module. Such
-  # a gate reads no test/bin oracle, so it contributes none below — but it must
-  # still RESOLVE, or `--for` would report "matched no gates" for a diff whose
-  # whole derived pattern set is native, and preflight would abort on it.
+  # find, so it resolves by registry NAME and the gate IS its `run` module. Its
+  # oracles are then derived from that module the same way as from a script —
+  # the `test/bin/<name>` grep below reads a `.mdk` as happily as a `.sh`, which
+  # is why a native runner must spell its oracle paths literally. A native gate
+  # that reads none simply contributes none — but it must still RESOLVE, or
+  # `--for` would report "matched no gates" for a diff whose whole derived
+  # pattern set is native, and preflight would abort on it.
   #
   # `_native_rows` (one line per row: "<name> <repo-relative run path>") is
   # defined in test/gate_native_rows.sh, sourced here rather than pasted, so

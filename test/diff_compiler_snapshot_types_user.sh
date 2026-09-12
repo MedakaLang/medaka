@@ -29,7 +29,7 @@
 #
 # ── SHARED CORPUS ────────────────────────────────────────────────────────────
 # test/diff_fixtures/ is now read by this gate ALSO (also: the frontend snapshot gate's
-# diff_fixtures family; the diff_compiler_check.sh / check_batch.sh probe gates, whose
+# diff_fixtures family; the diff_compiler_check sweep's clean and batched legs, whose
 # clean leg is a subset check against THIS `# TYPES_USER` snapshot since #81 Stage C; and
 # the eval/core_ir run gates, which read the frozen `=== EVAL ===` golden — the
 # `=== TYPES ===` section is empty since Stage C2). Adding, moving, or deleting a fixture

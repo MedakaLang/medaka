@@ -140,10 +140,10 @@ make preflight                           # derives the gate set from your diff â
 Then the gates for the stages you touched:
 
 ```sh
-bash test/diff_compiler_check.sh          # front-end + typecheck
+bash test/diff_compiler_check_test.mdk          # front-end + typecheck
 bash test/diff_compiler_eval.sh           # eval
 bash test/diff_compiler_snapshot_frontend.sh  # printer (# PRINTER) + parse/desugar/mark
-bash test/diff_compiler_check_modules.sh  # multi-module path
+bash test/diff_compiler_check_test.mdk  # multi-module path
 ```
 
 Because a new construct threads through the compiler's *own* source, also run:

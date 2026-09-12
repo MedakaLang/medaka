@@ -421,9 +421,16 @@ derived; `[G-MUST-FAIL]` inverted polarity gets a field, not a rubber stamp.
 - **Typecheck widening surfaces real errors in pds/sqlite** (B §6). Budget for it in
   wave 0; it is the point.
 - **The `migration` field is a claim** (§4.2). Seeded alone, in its own PR.
-- **The parity-plus-red rule is per PR, by review.** No gate checks that a migration PR
-  demonstrated its red; the PR body carries the transcript, and `style-review` §3 asks
-  for it.
+- **The parity-plus-red rule is per PR, by review — all of it but one sub-property.** One
+  half is now mechanical: `medaka gate verify`'s "native gate stdout-only grading" clause
+  (`ungradedSpawnSites`, `compiler/tools/gate_cmd.mdk`) reds a `kind = "native"` module
+  that spawns a process and grades its stdout alone, and it grades PER SPAWN SITE, so one
+  graded row in a many-row runner module does not answer for the rest (#2890, #2899). The
+  other half stays review: no gate checks that a migration PR reproduced the *specific*
+  break its script caught; the PR body carries the transcript, and `style-review` §3 asks
+  for it. The mechanical half reads source text, not types, so a site whose exit code is
+  interpolated into a message but never compared still reads as graded, as does one that
+  spawns only through a helper in another module.
 
 ---
 

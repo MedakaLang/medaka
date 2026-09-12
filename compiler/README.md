@@ -70,9 +70,9 @@ diff with `lib/`:
 | `typecheck.mdk` | HM core (**slice 1**). `Mono`/`Scheme` + union-find `unify`, level-based `generalize`/`instantiate`, `pp_mono`, and `infer`/`inferPat`. `checkToLines : List Decl -> <Mut> String`. |
 | `typecheck_main.mdk` | Runnable entry: `medaka run compiler/entries/typecheck_main.mdk [runtime.mdk] <src.mdk>` prints `name : scheme` per top-level binding (diffs against `dev/tc_probe.exe`; both sorted). With a runtime.mdk arg its externs are seeded into scope, so `core.mdk` (+ a user program) type-checks against the `=== TYPES ===` goldens. |
 | `check_match_main.mdk` | Runnable entry for the **type-aware match-exhaustiveness** check (`check_match`, fired per `EMatch` from inside `typecheck`): `medaka run compiler/entries/check_match_main.mdk <runtime.mdk> <src.mdk>` parses + desugars + type-checks the target (runtime externs seeded, **no prelude** — mirrors `check_program_no_prelude`) and prints one `Warning: non-exhaustive match …` line per `match` whose non-guarded arms don't cover the scrutinee's type. Diffs against `dev/diagdump.exe --check-match` (the harness sorts). The check itself (`typecheck.checkMatchToLines` + `inferMatch`) **reuses** `exhaust.mdk`'s exported `Oracle`/`buildOracle`/`useful`/`desugarPat`/`tupleCtorName`. |
-| `check.mdk` | **Composed front-end** — `medaka run compiler/check.mdk <runtime.mdk> <core.mdk> <src.mdk>` wires parse → desugar → resolve → exhaust → typecheck into one program (the self-hosted analog of `medaka check`). Prints resolve diagnostics, else guard warnings + inferred schemes. `test/diff_compiler_check.sh` validates it reproduces the 16 TYPES goldens (clean) and 14 resolve diagnostics (broken). |
+| `check.mdk` | **Composed front-end** — `medaka run compiler/check.mdk <runtime.mdk> <core.mdk> <src.mdk>` wires parse → desugar → resolve → exhaust → typecheck into one program (the self-hosted analog of `medaka check`). Prints resolve diagnostics, else guard warnings + inferred schemes. `test/diff_compiler_check_test.mdk` validates it reproduces the 16 TYPES goldens (clean) and 14 resolve diagnostics (broken). |
 | `loader.mdk` | Port of `lib/loader.ml`: `loadProgram : String -> List String -> <IO> Result String (List (String, List Decl))` — DFS topo-sort of a root file's transitive `import`s (dependency-first; cycle detection). Flat single-root simplification. `loader_main.mdk` prints the module order. |
-| `check_modules_main.mdk` | **Multi-module typecheck front-end** (the bootstrap front-end): `medaka run compiler/entries/check_modules_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]` loads entry + imports, typechecks them in dependency order against the shared prelude (`typecheck.checkModules`), prints the entry module's own schemes. Diffs against `dev/tc_module_probe.exe` (`test/diff_compiler_check_modules.sh`, all 13 compiler modules incl. `annotate`). |
+| `check_modules_main.mdk` | **Multi-module typecheck front-end** (the bootstrap front-end): `medaka run compiler/entries/check_modules_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]` loads entry + imports, typechecks them in dependency order against the shared prelude (`typecheck.checkModules`), prints the entry module's own schemes. Diffs against `dev/tc_module_probe.exe` (`test/diff_compiler_check_test.mdk`, all 13 compiler modules incl. `annotate`). |
 | `eval_modules_main.mdk` | **Multi-module execution** (the loader-driven eval path): `medaka run compiler/entries/eval_modules_main.mdk <core.mdk> <entry.mdk> [root ...]` loads entry + imports, evaluates them in per-module frames over the shared prelude (`eval.evalModules`), forces the entry's `main`, prints captured stdout. Diffs against `medaka run <entry>` (the `eval_modules_main` oracle in `medaka gate run diff_compiler_eval`). |
 | `eval_typed_modules_main.mdk` | **Typed multi-module execution** (the composition of `eval_typed_main` + `eval_modules_main`): `medaka run compiler/entries/eval_typed_modules_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]` loads entry + imports, then `typecheck.elaborateModules` threads the marker + route-stamping through the loader's module graph (per-module-frame typecheck in dependency order, `EMethodAt` routes stamped per module) before `eval.evalModules` runs the elaborated trees — so a stage that uses return-position dispatch (the `Parser` monad's `pure`/`andThen`) routes by RKey. The Leg-C/D bootstrap driver (runs the parser *and* the typechecker stage on the self-hosted eval); diffs against `medaka run <entry>` (`test/diff_compiler_selfproc.sh`). |
 | `core_ir.mdk` | **Stage 2 §2.1 Core IR** (slices 1/3/5) — the backend-neutral, serializable IR lowered from the elaborated AST: `CExpr`/`CArm`/`CGuard`/`CStmt`/`CBind`/`CImplEntry`/`CImplBody`/`CProgram`. Lives *above* any ISA (the on-ramp discipline): dispatch is the structural immutable `CMethod`/`CDict` (Routes read out of the AST's `Ref Route` cells), variables carry a lexical `Addr`, and typeclass impls/defaults are lowered (Ty-free) into `CImplEntry` for the driver to install. See `STAGE2-DESIGN.md` §2.1. |
@@ -121,8 +121,8 @@ only the non-exhaustive-match warnings.
 
 ```sh
 sh test/diff_compiler_snapshot_frontend.sh    # lexer (# TOKENS) + parse/desugar/mark snapshots
-sh test/diff_compiler_parse_errors.sh         # parser/lexer rejection path (~0.4s)
-sh test/diff_compiler_check_match.sh          # type-aware non-exhaustive-match warnings vs diagdump --check-match (11 fixtures)
+sh test/diff_compiler_check_test.mdk         # parser/lexer rejection path (~0.4s)
+sh test/diff_compiler_check_test.mdk          # type-aware non-exhaustive-match warnings vs diagdump --check-match (11 fixtures)
 sh test/diff_compiler_snapshot_eval_errors.sh # eval runtime-error messages, in-process # CRASH snapshot (~1s)
 sh test/diff_compiler_typecheck_errors.sh     # typecheck TYPE ERROR accumulation (3 fixtures × 2 drivers, ~1s)
 sh test/diff_compiler_selfproc.sh             # the bootstrap (#3) self-processing gate (4 legs, ~18s)
@@ -445,7 +445,7 @@ Stage-0 prerequisites in `../PLAN.md`).
    loses its ctor-export, so a downstream `T(..)` is NoExportedConstructors). The
    runnable entry `resolve_modules_main.mdk` threads `resolveModule` over an
    ordered module list (runtime/core seeded by NAME, undesugared, as in
-   `resolve_main`; modules desugared). `test/diff_compiler_resolve_modules.sh`
+   `resolve_main`; modules desugared). `test/diff_compiler_check_test.mdk`
    validates it against the new `dev/diagdump.exe --resolve-modules` oracle (which
    drives the real `Resolve.resolve_module`, accumulating exports over an explicit
    ordered file list — and, by *not* going through the Loader, makes UnknownModule
@@ -623,7 +623,7 @@ Stage-0 prerequisites in `../PLAN.md`).
      head (a tuple maps to a synthetic `__tupleN__` type), set in `matchOracle`
      by the `checkMatchToLines` driver.  The redundancy pass is **not** ported
      (the `--check-match` oracle dumps only the non-exhaustive-match warnings).
-     Validated by `test/diff_compiler_check_match.sh` (11 fixtures: non-exhaustive
+     Validated by `test/diff_compiler_check_test.mdk` (11 fixtures: non-exhaustive
      user ADT / Bool / list / tuple / nested-ctor / Int-literal / guarded-arm /
      multi-match, plus exhaustive + wildcard controls) against the net-new
      `dev/diagdump.exe --check-match` oracle.
@@ -822,7 +822,7 @@ All eight stages have validated self-hosted ports matching the OCaml reference
 byte-for-byte, plus two integration milestones beyond per-stage validation:
 
 - **Composed front-end** — `compiler/check.mdk` wires parse → desugar → resolve →
-  exhaust → typecheck into one program (`test/diff_compiler_check.sh`: reproduces
+  exhaust → typecheck into one program (`test/diff_compiler_check_test.mdk`: reproduces
   all 16 `=== TYPES ===` goldens *and* the 9 resolve diagnostics).
 - **True execution** — `compiler/entries/eval_run_main.mdk` runs programs for their stdout
   (output captured to a buffer), matching all 16 `=== EVAL ===` goldens
@@ -834,7 +834,7 @@ byte-for-byte, plus two integration milestones beyond per-stage validation:
   This is the *only* part of dictionary-passing the compiler needs — see below.
 - **Type-aware match exhaustiveness (`check_match`)** — the last Stage-1 stage
   piece, ported inside `typecheck` (`inferMatch` → `checkMatchToLines`, reusing
-  `exhaust.mdk`'s matrix machinery), validated by `test/diff_compiler_check_match.sh`
+  `exhaust.mdk`'s matrix machinery), validated by `test/diff_compiler_check_test.mdk`
   against the net-new `dev/diagdump.exe --check-match` oracle (11 fixtures).
 
 **What's next.** Every Stage-1 stage and sub-pass now has a validated self-hosted
@@ -852,7 +852,7 @@ The decisive self-hosting milestone: run the self-hosted compiler on the
 
 The self-hosted front-end (loader → desugar → multi-module typecheck) now
 typechecks **all 13 of its own modules** (incl. the §2.0 `annotate`) and matches the OCaml reference
-byte-for-byte. Validated by `test/diff_compiler_check_modules.sh` against
+byte-for-byte. Validated by `test/diff_compiler_check_test.mdk` against
 `dev/tc_module_probe.exe` (the reference doing the same: real `Loader` +
 `typecheck_module`).
 
@@ -1299,12 +1299,12 @@ gap in fidelity. Concretely, by stage:
   raises `Failure "Unexpected character: X"` on a byte it can't start a token
   with; the self-hosted lexer now mirrors this with `panic ("Unexpected
   character: " ++ charToStr c)` in `singleOp`'s catch-all (lexer.mdk:769).
-  Validated by `test/diff_compiler_parse_errors.sh` (`illegal_char_hash` fixture).
+  Validated by `test/diff_compiler_check_test.mdk` (`illegal_char_hash` fixture).
 - ✅ **Parser — full-consumption EOF check added (fixed 2026-06-05).** `resultDecls`
   now takes the token array, panics on `PErr`, and panics with `"parse error"` if
   any token before `TEof` is unconsumed after `many declThenNoise` returns.
   `parse` has the same `List Decl` return type — it panics on malformed input
-  rather than silently truncating. Validated by `test/diff_compiler_parse_errors.sh`
+  rather than silently truncating. Validated by `test/diff_compiler_check_test.mdk`
   (4 parse-error fixtures): `f = 1 +` (dangling operator), `g = )` (leading
   garbage), `f = 1\ng = )` (second decl fails), `f x = g x ? 0` (leftover integer
   after postfix `?`). The one remaining gap vs the OCaml reference is **location

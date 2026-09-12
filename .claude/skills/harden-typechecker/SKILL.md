@@ -114,7 +114,7 @@ The mechanical loop:
    (`ppMono` (`:2603`) / `ppScheme` (`:2565`) render a single type/scheme.)
 2. **Raise site** — `pushTypeError "T-YOUR-CODE" (yourMsg …)` from the phase that
    detects it.
-3. **Test** — add a fixture to `test/diff_compiler_check.sh`'s corpus.
+3. **Test** — add a fixture to `test/diff_compiler_check_test.mdk`'s corpus.
    **Watch for prelude name collisions:** a fixture that reuses a stdlib interface
    name (e.g. `Monoid`) may pass on a *duplicate-interface* error rather than the
    error you intend — use a fresh name so the test exercises what it claims.
@@ -199,9 +199,9 @@ Then the gates that matter for this file specifically:
 bash test/typecheck_compiler_source.sh     # ← DO NOT SKIP. The build does NOT gate on type
                                            #   errors: an ill-typed compiler passes all 83 gates.
                                            #   This is what the required `soundness` CI check runs.
-bash test/diff_compiler_check.sh           # typecheck gate (fixtures)
-bash test/diff_compiler_check_modules.sh   # multi-module typecheck
-bash test/diff_compiler_check_batch.sh
+bash test/diff_compiler_check_test.mdk           # typecheck gate (fixtures)
+bash test/diff_compiler_check_test.mdk   # multi-module typecheck
+bash test/diff_compiler_check_test.mdk
 bash test/diff_compiler_eval.sh            # the typechecker loads the real stdlib — a
                                            #   too-broad new rule that rejects valid stdlib
                                            #   code breaks many gates at once
