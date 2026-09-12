@@ -18,7 +18,7 @@ import json.{Json(..), get, jObject, parse, stringify}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
 import test.{expectEqual, expectTrue}
 import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
-import lib.handlers.{pdsServer}
+import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -46,7 +46,7 @@ account = match makeAccount accountDidText accountHandleText accountHostText
   Err message => panic "session_routes_test: account: \{message}"
 
 server : Server
-server = match pdsServer account
+server = match pdsServer account serverLinksEmpty
   Ok made => made
   Err message => panic "session_routes_test: server: \{message}"
 

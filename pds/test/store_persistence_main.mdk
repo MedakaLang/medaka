@@ -13,9 +13,15 @@
    (`shell.blobfile`), which is persisted beside the repository and not inside
    it: save in one process, load in another, and reject a tampered blob file.
    `blob-oversize` is the fourth: a blob the pure layer refuses reaches no
-   file at all. -}
+   file at all.
+
+   The `prefs-*` routes are the same save/load claim for the preferences half
+   (`shell.persist`'s `persistPreferences`/`persistLoadPreferences`), written
+   into the same data directory as the repository and blob halves so the
+   signing-key sweep in `store_persistence.sh` covers it too. -}
 
 import hex.{decode, encode}
+import json.{Json(..), jObject}
 import string.{toUtf8}
 import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
@@ -39,7 +45,12 @@ import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}
 import shell.blobfile.{blobFileRead, blobFileWrite}
-import shell.persist.{persistLoad, persistSave}
+import shell.persist.{
+  persistLoad,
+  persistLoadPreferences,
+  persistPreferences,
+  persistSave,
+}
 
 -- The gate greps every persisted file for this hex and for its raw bytes; it is
 -- the signing key the adapter must never be able to write.
@@ -273,6 +284,37 @@ runBlobOversize dir =
                 "BLOB-OVERSIZE: FAIL \{intToString (length rows)} blob(s) on disk"
             exit 1
 
+-- ── the preferences half ────────────────────────────────────────────────────
+
+-- | Two items in the `app.bsky` namespace, fixed so the reload comparison is
+-- exact rather than approximate.
+fixturePrefs : List Json
+fixturePrefs = [
+  jObject [
+    ("$type", JString "app.bsky.actor.defs#personalDetailsPref"),
+    ("birthDate", JString "2000-01-01"),
+  ],
+  jObject [
+    ("$type", JString "app.bsky.actor.defs#contentLabelPref"),
+    ("label", JString "spam"),
+  ],
+]
+
+runPrefsSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runPrefsSave dir = match persistPreferences dir fixturePrefs
+  Err message => panic "store_persistence: preferences save failed: \{message}"
+  Ok () => println "PREFS SAVE: PASS"
+
+runPrefsLoad : String -> <IO, FileRead "_"> Unit
+runPrefsLoad dir = match persistLoadPreferences dir
+  Err message => panic "store_persistence: preferences load failed: \{message}"
+  Ok prefs =>
+    if prefs == fixturePrefs then
+      println "PREFS LOAD: PASS"
+    else
+      let () = println "PREFS LOAD: FAIL mismatch"
+      exit 1
+
 main : <IO, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()
   ["save", dir] => runSave dir
@@ -282,6 +324,8 @@ main = match args ()
   ["blob-load", dir] => runBlobLoad dir
   ["blob-reject", dir] => runBlobReject dir
   ["blob-oversize", dir] => runBlobOversize dir
+  ["prefs-save", dir] => runPrefsSave dir
+  ["prefs-load", dir] => runPrefsLoad dir
   _ =>
     panic
-      "usage: store_persistence_main <save|load|reject|blob-save|blob-load|blob-reject|blob-oversize> <dir>"
+      "usage: store_persistence_main <save|load|reject|blob-save|blob-load|blob-reject|blob-oversize|prefs-save|prefs-load> <dir>"

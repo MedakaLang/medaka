@@ -52,7 +52,7 @@ import json.{Json(..), jObject, get, parse}
 import string.{
   contains, fromUtf8, join, split, startsWith, toLower, toUtf8, trim
 }
-import lib.handlers.{pdsServer}
+import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
 import lib.proxy.{
   AppviewRoute,
@@ -105,7 +105,7 @@ mustAccount = match makeAccount accountDidText accountHandleText accountHostText
   Err message => panic "read_routes: account setup failed: \{message}"
 
 mustServer : Server
-mustServer = match pdsServer mustAccount
+mustServer = match pdsServer mustAccount serverLinksEmpty
   Ok server => server
   Err message => panic "read_routes: server setup failed: \{message}"
 
@@ -656,17 +656,13 @@ runProxyCells =
       notProxiedLine
   let preferences =
     proxyCell
-      "proxy-admitted-preferences"
+      "proxy-locally-served-preferences"
       configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
         (xrpc "app.bsky.actor.getPreferences"))
-      (admittedLine
-        (xrpc "app.bsky.actor.getPreferences")
-        configuredAppviewDid
-        "app.bsky.actor.getPreferences"
-        configuredAppviewPort)
+      notProxiedLine
   let unconfigured =
     proxyCell
       "proxy-no-appview-configured"
@@ -1042,7 +1038,7 @@ runCells corpus =
       "describe-server"
       (getRequest (xrpc "com.atproto.server.describeServer"))
       "application/json"
-      "{\"did\":\"\{accountDidText}\",\"availableUserDomains\":[],\"inviteCodeRequired\":false}"
+      "{\"did\":\"\{accountDidText}\",\"availableUserDomains\":[],\"inviteCodeRequired\":false,\"blobUploadLimit\":5242880}"
   let getRecord =
     failCell
       "get-record-unconfigured"

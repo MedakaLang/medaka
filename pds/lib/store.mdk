@@ -1,6 +1,6 @@
 {- | Opaque immutable storage carrier for the pure PDS protocol core.
 
-   A `Store` has three parts.
+   A `Store` has four parts.
 
    The **blob half** is the verified content-addressed block store that Phase 2
    shipped (`storeGet`/`storePut`/`storeSize` unchanged), plus each blob's
@@ -38,6 +38,13 @@
    restart is refused after it — fail-closed, and deliberately: a revocation a
    restart could undo would be no revocation at all.
 
+   The **preferences half** is the account's `app.bsky` preference set
+   (`app.bsky.actor.getPreferences`/`putPreferences`): a list of preference
+   items, each a JSON object carrying its own `$type`. It starts empty on a
+   fresh account, and `putPreferences` replaces it wholesale rather than
+   merging into it — there is exactly one namespace this server ever writes,
+   so a whole-namespace replace and a whole-store replace coincide.
+
    Multiple repositories belong to a later phase and cannot leak effects
    through this interface. -}
 
@@ -55,6 +62,7 @@ import lib.credential.{CredentialRecord, ctEqBytes}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
 import sha256.{sha256}
+import json.{Json}
 import map.{Map(..), get, set, entries}
 import string.{toUtf8}
 
@@ -88,28 +96,31 @@ blobHalfEmpty : BlobHalf
 blobHalfEmpty = BlobHalf blockStoreEmpty Tip
 
 -- | Immutable verified protocol state. Its representation is private.
-export data Store = Store BlobHalf (Option Repo) Auth
+export data Store = Store BlobHalf (Option Repo) Auth (List Json)
 
--- | The empty protocol store: no blobs, no account, and no session state.
+-- | The empty protocol store: no blobs, no account, no session state, and no
+-- preferences.
 export
 storeEmpty : Store
-storeEmpty = Store blobHalfEmpty None emptyAuth
+storeEmpty = Store blobHalfEmpty None emptyAuth []
 
--- | A protocol store for one configured account repository, with no blobs.
+-- | A protocol store for one configured account repository, with no blobs and
+-- no preferences.
 export
 storeFromRepo : Repo -> Store
-storeFromRepo repo = Store blobHalfEmpty (Some repo) emptyAuth
+storeFromRepo repo = Store blobHalfEmpty (Some repo) emptyAuth []
 
 -- | The configured account repository, or `None` when no account is set up.
 export
 storeRepo : Store -> Option Repo
-storeRepo (Store _ repo _) = repo
+storeRepo (Store _ repo _ _) = repo
 
--- | Successor store carrying a transitioned account repository. The blob half
--- and the auth half are untouched.
+-- | Successor store carrying a transitioned account repository. The blob
+-- half, the auth half, and the preferences half are untouched.
 export
 storeWithRepo : Repo -> Store -> Store
-storeWithRepo repo (Store blocks _ auth) = Store blocks (Some repo) auth
+storeWithRepo repo (Store blocks _ auth prefs) =
+  Store blocks (Some repo) auth prefs
 
 {- | Successor store carrying the server's own session-token secret, admitted
    against `lib.jwt`'s expected length so a misconfigured secret is refused
@@ -121,18 +132,23 @@ storeWithRepo repo (Store blocks _ auth) = Store blocks (Some repo) auth
    `Store`" rule covers it. -}
 export
 storeWithServerSecret : Array Int -> Store -> Result String Store
-storeWithServerSecret secret (Store blocks repo (Auth _ credential sessions)) =
+storeWithServerSecret secret (Store blocks repo (Auth _ credential sessions) prefs) =
   if arrayLength secret /= serverSecretBytes then
     Err "store: server session secret must be 32 bytes"
   else
-    Ok (Store blocks repo (Auth (Some (arrayCopy secret)) credential sessions))
+    Ok
+      (Store
+        blocks
+        repo
+        (Auth (Some (arrayCopy secret)) credential sessions)
+        prefs)
 
 {- | The server's session-token secret, or `None` when no session secret is
    configured — in which case no credential can be verified at all and every
    gated route refuses. -}
 export
 storeServerSecret : Store -> Option (Array Int)
-storeServerSecret (Store _ _ (Auth secret _ _)) = map arrayCopy secret
+storeServerSecret (Store _ _ (Auth secret _ _) _) = map arrayCopy secret
 
 {- | Successor store carrying the account's password credential. It is a THIRD
    secret-bearing part of a `Store` (with the account signing key and the
@@ -140,14 +156,28 @@ storeServerSecret (Store _ _ (Auth secret _ _)) = map arrayCopy secret
    rule covers it. -}
 export
 storeWithCredential : CredentialRecord -> Store -> Store
-storeWithCredential credential (Store blocks repo (Auth secret _ sessions)) =
-  Store blocks repo (Auth secret (Some credential) sessions)
+storeWithCredential credential (Store blocks repo (Auth secret _ sessions) prefs) =
+  Store blocks repo (Auth secret (Some credential) sessions) prefs
 
 {- | The account's password credential, or `None` when none is configured — in
    which case no session can be opened at all and `createSession` refuses. -}
 export
 storeCredential : Store -> Option CredentialRecord
-storeCredential (Store _ _ (Auth _ credential _)) = credential
+storeCredential (Store _ _ (Auth _ credential _) _) = credential
+
+{- | The account's `app.bsky` preference set, in the order `putPreferences`
+   last wrote it. Empty on a fresh account that has never called
+   `putPreferences`. -}
+export
+storePreferences : Store -> List Json
+storePreferences (Store _ _ _ prefs) = prefs
+
+-- | Successor store carrying a wholesale-replaced preference set. The blob,
+-- repository, and auth halves are untouched.
+export
+storeWithPreferences : List Json -> Store -> Store
+storeWithPreferences prefs (Store blocks repo auth _) =
+  Store blocks repo auth prefs
 
 {- | The fingerprint a session is keyed by: the SHA-256 of the token text.
 
@@ -189,7 +219,7 @@ unexpired now ((SessionRecord access refresh expires) :: rest) =
    refresh-token fingerprint, and the instant the refresh token expires. -}
 export
 storeSessionOpen : Array Int -> Array Int -> Int -> Store -> Store
-storeSessionOpen access refresh expires (Store blocks repo (Auth secret credential sessions)) =
+storeSessionOpen access refresh expires (Store blocks repo (Auth secret credential sessions) prefs) =
   Store
     blocks
     repo
@@ -198,6 +228,7 @@ storeSessionOpen access refresh expires (Store blocks repo (Auth secret credenti
       credential
       (SessionRecord (arrayCopy access) (arrayCopy refresh) expires
         :: sessions))
+    prefs
 
 {- | Whether this access-token fingerprint belongs to an open session. A token
    this server minted but whose session has since been closed, rotated away, or
@@ -205,14 +236,14 @@ storeSessionOpen access refresh expires (Store blocks repo (Auth secret credenti
    revoke an access token that is otherwise still inside its own window. -}
 export
 storeAccessActive : Array Int -> Store -> Bool
-storeAccessActive fingerprint (Store _ _ (Auth _ _ sessions)) =
+storeAccessActive fingerprint (Store _ _ (Auth _ _ sessions) _) =
   hasAccess fingerprint sessions
 
 -- | Whether this refresh-token fingerprint belongs to an open session. One
 -- already consumed by a rotation answers `False`.
 export
 storeRefreshActive : Array Int -> Store -> Bool
-storeRefreshActive fingerprint (Store _ _ (Auth _ _ sessions)) =
+storeRefreshActive fingerprint (Store _ _ (Auth _ _ sessions) _) =
   hasRefresh fingerprint sessions
 
 {- | Consume a refresh token and reopen its session on a fresh token pair, or
@@ -228,7 +259,7 @@ storeSessionRotate : Array Int ->
   Int ->
   Store ->
   Option Store
-storeSessionRotate consumed access refresh expires (Store blocks repo (Auth secret credential sessions)) =
+storeSessionRotate consumed access refresh expires (Store blocks repo (Auth secret credential sessions) prefs) =
   if hasRefresh consumed sessions then
     Some
       (storeSessionOpen
@@ -238,7 +269,8 @@ storeSessionRotate consumed access refresh expires (Store blocks repo (Auth secr
         (Store
           blocks
           repo
-          (Auth secret credential (withoutRefresh consumed sessions))))
+          (Auth secret credential (withoutRefresh consumed sessions))
+          prefs))
   else
     None
 
@@ -247,13 +279,14 @@ storeSessionRotate consumed access refresh expires (Store blocks repo (Auth secr
    record they were checked against is gone. -}
 export
 storeSessionClose : Array Int -> Store -> Option Store
-storeSessionClose fingerprint (Store blocks repo (Auth secret credential sessions)) =
+storeSessionClose fingerprint (Store blocks repo (Auth secret credential sessions) prefs) =
   if hasRefresh fingerprint sessions then
     Some
       (Store
         blocks
         repo
-        (Auth secret credential (withoutRefresh fingerprint sessions)))
+        (Auth secret credential (withoutRefresh fingerprint sessions))
+        prefs)
   else
     None
 
@@ -261,25 +294,25 @@ storeSessionClose fingerprint (Store blocks repo (Auth secret credential session
 -- `now` dropped. An expired session verifies nothing, so it is only memory.
 export
 storeSessionsPrune : Int -> Store -> Store
-storeSessionsPrune now (Store blocks repo (Auth secret credential sessions)) =
-  Store blocks repo (Auth secret credential (unexpired now sessions))
+storeSessionsPrune now (Store blocks repo (Auth secret credential sessions) prefs) =
+  Store blocks repo (Auth secret credential (unexpired now sessions)) prefs
 
 -- | How many sessions are open. Nothing in the protocol reads this; it is what
 -- a test asserts a rotation or a close against.
 export
 storeSessionCount : Store -> Int
-storeSessionCount (Store _ _ (Auth _ _ sessions)) = length sessions
+storeSessionCount (Store _ _ (Auth _ _ sessions) _) = length sessions
 
 -- | Number of distinct verified blocks in the blob half. The repository half
 -- keeps its own blocks and is not counted here.
 export
 storeSize : Store -> Int
-storeSize (Store (BlobHalf blocks _) _ _) = blockStoreSize blocks
+storeSize (Store (BlobHalf blocks _) _ _ _) = blockStoreSize blocks
 
 -- | Look up a blob-half block, returning a defensive copy.
 export
 storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store (BlobHalf blocks _) _ _) = blockStoreGet cid blocks
+storeGet cid (Store (BlobHalf blocks _) _ _ _) = blockStoreGet cid blocks
 
 -- | Verify and immutably insert a blob-half block, returning the successor
 -- store. No MIME type is recorded — this is the byte-only primitive
@@ -287,9 +320,9 @@ storeGet cid (Store (BlobHalf blocks _) _ _) = blockStoreGet cid blocks
 -- unchanged.
 export
 storePut : Cid -> Array Int -> Store -> Result String Store
-storePut cid bytes (Store (BlobHalf blocks mimeTypes) repo auth) =
+storePut cid bytes (Store (BlobHalf blocks mimeTypes) repo auth prefs) =
   map
-    (next => Store (BlobHalf next mimeTypes) repo auth)
+    (next => Store (BlobHalf next mimeTypes) repo auth prefs)
     (blockStorePut cid bytes blocks)
 
 -- | Verify and immutably insert a blob-half block together with its declared
@@ -298,13 +331,14 @@ storePut cid bytes (Store (BlobHalf blocks mimeTypes) repo auth) =
 -- records what it already admitted.
 export
 storePutBlob : Cid -> String -> Array Int -> Store -> Result String Store
-storePutBlob cid mimeType bytes (Store (BlobHalf blocks mimeTypes) repo auth) =
+storePutBlob cid mimeType bytes (Store (BlobHalf blocks mimeTypes) repo auth prefs) =
   map
     (next =>
       Store
         (BlobHalf next (set (cidToString cid) mimeType mimeTypes))
         repo
-        auth)
+        auth
+        prefs)
     (blockStorePut cid bytes blocks)
 
 -- | The declared MIME type of a blob-half entry inserted via `storePutBlob`,
@@ -312,14 +346,14 @@ storePutBlob cid mimeType bytes (Store (BlobHalf blocks mimeTypes) repo auth) =
 -- `storePut`, which no route uses).
 export
 storeBlobMimeType : Cid -> Store -> Option String
-storeBlobMimeType cid (Store (BlobHalf _ mimeTypes) _ _) =
+storeBlobMimeType cid (Store (BlobHalf _ mimeTypes) _ _ _) =
   get (cidToString cid) mimeTypes
 
 -- | Every distinct verified block in the blob half, CID-sorted and
 -- defensively copied — the primitive `sync.listBlobs` wraps.
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
-storeBlobEntries (Store (BlobHalf blocks _) _ _) = blockStoreEntries blocks
+storeBlobEntries (Store (BlobHalf blocks _) _ _ _) = blockStoreEntries blocks
 
 {- | Every distinct verified CID in the blob half, in canonical CID order and
    carrying no bytes — what `sync.listBlobs` pages over.
@@ -329,7 +363,7 @@ storeBlobEntries (Store (BlobHalf blocks _) _ _) = blockStoreEntries blocks
    the whole blob half. -}
 export
 storeBlobCids : Store -> List Cid
-storeBlobCids (Store (BlobHalf blocks _) _ _) = blockStoreCids blocks
+storeBlobCids (Store (BlobHalf blocks _) _ _ _) = blockStoreCids blocks
 
 {- | The blob half's declared-type index: every CID text that has a declared
    MIME type, paired with it, in CID-text order and carrying no bytes.
@@ -342,4 +376,4 @@ storeBlobCids (Store (BlobHalf blocks _) _ _) = blockStoreCids blocks
    module exposes no way to remove one. -}
 export
 storeBlobMimeIndex : Store -> List (String, String)
-storeBlobMimeIndex (Store (BlobHalf _ mimeTypes) _ _) = entries mimeTypes
+storeBlobMimeIndex (Store (BlobHalf _ mimeTypes) _ _ _) = entries mimeTypes

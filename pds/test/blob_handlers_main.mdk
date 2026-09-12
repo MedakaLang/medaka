@@ -23,7 +23,7 @@ import io.{readLines}
 import json.{Json(..), get, parse, stringify}
 import list.{sort}
 import string.{contains, drop, fromUtf8, indexOf, split, startsWith, toUtf8}
-import lib.handlers.{pdsServer}
+import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,
@@ -79,7 +79,7 @@ account = match makeAccount accountDidText accountHandleText accountHostText
   Err message => panic "blob_handlers: account setup failed: \{message}"
 
 server : Server
-server = match pdsServer account
+server = match pdsServer account serverLinksEmpty
   Ok made => made
   Err message => panic "blob_handlers: server setup failed: \{message}"
 

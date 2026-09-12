@@ -34,7 +34,7 @@ import json.{Json(..), get, parse}
 import list.{sort}
 import string.{fromUtf8, toUtf8}
 import test.{expectEqual, expectTrue}
-import lib.handlers.{pdsRegistry, pdsServer}
+import lib.handlers.{pdsRegistry, pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
 import lib.server_core.{
   Account,
@@ -459,7 +459,7 @@ test "a public route is not closed by an unusable token" =
 -- ── the real registry ───────────────────────────────────────────────────────
 
 pdsServerValue : Server
-pdsServerValue = match pdsServer account
+pdsServerValue = match pdsServer account serverLinksEmpty
   Ok server => server
   Err message => panic "auth_seam_test: pdsServer setup failed: \{message}"
 
@@ -487,9 +487,11 @@ samePolicy _ _ = False
    the diff. A route registered later shows up in exactly one of these three
    lists, so neither an unclassified new write nor a wrongly closed read can
    land without moving one of them. -}
-test "exactly the four record writes, uploadBlob, getSession and getServiceAuth are access-gated" = expectEqual
+test "exactly the four record writes, uploadBlob, getSession, getServiceAuth and the two preferences routes are access-gated" = expectEqual
   (nsidsWith AuthenticatedRoute)
   [
+    "app.bsky.actor.getPreferences",
+    "app.bsky.actor.putPreferences",
     "com.atproto.repo.applyWrites",
     "com.atproto.repo.createRecord",
     "com.atproto.repo.deleteRecord",

@@ -102,7 +102,7 @@ CELL resolve-handle PASS status=200 media=application/json body={"did":"$DID"} s
 CELL resolve-handle-unknown PASS status=400 error=HandleNotFound state=unchanged
 CELL resolve-handle-repeated-param PASS status=400 error=InvalidRequest state=unchanged
 CELL resolve-handle-missing-param PASS status=400 error=InvalidRequest state=unchanged
-CELL describe-server PASS status=200 media=application/json body={"did":"$DID","availableUserDomains":[],"inviteCodeRequired":false} state=unchanged
+CELL describe-server PASS status=200 media=application/json body={"did":"$DID","availableUserDomains":[],"inviteCodeRequired":false,"blobUploadLimit":5242880} state=unchanged
 CELL get-record-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL list-records-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL describe-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
@@ -123,7 +123,7 @@ CELL proxy-header-repeated PASS decision=refused status=400 error=InvalidRequest
 CELL proxy-protected-method-unregistered PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.admin.deleteAccount signed=none
 CELL proxy-registered-method-with-header PASS decision=not-proxied signed=none
 CELL proxy-forward-on-local-miss PASS decision=not-proxied signed=none
-CELL proxy-admitted-preferences PASS decision=admitted verb=GET target=/xrpc/app.bsky.actor.getPreferences audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.actor.getPreferences jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
+CELL proxy-locally-served-preferences PASS decision=not-proxied signed=none
 CELL proxy-no-appview-configured PASS decision=refused status=400 error=InvalidRequest message=No service configured for app.bsky.feed.getTimeline signed=none
 CELL proxy-admitted-post-body PASS decision=admitted verb=POST target=/xrpc/app.bsky.notification.updateSeen audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.notification.updateSeen jti=$JTI iat=1700000000 relayed=[accept-language=en-GB,content-type=application/json] body={"seenAt":"2026-09-12T00:00:00.000Z"} port=$AVPORT
 CELL proxy-forwardable-requires-get-or-post PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET or POST signed=none

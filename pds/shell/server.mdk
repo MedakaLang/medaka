@@ -95,6 +95,7 @@ import lib.store.{
   storeBlobMimeIndex,
   storeBlobMimeType,
   storeCredential,
+  storePreferences,
   storeRepo,
   storeSize,
 }
@@ -114,7 +115,7 @@ import shell.eventlog.{
   eventLogPromote,
   eventLogStage,
 }
-import shell.persist.{persistCredential, persistSave}
+import shell.persist.{persistCredential, persistPreferences, persistSave}
 import shell.subscribe.{runSubscription}
 import string.{toUtf8}
 import time.{Duration, formatIso, fromEpochSeconds, now, seconds}
@@ -361,7 +362,23 @@ persistTransition : String ->
 persistTransition dir did nowSeconds before after = do
   () <- persistRepoHalf dir did nowSeconds before after
   () <- persistCredentialHalf dir before after
-  if blobsMoved before after then persistBlobHalf dir after else Ok ()
+  () <- if blobsMoved before after then persistBlobHalf dir after else Ok ()
+  persistPreferencesHalf dir before after
+
+{- | Persist the preference half when the transition moved it, which
+   `putPreferences` does (a wholesale replace) and every other route does
+   not. Comparing the two lists is exactly `persistCredentialHalf`'s shape,
+   one level simpler: there is no re-derivation case to distinguish, only
+   "moved" or "did not". -}
+persistPreferencesHalf : String ->
+  Store ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistPreferencesHalf dir before after =
+  if storePreferences before == storePreferences after then
+    Ok ()
+  else
+    persistPreferences dir (storePreferences after)
 
 {- | Persist the account credential when the transition moved it, which one
    route does: a login whose stored record predates today's iteration count is

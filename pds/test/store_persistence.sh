@@ -91,6 +91,19 @@ echo "resumed $(grep -c '^BLOBSTATE blob ' "$WORK/blobsave.state") blob(s)"
 grep -q '^BLOBSTATE blob .* text/plain ' "$WORK/blobload.state" \
   || fail 'the reloaded blob lost its declared MIME type'
 
+# ── 2c. the preferences half saves and reloads across a process boundary ───
+# Written into the SAME $DATA directory the repository and blob halves use,
+# so the key check below (case 3) covers the preferences file too.
+"$WORK/driver" prefs-save "$DATA" > "$WORK/prefssave.out" 2> "$WORK/prefssave.err"
+require_empty "$WORK/prefssave.err" prefs-save
+[ "$(tail -1 "$WORK/prefssave.out")" = 'PREFS SAVE: PASS' ] \
+  || fail 'preferences save route did not pass'
+
+"$WORK/driver" prefs-load "$DATA" > "$WORK/prefsload.out" 2> "$WORK/prefsload.err"
+require_empty "$WORK/prefsload.err" prefs-load
+[ "$(tail -1 "$WORK/prefsload.out")" = 'PREFS LOAD: PASS' ] \
+  || fail 'preferences load route did not pass'
+
 # ── 3. no persisted file carries the signing key ────────────────────────────
 # `tree_hex` sweeps `$DATA` whole, so the blob half is inside its scope by
 # construction — but only if blob files are actually there, which is asserted

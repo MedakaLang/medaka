@@ -32,7 +32,7 @@ import hex.{decode, encode}
 import io.{readLines}
 import string.{fromUtf8, join, split, startsWith, stripPrefix, toUtf8}
 import lib.dagcbor.{dagCborDecode}
-import lib.handlers.{pdsServer}
+import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.lexjson.{dagCborToLexJson}
 import lib.repo.{Repo, repoExportCar, repoInitFromKeyBytes}
 import lib.jwt.{mintToken}
@@ -83,7 +83,7 @@ mustAccount did = match makeAccount did accountHandleText accountHostText
   Err message => panic "read_handlers: account setup failed: \{message}"
 
 mustServer : Account -> Server
-mustServer account = match pdsServer account
+mustServer account = match pdsServer account serverLinksEmpty
   Ok server => server
   Err message => panic "read_handlers: server setup failed: \{message}"
 

@@ -84,7 +84,7 @@ import lib.credential.{
 }
 import lib.jwt.{serverSecretBytes}
 import lib.ratelimit.{TrustedProxy(..)}
-import lib.handlers.{pdsServer}
+import lib.handlers.{makeServerLinks, pdsServer}
 import lib.proxy.{AppviewRoute, makeAppviewRoute, makeAppviewTable}
 import lib.repo.{
   Repo,
@@ -103,6 +103,7 @@ import lib.store.{
   storePutBlob,
   storeFromRepo,
   storeWithCredential,
+  storeWithPreferences,
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidEncode}
@@ -117,6 +118,7 @@ import shell.persist.{
   persistCredential,
   persistHasHead,
   persistLoad,
+  persistLoadPreferences,
   persistSave,
 }
 import shell.server.{Serving, bindAddress, makeServing, runServer}
@@ -163,6 +165,18 @@ serveSpec = spec "serve" [
     ["--relay-port"]
     "N"
     "loopback port of a local reverse proxy that forwards to a relay; announces this server's --hostname there once at startup, best-effort",
+  value
+    ["--privacy-policy-url"]
+    "URL"
+    "this server's privacy policy, reported in describeServer's links; omitted from the response when absent",
+  value
+    ["--terms-of-service-url"]
+    "URL"
+    "this server's terms of service, reported in describeServer's links; omitted from the response when absent",
+  value
+    ["--contact-email"]
+    "EMAIL"
+    "an operator contact address, reported in describeServer's contact; omitted from the response when absent",
 ]
 
 {- | `pds keygen`'s roster. Both flags name a file to CREATE, and both are
@@ -687,7 +701,12 @@ configure parsed = do
   -- (#2659 item 4).
   () <- requireTrustedBind bind trustedProxy
   account <- makeAccount did handle hostname
-  server <- pdsServer account
+  let links =
+    makeServerLinks
+      (flagValue "--privacy-policy-url" parsed)
+      (flagValue "--terms-of-service-url" parsed)
+      (flagValue "--contact-email" parsed)
+  server <- pdsServer account links
   keyBytes <- readHexBytes "signing key" keyPath
   secret <- secretKeyFromBytes keyBytes
   -- Admitted here, beside the other flag-supplied configuration and ahead of
@@ -716,9 +735,11 @@ configure parsed = do
   credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
   withSecret <- storeWithServerSecret sessionSecret withBlobs
+  let withCredential = storeWithCredential credential withSecret
+  prefs <- persistLoadPreferences dir
   Ok (
     server,
-    storeWithCredential credential withSecret,
+    storeWithPreferences prefs withCredential,
     dir,
     port,
     bind,

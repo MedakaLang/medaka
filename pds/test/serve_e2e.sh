@@ -308,6 +308,11 @@ client pipeline "$PORT1" || fail 'case 2: pipelined pair'
 # 3. keep-alive reuse
 client keepalive "$PORT1" || fail 'case 3: keep-alive reuse'
 
+# 3b. a fresh account, before any putPreferences call, answers getPreferences
+#    with an empty list.
+client get-preferences "$PORT1" "$TOKEN" empty \
+  || fail 'case 3b: getPreferences on a fresh account'
+
 # 4. chunked write procedure succeeds — this ALSO plants the record that
 #    case 9 (restart-and-resume) reads back after the process boundary.
 client chunked "$PORT1" "$TOKEN" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
@@ -341,6 +346,18 @@ BLOB2_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB2_MIME" "$BLOB2_TEXT") \
 #    blob. Costs real wall time: the gaps are the point.
 client slow-upload "$PORT1" "$TOKEN" "$SLOW_MIME" \
   || fail 'case 4d: a slow but progressing upload did not complete'
+
+# 4e. putPreferences replaces the whole app.bsky namespace's preference set,
+#    and a $type-less item or one outside app.bsky is refused 400 rather than
+#    written. The write's survival across the restart is case 9's job below.
+client put-preferences-invalid "$PORT1" "$TOKEN" missing-type \
+  || fail 'case 4e: putPreferences refuses an item with no $type'
+client put-preferences-invalid "$PORT1" "$TOKEN" wrong-namespace \
+  || fail 'case 4e: putPreferences refuses an item outside app.bsky'
+client put-preferences "$PORT1" "$TOKEN" 200 \
+  || fail 'case 4e: putPreferences with a well-formed app.bsky item'
+client get-preferences "$PORT1" "$TOKEN" fixture \
+  || fail 'case 4e: getPreferences reads back the item just written'
 
 # 5. every remaining route: the eight XRPC NSIDs no other case drives
 #    (including listRepos/getRepoStatus, whose repo-bearing shape only exists
@@ -450,6 +467,17 @@ require_empty "$WORK/serve2.err" 'resumed server startup'
 #    from the fresh process over the same --data directory.
 client resume "$PORT2" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
   || fail 'case 9: restart-and-resume'
+
+# 9b. the preference item written before the restart (case 4e) is read back
+#    by the fresh process — the preferences half survives the process
+#    boundary the same way the repository and blob halves do. Sessions are
+#    not persisted, so this logs in again to get a token good on PORT2.
+LOGIN9=$(client login "$PORT2" "$HANDLE" "$PASSWORD") \
+  || fail 'case 9b: could not log in to the resumed server'
+TOKEN9=${LOGIN9%% *}
+[ -n "$TOKEN9" ] || fail 'case 9b: resumed server issued an empty access token'
+client get-preferences "$PORT2" "$TOKEN9" fixture \
+  || fail 'case 9b: getPreferences survived the restart'
 
 # 14. the blob written before the restart is served, byte for byte and under
 #    its DECLARED media type, by the fresh process over the same --data dir.

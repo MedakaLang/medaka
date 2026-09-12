@@ -19,7 +19,7 @@ import lib.credential.{
   saltBytes,
 }
 import sha256.{sha256}
-import json.{Json(..), get, jObject, parse, stringify}
+import json.{Json(..), get, jArray, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
 import string.{
@@ -375,6 +375,12 @@ deleteSessionPath = xrpcPath "com.atproto.server.deleteSession"
 
 getSessionPath : String
 getSessionPath = xrpcPath "com.atproto.server.getSession"
+
+getPreferencesPath : String
+getPreferencesPath = xrpcPath "app.bsky.actor.getPreferences"
+
+putPreferencesPath : String
+putPreferencesPath = xrpcPath "app.bsky.actor.putPreferences"
 
 uploadBlobPath : String
 uploadBlobPath = xrpcPath "com.atproto.repo.uploadBlob"
@@ -821,6 +827,87 @@ runGetSession port token did =
         ()
       else
         report "GETSESSION" False "body did not name the hosted DID"
+    Err _ => ()
+  ignoreResult (close conn)
+
+-- | The one preference item every `put-preferences`/`get-preferences` case
+-- in this gate shares, so the round trip through a restart is an exact
+-- string comparison rather than a structural one.
+preferencesItem : Json
+preferencesItem = jObject [
+  ("$type", JString "app.bsky.actor.defs#personalDetailsPref"),
+  ("birthDate", JString "2000-01-01"),
+]
+
+preferencesBodyJson : String
+preferencesBodyJson =
+  stringify (jObject [("preferences", jArray [preferencesItem])])
+
+missingTypePreferencesJson : String
+missingTypePreferencesJson =
+  stringify
+    (jObject [
+      ("preferences", jArray [jObject [("birthDate", JString "2000-01-01")]]),
+    ])
+
+wrongNamespacePreferencesJson : String
+wrongNamespacePreferencesJson =
+  stringify
+    (jObject [
+      (
+        "preferences",
+        jArray [
+          jObject [("$type", JString "com.atproto.server.describeServer")],
+        ],
+      ),
+    ])
+
+-- | `app.bsky.actor.putPreferences` with the one shared fixture item,
+-- required to answer `want`.
+runPutPreferences : Int -> String -> Int -> <IO, Net "_"> Unit
+runPutPreferences port token want =
+  let conn = mustConnect port
+  let () =
+    mustSend conn (postRequest token putPreferencesPath preferencesBodyJson)
+  let () =
+    expectStatus "PUTPREFS\{intToString want}" want (readResponse conn [||])
+  ignoreResult (close conn)
+
+{- | A `putPreferences` body this server must refuse 400: either an item with
+   no `$type` at all, or one whose `$type` names a namespace other than
+   `app.bsky`. -}
+runPutPreferencesInvalid : Int -> String -> String -> <IO, Net "_"> Unit
+runPutPreferencesInvalid port token kind =
+  let body =
+    if kind == "missing-type" then
+      missingTypePreferencesJson
+    else
+      wrongNamespacePreferencesJson
+  let conn = mustConnect port
+  let () = mustSend conn (postRequest token putPreferencesPath body)
+  let () = expectStatus "PUTPREFSINVALID" 400 (readResponse conn [||])
+  ignoreResult (close conn)
+
+-- | `app.bsky.actor.getPreferences`, required to answer with exactly the
+-- fixture item `runPutPreferences` last wrote — or, on a fresh account that
+-- never called `putPreferences`, an empty list.
+runGetPreferences : Int -> String -> Bool -> <IO, Net "_"> Unit
+runGetPreferences port token expectFixture =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token getPreferencesPath)
+  let result = readResponse conn [||]
+  let () = expectStatus "GETPREFS" 200 result
+  let wanted =
+    if expectFixture then
+      preferencesBodyJson
+    else
+      stringify (jObject [("preferences", jArray [])])
+  let () = match result
+    Ok (_, body, _) =>
+      if fromUtf8 body == wanted then
+        ()
+      else
+        report "GETPREFS" False "unexpected body: \{fromUtf8 body}"
     Err _ => ()
   ignoreResult (close conn)
 
@@ -1433,6 +1520,12 @@ main = match args ()
   ["refresh-refused", port, token] => runRefreshRefused (mustPort port) token
   ["logout", port, token] => runLogout (mustPort port) token
   ["get-session", port, token, did] => runGetSession (mustPort port) token did
+  ["put-preferences", port, token, want] =>
+    runPutPreferences (mustPort port) token (mustStatus want)
+  ["put-preferences-invalid", port, token, kind] =>
+    runPutPreferencesInvalid (mustPort port) token kind
+  ["get-preferences", port, token, expectFixture] =>
+    runGetPreferences (mustPort port) token (expectFixture == "fixture")
   ["write", port, token, did, collection, rkey, want] =>
     runWriteStatus (mustPort port) token did collection rkey (mustStatus want)
   ["malformed", port] => runMalformed (mustPort port)
