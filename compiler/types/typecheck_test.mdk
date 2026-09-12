@@ -529,6 +529,118 @@ test "inferred numeric results still default without a declared caller channel" 
     expectEqual [(0, "Int -> Int")] (fst helper),
   ]
 
+localNumBlockRecSource : String
+localNumBlockRecSource = joinNl [
+  "value : Num a => a -> a",
+  "value x =",
+  "  let local _ = x + 0",
+  "  local ()",
+]
+
+localNumBlockLetSource : String
+localNumBlockLetSource = joinNl [
+  "value : Num a => a -> a",
+  "value x =",
+  "  let local = x + 0",
+  "  local",
+]
+
+localNumInferRecSource : String
+localNumInferRecSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = let local _ = x + 0 in local ()",
+]
+
+localNumInferLetSource : String
+localNumInferLetSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = let local = x + 0 in local",
+]
+
+localNumGroupSource : String
+localNumGroupSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = local ()",
+  "  where",
+  "    local _ = x + 0",
+]
+
+localNumFinalizedScheme : String -> List (Int, String)
+localNumFinalizedScheme source = fst (declaredNumSchemeObserved None source)
+
+test "block recursive let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumBlockRecSource)
+
+test "block let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumBlockLetSource)
+
+test "inline recursive let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumInferRecSource)
+
+test "inline let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumInferLetSource)
+
+test "where group preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumGroupSource)
+
+localNumOwnSource : String
+localNumOwnSource = joinNl [
+  "blockRec _ =",
+  "  let local _ = 1",
+  "  local ()",
+  "blockLet _ =",
+  "  let local = 1",
+  "  local",
+  "inferRec _ = let local _ = 1 in local ()",
+  "inferLet _ = let local = 1 in local",
+  "group _ = local ()",
+  "  where",
+  "    local _ = 1",
+]
+
+test "each local boundary defaults its own numeric root to Int" =
+  let (_, schemes) = checkOneSchemeFullK None [] (desugar
+    (parse numericPreludeSource)) (
+    "local_numeric_own",
+    desugar (parseLocated localNumOwnSource),
+  )
+  let observed = map (entry => (fst entry, ppScheme (snd entry))) schemes
+  expectEqual
+    [
+      ("blockRec", "a -> Int"),
+      ("blockLet", "a -> Int"),
+      ("inferRec", "a -> Int"),
+      ("inferLet", "a -> Int"),
+      ("group", "a -> Int"),
+    ]
+    observed
+
+localNumMismatchCodes : String -> List String
+localNumMismatchCodes body =
+  declaredNumErrorCodes
+    (joinNl [
+      "value : Num a => a -> (a, Bool)",
+      body,
+    ])
+
+test "local numeric ownership does not admit explicit result mismatches" =
+  expectEqual
+    [
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+    ]
+    [
+      localNumMismatchCodes "value x =\n  let local _ = x + 0\n  (local (), 1)",
+      localNumMismatchCodes "value x =\n  let local = x + 0\n  (local, 1)",
+      localNumMismatchCodes "value x = let local _ = x + 0 in (local (), 1)",
+      localNumMismatchCodes "value x = let local = x + 0 in (local, 1)",
+      localNumMismatchCodes
+        "value x = (local (), 1)\n  where\n    local _ = x + 0",
+    ]
+
 data TraceView = TraceView {
   tvKind : AssumptionTraceKind,
   tvGoalModule : String,
