@@ -8,7 +8,9 @@ import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import eval.eval.{Value(..), evalOne, force}
 import ir.core_ir.{CBind(..), CClause(..), CExpr(..), CProgram(..), CStmt(..)}
-import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_lower.{
+  ifaceMethodArityKey, lowerProgram, methodConstraintIfaces
+}
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
@@ -1133,6 +1135,43 @@ test "method occurrence freezes declared arity before higher-order specializatio
       ])
       "probe"
       "ho")
+
+test "method occurrence arity stays distinct from tagged impl callable arity" =
+  expectEqual
+    (Some 2)
+    (loweredMethodArity
+      (joinNl [
+        "data ArityDog = ArityDog",
+        "interface ArityAct a where",
+        "  arityAct : a -> Unit -> Unit",
+        "impl ArityAct ArityDog where",
+        "  arityAct _ = _ => ()",
+        "observeArity : ArityAct a => a -> Unit -> Unit",
+        "observeArity x = arityAct x",
+      ])
+      "observeArity"
+      "arityAct")
+
+test "qualified method constraints preserve a selected empty row" =
+  let program =
+    desugar
+      (parseLocated
+        (joinNl [
+          "interface Plain a where",
+          "  collide : a -> Int",
+          "interface Rich a where",
+          "  collide : Num b => a -> b -> Int",
+        ]))
+  let rows = methodConstraintIfaces program
+  expectAll [
+    expectEqual
+      (Some [])
+      (lookupAssoc (ifaceMethodArityKey "Plain" "collide") rows),
+    expectEqual
+      (Some ["Num"])
+      (lookupAssoc (ifaceMethodArityKey "Rich" "collide") rows),
+    expectEqual (Some ["Num"]) (lookupAssoc "collide" rows),
+  ]
 
 test "definer-shadow application publishes its selected arity" =
   expectEqual

@@ -1,0 +1,6 @@
+export interface IZ a where
+  baseK : a -> Unit -> Int -> Int
+  baseK _ _ n = 200 + n
+
+  szK : a -> Int -> Int
+  szK x = baseK x ()

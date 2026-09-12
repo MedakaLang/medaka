@@ -92,53 +92,46 @@ W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT
 
 # A same-spelled different-arity interface is safe when the method occurrence has
-# a concrete RKey: its declaration identity supplies the exact arity.  The dynamic
-# twins below deliberately use RDict and must be rejected by BOTH native paths;
-# choosing either visible declaration by bare method name silently changes the
-# source call's saturation.
+# a concrete RKey or a runtime dictionary route: each occurrence now carries its
+# selected declaration arity, which narrows the same-spelled candidate set without
+# depending on module-table order.
 SAMPLE="$SAMPLE
-$ROOT/test/prelude_obj_fixtures/arity_static.mdk"
+$ROOT/test/prelude_obj_fixtures/arity_static.mdk
+$ROOT/test/prelude_obj_fixtures/arity_dynamic_direct.mdk
+$ROOT/test/prelude_obj_fixtures/arity_dynamic_value.mdk
+$ROOT/test/prelude_obj_fixtures/arity_dynamic_three_args.mdk
+$ROOT/test/prelude_obj_fixtures/arity_dynamic_partial.mdk
+$ROOT/test/prelude_obj_fixtures/arity_dynamic_strict_prefix.mdk
+$ROOT/test/prelude_obj_fixtures/default_arity/main_mixed_ia_only.mdk
+$ROOT/test/prelude_obj_fixtures/default_arity/main_distinct.mdk
+$ROOT/test/prelude_obj_fixtures/default_arity/main_distinct_reverse.mdk
+$ROOT/test/prelude_obj_fixtures/default_arity/main_box.mdk
+$ROOT/test/prelude_obj_fixtures/default_arity/main_box_reverse.mdk
+$ROOT/test/prelude_obj_fixtures/default_empty_constraint/main_empty_constraint.mdk"
 printf '123\n' > "$W/arity_static.expected"
+printf '123\n' > "$W/arity_dynamic_direct.expected"
+printf '123\n' > "$W/arity_dynamic_value.expected"
+printf '6\n' > "$W/arity_dynamic_three_args.expected"
+printf '42\n' > "$W/arity_dynamic_partial.expected"
+printf '1\n1\n' > "$W/arity_dynamic_strict_prefix.expected"
+printf '111\n101\n' > "$W/main_mixed_ia_only.expected"
+printf '101203\n' > "$W/main_distinct.expected"
+printf '101203\n' > "$W/main_distinct_reverse.expected"
+printf '101203\n' > "$W/main_box.expected"
+printf '101203\n' > "$W/main_box_reverse.expected"
+printf '111\n101\n' > "$W/main_empty_constraint.expected"
 
 checked=0
 same=0
 fail=0
 
-arityDiag="native backend cannot dispatch constrained method \`add\` because visible interfaces declare it with different arities"
-
-expectArityReject() {
-  mode="$1"
-  src="$2"
-  opt="$3"
-  pobj="$4"
-  label="$(basename "$src" .mdk)"
-  out="$W/$label$opt.$mode"
-  log="$out.log"
-  if [ "$mode" = prebuilt ]; then
-    MEDAKA_PRELUDE_OBJ="$pobj" MEDAKA_CLANG_OPT="$opt" \
-      "$MEDAKA" build --allow-internal "$src" -o "$out" >"$log" 2>&1
-  else
-    MEDAKA_CLANG_OPT="$opt" \
-      "$MEDAKA" build --allow-internal "$src" -o "$out" >"$log" 2>&1
-  fi
-  rc=$?
-  checked=$((checked+1))
-  if [ "$rc" -ne 0 ] && grep -F "$arityDiag" "$log" >/dev/null 2>&1; then
-    same=$((same+1))
-    printf 'ok   %-28s %s  %s rejected incompatible dynamic arity\n' \
-      "$label" "$opt" "$mode"
-  else
-    fail=$((fail+1))
-    printf 'FAIL %-28s %s  %s expected dynamic-arity rejection\n' \
-      "$label" "$opt" "$mode"
-    sed -n '1,8p' "$log"
-  fi
-}
-
 for src in "$ROOT"/test/prelude_obj_fixtures/arity_dynamic_*.mdk; do
   label="$(basename "$src" .mdk)"
   expected=123
   [ "$label" = arity_dynamic_three_args ] && expected=6
+  [ "$label" = arity_dynamic_partial ] && expected=42
+  [ "$label" = arity_dynamic_strict_prefix ] && expected='1
+1'
   if ! "$MEDAKA" check "$src" >"$W/$label.check.log" 2>&1; then
     echo "FAIL: dynamic-arity semantic probe did not typecheck ($label)"
     fail=$((fail+1))
@@ -172,7 +165,7 @@ for OPT in -O0 -O2; do
     "$prebuilt" > "$W/$label$OPT.prebuilt.out" 2>&1; rc_p=$?
     checked=$((checked+1))
     if [ "$rc_i" -eq "$rc_p" ] && cmp -s "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out" \
-      && { [ "$label" != arity_static ] || { [ "$rc_i" -eq 0 ] && cmp -s "$W/$label$OPT.inline.out" "$W/arity_static.expected"; }; }; then
+      && { [ ! -f "$W/$label.expected" ] || { [ "$rc_i" -eq 0 ] && cmp -s "$W/$label$OPT.inline.out" "$W/$label.expected"; }; }; then
       same=$((same+1))
       printf 'ok   %-28s %s  same output (exit %d)\n' "$label" "$OPT" "$rc_i"
     else
@@ -180,10 +173,6 @@ for OPT in -O0 -O2; do
       printf 'FAIL %-28s %s  inline(exit %d) vs prebuilt(exit %d) diverged or missed its value pin\n' "$label" "$OPT" "$rc_i" "$rc_p"
       diff "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out" | head -10
     fi
-  done
-  for src in "$ROOT"/test/prelude_obj_fixtures/arity_dynamic_*.mdk; do
-    expectArityReject inline "$src" "$OPT" "$pobj"
-    expectArityReject prebuilt "$src" "$OPT" "$pobj"
   done
 done
 

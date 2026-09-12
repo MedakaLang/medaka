@@ -124,8 +124,8 @@ public export data CExpr =
   | CBlock (List CStmt)
   -- typeclass dispatch, dicts explicit (slice 5; Route read out of the AST's
   -- mutable cell at lowering time so the IR is immutable):
-  --   CMethod = a method occurrence with its selected value arity, narrowed by
-  --             its RKey/RDict;
+  --   CMethod = a method occurrence with its selected denotation pre-use arrow
+  --             arity, used to narrow its RKey/RDict candidates;
   --             implRoutes applies per-instance requires dicts (Phase 83/84);
   --             methRoutes applies method-level constraint dicts (Phase 69.x-e).
   --   CDict   = a constrained-function occurrence, one Route per `=>` constraint.

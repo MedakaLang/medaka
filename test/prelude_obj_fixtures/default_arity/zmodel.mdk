@@ -1,0 +1,5 @@
+import iz.{IZ}
+
+public export data Z = Z
+
+export impl IZ Z

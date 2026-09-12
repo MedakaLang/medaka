@@ -1,0 +1,8 @@
+import ia.{IA}
+import iz.{IZ}
+import amodel.{A(..)}
+import zmodel.{Z(..)}
+import viaa.{viaA}
+import viaz.{viaZ}
+
+main = println (viaA A * 1000 + viaZ Z 3)

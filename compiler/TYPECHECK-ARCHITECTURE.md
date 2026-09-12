@@ -86,13 +86,25 @@ canonical instance key. Its ownership index also records the symbol chosen when
 the prelude was compiled alone, so declarations and call sites retain that symbol
 when a program introduces a colliding implementation.
 
-Dynamic dictionary routes still lack the interface identity needed to distinguish
-different declared arities of a shared method name. LLVM rejects those ambiguous
-calls rather than guessing their saturation; static exact-key calls retain their
-declared arity. The same guard applies to ordinary and precompiled-prelude builds.
-Prelude-owned bodies replayed only to produce declarations retain their standalone
-arity. Carrying full identity through method values, applications and both backends
-remains part of [#2396](https://github.com/MedakaLang/medaka/issues/2396).
+Each method occurrence now freezes the selected interface declaration's or
+standalone's pre-use arrow arity before application unification. Dynamic dictionary
+dispatch uses that scalar to separate same-spelled interface candidates and keys a
+partial dispatcher independently of the number of supplied arguments. Once a tag
+selects an implementation, its definition-side callable arity remains authoritative;
+the occurrence scalar does not replace `methodArityOfEntry` or `groupArity`.
+
+This scalar is a bounded dispatch discriminator rather than full source identity or
+source-parameter syntax. The type representation already erases parentheses that can
+distinguish a method returning a function from a multi-argument declaration. Static
+exact-key calls continue to use the selected implementation's definition-side arity,
+and full identity through method values and applications remains unfinished work.
+Native interface-default symbols include the selected declaration arity, so
+different-arity same-spelled defaults can coexist at one receiver tag. Wasm mirrors
+the selected-entry restamping and symbol choice for static routes. The tree evaluator's
+and Core evaluator's default selection still ignore the occurrence scalar, so nested
+same-spelled defaults remain order-sensitive there. Wasm dynamic-dictionary defaults
+(#1020) retain their pre-existing limitation. Same-arity defaults still need full
+interface identity and remain subject to the existing first-match limitation.
 
 Ordinary method-return sites retain the legacy spelling-based path; this work does not
 complete the shared solver or return-family migration. The finalized scheme query

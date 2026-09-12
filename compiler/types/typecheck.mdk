@@ -9638,9 +9638,9 @@ data GivenMatch =
 -- this file gets the answer from the published table (`evMethodRoutes`) — but the
 -- stampers still write through `Ref`s (every goal destination is an `EvDest` over
 -- one), so the cells live here, minted with the node (`mintMethodCell`) and read
--- back by `methodCellEntries` when the table is published.  Three cells, in the
--- order `EMethodAt` used to carry them: the dispatch route, the selected impl's
--- `requires` dicts, the method's own `=>` dicts.
+-- back by `methodCellEntries` when the table is published.  It owns four cells:
+-- the selected denotation's pre-use arrow arity, the dispatch route, the selected
+-- impl's `requires` dicts, and the method's own `=>` dicts.
 -- Two channels carry one fact: inside this file a reader dereferences the live
 -- cell, outside it reads the installed snapshot, and "no cell is written after the
 -- last publish" is a discipline of the drain's schedule, not a type.  The mutable
@@ -28999,8 +28999,8 @@ dictPassDecl _ _ (d@(DImpl { reqs, methods, ... })) =
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
 -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
 -- inferDefaultMethod).
-dictPassDecl _ _ (d@(DInterface { methods, ... })) =
-  DInterface { d | methods = map ifaceDictPassMethod methods }
+dictPassDecl _ _ (d@(DInterface { typarams, methods, ... })) =
+  DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
 dictPassDecl names ret (DAttrib attrs d) =
   DAttrib attrs (dictPassDecl names ret d)
 dictPassDecl _ _ d = d
@@ -29019,10 +29019,16 @@ prependDictClause : String -> Int -> FunClause -> FunClause
 prependDictClause n k (FunClause pats body) =
   FunClause (dictParams n k ++ pats) body
 
-ifaceDictPassMethod : IfaceMethod -> IfaceMethod
-ifaceDictPassMethod (IfaceMethod n ty (Some (MethodDefault pats body)) mloc) =
-  ifaceDictPassDefault n ty pats body mloc (methodDictArityOf n)
-ifaceDictPassMethod m = m
+ifaceDictPassMethod : List String -> IfaceMethod -> IfaceMethod
+ifaceDictPassMethod typarams (IfaceMethod n ty (Some (MethodDefault pats body)) mloc) =
+  ifaceDictPassDefault
+    n
+    ty
+    pats
+    body
+    mloc
+    (listLen (methodLevelConstraintVarNames typarams ty))
+ifaceDictPassMethod _ m = m
 
 ifaceDictPassDefault : String ->
   Ty ->
@@ -30263,7 +30269,8 @@ checkBodyImpl seed mode prog0 =
       let _ =
         setRef
           crossRun.value.crossModuleMethodPredicateSlotsQualRef
-          (attributeMethodModulePredicateSlots
+          (emptyMethodModulePredicateSlots mid prog
+            ++ attributeMethodModulePredicateSlots
               mid
               prog
               perRun.value.methodPredicateSlotsRef.value
@@ -44873,6 +44880,31 @@ attributeMethodModulePredicateSlots mid prog entries =
   map
     (e => ((mid, fst e), snd e))
     (filterList (e => omHasKey (fst e) progMethods) entries)
+
+-- The bare method-slot table deliberately omits empty rows, because absence was its
+-- historical unconstrained answer.  Its module-qualified carrier cannot do that:
+-- an explicit empty row distinguishes this interface's unconstrained method from a
+-- same-spelled constrained method in another module during final dict passing.
+emptyMethodModulePredicateSlots : String ->
+  List Decl ->
+  List ((String, String), List MethodPredicateSlot)
+emptyMethodModulePredicateSlots _ [] = []
+emptyMethodModulePredicateSlots mid ((DAttrib _ d) :: rest) =
+  emptyMethodModulePredicateSlots mid [d]
+    ++ emptyMethodModulePredicateSlots mid rest
+emptyMethodModulePredicateSlots mid ((DInterface { typarams, methods, ... }) :: rest) =
+  flatMap (emptyMethodModulePredicateSlot mid typarams) methods
+    ++ emptyMethodModulePredicateSlots mid rest
+emptyMethodModulePredicateSlots mid (_ :: rest) =
+  emptyMethodModulePredicateSlots mid rest
+
+emptyMethodModulePredicateSlot : String ->
+  List String ->
+  IfaceMethod ->
+  List ((String, String), List MethodPredicateSlot)
+emptyMethodModulePredicateSlot mid typarams (IfaceMethod name ty _ _)
+  | isEmptyL (methodLevelConstraintVarNames typarams ty) = [((mid, name), [])]
+  | otherwise = []
 -- membership-only sets (built once) instead of O(N) contains scans per entry:
 -- scopeNames (~all top-level fn names) was scanned per promotedC entry → O(N²).
 

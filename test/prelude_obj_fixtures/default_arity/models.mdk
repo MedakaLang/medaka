@@ -1,0 +1,8 @@
+import ia.{IA}
+import iz.{IZ}
+
+public export data Box = Box
+
+export impl IA Box
+
+export impl IZ Box

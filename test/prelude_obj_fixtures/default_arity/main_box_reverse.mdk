@@ -1,0 +1,7 @@
+import viaz.{viaZ}
+import viaa.{viaA}
+import models.{Box(..)}
+import iz.{IZ}
+import ia.{IA}
+
+main = println (viaA Box * 1000 + viaZ Box 3)
