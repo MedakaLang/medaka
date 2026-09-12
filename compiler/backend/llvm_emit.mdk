@@ -529,6 +529,21 @@ methodArityOfInput e method = match omLookup method e.input.methodIfaceIndex
   Some (_, arity) => arity
   None => 0
 
+-- A dynamic method route carries only its dictionary binder, not the declaration
+-- identity of the interface that owns it.  When two in-scope interfaces give the
+-- same method spelling different arities, using the bare first-match table can
+-- invent or drop operands and return a PAP pointer as a value.  Refuse that Core
+-- shape until RDict/RDictFwd carry predicate identity end to end.  Concrete RKey
+-- routes retain their exact-interface arity and never call this helper.
+dynamicMethodArity : Emit -> String -> Int
+dynamicMethodArity e method =
+  if omHasKey method e.input.methodArityConflictIndex
+    && not !e.declaringPrelude then
+    panic
+      "native backend cannot dispatch constrained method `\{method}` because visible interfaces declare it with different arities; use distinct method names"
+  else
+    methodArityOfInput e method
+
 -- ── ARITY BY DECLARATION (#1450, #1668) ─────────────────────────────────────
 -- THE ARITY LEG MOVED; THE `methodIfaceOf` ROUTE LEG DID NOT, and that asymmetry
 -- is deliberate, not an oversight.  `methodArityOfInput` above is keyed by the
@@ -613,11 +628,13 @@ methodArityOfTag e method tag = match implFor e method tag
   None => methodArityOfInput e method
 
 -- the declared arity of a method OCCURRENCE, taken from its route when the route
--- names a concrete impl.  RDict/RDictFwd occurrences dispatch through the shared
--- name-keyed `@mdk_disp_<method>_*` dispatcher and carry no interface identity at
--- all, so they keep the bare answer (see the report's `Not covered`).
+-- names a concrete impl.  RDict/RDictFwd occurrences dispatch through a shared
+-- name-keyed dispatcher and carry no interface identity; they can use the bare
+-- answer only when every declaration of that method agrees on arity.
 methodArityOfRoute : Emit -> String -> Route -> Int
 methodArityOfRoute e name (RKey tag _) = methodArityOfTag e name tag
+methodArityOfRoute e name (RDict _) = dynamicMethodArity e name
+methodArityOfRoute e name (RDictFwd _) = dynamicMethodArity e name
 methodArityOfRoute e name _ = methodArityOfInput e name
 
 -- ── method → method-level constraint INTERFACE names (native backend, G7) ────
@@ -856,6 +873,10 @@ data EmitInputData = EmitInputData {
   methodIfaces : List (String, (String, Int)),
   methodIfaceIndex : OrdMap (String, Int),
   methodIfaceIdIndex : OrdMap Int,
+  -- Bare method names whose interface declarations disagree on value arity.
+  -- Runtime-dictionary routes do not yet carry interface identity, so these
+  -- names must be rejected instead of selecting one declaration by list order.
+  methodArityConflictIndex : OrdMap Unit,
   methodConstraintIfaces : List (String, List String),
   ctorFieldIndex : OrdMap (List String),
   declSigIndex : OrdMap (List String, String),
@@ -918,6 +939,7 @@ makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorF
     omFromPairs (reverseL (map bareIfaceArityRow methodIfaces)) omEmpty,
   methodIfaceIdIndex =
     omFromPairs (reverseL (map ifaceIdArityRow methodIfaces)) omEmpty,
+  methodArityConflictIndex = methodArityConflicts methodIfaces omEmpty omEmpty,
   methodConstraintIfaces = methodConstraintIfaces,
   ctorFieldIndex = omFromPairs (reverseL ctorFieldTypes) omEmpty,
   declSigIndex = omFromPairs (reverseL declSigTypes) omEmpty,
@@ -931,6 +953,21 @@ makeEmitInput returnsSelf selfFnParams methodIfaces methodConstraintIfaces ctorF
   recordFieldOrders = recordFieldOrders,
   ifaceImplHeads = ifaceImplHeads,
 }
+
+methodArityConflicts : List (String, (String, String, Int)) ->
+  OrdMap Int ->
+  OrdMap Unit ->
+  OrdMap Unit
+methodArityConflicts [] _ conflicts = conflicts
+methodArityConflicts ((method, (_, _, arity)) :: rest) firstArities conflicts =
+  match omLookup method firstArities
+    None =>
+      methodArityConflicts rest (omInsert method arity firstArities) conflicts
+    Some firstArity => methodArityConflicts rest firstArities (if firstArity
+      == arity then
+      conflicts
+    else
+      omInsert method () conflicts)
 
 preludeImplIndexOf : List (String, String, String) ->
   OrdMap (OrdMap String) ->
@@ -977,6 +1014,10 @@ data Emit = Emit {
   gapMode : GapMode,
   gapLog : Ref (List String),
   curGapBind : Ref String,
+  -- True only while the program half replays a prelude-owned body to derive its
+  -- declarations and dispatcher registrations.  That body was compiled against
+  -- core.mdk's own method table, whose first-match arity remains authoritative.
+  declaringPrelude : Ref Bool,
   defineCounter : Ref Int,
   closureArity : Ref (List (String, Int)),
   closureRetTy : Ref (List (String, LTy)),
@@ -5998,9 +6039,9 @@ emitDictValDefine e lamName name nDicts valArity =
 -- paths, so they are excluded here and keep their existing lowering.)
 dictRoutedUnderApplied : Emit -> Route -> String -> List String -> Bool
 dictRoutedUnderApplied e (RDict _) name argOps =
-  lengthS argOps < methodArityOfInput e name
+  lengthS argOps < dynamicMethodArity e name
 dictRoutedUnderApplied e (RDictFwd _) name argOps =
-  lengthS argOps < methodArityOfInput e name
+  lengthS argOps < dynamicMethodArity e name
 dictRoutedUnderApplied _ _ _ _ = False
 
 -- E22: build the residual PAP closure for an under-applied dict-routed method.
@@ -6416,6 +6457,7 @@ emitMethodDispatch : Emit ->
   List String ->
   (String, LTy)
 emitMethodDispatch e env name d methRoutes argOps =
+  let _ = dynamicMethodArity e name
   match soleImplDirectSite e name
     Some ent =>
       -- WS-1b: the method has exactly ONE impl with no `requires` element dicts, so a
@@ -6608,9 +6650,12 @@ hasPreludeImpl e method key = match preludeImplSym e method key
 emitAsDeclares : Emit -> (Unit -> Unit) -> Unit
 emitAsDeclares e act =
   let saved = (bufRef e).value
+  let wasDeclaringPrelude = !e.declaringPrelude
   bufRef e := []
+  e.declaringPrelude := True
   let _ = act ()
   let produced = reverseL (bufRef e).value
+  e.declaringPrelude := wasDeclaringPrelude
   bufRef e := saved
   emitDeclaresFor e produced
 
@@ -14513,6 +14558,7 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
     gapMode = cfg.gapMode,
     gapLog = Ref [],
     curGapBind = Ref "?",
+    declaringPrelude = Ref False,
     defineCounter = Ref 0,
     closureArity = Ref [],
     closureRetTy = Ref [],
