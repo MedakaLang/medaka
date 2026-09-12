@@ -91,9 +91,120 @@ $ROOT/test/engine_fixtures/numop_predicate_primitive_collision.mdk
 W="$(mktemp -d)"
 trap 'rm -rf "$W"' EXIT
 
+# A same-spelled different-arity interface is safe when the method occurrence has
+# a concrete RKey: its declaration identity supplies the exact arity.  The dynamic
+# twins below deliberately use RDict and must be rejected by BOTH native paths;
+# choosing either visible declaration by bare method name silently changes the
+# source call's saturation.
+cat > "$W/arity_static.mdk" <<'MDK'
+interface Forge a where
+  add : a -> a
+
+impl Forge Int where
+  add x = x + 100
+
+forge : Int -> Int
+forge x = add x
+
+main = println (forge 23)
+MDK
+
+cat > "$W/arity_dynamic_direct.mdk" <<'MDK'
+interface Forge a where
+  add : a -> a
+
+impl Forge Int where
+  add x = x + 100
+
+forge : Forge a => a -> a
+forge x = add x
+
+main = println (forge 23)
+MDK
+
+cat > "$W/arity_dynamic_value.mdk" <<'MDK'
+interface Forge a where
+  add : a -> a
+
+impl Forge Int where
+  add x = x + 100
+
+forge : Forge a => a -> a
+forge x =
+  let f = add
+  f x
+
+main = println (forge 23)
+MDK
+
+cat > "$W/arity_dynamic_three_args.mdk" <<'MDK'
+interface Forge a where
+  add : a -> a -> a -> a
+
+impl Forge Int where
+  add x y z = x + y + z
+
+forge : Forge a => a -> a -> a -> a
+forge x y z = add x y z
+
+main = println (forge 1 2 3)
+MDK
+
+SAMPLE="$SAMPLE
+$W/arity_static.mdk"
+printf '123\n' > "$W/arity_static.expected"
+
 checked=0
 same=0
 fail=0
+
+arityDiag="native backend cannot dispatch constrained method \`add\` because visible interfaces declare it with different arities"
+
+expectArityReject() {
+  mode="$1"
+  src="$2"
+  opt="$3"
+  pobj="$4"
+  label="$(basename "$src" .mdk)"
+  out="$W/$label$opt.$mode"
+  log="$out.log"
+  if [ "$mode" = prebuilt ]; then
+    MEDAKA_PRELUDE_OBJ="$pobj" MEDAKA_CLANG_OPT="$opt" \
+      "$MEDAKA" build --allow-internal "$src" -o "$out" >"$log" 2>&1
+  else
+    MEDAKA_CLANG_OPT="$opt" \
+      "$MEDAKA" build --allow-internal "$src" -o "$out" >"$log" 2>&1
+  fi
+  rc=$?
+  checked=$((checked+1))
+  if [ "$rc" -ne 0 ] && grep -F "$arityDiag" "$log" >/dev/null 2>&1; then
+    same=$((same+1))
+    printf 'ok   %-28s %s  %s rejected incompatible dynamic arity\n' \
+      "$label" "$opt" "$mode"
+  else
+    fail=$((fail+1))
+    printf 'FAIL %-28s %s  %s expected dynamic-arity rejection\n' \
+      "$label" "$opt" "$mode"
+    sed -n '1,8p' "$log"
+  fi
+}
+
+for src in "$W"/arity_dynamic_*.mdk; do
+  label="$(basename "$src" .mdk)"
+  expected=123
+  [ "$label" = arity_dynamic_three_args ] && expected=6
+  if ! "$MEDAKA" check "$src" >"$W/$label.check.log" 2>&1; then
+    echo "FAIL: dynamic-arity semantic probe did not typecheck ($label)"
+    fail=$((fail+1))
+  else
+    actual="$("$MEDAKA" run "$src" 2>"$W/$label.run.err")"
+    rc_run=$?
+    if [ "$rc_run" -ne 0 ] || [ "$actual" != "$expected" ]; then
+      echo "FAIL: dynamic-arity eval oracle ($label): expected exit 0 / $expected, got exit $rc_run / $actual"
+      fail=$((fail+1))
+    fi
+  fi
+done
 
 for OPT in -O0 -O2; do
   pobj="$W/prelude$OPT.o"
@@ -114,14 +225,19 @@ for OPT in -O0 -O2; do
     "$inline"   > "$W/$label$OPT.inline.out"   2>&1; rc_i=$?
     "$prebuilt" > "$W/$label$OPT.prebuilt.out" 2>&1; rc_p=$?
     checked=$((checked+1))
-    if [ "$rc_i" -eq "$rc_p" ] && cmp -s "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out"; then
+    if [ "$rc_i" -eq "$rc_p" ] && cmp -s "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out" \
+      && { [ "$label" != arity_static ] || { [ "$rc_i" -eq 0 ] && cmp -s "$W/$label$OPT.inline.out" "$W/arity_static.expected"; }; }; then
       same=$((same+1))
       printf 'ok   %-28s %s  same output (exit %d)\n' "$label" "$OPT" "$rc_i"
     else
       fail=$((fail+1))
-      printf 'FAIL %-28s %s  inline(exit %d) vs prebuilt(exit %d) DIVERGED\n' "$label" "$OPT" "$rc_i" "$rc_p"
+      printf 'FAIL %-28s %s  inline(exit %d) vs prebuilt(exit %d) diverged or missed its value pin\n' "$label" "$OPT" "$rc_i" "$rc_p"
       diff "$W/$label$OPT.inline.out" "$W/$label$OPT.prebuilt.out" | head -10
     fi
+  done
+  for src in "$W"/arity_dynamic_*.mdk; do
+    expectArityReject inline "$src" "$OPT" "$pobj"
+    expectArityReject prebuilt "$src" "$OPT" "$pobj"
   done
 done
 
