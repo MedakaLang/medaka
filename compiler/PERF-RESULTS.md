@@ -1391,8 +1391,7 @@ impl Step Int where
   step x = x + 1
 
 loop : Int -> Int -> Int
-loop n x =
-  if n <= 0 then x else loop (n - 1) (step x)
+loop n x = if n <= 0 then x else loop (n - 1) (step x)
 
 main = println (loop 10000 0)
 ```
