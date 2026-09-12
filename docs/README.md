@@ -81,6 +81,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`INTERFACE-CANDIDATES.md`](design/INTERFACE-CANDIDATES.md) | INTERFACE-CANDIDATES.md — which built-in constructs could generalize behind an interface | PARTIAL |
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
+| [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
 
 ### ops — release, testing, distribution
 
