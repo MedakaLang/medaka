@@ -1,0 +1,8 @@
+-- Fixture for rule-regex-literal (#2924): the negative case — a string
+-- literal passed directly to `compile`/`mustCompile` that DOES compile as a
+-- regex pattern must never fire.
+
+import regex.{mustCompile}
+
+-- NEGATIVE: a valid pattern.
+goodRe = mustCompile "[a-z]+"

@@ -432,3 +432,11 @@ test/lib/pcg_partition         shell library, not a script (#2780): sourced by
                                observable, so there is nothing for a shard to assert. Its behavior
                                IS asserted — by diff_compiler_partition_stability.sh, which is
                                enrolled in test/gates.toml with a shard.
+test/regex_conformance_test.mdk  the RE2/Go conformance table for stdlib/regex.mdk (#2924,
+                               S-regex-engine): deliberately not a test/gates.toml `run` target —
+                               adding a brand-new gate mid-slice would hit [W-SHARD-DERIVED]'s
+                               hard refusal (no cost-sample row exists for it yet) and needed its
+                               own follow-up decision, not a unilateral one. Its behavior IS
+                               asserted: the Makefile `test:` target names it explicitly
+                               ([W-MODULE-BLIND]), so `make test` runs it, and CI's `inlang` job
+                               runs `make test` and is green.

@@ -1,0 +1,101 @@
+-- stdlib/regex.mdk through all three engines (eval == native == wasm).
+-- The module is several hundred lines of mutable-Array and Ref code driven by
+-- a recursive thread-adder, so it exercises rather more of each backend than
+-- its API surface suggests: arrayMake/arrayCopy/arrayGetUnsafe/arraySetUnsafe
+-- over an Array (Array Int), Ref cells inside record fields, and an
+-- eleven-constructor match in the inner loop.  Every value below must be
+-- IDENTICAL on the three engines; nothing here is an oracle capture.
+--
+-- Coverage, per docs/design/REGEX-DESIGN.md section 6: compile (including a
+-- rejection), find, captures, replace, and split.
+import regex.{
+  Group,
+  Match,
+  Regex,
+  compile,
+  escape,
+  find,
+  findAll,
+  fullMatch,
+  isFullMatch,
+  isMatch,
+  mustCompile,
+  replaceAll,
+  source,
+  split,
+}
+
+dateRe : Regex
+dateRe = mustCompile "^(\\d{4})-(\\d{2})-(\\d{2})$"
+
+wordRe : Regex
+wordRe = mustCompile "(?i)\\b[a-z]+\\b"
+
+altRe : Regex
+altRe = mustCompile "(a|ab)(c|bcd)(d*)"
+
+spanOf : Match -> (Int, Int)
+spanOf m = (m.start, m.end)
+
+textOf : Match -> String
+textOf m = m.text
+
+groupTexts : Match -> List String
+groupTexts m = map groupText m.groups
+
+groupText : Option Group -> String
+groupText None = "-"
+groupText (Some g) = g.text
+
+optTexts : Option Match -> List String
+optTexts None = ["<none>"]
+optTexts (Some m) = m.text :: groupTexts m
+
+compileErr : String -> String
+compileErr pat = match compile pat
+  Ok re => "compiled: " ++ source re
+  Err e => "\{e.message} @\{intToString e.position}"
+
+main = debug
+  (
+    -- Booleans: anchoring, folding, the leftmost-first discriminator.
+    [
+      isFullMatch dateRe "2026-09-11",
+      isFullMatch dateRe "2026-9-11",
+      isMatch wordRe "  Hello  ",
+      isMatch (mustCompile "\\d") "abc",
+      isFullMatch (mustCompile (escape "a.b*c")) "a.b*c",
+      isFullMatch (mustCompile (escape "a.b*c")) "axbbc",
+      isMatch (mustCompile "(a*)*b") "aaaaaaaaaaaaaaaaaaaa",
+    ],
+    -- Captures: whole match then one text per group, "-" for a group that
+    -- did not participate.
+    (
+      optTexts (find dateRe "2026-09-11"),
+      optTexts (find altRe "abcd"),
+      optTexts (find (mustCompile "(x)|b") "abc"),
+      optTexts (find (mustCompile "z") "abc"),
+      optTexts (fullMatch (mustCompile "a|ab") "ab"),
+    ),
+    -- findAll: spans and texts, including the empty-match advance rule.
+    (
+      map spanOf (findAll (mustCompile "a*") "baaab"),
+      map textOf (findAll (mustCompile "\\d+") "a1b22c333"),
+      map spanOf (findAll wordRe "Go regexp RE2"),
+    ),
+    -- Replacement and splitting.
+    (
+      replaceAll (mustCompile "(\\w+)@(\\w+)") "$2/$1" "a@b and c@d",
+      replaceAll (mustCompile "a*") "-" "abc",
+      split (mustCompile ",\\s*") "a, b,c",
+      split (mustCompile "a*") "abaabaccadaaae",
+    ),
+    -- A rejected pattern is an Err naming what is missing, not a panic and
+    -- not a pattern that quietly means something else.
+    [
+      compileErr "a(",
+      compileErr "[[:alpha:]]",
+      compileErr "(a)\\1",
+      compileErr "a{2,3}",
+    ],
+  )

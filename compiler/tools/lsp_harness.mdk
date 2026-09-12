@@ -33,7 +33,8 @@ import json.{
   asInt,
 }
 import support.util.{utf8Len, utf8CharWidth}
-import string.{isDigit}
+import string.{toInt}
+import regex.{Regex, mustCompile, find}
 
 -- ── JSON-RPC message builders ───────────────────────────────────────────────
 
@@ -168,8 +169,12 @@ parseFrames s =
   let arr = stringToChars s
   pfGo s arr (arrayLength arr) 0
 
-clLabel : String
-clLabel = "Content-Length:"
+-- `regex` has no anchor-at-offset primitive (`findFrom` restarts the SEARCH
+-- there, it does not anchor `^` there), so the header is matched against the
+-- tail slice from `i` with `^` doing the anchoring, and `i` is added back
+-- onto the reported match position.
+headerRe : Regex
+headerRe = mustCompile "^Content-Length: *([0-9]+)\r\n\r\n"
 
 pfGo : String -> Array Char -> Int -> Int -> (List Frame, Bool)
 pfGo s arr len i =
@@ -177,16 +182,20 @@ pfGo s arr len i =
     ([], True)
   else if isTrailingJunk arr len i then
     ([], True)
-  else if matchesAt arr len i clLabel then match parseHeader arr len i
+  else match find headerRe (stringSlice i (stringLength s) s)
     None => ([], False)
-    Some (n, bodyStart) => match takeBytes arr len bodyStart n
-      None => ([Frame n "" False], False)
-      Some bodyEnd =>
-        let body = stringSlice bodyStart bodyEnd s
-        match pfGo s arr len bodyEnd
-          (rest, clean) => (Frame n body True :: rest, clean)
-  else
-    ([], False)
+    Some m => match m.groups
+      [Some g] => match toInt g.text
+        None => ([], False)
+        Some n =>
+          let bodyStart = i + m.end
+          match takeBytes arr len bodyStart n
+            None => ([Frame n "" False], False)
+            Some bodyEnd =>
+              let body = stringSlice bodyStart bodyEnd s
+              match pfGo s arr len bodyEnd
+                (rest, clean) => (Frame n body True :: rest, clean)
+      _ => ([], False)
 
 -- Everything from i to end is trailing junk (the LSP's `0` unit-print + ws).
 isTrailingJunk : Array Char -> Int -> Int -> Bool
@@ -212,39 +221,6 @@ matchesGo arr len i larr j llen
   | arrayGetUnsafe (i + j) arr == arrayGetUnsafe j larr =
     matchesGo arr len i larr (j + 1) llen
   | otherwise = False
-
--- At `i` (== clLabel): skip label + spaces, read digits, expect "\r\n\r\n".
--- Returns (contentLength, bodyStartIndex).  Header bytes are ASCII so codepoint
--- index == byte index here.
-parseHeader : Array Char -> Int -> Int -> Option (Int, Int)
-parseHeader arr len i =
-  let afterLabel = i + stringLength clLabel
-  let numStart = skipSpaces arr len afterLabel
-  match parseDigits arr len numStart 0 False
-    None => None
-    Some (n, afterNum) =>
-      if matchesAt arr len afterNum "\r\n\r\n" then
-        Some (n, afterNum + 4)
-      else
-        None
-
-skipSpaces : Array Char -> Int -> Int -> Int
-skipSpaces arr len i
-  | i >= len = i
-  | arrayGetUnsafe i arr == ' ' = skipSpaces arr len (i + 1)
-  | otherwise = i
-
-parseDigits : Array Char -> Int -> Int -> Int -> Bool -> Option (Int, Int)
-parseDigits arr len i acc seen
-  | i >= len = if seen then Some (acc, i) else None
-  | isDigit (arrayGetUnsafe i arr) =
-    parseDigits
-      arr
-      len
-      (i + 1)
-      (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48))
-      True
-  | otherwise = if seen then Some (acc, i) else None
 
 -- Consume `remaining` BYTES from codepoint `i`; Some end-index on an exact
 -- boundary, None if a codepoint straddles the boundary or the stream runs out.

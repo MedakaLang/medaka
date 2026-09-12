@@ -1,5 +1,5 @@
 # META
-source_lines=1792
+source_lines=1784
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -102,8 +102,8 @@ import tools.prop_runner.{
   propResultPassed,
   propResultDetail,
 }
-import support.char.{isIdentChar}
 import support.util.{joinWith}
+import regex.{Regex, Match, mustCompile, findAll}
 
 -- ── protocol / server identity ──────────────────────────────────────────────
 
@@ -536,25 +536,17 @@ lineTextEnd arr len i
   | arrayGetUnsafe i arr == '\n' = i
   | otherwise = lineTextEnd arr len (i + 1)
 
--- Every identifier token on `text` (support.char.isIdentChar runs), as
--- (name, 0-based column) pairs in left-to-right order.
+-- Every identifier token on `text` (the WIDE class `support.char.isIdentChar`
+-- runs — alnum, `_`, `'`), as (name, 0-based column) pairs in left-to-right
+-- order.
+identTokenRe : Regex
+identTokenRe = mustCompile "[A-Za-z0-9_']+"
+
 identifiersInLine : String -> List (String, Int)
-identifiersInLine text =
-  identsGo (stringToChars text) text (stringLength text) 0
+identifiersInLine text = map identPair (findAll identTokenRe text)
 
-identsGo : Array Char -> String -> Int -> Int -> List (String, Int)
-identsGo arr text len i
-  | i >= len = []
-  | isIdentChar (arrayGetUnsafe i arr) =
-    let e = identsRunEnd arr len (i + 1)
-    (stringSlice i e text, i) :: identsGo arr text len e
-  | otherwise = identsGo arr text len (i + 1)
-
-identsRunEnd : Array Char -> Int -> Int -> Int
-identsRunEnd arr len i
-  | i >= len = len
-  | isIdentChar (arrayGetUnsafe i arr) = identsRunEnd arr len (i + 1)
-  | otherwise = i
+identPair : Match -> (String, Int)
+identPair m = (m.text, m.start)
 
 -- Columns where `symbol` appears as a WHOLE identifier token on `text`
 -- (exact match, not substring — "x" does not match "xs").
@@ -1806,8 +1798,8 @@ unit = ()
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "mcpSupportedVersions" () (EListLit (ELit (LString "2024-11-05")) (ELit (LString "2025-03-26")) (ELit (LString "2025-06-18")) (ELit (LString "2025-11-25"))))
 (DTypeSig false "mcpLatestVersion" (TyCon "String"))
@@ -1873,12 +1865,12 @@ unit = ()
 (DFunDef false "lineTextGo" ((PVar "arr") (PVar "src") (PVar "len") (PVar "i") (PVar "curLine") (PVar "target")) (EIf (EBinOp "==" (EVar "curLine") (EVar "target")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EApp (EApp (EApp (EVar "lineTextEnd") (EVar "arr")) (EVar "len")) (EVar "i"))) (EVar "src"))) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lineTextGo") (EVar "arr")) (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "curLine") (ELit (LInt 1)))) (EVar "target")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lineTextGo") (EVar "arr")) (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "curLine")) (EVar "target")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "lineTextEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "lineTextEnd" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lineTextEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "identTokenRe" (TyCon "Regex"))
+(DFunDef false "identTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "[A-Za-z0-9_']+"))))
 (DTypeSig false "identifiersInLine" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "identifiersInLine" ((PVar "text")) (EApp (EApp (EApp (EApp (EVar "identsGo") (EApp (EVar "stringToChars") (EVar "text"))) (EVar "text")) (EApp (EVar "stringLength") (EVar "text"))) (ELit (LInt 0))))
-(DTypeSig false "identsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "identsGo" ((PVar "arr") (PVar "text") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EListLit) (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identsRunEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "e")) (EVar "text")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "identsGo") (EVar "arr")) (EVar "text")) (EVar "len")) (EVar "e"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "identsGo") (EVar "arr")) (EVar "text")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "identsRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "identsRunEnd" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EVar "identsRunEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identifiersInLine" ((PVar "text")) (EApp (EApp (EVar "map") (EVar "identPair")) (EApp (EApp (EVar "findAll") (EVar "identTokenRe")) (EVar "text"))))
+(DTypeSig false "identPair" (TyFun (TyCon "Match") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "identPair" ((PVar "m")) (ETuple (EFieldAccess (EVar "m") "text") (EFieldAccess (EVar "m") "start")))
 (DTypeSig false "symbolColsOnLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "symbolColsOnLine" ((PVar "text") (PVar "symbol")) (EApp (EApp (EVar "symbolColsGo") (EApp (EVar "identifiersInLine") (EVar "text"))) (EVar "symbol")))
 (DTypeSig false "symbolColsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
@@ -2046,8 +2038,8 @@ unit = ()
 (DUse false (UseGroup ("tools" "test_cmd") ((mem "runTestReport" false))))
 (DUse false (UseGroup ("tools" "doctest") ((mem "Example" false) (mem "ExResult" true) (mem "exResultJsonFields" false) (mem "RunResult" false) (mem "Engine" true) (mem "engineName" false) (mem "exampleInput" false) (mem "exampleLine" false) (mem "runPassed" false) (mem "runFailed" false) (mem "runErrors" false) (mem "runDetails" false))))
 (DUse false (UseGroup ("tools" "prop_runner") ((mem "PropResult" false) (mem "propResultName" false) (mem "propResultPassed" false) (mem "propResultDetail" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinWith" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "findAll" false))))
 (DTypeSig false "mcpSupportedVersions" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "mcpSupportedVersions" () (EListLit (ELit (LString "2024-11-05")) (ELit (LString "2025-03-26")) (ELit (LString "2025-06-18")) (ELit (LString "2025-11-25"))))
 (DTypeSig false "mcpLatestVersion" (TyCon "String"))
@@ -2113,12 +2105,12 @@ unit = ()
 (DFunDef false "lineTextGo" ((PVar "arr") (PVar "src") (PVar "len") (PVar "i") (PVar "curLine") (PVar "target")) (EIf (EBinOp "==" (EVar "curLine") (EVar "target")) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EApp (EApp (EApp (EVar "lineTextEnd") (EVar "arr")) (EVar "len")) (EVar "i"))) (EVar "src"))) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lineTextGo") (EVar "arr")) (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "curLine") (ELit (LInt 1)))) (EVar "target")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "lineTextGo") (EVar "arr")) (EVar "src")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "curLine")) (EVar "target")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "lineTextEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "lineTextEnd" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EVar "i") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lineTextEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "identTokenRe" (TyCon "Regex"))
+(DFunDef false "identTokenRe" () (EApp (EVar "mustCompile") (ELit (LString "[A-Za-z0-9_']+"))))
 (DTypeSig false "identifiersInLine" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int")))))
-(DFunDef false "identifiersInLine" ((PVar "text")) (EApp (EApp (EApp (EApp (EVar "identsGo") (EApp (EVar "stringToChars") (EVar "text"))) (EVar "text")) (EApp (EVar "stringLength") (EVar "text"))) (ELit (LInt 0))))
-(DTypeSig false "identsGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))))))))
-(DFunDef false "identsGo" ((PVar "arr") (PVar "text") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EListLit) (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EBlock (DoLet false false (PVar "e") (EApp (EApp (EApp (EVar "identsRunEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (DoExpr (EBinOp "::" (ETuple (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EVar "e")) (EVar "text")) (EVar "i")) (EApp (EApp (EApp (EApp (EVar "identsGo") (EVar "arr")) (EVar "text")) (EVar "len")) (EVar "e"))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "identsGo") (EVar "arr")) (EVar "text")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "identsRunEnd" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
-(DFunDef false "identsRunEnd" ((PVar "arr") (PVar "len") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "len")) (EVar "len") (EIf (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EVar "identsRunEnd") (EVar "arr")) (EVar "len")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "identifiersInLine" ((PVar "text")) (EApp (EApp (EMethodRef "map") (EVar "identPair")) (EApp (EApp (EVar "findAll") (EVar "identTokenRe")) (EVar "text"))))
+(DTypeSig false "identPair" (TyFun (TyCon "Match") (TyTuple (TyCon "String") (TyCon "Int"))))
+(DFunDef false "identPair" ((PVar "m")) (ETuple (EFieldAccess (EVar "m") "text") (EFieldAccess (EVar "m") "start")))
 (DTypeSig false "symbolColsOnLine" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "symbolColsOnLine" ((PVar "text") (PVar "symbol")) (EApp (EApp (EVar "symbolColsGo") (EApp (EVar "identifiersInLine") (EVar "text"))) (EVar "symbol")))
 (DTypeSig false "symbolColsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Int"))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))

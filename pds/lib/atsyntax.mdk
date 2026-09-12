@@ -6,10 +6,15 @@
    `pds/test/atsyntax_vectors.sh`). NSID and TID have their own modules
    (`lib.nsid`, `lib.tid`) and are graded there. -}
 
+import regex.{Regex, isFullMatchBytes, mustCompile}
 import string.{contains, split, toUtf8, utf8ByteLength}
 import lib.nsid.{nsidErrorMessage, validateNsid}
 
 -- byte classes ----------------------------------------------------------------
+--
+-- Each rule below reports its own diagnostic, so the patterns cover only the
+-- character-set scans; the length, hyphen and first-byte rules stay separate,
+-- and a one-byte test stays a predicate.
 
 lowerByte : Int -> Bool
 lowerByte byte = byte >= 97 && byte <= 122
@@ -28,15 +33,8 @@ alphaNumericByte byte = alphaByte byte || digitByte byte
 
 -- handle ------------------------------------------------------------------------
 
-handleLabelByte : Int -> Bool
-handleLabelByte byte = alphaNumericByte byte || byte == 45
-
-validHandleLabelBytes : Array Int -> Int -> Int -> Bool
-validHandleLabelBytes bytes i end =
-  if i >= end then
-    True
-  else
-    handleLabelByte bytes[i] && validHandleLabelBytes bytes (i + 1) end
+handleLabelRe : Regex
+handleLabelRe = mustCompile "[a-zA-Z0-9-]*"
 
 validateHandleLabel : Array Int -> Int -> Int -> Bool -> Result String Unit
 validateHandleLabel bytes start end isFinal =
@@ -45,7 +43,7 @@ validateHandleLabel bytes start end isFinal =
     Err "handle: label length must be 1..63 characters"
   else if bytes[start] == 45 || bytes[end - 1] == 45 then
     Err "handle: label must not start or end with a hyphen"
-  else if not (validHandleLabelBytes bytes start end) then
+  else if not (isFullMatchBytes handleLabelRe bytes start end) then
     Err "handle: label contains invalid characters"
   else if isFinal && not (alphaByte bytes[start]) then
     Err "handle: final label must start with an ASCII letter"
@@ -85,25 +83,12 @@ validateHandle handle =
 
 -- did ---------------------------------------------------------------------------
 
-didMiddleByte : Int -> Bool
-didMiddleByte byte =
-  alphaNumericByte byte
-    || byte == 46
-    || byte == 95
-    || byte == 58
-    || byte == 37
-    || byte == 45
+didIdentifierRe : Regex
+didIdentifierRe = mustCompile "[a-zA-Z0-9._:%-]*"
 
 didLastByte : Int -> Bool
 didLastByte byte =
   alphaNumericByte byte || byte == 46 || byte == 95 || byte == 45
-
-validDidMiddleBytes : Array Int -> Int -> Int -> Bool
-validDidMiddleBytes bytes i end =
-  if i >= end then
-    True
-  else
-    didMiddleByte bytes[i] && validDidMiddleBytes bytes (i + 1) end
 
 hasDidPrefix : Array Int -> Bool
 hasDidPrefix bytes =
@@ -145,7 +130,8 @@ validateDid did =
         let idStart = methodEnd + 1
         if idStart >= len then
           Err "did: identifier must be non-empty"
-        else if not (validDidMiddleBytes bytes idStart (len - 1)) then
+        else if not
+          (isFullMatchBytes didIdentifierRe bytes idStart (len - 1)) then
           Err "did: identifier contains invalid characters"
         else if not (didLastByte bytes[len - 1]) then
           Err "did: identifier must not end with \":\" or \"%\""
@@ -162,21 +148,8 @@ validateAtIdentifier id =
 
 -- record key ------------------------------------------------------------------
 
-recordKeyByte : Int -> Bool
-recordKeyByte byte =
-  alphaNumericByte byte
-    || byte == 95
-    || byte == 126
-    || byte == 46
-    || byte == 58
-    || byte == 45
-
-validRecordKeyBytes : Array Int -> Int -> Int -> Bool
-validRecordKeyBytes bytes i end =
-  if i >= end then
-    True
-  else
-    recordKeyByte bytes[i] && validRecordKeyBytes bytes (i + 1) end
+recordKeyRe : Regex
+recordKeyRe = mustCompile "[a-zA-Z0-9_~.:-]*"
 
 {- | Validate a record key: 1..512 bytes of `[a-zA-Z0-9_~.:-]`, excluding the
    literal values `.` and `..`. -}
@@ -191,7 +164,7 @@ validateRecordKey key =
     Err "record key: must not be \".\" or \"..\""
   else if len == 2 && bytes[0] == 46 && bytes[1] == 46 then
     Err "record key: must not be \".\" or \"..\""
-  else if not (validRecordKeyBytes bytes 0 len) then
+  else if not (isFullMatchBytes recordKeyRe bytes 0 len) then
     Err "record key: invalid characters"
   else
     Ok ()

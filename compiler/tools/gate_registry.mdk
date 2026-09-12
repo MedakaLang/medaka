@@ -21,6 +21,7 @@ import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
 import json.{Json, JString, JBool, jArray, jObject, stringify}
 import tools.gate_cost.{baselineKey}
 import support.util.{splitOnChar}
+import regex.{mustCompile, isFullMatch, escape}
 
 -- ── The entry schema ────────────────────────────────────────────────────────
 -- One `[[gate]]` table in `test/gates.toml` per gate.  Every field below is
@@ -318,23 +319,25 @@ parseShards src = match parse src
 -- `*` matches any run of characters (path separators included — the registry's
 -- names are opaque strings, not paths), `?` matches exactly one.  Everything
 -- else is literal.  This is the same shape `run_gates.sh` gets from the shell.
+--
+-- Translated to a `regex` pattern rather than hand-matched: `*` becomes `.*`,
+-- `?` becomes `.`, and every other character is escaped and matched via
+-- `isFullMatch`. The leading `(?s)` makes `.` match a newline too, since the
+-- old character-by-character matcher treated every character alike — without
+-- it `.`/`.*` would silently stop matching a name containing `\n`. Where the
+-- old backtracking matcher ("try consuming 0, 1, 2, … characters") could take
+-- exponential time on an adversarial pattern like `*a*a*a*a*b`, the Pike-VM
+-- `regex` engine matches the same patterns in linear time — the accept/reject
+-- answer is unchanged, only the time bound.
 
-globMatchAt : Array Char -> Int -> Int -> Array Char -> Int -> Int -> Bool
-globMatchAt pat pi pn s si sn
-  | pi >= pn = si >= sn
-  | arrayGetUnsafe pi pat == '*' = globStar pat pi pn s si sn
-  | si >= sn = False
-  | arrayGetUnsafe pi pat == '?' = globMatchAt pat (pi + 1) pn s (si + 1) sn
-  | arrayGetUnsafe pi pat == arrayGetUnsafe si s =
-    globMatchAt pat (pi + 1) pn s (si + 1) sn
-  | otherwise = False
-
--- `*` at `pi`: try consuming 0, 1, 2, … characters of the subject.
-globStar : Array Char -> Int -> Int -> Array Char -> Int -> Int -> Bool
-globStar pat pi pn s si sn
-  | globMatchAt pat (pi + 1) pn s si sn = True
-  | si >= sn = False
-  | otherwise = globStar pat pi pn s (si + 1) sn
+-- Every character of `pat` translated to its regex-source equivalent.
+globToRegexSrc : Array Char -> Int -> List String
+globToRegexSrc pat i
+  | i >= arrayLength pat = []
+  | arrayGetUnsafe i pat == '*' = ".*" :: globToRegexSrc pat (i + 1)
+  | arrayGetUnsafe i pat == '?' = "." :: globToRegexSrc pat (i + 1)
+  | otherwise =
+    escape (charToStr (arrayGetUnsafe i pat)) :: globToRegexSrc pat (i + 1)
 
 {- | Glob match, `*`/`?` only.
 
@@ -355,13 +358,33 @@ globStar pat pi pn s si sn
    `*` crosses `/` — registry names are opaque strings, not paths:
 
    > globMatch "sqlite/*" "sqlite/test/select_oracle"
+   True
+
+   Several `*` in one pattern:
+
+   > globMatch "a*b*c" "aXXbYYc"
+   True
+   > globMatch "a*b*c" "aXXbYY"
+   False
+
+   The classic exponential-blowup shape for a backtracking glob matcher
+   (`*a*a*a*a*b` against a long run of `a`s with no trailing `b`) still
+   rejects, and returns fast rather than eventually:
+
+   > globMatch "*a*a*a*a*a*a*a*a*a*a*b" "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+   False
+
+   `*` crosses a newline too — a name is an opaque string, not a line:
+
+   > globMatch "*" "a\nb"
    True -}
 export
 globMatch : String -> String -> Bool
 globMatch pat s =
-  let p = stringToChars pat
-  let subj = stringToChars s
-  globMatchAt p 0 (arrayLength p) subj 0 (arrayLength subj)
+  isFullMatch
+    (mustCompile
+      (stringConcat (["(?s)"] ++ globToRegexSrc (stringToChars pat) 0)))
+    s
 
 -- ── Selectors ───────────────────────────────────────────────────────────────
 

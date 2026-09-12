@@ -1,5 +1,5 @@
 # META
-source_lines=2236
+source_lines=2227
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-duplicate-body
@@ -73,9 +73,10 @@ import frontend.parser.{
 }
 import frontend.lexer.{Token(..), tokenizeWithOffsetPairs}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
-import support.char.{isIdentChar, isDigit}
+import support.char.{isIdentChar}
 import support.util.{maxI, utf8Len, joinWith, startsWith}
-import string.{stripCR}
+import string.{stripCR, toInt}
+import regex.{Regex, Match, mustCompile, escape, findAll, find}
 import frontend.desugar.{desugar}
 import types.repr.{Scheme(..)}
 import types.typecheck.{
@@ -331,24 +332,29 @@ posOffGo arr off i line lineStart
 
 -- A whole-source word-boundary occurrence scan: every offset where `name`
 -- appears as a standalone identifier.  Returns the offsets in source order.
+--
+-- The boundary check runs on each match's OWN position afterward (match,
+-- then test the neighbors) rather than folded into the pattern, for the
+-- same reason `lint.mdk`'s `wordReadIn` keeps it out of the pattern: a
+-- consuming boundary class baked in would make two occurrences separated by
+-- exactly one boundary char invisible to a left-to-right non-overlapping
+-- scan.
 occurrences : String -> String -> List Int
 occurrences src name =
-  let arr = stringToChars src
-  let len = arrayLength arr
-  let nlen = stringLength name
-  if nlen == 0 then [] else occGo src arr len name nlen 0
+  if stringLength name == 0 then
+    []
+  else
+    let arr = stringToChars src
+    let len = arrayLength arr
+    filterMap (occStart arr len) (findAll (mustCompile (escape name)) src)
 
-occGo : String -> Array Char -> Int -> String -> Int -> Int -> List Int
-occGo src arr len name nlen i
-  | i + nlen > len = []
-  | windowEq src i name nlen
-    && (i == 0 || not (isIdentChar (arrayGetUnsafe (i - 1) arr)))
-    && (i + nlen == len || not (isIdentChar (arrayGetUnsafe (i + nlen) arr))) =
-    i :: occGo src arr len name nlen (i + nlen)
-  | otherwise = occGo src arr len name nlen (i + 1)
-
-windowEq : String -> Int -> String -> Int -> Bool
-windowEq src i name nlen = stringSlice i (i + nlen) src == name
+occStart : Array Char -> Int -> Match -> Option Int
+occStart arr len m =
+  if (m.start == 0 || not (isIdentChar (arrayGetUnsafe (m.start - 1) arr)))
+    && (m.end == len || not (isIdentChar (arrayGetUnsafe m.end arr))) then
+    Some m.start
+  else
+    None
 
 -- documentHighlight ranges (one per occurrence) of `name` in `src`.
 highlightRanges : String -> String -> List Json
@@ -1405,35 +1411,20 @@ readHeaders lenAcc = match readLineOpt ()
 -- blank line ends the header block
 
 -- Parse "Content-Length: <n>" (case-sensitive, as clients emit it).  Returns
--- the integer N or None if this header line is something else.
-parseContentLength : String -> Option Int
-parseContentLength line =
-  let prefix = "Content-Length:"
-  let pn = stringLength prefix
-  if stringLength line >= pn && stringSlice 0 pn line == prefix then
-    parseDigits
-      (stringToChars (stringSlice pn (stringLength line) line))
-      0
-      (arrayLength (stringToChars (stringSlice pn (stringLength line) line)))
-      0
-      False
-  else
-    None
+-- the integer N or None if this header line is something else. Not anchored
+-- at the end: the hand-rolled parser this replaces stopped at the first
+-- non-digit and returned what it had, so trailing text after the digits
+-- (there never is any, in practice) is tolerated rather than rejected —
+-- preserved here by `find` rather than `isFullMatch`.
+contentLengthRe : Regex
+contentLengthRe = mustCompile "^Content-Length: *([0-9]+)"
 
--- Parse a run of ASCII digits (skipping leading spaces) into an Int.  `seen`
--- tracks whether at least one digit was consumed.
-parseDigits : Array Char -> Int -> Int -> Int -> Bool -> Option Int
-parseDigits arr i n acc seen
-  | i >= n = if seen then Some acc else None
-  | arrayGetUnsafe i arr == ' ' && not seen = parseDigits arr (i + 1) n acc seen
-  | isDigit (arrayGetUnsafe i arr) =
-    parseDigits
-      arr
-      (i + 1)
-      n
-      (acc * 10 + (charCode (arrayGetUnsafe i arr) - 48))
-      True
-  | otherwise = if seen then Some acc else None
+parseContentLength : String -> Option Int
+parseContentLength line = match find contentLengthRe line
+  None => None
+  Some m => match m.groups
+    [Some g] => toInt g.text
+    _ => None
 
 {- ── textDocument/semanticTokens/full ────────────────────────────────────────
 
@@ -2245,9 +2236,10 @@ unit = ()
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
+(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
-(DUse false (UseGroup ("string") ((mem "stripCR" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
@@ -2313,11 +2305,9 @@ unit = ()
 (DTypeSig false "posOffGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "posOffGo" ((PVar "arr") (PVar "off") (PVar "i") (PVar "line") (PVar "lineStart")) (EIf (EBinOp ">=" (EVar "i") (EVar "off")) (ETuple (EVar "line") (EBinOp "-" (EVar "off") (EVar "lineStart"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EApp (EVar "posOffGo") (EVar "arr")) (EVar "off")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "posOffGo") (EVar "arr")) (EVar "off")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EVar "lineStart")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "occurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "occurrences" ((PVar "src") (PVar "name")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoLet false false (PVar "nlen") (EApp (EVar "stringLength") (EVar "name"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EListLit) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "occGo") (EVar "src")) (EVar "arr")) (EVar "len")) (EVar "name")) (EVar "nlen")) (ELit (LInt 0)))))))
-(DTypeSig false "occGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))))))
-(DFunDef false "occGo" ((PVar "src") (PVar "arr") (PVar "len") (PVar "name") (PVar "nlen") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "nlen")) (EVar "len")) (EListLit) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "windowEq") (EVar "src")) (EVar "i")) (EVar "name")) (EVar "nlen")) (EBinOp "||" (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "arr")))))) (EBinOp "||" (EBinOp "==" (EBinOp "+" (EVar "i") (EVar "nlen")) (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "nlen"))) (EVar "arr")))))) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "occGo") (EVar "src")) (EVar "arr")) (EVar "len")) (EVar "name")) (EVar "nlen")) (EBinOp "+" (EVar "i") (EVar "nlen")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "occGo") (EVar "src")) (EVar "arr")) (EVar "len")) (EVar "name")) (EVar "nlen")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "windowEq" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "windowEq" ((PVar "src") (PVar "i") (PVar "name") (PVar "nlen")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EVar "nlen"))) (EVar "src")) (EVar "name")))
+(DFunDef false "occurrences" ((PVar "src") (PVar "name")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EVar "filterMap") (EApp (EApp (EVar "occStart") (EVar "arr")) (EVar "len"))) (EApp (EApp (EVar "findAll") (EApp (EVar "mustCompile") (EApp (EVar "escape") (EVar "name")))) (EVar "src")))))))
+(DTypeSig false "occStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "occStart" ((PVar "arr") (PVar "len") (PVar "m")) (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "arr"))))) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "end") (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EFieldAccess (EVar "m") "end")) (EVar "arr")))))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "start")) (EVar "None")))
 (DTypeSig false "highlightRanges" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "highlightRanges" ((PVar "src") (PVar "name")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "nlen") (EApp (EVar "stringLength") (EVar "name"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "occToHighlight") (EVar "arr")) (EVar "nlen"))) (EApp (EApp (EVar "occurrences") (EVar "src")) (EVar "name"))))))
 (DTypeSig false "occToHighlight" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json")))))
@@ -2519,10 +2509,10 @@ unit = ()
 (DData Public "Headers" () ((variant "Headers" (ConPos (TyCon "Int")))) ())
 (DTypeSig false "readHeaders" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "readHeaders" ((PVar "lenAcc")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "Some") (EVar "lenAcc")) (EBlock (DoLet false false (PVar "lenAcc2") (EMatch (EApp (EVar "parseContentLength") (EVar "line")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EVar "lenAcc")))) (DoExpr (EApp (EVar "readHeaders") (EVar "lenAcc2"))))))))))
+(DTypeSig false "contentLengthRe" (TyCon "Regex"))
+(DFunDef false "contentLengthRe" () (EApp (EVar "mustCompile") (ELit (LString "^Content-Length: *([0-9]+)"))))
 (DTypeSig false "parseContentLength" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "parseContentLength" ((PVar "line")) (EBlock (DoLet false false (PVar "prefix") (ELit (LString "Content-Length:"))) (DoLet false false (PVar "pn") (EApp (EVar "stringLength") (EVar "prefix"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "line")) (EVar "pn")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "pn")) (EVar "line")) (EVar "prefix"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EApp (EVar "stringToChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "pn")) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line")))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "pn")) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))))) (ELit (LInt 0))) (EVar "False")) (EVar "None")))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))))
-(DFunDef false "parseDigits" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "not") (EVar "seen"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "acc")) (EVar "seen")) (EIf (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LInt 48))))) (EVar "True")) (EIf (EVar "otherwise") (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "parseContentLength" ((PVar "line")) (EMatch (EApp (EApp (EVar "find") (EVar "contentLengthRe")) (EVar "line")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PList (PCon "Some" (PVar "g"))) () (EApp (EVar "toInt") (EFieldAccess (EVar "g") "text"))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "semanticLegend" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "semanticLegend" () (EListLit (ELit (LString "keyword")) (ELit (LString "class")) (ELit (LString "macro")) (ELit (LString "function")) (ELit (LString "property")) (ELit (LString "string")) (ELit (LString "number")) (ELit (LString "selfParameter"))))
 (DTypeSig false "semanticTokensOptions" (TyCon "Json"))
@@ -2715,9 +2705,10 @@ unit = ()
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false) (mem "parseWithPositions" false) (mem "parseWithPositionsOpt" false) (mem "positionsDecls" false) (mem "DeclPos" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "declPosNameLoc" false) (mem "declPosChildLocs" false))))
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Token" true) (mem "tokenizeWithOffsetPairs" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
-(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false) (mem "isDigit" false))))
+(DUse false (UseGroup ("support" "char") ((mem "isIdentChar" false))))
 (DUse false (UseGroup ("support" "util") ((mem "maxI" false) (mem "utf8Len" false) (mem "joinWith" false) (mem "startsWith" false))))
-(DUse false (UseGroup ("string") ((mem "stripCR" false))))
+(DUse false (UseGroup ("string") ((mem "stripCR" false) (mem "toInt" false))))
+(DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "escape" false) (mem "findAll" false) (mem "find" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true))))
 (DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFullK" false) (mem "ppSchemeNamed" false) (mem "ppSchemeNamedFull" false) (mem "currentLocalSchemes" false) (mem "currentLocalSchemesLoc" false) (mem "currentSeedSchemes" false))))
@@ -2783,11 +2774,9 @@ unit = ()
 (DTypeSig false "posOffGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyTuple (TyCon "Int") (TyCon "Int"))))))))
 (DFunDef false "posOffGo" ((PVar "arr") (PVar "off") (PVar "i") (PVar "line") (PVar "lineStart")) (EIf (EBinOp ">=" (EVar "i") (EVar "off")) (ETuple (EVar "line") (EBinOp "-" (EVar "off") (EVar "lineStart"))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar "\n"))) (EApp (EApp (EApp (EApp (EApp (EVar "posOffGo") (EVar "arr")) (EVar "off")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "line") (ELit (LInt 1)))) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EVar "posOffGo") (EVar "arr")) (EVar "off")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "line")) (EVar "lineStart")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "occurrences" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Int")))))
-(DFunDef false "occurrences" ((PVar "src") (PVar "name")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoLet false false (PVar "nlen") (EApp (EVar "stringLength") (EVar "name"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EListLit) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "occGo") (EVar "src")) (EVar "arr")) (EVar "len")) (EVar "name")) (EVar "nlen")) (ELit (LInt 0)))))))
-(DTypeSig false "occGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))))))
-(DFunDef false "occGo" ((PVar "src") (PVar "arr") (PVar "len") (PVar "name") (PVar "nlen") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (EVar "nlen")) (EVar "len")) (EListLit) (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EApp (EApp (EVar "windowEq") (EVar "src")) (EVar "i")) (EVar "name")) (EVar "nlen")) (EBinOp "||" (EBinOp "==" (EVar "i") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "arr")))))) (EBinOp "||" (EBinOp "==" (EBinOp "+" (EVar "i") (EVar "nlen")) (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (EVar "nlen"))) (EVar "arr")))))) (EBinOp "::" (EVar "i") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "occGo") (EVar "src")) (EVar "arr")) (EVar "len")) (EVar "name")) (EVar "nlen")) (EBinOp "+" (EVar "i") (EVar "nlen")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "occGo") (EVar "src")) (EVar "arr")) (EVar "len")) (EVar "name")) (EVar "nlen")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "windowEq" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "windowEq" ((PVar "src") (PVar "i") (PVar "name") (PVar "nlen")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (EVar "nlen"))) (EVar "src")) (EVar "name")))
+(DFunDef false "occurrences" ((PVar "src") (PVar "name")) (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "name")) (ELit (LInt 0))) (EListLit) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "len") (EApp (EVar "arrayLength") (EVar "arr"))) (DoExpr (EApp (EApp (EMethodRef "filterMap") (EApp (EApp (EVar "occStart") (EVar "arr")) (EVar "len"))) (EApp (EApp (EVar "findAll") (EApp (EVar "mustCompile") (EApp (EVar "escape") (EVar "name")))) (EVar "src")))))))
+(DTypeSig false "occStart" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Match") (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DFunDef false "occStart" ((PVar "arr") (PVar "len") (PVar "m")) (EIf (EBinOp "&&" (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "start") (ELit (LInt 0))) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EFieldAccess (EVar "m") "start") (ELit (LInt 1)))) (EVar "arr"))))) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "m") "end") (EVar "len")) (EApp (EVar "not") (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EFieldAccess (EVar "m") "end")) (EVar "arr")))))) (EApp (EVar "Some") (EFieldAccess (EVar "m") "start")) (EVar "None")))
 (DTypeSig false "highlightRanges" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Json")))))
 (DFunDef false "highlightRanges" ((PVar "src") (PVar "name")) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "stringToChars") (EVar "src"))) (DoLet false false (PVar "nlen") (EApp (EVar "stringLength") (EVar "name"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "occToHighlight") (EVar "arr")) (EVar "nlen"))) (EApp (EApp (EVar "occurrences") (EVar "src")) (EVar "name"))))))
 (DTypeSig false "occToHighlight" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Json")))))
@@ -2989,10 +2978,10 @@ unit = ()
 (DData Public "Headers" () ((variant "Headers" (ConPos (TyCon "Int")))) ())
 (DTypeSig false "readHeaders" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "readHeaders" ((PVar "lenAcc")) (EMatch (EApp (EVar "readLineOpt") (ELit LUnit)) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "raw")) () (EBlock (DoLet false false (PVar "line") (EApp (EVar "stripCR") (EVar "raw"))) (DoExpr (EIf (EBinOp "==" (EVar "line") (ELit (LString ""))) (EApp (EVar "Some") (EVar "lenAcc")) (EBlock (DoLet false false (PVar "lenAcc2") (EMatch (EApp (EVar "parseContentLength") (EVar "line")) (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (EVar "lenAcc")))) (DoExpr (EApp (EVar "readHeaders") (EVar "lenAcc2"))))))))))
+(DTypeSig false "contentLengthRe" (TyCon "Regex"))
+(DFunDef false "contentLengthRe" () (EApp (EVar "mustCompile") (ELit (LString "^Content-Length: *([0-9]+)"))))
 (DTypeSig false "parseContentLength" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
-(DFunDef false "parseContentLength" ((PVar "line")) (EBlock (DoLet false false (PVar "prefix") (ELit (LString "Content-Length:"))) (DoLet false false (PVar "pn") (EApp (EVar "stringLength") (EVar "prefix"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EVar "stringLength") (EVar "line")) (EVar "pn")) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EVar "pn")) (EVar "line")) (EVar "prefix"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EApp (EVar "stringToChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "pn")) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line")))) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EApp (EVar "stringToChars") (EApp (EApp (EApp (EVar "stringSlice") (EVar "pn")) (EApp (EVar "stringLength") (EVar "line"))) (EVar "line"))))) (ELit (LInt 0))) (EVar "False")) (EVar "None")))))
-(DTypeSig false "parseDigits" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyCon "Option") (TyCon "Int"))))))))
-(DFunDef false "parseDigits" ((PVar "arr") (PVar "i") (PVar "n") (PVar "acc") (PVar "seen")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EIf (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")) (ELit (LChar " "))) (EApp (EVar "not") (EVar "seen"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "acc")) (EVar "seen")) (EIf (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (EApp (EApp (EApp (EApp (EApp (EVar "parseDigits") (EVar "arr")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 10))) (EBinOp "-" (EApp (EVar "charCode") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))) (ELit (LInt 48))))) (EVar "True")) (EIf (EVar "otherwise") (EIf (EVar "seen") (EApp (EVar "Some") (EVar "acc")) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
+(DFunDef false "parseContentLength" ((PVar "line")) (EMatch (EApp (EApp (EDictApp "find") (EVar "contentLengthRe")) (EVar "line")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "m")) () (EMatch (EFieldAccess (EVar "m") "groups") (arm (PList (PCon "Some" (PVar "g"))) () (EApp (EVar "toInt") (EFieldAccess (EVar "g") "text"))) (arm PWild () (EVar "None"))))))
 (DTypeSig false "semanticLegend" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "semanticLegend" () (EListLit (ELit (LString "keyword")) (ELit (LString "class")) (ELit (LString "macro")) (ELit (LString "function")) (ELit (LString "property")) (ELit (LString "string")) (ELit (LString "number")) (ELit (LString "selfParameter"))))
 (DTypeSig false "semanticTokensOptions" (TyCon "Json"))

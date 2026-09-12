@@ -126,8 +126,11 @@ import list.{
 }
 import path.{basename}
 import string.{
-  contains, isAlpha, isAlphaNum, isDigit, join, lines, padRight, replaceAll,
-  split, startsWith, stripPrefix, stripSuffix, toChars, trim, trimLeft, unlines
+  contains, join, lines, padRight, replaceAll, split, startsWith, stripPrefix,
+  stripSuffix, trim, trimLeft, unlines
+}
+import regex.{
+  Regex, Match, mustCompile, isMatch, find as reFind, findAll as reFindAll
 }
 import test.{Expectation, fail, pass}
 import test_process.{medakaBin, medakaRoot, missingUnits, scratchDir}
@@ -173,18 +176,13 @@ startsChunk : String -> Bool
 startsChunk piece =
   piece /= "" && not (startsWith " " piece) && not (startsWith "\t" piece)
 
+importHeadRe : Regex
+importHeadRe = mustCompile "^(?:export[ \\t]+)?import[ \\t]"
+
 -- Matches `import m…` and `export import m…`, the two forms a top-level
 -- import clause takes.
 importHead : String -> Bool
-importHead line =
-  let bare = match stripPrefix "export" line
-    Some rest =>
-      if startsWith " " rest || startsWith "\t" rest then
-        trimLeft rest
-      else
-        line
-    None => line
-  startsWith "import " bare || startsWith "import\t" bare
+importHead line = isMatch importHeadRe line
 
 addPiece : List Chunk -> String -> List Chunk
 addPiece acc piece =
@@ -231,12 +229,12 @@ swapAdjacent i n =
    each moved into one of the slots the clauses already occupied. -}
 permutedText : Source -> List Int -> String
 permutedText src order =
-  let original = map (i => src.chunks[i].text) src.slots
+  let original = map (i => (src.chunks[i] : Chunk).text) src.slots
   let placed = zip src.slots (map (w => original[w]) order)
   let render =
     e => match lookup (fst e) placed
       Some t => t
-      None => (snd e).text
+      None => (snd e : Chunk).text
   "\{join "\n" (map render (indexed src.chunks))}\{src.ending}"
 
 -- # The signature
@@ -251,15 +249,17 @@ escapeCell s =
       "\\t"
       (replaceAll ";" "\\s" (replaceAll "|" "\\p" (replaceAll "\\" "\\\\" s))))
 
+codeRe : Regex
+codeRe = mustCompile "\"code\":\"([^\"]*)\""
+
 -- Every `"code":"…"` in `check --json`'s output, sorted, as a multiset.
 codesIn : String -> String
-codesIn text =
-  join "," (sort (map upToQuote (drop 1 (split "\"code\":\"" text))))
+codesIn text = join "," (sort (map codeGroupText (reFindAll codeRe text)))
 
-upToQuote : String -> String
-upToQuote piece = match split "\"" piece
-  h :: _ => h
-  [] => piece
+codeGroupText : Match -> String
+codeGroupText m = match m.groups
+  (Some g) :: _ => g.text
+  _ => ""
 
 {- | The scheme lines of plain `check`'s stdout, selected by their format:
    an identifier anchored at column 0 followed by ` : `.
@@ -271,18 +271,11 @@ upToQuote piece = match split "\"" piece
 schemeDump : String -> String
 schemeDump out = unlines (filter schemeLine (lines out))
 
+schemeLineRe : Regex
+schemeLineRe = mustCompile "^[A-Za-z_][A-Za-z0-9_']*\\s:\\s"
+
 schemeLine : String -> Bool
-schemeLine line = match split " : " line
-  ident :: _ :: _ => identifierText ident
-  _ => False
-
-identifierText : String -> Bool
-identifierText s = match toList (toChars s)
-  [] => False
-  c :: rest => (isAlpha c || c == '_') && all identifierChar rest
-
-identifierChar : Char -> Bool
-identifierChar c = isAlphaNum c || c == '_' || c == '\''
+schemeLine line = isMatch schemeLineRe line
 
 {- | One ordering's graded observations: its signature, its emitter-verdict
    signature, and whether its `build` produced a binary. -}
@@ -541,13 +534,24 @@ rowFor unit rows = match filter (r => r.rowCase == unit) rows
   r :: _ => Some r
   [] => None
 
--- The digits of an issue field spelled `#<digits>…`, or `None`.
+issueDigitsRe : Regex
+issueDigitsRe = mustCompile "^#([0-9]+)$"
+
+{- | The digits of an issue field spelled `#<digits>`, or `None`.
+
+   The whole tag after `#` must be digits — `"#12ab"` is rejected, not
+   truncated to its leading digit run.
+
+   > issueDigits "#123"
+   Some "123"
+   > issueDigits "#12ab"
+   None -}
 issueDigits : String -> Option String
-issueDigits tag = match stripPrefix "#" tag
+issueDigits tag = match reFind issueDigitsRe tag
   None => None
-  Some rest => match toList (toChars rest)
-    d :: _ => if isDigit d then Some rest else None
-    [] => None
+  Some m => match m.groups
+    (Some g) :: _ => Some g.text
+    _ => None
 
 -- # Grading
 
