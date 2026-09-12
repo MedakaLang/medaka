@@ -1,0 +1,35 @@
+-- Each helper call must receive the enclosing Num prerequisite. The literal
+-- selects Num (1001), while explicit fromInt selects Forge (2001).
+
+import numlit_helper.support.{lift}
+
+data Box a = Box a deriving (Eq)
+
+interface Forge a where
+  fromInt : Int -> a
+
+impl Forge (Box a) requires Num a where
+  fromInt n = Box (lift n + lift 2000)
+
+impl Num (Box a) requires Num a where
+  add (Box x) (Box y) = Box (x + y)
+  sub (Box x) (Box y) = Box (x - y)
+  mul (Box x) (Box y) = Box (x * y)
+  div (Box x) (Box y) = Box (x / y)
+  negate (Box x) = Box (-x)
+  abs (Box x) = Box (abs x)
+  signum (Box x) = Box (signum x)
+  fromInt n = Box (lift n + lift 1000)
+
+unBox : Box a -> a
+unBox (Box x) = x
+
+literal : Box Int
+literal = 1
+
+explicit : Box Int
+explicit = fromInt 1
+
+main =
+  println (unBox literal)
+  println (unBox explicit)

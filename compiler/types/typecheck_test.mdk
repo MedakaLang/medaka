@@ -7,7 +7,7 @@ import frontend.ast.{Loc(..), Route(..), TyConOrigin(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
-import types.repr.{ppMono, ppScheme}
+import types.repr.{Scheme(..), ppMono, ppScheme}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
@@ -29,6 +29,7 @@ import types.typecheck.{
   finishNumericPredicateTrace,
   scopeFrameStats,
   scopeTraceContext,
+  tcCode,
   tcMsg,
 }
 import support.util.{joinNl, listLen}
@@ -362,6 +363,121 @@ test "finalized scheme queries drain numeric predicates on cold and keyed calls"
     expectEqual (snd keyed) (snd repeated),
     expectEqual repeated afterFailure,
   ]
+declaredNumHelperSource : String
+declaredNumHelperSource = "value : Num a => Int -> a\nvalue n = fromInt n\n"
+
+schemeVariableCount : Scheme -> Int
+schemeVariableCount (Forall variables _ _) = listLen variables
+
+declaredNumSchemeObserved : Option (Int, Int) ->
+  String ->
+  (List (Int, String), List (String, String, Int))
+declaredNumSchemeObserved key source =
+  beginAssumptionTrace ()
+  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+    (parse numericPreludeSource)) (
+    "declared_numeric_scheme",
+    desugar (parseLocated source),
+  )
+  let values =
+    map
+      (entry => (schemeVariableCount (snd entry), ppScheme (snd entry)))
+      (filter (entry => fst entry == "value") schemes)
+  let assumptions =
+    map
+      (entry =>
+        let (EvidenceBinderId binderScope slot) = entry.atBinder
+        (
+          snd (scopeTraceContext entry.atGoalScope),
+          snd (scopeTraceContext binderScope),
+          slot,
+        ))
+      (finishAssumptionTrace ())
+  (values, assumptions)
+
+declaredNumErrorCodes : String -> List String
+declaredNumErrorCodes source =
+  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+    "declared_numeric_errors",
+    desugar (parseLocated source),
+  )
+  map tcCode errors
+
+test "declared numeric result retains its quantifier and given at finalized queries" =
+  let cold = declaredNumSchemeObserved None declaredNumHelperSource
+  let keyed =
+    declaredNumSchemeObserved (Some (991, 997)) declaredNumHelperSource
+  let repeated =
+    declaredNumSchemeObserved (Some (991, 997)) declaredNumHelperSource
+  let failed = declaredNumErrorCodes "value : Int\nvalue = \"wrong\"\n"
+  let afterFailure =
+    declaredNumSchemeObserved (Some (991, 997)) declaredNumHelperSource
+  expectAll [
+    expectEqual [(1, "Int -> a")] (fst cold),
+    expectEqual [("binding:value", "binding:value", 0)] (snd cold),
+    expectEqual cold keyed,
+    expectEqual keyed repeated,
+    expectEqual repeated afterFailure,
+    expectEqual True (listLen failed > 0),
+  ]
+
+test "declared numeric channels include nested results and independent quantifiers" =
+  let nested =
+    declaredNumSchemeObserved
+      None
+      (joinNl [
+        "value : Num a => b -> Int -> (b, a)",
+        "value b n = (b, fromInt n)",
+      ])
+  let returnedFunction =
+    declaredNumSchemeObserved
+      None
+      (joinNl [
+        "value : Num a => Int -> (Unit -> a)",
+        "value n = _ => fromInt n",
+      ])
+  let independent =
+    declaredNumSchemeObserved
+      None
+      (joinNl [
+        "value : (Num a, Num b) => Int -> (a, b)",
+        "value n = (fromInt n, fromInt n)",
+      ])
+  expectAll [
+    expectEqual [(2, "a -> Int -> (a, b)")] (fst nested),
+    expectEqual [(1, "Int -> Unit -> a")] (fst returnedFunction),
+    expectEqual [(2, "Int -> (a, b)")] (fst independent),
+  ]
+
+test "an unsigned recursive sibling cannot default a declared numeric root" =
+  let observed =
+    declaredNumSchemeObserved
+      None
+      (joinNl [
+        "value : Num a => Int -> a",
+        "value n = if n == 0 then fromInt n else relay (n - 1)",
+        "relay n = value n",
+      ])
+  expectEqual [(1, "Int -> a")] (fst observed)
+
+test "declared result protection preserves missing-context and value-restriction errors" = expectAll
+  [
+    expectEqual
+      ["T-MISSING-CONSTRAINT"]
+      (declaredNumErrorCodes "value : Int -> a\nvalue n = fromInt n\n"),
+    expectEqual
+      ["T-SIG-OVER-EXPANSIVE"]
+      (declaredNumErrorCodes "value : Num a => a\nvalue = 0\n"),
+  ]
+
+test "inferred numeric results still default without a declared caller channel" =
+  let literal = declaredNumSchemeObserved None "value = 1\n"
+  let helper = declaredNumSchemeObserved None "value n = fromInt n\n"
+  expectAll [
+    expectEqual [(0, "Int")] (fst literal),
+    expectEqual [(0, "Int -> Int")] (fst helper),
+  ]
+
 data TraceView = TraceView {
   tvKind : AssumptionTraceKind,
   tvGoalModule : String,

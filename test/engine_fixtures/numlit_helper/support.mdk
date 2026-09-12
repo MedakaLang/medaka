@@ -1,0 +1,3 @@
+export
+lift : Num a => Int -> a
+lift n = fromInt n
