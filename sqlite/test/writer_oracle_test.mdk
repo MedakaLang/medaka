@@ -44,7 +44,6 @@
 -- clause reads only the source text of the module a gate's `run =` names, so
 -- moving these into a module the two files share would make the check see
 -- nothing to grade in either file and pass having verified neither.
--- lint-disable-file rule-duplicate-body
 import io.{getEnvOr, runVerb}
 import list.{drop}
 import string.{join, split, trim, unwords}
@@ -68,11 +67,15 @@ queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
 emitterBin : <IO> String
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
 emitterBin =
   let root = medakaRoot
   getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
 
 spawnEnv : <IO> List String
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
 spawnEnv =
   let rootVar = "MEDAKA_ROOT=\{medakaRoot}"
   let emitterVar = "MEDAKA_EMITTER=\{emitterBin}"
@@ -82,6 +85,8 @@ spawnRaw : Int ->
   String ->
   List String ->
   <Exec "_", IO> Result String (Int, String, String)
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
 spawnRaw secs cmd args =
   match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
     Err e =>
@@ -91,6 +96,8 @@ spawnRaw secs cmd args =
     Ok triple => Ok triple
 
 spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
 spawnOut secs cmd args = match spawnRaw secs cmd args
   Err e => Err e
   Ok (0, out, _) => Ok out
@@ -101,6 +108,8 @@ spawnOut secs cmd args = match spawnRaw secs cmd args
 -- # Small process-backed primitives every row below is built from.
 
 rowScratch : String -> <Exec "_"> Result String String
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
 rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"
   Ok dir => Ok "\{dir}/\{name}"
@@ -117,6 +126,8 @@ buildBin entry bin =
     ])
 
 seedDb : String -> String -> <Exec "_", IO> Result String Unit
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
+-- lint-disable-next-line rule-duplicate-body
 seedDb db sql = map (_ => ()) (spawnOut queryTimeoutSeconds "sqlite3" [db, sql])
 
 sqlite3Query : String -> String -> <Exec "_", IO> Result String String

@@ -16,7 +16,7 @@
 -- does not exist yet.  Rows print in `sqlite3`'s default `-list` mode (one row per
 -- line, columns joined by `|`, NULL as the empty string), so the output can be
 -- diffed BYTE-FOR-BYTE against `sqlite3 <db> "<same SQL>"`; that diff IS the gate
--- (`sqlite/test/dml_oracle.sh`).  INSERT / UPDATE / DELETE / CREATE print nothing
+-- (`sqlite/test/dml_oracle_test.mdk`).  INSERT / UPDATE / DELETE / CREATE print nothing
 -- on success, exactly as the `sqlite3` CLI does.
 --
 -- The row type is `lib.rowtype.tCells`, the DYNAMIC decoder: a SQL string's

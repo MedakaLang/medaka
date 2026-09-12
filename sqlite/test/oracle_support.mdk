@@ -56,12 +56,11 @@ public export data Step =
 
 {- | One retired `*_oracle.sh` gate, as data.
 
-   `entry` and `golden` are tree-root-relative paths. `buildFlags` sit before
-   the entry on the `medaka build` command line, so a demo that reaches an
-   internal module keeps its `--allow-internal`. `golden` is `Some` only for a
-   row whose script diffed the demo against a committed golden AS WELL AS
-   against `sqlite3`; the two checks are separate assertions, and neither
-   substitutes for the other. -}
+   `entry` is a tree-root-relative path. `buildFlags` sit before the entry on
+   the `medaka build` command line, so a demo that reaches an internal module
+   keeps its `--allow-internal`. The two rows whose scripts also diffed
+   against a committed golden pass that golden's path directly to
+   `goldenExpectation`, as a second, separate assertion from this record. -}
 public export data OracleRow = OracleRow {
   name : String,
   entry : String,
@@ -69,7 +68,6 @@ public export data OracleRow = OracleRow {
   seed : List Seed,
   pieces : List Piece,
   expect : List Step,
-  golden : Option String,
 }
 
 -- # Comparing output

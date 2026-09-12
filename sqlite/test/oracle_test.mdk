@@ -12,9 +12,11 @@
 
    Two rows (`oracle`, `multipage`) ALSO diff the demo against a committed
    golden, exactly as their scripts did. Those are separate assertions from
-   the live-oracle ones and neither stands in for the other. Nothing here ever
-   writes a golden; the retired scripts' `--capture` mode has no successor,
-   and re-blessing is `test/capture_goldens.sh`'s job, not a test's.
+   the live-oracle ones and neither stands in for the other. Nothing here
+   ever writes a golden, and the retired scripts' `--capture` mode has no
+   successor: `test/capture_goldens.sh` has no sqlite arm, so re-blessing
+   either golden is currently a by-hand act — run the assertion once, write
+   its output at the golden path, and eyeball the diff before committing it.
 
    The rows retired here are the READ group: `oracle`, `multipage_oracle`,
    `select_oracle`, `groupby_oracle`, `aggregate_oracle`, `projection_oracle`,
@@ -225,7 +227,6 @@ oracleRow = OracleRow {
     Line "# table prices",
     Rows "SELECT * FROM prices",
   ],
-  golden = Some "sqlite/test/basic.golden",
 }
 
 -- `sqlite/test/multipage_oracle.sh`: 2000 rows, which is what pushes the
@@ -241,7 +242,6 @@ multipageRow = OracleRow {
   seed = [SeedSql multipageSchema, SeedSql multipageInsert],
   pieces = [PRun ["t"]],
   expect = [Rows "SELECT * FROM t"],
-  golden = Some "sqlite/test/multipage.golden",
 }
 
 multipageSchema : String
@@ -304,7 +304,6 @@ selectRow = OracleRow {
     Line "-- age / 10 = 2 --",
     Rows "SELECT id,name,age FROM users WHERE age / 10 = 2 ORDER BY rowid;",
   ],
-  golden = None,
 }
 
 -- `sqlite/test/groupby_oracle.sh`: the unified engine's GROUP BY / aggregate
@@ -341,7 +340,6 @@ groupbyRow = OracleRow {
     Line
       "query error: column 'orders.amount' must appear in the GROUP BY clause or be used in an aggregate function",
   ],
-  golden = None,
 }
 
 -- `sqlite/test/aggregate_oracle.sh`: the aggregate executor. The last block is
@@ -383,7 +381,6 @@ aggregateRow = OracleRow {
     Rows "SELECT count(*),sum(salary) FROM emp WHERE dept='zzz';",
     Line "-- where none, group dept: count* (no rows) --",
   ],
-  golden = None,
 }
 
 -- `sqlite/test/projection_oracle.sh`: computed SELECT columns.
@@ -408,7 +405,6 @@ projectionRow = OracleRow {
     Line "-- SELECT DISTINCT a*0 --",
     Rows "SELECT DISTINCT a*0 FROM nums;",
   ],
-  golden = None,
 }
 
 -- `sqlite/test/join_oracle.sh`: 2-table and 3-table INNER equi-joins.
@@ -436,7 +432,6 @@ joinRow = OracleRow {
     Rows
       "SELECT ta.aid,ta.av,tb.bid,tb.aref,tc.cid,tc.bref FROM ta INNER JOIN tb ON ta.aid=tb.aref INNER JOIN tc ON tb.bid=tc.bref ORDER BY tc.cid ASC;",
   ],
-  golden = None,
 }
 
 -- `sqlite/test/left_join_oracle.sh`: LEFT JOIN, seeded so some left rows have
@@ -463,7 +458,6 @@ leftJoinRow = OracleRow {
     NullRows
       "SELECT ta.aid,ta.av,tb.bid,tb.aref,tc.cid,tc.bref FROM ta INNER JOIN tb ON ta.aid=tb.aref LEFT JOIN tc ON tb.bid=tc.bref ORDER BY tb.bid ASC;",
   ],
-  golden = None,
 }
 
 -- `sqlite/test/distinct_oracle.sh`: SELECT DISTINCT, seeded with duplicates.
@@ -485,7 +479,6 @@ distinctRow = OracleRow {
     Line "-- distinct n from nums order by n limit 2 --",
     Rows "SELECT DISTINCT n FROM nums ORDER BY n LIMIT 2;",
   ],
-  golden = None,
 }
 
 -- `sqlite/test/typed_oracle.sh`: the typed-result (RowType) layer. Its
@@ -508,7 +501,6 @@ typedRow = OracleRow {
     Line "-- scanTable users WHERE age > 25 --",
     TypedRows "SELECT id,name,age FROM users WHERE age > 25 ORDER BY id;",
   ],
-  golden = None,
 }
 
 -- # Grading

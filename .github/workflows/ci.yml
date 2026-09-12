@@ -1060,7 +1060,7 @@ jobs:
 
           # run_gates.sh / build_oracles.sh --for take PATTERNS; a concrete gate path minus
           # its `.sh`, minus a leading `test/`, IS one ('diff_compiler_fmt',
-          # 'native_fixtures/run', 'sqlite/test/select_oracle'). Same names the shards use.
+          # 'native_fixtures/run', 'sqlite/test/sql_oracle'). Same names the shards use.
           # A native gate has no such path rule — those resolve by registry NAME on both
           # sides — so its pattern comes back out of the registry it went in through.
           pats=""

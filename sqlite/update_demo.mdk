@@ -1,4 +1,4 @@
--- UPDATE probe for the sqlite/test/update_oracle.sh gate.
+-- UPDATE probe for the `update` block of sqlite/test/dml_oracle_test.mdk.
 --
 -- Usage: medaka build sqlite/update_demo.mdk
 --        ./update_demo <path> <table> <set-col> <set-type> <set-val> <where-col> <op> <int-value>

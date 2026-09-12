@@ -1,7 +1,7 @@
 -- | dml_probe — the PARSE-level gate for `lib.sqlstmt`'s DML/DDL grammar.
 --
 -- Two corpora, both asserted, neither diffed against sqlite3 (that is
--- `sqlite/test/dml_oracle.sh`'s job — this one needs no database):
+-- `sqlite/test/dml_oracle_test.mdk`'s job — this one needs no database):
 --
 --   1. RENDER — for each `(sql, expected)` pair, `renderStmt (parseStmt sql)` must
 --      equal `expected` EXACTLY.  This is what catches a SILENTLY DROPPED CLAUSE:

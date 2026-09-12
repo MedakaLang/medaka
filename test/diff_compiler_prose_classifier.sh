@@ -100,7 +100,7 @@ printf '%s\n' \
   'compiler/tools/gate_cmd.mdk' \
   'stdlib/core.mdk' \
   'runtime/medaka_rt.c' \
-  'sqlite/test/select_oracle.sh' \
+  'sqlite/test/sql_oracle.sh' \
   'playground/e2e/run.sh' \
   '.github/workflows/ci.yml' > "$TMP/probes"
 

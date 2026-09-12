@@ -96,7 +96,7 @@ outChanged OutOk = 0
 --
 --   (No doctest: it needs a live database file.  Every statement kind, and every
 --   rejection, is gated end-to-end against the real `sqlite3` CLI by
---   `sqlite/test/dml_oracle.sh`.)
+--   `sqlite/test/dml_oracle_test.mdk`.)
 export
 execSql : String -> String -> <FileRead, FileWrite> Result String ExecOut
 execSql path sql = do

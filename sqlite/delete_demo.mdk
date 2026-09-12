@@ -1,4 +1,4 @@
--- DELETE probe for the sqlite/test/delete_oracle.sh gate.
+-- DELETE probe for the `delete` block of sqlite/test/dml_oracle_test.mdk.
 --
 -- Usage: medaka build sqlite/delete_demo.mdk
 --        ./delete_demo <path> <table> <col> <op> <int-value>
