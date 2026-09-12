@@ -3,7 +3,9 @@
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
 import test.{expectAll, expectEqual}
-import frontend.ast.{Loc(..), Route(..), TyConOrigin(..)}
+import frontend.ast.{
+  Decl(..), EvId(..), EvVal(..), Expr(..), Loc(..), Route(..), TyConOrigin(..)
+}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
 import eval.eval.{Value(..), evalOne, force}
@@ -20,11 +22,14 @@ import types.typecheck.{
   AssumptionTraceKind(..),
   DefaultBodyRNoneKind(..),
   DefaultBodyRNoneTraceEntry(..),
+  MethodReturnTraceEntry(..),
+  MethodReturnTraceStage(..),
   ModDiags,
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
   beginAssumptionTrace,
   beginDefaultBodyRNoneTrace,
+  beginMethodReturnTrace,
   beginNumericPredicateTrace,
   checkModulesDiagsChain,
   checkOneDiags,
@@ -34,6 +39,7 @@ import types.typecheck.{
   elaborateOne,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
+  finishMethodReturnTrace,
   finishNumericPredicateTrace,
   scopeFrameStats,
   scopeTraceContext,
@@ -1191,6 +1197,84 @@ test "wrapped return routes survive an intervening failed request" =
     expectEqual True (listLen errors > 0),
     expectEqual (Some ["Int[]"]) before,
     expectEqual before after,
+  ]
+
+returnIdentitySource : String
+returnIdentitySource = joinNl [
+  "data Pair a b = Pair a b",
+  "interface Choose a b where",
+  "  choose : Unit -> Pair b a",
+  "impl Choose Int Bool where",
+  "  choose _ = Pair True 41",
+  "value : Pair Bool Int",
+  "value = choose ()",
+]
+
+evIdText : EvId -> String
+evIdText (EvId moduleId ordinal) = "\{moduleId}:\{ordinal}"
+
+methodTraceGoalText : MethodReturnTraceEntry -> String
+methodTraceGoalText entry = match entry.mrtGoal
+  Some ev => evIdText ev
+  None => "none"
+
+methodTraceArgs : MethodReturnTraceEntry -> Option (List String)
+methodTraceArgs entry = map (map ppMono) entry.mrtArguments
+
+methodTracePublishedOne : MethodReturnTraceEntry -> Bool
+methodTracePublishedOne entry = match entry.mrtPublished
+  Some (EvOne _) => True
+  _ => False
+
+methodEvInExpr : String -> Expr -> Option EvId
+methodEvInExpr target (EMethodAt name _ ev)
+  | target == name = Some ev
+  | otherwise = None
+methodEvInExpr target (ELoc _ expr) = methodEvInExpr target expr
+methodEvInExpr target (EApp fn arg) = match methodEvInExpr target fn
+  Some ev => Some ev
+  None => methodEvInExpr target arg
+methodEvInExpr _ _ = None
+
+methodEvInDecls : String -> List Decl -> Option EvId
+methodEvInDecls _ [] = None
+methodEvInDecls target ((DFunDef _ _ _ body) :: rest) =
+  match methodEvInExpr target body
+    Some ev => Some ev
+    None => methodEvInDecls target rest
+methodEvInDecls target (_ :: rest) = methodEvInDecls target rest
+
+test "ordinary return shares declaration identity vector and goal destination" =
+  beginMethodReturnTrace ()
+  let typed = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    "identity_return",
+    desugar (parseLocated returnIdentitySource),
+  )
+  let trace =
+    filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ())
+  let goals = map methodTraceGoalText trace
+  let aggregate = map evIdText (methodEvInDecls "choose" typed)
+  expectAll [
+    expectEqual
+      [MRTProduced, MRTChecked, MRTStamped]
+      (map (entry => entry.mrtStage) trace),
+    expectEqual
+      ["identity_return", "identity_return", "identity_return"]
+      (map
+        (entry => match entry.mrtInterface.irOrigin
+          OriginModule moduleId => moduleId
+          _ => "<unresolved>")
+        trace),
+    expectEqual
+      [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
+      (map methodTraceArgs trace),
+    expectEqual True (match goals
+      first :: second :: third :: [] => first == second && second == third
+      _ => False),
+    expectEqual True (match (goals, aggregate)
+      (goal :: _, Some methodGoal) => goal /= methodGoal
+      _ => False),
+    expectEqual [True, True, True] (map methodTracePublishedOne trace),
   ]
 
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
