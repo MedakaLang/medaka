@@ -269,12 +269,10 @@
 #   `runtimeTypeTag`/`filterByTag` RUNTIME fallback, where this fixture's site is a
 #   DIRECT call decided at elaboration. F-3b did NOT retire the head-tag hedge in
 #   `keyForSite`; it only stopped it lying about the selected instance.
-# * s3-nested-obligation-two-levels -- #323 (OPEN, S3). At nesting depth >= 2
-#   under overlap the RUN path E-PANICs `unknown op '+'` while `check` and the
-#   NATIVE binary are both correct (119). A §7 single-evaluator-law violation.
-#   Its no-overlap control (s3-nested-no-overlap-control) proves eval handles
-#   depth-3 recursive context discharge fine, so the trigger is the overlap.
-#   ⚠️ #323's filed BUILD-side symptom ("silent garbage") does NOT reproduce.
+# * s3-nested-obligation-two-levels -- #323's eval divergence is drained by
+#   canonical implementation-route dictionary counts. Both engines must print
+#   7 then 119; the no-overlap control prints 31. Removing the canonical count
+#   alias restores eval's panic while the no-overlap control remains correct.
 # * s6-1c-per-goal-unique-min-accepted -- #614 (S2) / #311 (S3) are FIXED and this
 #   row HAS DRAINED (F-3d, 2026-08-01). Kept in the ledger as the worked example of
 #   an ACCEPTANCE WIDENING, because that direction has its own trap:
@@ -533,7 +531,7 @@ s3-scope-prefix-scalar-nested-crossed-impl-first.mdk|§3 positional body-scope p
 s3-scope-prefix-scalar-nested-crossed-interface-first.mdk|§3 positional body-scope pairing with the opposite crossed orders: interface lists `foo_bar` first and impl lists `foo` first|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|7|
 s3-scope-prefix-scalar-nested-global-control.mdk|§3 direct-global control for nested scalar forwarding, separating nominal sibling ownership from ordinary given-before-instance behavior|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|7|
 s3-scope-local-inherits-outer-given.mdk|§3 accepted local-scope carveout: a local lambda inherits the enclosing function body scope and sees its `D a` given, producing exactly 7|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|7|
-s3-nested-obligation-two-levels.mdk|§2/§7 LEDGER #323 (OPEN): at nesting depth >=2 under overlap `run` E-PANICs `unknown op ‘+’` while check and the NATIVE binary are correct (7 then 119). build`s value is pinned because it is RIGHT; run`s pinned stdout is the `7` SENTINEL it emits before dying, which pins that it reached the failing line rather than falling over earlier. ⚠️ REACH POINT, NOT REASON -- run`s stderr is ungradeable (#1130), so a different fault on the same line would still pass. The row drains when run stops panicking|ACCEPT|REJECT|ACCEPT|BUILD_EXACT|7%%7\n119|
+s3-nested-obligation-two-levels.mdk|§2/§7 recursive evidence under overlap: the innermost most-specific Tag instance yields 99 and two enclosing general instances each add 10. Both engines must retain every prerequisite and print the sentinel 7 followed by 119 (#323 regression guard); the no-overlap sibling yields 31|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|7\n119|
 s3-nested-no-overlap-control.mdk|CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|31|
 s3-min-fully-general-sibling.mdk|§3 `inst` = min⊑(match) WITH A FULLY-GENERAL SIBLING -- the #1128 DRAIN (F-3b). `impl Tag a` beside `impl Tag (Box Int)`: goal `Tag (Box Int)` matches BOTH and min⊑ takes the concrete one (99); goals `Tag (Box String)` / `Tag (Box Bool)` match the general one ALONE, because no substitution makes `Box Int` into `Box String` (10, 10). This row pinned the WRONG 99/99/99 until 2026-08-01; the value below is the SPEC answer the fixture`s own header hand-derived before the fix existed, not a recapture of what the engine started doing|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|99\n10\n10|
 s3-fn-typed-impl-heads-discriminated.mdk|§3 `inst` DISCRIMINATES TWO FUNCTION-TYPED IMPL HEADS -- the #1617 DRAIN, and the third member of the `noneHeadTag` family after #1128 above and #1154 below. `impl Sz (Int -> Int)` beside `impl Sz (Bool -> Bool)`: `headTyconTy`s `_ => None` arm swallowed `TyFun`, both heads shared the ONE `noneHeadTag` bucket, and the value was decided by DECLARATION ORDER at exit 0 with `check --json` clean -- this ordering printed `(5, 5)`, the reversed one `(9, 9)`, and `build` exited 1 with `arg-tag dispatch on impl type that owns no constructors`. `(5, 9)` is the SPEC answer the fixtures own header hand-derived from the two signatures, not a recapture. ⚠️ THE VALUE CELL IS ONLY HALF THIS ROW: the defects signature was ORDER-DEPENDENCE, which a single-order value pin passes by construction, so the discriminating half is Section 4 -- this file is a FLAT `.mdk` with 2 impls of one interface precisely so the permuter derives it|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|(5, 9)|

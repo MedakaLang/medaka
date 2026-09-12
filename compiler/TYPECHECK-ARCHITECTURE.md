@@ -515,9 +515,11 @@ resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
 Method declaration rows now pair identity, scheme and method predicate slots in
 one allocation. Flat retains its second row construction for `methodNames` and
 the first-write slot registry; Module constructs visible rows from `implDecls`
-for admitted lookup and Num seeding. Those rows remain setup-local. The numeric
-scheme and optional legacy declaration parameters share `LegacyNumLiteralAnchor`;
-this is preparation for qualified schemes, not a shared solving judgment.
+for admitted lookup and Num seeding. Numeric seeding retains the selected
+`MethodSchemeRow`, which owns the scheme, raw method type, interface parameters,
+identity and method predicate slots. Each numeric occurrence derives its
+`ClassPredicate` from that row's instantiation for checking and return stamping.
+This does not yet provide a shared solving judgment for other return sites.
 
 This sequence runs ONCE per module on the Module arm: marking happens inside it, per
 binding group, after the group's callees have generalized (ARCH §E), so a promoted callee's

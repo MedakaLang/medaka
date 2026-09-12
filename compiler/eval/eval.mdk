@@ -67,6 +67,7 @@ import support.util.{
   dedup,
   startsWith,
 }
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import support.opcount.{opBump}
 -- #1292: the ctor-collision rename the module drivers apply before seeding the
 -- program-global `ctorToTypeRef`.  `backend/private_mangle.mdk` imports only
@@ -345,8 +346,8 @@ ctorFieldOrdersRef = Ref []
 -- dispatch chain loads only reqCount of the matched impl); eval must too: forward
 -- only the first reqCount of the dict's reqs.  None ⇒ no entry ⇒ method takes 0
 -- leading dicts (forward none).
-methodReqCountRef : Ref (List ((String, String), Int))
-methodReqCountRef = Ref []
+methodReqCountRef : Ref (OrdMap (OrdMap Int))
+methodReqCountRef = Ref omEmpty
 
 -- #315: the ((iface, method), positions) table, kept for the REVERSE direction the
 -- default-method specialiser needs: method → its interface → that interface's other
@@ -370,7 +371,7 @@ export
 installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
-  methodReqCountRef := buildMethodReqCounts allDecls
+  methodReqCountRef := methodReqCountIndex (buildMethodReqCounts allDecls)
   ifaceDispatchRef := disp
   -- #1047: installed HERE for the same reason `lowerImpls` installs
   -- `installIfaceImplHeads` — this is the ONE call every module driver (eval's
@@ -538,6 +539,22 @@ leadingImplDictPats ((PVar x _) :: rest) =
   if startsWith "$dict" x then 1 + leadingImplDictPats rest else 0
 leadingImplDictPats _ = 0
 
+-- Preserve the row builder's first-match semantics while indexing its two existing
+-- String keys.  The reverse is performed once at installation because omInsert is
+-- last-write-wins.
+methodReqCountIndex : List ((String, String), Int) -> OrdMap (OrdMap Int)
+methodReqCountIndex rows = methodReqCountIndexGo (reverseL rows) omEmpty
+
+methodReqCountIndexGo : List ((String, String), Int) ->
+  OrdMap (OrdMap Int) ->
+  OrdMap (OrdMap Int)
+methodReqCountIndexGo [] index = index
+methodReqCountIndexGo (((mname, route), count) :: rest) index =
+  let routes = optionOr omEmpty (omLookup mname index)
+  methodReqCountIndexGo
+    rest
+    (omInsert mname (omInsert route count routes) index)
+
 subClampZero : Int -> Int -> Int
 subClampZero a b = if a - b < 0 then 0 else a - b
 
@@ -564,16 +581,12 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 -- the dict to `lt`'s first value param → "applied non-function: false" (#315).  The
 -- dicts are not stripped: specializeDefault routes them to the inner same-interface
 -- call that actually needs them.
--- This scans methodReqCountRef, so it is once-per-dispatch on the hot path: callers
--- take the Option ONCE and derive every consumer from it (see applyMethodDicts).
+-- Callers take the indexed Option once and derive every consumer from it (see
+-- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
-lookupMethodReqCountOpt mname tag = lookupReqCount mname tag !methodReqCountRef
-
-lookupReqCount : String -> String -> List ((String, String), Int) -> Option Int
-lookupReqCount _ _ [] = None
-lookupReqCount mname tag (((m, t), c) :: rest)
-  | m == mname && t == tag = Some c
-  | otherwise = lookupReqCount mname tag rest
+lookupMethodReqCountOpt mname tag = match omLookup mname !methodReqCountRef
+  Some routes => omLookup tag routes
+  None => None
 
 export
 buildCtorFieldOrders : List Decl -> List (String, List String)
@@ -1852,10 +1865,9 @@ applyMethodDicts : EvalEnv (Value e) ->
   <e> Value e
 applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   let tag = routeTag env route
-  -- ONE scan of methodReqCountRef per dispatch.  Both consumers below derive from
-  -- this single Option: fwdReqs wants it as a count (absent ⇒ 0), implDictRoutes
-  -- wants the absent/present distinction.  Looking it up twice doubled a
-  -- linear-in-impl-count scan on a runtime dispatch hot path for nothing.
+  -- ONE indexed lookup per dispatch. Both consumers below derive from this single
+  -- Option: fwdReqs wants it as a count (absent ⇒ 0), implDictRoutes wants the
+  -- absent/present distinction.
   let reqCount = lookupMethodReqCountOpt name tag
   let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
   if awaitsArgs

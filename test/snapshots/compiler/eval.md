@@ -1,5 +1,5 @@
 # META
-source_lines=4879
+source_lines=4891
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -71,6 +71,7 @@ import support.util.{
   dedup,
   startsWith,
 }
+import support.ordmap.{OrdMap, omEmpty, omInsert, omLookup}
 import support.opcount.{opBump}
 -- #1292: the ctor-collision rename the module drivers apply before seeding the
 -- program-global `ctorToTypeRef`.  `backend/private_mangle.mdk` imports only
@@ -349,8 +350,8 @@ ctorFieldOrdersRef = Ref []
 -- dispatch chain loads only reqCount of the matched impl); eval must too: forward
 -- only the first reqCount of the dict's reqs.  None ⇒ no entry ⇒ method takes 0
 -- leading dicts (forward none).
-methodReqCountRef : Ref (List ((String, String), Int))
-methodReqCountRef = Ref []
+methodReqCountRef : Ref (OrdMap (OrdMap Int))
+methodReqCountRef = Ref omEmpty
 
 -- #315: the ((iface, method), positions) table, kept for the REVERSE direction the
 -- default-method specialiser needs: method → its interface → that interface's other
@@ -374,7 +375,7 @@ export
 installDispatchTables : List Decl -> List ((String, String, String), List Int)
 installDispatchTables allDecls =
   let disp = buildIfaceDispatch allDecls
-  methodReqCountRef := buildMethodReqCounts allDecls
+  methodReqCountRef := methodReqCountIndex (buildMethodReqCounts allDecls)
   ifaceDispatchRef := disp
   -- #1047: installed HERE for the same reason `lowerImpls` installs
   -- `installIfaceImplHeads` — this is the ONE call every module driver (eval's
@@ -542,6 +543,22 @@ leadingImplDictPats ((PVar x _) :: rest) =
   if startsWith "$dict" x then 1 + leadingImplDictPats rest else 0
 leadingImplDictPats _ = 0
 
+-- Preserve the row builder's first-match semantics while indexing its two existing
+-- String keys.  The reverse is performed once at installation because omInsert is
+-- last-write-wins.
+methodReqCountIndex : List ((String, String), Int) -> OrdMap (OrdMap Int)
+methodReqCountIndex rows = methodReqCountIndexGo (reverseL rows) omEmpty
+
+methodReqCountIndexGo : List ((String, String), Int) ->
+  OrdMap (OrdMap Int) ->
+  OrdMap (OrdMap Int)
+methodReqCountIndexGo [] index = index
+methodReqCountIndexGo (((mname, route), count) :: rest) index =
+  let routes = optionOr omEmpty (omLookup mname index)
+  methodReqCountIndexGo
+    rest
+    (omInsert mname (omInsert route count routes) index)
+
 subClampZero : Int -> Int -> Int
 subClampZero a b = if a - b < 0 then 0 else a - b
 
@@ -568,16 +585,12 @@ takeN n (x :: rest) = x :: takeN (n - 1) rest
 -- the dict to `lt`'s first value param → "applied non-function: false" (#315).  The
 -- dicts are not stripped: specializeDefault routes them to the inner same-interface
 -- call that actually needs them.
--- This scans methodReqCountRef, so it is once-per-dispatch on the hot path: callers
--- take the Option ONCE and derive every consumer from it (see applyMethodDicts).
+-- Callers take the indexed Option once and derive every consumer from it (see
+-- applyMethodDicts).
 lookupMethodReqCountOpt : String -> String -> Option Int
-lookupMethodReqCountOpt mname tag = lookupReqCount mname tag !methodReqCountRef
-
-lookupReqCount : String -> String -> List ((String, String), Int) -> Option Int
-lookupReqCount _ _ [] = None
-lookupReqCount mname tag (((m, t), c) :: rest)
-  | m == mname && t == tag = Some c
-  | otherwise = lookupReqCount mname tag rest
+lookupMethodReqCountOpt mname tag = match omLookup mname !methodReqCountRef
+  Some routes => omLookup tag routes
+  None => None
 
 export
 buildCtorFieldOrders : List Decl -> List (String, List String)
@@ -1856,10 +1869,9 @@ applyMethodDicts : EvalEnv (Value e) ->
   <e> Value e
 applyMethodDicts env name route narrowed fwdReqs0 implRoutes methodRoutes =
   let tag = routeTag env route
-  -- ONE scan of methodReqCountRef per dispatch.  Both consumers below derive from
-  -- this single Option: fwdReqs wants it as a count (absent ⇒ 0), implDictRoutes
-  -- wants the absent/present distinction.  Looking it up twice doubled a
-  -- linear-in-impl-count scan on a runtime dispatch hot path for nothing.
+  -- ONE indexed lookup per dispatch. Both consumers below derive from this single
+  -- Option: fwdReqs wants it as a count (absent ⇒ 0), implDictRoutes wants the
+  -- absent/present distinction.
   let reqCount = lookupMethodReqCountOpt name tag
   let fwdReqs = takeN (optionOr 0 reqCount) fwdReqs0
   if awaitsArgs
@@ -4885,6 +4897,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
@@ -4967,12 +4980,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "ctorFieldOrdersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldOrdersRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
-(DFunDef false "methodReqCountRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "methodReqCountRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
 (DTypeSig false "ifaceDispatchRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "ifaceDispatchRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "installDispatchTables" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "buildMethodReqCounts") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceDispatchRef")) (EVar "disp"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "declImplIfaceIdsRef")) (EApp (EVar "declImplIfaceIdTable") (EVar "allDecls")))) (DoExpr (EVar "disp"))))
+(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "methodReqCountIndex") (EApp (EVar "buildMethodReqCounts") (EVar "allDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceDispatchRef")) (EVar "disp"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "declImplIfaceIdsRef")) (EApp (EVar "declImplIfaceIdTable") (EVar "allDecls")))) (DoExpr (EVar "disp"))))
 (DTypeSig false "declImplIfaceIdsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "declImplIfaceIdsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "declImplIfaceIdTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
@@ -5009,6 +5022,11 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "leadingImplDictPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "leadingImplDictPats" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingImplDictPats") (EVar "rest"))) (ELit (LInt 0))))
 (DFunDef false "leadingImplDictPats" (PWild) (ELit (LInt 0)))
+(DTypeSig false "methodReqCountIndex" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "methodReqCountIndex" ((PVar "rows")) (EApp (EApp (EVar "methodReqCountIndexGo") (EApp (EVar "reverseL") (EVar "rows"))) (EVar "omEmpty")))
+(DTypeSig false "methodReqCountIndexGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
+(DFunDef false "methodReqCountIndexGo" ((PList) (PVar "index")) (EVar "index"))
+(DFunDef false "methodReqCountIndexGo" ((PCons (PTuple (PTuple (PVar "mname") (PVar "route")) (PVar "count")) (PVar "rest")) (PVar "index")) (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mname")) (EVar "index")))) (DoExpr (EApp (EApp (EVar "methodReqCountIndexGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mname")) (EApp (EApp (EApp (EVar "omInsert") (EVar "route")) (EVar "count")) (EVar "routes"))) (EVar "index"))))))
 (DTypeSig false "subClampZero" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "subClampZero" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EBinOp "-" (EVar "a") (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0)) (EBinOp "-" (EVar "a") (EVar "b"))))
 (DTypeSig false "takeN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -5016,10 +5034,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "takeN" (PWild (PList)) (EListLit))
 (DFunDef false "takeN" ((PVar "n") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "lookupMethodReqCountOpt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EApp (EApp (EApp (EVar "lookupReqCount") (EVar "mname")) (EVar "tag")) (EUnOp "!" (EVar "methodReqCountRef"))))
-(DTypeSig false "lookupReqCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "lookupReqCount" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "lookupReqCount" ((PVar "mname") (PVar "tag") (PCons (PTuple (PTuple (PVar "m") (PVar "t")) (PVar "c")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "mname")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "Some") (EVar "c")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupReqCount") (EVar "mname")) (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "methodReqCountRef"))) (arm (PCon "Some" (PVar "routes")) () (EApp (EApp (EVar "omLookup") (EVar "tag")) (EVar "routes"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "buildCtorFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildCtorFieldOrders" ((PVar "prog")) (EApp (EApp (EVar "flatMap") (EVar "ctorFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -6410,6 +6425,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DUse false (UseGroup ("frontend" "ast") ((mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Addr" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "FieldAssign" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "Route" true) (mem "ConPayload" true) (mem "Field" true) (mem "Variant" true) (mem "IfaceMethod" true) (mem "MethodDefault" true) (mem "ImplMethod" true) (mem "UsePath" true) (mem "UseMember" true) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "qualifiedLocal" false) (mem "Decl" true) (mem "DataVis" true) (mem "TyConOrigin" false) (mem "ifaceIdentity" false) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("types" "route_key") ((mem "implRouteKeyWord" false) (mem "funHeadTag" false) (mem "evDictRoutes" false) (mem "evMethodRoutes" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "listLen" false) (mem "reverseL" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "joinWith" false) (mem "fallthroughName" false) (mem "noneHeadTag" false) (mem "isEmptyL" false) (mem "filterList" false) (mem "splitOnChar" false) (mem "initList" false) (mem "mapOption" false) (mem "joinDot" false) (mem "dedup" false) (mem "startsWith" false))))
+(DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false))))
 (DUse false (UseGroup ("support" "opcount") ((mem "opBump" false))))
 (DUse false (UseGroup ("backend" "private_mangle") ((mem "mangleCtorCollisions" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" true) (mem "Severity" true) (mem "cjAllToJsonWith" false) (mem "flushRunEnvelope" false) (mem "runEnvelopeFields" false))))
@@ -6492,12 +6508,12 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "variantName" ((PCon "Variant" (PVar "n") PWild)) (EVar "n"))
 (DTypeSig true "ctorFieldOrdersRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "ctorFieldOrdersRef" () (EApp (EVar "Ref") (EListLit)))
-(DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int")))))
-(DFunDef false "methodReqCountRef" () (EApp (EVar "Ref") (EListLit)))
+(DTypeSig false "methodReqCountRef" (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "methodReqCountRef" () (EApp (EVar "Ref") (EVar "omEmpty")))
 (DTypeSig false "ifaceDispatchRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
 (DFunDef false "ifaceDispatchRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig true "installDispatchTables" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Int"))))))
-(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "buildMethodReqCounts") (EVar "allDecls")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceDispatchRef")) (EVar "disp"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "declImplIfaceIdsRef")) (EApp (EVar "declImplIfaceIdTable") (EVar "allDecls")))) (DoExpr (EVar "disp"))))
+(DFunDef false "installDispatchTables" ((PVar "allDecls")) (EBlock (DoLet false false (PVar "disp") (EApp (EVar "buildIfaceDispatch") (EVar "allDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReqCountRef")) (EApp (EVar "methodReqCountIndex") (EApp (EVar "buildMethodReqCounts") (EVar "allDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "ifaceDispatchRef")) (EVar "disp"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "declImplIfaceIdsRef")) (EApp (EVar "declImplIfaceIdTable") (EVar "allDecls")))) (DoExpr (EVar "disp"))))
 (DTypeSig false "declImplIfaceIdsRef" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
 (DFunDef false "declImplIfaceIdsRef" () (EApp (EVar "Ref") (EListLit)))
 (DTypeSig false "declImplIfaceIdTable" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyCon "String")))))
@@ -6534,6 +6550,11 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DTypeSig false "leadingImplDictPats" (TyFun (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Int")))
 (DFunDef false "leadingImplDictPats" ((PCons (PCon "PVar" (PVar "x") PWild) (PVar "rest"))) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "$dict"))) (EVar "x")) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "leadingImplDictPats") (EVar "rest"))) (ELit (LInt 0))))
 (DFunDef false "leadingImplDictPats" (PWild) (ELit (LInt 0)))
+(DTypeSig false "methodReqCountIndex" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int")))))
+(DFunDef false "methodReqCountIndex" ((PVar "rows")) (EApp (EApp (EVar "methodReqCountIndexGo") (EApp (EVar "reverseL") (EVar "rows"))) (EVar "omEmpty")))
+(DTypeSig false "methodReqCountIndexGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Int"))))))
+(DFunDef false "methodReqCountIndexGo" ((PList) (PVar "index")) (EMethodRef "index"))
+(DFunDef false "methodReqCountIndexGo" ((PCons (PTuple (PTuple (PVar "mname") (PVar "route")) (PVar "count")) (PVar "rest")) (PVar "index")) (EBlock (DoLet false false (PVar "routes") (EApp (EApp (EVar "optionOr") (EVar "omEmpty")) (EApp (EApp (EVar "omLookup") (EVar "mname")) (EMethodRef "index")))) (DoExpr (EApp (EApp (EVar "methodReqCountIndexGo") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "mname")) (EApp (EApp (EApp (EVar "omInsert") (EVar "route")) (EDictApp "count")) (EVar "routes"))) (EMethodRef "index"))))))
 (DTypeSig false "subClampZero" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "subClampZero" ((PVar "a") (PVar "b")) (EIf (EBinOp "<" (EBinOp "-" (EVar "a") (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0)) (EBinOp "-" (EVar "a") (EVar "b"))))
 (DTypeSig false "takeN" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "List") (TyVar "a")))))
@@ -6541,10 +6562,7 @@ evalOneRootEnvWith extraExterns preludeDecls (rootId, prog) =
 (DFunDef false "takeN" (PWild (PList)) (EListLit))
 (DFunDef false "takeN" ((PVar "n") (PCons (PVar "x") (PVar "rest"))) (EBinOp "::" (EVar "x") (EApp (EApp (EVar "takeN") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "rest"))))
 (DTypeSig false "lookupMethodReqCountOpt" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EApp (EApp (EApp (EVar "lookupReqCount") (EVar "mname")) (EVar "tag")) (EUnOp "!" (EVar "methodReqCountRef"))))
-(DTypeSig false "lookupReqCount" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyCon "Int"))) (TyApp (TyCon "Option") (TyCon "Int"))))))
-(DFunDef false "lookupReqCount" (PWild PWild (PList)) (EVar "None"))
-(DFunDef false "lookupReqCount" ((PVar "mname") (PVar "tag") (PCons (PTuple (PTuple (PVar "m") (PVar "t")) (PVar "c")) (PVar "rest"))) (EIf (EBinOp "&&" (EBinOp "==" (EVar "m") (EVar "mname")) (EBinOp "==" (EVar "t") (EVar "tag"))) (EApp (EVar "Some") (EVar "c")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "lookupReqCount") (EVar "mname")) (EVar "tag")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lookupMethodReqCountOpt" ((PVar "mname") (PVar "tag")) (EMatch (EApp (EApp (EVar "omLookup") (EVar "mname")) (EUnOp "!" (EVar "methodReqCountRef"))) (arm (PCon "Some" (PVar "routes")) () (EApp (EApp (EVar "omLookup") (EVar "tag")) (EVar "routes"))) (arm (PCon "None") () (EVar "None"))))
 (DTypeSig true "buildCtorFieldOrders" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "buildCtorFieldOrders" ((PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EVar "ctorFieldOrderEntries")) (EVar "prog")))
 (DTypeSig false "ctorFieldOrderEntries" (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))
