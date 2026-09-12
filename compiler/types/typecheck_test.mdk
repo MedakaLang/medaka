@@ -1169,6 +1169,16 @@ test "wrapped return checking rejects an instance for only the result wrapper" =
     expectEqual True (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
   ]
 
+test "wrapped return routes use the specific instance's empty context" =
+  let source = joinNl [
+    wrappedReturnSource True True,
+    "impl Produce Int where",
+    "  produce _ = Box 73",
+  ]
+  expectEqual
+    [Some [], Some []]
+    [wrappedReturnRoutes source, wrappedReturnFlatRoutes source]
+
 test "wrapped return routes survive an intervening failed request" =
   let before = wrappedReturnRoutes (wrappedReturnSource True True)
   let core = desugar (parse numericPreludeSource)
