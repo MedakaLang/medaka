@@ -38810,6 +38810,60 @@ methodReturnProbeRequest row =
   let occurrence = fst (methodReturnProbeOccurrence row)
   methodReturnRequest row occurrence None
 
+methodReturnVectorCompletenessProbe : Unit ->
+  (Option (List String), Option (List String), Bool, Bool)
+methodReturnVectorCompletenessProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let _ = methodReturnProbeScope "return-vector"
+  let zeroRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface "return-zero" "Zero" [] [
+          IfaceMethod
+            "make"
+            (TyFun (tyConBuiltin "Unit" None) (tyConBuiltin "Int" None))
+            None
+            None,
+        ],
+      ])
+  let partialRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface
+          "return-partial"
+          "Partial"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+              None
+              None,
+          ],
+      ])
+  let zeroArgs =
+    map (map ppMono) (methodReturnArgs (methodReturnProbeRequest zeroRow))
+  let partialArgs =
+    map (map ppMono) (methodReturnArgs (methodReturnProbeRequest partialRow))
+  let observed = (
+    zeroArgs,
+    partialArgs,
+    allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
+    allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observed
+
+-- > methodReturnVectorCompletenessProbe ()
+-- (Some [], None, True, False)
+
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeCodes ownedRow impls =
   graphRun := freshGraphRun ()
