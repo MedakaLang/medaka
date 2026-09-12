@@ -102,7 +102,7 @@ import lib.xrpc.{
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileWrite}
-import shell.egress.{Egress, egressAppview, egressCall}
+import shell.egress.{Egress, egressAppviews, egressCall}
 import shell.eventlog.{
   eventLogDiscardStaged,
   eventLogNextSequence,
@@ -1317,7 +1317,7 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
       nowSeconds = nowSeconds,
       nonce = osEntropyBytes requestNonceBytes,
     }
-    (map egressAppview (servingEgress serving))
+    (map egressAppviews (servingEgress serving))
     !storeRef
     request
 
@@ -1336,7 +1336,7 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
    function chooses the identity it charges and nothing else.
 
    `None` for the egress is unreachable — a `ProxyAdmitted` decision is only
-   produced when an `AppviewPolicy` was supplied, and the only source of one is
+   produced when an `AppviewTable` was supplied, and the only source of one is
    a configured `Egress` — and it is answered 502 rather than by a panic: a
    reachability argument is not a reason to add a crash path to the one
    function a client can reach over the network. -}

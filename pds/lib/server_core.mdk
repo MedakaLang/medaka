@@ -32,8 +32,10 @@ import lib.jwt.{
   verifyToken,
 }
 import lib.proxy.{
-  AppviewPolicy,
-  appviewPolicyDid,
+  appviewRouteDid,
+  appviewRouteFor,
+  AppviewTable,
+  defaultAppviewRoute,
   forwardableProxyVerb,
   ProxyDisposition(..),
   ProxyHeader(..),
@@ -525,8 +527,8 @@ classifyUpgrade (Server account registry _) context store request =
 
    Every DECISION is taken here: whether the method is one this server forwards
    at all, whether the CALLER holds a credential of this account's own, which
-   audience the call goes to — the one a header named, graded against the one
-   this server was configured to mint for, or that configured one when no header
+   audience the call goes to — the one a header named, graded against the SET
+   this server was configured to mint for, or that set's default when no header
    named any — and, when all of them hold, the exact claim set a token must
    carry along with the verb, body and fields that travel with it. The shell
    signs that claim set and sends the call; it chooses none of it. That is what
@@ -634,34 +636,32 @@ admitForward account context request nsid audience signedAudience =
 
 -- The audience half for a request that NAMED one: the header must name a DID,
 -- this server must have been configured to proxy at all, and the DID must be
--- the one it was configured with. A failure of any of the three refuses before
--- the verb is looked at, so a header naming someone else's service is refused
--- for naming it and not for what it asked for.
+-- one of the audiences it was configured with. A failure of any of the three
+-- refuses before the verb is looked at, so a header naming someone else's
+-- service is refused for naming it and not for what it asked for.
+--
+-- The admitted value is the ROW's own DID and not the client's bytes, even
+-- though the two compared equal: what travels onward is a value this server's
+-- own configuration produced, so the port chosen downstream from it
+-- (`pds/shell/egress.mdk`) is chosen from the table and never from the header.
 admitProxyAudience : Account ->
   RequestContext ->
-  Option AppviewPolicy ->
+  Option AppviewTable ->
   Request ->
   String ->
   String ->
   ProxyDecision
-admitProxyAudience account context policy request nsid raw =
+admitProxyAudience account context table request nsid raw =
   match proxyServiceDid raw
     None =>
       ProxyRefused
         (proxyRefusalResponse "atproto-proxy does not name a service DID")
-    Some service => match policy
+    Some service => match table
       None => ProxyRefused (proxyRefusalResponse (proxyNoServiceMessage nsid))
-      Some configured =>
-        if service /= appviewPolicyDid configured then
-          ProxyRefused (proxyRefusalResponse proxyForeignAudienceMessage)
-        else
-          admitForward
-            account
-            context
-            request
-            nsid
-            (appviewPolicyDid configured)
-            raw
+      Some configured => match appviewRouteFor configured service
+        None => ProxyRefused (proxyRefusalResponse proxyForeignAudienceMessage)
+        Some route =>
+          admitForward account context request nsid (appviewRouteDid route) raw
 
 {- | The refusal this caller is owed for its credential, or `None` when it
    holds one.
@@ -688,8 +688,8 @@ proxyCredentialRefusal account context store request =
 
    The named-none clause is what `parseProxyInfo`'s fall-through to
    `defaultService` does in the official implementation: an app that sends no
-   header still gets its reads answered, by the one service this operator
-   configured.
+   header still gets its reads answered, by the FIRST service this operator
+   configured (`lib.proxy`'s `defaultAppviewRoute`).
 
    A server with NO appview configured answers `NotProxied` to that clause
    BEFORE the credential is looked at, and the ordering is the point rather
@@ -700,7 +700,7 @@ proxyCredentialRefusal account context store request =
    asked this server for something, and is owed an answer to what it asked. -}
 admitForwardable : Account ->
   RequestContext ->
-  Option AppviewPolicy ->
+  Option AppviewTable ->
   Store ->
   Request ->
   String ->
@@ -711,17 +711,12 @@ admitForwardable account context (Some configured) store request nsid None =
   match proxyCredentialRefusal account context store request
     Some response => ProxyRefused response
     None =>
-      admitForward
-        account
-        context
-        request
-        nsid
-        (appviewPolicyDid configured)
-        (appviewPolicyDid configured)
-admitForwardable account context policy store request nsid (Some raw) =
+      let fallback = appviewRouteDid (defaultAppviewRoute configured)
+      admitForward account context request nsid fallback fallback
+admitForwardable account context table store request nsid (Some raw) =
   match proxyCredentialRefusal account context store request
     Some response => ProxyRefused response
-    None => admitProxyAudience account context policy request nsid raw
+    None => admitProxyAudience account context table request nsid raw
 
 {- | Whether this request is forwarded, refused, or none of this seam's
    business.
@@ -751,7 +746,7 @@ admitForwardable account context policy store request nsid (Some raw) =
 export
 classifyProxy : Server ->
   RequestContext ->
-  Option AppviewPolicy ->
+  Option AppviewTable ->
   Store ->
   Request ->
   ProxyDecision

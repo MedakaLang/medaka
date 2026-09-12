@@ -15,9 +15,11 @@
    no deployment this design has, and leaving it out is containment as well as
    simplicity: a defect anywhere in the audience grading still cannot send a
    credential bearing this account's identity anywhere but to a listener on
-   this machine. The egress proxy is therefore a reverse proxy pinned to the
-   one configured appview, not a forwarding proxy that routes on `Host` — the
-   `Host` this module sends is the proxy's own loopback address.
+   this machine. An egress proxy is therefore a reverse proxy pinned to ONE
+   configured audience, not a forwarding proxy that routes on `Host` — the
+   `Host` this module sends is the proxy's own loopback address, so an operator
+   who configures a second audience configures a second listener for it and the
+   choice between them is this process's, taken from the audience table.
 
    EVERY WAIT PARKS, the connect included. A loopback listener whose accept
    queue is full does not refuse a dial — the kernel drops the handshake and
@@ -50,7 +52,13 @@ import lib.httpclient.{
 }
 import lib.jwt.{mintServiceToken}
 import lib.server_core.{ProxyAdmission}
-import lib.proxy.{AppviewPolicy, relayedResponseFields, UpstreamAnswer(..)}
+import lib.proxy.{
+  appviewRouteFor,
+  appviewRoutePort,
+  AppviewTable,
+  relayedResponseFields,
+  UpstreamAnswer(..),
+}
 import lib.resource_limits.{maxHttpClientWireBytes}
 import lib.sign.{SecretKey}
 import net.{Connection}
@@ -102,39 +110,44 @@ upstreamConnectTimeout = seconds 5
 upstreamChunkBytes : Int
 upstreamChunkBytes = 65536
 
-{- | Everything a proxied call needs that is not in the request: the egress
-   proxy's loopback port, the one appview this server proxies to, and the
-   account's own repo signing key.
+{- | Everything a proxied call needs that is not in the request: the audiences
+   this server proxies to with the loopback egress port each one's forwards
+   leave by, and the account's own repo signing key.
+
+   One port per audience and not one for the whole server: each row's egress
+   proxy is a reverse proxy pinned to that row's service, so which port a call
+   leaves by IS which service it reaches. That is why the port is looked up
+   from the same table the audience was admitted against, keyed by the value
+   that was ADMITTED — a port derived from the client's header a second time
+   would be a second audience decision, taken where nothing grades it.
 
    The key has no accessor. It enters through `makeEgress` and leaves only as a
    signature over a claim set `lib.server_core` built, so no other module can
    sign anything with it, and nothing can render it. -}
-export data Egress = Egress Int AppviewPolicy SecretKey
+export data Egress = Egress AppviewTable SecretKey
 
 export
-makeEgress : Int -> AppviewPolicy -> SecretKey -> Egress
-makeEgress port appview signingKey = Egress port appview signingKey
+makeEgress : AppviewTable -> SecretKey -> Egress
+makeEgress appviews signingKey = Egress appviews signingKey
 
--- | The one appview this server proxies to, for the pure classifier that has
--- to compare a client's header against it.
+-- | The audiences this server proxies to, for the pure classifier that has to
+-- grade a client's header against them.
 export
-egressAppview : Egress -> AppviewPolicy
-egressAppview (Egress _ appview _) = appview
-
-egressPort : Egress -> Int
-egressPort (Egress port _ _) = port
+egressAppviews : Egress -> AppviewTable
+egressAppviews (Egress appviews _) = appviews
 
 -- The account's own repo signing key, for the ONE caller that signs with it.
 -- It is private to this module and has no export: the key enters through
 -- `makeEgress` and leaves only as a signature over a claim set
 -- `lib.server_core` built.
 egressSigningKey : Egress -> SecretKey
-egressSigningKey (Egress _ _ signingKey) = signingKey
+egressSigningKey (Egress _ signingKey) = signingKey
 
--- The `Host` field's value: the egress proxy's own address. See the module
--- header on why that is the right value rather than the appview's hostname.
-egressHostValue : Egress -> String
-egressHostValue egress = "\{egressAddress}:\{intToString (egressPort egress)}"
+-- The `Host` field's value: the egress proxy's own address, on the port this
+-- call's admitted audience is reached at. See the module header on why the
+-- address is the proxy's rather than the appview's hostname.
+egressHostValue : Int -> String
+egressHostValue port = "\{egressAddress}:\{intToString port}"
 
 {- | The outbound request bytes.
 
@@ -150,11 +163,11 @@ egressHostValue egress = "\{egressAddress}:\{intToString (egressPort egress)}"
    `lib.httpclient` owns every framing field besides — including the one
    `content-length`, computed from the body actually being sent rather than
    copied from what the client claimed. -}
-egressRequestBytes : Egress ->
+egressRequestBytes : Int ->
   ProxyAdmission ->
   String ->
   Result String (Array Int)
-egressRequestBytes egress admission minted = do
+egressRequestBytes port admission minted = do
   relayed <- relayedRequestFieldsOf admission.headers
   authorization <- makeRequestHeader "authorization" ("Bearer " ++ minted)
   accept <- makeRequestHeader "accept" "application/json"
@@ -162,7 +175,7 @@ egressRequestBytes egress admission minted = do
   serializeRequest
     admission.verb
     admission.target
-    (egressHostValue egress)
+    (egressHostValue port)
     (relayed ++ [authorization, accept, closing])
     admission.body
 
@@ -297,6 +310,17 @@ egressConnect host port bytes = defer
    verb chosen here would be a second place the verb is decided, and the two
    could disagree.
 
+   WHERE it goes is looked up here, from `admission.audience` — the value
+   `lib.server_core` ADMITTED, which is the table's own DID and not the
+   client's header text. An audience this table does not hold is an `Err` and
+   not a default: falling back to the first row would send a credential minted
+   for one service to another one's proxy, which is the confused deputy with
+   the grading intact and the routing wrong. That arm is unreachable — an
+   admission's audience came out of this same table — and it is an `Err` rather
+   than a panic for the reason `pds/shell/server.mdk`'s unreachable `None`
+   egress is a 502: a reachability argument is not a reason to add a crash path
+   to a function a client can reach over the network.
+
    `Err` is every way the call can fail to produce an answer — the token could
    not be minted, the target the client sent is not a serializable origin-form
    target, a relayed field is not serializable, the proxy refused the
@@ -308,11 +332,18 @@ egressCall : Egress ->
   ProxyAdmission ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
 egressCall egress admission =
-  match mintServiceToken (egressSigningKey egress) admission.serviceAuth
-    Err message =>
-      deferPure (Err "egress: could not mint a service credential: \{message}")
-    Ok minted => match egressRequestBytes egress admission minted
-      Err message =>
-        deferPure
-          (Err "egress: outbound request is not serializable: \{message}")
-      Ok bytes => egressConnect egressAddress (egressPort egress) bytes
+  match appviewRouteFor (egressAppviews egress) admission.audience
+    None =>
+      deferPure (Err "egress: the admitted audience is not a configured one")
+    Some route =>
+      match mintServiceToken (egressSigningKey egress) admission.serviceAuth
+        Err message =>
+          deferPure
+            (Err "egress: could not mint a service credential: \{message}")
+        Ok minted =>
+          match egressRequestBytes (appviewRoutePort route) admission minted
+            Err message =>
+              deferPure
+                (Err "egress: outbound request is not serializable: \{message}")
+            Ok bytes =>
+              egressConnect egressAddress (appviewRoutePort route) bytes

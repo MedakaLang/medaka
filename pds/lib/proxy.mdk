@@ -5,9 +5,10 @@
    token would be minted for. Grading it is therefore not a formality: a server
    that signs whatever audience the header names hands out credentials bearing
    its own account's identity to whoever the client points at. The audience is
-   graded against the ONE service this server was configured to proxy to, and
-   it is graded here, where no effect is available, so that no caller can reach
-   a signature along a path that skipped it.
+   graded against the SET of services this server was configured to proxy to —
+   a set an operator enumerates and this module holds as a table — and it is
+   graded here, where no effect is available, so that no caller can reach a
+   signature along a path that skipped it.
 
    THE TWO AXES ARE NOT SYMMETRIC, and that is the whole design (ruling R1,
    `docs/design/ATPROTO-PDS-DESIGN.md` §4.5). The confused-deputy defense lives
@@ -57,7 +58,7 @@ import lib.atsyntax.{validateDid}
 import lib.nsid.{canonicalNsid, sameNsidIdentity, validateNsid}
 import lib.xrpc.{Registry, endpointNsid, registryEndpoints, xrpcErrorResponse}
 
-{- | The one service this server may proxy to, as `--appview-did` named it.
+{- | One service this server may proxy to, as an operator named it.
 
    Its constructor is private so every value has passed DID admission, and it
    is a type of its own rather than a bare `String` for the reason
@@ -84,10 +85,114 @@ makeAppviewPolicy did =
     Err message => Err "proxy: appview DID: \{message}"
     Ok () => Ok (AppviewPolicy did)
 
--- | The configured appview's bare DID.
+-- | This audience's bare DID.
 export
 appviewPolicyDid : AppviewPolicy -> String
 appviewPolicyDid (AppviewPolicy did) = did
+
+{- | One configured audience, and the loopback egress port a forward to it
+   leaves by.
+
+   The port is held beside the DID, and not anywhere a DID cannot be produced
+   with it, because the pair is what an operator configures and what routing
+   must consult as a unit: the only way to obtain a port is to have matched a
+   row, so a forward cannot leave for a destination the audience grading did
+   not admit. -}
+export data AppviewRoute = AppviewRoute AppviewPolicy Int
+
+{- | Admit one configured audience row.
+
+   The DID passes `makeAppviewPolicy`'s admission unchanged. The port is graded
+   here as well, rather than only where a flag is parsed, for the same reason
+   the DID is: a row is the value routing consults, and 0 — which the kernel
+   reads as "pick one" when binding and which names no listener when dialing —
+   must not be able to reach a connect. -}
+export
+makeAppviewRoute : String -> Int -> Result String AppviewRoute
+makeAppviewRoute did port =
+  if port < 1 || port > 65535 then
+    Err "proxy: appview egress port must be in 1..65535: \{intToString port}"
+  else
+    map (policy => AppviewRoute policy port) (makeAppviewPolicy did)
+
+-- | The bare DID this row's audience is.
+export
+appviewRouteDid : AppviewRoute -> String
+appviewRouteDid (AppviewRoute policy _) = appviewPolicyDid policy
+
+-- | The loopback port a forward to this row's audience leaves by.
+export
+appviewRoutePort : AppviewRoute -> Int
+appviewRoutePort (AppviewRoute _ port) = port
+
+{- | Every audience this server may mint for, and where each one's forwards
+   go.
+
+   Nonempty by construction, and the FIRST row is the DEFAULT: a request that
+   names no audience is forwarded there, which is the fall-through the official
+   implementation takes when `parseProxyInfo` finds no header. A server that
+   proxies at all therefore always has somewhere to send a header-absent call,
+   and a server that proxies nothing carries no table at all rather than an
+   empty one.
+
+   The set is the whole of the audience axis, and the axis stays DEFAULT-DENY
+   (`docs/design/ATPROTO-PDS-DESIGN.md` §4.5): a header naming a DID no row
+   holds is refused before the method is looked at. What a second row buys is
+   an audience an OPERATOR chose — a chat service alongside an appview — and
+   not a name this module knows. -}
+export data AppviewTable = AppviewTable AppviewRoute (List AppviewRoute)
+
+{- | The configured table, or a refusal when one DID is configured twice.
+
+   A repeated DID is refused rather than settled first-wins or last-wins: two
+   rows for one audience are two ports a token minted for that audience could
+   be sent to, and picking between them is picking which upstream an operator's
+   credential reaches on their behalf. -}
+export
+makeAppviewTable : AppviewRoute ->
+  List AppviewRoute ->
+  Result String AppviewTable
+makeAppviewTable first rest = match repeatedAudience (first :: rest)
+  Some did => Err "proxy: \{did} is configured as an audience twice"
+  None => Ok (AppviewTable first rest)
+
+repeatedAudience : List AppviewRoute -> Option String
+repeatedAudience [] = None
+repeatedAudience (route :: rest) =
+  if any (other => appviewRouteDid other == appviewRouteDid route) rest then
+    Some (appviewRouteDid route)
+  else
+    repeatedAudience rest
+
+-- | Where a request that named no audience is forwarded: the first configured
+-- row. See `AppviewTable` for why that is the default rather than a refusal.
+export
+defaultAppviewRoute : AppviewTable -> AppviewRoute
+defaultAppviewRoute (AppviewTable first _) = first
+
+{- | The row whose audience is exactly `did`, or `None` when no row holds it.
+
+   Exact equality, and no folding of any kind: a DID's method-specific
+   identifier is case-SENSITIVE, so `did:web:Api.Bsky.Chat` is a different
+   identifier from `did:web:api.bsky.chat` and admitting one for the other
+   would admit an audience no operator configured. The `#serviceId` fragment a
+   header may carry is stripped by `proxyServiceDid` before this is asked and
+   not here, so what this compares is already a bare DID.
+
+   This is the ONE lookup on the audience axis. `lib.server_core` asks it to
+   decide whether a header may be honored at all, and the shell asks it a
+   second time with the value that was ADMITTED, to find the port to dial.
+   Neither reads the client's header text to choose a destination — that is
+   what keeps a second audience from becoming a second way to be pointed
+   somewhere. -}
+export
+appviewRouteFor : AppviewTable -> String -> Option AppviewRoute
+appviewRouteFor (AppviewTable first rest) did = routeWithDid (first :: rest) did
+
+routeWithDid : List AppviewRoute -> String -> Option AppviewRoute
+routeWithDid [] _ = None
+routeWithDid (route :: rest) did =
+  if appviewRouteDid route == did then Some route else routeWithDid rest did
 
 {- | What the request's `atproto-proxy` header carried.
 
@@ -297,7 +402,7 @@ proxyNoServiceMessage nsid = "No service configured for \{nsid}"
 
 -- | The message a header naming some other service is refused with. This is
 -- the confused-deputy refusal: the audience a token would have carried is not
--- the one audience this server was configured to mint for.
+-- one of the audiences this server was configured to mint for.
 export
 proxyForeignAudienceMessage : String
 proxyForeignAudienceMessage =

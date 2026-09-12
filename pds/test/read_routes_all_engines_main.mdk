@@ -43,7 +43,14 @@ import json.{Json(..), jObject, get, parse}
 import string.{contains, fromUtf8, join, split, toUtf8}
 import lib.handlers.{pdsServer}
 import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
-import lib.proxy.{AppviewPolicy, makeAppviewPolicy}
+import lib.proxy.{
+  AppviewRoute,
+  appviewRouteFor,
+  appviewRoutePort,
+  AppviewTable,
+  makeAppviewRoute,
+  makeAppviewTable,
+}
 import lib.server_core.{
   Account,
   ProxyAdmission,
@@ -210,25 +217,57 @@ failCell label request expectedStatus expectedCode =
 
 -- ── the appview-proxy seam ──────────────────────────────────────────────────
 
-{- | The one appview these cells are configured to proxy to, and a SECOND
-   service DID nothing here is configured for.
+{- | The audiences these cells are configured to proxy to, and a THIRD service
+   DID nothing here is configured for.
 
-   The confused-deputy cells turn entirely on the difference between the two: a
-   header naming the second must be refused with nothing signed, and a cell
-   that printed a claim set for it would be exactly the defect the seam exists
-   to prevent. The transcript is therefore graded on the whole outcome string —
-   a refusal prints `signed=none` and an admission prints the claims, so the
-   two can never be confused for each other. -}
+   The confused-deputy cells turn on the difference between a configured
+   audience and an unconfigured one: a header naming the third must be refused
+   with nothing signed, and a cell that printed a claim set for it would be
+   exactly the defect the seam exists to prevent. The transcript is therefore
+   graded on the whole outcome string — a refusal prints `signed=none` and an
+   admission prints the claims, so the two can never be confused for each
+   other.
+
+   The two CONFIGURED audiences carry the other half of the same property. They
+   differ only in their DID and their port, so an admitted call that reached
+   the wrong one is visible as a `port=` that names the other row rather than
+   as anything about the claim set, which is what makes a routing confusion
+   gradeable here at all. -}
 configuredAppviewDid : String
 configuredAppviewDid = "did:web:appview.example"
+
+configuredChatDid : String
+configuredChatDid = "did:web:chat.example"
 
 foreignServiceDid : String
 foreignServiceDid = "did:web:other.example"
 
-configuredPolicy : Option AppviewPolicy
-configuredPolicy = match makeAppviewPolicy configuredAppviewDid
-  Ok policy => Some policy
-  Err message => panic "read_routes: appview policy setup failed: \{message}"
+{- | The loopback ports the two configured audiences are reached at.
+
+   Arbitrary numbers, and deliberately adjacent: nothing here opens a socket,
+   so what a port means in this file is only "which row", and two values a
+   transposition would swap is the shape a routing cell wants. -}
+configuredAppviewPort : Int
+configuredAppviewPort = 3128
+
+configuredChatPort : Int
+configuredChatPort = 3129
+
+mustRoute : String -> Int -> AppviewRoute
+mustRoute did port = match makeAppviewRoute did port
+  Ok route => route
+  Err message => panic "read_routes: audience row setup failed: \{message}"
+
+configuredAudiences : Option AppviewTable
+configuredAudiences =
+  let configured = makeAppviewTable (mustRoute
+    configuredAppviewDid
+    configuredAppviewPort) [
+    mustRoute configuredChatDid configuredChatPort,
+  ]
+  match configured
+    Ok table => Some table
+    Err message => panic "read_routes: audience table setup failed: \{message}"
 
 {- | The session every proxy cell below calls as.
 
@@ -275,7 +314,7 @@ proxyAuthField = "Authorization: Bearer \{proxyAccessToken}\r\n"
 
 -- A server with no `--appview-did` at all, which is what every deployment that
 -- has not configured an appview runs.
-noPolicy : Option AppviewPolicy
+noPolicy : Option AppviewTable
 noPolicy = None
 
 proxyRequest : String -> String -> String -> Array Int
@@ -361,15 +400,31 @@ relayedText fields = join "," (map ((name, value) => "\{name}=\{value}") fields)
    separately because they are allowed to differ — the first is the bare DID
    this server admitted and may open a socket to, the second is the header's
    own text a token is signed for. -}
-proxyOutcome : ProxyDecision -> String
-proxyOutcome NotProxied = "decision=not-proxied signed=none"
-proxyOutcome (ProxyRefused response) =
+{- | The loopback port a forward this admission licensed would leave by, as the
+   shell finds it: by asking the configured table for the row whose DID is the
+   ADMITTED audience (`pds/shell/egress.mdk`'s `egressCall`).
+
+   It is looked up here rather than read off the admission because the
+   admission carries no port — the seam decides WHO may be talked to and the
+   shell decides which socket that is, and grading the second against the first
+   is what makes an audience that routed to another audience's proxy visible.
+   `<unrouted>` is what an admitted audience no row holds would print, which is
+   a state nothing should be able to reach. -}
+routeText : Option AppviewTable -> String -> String
+routeText None _ = "<no-table>"
+routeText (Some table) did = match appviewRouteFor table did
+  Some route => intToString (appviewRoutePort route)
+  None => "<unrouted>"
+
+proxyOutcome : Option AppviewTable -> ProxyDecision -> String
+proxyOutcome _ NotProxied = "decision=not-proxied signed=none"
+proxyOutcome _ (ProxyRefused response) =
   let bytes = serializeResponse response
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
-proxyOutcome (ProxyAdmitted admission) =
-  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{fromUtf8 admission.body}"
+proxyOutcome table (ProxyAdmitted admission) =
+  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{fromUtf8 admission.body} port=\{routeText table admission.audience}"
 
-proxyCell : String -> Option AppviewPolicy -> Array Int -> String -> <IO> Int
+proxyCell : String -> Option AppviewTable -> Array Int -> String -> <IO> Int
 proxyCell label policy bytes expected =
   let decision =
     classifyProxy
@@ -378,7 +433,7 @@ proxyCell label policy bytes expected =
       policy
       proxySessionStore
       (mustRequest bytes)
-  let got = proxyOutcome decision
+  let got = proxyOutcome policy decision
   check label (got == expected) got
 
 xrpc : String -> String
@@ -407,13 +462,15 @@ admittedWith : String ->
   String ->
   String ->
   String ->
+  Int ->
   String
-admittedWith verb target audience aud nsid relayed body =
-  "decision=admitted verb=\{verb} target=\{target} audience=\{audience} iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000 relayed=[\{relayed}] body=\{body}"
+admittedWith verb target audience aud nsid relayed body port =
+  "decision=admitted verb=\{verb} target=\{target} audience=\{audience} iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000 relayed=[\{relayed}] body=\{body} port=\{intToString port}"
 
 -- A forwarded GET: no body, and therefore no body fields relayed with it.
-admittedLine : String -> String -> String -> String
-admittedLine target aud nsid = admittedWith "GET" target aud aud nsid "" ""
+admittedLine : String -> String -> String -> Int -> String
+admittedLine target aud nsid port =
+  admittedWith "GET" target aud aud nsid "" "" port
 
 refusedLine : String -> String -> String -> String
 refusedLine status code message =
@@ -440,6 +497,13 @@ updateSeenTarget = xrpc "app.bsky.notification.updateSeen"
 
 updateSeenBody : String
 updateSeenBody = "{\"seenAt\":\"2026-09-12T00:00:00.000Z\"}"
+
+-- | A read in the OTHER forwardable namespace, used by every second-audience
+-- cell. `chat.bsky.*` is the DM service's lexicon and this server registers
+-- none of it, so the method half of every one of those cells is settled by the
+-- namespace bound and only the audience half is in question.
+listConvosTarget : String
+listConvosTarget = xrpc "chat.bsky.convo.listConvos"
 
 {- | An nsid in no namespace this server forwards and in no registry it holds.
 
@@ -478,12 +542,13 @@ runProxyCells =
   let absent =
     proxyCell
       "proxy-header-absent-default-appview"
-      configuredPolicy
+      configuredAudiences
       (proxyRequestNoHeader followsTarget)
       (admittedLine
         followsTarget
         configuredAppviewDid
-        "app.bsky.graph.getFollows")
+        "app.bsky.graph.getFollows"
+        configuredAppviewPort)
   -- Anonymous ON PURPOSE: a deployment with no appview has no forward to make,
   -- so this path must stay the router's 404 and must not become the 401 a
   -- credential check would answer first.
@@ -496,16 +561,17 @@ runProxyCells =
   let admitted =
     proxyCell
       "proxy-admitted-timeline"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" configuredAppviewDid timelineTarget)
       (admittedLine
         timelineTarget
         configuredAppviewDid
-        "app.bsky.feed.getTimeline")
+        "app.bsky.feed.getTimeline"
+        configuredAppviewPort)
   let fragment =
     proxyCell
       "proxy-admitted-service-fragment"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" "\{configuredAppviewDid}#bsky_appview" profileTarget)
       (admittedWith
         "GET"
@@ -514,39 +580,41 @@ runProxyCells =
         "\{configuredAppviewDid}#bsky_appview"
         "app.bsky.actor.getProfile"
         ""
-        "")
+        ""
+        configuredAppviewPort)
   let mixedCase =
     proxyCell
       "proxy-header-name-case-insensitive"
-      configuredPolicy
+      configuredAudiences
       (proxyMixedCaseRequest authorFeedTarget)
       (admittedLine
         authorFeedTarget
         configuredAppviewDid
-        "app.bsky.feed.getAuthorFeed")
+        "app.bsky.feed.getAuthorFeed"
+        configuredAppviewPort)
   let foreign =
     proxyCell
       "proxy-foreign-audience"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" foreignServiceDid timelineTarget)
       (invalidRequestLine
         "atproto-proxy names a service this server does not proxy to")
   let notADid =
     proxyCell
       "proxy-audience-not-a-did"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" "https://appview.example" timelineTarget)
       (invalidRequestLine "atproto-proxy does not name a service DID")
   let repeated =
     proxyCell
       "proxy-header-repeated"
-      configuredPolicy
+      configuredAudiences
       (proxyRepeatedRequest timelineTarget)
       (invalidRequestLine "atproto-proxy must not be repeated")
   let protectedUnregistered =
     proxyCell
       "proxy-protected-method-unregistered"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
@@ -556,7 +624,7 @@ runProxyCells =
   let registeredWithHeader =
     proxyCell
       "proxy-registered-method-with-header"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
@@ -565,7 +633,7 @@ runProxyCells =
   let localMiss =
     proxyCell
       "proxy-forward-on-local-miss"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
@@ -575,7 +643,7 @@ runProxyCells =
   let preferences =
     proxyCell
       "proxy-admitted-preferences"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
@@ -583,7 +651,8 @@ runProxyCells =
       (admittedLine
         (xrpc "app.bsky.actor.getPreferences")
         configuredAppviewDid
-        "app.bsky.actor.getPreferences")
+        "app.bsky.actor.getPreferences"
+        configuredAppviewPort)
   let unconfigured =
     proxyCell
       "proxy-no-appview-configured"
@@ -593,7 +662,7 @@ runProxyCells =
   let postBody =
     proxyCell
       "proxy-admitted-post-body"
-      configuredPolicy
+      configuredAudiences
       (proxyPostRequest updateSeenTarget updateSeenBody)
       (admittedWith
         "POST"
@@ -602,11 +671,12 @@ runProxyCells =
         configuredAppviewDid
         "app.bsky.notification.updateSeen"
         "accept-language=en-GB,content-type=application/json"
-        updateSeenBody)
+        updateSeenBody
+        configuredAppviewPort)
   let needsGetOrPost =
     proxyCell
       "proxy-forwardable-requires-get-or-post"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "DELETE" configuredAppviewDid timelineTarget)
       (refusedLine
         "405"
@@ -615,38 +685,108 @@ runProxyCells =
   let outOfNamespaceHeader =
     proxyCell
       "proxy-out-of-namespace-with-header"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" configuredAppviewDid outOfNamespaceTarget)
       (invalidRequestLine
         "No service configured for com.atproto.temp.checkSignupQueue")
   let outOfNamespaceAbsent =
     proxyCell
       "proxy-out-of-namespace-header-absent"
-      configuredPolicy
+      configuredAudiences
       (getRequest outOfNamespaceTarget)
       notProxiedLine
   let wellKnown =
     proxyCell
       "proxy-header-on-well-known"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" configuredAppviewDid "/.well-known/did.json")
       notProxiedLine
   let unauthenticated =
     proxyCell
       "proxy-unauthenticated"
-      configuredPolicy
+      configuredAudiences
       (proxyRequestUnauthenticated timelineTarget)
       noCredentialLine
   let mixedCaseNsid =
     proxyCell
       "proxy-admitted-nsid-authority-case"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" configuredAppviewDid mixedCaseNsidTarget)
       (admittedLine
         mixedCaseNsidTarget
         configuredAppviewDid
-        "app.bsky.feed.getTimeline")
-  absent
+        "app.bsky.feed.getTimeline"
+        configuredAppviewPort)
+  -- The SECOND configured audience, named by a header. Everything but the DID
+  -- and the port is what the appview cells send, so what this cell adds over
+  -- them is the routing: the admitted audience is the chat DID and the port a
+  -- forward would leave by is the chat row's, not the default row's.
+  let chatAudience =
+    proxyCell
+      "proxy-admitted-chat-audience"
+      configuredAudiences
+      (proxyRequest "GET" configuredChatDid listConvosTarget)
+      (admittedLine
+        listConvosTarget
+        configuredChatDid
+        "chat.bsky.convo.listConvos"
+        configuredChatPort)
+  -- A service OF the second audience. The fragment is stripped before the
+  -- table is asked, so the row that matches is the chat row and not the
+  -- default one — a strip that fell through to the default would send a
+  -- credential minted for the chat service to the appview's proxy.
+  let chatFragment =
+    proxyCell
+      "proxy-admitted-chat-service-fragment"
+      configuredAudiences
+      (proxyRequest "GET" "\{configuredChatDid}#bsky_chat" listConvosTarget)
+      (admittedWith
+        "GET"
+        listConvosTarget
+        configuredChatDid
+        "\{configuredChatDid}#bsky_chat"
+        "chat.bsky.convo.listConvos"
+        ""
+        ""
+        configuredChatPort)
+  -- The two axes stay independent: a `chat.bsky.*` method is forwardable on
+  -- namespace alone, and the audience it goes to is the one the HEADER named.
+  -- A server that routed on the method's namespace would send this to the chat
+  -- row; the client asked for the appview.
+  let chatMethodDefaultAudience =
+    proxyCell
+      "proxy-chat-method-default-audience"
+      configuredAudiences
+      (proxyRequest "GET" configuredAppviewDid listConvosTarget)
+      (admittedLine
+        listConvosTarget
+        configuredAppviewDid
+        "chat.bsky.convo.listConvos"
+        configuredAppviewPort)
+  -- A DID's method-specific identifier is case-SENSITIVE, so neither of these
+  -- is a configured audience and neither may be admitted for the row it
+  -- resembles. They are the audience-routing-confusion pair: a comparison that
+  -- folded case would admit one of them and then route it somewhere.
+  let chatAudienceCaseFolded =
+    proxyCell
+      "proxy-chat-audience-case-folded"
+      configuredAudiences
+      (proxyRequest "GET" "did:web:Chat.Example" listConvosTarget)
+      (invalidRequestLine
+        "atproto-proxy names a service this server does not proxy to")
+  let appviewAudienceCaseFolded =
+    proxyCell
+      "proxy-appview-audience-case-folded"
+      configuredAudiences
+      (proxyRequest "GET" "did:web:Appview.Example" timelineTarget)
+      (invalidRequestLine
+        "atproto-proxy names a service this server does not proxy to")
+  chatAudience
+    + chatFragment
+    + chatMethodDefaultAudience
+    + chatAudienceCaseFolded
+    + appviewAudienceCaseFolded
+    + absent
     + absentUnconfigured
     + admitted
     + fragment
@@ -816,8 +956,8 @@ runCells =
       + unregistered
   let () =
     println
-      "cells: \{intToString cells}/40 repository-free routes and proxy dispositions"
-  if cells == 40 then
+      "cells: \{intToString cells}/45 repository-free routes and proxy dispositions"
+  if cells == 45 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

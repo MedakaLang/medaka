@@ -611,9 +611,12 @@ are both decided before anything is signed (`proxyDisposition`, `pds/lib/proxy.m
   client of the appview with every lexicon the network adds, and it refused nothing the
   namespace bound does not refuse, since the account-management surface is all
   `com.atproto.*`.
-- **The audience axis stays DEFAULT-DENY.** A header naming anything but the single
-  configured `--appview-did` is refused rather than forwarded, because a credential
-  minted for it would be a credential for a service this operator never chose. `aud`
+- **The audience axis stays DEFAULT-DENY.** A header naming anything but one of the
+  configured audiences is refused rather than forwarded, because a credential minted for
+  it would be a credential for a service this operator never chose. The configured set is
+  `--appview-did` — the default a header-absent read goes to — plus a `--proxy-audience`
+  row per further service, each with its own egress port; a forward is routed by the DID
+  the admission ADMITTED, never by the header string a second time. `aud`
   carries the BARE DID, with any `#service` fragment from the header stripped at mint,
   since a peer checks `aud` against its own DID.
 

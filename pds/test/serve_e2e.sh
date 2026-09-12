@@ -140,11 +140,17 @@ TOKEN_SECRET_HEX='7f1c0a6d2b93e45880ac31f6d5e27b04913ca8e6f27d4b51a03c8e19d6b472
 # and `printf %s\n` leaves, and the server strips exactly one.
 PASSWORD='s-sessions e2e gate password'
 
-# The ONE service an `atproto-proxy` header may name on the proxy servers below,
-# and a second DID no server here is configured for: the confused-deputy case is
-# entirely about the difference between them.
+# The services an `atproto-proxy` header may name on the proxy servers below,
+# and a DID no server here is configured for: the confused-deputy case is
+# entirely about the difference between a configured audience and that one.
+#
+# The chat DID is the SECOND configured audience, given its own egress proxy on
+# its own port. Nothing in the server knows either of these names — they are
+# values this gate puts in the configured set, exactly as an operator would.
 APPVIEW_DID='did:web:appview.test'
+CHAT_DID='did:web:chat.test'
 ATTACKER_DID='did:web:attacker.example'
+LISTCONVOS='/xrpc/chat.bsky.convo.listConvos'
 # The stub answers 203 rather than 200 deliberately. The status a proxied read
 # returns must be the APPVIEW's, so a PDS that composed its own 200 around a
 # forwarded body would pass a case expecting 200 and fails this one.
@@ -1318,6 +1324,74 @@ STUBPORT=$(wait_for_stub_port "$WORK/stub.out" "$STUB_ANSWER_PID") || {
   fail 'the stub appview did not report readiness'
 }
 
+# The SECOND audience's egress proxy, on its own port and with its own log.
+# Two separate logs are the whole apparatus for cases 54-57: "the chat call
+# reached the chat service" and "the appview never saw it" are two claims, and
+# one shared log could not carry the second.
+"$WORK/appview" answer 0 "$WORK/chatstub.log" "$STUB_STATUS" \
+  >"$WORK/chatstub.out" 2>"$WORK/chatstub.err" &
+STUB_CHAT_PID=$!
+STUB_PIDS="$STUB_PIDS $STUB_CHAT_PID"
+CHATPORT=$(wait_for_stub_port "$WORK/chatstub.out" "$STUB_CHAT_PID") || {
+  cat "$WORK/chatstub.err" >&2
+  fail 'the stub chat service did not report readiness'
+}
+
+# 58. ALL OR NONE, PER ROW. An additional audience is a DID and a port, and a
+#    row carrying only one of them is a startup refusal, exactly as
+#    `--appview-did` without `--egress-port` already was. An operator who
+#    believes a second service is configured and is wrong learns it here rather
+#    than from a 400 on a header they expected to be honored.
+#
+#    Each refusal names the flag and the shape it wants, and none of them binds:
+#    the same ordering every other configuration refusal keeps (#2659 item 4).
+DATA58="$WORK/data58"
+mkdir -p "$DATA58"
+for BADROW in "$CHAT_DID" "$CHAT_DID=" "=3129"; do
+  run_until_exit "$WORK/serve58.out" "$WORK/serve58.err" \
+    --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+    --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+    --password-file "$WORK/password" --data "$DATA58" --port 0 --init \
+    --appview-did "$APPVIEW_DID" --egress-port 3128 \
+    --proxy-audience "$BADROW"
+  [ "$RC" -ne 0 ] \
+    || fail "case 58: --proxy-audience '$BADROW' was accepted"
+  grep -F 'DID=PORT' "$WORK/serve58.err" >/dev/null \
+    || fail "case 58: the refusal of '$BADROW' did not name the shape it wants"
+  if grep -F 'serve: listening on' "$WORK/serve58.out" >/dev/null 2>&1; then
+    fail "case 58: the listener bound before --proxy-audience '$BADROW' was graded"
+  fi
+done
+
+# 58b. an additional audience with no DEFAULT pair is refused rather than
+#    promoted to the default: a header-absent read has to go somewhere, and
+#    which of an operator's audiences receives it is not this program's choice.
+run_until_exit "$WORK/serve58b.out" "$WORK/serve58b.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA58" --port 0 --init \
+  --proxy-audience "$CHAT_DID=3129"
+[ "$RC" -ne 0 ] \
+  || fail 'case 58b: --proxy-audience with no default audience was accepted'
+grep -F -- '--proxy-audience requires --appview-did and --egress-port' \
+  "$WORK/serve58b.err" >/dev/null \
+  || fail 'case 58b: the refusal did not name the flags it requires'
+
+# 58c. the same audience twice is refused. Two rows for one DID are two ports a
+#    token minted for it could be sent to, and picking between them is picking
+#    which upstream an operator's credential reaches.
+run_until_exit "$WORK/serve58c.out" "$WORK/serve58c.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" --data "$DATA58" --port 0 --init \
+  --appview-did "$APPVIEW_DID" --egress-port 3128 \
+  --proxy-audience "$APPVIEW_DID=3129"
+[ "$RC" -ne 0 ] \
+  || fail 'case 58c: one DID configured as two audiences was accepted'
+grep -F "$APPVIEW_DID is configured as an audience twice" "$WORK/serve58c.err" \
+  >/dev/null \
+  || fail 'case 58c: the refusal did not name the repeated audience'
+
 DATAPX="$WORK/data-proxy"
 mkdir -p "$DATAPX"
 # `--trusted-proxy` is on for case 47 alone, which needs two distinct client
@@ -1330,6 +1404,7 @@ mkdir -p "$DATAPX"
   --password-file "$WORK/password" \
   --data "$DATAPX" --port 0 --init --trusted-proxy \
   --appview-did "$APPVIEW_DID" --egress-port "$STUBPORT" \
+  --proxy-audience "$CHAT_DID=$CHATPORT" \
   >"$WORK/servepx.out" 2>"$WORK/servepx.err" &
 SERVER_PID=$!
 PORTPX=$(wait_for_port "$WORK/servepx.out") || {
@@ -1514,6 +1589,83 @@ CALLS_POST_DEFAULT=$(stub_calls "$WORK/stub.log")
 [ "$CALLS_POST_DEFAULT" -eq $((CALLS_PRE_DEFAULT + 1)) ] \
   || fail 'case 53: the header-absent read did not reach the appview exactly once'
 
+# 54. THE SECOND AUDIENCE, END TO END. A `chat.bsky.*` read with a header naming
+#    the chat DID reaches the CHAT egress proxy and not the appview's, and the
+#    credential it arrives with is audienced for the chat service. Both stubs
+#    are live and identical apart from their port, so what distinguishes them is
+#    the routing and nothing else.
+#
+#    The appview's call count must not move. That is the half no assertion about
+#    the claim set can make: a credential minted for the chat service and handed
+#    to the appview's proxy carries a perfectly correct `aud`, so "the right
+#    service was named" and "the right service received it" are different
+#    claims, and only the second is the confused-deputy defense on this axis.
+CALLS_PRE_CHAT=$(stub_calls "$WORK/stub.log")
+CHAT_PRE=$(stub_calls "$WORK/chatstub.log")
+client proxy-read "$PORTPX" "$PXACCESS" "$CHAT_DID" "$LISTCONVOS" \
+  "$STUB_STATUS" '"lxm":"chat.bsky.convo.listConvos"' \
+  || fail 'case 54: a read audienced for the second configured service was not proxied'
+grep -F -q "call aud=$CHAT_DID lxm=chat.bsky.convo.listConvos iss=$DID" \
+  "$WORK/chatstub.log" || {
+  cat "$WORK/chatstub.log" >&2
+  fail 'case 54: the chat service did not receive a credential naming itself and the requested method'
+}
+CHAT_POST=$(stub_calls "$WORK/chatstub.log")
+[ "$CHAT_POST" -eq $((CHAT_PRE + 1)) ] \
+  || fail 'case 54: the chat read did not reach the chat egress proxy exactly once'
+CALLS_POST_CHAT=$(stub_calls "$WORK/stub.log")
+[ "$CALLS_PRE_CHAT" = "$CALLS_POST_CHAT" ] || {
+  cat "$WORK/stub.log" >&2
+  fail "case 54: the chat read also reached the APPVIEW ($CALLS_PRE_CHAT -> $CALLS_POST_CHAT calls)"
+}
+
+# 55. THE CONVERSE. A timeline read audienced for the appview reaches only the
+#    appview. Without it case 54 would be satisfied by a server that sent every
+#    forward to the chat proxy, which is the same defect pointing the other way.
+CHAT_PRE_TL=$(stub_calls "$WORK/chatstub.log")
+CALLS_PRE_TL=$(stub_calls "$WORK/stub.log")
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  "$STUB_STATUS" '"lxm":"app.bsky.feed.getTimeline"' \
+  || fail 'case 55: a read audienced for the default service was not proxied'
+CALLS_POST_TL=$(stub_calls "$WORK/stub.log")
+[ "$CALLS_POST_TL" -eq $((CALLS_PRE_TL + 1)) ] \
+  || fail 'case 55: the appview read did not reach the appview exactly once'
+CHAT_POST_TL=$(stub_calls "$WORK/chatstub.log")
+[ "$CHAT_PRE_TL" = "$CHAT_POST_TL" ] || {
+  cat "$WORK/chatstub.log" >&2
+  fail "case 55: the appview read also reached the CHAT service ($CHAT_PRE_TL -> $CHAT_POST_TL calls)"
+}
+
+# 56. A `chat.bsky.*` method with the header naming the APPVIEW goes to the
+#    appview. The two axes are independent: the namespace decides whether a
+#    method may be forwarded at all and the header decides to whom, so a server
+#    that routed on the method's namespace would send this to the chat proxy.
+CHAT_PRE_X=$(stub_calls "$WORK/chatstub.log")
+CALLS_PRE_X=$(stub_calls "$WORK/stub.log")
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID" "$LISTCONVOS" \
+  "$STUB_STATUS" '"aud":"'"$APPVIEW_DID"'"' \
+  || fail 'case 56: a chat.bsky.* method audienced for the appview was not proxied'
+CALLS_POST_X=$(stub_calls "$WORK/stub.log")
+[ "$CALLS_POST_X" -eq $((CALLS_PRE_X + 1)) ] \
+  || fail 'case 56: the appview-audienced chat method did not reach the appview'
+CHAT_POST_X=$(stub_calls "$WORK/chatstub.log")
+[ "$CHAT_PRE_X" = "$CHAT_POST_X" ] || {
+  cat "$WORK/chatstub.log" >&2
+  fail "case 56: a chat.bsky.* method was routed by its NAMESPACE rather than by the audience the header named"
+}
+
+# 57. an audience NEITHER row holds is still refused with nothing signed, and
+#    neither stub is reached. The set grew; it did not stop being a set.
+CHAT_PRE_F=$(stub_calls "$WORK/chatstub.log")
+CALLS_PRE_F=$(stub_calls "$WORK/stub.log")
+client proxy-read "$PORTPX" "$PXACCESS" "$ATTACKER_DID" "$LISTCONVOS" 400 \
+  'atproto-proxy names a service this server does not proxy to' \
+  || fail 'case 57: a header naming an unconfigured service was not refused'
+[ "$CHAT_PRE_F" = "$(stub_calls "$WORK/chatstub.log")" ] \
+  || fail 'case 57: a refused request still reached the chat service'
+[ "$CALLS_PRE_F" = "$(stub_calls "$WORK/stub.log")" ] \
+  || fail 'case 57: a refused request still reached the appview'
+
 # 47. the proxied-read class: one inbound request became one outbound call, so
 #    the amplification is metered. Driven over ONE connection (the connections
 #    class is charged per connection and its ceiling is lower, so a
@@ -1536,6 +1688,7 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/servepx.err" 'proxy server (post-run)'
 require_empty "$WORK/stub.err" 'stub appview'
+require_empty "$WORK/chatstub.err" 'stub chat service'
 
 # 46. HEAD-OF-LINE BLOCKING. The outbound call runs on the same cooperative
 #    scheduler as the accept loop, so an upstream that accepts and never answers
@@ -1843,4 +1996,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/stall.err" 'stalling stub appview'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind'
