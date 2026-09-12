@@ -1,0 +1,60 @@
+-- Generic arithmetic is prelude Num evidence. Each signed and inferred helper
+-- must dispatch +, -, *, and / through the caller's dictionary; Box then
+-- forwards the same prerequisite dictionary to arithmetic on its payload.
+-- lint-disable-file rule-missing-signature
+
+import numop_predicate.box.{Box(..)}
+import numop_predicate.foreign.{add, sub, mul, div}
+
+signedAdd : Num a => a -> a -> a
+signedAdd x y = x + y
+
+signedSub : Num a => a -> a -> a
+signedSub x y = x - y
+
+signedMul : Num a => a -> a -> a
+signedMul x y = x * y
+
+signedDiv : Num a => a -> a -> a
+signedDiv x y = x / y
+
+inferredAdd x y = x + y
+
+inferredSub x y = x - y
+
+inferredMul x y = x * y
+
+inferredDiv x y = x / y
+
+addOne : Num a => a -> a
+addOne x = x + 1
+
+main =
+  println (signedAdd (Box 12) (Box 3) == Box 15)
+  println (signedSub (Box 12) (Box 3) == Box 9)
+  println (signedMul (Box 12) (Box 3) == Box 36)
+  println (signedDiv (Box 12) (Box 3) == Box 4)
+  println (signedAdd (Box 1.5) (Box 2.25) == Box 3.75)
+  println (inferredAdd (Box 12) (Box 3) == Box 15)
+  println (inferredSub (Box 12) (Box 3) == Box 9)
+  println (inferredMul (Box 12) (Box 3) == Box 36)
+  println (inferredDiv (Box 12) (Box 3) == Box 4)
+  println (addOne (Box 41) == Box 42)
+  println (signedAdd (12 : Int) 3 == 15)
+  println (signedSub (12 : Int) 3 == 9)
+  println (signedMul (12 : Int) 3 == 36)
+  println (signedDiv (12 : Int) 3 == 4)
+  println (signedAdd (12.0 : Float) 3.0 == 15.0)
+  println (signedSub (12.0 : Float) 3.0 == 9.0)
+  println (signedMul (12.0 : Float) 3.0 == 36.0)
+  println (signedDiv (7.5 : Float) 2.0 == 3.75)
+  println (inferredAdd (12 : Int) 3 == 15)
+  println (inferredDiv (7.5 : Float) 2.0 == 3.75)
+  println ((12 : Int) + 3 == 15)
+  println ((12 : Int) - 3 == 9)
+  println ((12 : Int) * 3 == 36)
+  println ((12 : Int) / 3 == 4)
+  println ((12.0 : Float) + 3.0 == 15.0)
+  println ((12.0 : Float) - 3.0 == 9.0)
+  println ((12.0 : Float) * 3.0 == 36.0)
+  println ((7.5 : Float) / 2.0 == 3.75)

@@ -1,0 +1,11 @@
+-- The foreign interface exports the same method spellings as Num. Reversing
+-- these independent imports must not change the operator's prelude Num identity.
+
+import numop_predicate.foreign.{add, sub, mul, div}
+import numop_predicate.box.{Box(..)}
+
+main =
+  println (Box 12 + Box 3 == Box 15)
+  println (Box 12 - Box 3 == Box 9)
+  println (Box 12 * Box 3 == Box 36)
+  println (Box 12 / Box 3 == Box 4)

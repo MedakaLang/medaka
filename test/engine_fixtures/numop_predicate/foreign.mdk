@@ -1,0 +1,5 @@
+export interface Forge a where
+  add : a -> a -> a
+  sub : a -> a -> a
+  mul : a -> a -> a
+  div : a -> a -> a
