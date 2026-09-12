@@ -1263,10 +1263,11 @@ sigsToMap t = omFromPairs (reverseL t) omEmpty
 -- E22: the EMITTED define arity per top-level fn (post eta-saturate), the truth a
 -- CDict call site needs to decide under-application.  Computed by replaying
 -- etaSaturateMethodBody (deterministic, side-effect-free reads only) — the
--- SIGNATURE arity is NOT a safe proxy: a closure-returning constrained fn's define
--- has `nDicts + sigValueArity` params (eta-saturated), while a fn whose body is a
--- non-CLam expression keeps its bare clause arity (eta-saturate does not fire), so
--- the two diverge and only the replayed arity tracks the real `@mdk_<fn>` define.
+-- SIGNATURE arity is NOT a safe proxy.  A CLam-returning constrained fn is
+-- eta-saturated to `nDicts + sigValueArity`; a dynamic-method-tail wrapper retains
+-- its dicts plus source clause params so dispatch can precede PAP construction; and
+-- another non-CLam body can keep its bare clause arity.  Only the replayed arity
+-- tracks the real `@mdk_<fn>` define across those shapes.
 installDefArityMap : Emit -> List CBind -> Unit
 installDefArityMap e binds =
   e.defArityMap := Some (omFromPairs (map (defArityPair e) binds) omEmpty)
@@ -1446,7 +1447,7 @@ implEntriesOf e = !e.implEntries
 
 -- ── impl INDEX by method name (perf #990 — the LLVM twin of #382/#985's wasm scan) ─
 -- Every per-site dispatch scan below reads the WHOLE flat `implEntries` list and FIRST
--- filters it by the interface METHOD name: `implsOf`/`filterTagged`, `defaultFor`/
+-- filters it by the interface METHOD name: `implsOf`/`filterTagged`, `defaultForArity`/
 -- `findDefault`, and `implFnSymOf`→`headTagUnique`→`distinctKeysAtHead` (the C7 collision
 -- count) + `implEntryRouteKey`.  The LLVM emitter resolves an RKey call site directly
 -- (`emitMethod`'s `implFor` + `implFnSymOf` per site) and outlines one dispatcher per
@@ -1652,9 +1653,6 @@ findByTag tag (_ :: rest) = findByTag tag rest
 -- which now carries the full evidence for what threading an identity through
 -- actually requires.  Pinned at
 -- test/must_fail_fixtures/1265-two-ifaces-same-method-one-type-default-collapse/.
-defaultFor : Emit -> String -> Option CImplEntry
-defaultFor e method = defaultForAt e method ""
-
 defaultForArity : Emit -> String -> Int -> Option CImplEntry
 defaultForArity e method arity =
   firstDefaultAtArity
@@ -1691,16 +1689,6 @@ ifaceNameForId _ "" fallback = fallback
 ifaceNameForId ((ifaceId, iface, _, _) :: rest) target fallback
   | ifaceIdMatches target ifaceId = iface
   | otherwise = ifaceNameForId rest target fallback
-
--- [tag] is the concrete dispatch tag the default is being emitted FOR (the `<tag>`
--- of a selected-arity default symbol); "" means "no tag in hand", which degrades to
--- first-match.
-defaultForAt : Emit -> String -> String -> Option CImplEntry
-defaultForAt e method tag =
-  pickDefaultAt
-    e.input.ifaceImplHeads
-    tag
-    (findDefaults method (methodEntries e method))
 
 defaultForAtArity : Emit -> String -> String -> Int -> Option CImplEntry
 defaultForAtArity e method tag siteArity =
@@ -5724,7 +5712,7 @@ argDecls (x :: rest) = "i64 \{x}, \{argDecls rest}"
 --       Why one dispatcher can serve every site of a method: the chain body is a pure
 --       function of the method NAME, the method-level dict count, and the arg count —
 --       all three are baked into the symbol — plus program-global tables
---       (`implsOf`/`defaultFor`/`ifaceTags`, all reading `e.implEntries`, which is
+--       (`implsOf`/`defaultForArity`/`ifaceTags`, all reading `e.implEntries`, which is
 --       written ONCE at Emit construction and never mutated).  So the impl set cannot
 --       grow between the site that mints a dispatcher and any later site.
 
@@ -5898,27 +5886,31 @@ emitMethodValue e env name siteArity route implRoutes methRoutes =
 --
 -- RLocal is the definer-shadow route: the body (`emitMethod`'s RLocal arm) forwards to
 -- the STANDALONE `mdk_<target>`, so the closure must expose the STANDALONE's value arity.
--- `fnArity` is the right source precisely because it is what that arm's own
--- `emitKnownFnSat`/`emitDictApp` measure against — deriving the closure arity from
--- anything else re-opens the same mismatch from the other side.
+-- The recorded emitted define arity is authoritative because it is the ruler that
+-- target's `emitKnownFnSat`/`emitDictApp` saturation uses.  A declaration signature can
+-- exceed a dynamic-method-tail wrapper's source clause arity, so using it here would
+-- delay dispatch and overcall the define.  `fnArity` remains the compatibility fallback
+-- when the target has no recorded define.
 --
 -- ⚠️ the `- listLen dicts` is load-bearing and NOT cosmetic: `inferSigs` runs over the
--- LOWERED (post-dict-pass) clauses, so `fnArity`'s `ptys` is DICT-INCLUSIVE (see the
--- `trmcTryFn` note ~:7081).  A CONSTRAINED shadow's `fnArity` therefore counts its leading
--- dict params, but the closure exposes VALUE args only — the dict words are CAPTURED (see
+-- LOWERED (post-dict-pass) clauses, so both define and fallback arities are
+-- DICT-INCLUSIVE.  A CONSTRAINED shadow therefore counts its leading dict params, but
+-- the closure exposes VALUE args only — the dict words are CAPTURED (see
 -- `methValDictNames`) and re-prepended inside the body by `emitDictApp`.  Without the
 -- subtraction a constrained shadow would advertise nDicts too many and segfault exactly
--- like the unconstrained case it fixes.  `dicts == []` ⇒ subtract 0 ⇒ plain `fnArity`.
+-- like the unconstrained case it fixes.  `dicts == []` ⇒ subtract 0.
 --
--- A non-RLocal route (RDict/RDictFwd/RKey/RNone) really is dispatching the METHOD, so it
--- keeps `methodArityOf` — byte-identical to pre-#410 codegen, so the fixpoint cannot move.
--- `<= 0` means the target has no known signature (a name absent from the sig table);
--- fall back to the old name-derived arity rather than emit a 0-arity closure.
+-- RKey uses the selected implementation's callable arity.  RNone accepts only enough
+-- args to expose its runtime receiver before per-group saturation.  RDict/RDictFwd are
+-- dispatched immediately by emitMethodValue and do not allocate this closure.
 methValArity : Emit -> String -> Int -> Route -> Int
 methValArity e name siteArity (RLocal sym dicts) =
   let target = if sym == "" then name else sym
-  let a = fnArity e target - listLen dicts
-  if a <= 0 then siteArity else a
+  match defArityOf e target
+    Some n => maxInt 0 (n - listLen dicts)
+    None =>
+      let a = fnArity e target - listLen dicts
+      if a <= 0 then siteArity else a
 methValArity e name siteArity (RKey tag _) =
   match implForSite e name tag siteArity
     Some entry => methodArityOfEntry e entry name
@@ -6012,7 +6004,9 @@ emitDictValue : Emit ->
   (String, LTy)
 emitDictValue e env name routes =
   if isKnownFn e name then
-    let valArity = fnArity e name - listLen routes
+    let valArity = match defArityOf e name
+      Some n => maxInt 0 (n - listLen routes)
+      None => fnArity e name - listLen routes
     if valArity <= 0 then
       emitDictApp e env name routes []
     else
@@ -6027,7 +6021,10 @@ emitDictValue e env name routes =
 -- code_ptr, fields 1..nDicts = captured dict words.  The forwarder takes `valArity`
 -- fresh `%argK` params, reloads the dict words from %clos fields 1..nDicts, and
 -- calls `@mdk_<name>(dicts.., %arg0.., %arg(valArity-1))` — the same leading-dict-then-
--- value-arg order emitDictApp / dict_pass use at every direct call site.
+-- value-arg order emitDictApp / dict_pass use at every direct call site.  valArity
+-- comes from the recorded emitted define, so a dynamic-method-tail wrapper that
+-- deliberately retains its source clause arity is neither overcalled nor advertised
+-- at the larger signature arity.
 emitDictValDefine : Emit -> String -> String -> Int -> Int -> Unit
 emitDictValDefine e lamName name nDicts valArity =
   let saved = (bufRef e).value
@@ -6074,7 +6071,8 @@ emitDefaultRKey : Emit ->
   List Route ->
   List String ->
   (String, LTy)
--- #1047: `defaultForAt`, not `defaultFor` — the tag is what the narrowing keys on,
+-- #1047: `defaultForAtArity`, not `defaultForArity` — the tag is one of the
+-- narrowing keys,
 -- and this is the site that emits the body.  ⚠️ The trigger is a METHOD-name
 -- collision, not an interface-name one (the interfaces' own names are irrelevant),
 -- and the tag does NOT disambiguate when ONE tag carries TWO interfaces sharing a
@@ -6397,28 +6395,26 @@ emitMethodDispatch : Emit ->
   List String ->
   (String, LTy)
 emitMethodDispatch e env name siteArity d methRoutes argOps =
-  match soleImplDirectSite e name
+  match soleImplDirectSite e name siteArity
     Some ent =>
-      if methodArityOfIface e (implEntryIfaceWord ent) name == siteArity then
-        -- WS-1b: the method has exactly ONE impl with no `requires` element dicts, so a
-        -- well-typed call always reaches that impl regardless of the runtime dict (mirrors
-        -- eval's `narrowMethod (VMulti vs) ""` → sole-impl pick, and the arg-position
-        -- single-impl-group DIRECT-call optimization).  Emitting a direct call here avoids
-        -- LOADING the dict head tag — which, under an AMBIGUOUS return-position superclass
-        -- constraint (`build : Sub a => Int -> a; build n = mk n`, where `mk`'s `Sup` dict
-        -- stays ungrounded → the caller passes a NULL dict), would dereference null → the
-        -- run≠build SIGTRAP.  Concrete-grounded callers (a real dict) are unaffected: the
-        -- direct call is the same impl the tag-dispatch chain would have selected.
-        let symTag = implFnSymE e name ent
-        -- F10: saturate against the impl's own declared arity (see emitDispatchArmBody).
-        emitKnownFnSat
-          e
-          (implFnName symTag name)
-          argOps
-          (methodArityOfEntry e ent name)
-          LTInt
-      else
-        emitMethodDispatchChain e env name siteArity d methRoutes argOps
+      -- WS-1b: the selected interface method has exactly ONE impl with no `requires`
+      -- element dicts, so a well-typed call always reaches that impl regardless of the
+      -- runtime dict (mirrors eval's `narrowMethod (VMulti vs) ""` → sole-impl pick, and
+      -- the arg-position single-impl-group DIRECT-call optimization).  Emitting a direct
+      -- call here avoids LOADING the dict head tag — which, under an AMBIGUOUS
+      -- return-position superclass constraint (`build : Sub a => Int -> a; build n = mk n`,
+      -- where `mk`'s `Sup` dict stays ungrounded → the caller passes a NULL dict), would
+      -- dereference null → the run≠build SIGTRAP.  Concrete-grounded callers (a real dict)
+      -- are unaffected: the direct call is the same impl the tag-dispatch chain would have
+      -- selected.
+      let symTag = implFnSymE e name ent
+      -- F10: saturate against the impl's own callable arity (see emitDispatchArmBody).
+      emitKnownFnSat
+        e
+        (implFnName symTag name)
+        argOps
+        (methodArityOfEntry e ent name)
+        LTInt
     _ => emitMethodDispatchChain e env name siteArity d methRoutes argOps
 
 -- WS-1b: Some impl iff [name] has exactly one tagged impl AND that impl takes no
@@ -6426,15 +6422,16 @@ emitMethodDispatch e env name siteArity d methRoutes argOps =
 -- needs nothing from the runtime dict.  A multi-impl method, or a sole impl WITH
 -- requires (whose element dicts live in the dict cell), still goes through the
 -- tag-switching chain (which reads the dict).
-soleImplDirect : Emit -> String -> Option CImplEntry
-soleImplDirect e name = match implsOf e name
-  [ent] =>
-    if implReqCount e name ent <= 0
-      && not (defaultReachesOtherTags e name ent) then
-      Some ent
-    else
-      None
-  _ => None
+soleImplDirect : Emit -> String -> Int -> Option CImplEntry
+soleImplDirect e name siteArity =
+  match narrowImplsByArity e name (implsOf e name) siteArity
+    [ent] =>
+      if implReqCount e name ent <= 0
+        && not (defaultReachesOtherTags e name siteArity ent) then
+        Some ent
+      else
+        None
+    _ => None
 
 -- #948: "exactly one TAGGED impl" is not "exactly one possible callee".  When the
 -- interface owns a DEFAULT body for [name], every impl head the sole tagged entry
@@ -6445,14 +6442,15 @@ soleImplDirect e name = match implsOf e name
 -- into a direct call to `Cat`'s override: no crash, just the wrong answer.
 -- Pre-#948 this could not be SEEN (the uncovered impl contributed no entry, so
 -- `ifaceTags` did not list its tag); the two halves of the fix are one bug.
-defaultReachesOtherTags : Emit -> String -> CImplEntry -> Bool
-defaultReachesOtherTags e name ent = match defaultFor e name
-  None => False
-  Some _ =>
-    isNonEmptyL
-      (tagsMinus
-        (ifaceTags e (methodIfaceOfInput e name))
-        (implEntryTags e [ent]))
+defaultReachesOtherTags : Emit -> String -> Int -> CImplEntry -> Bool
+defaultReachesOtherTags e name siteArity ent =
+  match defaultForArity e name siteArity
+    None => False
+    Some defaultEntry =>
+      isNonEmptyL
+        (tagsMinus
+          (ifaceTags e (defaultEntryIfaceName e name defaultEntry))
+          (implEntryTags e [ent]))
 
 -- The SITE-level form of the same test.  In prelude-object mode a dict-routed
 -- site must NOT bake an impl decision into its enclosing define, because that
@@ -6469,9 +6467,12 @@ defaultReachesOtherTags e name ent = match defaultFor e name
 --
 -- Mode 0 (every ordinary `medaka build`) is unchanged, so the default path's IR
 -- stays byte-for-byte what it was.
-soleImplDirectSite : Emit -> String -> Option CImplEntry
-soleImplDirectSite e name =
-  if e.input.emitHalf == emitHalfWhole then soleImplDirect e name else None
+soleImplDirectSite : Emit -> String -> Int -> Option CImplEntry
+soleImplDirectSite e name siteArity =
+  if e.input.emitHalf == emitHalfWhole then
+    soleImplDirect e name siteArity
+  else
+    None
 
 -- ── issue #118 step 3: the shared prelude object (MEDAKA_PRELUDE_OBJ) ────────
 -- 88% of a small program's emitted IR is the PRELUDE (270 of 281 defines, 9,935
@@ -6731,20 +6732,19 @@ emitDispatcherDefine e fname name nmw nargs siteArity =
 -- ambiguous return-position superclass constraint's NULL dict from being
 -- dereferenced.  `%mw`/`%dict` are simply left unread, as at the direct call site.
 emitDispatcherBody : Emit -> String -> Int -> Int -> Int -> (String, LTy)
-emitDispatcherBody e name nmw nargs siteArity = match soleImplDirect e name
-  Some ent =>
-    if methodArityOfIface e (implEntryIfaceWord ent) name == siteArity then
+emitDispatcherBody e name nmw nargs siteArity =
+  match soleImplDirect e name siteArity
+    Some ent =>
       let symTag = implFnSymE e name ent
-      -- F10: same saturation as emitDispatchArmBody — the sole impl's declared arity
-      -- can still differ from `nargs` when a SECOND interface declares the same method
-      -- name at another arity and supplies the bare table's row.
+      -- F10: same saturation as emitDispatchArmBody — the selected interface's sole
+      -- impl callable arity can still differ from the occurrence arity.
       emitKnownFnSat
         e
         (implFnName symTag name)
         (dispWordNames "%arg" nargs 0)
         (methodArityOfEntry e ent name)
         LTInt
-    else
+    _ =>
       emitDispatchBody
         e
         name
@@ -6752,14 +6752,6 @@ emitDispatcherBody e name nmw nargs siteArity = match soleImplDirect e name
         (dispWordNames "%mw" nmw 0)
         (dispWordNames "%arg" nargs 0)
         siteArity
-  _ =>
-    emitDispatchBody
-      e
-      name
-      "%dict"
-      (dispWordNames "%mw" nmw 0)
-      (dispWordNames "%arg" nargs 0)
-      siteArity
 
 dispParamDecls : Int -> Int -> String
 dispParamDecls nmw nargs =
@@ -7571,11 +7563,14 @@ emitMethodArgDispatch e method siteArity argOps =
 -- one extra `declare` line.
 argTagCollidingHeads : Emit ->
   String ->
+  Int ->
   List ImplGroup ->
   List String ->
   List String
-argTagCollidingHeads e method groups raw =
-  let iface = methodIfaceOfInput e method
+argTagCollidingHeads e method siteArity groups raw =
+  let iface = match defaultForArity e method siteArity
+    Some entry => defaultEntryIfaceName e method entry
+    None => methodIfaceOfInput e method
   if iface == "" then
     []
   else
@@ -7634,7 +7629,7 @@ emitArgTagRoute e method siteArity groups emittable raw argOps =
     emittable
     raw
     argOps
-    (argTagCollidingHeads e method groups raw)
+    (argTagCollidingHeads e method siteArity groups raw)
 
 emitArgTagRouteGo : Emit ->
   String ->
@@ -9707,9 +9702,10 @@ emitExternEtaClosure e name =
 -- on CMethod, not CVar), so dispatch must fall to the runtime arg-tag path.  Eta-
 -- wrap into a captureless closure whose lifted body REPLAYS emitMethodArgDispatch's
 -- applied-form codegen on the incoming `%argK` operands — byte-consistent with the
--- saturated `isImplMethod` call site (emitApp).  Arity = methodArityOf.  (A method
--- reached point-free under a `=>` CONSTRAINT instead becomes a fn-bind with a dict
--- param and is eta-saturated at the define by etaSaturateMethodBody.)
+-- saturated `isImplMethod` call site (emitApp).  Arity = methodArityOf.  A method
+-- reached point-free under a `=>` constraint instead becomes a fn-bind with a dict
+-- param; a static route can be eta-saturated there, while a dynamic route retains
+-- the source wrapper arity and dispatches before constructing a residual PAP.
 emitMethodEtaClosure : Emit -> String -> (String, LTy)
 emitMethodEtaClosure e name =
   let lamName = "mdk_eta_\{name}\{mangleScoped e}"
@@ -11388,19 +11384,18 @@ allClausesPVar [] = True
 allClausesPVar ((pats, _) :: rest) = allPVar pats && allClausesPVar rest
 
 -- Gap #50 — eta-SATURATE a point-free constrained binding whose body is an
--- UNDER-APPLIED interface-method (CMethod) or constrained-fn (CDict) occurrence.
--- `callMax : Ord a => a -> a -> a; callMax = max` dict-passes to a clause with ONE
--- param (the `Ord a` dict) and body `CMethod "max" (RDict $d) ..` applied to ZERO
--- value args — but `max` needs TWO.  The lifted define then has arity 1 (dict only)
--- while the call site (emitDictApp `callMax $d x y`) passes dict + the two real
--- args, OVER-applying the define and silently DROPPING the value args → the method
--- dispatch runs with garbage operands (observed: 0).  Append `deficit` fresh value
--- params to the clause and apply them to the body, so (1) the define's arity matches
--- what the call site passes, and (2) the body becomes a SATURATED method application
--- (emitMethod threads the full argOps through the RDict dispatch chain).  General:
--- any method/constrained-fn used point-free under a `=>` constraint (the dict makes
--- it a fn-bind, not the arity-0 value global that an UNCONSTRAINED alias becomes and
--- which already eta-closures correctly via emitVar→emitEtaClosure).
+-- UNDER-APPLIED statically selected interface method (CMethod) or constrained fn
+-- (CDict) occurrence.  Static RKey selection already knows the chosen impl's callable
+-- arity, so the missing value params can be appended to the wrapper and applied to its
+-- body.  CDict similarly has one known define arity.
+--
+-- A dynamic RDict/RDictFwd occurrence is deliberately excluded.  Its selected
+-- declaration arity only narrows candidates; each runtime arm can have a smaller
+-- callable arity and must dispatch before deciding whether to return a PAP.  Expanding
+-- `forge x = forgeOp x` from one source param to the declaration's two params delays a
+-- strict-prefix `forgeOp x = y => ...` until `y`, changing observable effects.  Keep the
+-- source wrapper arity: `emitMethodValue` dispatches a bare dynamic method immediately,
+-- and the CDict caller's saturation path applies surplus args to the returned closure.
 --
 -- Gap #12 (3rd wrapper shape — CLam/compose) — a point-free `=>`-constrained binding
 -- whose body is a CLOSURE VALUE, not a method spine.  `clamp lo hi = min hi >> max lo`
@@ -11508,14 +11503,22 @@ methodBodyDeficit : Emit -> CExpr -> Int
 methodBodyDeficit e (CLet _ _ _ b) = methodBodyDeficit e b
 methodBodyDeficit e (CLetGroup _ b) = methodBodyDeficit e b
 methodBodyDeficit e (CMethod name arity route _ _) =
-  methodOccurrenceCallableArity e name arity route
+  if isDynamicMethodRoute route then
+    0
+  else
+    methodOccurrenceCallableArity e name arity route
 methodBodyDeficit e (CDict name routes) =
   maxInt 0 (fnArity e name - listLen routes)
 methodBodyDeficit e app =
   let (hd, args) = flattenApp app []
   match hd
     CMethod name arity route _ _ =>
-      maxInt 0 (methodOccurrenceCallableArity e name arity route - listLen args)
+      if isDynamicMethodRoute route then
+        0
+      else
+        maxInt
+          0
+          (methodOccurrenceCallableArity e name arity route - listLen args)
     CDict name routes =>
       maxInt 0 (fnArity e name - listLen routes - listLen args)
     _ => 0
@@ -14725,11 +14728,11 @@ buildEmitState cfg input groups ctorArs ctorTypes implEntries =
   let _ = installRecFieldIndex e (recFieldTable e)
   let _ = installSigMap e (sigTable e)
   -- #990: group the flat impl-entry list by interface method ONCE, so every per-site
-  -- dispatch scan (implsOf/defaultFor/implFnSymE/implEntryRouteKeyE) is O(bucket) not
+  -- dispatch scan (implsOf/defaultForArity/implFnSymE/implEntryRouteKeyE) is O(bucket) not
   -- O(impls) — byte-identical IR, O(N²)→O(N log N) emit on dispatch-heavy code.
   -- ⚠️ RUN-EMIT-003: these two MUST precede `installDefArityMap`.  That install
   -- replays `etaSaturateMethodBody` per bind, which reaches `methodBodyDeficit` →
-  -- `methodArityOfRoute` → `methodArityOfTag` → `implFor` → `implsOf` →
+  -- `methodOccurrenceCallableArity` → `implForSite` → `implsOf` →
   -- `methodEntries`, i.e. it READS `e.implsByMethod`.  Ordered the other way round
   -- that read landed on the (now retired) uninstalled-scan branch, which is the one
   -- place the two paths were both live in a single emission.

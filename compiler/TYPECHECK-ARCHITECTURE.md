@@ -98,6 +98,11 @@ source-parameter syntax. The type representation already erases parentheses that
 distinguish a method returning a function from a multi-argument declaration. Static
 exact-key calls continue to use the selected implementation's definition-side arity,
 and full identity through method values and applications remains unfinished work.
+Native dynamic wrappers retain their source clause arity so dictionary dispatch selects
+an implementation before constructing any residual partial application. Wasm still
+eta-wraps dynamic method values at the declaration arity and lacks per-arm partial and
+over-application; that dynamic value and under-application path remains an emitter
+limitation.
 Native interface-default symbols include the selected declaration arity, so
 different-arity same-spelled defaults can coexist at one receiver tag. Wasm mirrors
 the selected-entry restamping and symbol choice for static routes. The tree evaluator's

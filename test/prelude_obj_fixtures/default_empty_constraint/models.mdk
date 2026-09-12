@@ -2,12 +2,12 @@ import ia.{IA}
 import iz.{IZ}
 
 public export data Dog = Dog
-public export data Cat = Cat
+public export data Cat = Cat Int
 public export data Z = Z
 
 export impl IA Dog
 
 export impl IA Cat where
-  szK _ = 111
+  szK (Cat n) = n
 
 export impl IZ Z

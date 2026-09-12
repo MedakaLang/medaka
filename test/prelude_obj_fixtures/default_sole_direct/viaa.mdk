@@ -1,0 +1,5 @@
+import ia.{IA, szK}
+
+export
+viaA : IA a => a -> Int
+viaA x = szK x

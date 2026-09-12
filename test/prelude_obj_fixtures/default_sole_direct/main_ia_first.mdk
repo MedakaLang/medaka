@@ -4,5 +4,5 @@ import models.{Cat(..), Dog(..)}
 import viaa.{viaA}
 
 main =
-  println (viaA (Cat 111))
+  println (viaA Cat)
   println (viaA Dog)

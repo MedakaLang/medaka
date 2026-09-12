@@ -1,8 +1,9 @@
-import ia.{IA}
 import iz.{IZ}
+import ia.{IA}
 import models.{Cat(..), Dog(..)}
 import viaa.{viaA}
 
 main =
-  println (viaA (Cat 111))
+  let cat = viaA Cat
+  println cat
   println (viaA Dog)

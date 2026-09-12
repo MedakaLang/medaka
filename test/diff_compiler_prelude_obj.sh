@@ -98,6 +98,7 @@ trap 'rm -rf "$W"' EXIT
 SAMPLE="$SAMPLE
 $ROOT/test/prelude_obj_fixtures/arity_static.mdk
 $ROOT/test/prelude_obj_fixtures/arity_dynamic_direct.mdk
+$ROOT/test/prelude_obj_fixtures/arity_dynamic_dispatch_first.mdk
 $ROOT/test/prelude_obj_fixtures/arity_dynamic_value.mdk
 $ROOT/test/prelude_obj_fixtures/arity_dynamic_three_args.mdk
 $ROOT/test/prelude_obj_fixtures/arity_dynamic_partial.mdk
@@ -107,9 +108,12 @@ $ROOT/test/prelude_obj_fixtures/default_arity/main_distinct.mdk
 $ROOT/test/prelude_obj_fixtures/default_arity/main_distinct_reverse.mdk
 $ROOT/test/prelude_obj_fixtures/default_arity/main_box.mdk
 $ROOT/test/prelude_obj_fixtures/default_arity/main_box_reverse.mdk
-$ROOT/test/prelude_obj_fixtures/default_empty_constraint/main_empty_constraint.mdk"
+$ROOT/test/prelude_obj_fixtures/default_empty_constraint/main_empty_constraint.mdk
+$ROOT/test/prelude_obj_fixtures/default_sole_direct/main_ia_first.mdk
+$ROOT/test/prelude_obj_fixtures/default_sole_direct/main_iz_first.mdk"
 printf '123\n' > "$W/arity_static.expected"
 printf '123\n' > "$W/arity_dynamic_direct.expected"
+printf '1\n42\n1\n2\n53\n2\n3\n64\n' > "$W/arity_dynamic_dispatch_first.expected"
 printf '123\n' > "$W/arity_dynamic_value.expected"
 printf '6\n' > "$W/arity_dynamic_three_args.expected"
 printf '42\n' > "$W/arity_dynamic_partial.expected"
@@ -120,10 +124,28 @@ printf '101203\n' > "$W/main_distinct_reverse.expected"
 printf '101203\n' > "$W/main_box.expected"
 printf '101203\n' > "$W/main_box_reverse.expected"
 printf '111\n101\n' > "$W/main_empty_constraint.expected"
+printf '111\n101\n' > "$W/main_ia_first.expected"
+printf '111\n101\n' > "$W/main_iz_first.expected"
 
 checked=0
 same=0
 fail=0
+
+# The value assertion above makes a foreign method-dictionary prefix observable in
+# the selected IA override.  Pin the ABI too: Cat's unconstrained IA.szK define and
+# its dispatch-arm call each take exactly the receiver, even though the imported
+# IZ.szK of the same spelling has a method-level Display constraint.
+abi="$W/default_empty_constraint.abi"
+if ! MEDAKA_STRICT=1 "$MEDAKA" build --allow-internal --keep-ir \
+  "$ROOT/test/prelude_obj_fixtures/default_empty_constraint/main_empty_constraint.mdk" \
+  -o "$abi" >"$abi.log" 2>&1; then
+  echo "FAIL: could not inspect selected-interface impl ABI"
+  fail=$((fail+1))
+elif ! grep -Eq '^define i64 @mdk_impl_Cat_szK\(i64 [^,()]+\) \{' "$abi.ll" \
+  || ! grep -Eq 'call i64 @mdk_impl_Cat_szK\(i64 [^,()]+\)' "$abi.ll"; then
+  echo "FAIL: unconstrained IA.szK impl retained a foreign method-dictionary prefix"
+  fail=$((fail+1))
+fi
 
 for src in "$ROOT"/test/prelude_obj_fixtures/arity_dynamic_*.mdk; do
   label="$(basename "$src" .mdk)"
@@ -132,6 +154,14 @@ for src in "$ROOT"/test/prelude_obj_fixtures/arity_dynamic_*.mdk; do
   [ "$label" = arity_dynamic_partial ] && expected=42
   [ "$label" = arity_dynamic_strict_prefix ] && expected='1
 1'
+  [ "$label" = arity_dynamic_dispatch_first ] && expected='1
+42
+1
+2
+53
+2
+3
+64'
   if ! "$MEDAKA" check "$src" >"$W/$label.check.log" 2>&1; then
     echo "FAIL: dynamic-arity semantic probe did not typecheck ($label)"
     fail=$((fail+1))

@@ -322,7 +322,7 @@ data WTy = WInt | WBool | WUnit | WStr | WRef | WChar | WFloat
 -- continues with placeholders while preserving first-observed event order.
 data WGapMode = WGapStrict | WGapRecord
 
-data ImplSelfCtx = ImplSelfOff | ImplSelfOn String String Int
+data ImplSelfCtx = ImplSelfOff | ImplSelfOn String String String String Int
 
 -- Destination-passing TMC context. It is owned by a fresh WasmEmit so nested
 -- and independent emission routes cannot leak loop-local authority.
@@ -5756,7 +5756,9 @@ emitImplGroup prog (ImplG method headTag key arity clauses) =
       -- must NOT see it).
       let savedImplSelf = (progEmit prog).implSelfCtx.value
       let _ =
-        setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag arity)
+        setRef
+          (progEmit prog).implSelfCtx
+          (ImplSelfOn method headTag key fnName arity)
       let bodyLines = emitClausesImpl prog fnName params arity clauses
       let _ = setRef (progEmit prog).implSelfCtx savedImplSelf
       let _ = setRef (progEmit prog).floatLocals []
@@ -9322,40 +9324,46 @@ emitWDispBase prog env root e =
 
 -- layer-18: the plain-tail impl-method return_call rewrite (helper for emitAppTail's
 -- CMethod arm).  Some instrs ⇒ this tail CMethod application is a saturated self-call to
--- the impl `(method, tag)` we are currently emitting, lowered to `return_call
--- $mdk_impl_<tag>_<method>` (the args + forwarded dict words, exactly as the ordinary RKey
--- `call` arm builds them, but tail).  None ⇒ not a self-call (or no impl-self context) ⇒
+-- the impl `(method, tag)` we are currently emitting, lowered to `return_call` of
+-- that exact group's interface-qualified symbol (the args + forwarded dict words,
+-- exactly as the ordinary RKey `call` arm builds them, but tail).  None ⇒ not a
+-- self-call (or no impl-self context) ⇒
 -- the caller keeps the ordinary `call … ; return`.  Gated on BOTH the impl-self context
 -- AND `isSelfSatApp (SelfByMethod …)`: a different-method/tag, unsaturated, or non-self
 -- call fails the gate and stays ordinary; a non-tail self-call never reaches here.
 implSelfReturnCall : Prog ->
   List String ->
   String ->
+  Int ->
   Route ->
   List Route ->
   List Route ->
   CExpr ->
   List CExpr ->
   Option (List String)
-implSelfReturnCall prog env name route methRoutes implRoutes app args =
+implSelfReturnCall prog env name siteArity route methRoutes implRoutes app args =
   match (progEmit prog).implSelfCtx.value
     ImplSelfOff => None
-    ImplSelfOn method tag arity =>
+    ImplSelfOn method tag key fnName arity =>
       if name == method
         && isSelfSatApp (SelfByMethod method tag) arity app then match route
-        RKey rtag _ => match implForW prog name rtag
-          Some _ =>
-            let dictWords =
-              flatMap (routeWitness prog env 0) (methRoutes ++ implRoutes)
-            let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
-            Some
-              (dictWords
-                ++ argInstrs
-                ++ ["return_call $" ++ implFnSym prog rtag name])
+        RKey rtag _ => match implForWSite prog name rtag siteArity
+          Some entry =>
+            if implEntryCanonicalKeyW entry == key then
+              let dictWords =
+                flatMap (routeWitness prog env 0) (methRoutes ++ implRoutes)
+              let argInstrs = flatMap (a => emitRefExpr prog env 0 a) args
+              Some (dictWords ++ argInstrs ++ ["return_call $" ++ fnName])
+            else
+              None
           None => None
         _ => None
       else
         None
+
+implEntryCanonicalKeyW : CImplEntry -> String
+implEntryCanonicalKeyW (CImplEntry _ _ (CImplTagged _ key _ _ _ _)) = key
+implEntryCanonicalKeyW _ = ""
 
 -- a tail application: saturated direct known-fn → return_call; ctor → value+return;
 -- everything else → indirect via return_call $__mdk_apply.
@@ -9418,6 +9426,7 @@ emitAppTail prog env arity app =
         prog
         env
         name
+        arity
         route
         methRoutes
         implRoutes
