@@ -350,6 +350,7 @@ data WasmEmit = WasmEmit {
   nextLambdaId : Ref Int,
   liftedDefinitions : Ref (List (List String)),
   liftedDefinitionNames : Ref (OrdMap Unit),
+  usedDictRouteKeys : Ref (OrdMap Unit),
   -- S-4: the capture-free closure globals this emission hoisted.  `constClosIdx`
   -- maps an initializer's TEXT to its global name (the dedup key — an OrdMap, not
   -- a List-as-map, so N distinct cells cost N log N and not N²); `constClosCells`
@@ -424,6 +425,7 @@ freshWasmEmit mode = WasmEmit {
   nextLambdaId = Ref 0,
   liftedDefinitions = Ref [],
   liftedDefinitionNames = Ref omEmpty,
+  usedDictRouteKeys = Ref omEmpty,
   constClosIdx = Ref omEmpty,
   constClosCells = Ref [],
   nextConstClosId = Ref 0,
@@ -2225,6 +2227,11 @@ scanExprW7 emit (CApp f a) =
   forEachU (arg => scanExprW7 emit arg) args
 scanExprW7 emit (CVar x _) =
   if x == "Ref" then setRef emit.useRefBox True else noteW8Extern emit x
+scanExprW7 emit (CDict _ routes) = scanDictRoutesW emit routes
+scanExprW7 emit (CMethod _ route implRoutes methRoutes) =
+  let _ = scanMethodRouteW emit route
+  let _ = scanDictRoutesW emit implRoutes
+  scanDictRoutesW emit methRoutes
 -- W8b: a Float literal forces the Float rep + runtime.  (Bare `pi`/`e` are NOT keyed
 -- here — scanExprW7 doesn't track binders, so a LOCAL named `e`/`pi`, e.g. `Err e`,
 -- would false-positive; useFloat is instead forced by a Float literal, a Float
@@ -2258,6 +2265,25 @@ scanExprW7 emit (CMatch scrut arms) =
 scanExprW7 emit (CLetGroup binds b) =
   let _ = forEachU (bd => scanBindW7 emit bd) binds in scanExprW7 emit b
 scanExprW7 _ _ = ()
+
+-- Only materialized dictionary words need dynamic aliases. A direct method's
+-- principal RKey selects a symbol; its nested requirements still carry words.
+scanMethodRouteW : WasmEmit -> Route -> Unit
+scanMethodRouteW emit (RKey _ routes) = scanDictRoutesW emit routes
+scanMethodRouteW emit (RLocal _ routes) = scanDictRoutesW emit routes
+scanMethodRouteW _ _ = ()
+
+scanDictRoutesW : WasmEmit -> List Route -> Unit
+scanDictRoutesW emit routes =
+  forEachU (route => scanDictRouteW emit route) routes
+
+scanDictRouteW : WasmEmit -> Route -> Unit
+scanDictRouteW emit (RKey key routes) =
+  let _ =
+    setRef emit.usedDictRouteKeys (omInsert key () !emit.usedDictRouteKeys)
+  scanDictRoutesW emit routes
+scanDictRouteW emit (RLocal _ routes) = scanDictRoutesW emit routes
+scanDictRouteW _ _ = ()
 
 scanW7Head : WasmEmit -> CExpr -> Unit
 scanW7Head emit (CVar "Ref" _) = setRef emit.useRefBox True
@@ -5061,9 +5087,7 @@ emitDispatchChain prog name ((tag, key) :: rest) blk tagRead dpar argInstrs nArg
   -- leading dict args, mirroring llvm_emit's loadReqDicts (fields 1..n of the boxed cell).
   let reqDicts = implReqDictCount prog name key nArgs
   let reqLoads = flatMap (loadReqDict dpar) (rangeList 0 reqDicts)
-  indentBy
-      idt
-      (tagRead ++ ["i32.const " ++ intToString (dictTag key), "i32.eq", "if"])
+  indentBy idt (dispatchKeyTestW prog name key tagRead ++ ["if"])
     ++ indentBy
       (idt + 1)
       (reqLoads
@@ -5082,6 +5106,26 @@ emitDispatchChain prog name ((tag, key) :: rest) blk tagRead dpar argInstrs nArg
       nArgs
       (idt + 1)
     ++ indentBy idt ["end"]
+
+-- The primary word and its canonical alias select one implementation. Keep the
+-- argument code in one arm: it may itself contain another dictionary dispatch.
+dispatchKeyTestW : Prog -> String -> String -> List String -> List String
+dispatchKeyTestW prog name key tagRead =
+  let primary = tagRead ++ ["i32.const " ++ intToString (dictTag key), "i32.eq"]
+  match implForW prog name key
+    Some (CImplEntry _ _ (CImplTagged _ canonical _ _ _ _)) =>
+      if key == canonical
+        || not (omHasKey canonical !(progEmit prog).usedDictRouteKeys) then
+        primary
+      else
+        primary
+          ++ tagRead
+          ++ [
+            "i32.const " ++ intToString (dictTag canonical),
+            "i32.eq",
+            "i32.or",
+          ]
+    _ => primary
 
 -- load nested req dict `i` from the dict param $dpar's $dictcell (field 1 = $dictarr).
 -- Only reached for a constrained impl arm, where the in-scope dict IS a $dictcell.
@@ -5870,14 +5914,12 @@ methodImpls prog method =
   dedupPairs (flatMap (methodImplKey mEntries method) mEntries) []
 
 -- A sibling method's collision can canonicalize the shared interface dictionary.
--- Both words must call the same implementation symbol; accepting the canonical
--- alias here avoids reconstructing typecheck's interface-wide collision decision.
+-- Keep one candidate per implementation; dispatchKeyTestW accepts both words
+-- without duplicating argument code or reconstructing the collision decision.
 methodImplKey : List CImplEntry -> String -> CImplEntry -> List (String, String)
 methodImplKey entries method (CImplEntry n _ (CImplTagged t k _ _ _ _)) =
   if n == method then
-    let sym = implFnSymTagW entries method t k
-    let route = implEntryRouteKeyW entries method t k
-    if route == k then [(sym, route)] else [(sym, route), (sym, k)]
+    [(implFnSymTagW entries method t k, implEntryRouteKeyW entries method t k)]
   else
     []
 methodImplKey _ _ _ = []
