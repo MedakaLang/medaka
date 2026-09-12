@@ -13512,7 +13512,12 @@ blockRecLet env x xloc e =
   let _ = unify placeholder t1
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = defaultAmbiguousNum omEmpty addedObls t1  -- PLAN.md #11
+  let _ =
+    defaultAmbiguousNumOwnedBy
+      (perRun.value.currentLevel.value + 1)
+      omEmpty
+      addedObls
+      t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (block rec-let bypasses inferPat)
   let sch =
@@ -13529,7 +13534,12 @@ blockLet env (PVar x xloc) e =
   let t = infer env e
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = defaultAmbiguousNum omEmpty addedObls t  -- PLAN.md #11
+  let _ =
+    defaultAmbiguousNumOwnedBy
+      (perRun.value.currentLevel.value + 1)
+      omEmpty
+      addedObls
+      t  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t]  -- RETPOS soundness
   let _ = recordLocalBind x (Some xloc) t  -- LSP hover (block let bypasses inferPat)
   let sch =
@@ -18423,7 +18433,12 @@ inferRecLet env x xloc e1 e2 =
   let _ = unify placeholder t1
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = defaultAmbiguousNum omEmpty addedObls t1  -- PLAN.md #11
+  let _ =
+    defaultAmbiguousNumOwnedBy
+      (perRun.value.currentLevel.value + 1)
+      omEmpty
+      addedObls
+      t1  -- PLAN.md #11
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (recursive PVar let bypasses inferPat)
   let sch =
@@ -18485,11 +18500,16 @@ inferLetSimple env pat e1 e2 =
   let dictN0 = goalsMark ()
   let t1 = infer env e1
   let _ = exitLevel ()
-  -- PLAN.md #11: ground an ambiguous Num-only var before this inner let
-  -- generalizes, so `let z = 2 in y + z` (y:Float) is a clean type error and
-  -- never leaks an unbound Num var.  Scoped to this binding's new obligations.
+  -- PLAN.md #11 / D4: ground an ambiguous Num-only var owned by this inner let
+  -- before it generalizes, so `let z = 2 in y + z` (y:Float) is a clean type
+  -- error and never leaks an unbound Num var.  Scoped to this binding's new obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ = defaultAmbiguousNum omEmpty addedObls t1
+  let _ =
+    defaultAmbiguousNumOwnedBy
+      (perRun.value.currentLevel.value + 1)
+      omEmpty
+      addedObls
+      t1
   let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
   inferLetBody env pat t1 e1 e2 oblN0 callN0 dictN0
 
@@ -19862,12 +19882,13 @@ processLetGroup env binds =
   let env2 = extendLocalVars env placeholders
   let _ = inferLetBinds env2 (zipL binds placeholders)
   let _ = exitLevel ()
-  -- PLAN.md #11: ground ambiguous Num-only vars (not arg-reachable from any
-  -- where-binding's type) before this group generalizes.  Scoped to this group's
-  -- newly added obligations.
+  -- PLAN.md #11 / D4: ground ambiguous Num-only vars owned by this just-exited
+  -- where-group boundary (and not arg-reachable from any member type) before the
+  -- group generalizes.  Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
   let _ =
-    defaultGroupNum
+    defaultGroupNumOwnedBy
+      (perRun.value.currentLevel.value + 1)
       omEmpty
       addedObls
       (map (p => schemeMono (snd p)) placeholders)
@@ -20445,7 +20466,9 @@ anyIn xs ys = anyList (x => containsI x ys) xs
 -- `processSCC` separately protects declared variables, including result-only and nullary
 -- variables. A recursive group retains only roots every member can generalize: the
 -- current per-member schemes cannot publish a group's hidden constraint-only variables.
--- Inferred result-only variables still default; broader ownership gaps remain #563.
+-- Lexical binding boundaries require exact level ownership. This is partial D4:
+-- expected-result propagation and deeper roots reaching the SCC fallback remain separate
+-- (#2646).
 monoArgUnboundIds : Mono -> List Int
 monoArgUnboundIds t = match normalize t
   TFun a _ b => monoUnboundIds a ++ monoArgUnboundIds b
@@ -20465,10 +20488,27 @@ numObligIds o = match o.oblProj
 
 defaultAmbiguousNum : OrdMap Unit -> List UObligation -> Mono -> Unit
 defaultAmbiguousNum protectedIds obls t =
+  defaultAmbiguousNumWith None protectedIds obls t
+
+defaultAmbiguousNumOwnedBy : Int ->
+  OrdMap Unit ->
+  List UObligation ->
+  Mono ->
+  Unit
+defaultAmbiguousNumOwnedBy owner protectedIds obls t =
+  defaultAmbiguousNumWith (Some owner) protectedIds obls t
+
+defaultAmbiguousNumWith : Option Int ->
+  OrdMap Unit ->
+  List UObligation ->
+  Mono ->
+  Unit
+defaultAmbiguousNumWith ownerPolicy protectedIds obls t =
   let argIds = monoArgUnboundIds t
   let inT = monoUnboundIds t
   let candidates = unprotectedNumCandidates protectedIds obls
-  groundNumVars
+  groundNumVarsWith
+    ownerPolicy
     obls
     (filterList
       (id => containsI id inT && not (containsI id argIds))
@@ -20483,9 +20523,28 @@ defaultAmbiguousNum protectedIds obls t =
 -- process_letrec_group's group_arg_ids over added_obligs/added_methods.
 defaultGroupNum : OrdMap Unit -> List UObligation -> List Mono -> Unit
 defaultGroupNum protectedIds obls monos =
+  defaultGroupNumWith None protectedIds obls monos
+
+defaultGroupNumOwnedBy : Int ->
+  OrdMap Unit ->
+  List UObligation ->
+  List Mono ->
+  Unit
+defaultGroupNumOwnedBy owner protectedIds obls monos =
+  defaultGroupNumWith (Some owner) protectedIds obls monos
+
+defaultGroupNumWith : Option Int ->
+  OrdMap Unit ->
+  List UObligation ->
+  List Mono ->
+  Unit
+defaultGroupNumWith ownerPolicy protectedIds obls monos =
   let argIds = flatMap monoArgUnboundIds monos
   let candidates = unprotectedNumCandidates protectedIds obls
-  groundNumVars obls (filterList (id => not (containsI id argIds)) candidates)
+  groundNumVarsWith
+    ownerPolicy
+    obls
+    (filterList (id => not (containsI id argIds)) candidates)
 
 unprotectedNumCandidates : OrdMap Unit -> List UObligation -> List Int
 unprotectedNumCandidates protectedIds obls =
@@ -20688,15 +20747,50 @@ monoUnboundVarLevels t = match normalize t
   TFun a _ b => monoUnboundVarLevels a ++ monoUnboundVarLevels b
   TEff _ => []
 
--- ground each id to Int by unifying the live var carrying it (found among [obls]'
--- Num operand monos — refs alias post-unify, grounding any grounds all)
+-- D4 ownership is exact at lexical boundaries: an outer or deeper root survives.
+-- None preserves the legacy SCC/body-local policy until graph-end defaulting (#2646)
+-- can safely own the roots that exact SCC filtering would strand.
+numDefaultOwnerAllows : Option Int -> Mono -> Bool
+numDefaultOwnerAllows None _ = True
+numDefaultOwnerAllows (Some level) m = match normalize m
+  TVar r => match r.value
+    Unbound _ owner => owner == level
+    _ => False
+  _ => False
+
+-- Outer variable is not owned by boundary 7.
+-- > numDefaultOwnerAllows (Some 7) (TVar (Ref (Unbound 91001 6)))
+-- False
+--
+-- Exact owner is eligible.
+-- > numDefaultOwnerAllows (Some 7) (TVar (Ref (Unbound 91002 7)))
+-- True
+--
+-- Deeper variable is not owned by boundary 7.
+-- > numDefaultOwnerAllows (Some 7) (TVar (Ref (Unbound 91003 8)))
+-- False
+--
+-- Ownership follows the normalized root.
+-- > numDefaultOwnerAllows (Some 7) (TVar (Ref (Link (TVar (Ref (Unbound 91004 7))))))
+-- True
+--
+-- Unrestricted policy preserves legacy SCC/body-local behavior.
+-- > numDefaultOwnerAllows None (TVar (Ref (Unbound 91005 6)))
+-- True
+
+-- Ground each id to Int by unifying the live var carrying it (found among [obls]'
+-- Num operand monos — refs alias post-unify, grounding any grounds all).
 groundNumVars : List UObligation -> List Int -> Unit
-groundNumVars _ [] = ()
-groundNumVars obls (id :: rest) =
+groundNumVars obls ids = groundNumVarsWith None obls ids
+
+groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
+groundNumVarsWith _ _ [] = ()
+groundNumVarsWith ownerPolicy obls (id :: rest) =
   let _ = match liveNumVarGo id obls
-    Some m => unify m (tconBuiltin "Int")
+    Some m =>
+      if numDefaultOwnerAllows ownerPolicy m then unify m (tconBuiltin "Int")
     None => ()
-  groundNumVars obls rest
+  groundNumVarsWith ownerPolicy obls rest
 
 liveNumVarGo : Int -> List UObligation -> Option Mono
 liveNumVarGo _ [] = None
