@@ -115,6 +115,10 @@ test: medaka
 	##     deFieldOwnerIdents identity-collision case lives in one.
 	./medaka test compiler/types
 	./medaka test compiler/eval/eval_test.mdk
+	## The shared free-variable walker in trmc_analysis.mdk drives TRMC safety and
+	## closure capture in both emitters. Its sibling is outside the test roster
+	## for compiler/types and otherwise has no runner.
+	./medaka test compiler/backend/trmc_analysis_test.mdk
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in
 	## pure functions with doctests (reachIsFailOpen/reachProjects), and NOTHING
 	## else runs this file's doctests — no gate script invokes `medaka test` on

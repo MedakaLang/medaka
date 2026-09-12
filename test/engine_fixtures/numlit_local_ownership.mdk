@@ -135,6 +135,7 @@ main =
   println (shadowedLambda "kept" == (42, "kept"))
   println (shadowedGroup "kept" == ("kept", 42))
   println (lamThenGroup (1.5 : Float) == 3.0)
+  println (lamThenGroup (Box 1) == Box 101)
   println (groupThenLam (1.5 : Float) == 4.5)
   println (ownAndCaptured (1.5 : Float) == 3.0)
   println (inferredBlock (1.5 : Float) == 1.5)

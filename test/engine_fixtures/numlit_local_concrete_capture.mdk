@@ -1,0 +1,7 @@
+-- A concrete outer value used only by a parameterized member of a nested
+-- let-group must remain in the enclosing lambda's capture set.
+
+outer : Int -> Int
+outer x = let f = _ => let rec g z = x + z in g 1 in f ()
+
+main = println (outer 41 == 42)
