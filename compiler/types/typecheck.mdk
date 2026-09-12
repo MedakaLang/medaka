@@ -25939,8 +25939,6 @@ setLocalPinDisabled off = driverState.value.localPinDisabledRef := off
 -- could not materialise one from it (the direct-call form is byte-identical, and the
 -- dict-forwarding form is rejected identically by the base and patched binaries).
 -- Do not "fix" it on the strength of this note — reproduce first, or leave it.
--- `predicateRouteKeyForRow` is NOT exposed: it is iface-keyed, and at most one headless
--- impl per interface survives coherence.
 implMethodNameTc : ImplMethod -> String
 implMethodNameTc (ImplMethod n _ _) = n
 
@@ -25980,12 +25978,9 @@ implMethodNameTc (ImplMethod n _ _) = n
 -- be keyed by the head's IDENTITY instead of its spelling, so two same-named
 -- types declared in two modules no longer share a bucket.
 --
--- ⚠️ THE ROUTE WORD IS STILL A BARE NAME AND MUST STAY ONE.  `keyForSite` /
--- `predicateRouteKeyForRow` hand this field's `headKeyNameOr noneHeadTag` projection
--- to the dict cell, and `core_ir_lower.declRouteKey` derives the impl's own
--- word the same way — the two must agree word for word or the dict skew is
--- live on the RDict path.  Re-keying the TABLE and renaming the emitted SYMBOL
--- are different changes; the second is #1113's.
+-- The projected head field remains a bare-name bucket key.  Live route producers
+-- may choose that short word or the impl's canonical key; eval and both emitters
+-- accept both aliases.  Re-keying this table by identity is still a separate change.
 data KeyEntry =
   | KeyEntry (List String) (Option HeadKey) Ty String String (List Ty) (List Require) Int
 
@@ -27071,9 +27066,9 @@ ieHeadCollidesByIface env iface hd = ieCountHeadByIface env iface hd > 1
 -- Why it MATTERS even though no gate moved: `ieHeadCollidesByIface` /
 -- `ieHeadCollidesByMethod` going False where they were True makes `keyForSite` /
 -- `predicateRouteKeyForRow` stamp the BARE HEAD WORD instead of the winner's canonical key,
--- while `core_ir_lower.declRouteKey` derives the impl's own word from a spelling-based
--- uniqueness test.  That is a dict-word skew — by `keyForSite`'s own #1128 note,
--- "invisible on the direct-call path … and live on the RDict path".
+-- leaving a method-keyed runtime bucket with more than one candidate for that short
+-- alias.  The universal canonical alias lets either backend accept a canonical word;
+-- it cannot disambiguate a short word the typechecker chose from an under-count.
 --
 -- 🚨 NO LONGER LATENT, AND NO LONGER A PREDICTION — MEASURED, #1317.  This paragraph
 -- used to end "it is LATENT today because the one shape known to reach it, #1277's, is
@@ -27095,18 +27090,10 @@ ieHeadCollidesByIface env iface hd = ieCountHeadByIface env iface hd > 1
 -- does NOT — so the cause is isolated to these two scans.
 --
 -- ⇒ AND THE FIX IS NOT MORE SUPPLY.  These scans do not ask "are these two heads the same
--- type"; they ask "is the ROUTE WORD `keyForSite` is about to stamp ambiguous at run
--- time".  Route words are bare names by construction and three engines re-derive that
--- same uniqueness test from a bare `String` tag —
--- `core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`, `llvm_emit.headTagUnique`/
--- `distinctKeysAtHead`, and `eval.pickTagFallback`'s peer arm.  So the question is
--- inherently SPELLING-scoped and answering it with identities is wrong at ANY supply
--- level, total supply included.  These two scans are therefore NOT "spelling-keyed
--- pending #1280/#1115"; they are spelling-keyed because their consumer is a byte-for-byte
--- agreement with a namespace that has not moved.  They retire WITH #1113, alongside the
--- emitter word-set retirement — at which point they are DELETED rather than re-keyed,
--- there being no head-tag hedge left to disambiguate.  `keyForSite`'s own doc-comment
--- reaches the same conclusion from the other direction; read it before touching either.
+-- type"; they ask whether the short bare-head alias is ambiguous in the runtime's
+-- spelling-keyed method bucket.  The canonical and short aliases are both accepted,
+-- but answering this shortening decision with identities is still wrong at any supply
+-- level.  These counters retire only when the bare-head hedge retires.
 --
 -- ⚠️ THE EARLIER WITNESS IS STILL A WITNESS, NOT A CENSUS.  What had been run before
 -- #1317: this file rebuilt with the retest reverted to the identity form and a panic on
@@ -27124,12 +27111,10 @@ ieHeadCollidesByIface env iface hd = ieCountHeadByIface env iface hd > 1
 -- under and `keyEntryOfRow` puts in `hd`.
 -- 🚨 B-4b-i: the `IfaceRef` param is threaded for UNIFORMITY WITH THE FAMILY, and its
 -- ORIGIN IS DELIBERATELY UNREAD.  The comparison below stays `ir.irName ==
--- iface.irName` — a bare SPELLING test, NOT `sameTyConHead` — for exactly the reason
--- derived above about the head half: this scan's consumer (`predicateRouteKeyForRow`'s
--- collision gate) is a byte-for-byte agreement with a bare-`String` route-word
--- namespace that three engines re-derive independently.  A supply bite that makes
--- this identity-aware changes which WORD gets stamped without moving the emitter's
--- side of the same verdict.  Widen the type here if you must; do not widen the RULE.
+-- iface.irName` — a bare SPELLING test, NOT `sameTyConHead`.  Its consumer uses the
+-- result to decide whether the short bare-head alias is safe; both backends also
+-- accept the canonical alias.  Making this count identity-aware could incorrectly
+-- shorten a word that is ambiguous in the spelling-keyed runtime namespace.
 ieCountHeadByIface : ImplEnv -> IfaceRef -> Option HeadKey -> Int
 ieCountHeadByIface env iface hd =
   -- goal-side key projected ONCE, here — see `headTabOf`.
@@ -31238,17 +31223,11 @@ oblIfaceKey ir = tabKeyOf NsIface ir.irOrigin ir.irName
 --
 -- WHY, and why supply is beside the point: those two feed
 -- `ieHeadCollidesByMethod`/`ieHeadCollidesByIface` → `keyForSite`/`predicateRouteKeyForRow`, which
--- stamp a ROUTE WORD.  Route words are bare names by construction, and three
--- engines re-derive the same uniqueness test from a bare `String` tag
--- (`core_ir_lower.declRouteKey`/`ifaceDeclHeadUnique`,
--- `llvm_emit.headTagUnique`/`distinctKeysAtHead`, `eval.pickTagFallback`'s peer).
--- An identity-keyed count answers 1 where the spelling count answers 2, so
--- `keyForSite` takes its no-collision branch and stamps the bare head word into a
--- dict cell that is then ambiguous at run time.  The question "is this route word
--- ambiguous" is inherently SPELLING-scoped; answering it with identities is wrong
--- at any supply level, TOTAL SUPPLY INCLUDED.  See `ieCountHeadByIface`'s own comment
--- for the full derivation and `keyForSite`'s for the same conclusion reached from the
--- other side.
+-- choose between a short bare-head alias and the canonical impl key.  Eval and both
+-- emitters accept either word; the count still has to be spelling-scoped because an
+-- identity-keyed answer of 1 where the runtime name bucket contains 2 would choose
+-- the ambiguous short alias.  See `ieCountHeadByIface` and `keyForSite` for the
+-- corresponding consumer derivations.
 --
 -- ⇒ The head COMPONENT is therefore still spelling-keyed, and that is still
 -- CORRECT rather than merely deferred.  What #1317 owns, restated with the
