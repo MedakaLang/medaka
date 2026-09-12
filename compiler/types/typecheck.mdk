@@ -20408,9 +20408,10 @@ anyIn xs ys = anyList (x => containsI x ys) xs
 -- the widening would have existed only as a judgment call in code.
 --
 -- `monoArgUnboundIds` protects inferred argument channels.  At a top-level SCC,
--- `processSCC` separately protects every live variable carried by a declared signature,
--- including result-only and nullary variables.  Inferred result-only variables still
--- default, as do local groups; the broader body/default-method gap remains #563.
+-- `processSCC` separately protects declared variables, including result-only and nullary
+-- variables. A recursive group retains only roots every member can generalize: the
+-- current per-member schemes cannot publish a group's hidden constraint-only variables.
+-- Inferred result-only variables still default; broader ownership gaps remain #563.
 monoArgUnboundIds : Mono -> List Int
 monoArgUnboundIds t = match normalize t
   TFun a _ b => monoUnboundIds a ++ monoArgUnboundIds b
@@ -35800,13 +35801,13 @@ processSCC env sigs grouped0 members =
   let _ = exitLevel ()
   -- PLAN.md #11 (locked §0.2): GROUP-LEVEL + per-binding Num defaulting.  Ground
   -- every ambiguous Num-only var to Int before this group generalizes.  A live var
-  -- carried by any declared signature in the SCC stays caller-determined across both
-  -- passes; otherwise an argument-reachable var (`sum`'s/`inc`'s element var) also
+  -- carried by a declared signature stays caller-determined across both passes when
+  -- every recursive member can abstract it; an argument-reachable var also
   -- stays polymorphic.  Body-only vars (`n = tag [1,2,3]`) still ground.  Scoped to
   -- THIS group's newly-added obligations (prepended at the front) so an earlier
   -- group's already-generalized var is never touched.
   let protectedSigIds =
-    omFromNames (map intToString (flatMap sigTvMapUnboundIds sigTvMaps)) omEmpty
+    sccProtectedSignatureIds env2 groupedStamped placeholders sigTvMaps
   let addedObls = wWindow perRun.value.implObls oblN0
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
@@ -35978,6 +35979,50 @@ instantiateSigTracked ty =
 
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs
+
+-- The current recursive ABI abstracts each member's own Scheme. A protected root
+-- must therefore survive every member's value restriction and generalization. Full
+-- group-qualified schemes, including constraint-only quantifiers, need a separate
+-- publication/caller contract; this boundary preserves the existing defaulting there.
+sccProtectedSignatureIds : TcEnv ->
+  OrdMap (List (List Pat, Expr)) ->
+  List (String, Mono) ->
+  List (String, Ty, List (String, Mono)) ->
+  OrdMap Unit
+sccProtectedSignatureIds env grouped members sigTvMaps =
+  let declared =
+    omFromNames (map intToString (flatMap sigTvMapUnboundIds sigTvMaps)) omEmpty
+  match members
+    [] => declared
+    [_] => declared
+    _ =>
+      sharedGeneralizableSigIds
+        env
+        grouped
+        perRun.value.currentLevel.value
+        members
+        (omKeys declared)
+
+sharedGeneralizableSigIds : TcEnv ->
+  OrdMap (List (List Pat, Expr)) ->
+  Int ->
+  List (String, Mono) ->
+  List String ->
+  OrdMap Unit
+sharedGeneralizableSigIds _ _ _ _ [] = omEmpty
+sharedGeneralizableSigIds _ _ _ [] ids = omFromNames ids omEmpty
+sharedGeneralizableSigIds env grouped level ((name, mono) :: rest) ids =
+  if allList (memberClauseIsValue env) (clausesOf name grouped) then
+    let available =
+      omFromNames (map intToString (freeGenVars level mono)) omEmpty
+    sharedGeneralizableSigIds
+      env
+      grouped
+      level
+      rest
+      (filterList (id => omHasKey id available) ids)
+  else
+    omEmpty
 
 -- 🚨 ONE ENTRY PER PREDICATE (S-dict-arity-contract, #1318/B-4) — the (iface, bare
 -- tyvar NAMES) pairs of a signature's `=>` constraints, ONE per constraint that has at

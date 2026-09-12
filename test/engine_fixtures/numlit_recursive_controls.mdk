@@ -1,0 +1,16 @@
+single : Num a => Int -> a
+single n = if n == 0 then fromInt 5 else single (n - 1)
+
+left : Num a => Int -> a
+left n = if n == 0 then fromInt 13 else right (n - 1)
+right : Num a => Int -> a
+right n = left n
+
+singleFloat : Float
+singleFloat = single 2
+mutualFloat : Float
+mutualFloat = right 3
+
+main =
+  println (singleFloat == 5.0)
+  println (mutualFloat == 13.0)

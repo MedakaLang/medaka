@@ -373,6 +373,13 @@ declaredNumSchemeObserved : Option (Int, Int) ->
   String ->
   (List (Int, String), List (String, String, Int))
 declaredNumSchemeObserved key source =
+  declaredNumMemberSchemeObserved key "value" source
+
+declaredNumMemberSchemeObserved : Option (Int, Int) ->
+  String ->
+  String ->
+  (List (Int, String), List (String, String, Int))
+declaredNumMemberSchemeObserved key member source =
   beginAssumptionTrace ()
   let (_, schemes) = checkOneSchemeFullK key [] (desugar
     (parse numericPreludeSource)) (
@@ -382,7 +389,7 @@ declaredNumSchemeObserved key source =
   let values =
     map
       (entry => (schemeVariableCount (snd entry), ppScheme (snd entry)))
-      (filter (entry => fst entry == "value") schemes)
+      (filter (entry => fst entry == member) schemes)
   let assumptions =
     map
       (entry =>
@@ -450,15 +457,39 @@ test "declared numeric channels include nested results and independent quantifie
   ]
 
 test "an unsigned recursive sibling cannot default a declared numeric root" =
-  let observed =
-    declaredNumSchemeObserved
-      None
-      (joinNl [
-        "value : Num a => Int -> a",
-        "value n = if n == 0 then fromInt n else relay (n - 1)",
-        "relay n = value n",
-      ])
-  expectEqual [(1, "Int -> a")] (fst observed)
+  let source = joinNl [
+    "value : Num a => Int -> a",
+    "value n = if n == 0 then fromInt n else relay (n - 1)",
+    "relay n = value n",
+  ]
+  expectAll [
+    expectEqual [(1, "Int -> a")] (fst (declaredNumSchemeObserved None source)),
+    expectEqual
+      [(1, "Int -> a")]
+      (fst (declaredNumMemberSchemeObserved None "relay" source)),
+  ]
+
+test "unsupported recursive evidence keeps erased and expansive siblings rejected" =
+  let erased = joinNl [
+    "consume : a -> Int",
+    "consume _ = 1",
+    "signed : Num a => Int -> a",
+    "signed n = if ping n == 0 then fromInt n else fromInt n",
+    "ping n = if n == 0 then 1 else consume (signed (n - 1))",
+    "floating : Float",
+    "floating = signed 2",
+  ]
+  let expansive = joinNl [
+    "signed : Num a => Int -> a",
+    "signed n = if n == 0 then ping else fromInt n",
+    "ping = signed 1",
+    "floating : Float",
+    "floating = signed 0",
+  ]
+  expectAll [
+    expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes erased),
+    expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes expansive),
+  ]
 
 test "declared result protection preserves missing-context and value-restriction errors" = expectAll
   [

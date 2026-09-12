@@ -45,8 +45,15 @@ were and remain RNone inside such an owner. It is an observation of the existing
 compatibility path, not semantic evidence, and is excluded from memo replay.
 
 Numeric defaulting in closed test/property bodies uses body-owned variables and
-preserves enclosing or caller-determined variables. Whole-graph defaulting and
-finalized scheme queries remain tracked by
+preserves enclosing or caller-determined variables. At a top-level SCC, both
+numeric defaulting passes preserve the normalized live variables of declared
+signatures. In a recursive group, protection requires every member to be a
+syntactic value that can generalize the root; one membership index serves both
+defaulting passes. This preserves the correspondence between the
+published scheme and its registered dictionary slots; inferred result-only
+numeric variables still default before generalization. Local binding and
+implementation-body defaulting retain their existing policies. Whole-graph
+defaulting and finalized scheme queries remain tracked by
 [#2646](https://github.com/MedakaLang/medaka/issues/2646). Measurements are in the
 [performance log](PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
 
@@ -58,6 +65,15 @@ complete the shared solver or return-family migration. The finalized scheme quer
 `checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
 live inference cells. Cache replacement and immutable publication remain with
 [#2549](https://github.com/MedakaLang/medaka/issues/2549).
+
+Inferred dictionary slots retain complete predicate vectors and their `IfaceRef`
+payloads. Distinct predicates can share a lead variable, and a variable appearing
+as another predicate's argument can still lead its own slot. Complete vectors use
+the existing deduplication key, which still compares interface spelling rather
+than origin; completing nominal identity remains open. Trace-only IDs retain the
+legacy unknown-argument fallback. Recursive groups that need constraint-only quantifiers
+or evidence on a non-generalized member remain outside this adapter's support;
+their prior defaulting behavior is retained pending group-qualified publication.
 
 Implementation-body inference obtains the declared method type and graded scope
 from the identity-indexed `ClassEnv` at the module's visibility ordinal. A different

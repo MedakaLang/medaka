@@ -1,0 +1,41 @@
+interface Tweak a b where
+  tweak : b -> a -> a
+
+impl Tweak Float Int where
+  tweak _ x = x + 10.0
+
+impl Tweak Float Bool where
+  tweak _ x = x + 100.0
+
+value : (Num a, Tweak a Int, Tweak a Bool) => Int -> a
+value n = if n == 0 then fromInt 0 else tweak True (tweak 1 (relay (n - 1)))
+
+-- Its inferred context needs three distinct dictionary slots.
+-- lint-disable-next-line rule-missing-signature
+relay n = value n
+
+signedValue : (Num a, Tweak a Int, Tweak a Bool) => Int -> a
+signedValue n =
+  if n == 0 then fromInt 0 else tweak True (tweak 1 (signedRelay (n - 1)))
+
+signedRelay : (Num a, Tweak a Int, Tweak a Bool) => Int -> a
+signedRelay n = signedValue n
+
+-- The inferred member precedes the signature and its predicate order differs.
+-- lint-disable-next-line rule-missing-signature
+back n = front n
+
+front : (Tweak a Bool, Num a, Tweak a Int) => Int -> a
+front n = if n == 0 then fromInt 0 else tweak True (tweak 1 (back (n - 1)))
+
+floating : Float
+floating = relay 2
+signedFloat : Float
+signedFloat = signedRelay 2
+reversedFloat : Float
+reversedFloat = back 3
+
+main =
+  println (floating == 220.0)
+  println (signedFloat == 220.0)
+  println (reversedFloat == 330.0)
