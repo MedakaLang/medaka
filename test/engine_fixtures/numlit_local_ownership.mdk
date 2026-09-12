@@ -82,7 +82,7 @@ shadowedGroup x = (x, let rec x _ = 41 + 1 in x ())
 -- Numeric context must reach captures through both orders of nested closure
 -- and group boundaries. ownAndCaptured needs context for both x and local y.
 lamThenGroup : Num a => a -> a
-lamThenGroup x = let f = y => let rec g z = y + z in g y in f x
+lamThenGroup x = let f = _ => let rec g z = x + z in g x in f ()
 
 groupThenLam : Num a => a -> a
 groupThenLam x = local x
