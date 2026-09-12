@@ -1820,9 +1820,9 @@ evalMethodAt : EvalEnv (Value e) ->
 -- machinery, now reachable from the shadow arm that the marking prePass consumes.
 evalMethodAtEv : EvalEnv (Value e) ->
   String ->
-  (Route, List Route, List Route) ->
+  (Int, Route, List Route, List Route) ->
   <e> Value e
-evalMethodAtEv env name (route, implRoutes, methodRoutes) =
+evalMethodAtEv env name (_, route, implRoutes, methodRoutes) =
   evalMethodAt env name route implRoutes methodRoutes
 
 evalMethodAt env name (RLocal sym dicts) _ _ =

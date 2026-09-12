@@ -943,7 +943,8 @@ public export data EvId = EvId String Int
 -- The evidence shapes.  `EvOne` and `EvMany` are one per destination arm a goal
 -- can have: a single site route, or a dictionary application's slot-ordered route
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
--- `EMethodAt` node's three answers (its dispatch route, the selected impl's
+-- `EMethodAt` node's selected value arity and three route answers (its dispatch
+-- route, the selected impl's
 -- `requires` dicts, the method's own `=>` dicts) in the order the node's three
 -- cells used to hold them.  One node can be the destination of zero goals (the
 -- unbound-method recovery arm writes a final route without pushing one) or three
@@ -957,7 +958,7 @@ public export data EvId = EvId String Int
 public export data EvVal =
   | EvOne Route
   | EvMany (List Route)
-  | EvMethod Route (List Route) (List Route)
+  | EvMethod Int Route (List Route) (List Route)
 
 public export data EvEntry = EvEntry EvId EvVal
 

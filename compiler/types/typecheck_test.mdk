@@ -9,6 +9,8 @@ import frontend.parser.{parse, parseLocated}
 import eval.eval.{Value(..), evalOne, force}
 import ir.core_ir.{CBind(..), CClause(..), CExpr(..), CProgram(..), CStmt(..)}
 import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_ir_sexp_parse.{parseCProgram}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
 import types.repr.{Scheme(..), ppMono, ppScheme}
 import types.typecheck.{
@@ -1095,6 +1097,83 @@ test "block recursive arithmetic retains the outer predicate and route" =
 
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
 
+methodHeadArity : String -> CExpr -> Option Int
+methodHeadArity target (CMethod name arity _ _ _)
+  | name == target = Some arity
+  | otherwise = None
+methodHeadArity target (CApp f _) = methodHeadArity target f
+methodHeadArity _ _ = None
+
+bindMethodArity : String -> String -> List CBind -> Option Int
+bindMethodArity _ _ [] = None
+bindMethodArity bindName method ((CBind name clauses) :: rest)
+  | name == bindName = match clauses
+    (CClause _ body) :: _ => methodHeadArity method body
+    [] => None
+  | otherwise = bindMethodArity bindName method rest
+
+loweredMethodArity : String -> String -> String -> Option Int
+loweredMethodArity source bindName method =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("method_arity", program)
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  bindMethodArity bindName method binds
+
+test "method occurrence freezes declared arity before higher-order specialization" =
+  expectEqual
+    (Some 1)
+    (loweredMethodArity
+      (joinNl [
+        "interface ArityHo a where",
+        "  ho : a -> a",
+        "impl ArityHo (Int -> Int) where",
+        "  ho f = f",
+        "probe = ho (x => x)",
+      ])
+      "probe"
+      "ho")
+
+test "definer-shadow application publishes its selected arity" =
+  expectEqual
+    (Some 1)
+    (loweredMethodArity
+      (joinNl [
+        "interface ArityShadow a where",
+        "  shadow : a -> Int",
+        "shadow : Int -> Int",
+        "shadow x = x",
+        "probe = shadow 1",
+      ])
+      "probe"
+      "shadow")
+
+test "value-position shadow publishes the selected standalone arity" =
+  expectEqual
+    (Some 2)
+    (loweredMethodArity
+      (joinNl [
+        "interface ArityValueShadow a where",
+        "  shadowValue : a -> Int",
+        "shadowValue : Int -> Int -> Int",
+        "shadowValue x _ = x",
+        "probe = shadowValue",
+      ])
+      "probe"
+      "shadowValue")
+
+test "Core IR round-trip preserves method occurrence arity" =
+  let original =
+    CProgram
+      [CBind "main" [CClause [] (CMethod "probe" 7 RNone [] [])]]
+      []
+      []
+      []
+  match parseCProgram (cprogramToSexp original)
+    CProgram [CBind "main" [CClause [] (CMethod "probe" arity RNone [] [])]] _ _ _ =>
+      expectEqual 7 arity
+    _ => expectEqual True False
+
 emptyLocalCoreFacts : LocalCoreFacts
 emptyLocalCoreFacts = LocalCoreFacts False [] [] 0
 
@@ -1121,9 +1200,9 @@ localCoreExprFacts (CBinPrim op lhs rhs _) =
     addRoutes
     fromIntRoutes
     (primCount + (if op == "+" then 1 else 0))
-localCoreExprFacts (CMethod "add" (RDict binder) _ _) =
+localCoreExprFacts (CMethod "add" _ (RDict binder) _ _) =
   LocalCoreFacts False [binder] [] 0
-localCoreExprFacts (CMethod "fromInt" route _ _) = match route
+localCoreExprFacts (CMethod "fromInt" _ route _ _) = match route
   RDict binder => LocalCoreFacts False [] [binder] 0
   RDictFwd binder => LocalCoreFacts False [] [binder] 0
   _ => emptyLocalCoreFacts

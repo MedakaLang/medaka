@@ -20,7 +20,7 @@ multiClauseGroup =
             CVar "outer" AGlobal,
             CVar "p" AGlobal,
             CVar "g" AGlobal,
-            CMethod "add" (RDict "$d0") [] [RDictFwd "$d1"],
+            CMethod "add" 2 (RDict "$d0") [] [RDictFwd "$d1"],
           ]),
         CClause
           [PVar "q" loc]

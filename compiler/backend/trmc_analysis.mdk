@@ -105,7 +105,7 @@ freeVars b (CStringSlice a lo hi _) =
 freeVars b (CListIndex a i) = freeVars b a ++ freeVars b i
 freeVars b (CListSlice a lo hi _) =
   freeVars b a ++ freeVars b lo ++ freeVars b hi
-freeVars b (CMethod _ route implRoutes methRoutes) =
+freeVars b (CMethod _ _ route implRoutes methRoutes) =
   routeDictNames b (route :: implRoutes ++ methRoutes)
 freeVars b (CDict _ routes) = routeDictNames b routes
 freeVars _ _ = []
@@ -421,7 +421,7 @@ export
 isSelfHead : SelfRef -> CExpr -> Bool
 isSelfHead (SelfByVar self) (CVar f _) = f == self
 isSelfHead (SelfByVar self) (CDict f _) = f == self
-isSelfHead (SelfByMethod method tag) (CMethod m route _ _) =
+isSelfHead (SelfByMethod method tag) (CMethod m _ route _ _) =
   m == method && routeIsKey tag route
 isSelfHead _ _ = False
 
@@ -462,7 +462,7 @@ selfFree (SelfByMethod method tag) ex = not (mentionsSelfMethod method tag ex)
 -- recursion DROPPED → silent miscompile.  This full structural walk closes that.
 export
 mentionsSelfMethod : String -> String -> CExpr -> Bool
-mentionsSelfMethod method tag (CMethod m route _ _) =
+mentionsSelfMethod method tag (CMethod m _ route _ _) =
   m == method && routeIsKey tag route
 mentionsSelfMethod method tag (CApp f a) =
   mentionsSelfMethod method tag f || mentionsSelfMethod method tag a

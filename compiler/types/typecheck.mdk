@@ -9648,6 +9648,7 @@ data GivenMatch =
 -- solver's working store and nothing else may write it.
 data EvCell = EvCell {
   ecId : EvId,
+  ecArity : Ref (Option Int),
   ecTag : Ref Route,
   ecImpl : Ref (List Route),
   ecMeth : Ref (List Route),
@@ -9724,12 +9725,15 @@ freshGraphRun _ = GraphRun {
 -- every seed reader (`routeLocalSym`) expect to find on the dispatch cell.
 mintMethodCell : String -> EvId
 mintMethodCell seed =
-  mintMethodCellWith (if seed == "" then RNone else RLocal seed []) []
+  mintMethodCellRaw None (if seed == "" then RNone else RLocal seed []) []
 
 -- The `dictPass` mints: a node constructed AFTER the drain, from a route another
 -- node already solved, so its cells start at their final values.
-mintMethodCellWith : Route -> List Route -> EvId
-mintMethodCellWith tag impls =
+mintMethodCellWith : Int -> Route -> List Route -> EvId
+mintMethodCellWith arity tag impls = mintMethodCellRaw (Some arity) tag impls
+
+mintMethodCellRaw : Option Int -> Route -> List Route -> EvId
+mintMethodCellRaw arity tag impls =
   let ev = freshEvId ()
   let i = evOrdinal ev
   let g = graphRun.value
@@ -9754,6 +9758,7 @@ mintMethodCellWith tag impls =
       i
       (Some EvCell {
         ecId = ev,
+        ecArity = Ref arity,
         ecTag = Ref tag,
         ecImpl = Ref impls,
         ecMeth = Ref [],
@@ -9792,10 +9797,17 @@ methodCellEntriesFrom arr i acc
   | otherwise = match arrayGetUnsafe i arr
     None => methodCellEntriesFrom arr (i - 1) acc
     Some c =>
+      let arity = match c.ecArity.value
+        Some n => n
+        None =>
+          panic
+            "method cell published before its selected scheme supplied an arity"
       methodCellEntriesFrom
         arr
         (i - 1)
-        (EvEntry c.ecId (EvMethod c.ecTag.value c.ecImpl.value c.ecMeth.value)
+        (EvEntry
+            c.ecId
+            (EvMethod arity c.ecTag.value c.ecImpl.value c.ecMeth.value)
           :: acc)
 
 -- Install the table the readers below this file consult: the per-goal entries the
@@ -12200,12 +12212,14 @@ inferIntRange env lo hi container =
 -- NOT a pendingSites/methodSiteFns return-position site.
 inferMethodAt : TcEnv ->
   String ->
+  Ref (Option Int) ->
   Ref Route ->
   Ref (List Route) ->
   Ref (List Route) ->
   Mono
 inferMethodAtCell : TcEnv -> String -> EvCell -> Mono
-inferMethodAtCell env name c = inferMethodAt env name c.ecTag c.ecImpl c.ecMeth
+inferMethodAtCell env name c =
+  inferMethodAt env name c.ecArity c.ecTag c.ecImpl c.ecMeth
 
 -- #2705: a standalone-shadow occurrence (a user fn spelled like an interface
 -- method — `add x y = x + y` beside `Num`'s `add`) DENOTES THE STANDALONE, whose
@@ -12231,67 +12245,74 @@ recordShadowStandaloneObls name subst
         None => ()
   | otherwise = ()
 
-inferMethodAt env name tagRef implRef methodRef = match lookupVar env name
-  -- #1430 (S2, row 39, EMIT path): a definer shadow of a method whose interface is
-  -- NAMEABLE in this module but whose METHOD NAME was never imported (`import
-  -- smod.{Zed, sf}` names the interface, not `zed`) has no `zed` binding in this
-  -- module's env at all.  The mangler has already renamed the module's own standalone
-  -- to `<mid>__zed` and the mark pass rewrote the occurrence to `EMethodAt "zed"` with
-  -- `RLocal <mid>__zed` seeded on its route, so the bare lookup below misses and this
-  -- panicked `unbound method: zed` — `medaka build` exit 1 on a program `check` and
-  -- `run` both accept.  The route already names the standalone that IS in scope, so
-  -- recover through the same emit-path value-position accessor the `Some` arm consults
-  -- (`maybeStandaloneValueMonoEmit`), and stamp the route it was pinned to.  An APP head
-  -- (shadowHeadCtxRef True) and a route with no mangled symbol both decline there, so
-  -- every occurrence that genuinely has no denotation still panics as before.
-  None => match maybeStandaloneValueMonoEmit env name tagRef
-    Some m =>
-      tagRef := RLocal (routeLocalSym !tagRef) []
-      m
-    None => panic ("unbound method: " ++ name)
-  Some s =>
-    let inst = instantiateTracked s
-    let _ = recordMethodDicts name methodRef (snd inst)
-    -- #816/#818 shadow guard — shared with inferVarPlainId (the check path); see
-    -- recordMethodObligationGuarded for the full rationale.  The tracked
-    -- instantiation `fst inst` is already computed (its recordMethodDicts side-effect
-    -- fired above), so pass it in rather than re-instantiate.
-    let _ = recordMethodObligationGuarded env name s (fst inst)
-    let _ = recordShadowStandaloneObls name (snd inst)
-    let _ = recordRLocalSite env name tagRef (fst inst)
-    let ret = match argDispatchOf name
-      Some idx =>
-        let _ = recordArgStamp name tagRef implRef idx (fst inst)
-        let _ = recordArgSiteFn name idx (fst inst)
-        fst inst
-      None => recordSite name tagRef implRef (fst inst)
-    -- P0-19 d4b (S4): a bare value-position definer shadow (`map size xs`, marked to
-    -- `EMethodAt`) denotes the STANDALONE — return its declared scheme type so the type
-    -- mismatches live-impl elements (Box vs Int) instead of dispatching, while the route
-    -- side-effects above still stamp RLocal (ungrounded receiver) so `map size [1,2,3]`
-    -- runs the standalone.  Inert for an application head (shadowHeadCtxRef True).
-    match maybeStandaloneValueMono name
-      Some m => m
-      -- #410/#669 (S4, EMIT path): maybeStandaloneValueMono is keyed on the BARE name via
-      -- `definerShadowNamesRef`.  Under the old mangle-first emit order the mangler had
-      -- already renamed the definer standalone's funDef + call sites to `<mid>__name`
-      -- before marking, so the bare name was no longer in that ref and the pin above
-      -- missed (#2809 reversed that order, and this is accommodation 6 of the census in
-      -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20, retiring with it on
-      -- its own measurement) — the occurrence then
-      -- gets the permissive METHOD scheme (`a -> a -> Int`), so `map size` infers element
-      -- type `Int -> Int` (a function) and `println`'s `Display (List (Int -> Int))`
-      -- stamps a NULL element route (RNone → i64 0 dict word → the built binary SEGFAULTs,
-      -- while `run` is correct because eval follows the RLocal route this same call already
-      -- stamped).  Recover the shadow post-mangle exactly as the app-head path does (P0-18):
-      -- the route sym seeded on `tagRef` names the mangled standalone, and
-      -- `standaloneValuesRef` is the emit-path shadow set (definer ∪ importer) that stamped
-      -- RLocal.  Pin the occurrence's TYPE to that standalone's scheme so the element var is
-      -- grounded (`Int`/`String`) BEFORE resolveDictApps, closing the check-vs-build type
-      -- skew.  Value-position ONLY (shadowHeadCtxRef False); an app head keeps `ret`.
-      None => match maybeStandaloneValueMonoEmit env name tagRef
-        Some m => m
-        None => ret
+inferMethodAt env name arityRef tagRef implRef methodRef =
+  match lookupVar env name
+    -- #1430 (S2, row 39, EMIT path): a definer shadow of a method whose interface is
+    -- NAMEABLE in this module but whose METHOD NAME was never imported (`import
+    -- smod.{Zed, sf}` names the interface, not `zed`) has no `zed` binding in this
+    -- module's env at all.  The mangler has already renamed the module's own standalone
+    -- to `<mid>__zed` and the mark pass rewrote the occurrence to `EMethodAt "zed"` with
+    -- `RLocal <mid>__zed` seeded on its route, so the bare lookup below misses and this
+    -- panicked `unbound method: zed` — `medaka build` exit 1 on a program `check` and
+    -- `run` both accept.  The route already names the standalone that IS in scope, so
+    -- recover through the same emit-path value-position accessor the `Some` arm consults
+    -- (`maybeStandaloneValueMonoEmit`), and stamp the route it was pinned to.  An APP head
+    -- (shadowHeadCtxRef True) and a route with no mangled symbol both decline there, so
+    -- every occurrence that genuinely has no denotation still panics as before.
+    None => match maybeStandaloneValueMonoEmit env name tagRef
+      Some m =>
+        arityRef := Some (funArity m)
+        tagRef := RLocal (routeLocalSym !tagRef) []
+        m
+      None => panic ("unbound method: " ++ name)
+    Some s =>
+      let inst = instantiateTracked s
+      arityRef := Some (funArity (fst inst))
+      let _ = recordMethodDicts name methodRef (snd inst)
+      -- #816/#818 shadow guard — shared with inferVarPlainId (the check path); see
+      -- recordMethodObligationGuarded for the full rationale.  The tracked
+      -- instantiation `fst inst` is already computed (its recordMethodDicts side-effect
+      -- fired above), so pass it in rather than re-instantiate.
+      let _ = recordMethodObligationGuarded env name s (fst inst)
+      let _ = recordShadowStandaloneObls name (snd inst)
+      let _ = recordRLocalSite env name tagRef (fst inst)
+      let ret = match argDispatchOf name
+        Some idx =>
+          let _ = recordArgStamp name tagRef implRef idx (fst inst)
+          let _ = recordArgSiteFn name idx (fst inst)
+          fst inst
+        None => recordSite name tagRef implRef (fst inst)
+      -- P0-19 d4b (S4): a bare value-position definer shadow (`map size xs`, marked to
+      -- `EMethodAt`) denotes the STANDALONE — return its declared scheme type so the type
+      -- mismatches live-impl elements (Box vs Int) instead of dispatching, while the route
+      -- side-effects above still stamp RLocal (ungrounded receiver) so `map size [1,2,3]`
+      -- runs the standalone.  Inert for an application head (shadowHeadCtxRef True).
+      match maybeStandaloneValueMono name
+        Some m =>
+          arityRef := Some (funArity m)
+          m
+        -- #410/#669 (S4, EMIT path): maybeStandaloneValueMono is keyed on the BARE name via
+        -- `definerShadowNamesRef`.  Under the old mangle-first emit order the mangler had
+        -- already renamed the definer standalone's funDef + call sites to `<mid>__name`
+        -- before marking, so the bare name was no longer in that ref and the pin above
+        -- missed (#2809 reversed that order, and this is accommodation 6 of the census in
+        -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 20, retiring with it on
+        -- its own measurement) — the occurrence then
+        -- gets the permissive METHOD scheme (`a -> a -> Int`), so `map size` infers element
+        -- type `Int -> Int` (a function) and `println`'s `Display (List (Int -> Int))`
+        -- stamps a NULL element route (RNone → i64 0 dict word → the built binary SEGFAULTs,
+        -- while `run` is correct because eval follows the RLocal route this same call already
+        -- stamped).  Recover the shadow post-mangle exactly as the app-head path does (P0-18):
+        -- the route sym seeded on `tagRef` names the mangled standalone, and
+        -- `standaloneValuesRef` is the emit-path shadow set (definer ∪ importer) that stamped
+        -- RLocal.  Pin the occurrence's TYPE to that standalone's scheme so the element var is
+        -- grounded (`Int`/`String`) BEFORE resolveDictApps, closing the check-vs-build type
+        -- skew.  Value-position ONLY (shadowHeadCtxRef False); an app head keeps `ret`.
+        None => match maybeStandaloneValueMonoEmit env name tagRef
+          Some m =>
+            arityRef := Some (funArity m)
+            m
+          None => ret
 -- C5: if [name] is a standalone-shadow method, record its discriminating-arg
 -- mono cell UNGATED so resolveRLocalSites can route RLocal when the receiver
 -- grounds to a no-impl head (the arg-stamp path would otherwise leave it RNone
@@ -16360,10 +16381,11 @@ inferAppExpr env f x = match lamUnderLoc x
     -- has its receiver at the OUTER spine node, not the inner node the bare-head arm
     -- would otherwise ask about.  Declines (None) at k == 0, so the bare-head arm
     -- stays byte-identical.
-    Some (mname, tagRefs, hd, nodes) =>
-      inferShadowAppAt env mname tagRefs hd nodes f x
+    Some (mname, arityRefs, tagRefs, hd, nodes) =>
+      inferShadowAppAt env mname arityRefs tagRefs hd nodes f x
     None => match shadowStandaloneHead env f
-      Some (mname, tagRefs) => inferShadowApp env mname tagRefs f x
+      Some (mname, arityRefs, tagRefs) =>
+        inferShadowApp env mname arityRefs tagRefs f x
       -- #1815: the SPINE arms come FIRST, and they are the same two definer-shadow arms
       -- one node further out.  A definer shadow whose interface dispatches on argument
       -- k > 0 (`mth : Int -> b -> Int`) reaches its dispatch argument at the OUTER node
@@ -16373,14 +16395,23 @@ inferAppExpr env f x = match lamUnderLoc x
       -- declared type on the enclosing annotated function.  They decline at k == 0 (a
       -- bare head has no applied nodes), so the index-0 path below is byte-unchanged.
       None => match definerShadowSpineArgAt f
-        Some (dname, dtagRef, dimplRef, dhd, dnodes) =>
-          inferDefinerShadowAppAt env dname dtagRef dimplRef dhd dnodes f x
+        Some (dname, darityRef, dtagRef, dimplRef, dhd, dnodes) =>
+          inferDefinerShadowAppAt
+            env
+            dname
+            darityRef
+            dtagRef
+            dimplRef
+            dhd
+            dnodes
+            f
+            x
         None => match definerShadowSpineVarAt f
           Some (dname, dhd, dnodes) =>
             inferDefinerShadowVarAppAt env dname dhd dnodes f x
           None => match definerShadowArgHead f
-            Some (dname, dtagRef, dimplRef) =>
-              inferDefinerShadowApp env dname dtagRef dimplRef f x
+            Some (dname, darityRef, dtagRef, dimplRef) =>
+              inferDefinerShadowApp env dname darityRef dtagRef dimplRef f x
             None => match definerShadowVarHead f
               Some dname => inferDefinerShadowVarApp env dname f x
               None =>
@@ -16412,16 +16443,20 @@ inferAppExpr env f x = match lamUnderLoc x
 -- Only fires for a SINGLE-param interface method whose name is a registered importer
 -- shadow with a stashed standalone scheme — exactly the oracle's guard.  Everything
 -- else (no shadow, multi-param iface, non-method head) returns None → the ordinary path.
-shadowStandaloneHead : TcEnv -> Expr -> Option (String, List (Ref Route))
+shadowStandaloneHead : TcEnv ->
+  Expr ->
+  Option (String, List (Ref (Option Int)), List (Ref Route))
 shadowStandaloneHead env (ELoc _ f) = shadowStandaloneHead env f
 shadowStandaloneHead env (EMethodAt name _ ev)
-  | isShadowStandalone name = Some (name, [(methodCellOf ev).ecTag])
+  | isShadowStandalone name =
+    let c = methodCellOf ev
+    Some (name, [c.ecArity], [c.ecTag])
   | otherwise = None
 shadowStandaloneHead env (EVar name)
-  | isShadowStandalone name = Some (name, [])
+  | isShadowStandalone name = Some (name, [], [])
   | otherwise = None
 shadowStandaloneHead env (EVarId name _)
-  | isShadowStandalone name = Some (name, [])
+  | isShadowStandalone name = Some (name, [], [])
   | otherwise = None
 shadowStandaloneHead _ _ = None
 
@@ -16435,13 +16470,13 @@ shadowStandaloneHead _ _ = None
 -- shadowStandaloneHead / inferShadowApp path stays byte-identical.
 shadowStandaloneSpineHeadAt : TcEnv ->
   Expr ->
-  Option (String, List (Ref Route), Expr, List Expr)
+  Option (String, List (Ref (Option Int)), List (Ref Route), Expr, List Expr)
 shadowStandaloneSpineHeadAt env f =
   match shadowStandaloneHead env (appSpineHead f)
     None => None
-    Some (name, tagRefs) =>
+    Some (name, arityRefs, tagRefs) =>
       map
-        (nodes => (name, tagRefs, appSpineHead f, nodes))
+        (nodes => (name, arityRefs, tagRefs, appSpineHead f, nodes))
         (shadowSpineNodesAtImporter name f)
 
 -- a name that is BOTH a registered importer shadow (standaloneValuesRef), has a
@@ -16519,8 +16554,14 @@ ifaceMethodName name =
 -- ⚠️ NOT affected by the S2 inversion: an IMPORTER shadow keeps the per-receiver rule
 -- (Fork 1).  Grounding only decides WHICH head the rule is applied to; a grounded head with
 -- a live impl still dispatches (`isEmpty [1, 2]` → `Foldable.isEmpty`, fixture i4).
-inferShadowApp : TcEnv -> String -> List (Ref Route) -> Expr -> Expr -> Mono
-inferShadowApp env mname tagRefs f x =
+inferShadowApp : TcEnv ->
+  String ->
+  List (Ref (Option Int)) ->
+  List (Ref Route) ->
+  Expr ->
+  Expr ->
+  Mono
+inferShadowApp env mname arityRefs tagRefs f x =
   -- capture the application's loc BEFORE inferring the argument (which moves currentLoc),
   -- so a domain mismatch localizes to the call site, not the argument.
   let dloc = !currentLoc
@@ -16546,8 +16587,8 @@ inferShadowApp env mname tagRefs f x =
       -- T-ERRORS-ACCUM: the diagnostic is the verdict; inference still has to produce a
       -- type for the occurrence, and the standalone is the only denotation this call has
       -- that no admitted declaration disputes the SHAPE of.
-      inferShadowStandaloneArm env mname tagRefs f x tx
-    AdStandalone => inferShadowStandaloneArm env mname tagRefs f x tx
+      inferShadowStandaloneArm env mname arityRefs tagRefs f x tx
+    AdStandalone => inferShadowStandaloneArm env mname arityRefs tagRefs f x tx
     AdDefer => match headTyconMono tx
       -- ARCH B-2.1-g: the S2 impl question, off the GRAPH-GLOBAL substrate — see
       -- `ieImplExistsForHead`.  It used to read the cumulative topological PREFIX
@@ -16557,7 +16598,7 @@ inferShadowApp env mname tagRefs f x =
         if ieImplExistsForHead perRun.value.bodyImplEnvRef.value mname head then
           inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
         else
-          inferShadowStandaloneArm env mname tagRefs f x tx
+          inferShadowStandaloneArm env mname arityRefs tagRefs f x tx
       None =>
         inferApp (envAlphaLets env) (EApp f x) (inferShadowAppHead env f) tx
 
@@ -16566,15 +16607,17 @@ inferShadowApp env mname tagRefs f x =
 -- already reached — one arm, three callers, no second copy to drift.
 inferShadowStandaloneArm : TcEnv ->
   String ->
+  List (Ref (Option Int)) ->
   List (Ref Route) ->
   Expr ->
   Expr ->
   Mono ->
   Mono
-inferShadowStandaloneArm env mname tagRefs f x tx =
+inferShadowStandaloneArm env mname arityRefs tagRefs f x tx =
   match omLookup mname perRun.value.shadowStandaloneSchemesRef.value
     Some sscheme =>
       let smono = instantiate sscheme
+      let _ = stampMethodArities arityRefs (funArity smono)
       let r = freshVar ()
       let eff = openRow ()
       let _ = unify smono (TFun tx eff r)
@@ -16617,13 +16660,14 @@ inferShadowAppHead env f =
 -- applied prefix via inferSpineArgs/inferAppNodes/unifySpineResult.
 inferShadowAppAt : TcEnv ->
   String ->
+  List (Ref (Option Int)) ->
   List (Ref Route) ->
   Expr ->
   List Expr ->
   Expr ->
   Expr ->
   Mono
-inferShadowAppAt env mname tagRefs hd nodes f x =
+inferShadowAppAt env mname arityRefs tagRefs hd nodes f x =
   let dloc = !currentLoc
   let pre = inferSpineArgs env nodes
   let k = listLen pre
@@ -16643,8 +16687,9 @@ inferShadowAppAt env mname tagRefs hd nodes f x =
   match importerAdmittedVerdict perRun.value.bodyImplEnvRef.value mname ats
     AdReject ifs =>
       let _ = pushAmbiguousShadowDecl mname ifs dloc
-      inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx
-    AdStandalone => inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx
+      inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx
+    AdStandalone =>
+      inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx
     AdDefer => match headTyconMono tx
       Some head =>
         if ieImplExistsForHead perRun.value.bodyImplEnvRef.value mname head then
@@ -16653,7 +16698,7 @@ inferShadowAppAt env mname tagRefs hd nodes f x =
             (inferShadowAppHead env hd)
             (pre ++ [(EApp f x, tx)])
         else
-          inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx
+          inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx
       None =>
         inferAppNodes
           (envAlphaLets env)
@@ -16665,6 +16710,7 @@ inferShadowAppAt env mname tagRefs hd nodes f x =
 -- verdicts.
 inferShadowStandaloneArmAt : TcEnv ->
   String ->
+  List (Ref (Option Int)) ->
   List (Ref Route) ->
   Expr ->
   List (Expr, Mono) ->
@@ -16672,10 +16718,11 @@ inferShadowStandaloneArmAt : TcEnv ->
   Expr ->
   Mono ->
   Mono
-inferShadowStandaloneArmAt env mname tagRefs hd pre f x tx =
+inferShadowStandaloneArmAt env mname arityRefs tagRefs hd pre f x tx =
   match omLookup mname perRun.value.shadowStandaloneSchemesRef.value
     Some sscheme =>
       let smono = instantiate sscheme
+      let _ = stampMethodArities arityRefs (funArity smono)
       let r = unifySpineResult smono (map snd pre ++ [tx])
       let _ = stampRoutes tagRefs
       let _ =
@@ -16811,7 +16858,8 @@ recordImporterShadowDictsAt env mname (r :: rest) ats tx =
 -- no-impl receiver falls back to the standalone (RLocal <sym>), exactly like a
 -- definer shadow.  On the un-mangled run/check path the route is RNone (sym ""), so
 -- this branch is inert there and the ordinary definerShadowNames branch governs.
-definerShadowArgHead : Expr -> Option (String, Ref Route, Ref (List Route))
+definerShadowArgHead : Expr ->
+  Option (String, Ref (Option Int), Ref Route, Ref (List Route))
 definerShadowArgHead (ELoc _ f) = definerShadowArgHead f
 -- ⚠️ #54: the two disjuncts carry DIFFERENT gates, because they serve different shadow
 -- KINDS — this predicate is a Fork-1 boundary, not an arity test.  `isDefinerShadow` is
@@ -16826,10 +16874,10 @@ definerShadowArgHead _ = None
 
 definerShadowArgHeadCell : String ->
   EvCell ->
-  Option (String, Ref Route, Ref (List Route))
+  Option (String, Ref (Option Int), Ref Route, Ref (List Route))
 definerShadowArgHeadCell name c
   | isDefinerShadow name || importerShadowOnEmitPath name c.ecTag =
-    Some (name, c.ecTag, c.ecImpl)
+    Some (name, c.ecArity, c.ecTag, c.ecImpl)
   | otherwise = None
 
 -- L4 (xmod-identity #1351 spine, RUN-XMOD-022/026): the mark pass's own per-occurrence
@@ -16905,13 +16953,14 @@ importerShadowOnEmitPath name tagRef =
 -- ALSO pushing the standalone's declared domain (which would mis-route `Box`→`Int`).
 inferDefinerShadowApp : TcEnv ->
   String ->
+  Ref (Option Int) ->
   Ref Route ->
   Ref (List Route) ->
   Expr ->
   Expr ->
   Mono
-inferDefinerShadowApp env name tagRef implRef f x =
-  inferDefinerShadowAppAt env name tagRef implRef f [] f x
+inferDefinerShadowApp env name arityRef tagRef implRef f x =
+  inferDefinerShadowAppAt env name arityRef tagRef implRef f [] f x
 
 -- #1815: the marked twin at an arbitrary dispatch index — the peer of
 -- inferDefinerShadowVarAppAt, and the two must still agree cell-for-cell (S7).  [hd] is
@@ -16921,6 +16970,7 @@ inferDefinerShadowApp env name tagRef implRef f x =
 -- are pushed at THIS node with THAT receiver — "the route must follow the arm".
 inferDefinerShadowAppAt : TcEnv ->
   String ->
+  Ref (Option Int) ->
   Ref Route ->
   Ref (List Route) ->
   Expr ->
@@ -16928,7 +16978,7 @@ inferDefinerShadowAppAt : TcEnv ->
   Expr ->
   Expr ->
   Mono
-inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
+inferDefinerShadowAppAt env name arityRef tagRef implRef hd nodes f x =
   -- #2809: the RECOVERED symbol, not the raw route seed — every use of [sym] below is
   -- a typing decision that presumes "the bare name no longer denotes the standalone"
   -- (see `recoveredShadowSym`).  The two `SKRLocal (routeLocalSym !tagRef)` stamps
@@ -17000,6 +17050,7 @@ inferDefinerShadowAppAt env name tagRef implRef hd nodes f x =
       shadowVarHeadMethodScheme env name hd
     else
       definerShadowHeadType env sym hd
+  arityRef := Some (funArity ft)
   toggles.value.shadowHeadCtxRef := savedShadowHead
   toggles.value.suppressRLocalRecord := savedRLocal
   toggles.value.suppressArgStamp := savedArgStamp
@@ -17530,12 +17581,12 @@ shadowSpineNodesAtImporter name f =
 
 -- the MARKED (run/build) spine arm — peer of definerShadowArgHead.
 definerShadowSpineArgAt : Expr ->
-  Option (String, Ref Route, Ref (List Route), Expr, List Expr)
+  Option (String, Ref (Option Int), Ref Route, Ref (List Route), Expr, List Expr)
 definerShadowSpineArgAt f = match definerShadowArgHead (appSpineHead f)
   None => None
-  Some (name, tagRef, implRef) =>
+  Some (name, arityRef, tagRef, implRef) =>
     map
-      (nodes => (name, tagRef, implRef, appSpineHead f, nodes))
+      (nodes => (name, arityRef, tagRef, implRef, appSpineHead f, nodes))
       (shadowSpineNodesAt name f)
 
 -- the UNMARKED (`check`) spine arm — peer of definerShadowVarHead.
@@ -17683,6 +17734,12 @@ stampRoutes [] = ()
 stampRoutes (r :: rest) =
   r := RLocal (routeLocalSym !r) []
   stampRoutes rest
+
+stampMethodArities : List (Ref (Option Int)) -> Int -> Unit
+stampMethodArities [] _ = ()
+stampMethodArities (r :: rest) arity =
+  r := Some arity
+  stampMethodArities rest arity
 
 -- ── S-1: the shadowing standalone's OWN constraint dicts ──────────────────────
 -- A `=>`-constrained top-level fn whose name collides with a visible interface method
@@ -28870,7 +28927,7 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
     route =>
       let split = binopRouteSplit route
       EApp
-        (EMethodAt "fromInt" "" (mintMethodCellWith (fst split) (snd split)))
+        (EMethodAt "fromInt" "" (mintMethodCellWith 1 (fst split) (snd split)))
         (ELit (LInt n))
 -- Roadmap #18c: rewrite each *stamped* EUnOp (`-` → `negate`) into its Num
 -- method application via EMethodAt, exactly like the EBinOp arm above.  Only
@@ -28898,7 +28955,7 @@ binopMethodApp op l r routeRef =
   let call =
     EApp
       (EApp
-        (EMethodAt method "" (mintMethodCellWith (fst split) (snd split)))
+        (EMethodAt method "" (mintMethodCellWith 2 (fst split) (snd split)))
         l)
       r
   if op == "/=" then EApp (EVar "not") call else call
@@ -28915,7 +28972,7 @@ unopMethodApp : String -> Expr -> Ref Route -> Expr
 unopMethodApp op e routeRef =
   let method = optionOr "negate" (unopMethod op)
   let split = binopRouteSplit !routeRef
-  EApp (EMethodAt method "" (mintMethodCellWith (fst split) (snd split))) e
+  EApp (EMethodAt method "" (mintMethodCellWith 1 (fst split) (snd split))) e
 
 dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
 dictPassDecl names _ (DFunDef pub n pats body)

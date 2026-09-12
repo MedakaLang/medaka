@@ -2220,7 +2220,7 @@ emitExpr e env (CRecordUpdate name base updates) =
   emitRecordUpdate e env name base updates
 emitExpr e env (CVariantUpdate con base updates) =
   emitVariantUpdate e env con base updates
-emitExpr e env (CMethod name route implRoutes methRoutes) =
+emitExpr e env (CMethod name _ route implRoutes methRoutes) =
   emitMethodValue e env name route implRoutes methRoutes
 emitExpr e env (CDict name routes) = emitDictValue e env name routes
 emitExpr e env (CArray es) = emitArrayCreate e env es
@@ -4414,7 +4414,7 @@ intFromIntIdentityArg _ _ _ _ _ = None
 
 headNameIs : CExpr -> String -> Bool
 headNameIs (CVar n _) name = n == name
-headNameIs (CMethod n _ _ _) name = n == name
+headNameIs (CMethod n _ _ _ _) name = n == name
 headNameIs _ _ = False
 
 -- the unboxed-double register for an LTFloatU let-bound CVar (a float-let kept
@@ -5116,7 +5116,7 @@ satOnlyUses name arity (CListSlice a lo hi _) =
 satOnlyUses name arity (CBlock stmts) = satOnlyStmts name arity stmts
 -- a dict/method occurrence names its captured dict PARAMS, never a local
 -- function binding — but read them anyway rather than assume it.
-satOnlyUses name _ (CMethod _ route implRoutes methRoutes) =
+satOnlyUses name _ (CMethod _ _ route implRoutes methRoutes) =
   not (contains name (routeDictNames [] (route :: implRoutes ++ methRoutes)))
 satOnlyUses name _ (CDict _ routes) =
   not (contains name (routeDictNames [] routes))
@@ -5547,7 +5547,7 @@ emitApp e env app =
           emitFallthrough e fname
         else
           emitIndirect e env hd args
-    CMethod name route implRoutes methRoutes =>
+    CMethod name _ route implRoutes methRoutes =>
       match intFromIntIdentityArg name route implRoutes methRoutes args
         Some a => emitExpr e env a
         None =>
@@ -8466,7 +8466,8 @@ restampIfaceDicts : List (String, (String, Int)) ->
   CExpr ->
   CExpr
 restampIfaceDicts tbl iface tag rr (CVar m ad)
-  | iface /= "" && ifaceOfIn tbl m == iface = CMethod m (RKey tag []) rr []
+  | iface /= "" && ifaceOfIn tbl m == iface =
+    CMethod m (methodArityIn tbl iface m) (RKey tag []) rr []
   | otherwise = CVar m ad
 -- An inner same-interface method that method_marker already rewrote to a
 -- `CMethod m RNone` (e.g. `compare` inside the `lt`/`gt`/… Ord defaults) must
@@ -8476,10 +8477,10 @@ restampIfaceDicts tbl iface tag rr (CVar m ad)
 -- (a different element type) is left intact.  The parametric element dicts [rr]
 -- REPLACE the call's empty impl-dicts so the inner `@mdk_impl_<tag>_compare` sees
 -- its leading element-dict params (`reqDictRoutes`); [] preserves the old behaviour.
-restampIfaceDicts tbl iface tag rr (CMethod m RNone irs mrs)
+restampIfaceDicts tbl iface tag rr (CMethod m arity RNone irs mrs)
   | iface /= "" && ifaceOfIn tbl m == iface =
-    CMethod m (RKey tag []) (chooseReqRoutes rr irs) mrs
-  | otherwise = CMethod m RNone irs mrs
+    CMethod m arity (RKey tag []) (chooseReqRoutes rr irs) mrs
+  | otherwise = CMethod m arity RNone irs mrs
 restampIfaceDicts tbl iface tag rr (CApp f a) =
   CApp
     (restampIfaceDicts tbl iface tag rr f)
@@ -8558,12 +8559,18 @@ restampCrossIface : List (String, (String, Int)) ->
   CExpr ->
   CExpr
 restampCrossIface tbl method difs (CVar m ad) = match crossDictSlot tbl difs m
-  Some k => CMethod m (RDict (dictParamNameE method k)) [] []
+  Some k =>
+    CMethod
+      m
+      (methodArityIn tbl (ifaceOfIn tbl m) m)
+      (RDict (dictParamNameE method k))
+      []
+      []
   None => CVar m ad
-restampCrossIface tbl method difs (CMethod m RNone irs mrs) =
+restampCrossIface tbl method difs (CMethod m arity RNone irs mrs) =
   match crossDictSlot tbl difs m
-    Some k => CMethod m (RDict (dictParamNameE method k)) irs mrs
-    None => CMethod m RNone irs mrs
+    Some k => CMethod m arity (RDict (dictParamNameE method k)) irs mrs
+    None => CMethod m arity RNone irs mrs
 restampCrossIface tbl method difs (CApp f a) =
   CApp
     (restampCrossIface tbl method difs f)
@@ -8681,6 +8688,13 @@ ifaceOfIn : List (String, (String, Int)) -> String -> String
 ifaceOfIn tbl m = match lookupAssoc m tbl
   Some (iface, _) => iface
   None => ""
+
+methodArityIn : List (String, (String, Int)) -> String -> String -> Int
+methodArityIn [] iface method =
+  panic "llvm: no declaration for method `\{method}` in interface `\{iface}`"
+methodArityIn ((m, (i, arity)) :: rest) iface method
+  | m == method && i == iface = arity
+  | otherwise = methodArityIn rest iface method
 
 restampBind : List (String, (String, Int)) ->
   String ->
@@ -11408,13 +11422,13 @@ leadingDictPats _ = 0
 methodBodyDeficit : Emit -> CExpr -> Int
 methodBodyDeficit e (CLet _ _ _ b) = methodBodyDeficit e b
 methodBodyDeficit e (CLetGroup _ b) = methodBodyDeficit e b
-methodBodyDeficit e (CMethod name route _ _) = methodArityOfRoute e name route
+methodBodyDeficit e (CMethod name _ route _ _) = methodArityOfRoute e name route
 methodBodyDeficit e (CDict name routes) =
   maxInt 0 (fnArity e name - listLen routes)
 methodBodyDeficit e app =
   let (hd, args) = flattenApp app []
   match hd
-    CMethod name route _ _ =>
+    CMethod name _ route _ _ =>
       maxInt 0 (methodArityOfRoute e name route - listLen args)
     CDict name routes =>
       maxInt 0 (fnArity e name - listLen routes - listLen args)
@@ -12930,7 +12944,7 @@ typeOf sigs env app =
   match hd
     CVar fname _ => if hasArgs args then callRetTy sigs fname else LTInt
     CDict fname _ => callRetTy sigs fname
-    CMethod fname _ _ _ => callRetTy sigs fname
+    CMethod fname _ _ _ _ => callRetTy sigs fname
     _ => LTInt
 
 -- the return type of a known function from the sig table (Int if unknown).
@@ -14926,7 +14940,7 @@ ctag (CStringIndex _ _) = "CStringIndex"
 ctag (CStringSlice _ _ _ _) = "CStringSlice"
 ctag (CListIndex _ _) = "CListIndex"
 ctag (CListSlice _ _ _ _) = "CListSlice"
-ctag (CMethod _ _ _ _) = "CMethod (typeclass dispatch)"
+ctag (CMethod _ _ _ _ _) = "CMethod (typeclass dispatch)"
 ctag (CDict _ _) = "CDict (dictionary)"
 ctag (CVariantUpdate _ _ _) = "CVariantUpdate (named-field variant update)"
 ctag _ = "?"
