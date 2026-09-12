@@ -690,7 +690,12 @@ braceHexGo st seen acc =
         None
       Some v =>
         advance st
-        braceHexGo st (seen + 1) (acc * 16 + v)
+        -- Once `acc` is already above the Unicode maximum, stop multiplying:
+        -- an unbounded `\u{...}` (any number of hex digits) would otherwise
+        -- wrap a 63-bit accumulator back into a valid-looking codepoint
+        -- instead of tripping the `code > maxCode` check below, silently
+        -- compiling a pattern that matches an unrelated character.
+        braceHexGo st (seen + 1) (if acc > maxCode then acc else acc * 16 + v)
 
 parseSet : PState -> Node
 parseSet st =

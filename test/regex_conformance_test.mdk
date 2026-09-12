@@ -400,6 +400,12 @@ errRows = [
   ("\\u{41", Some "\\u{ is missing its closing brace"),
   ("\\u{}", Some "\\u{} needs at least one hexadecimal digit"),
   ("\\u{110000}", Some "codepoint is above the Unicode maximum"),
+  -- A run of hex digits long enough to overflow the accumulator must still
+  -- reject as above-maximum, never wrap around into a valid-looking
+  -- codepoint (regression: an unguarded `acc * 16 + v` wrapped this to a
+  -- match against U+0000).
+  ("\\u{10000000000000000}", Some "codepoint is above the Unicode maximum"),
+  ("\\u{FFFFFFFFFFFFFFFFF}", Some "codepoint is above the Unicode maximum"),
   -- A `{` that opens no valid bound is a literal `{`, as in RE2, so these
   -- are accepted rather than rejected.
   ("a{", None),
