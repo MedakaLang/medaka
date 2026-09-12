@@ -723,7 +723,13 @@ print x = putStr (display x)
 
    The arithmetic operators are built in for `Int` and `Float`; on any other
    type, `+`, `-`, `*`, `/`, and `%` dispatch to `add`, `sub`, `mul`, `div`,
-   and `rem`. `div` truncates for `Int` and is true division for `Float`. -}
+   and `rem`. `div` truncates for `Int` and is true division for `Float`.
+   `rem` keeps the dividend's sign for a nonzero result.
+
+   > rem (-7) 3
+   -1
+   > rem 5.5 2.0
+   1.5 -}
 export interface Num a requires Eq a where
   add : a -> a -> a
   sub : a -> a -> a

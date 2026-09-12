@@ -152,7 +152,7 @@ and prepended to every program by the compiler.
 - ✅ `Monoid a` requires `Semigroup a` — semigroup with identity element
   - `empty : a` — identity such that `append empty x == x == append x empty`
 
-- ✅ `Num a` requires `Eq a` — numeric arithmetic (backs `+`/`-`/`*`/`/`)
+- ✅ `Num a` requires `Eq a` — numeric arithmetic (backs `+`/`-`/`*`/`/`/`%`; `rem` supplies signed remainder)
   - `add : a -> a -> a` — addition
   - `sub : a -> a -> a` — subtraction
   - `mul : a -> a -> a` — multiplication
