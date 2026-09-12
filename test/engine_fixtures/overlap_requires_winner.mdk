@@ -1,0 +1,29 @@
+-- #1125 acceptance regression. `Box (List a)` is strictly more specific than
+-- `Box a`, so its `requires Tag a` evidence must reach the selected method body.
+-- The correct result is independently derived from `impl Tag Int` below.
+interface Tag a where
+  tagOf : a -> String
+
+impl Tag Int where
+  tagOf _ = "INT"
+
+interface Speak a where
+  speak : a -> String
+  speak _ = "DEFAULT"
+
+data Box a = Box a
+
+impl Speak (Box a) where
+  speak _ = "general"
+
+impl Speak (Box (List a)) requires Tag a where
+  speak (Box xs) = match xs
+    [] => "specific:empty"
+    y :: _ => "specific:" ++ tagOf y
+
+use : Speak a => a -> String
+use x = speak x
+
+main =
+  println "START"
+  println (use (Box [1, 2]))

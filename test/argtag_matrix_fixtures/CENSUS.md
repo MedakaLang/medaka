@@ -132,8 +132,11 @@ predicts:
   dict, its selection is `A1`'s.
 - **`A2` (equal tag sets) is `undecidable-by-construction` and now SAYS SO on the native
   engine too**: the binary builds and traps with `E-AMBIGUOUS-DISPATCH` on the first
-  receiver — the same retimed refusal `A6` records — instead of the emitter panicking about
-  a `fromInt` the program never mentions.
+  receiver, instead of the emitter panicking about a `fromInt` the program never mentions.
+- **Both `A6` cells are now `decidable`.** Their top-level inferred `go` carries the
+  complete `Wrap f` predicate as a dictionary parameter, and each ground call supplies
+  the exact `Wrap (Pair Int)` or `Wrap (Pair String)` dictionary. The historical fixture
+  names record the old route; neither call now reaches the arg-tag chain.
 - **`A3`/`A4` (a receiver with no cell tag) stay `undecidable-by-construction`**; the build
   still aborts, now with the emitter naming the actual reason (`arg-tag dispatch on impl
   type that owns no constructors`) instead of the `fromInt` panic.
@@ -142,17 +145,18 @@ predicts:
   139 — the shell's 128+SIGSEGV convention, not a code the binary chose), loud on both
   engines.
 
-The control is unchanged. So the information needed to dispatch is present, the group/tag
-machinery handles it, and the ONLY shapes the arg-tag route cannot decide are the ones
-where the tag is strictly weaker than the type identity (`A2`) or absent (`A3`/`A4`) —
-which no narrowing of the pin could ever reach, and which now fail loudly on both engines.
+The control is unchanged. Where a call still reaches the arg-tag route, the only shapes it
+cannot decide are the ones where the tag is strictly weaker than the type identity (`A2`)
+or absent (`A3`/`A4`). The `A6` calls now carry exact predicate evidence and bypass that
+route entirely; this is why their same-head types are distinguishable without weakening
+the `A2` controls.
 
 **Consequence for #2032's fix order.** The narrowing is NOT blocked on #1082 for the
 disjoint-head shapes: `A1__B1`, `A1__B2`, `A1__B3` and `A5__B2` are correct on the native
 engine as built. The shape #1046 names (`A1__B2`, one method-less impl) answers correctly
 here. What remains is the `requires`-body failure (`A5__B1`, the #1082 shape proper) and
-the undecidable classes, which any narrowing must keep pinned — or route by a different
-mechanism — exactly as `docs/KNOWN-GAPS.md` says.
+the `A2`/`A3`/`A4` undecidable classes, which any narrowing must keep pinned — or route
+by a different mechanism — exactly as `docs/KNOWN-GAPS.md` says.
 
 ## Classification vocabulary
 
@@ -209,8 +213,8 @@ it not having done so.
 | `A4…__B2_one_default` | undecidable | `meow\|int` | ✅ `meow\|int` | build aborts (no cell tag), exit 1 |
 | `A5…__B1_both_defined` | bug | `[meow]\|meow` | E-PANIC, exit 1 | builds; memory fault, exit 139 |
 | `A5…__B2_one_default` | decidable | `box\|meow` | ✅ `box\|meow` | ✅ `box\|meow` |
-| `A6…__no_local` | undecidable | `1\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
-| `A6…__one_default` | undecidable | `9\|2` | E-AMBIGUOUS-DISPATCH, exit 1 | builds; E-AMBIGUOUS-DISPATCH at run, exit 1 |
+| `A6…__no_local` | decidable | `1\|2` | ✅ `1\|2` | ✅ `1\|2` |
+| `A6…__one_default` | decidable | `9\|2` | ✅ `9\|2` | ✅ `9\|2` |
 | `A7…__one_default` | decidable | `9\|2` | ✅ | ✅ |
 | `CONTROL…__not_pinned` | decidable | `woof\|meow//woof\|meow` | ✅ | ✅ |
 
@@ -285,9 +289,10 @@ Re-deriving `boxint|boxint` here would be a regression, not a repair.
 not.** The native side used to abort the whole build with the emitter's own `fromInt`
 panic — a symptom of the pinned local's narrowed numeric literal, not of this cell (see §
 headline result). It now BUILDS at exit 0 and traps with `E-AMBIGUOUS-DISPATCH` on the
-first receiver: the retimed refusal `A6__no_local` documents, reached here through the
-local instead of the bare chain. The correct answer is unreachable on this route either
-way; what changed is that both engines now say so at the same phase.
+first receiver. The correct answer is unreachable on this route either way; what changed
+is that both engines now say so at the same phase. `A6__no_local` used to exercise the
+same retimed refusal, but now bypasses the route with an exact predicate dictionary; its
+section below explains why that does not change this local-binding cell.
 
 ### A2_same_head_diff_args__B2_one_default
 
@@ -365,100 +370,53 @@ shows the body failure is what remains once selection is made trivial.
 
 ### A6_same_head_chain_reached__no_local
 
-**`undecidable-by-construction`** — and the cell the original ten did not contain: the
-head collision reaching the NATIVE ARG-TAG CHAIN, with no `let`-local and therefore no
-pin, no hatch, and no `#1082` monomorphisation anywhere in the story.
+**`decidable`.** The historical name records the route this source used before complete
+inferred predicate slots landed. `go` has the principal scheme
+`Wrap f => f a -> Int`; as a top-level binding it can abstract that predicate. Its slot
+now retains the known argument vector `[f]`, so the two calls instantiate and pass two
+different dictionaries: `Wrap (Pair Int)` and `Wrap (Pair String)`.
 
-Every A2 cell routes its collision through a pinned local, and a pinned local is resolved
-to ONE impl *before emit* — the marker stamps a single impl key on the lifted lambda's one
-shared call site, so `emitArgDispatchChain` is never entered and the collision is
-unobservable in IR. That was the S-3 spike's finding, and it is why the native halves of
-`A2`/`A3`/`A4` all read "build aborts" rather than showing a chain. This cell removes the
-local: `Wrap` is HIGHER-KINDED, so `go`'s constraint is not dict-abstracted and `wsize`
-falls through to the arg-tag route with the receiver's runtime tag as its only evidence.
+The emitted shape makes the new classification falsifiable. At base `42a672d04`, `go`
+was `go(value)` and its body contained an arg-tag chain whose two `Pair` arms both called
+`@mdk_dispatch_ambiguous`; eval and the native executable exited 1. On the repaired source,
+`go` is `go(dict, value)`, its body calls `@mdk_disp_wsize_0_1(dict, value)`, and the two
+call sites supply distinct canonical dictionary constants. The dispatcher matches those
+keys to the exact `Pair Int` and `Pair String` rows. Both engines therefore print the
+hand-derived `1|2` at exit 0.
 
-**Measured at base `919096b82`, before the S-3 guards** — the chain was built, and both
-of its arms tested the SAME constant:
-
-```
-argyes10:  call @mdk_impl_…Wrap_7c__28_Pair_20_Int_29__7c__wsize   -- icmp eq %t6, 21474836480
-argnext10: %t12 = icmp eq i64 %t6, 21474836480                     -- the identical tag
-argyes13:  call @mdk_impl_…Wrap_7c__28_Pair_20_String_29__7c__wsize -- dead code
-```
-
-The binary printed `1` twice at exit 0 where the semantics say `1` then `2`; `medaka run`
-printed `1` twice as well. That is the silent fold this corpus exists to name, observed on
-the arg-tag chain itself rather than inferred from it.
-
-Both engines now refuse loudly. The class stays `undecidable-by-construction`: the
-runtime constructor tag is strictly weaker than the type identity the choice needs, and no
-narrowing of `T-LOCAL-CONSTRAINED-MONO` can reach this cell at all — it is not in the
-pinned region.
-
-⚠️ **This cell's `build`/`exec` lines MOVED in #2445 F-1-v2, and the class did not.**
-S-3 landed the native half as a `gapE` REFUSAL of the whole `medaka build` (exit 1, no
-binary). That refusal could not be scoped, and F-1 measured why: a program that declares
-these same colliding impls but never CONSTRUCTS a `Pair` receiver presents an IDENTICAL
-static candidate set at `emitArgTagRoute` — a duplicate `Pair`-tagged arm in the chain
-about to be emitted — yet is perfectly decidable and must build. The two differ only in
-a whole-program receiver-reachability fact the emitter does not have, so any static test
-that refuses this cell also refuses that correct program.
-
-The loudness is therefore RETIMED rather than scoped: the chain is emitted as normal and
-only the arms at a colliding head carry `@mdk_dispatch_ambiguous` instead of their impl
-call. This cell now BUILDS at exit 0 and traps at exit 1 on the first `go (Pair 1 True)`,
-before printing anything. That is the same verdict at a later phase — the cell is no more
-decidable than it was — and it scopes the guard by ACTUAL receiver, exactly the way eval's
-`checkArgTagDecidable` already did. Re-deriving a build-time refusal here would restore a
-false positive on unreachable collisions; re-deriving `1|1` would restore the S0.
-
-⚠️ **Honest limit.** `declHeadOfRouteWord` answers `""` when the driver's decl-derived
-heads table (`e.input.ifaceImplHeads`) is empty, so a driver that never lowered through
-`lowerImpls` sees only the group heads and still emits the silent chain. This cell pins
-the installed path, which is every path `medaka build`/`run` take today; it is a floor,
-not a proof.
+This does not reclassify A2. Its constrained helper is local and, under the unpin hatch,
+has no top-level predicate abstraction from which a complete dictionary can be passed.
+It still reaches the arg-tag route, where one `Box` constructor tag cannot distinguish
+`Box Int` from `Box String`. A6 is decidable because it no longer asks that route to make
+the decision.
 
 ### A6_same_head_chain_reached__one_default
 
-**`undecidable-by-construction`**, and the RAW LEG of the native guard — the one leg
-nothing else in this corpus reaches on the chain path. `A6__no_local` with the `Pair Int`
-impl left method-less, so the interface default supplies `wsize` for it.
+**`decidable`.** This is the inherited-default twin of `A6__no_local`. The `Pair Int`
+instance contributes no explicit `wsize` body, but it still contributes the exact
+`Wrap (Pair Int)` dictionary selected at the first call. The dictionary dispatcher sends
+that key to the interface default, while the distinct `Wrap (Pair String)` key reaches the
+explicit body returning `2`. Eval and native therefore print the hand-derived `9|2`.
 
-The mechanism is worth stating because it is where a plausible fix fails OPEN. The
-inheriting impl contributes no `CImplEntry`, so `implGroupsForMethod` yields exactly ONE
-group here and a duplicate test over the group tags alone finds no collision at all — it
-would emit a single-arm chain and silently answer `2|2`. The second `Pair` lives in `raw`
-(the interface's declared route words minus what this method's entries cover), and `raw`'s
-words are canonical KEYS at a collision, precisely because `declRouteKey` mints the bare
-head only when the head IS unique. So `main::Wrap|(Pair Int)|` never string-compares equal
-to the group's bare `Pair`, and a duplicate test over `map groupTag groups ++ raw` reports
-"no collision" on exactly the shape the guard exists to catch. `declHeadOfRouteWord` maps
-each raw word back to its head first, which is what keeps this cell loud.
-
-Both engines refuse loudly on the first `go (Pair 1 True)`: eval at check-free run time
-via `checkArgTagDecidable`, the binary via the retimed `@mdk_dispatch_ambiguous` arm. The
-correct answer, `9|2`, needs the type identity behind the `Pair` tag and is unreachable on
-this route whichever impl spelling is used — which is the same statement `A2__B2` makes
-about axis B, made here on the chain rather than before it.
+At base `42a672d04`, both calls lacked the dictionary parameter and reached the raw/group
+arg-tag guard, producing `E-AMBIGUOUS-DISPATCH`. The repaired `go(dict, value)` shape
+removes that decision from the raw leg. `A2__B2` remains the control for a local occurrence
+that still reaches a same-head arg-tag route and must stay loud.
 
 ### A7_distinct_heads_chain_reached__one_default
 
-**`decidable`, and the NEGATIVE CONTROL for `A6__one_default`.** Every ingredient of that
-cell is present — a non-empty `raw` leg, an inheriting declared impl, the arg-tag chain
-route, a higher-kinded interface, no `let`-local — with the collision removed: the
-inheriting impl sits at `Solo` and the defining one at `Pair Int`, two distinct runtime
-constructor tags.
+**`decidable`, and the historical negative control for `A6__one_default`'s old raw-leg
+route.** It now follows the same repaired predicate path as A6: top-level `go` receives an
+exact dictionary. The inheriting instance sits at `Solo` and the defining one at
+`Pair Int`, so the two call sites pass distinct `Wrap Solo` and `Wrap (Pair Int)` evidence.
+Correct remains `9|2` on both engines.
 
-It exists because the retimed guard's failure mode in the other direction is invisible
-without it. A guard that trapped on the mere PRESENCE of a raw entry, or that compared
-raw's route words against head tags by the wrong ruler and matched something, would fire
-here and be wrong to — and it would look exactly like the correct behaviour on
-`A6__one_default`. Correct on both engines (`9` then `2`).
-
-**If this cell ever goes red the guard over-fires, not the region** — it is not evidence
-about #2032. Note it is also the one `B2` cell in the corpus whose native default arm is
-CORRECT; `A1__B2` and `A5__B2` answer with the defining impl's body at exit 0, which is
-their own separate `bug` and not this cell's business.
+The cell no longer exercises the arg-tag raw leg, and this census does not claim it does.
+It remains a useful control for the feature A6/B2 varies: one instance inherits the
+interface default while the other defines the method, across two distinct heads. A
+regression that collapsed complete `Wrap f` predicate slots or lost the inherited row
+would move it. It is also the one `B2` cell in the corpus whose native default arm is
+correct; the other B2 cells exercise separate mechanisms described above.
 
 ### CONTROL_toplevel_helper__not_pinned
 
@@ -489,4 +447,3 @@ unresolved and the emitter panicked on the second receiver. With the hatch reach
 emitter the panic is gone: `A2` builds and traps at run time with `E-AMBIGUOUS-DISPATCH`,
 and `A3`/`A4` abort the build naming the actual reason — a primitive receiver carries no
 cell tag.
-

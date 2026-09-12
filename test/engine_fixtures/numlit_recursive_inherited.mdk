@@ -1,0 +1,6 @@
+-- #2768 acceptance regression. The unsigned recursive group in the sibling
+-- module inherits its Num predicate through a promoted non-member. All engines
+-- must agree with the hand-derived result r1 3 = 6.
+import numlit_recursive_inherited.lib.{r1}
+
+main = println (r1 (3 : Int))
