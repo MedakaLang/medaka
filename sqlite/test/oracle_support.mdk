@@ -150,6 +150,23 @@ expectLines expected actual =
       (join "\n" expected)
       (join "\n" actual)
 
+{- | `e`, with `label` prefixed onto its message when it is a `Fail`.
+
+   For a comparison run under a label (which table, which database pair) the
+   label needs to travel WITH the failure message, not sit beside it — a
+   caller that only forwards the first `Fail` out of several labelled
+   comparisons (`test.expectAll`) would otherwise print a message with no way
+   to tell which comparison it came from.
+
+   > labelFail "t1" (Pass "a" "a")
+   Pass "a" "a"
+   > labelFail "t1" (Fail "line 1: expected \"a\" but got \"b\"" "a" "b")
+   Fail "t1: line 1: expected \"a\" but got \"b\"" "a" "b" -}
+export
+labelFail : String -> Expectation -> Expectation
+labelFail _ (Pass e a) = Pass e a
+labelFail label (Fail m e a) = Fail "\{label}: \{m}" e a
+
 countMsg : List String -> String
 countMsg ls = match length ls
   1 => "1 line"

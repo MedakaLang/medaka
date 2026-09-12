@@ -877,45 +877,15 @@ corpus = []
 toolchain = ["node>=24"]
 
 [[gate]]
-name = "sqlite/test/delete_negative_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/delete_negative_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/delete_oracle"
-area = "engines"
-shard = "gates_5"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/delete_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
 shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/dml_oracle.sh"
+kind = "native"
+migration = "done"
+run = "sqlite/test/dml_oracle_test.mdk"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []
@@ -1041,36 +1011,6 @@ cost = "medium"
 kind = "exec"
 migration = "split-first"
 run = "sqlite/test/sql_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/update_expr_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/update_expr_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/update_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/update_oracle.sh"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []
@@ -3594,7 +3534,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_closure_alloc"
 area = "backend"
-shard = "gates_7"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
