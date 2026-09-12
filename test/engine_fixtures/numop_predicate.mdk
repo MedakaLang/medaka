@@ -5,7 +5,7 @@
 
 import numop_predicate.box.{Box(..)}
 import numop_predicate.num.{numReady}
-import numop_predicate.foreign.{add, sub, mul, div, rem}
+import numop_predicate.foreign.{add, rem}
 
 signedAdd : Num a => a -> a -> a
 signedAdd x y = x + y

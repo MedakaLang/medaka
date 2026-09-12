@@ -2,7 +2,7 @@
 -- these independent imports must not change the operator's prelude Num identity.
 -- lint-disable-file rule-missing-signature
 
-import numop_predicate.foreign.{add, sub, mul, div, rem}
+import numop_predicate.foreign.{add, rem}
 import numop_predicate.box.{Box(..)}
 import numop_predicate.num.{numReady}
 

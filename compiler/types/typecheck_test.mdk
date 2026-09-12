@@ -6,6 +6,10 @@ import test.{expectAll, expectEqual}
 import frontend.ast.{Loc(..), Route(..), TyConOrigin(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
+import eval.eval.{Value(..), evalOne}
+import ir.core_ir_lower.{lowerProgram}
+import ir.core_ir_sexp.{cprogramToSexp}
+import string as Str
 import types.evidence.{EvidenceBinderId(..), ScopeId}
 import types.repr.{Scheme(..), ppMono, ppScheme}
 import types.typecheck.{
@@ -24,6 +28,7 @@ import types.typecheck.{
   checkOneSchemeFullK,
   checkProgramDiags,
   elaborateDict,
+  elaborateOne,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
   finishNumericPredicateTrace,
@@ -32,7 +37,7 @@ import types.typecheck.{
   tcCode,
   tcMsg,
 }
-import support.util.{contains, joinNl, listLen}
+import support.util.{contains, joinNl, listLen, lookupAssoc}
 
 data NumericTraceView = NumericTraceView {
   ntvStage : NumericPredicateTraceStage,
@@ -640,28 +645,22 @@ arithmeticImportedObserved reverseOrder =
       "import arithmetic_shape.{Box}",
       "export interface Forge a where",
       "  add : a -> a -> a",
-      "  sub : a -> a -> a",
-      "  mul : a -> a -> a",
-      "  div : a -> a -> a",
       "  rem : a -> a -> a",
       "impl Forge (Box a) where",
       "  add x _ = x",
-      "  sub x _ = x",
-      "  mul x _ = x",
-      "  div x _ = x",
       "  rem x _ = x",
     ],
   )
   let imports =
     if reverseOrder then
       [
-        "import arithmetic_forge.{Forge, add, sub, mul, div, rem}",
+        "import arithmetic_forge.{Forge, add, rem}",
         "import arithmetic_numeric",
       ]
     else
       [
         "import arithmetic_numeric",
-        "import arithmetic_forge.{Forge, add, sub, mul, div, rem}",
+        "import arithmetic_forge.{Forge, add, rem}",
       ]
   let entry = (
     "arithmetic_entry",
@@ -722,14 +721,27 @@ test "arithmetic collision imports select the exact Num row and prerequisites" =
     expectEqual forward backward,
     expectEqual
       [
-        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
-        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
-        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
-        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
-        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
+        (
+          "binding:remValue",
+          "core::Num",
+          "core::Num",
+          "core::Num|(Box a)|[]",
+          ["Int[]"],
+        ),
+        ("binding:divValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
+        ("binding:mulValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
+        ("binding:subValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
+        (
+          "binding:addValue",
+          "core::Num",
+          "core::Num",
+          "core::Num|(Box a)|[]",
+          ["Int[]"],
+        ),
       ]
       (map
         (view => (
+          view.ntvOwner,
           view.ntvInterface,
           view.ntvSelectedIdentity,
           view.ntvRoute,
@@ -942,6 +954,220 @@ test "inferred numeric results still default without a declared caller channel" 
     expectEqual [(0, "Int")] (fst literal),
     expectEqual [(0, "Int -> Int")] (fst helper),
   ]
+
+localNumBlockRecSource : String
+localNumBlockRecSource = joinNl [
+  "value : Num a => a -> a",
+  "value x =",
+  "  let local _ = x + 0",
+  "  local ()",
+]
+
+localNumBlockLetSource : String
+localNumBlockLetSource = joinNl [
+  "value : Num a => a -> a",
+  "value x =",
+  "  let local = x + 0",
+  "  local",
+]
+
+localNumInferRecSource : String
+localNumInferRecSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = let local _ = x + 0 in local ()",
+]
+
+localNumInferLetSource : String
+localNumInferLetSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = let local = x + 0 in local",
+]
+
+localNumGroupSource : String
+localNumGroupSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = local ()",
+  "  where",
+  "    local _ = x + 0",
+]
+
+localNumFinalizedScheme : String -> List (Int, String)
+localNumFinalizedScheme source = fst (declaredNumSchemeObserved None source)
+
+test "block recursive let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumBlockRecSource)
+
+test "block let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumBlockLetSource)
+
+test "inline recursive let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumInferRecSource)
+
+test "inline let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumInferLetSource)
+
+test "where group preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumGroupSource)
+
+localNumInferredBlockRecSource : String
+localNumInferredBlockRecSource = joinNl [
+  "value x =",
+  "  let local _ = x + 0",
+  "  local ()",
+]
+
+localNumInferredBlockLetSource : String
+localNumInferredBlockLetSource = joinNl [
+  "value x =",
+  "  let local = x + 0",
+  "  local",
+]
+
+localNumInferredInferRecSource : String
+localNumInferredInferRecSource = "value x = let local _ = x + 0 in local ()\n"
+
+localNumInferredInferLetSource : String
+localNumInferredInferLetSource = "value x = let local = x + 0 in local\n"
+
+localNumInferredGroupSource : String
+localNumInferredGroupSource = joinNl [
+  "value x = local ()",
+  "  where",
+  "    local _ = x + 0",
+]
+
+test "each local boundary retains an inferred outer numeric root" =
+  expectEqual
+    [
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+    ]
+    [
+      localNumFinalizedScheme localNumInferredBlockRecSource,
+      localNumFinalizedScheme localNumInferredBlockLetSource,
+      localNumFinalizedScheme localNumInferredInferRecSource,
+      localNumFinalizedScheme localNumInferredInferLetSource,
+      localNumFinalizedScheme localNumInferredGroupSource,
+    ]
+
+blockRecEvalValue : Float
+blockRecEvalValue =
+  let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
+  let core = desugar (parse arithmeticPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("block_rec_eval", program)
+  let bindings = evalOne [] ("block_rec_eval", elaborated)
+  match lookupAssoc "main" bindings
+    Some (VFloat value) => value
+    _ => 0.0
+
+test "block recursive let executes with its captured Num dictionary" =
+  expectEqual 1.5 blockRecEvalValue
+
+test "block recursive arithmetic retains the outer predicate and route" =
+  let (errors, trace, assumptions) =
+    arithmeticTraceObserved localNumBlockRecSource
+  let arithmetic = filter (view => view.ntvStage == NPTArithmetic) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [("core::Num", ["a"], "binding:local", True, [])]
+      (map
+        (view => (
+          view.ntvInterface,
+          view.ntvArguments,
+          view.ntvOwner,
+          view.ntvGiven,
+          view.ntvPrerequisites,
+        ))
+        arithmetic),
+    expectEqual
+      [
+        ("binding:local", "binding:value", 0),
+        ("binding:local", "binding:value", 0),
+      ]
+      assumptions,
+  ]
+
+blockRecCoreSexp : String
+blockRecCoreSexp =
+  let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
+  let core = desugar (parse arithmeticPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("block_rec_core", program)
+  cprogramToSexp (lowerProgram elaborated)
+
+test "block recursive Core keeps dictionary methods inside the captured closure" = expectAll
+  [
+    expectEqual True (Str.contains "(CSLet true" blockRecCoreSexp),
+    expectEqual True (Str.contains "(CLam" blockRecCoreSexp),
+    expectEqual True (Str.contains "(CMethod \"add\" (RDict" blockRecCoreSexp),
+    expectEqual
+      True
+      (Str.contains "(CMethod \"fromInt\" (RDict" blockRecCoreSexp),
+    expectEqual False (Str.contains "(CBinPrim \"+\"" blockRecCoreSexp),
+  ]
+
+localNumOwnSource : String
+localNumOwnSource = joinNl [
+  "blockRec _ =",
+  "  let local _ = 1",
+  "  local ()",
+  "blockLet _ =",
+  "  let local = 1",
+  "  local",
+  "inferRec _ = let local _ = 1 in local ()",
+  "inferLet _ = let local = 1 in local",
+  "group _ = local ()",
+  "  where",
+  "    local _ = 1",
+]
+
+test "each local boundary defaults its own numeric root to Int" =
+  let (_, schemes) = checkOneSchemeFullK None [] (desugar
+    (parse numericPreludeSource)) (
+    "local_numeric_own",
+    desugar (parseLocated localNumOwnSource),
+  )
+  let observed = map (entry => (fst entry, ppScheme (snd entry))) schemes
+  expectEqual
+    [
+      ("blockRec", "a -> Int"),
+      ("blockLet", "a -> Int"),
+      ("inferRec", "a -> Int"),
+      ("inferLet", "a -> Int"),
+      ("group", "a -> Int"),
+    ]
+    observed
+
+localNumMismatchCodes : String -> List String
+localNumMismatchCodes body =
+  declaredNumErrorCodes
+    (joinNl [
+      "value : Num a => a -> (a, Bool)",
+      body,
+    ])
+
+test "local numeric ownership does not admit explicit result mismatches" =
+  expectEqual
+    [
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+    ]
+    [
+      localNumMismatchCodes "value x =\n  let local _ = x + 0\n  (local (), 1)",
+      localNumMismatchCodes "value x =\n  let local = x + 0\n  (local, 1)",
+      localNumMismatchCodes "value x = let local _ = x + 0 in (local (), 1)",
+      localNumMismatchCodes "value x = let local = x + 0 in (local, 1)",
+      localNumMismatchCodes
+        "value x = (local (), 1)\n  where\n    local _ = x + 0",
+    ]
 
 data TraceView = TraceView {
   tvKind : AssumptionTraceKind,
