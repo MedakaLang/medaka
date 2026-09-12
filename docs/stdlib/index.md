@@ -607,6 +607,8 @@ TCP connections and name resolution.
 
 ## [`net_async`](net_async.md)
 
+- [`connect`](net_async.md#connect)
+- [`connectWithin`](net_async.md#connectwithin)
 - [`accept`](net_async.md#accept)
 - [`recv`](net_async.md#recv)
 - [`recvWithin`](net_async.md#recvwithin)
@@ -700,6 +702,8 @@ The host primitives.
 - [`ioPoll`](runtime.md#iopoll)
 - [`netSetNonblock`](runtime.md#netsetnonblock)
 - [`netTryAccept`](runtime.md#nettryaccept)
+- [`netConnectStart`](runtime.md#netconnectstart)
+- [`netConnectCheck`](runtime.md#netconnectcheck)
 - [`netTryRecv`](runtime.md#nettryrecv)
 - [`netTrySend`](runtime.md#nettrysend)
 - [`netTrySendFrom`](runtime.md#nettrysendfrom)

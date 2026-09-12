@@ -18,16 +18,21 @@
    driver is an observer, and an observer that refused a call could hide a
    defect behind its own refusal.
 
-   Two modes:
+   Three modes:
 
      appview_stub_main answer PORT LOGFILE STATUS
      appview_stub_main stall PORT
+     appview_stub_main deaf PORT
 
    `answer` serves one call at a time — read, log, reply, close — which is all
    a sequential gate needs, and replies with `STATUS` so a case can prove the
    upstream's own status code is relayed rather than replaced. `stall` accepts
    and never answers: it is the head-of-line-blocking case's upstream, and the
    claim under test there is about the PDS's scheduler, not about this driver.
+   `deaf` never accepts at all and fills its own accept queue until the kernel
+   stops answering handshakes, which is the only state in which a LOOPBACK dial
+   hangs rather than completing or being refused — the upstream a case about
+   the PDS's connect needs.
 
    `PORT` may be 0, in which case the kernel picks one and the readiness line
    on stdout names it — the same contract `pds/serve.mdk` has with this gate,
@@ -231,12 +236,85 @@ stallCall conn = match recvAll conn
   Err _ => Ok ()
   Ok _ => Ok ()
 
-ready : Listener -> <IO, Net "_"> Unit
+-- Announces the bound port and hands it back, so a mode that needs the port
+-- itself does not ask for it a second time and risk naming a different one in
+-- its own output than the gate read from this line.
+ready : Listener -> <IO, Net "_"> Int
 ready lis = match listenPort lis
   Err message => panic "appview_stub: listener port unavailable: \{message}"
   Ok port =>
     let () = println "appview-stub: listening on 127.0.0.1:\{intToString port}"
+    let () = flushStdout ()
+    port
+
+{- | How long one `deaf` dial is given to complete before the accept queue is
+   taken to be full. A loopback handshake the kernel answers completes in
+   microseconds, so this is three orders of magnitude of slack. -}
+dialProbeMs : Int
+dialProbeMs = 300
+
+{- | How many dials `deaf` will make looking for the queue's edge. The kernel
+   takes the listen backlog plus one before it starts dropping handshakes
+   (`listen(fd, 128)`, `stdlib/net.mdk`), so this is comfortably past it while
+   still terminating if a future kernel queues far more. -}
+backlogDialAttempts : Int
+backlogDialAttempts = 512
+
+{- | Whether a dial to this box's own `port` finishes its handshake inside
+   `dialProbeMs`.
+
+   The readiness externs are used directly, rather than `net`'s blocking
+   `connect`, because the question is exactly the one a blocking connect cannot
+   answer: a dial into a FULL accept queue is not refused — the kernel drops
+   the handshake and `connect(2)` waits minutes on SYN retries — so a driver
+   that dialled with `net.connect` would itself hang at the edge it is looking
+   for, with nothing left to report the edge with.
+
+   A socket whose handshake never completed is deliberately left open: the
+   queue stays full only while those requests keep retransmitting, and closing
+   them would let the next dial through — including the PDS's, which is the
+   dial the case needs to hang. -}
+dialCompletes : Int -> <Net "_"> Bool
+dialCompletes port = match netConnectStart "127.0.0.1" port
+  Err message => panic "appview_stub: deaf dial failed: \{message}"
+  Ok fd => match ioPoll [|fd|] [|2|] dialProbeMs
+    Err message => panic "appview_stub: deaf poll failed: \{message}"
+    Ok _ => match netConnectCheck fd
+      Ok (Some _) => True
+      Ok None => False
+      Err message => panic "appview_stub: deaf dial refused: \{message}"
+
+{- | Dial this listener until a dial stops completing, then say so.
+
+   The readiness line is already out by the time this runs, so the gate waits
+   for THIS line before pointing a PDS at the port: a dial made while the queue
+   still had room would complete, and the case would grade a connect that never
+   hung. -}
+fillBacklog : Int -> Int -> <IO, Net "_"> Unit
+fillBacklog port attempts =
+  if attempts <= 0 then
+    panic "appview_stub: the accept queue never filled"
+  else if dialCompletes port then
+    fillBacklog port (attempts - 1)
+  else
+    let () =
+      println "appview-stub: accept queue full on 127.0.0.1:\{intToString port}"
     flushStdout ()
+
+-- Nothing is ever accepted, so there is no loop to run: the process exists
+-- from here on only to hold the queue full and the sockets open.
+idleForever : Unit -> <Clock> Unit
+idleForever u =
+  let () = sleepMs 60000
+  idleForever ()
+
+deaf : Int -> <Clock, IO, Net "_"> Unit
+deaf port = match listen "127.0.0.1" port
+  Err message => panic "appview_stub: listen failed: \{message}"
+  Ok lis =>
+    let bound = ready lis
+    let () = fillBacklog bound backlogDialAttempts
+    idleForever ()
 
 {- | `stdlib/net`'s own `serveLoop` cannot carry this: its handler row is closed
    at `<Net "_">`, and logging the claims a call arrived with is a file write.
@@ -258,7 +336,7 @@ serve : Int ->
 serve port handle = match listen "127.0.0.1" port
   Err message => panic "appview_stub: listen failed: \{message}"
   Ok lis =>
-    let () = ready lis
+    let _ = ready lis
     acceptLoop lis handle
 
 mustPort : String -> Int
@@ -272,11 +350,13 @@ mustStatus text = match toInt text
   None => panic "appview_stub: not a status code: \{text}"
 
 usage : String
-usage = "usage: appview_stub_main <answer PORT LOGFILE STATUS|stall PORT>"
+usage =
+  "usage: appview_stub_main <answer PORT LOGFILE STATUS|stall PORT|deaf PORT>"
 
-main : <IO, Env, Net "_"> Unit
+main : <Clock, IO, Env, Net "_"> Unit
 main = match args ()
   ["answer", port, path, status] =>
     serve (mustPort port) (answerCall path (mustStatus status))
   ["stall", port] => serve (mustPort port) stallCall
+  ["deaf", port] => deaf (mustPort port)
   _ => panic usage

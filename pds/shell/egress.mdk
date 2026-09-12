@@ -19,9 +19,14 @@
    one configured appview, not a forwarding proxy that routes on `Host` — the
    `Host` this module sends is the proxy's own loopback address.
 
-   EVERY WAIT PARKS. The connect is one synchronous syscall to a listener on
-   this machine; every byte after it moves through `net_async`, which parks the
-   task on would-block instead of blocking the thread. That is the whole
+   EVERY WAIT PARKS, the connect included. A loopback listener whose accept
+   queue is full does not refuse a dial — the kernel drops the handshake and
+   `connect(2)` waits — so a blocking connect here would have wedged the ONE
+   thread this scheduler has, and with it every unrelated request and every
+   open subscription, which is the opposite of what the rest of this paragraph
+   promises. `net_async`'s `connectWithin` parks on write-readiness instead,
+   and every byte after it moves through `net_async` too, which parks the task
+   on would-block instead of blocking the thread. That is the whole
    requirement this module exists to satisfy: a stalled or slow-dripping
    appview suspends the ONE connection that asked to be proxied, and the accept
    loop, every unrelated in-flight request, and every open firehose
@@ -31,7 +36,7 @@
    nothing is closed on the first, and one that dribbles a byte per budget is
    closed only by the second. -}
 
-import async.{Async, Wait, deadlineAfter, expired, liftIO}
+import async.{Async, Wait, deadlineAfter, expired}
 import lib.httpclient.{
   findHeader,
   makeRequestHeader,
@@ -46,7 +51,7 @@ import lib.jwt.{ServiceAuthRequest, mintServiceToken}
 import lib.proxy.{AppviewPolicy, UpstreamAnswer(..)}
 import lib.resource_limits.{maxHttpClientWireBytes}
 import lib.sign.{SecretKey}
-import net.{Connection, connect}
+import net.{Connection}
 import net_async as A
 import time.{Duration, seconds}
 import vector.{Vector}
@@ -77,6 +82,19 @@ upstreamCallTimeout = seconds 10
 -- | How long writing the outbound request may take.
 upstreamWriteTimeout : Duration
 upstreamWriteTimeout = seconds 10
+
+{- | How long one outbound dial may take to complete its handshake.
+
+   The target is a listener on this box, so a dial either completes in
+   microseconds or is not going to: the budget exists for the one state that
+   is neither a refusal nor a completion — a full accept queue, whose dropped
+   handshake `connect(2)` waits out for minutes. It is sized like
+   `upstreamSilenceTimeout` because it is the same judgement, that nothing is
+   happening, and it is a budget of its own rather than a share of
+   `upstreamCallTimeout` so that a slow dial cannot spend the whole call's
+   allowance before a single byte is written. -}
+upstreamConnectTimeout : Duration
+upstreamConnectTimeout = seconds 5
 
 -- | Bytes asked for per outbound read.
 upstreamChunkBytes : Int
@@ -222,7 +240,7 @@ egressConnect : String ->
   Array Int ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
 egressConnect host port bytes = defer
-  connected <- liftIO (u => connect host port)
+  connected <- A.connectWithin upstreamConnectTimeout host port
   match connected
     Err message =>
       deferPure

@@ -652,7 +652,7 @@ configure parsed = do
   -- refused for a malformed appview DID must leave no session secret on disk
   -- for the next run to adopt (#2659 item 4).
   egress <- configureEgress parsed secret
-  let serving = makeServing trustedProxy egress
+  let serving = makeServing trustedProxy egress (Ref 0)
   relay <- configureRelay parsed
   () <- requireDir dir
   repo <- openRepo (flag "--init" parsed) dir did keyBytes secret

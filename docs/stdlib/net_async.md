@@ -1,5 +1,32 @@
 # net_async
 
+## `connect`
+
+```
+connect : String -> Int -> Async <Net _ | e> (Result String Connection)
+```
+
+Connects to `host` on `port`, parking until the handshake finishes
+instead of blocking the thread in `connect(2)`.
+
+The returned socket is already non-blocking, so the `recv`/`send` below
+park on it without switching it first. Resolving `host` still blocks —
+`netConnectStart` does that part before there is any descriptor to park
+on — so this parks for the handshake, which is the wait an unreachable or
+overloaded peer makes unbounded, and not for a name lookup.
+
+A descriptor is never handed back except inside `Ok`: every other path
+closes the socket this opened, because the caller has nothing to close
+it with.
+
+## `connectWithin`
+
+```
+connectWithin : Duration -> String -> Int -> Async <Clock, Net _ | e> (Result String Connection)
+```
+
+`connect` that gives up after `d` with `Err "timed out"`.
+
 ## `accept`
 
 ```

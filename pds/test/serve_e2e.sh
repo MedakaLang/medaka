@@ -1561,6 +1561,145 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/servehol.err" 'case 46 (post-run)'
 
+# ── eighth --data dir: a proxy that cannot be reached at all (F3) ───────────
+# Case 46's upstream ACCEPTS and then says nothing, so the PDS's own connect
+# completed and only its reads had to park. The dial itself is the other half,
+# and a worse one: a loopback listener whose accept queue is FULL does not
+# refuse a dial - the kernel drops the handshake and `connect(2)` waits on SYN
+# retries for minutes - so a blocking connect wedges the one thread this
+# scheduler has, taking every unrelated request and every open subscription
+# with it. The `deaf` stub mode manufactures exactly that state and says so on
+# stdout once it holds.
+"$WORK/appview" deaf 0 >"$WORK/deaf.out" 2>"$WORK/deaf.err" &
+STUB_DEAF_PID=$!
+STUB_PIDS="$STUB_PIDS $STUB_DEAF_PID"
+DEAFPORT=$(wait_for_stub_port "$WORK/deaf.out" "$STUB_DEAF_PID") || {
+  cat "$WORK/deaf.err" >&2
+  fail 'case 50: the deaf stub appview did not report readiness'
+}
+# Readiness is the LISTEN; the queue is full a moment later. Pointing a server
+# at the port before that line appears would grade a dial that completed.
+i=0
+while [ "$i" -lt 200 ]; do
+  if grep -F 'appview-stub: accept queue full' "$WORK/deaf.out" >/dev/null 2>&1
+  then
+    break
+  fi
+  i=$((i + 1))
+  sleep 0.1
+done
+grep -F -q 'appview-stub: accept queue full' "$WORK/deaf.out" || {
+  cat "$WORK/deaf.out" "$WORK/deaf.err" >&2
+  fail 'case 50: the deaf stub never filled its own accept queue'
+}
+
+DATADEAF="$WORK/data-proxy-deaf"
+mkdir -p "$DATADEAF"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATADEAF" --port 0 --init \
+  --appview-did "$APPVIEW_DID" --egress-port "$DEAFPORT" \
+  >"$WORK/servedeaf.out" 2>"$WORK/servedeaf.err" &
+SERVER_PID=$!
+PORTDEAF=$(wait_for_port "$WORK/servedeaf.out") || {
+  cat "$WORK/servedeaf.err" >&2
+  fail 'case 50: the unreachable-proxy server did not report readiness'
+}
+require_empty "$WORK/servedeaf.err" 'case 50 startup'
+
+DEAFLOGIN=$(client login "$PORTDEAF" "$HANDLE" "$PASSWORD") \
+  || fail 'case 50: login against the unreachable-proxy server'
+DEAFACCESS=${DEAFLOGIN%% *}
+
+# 50. THE CONNECT PARKS. One proxied read is left stuck mid-handshake while an
+#    unrelated plain read is asked for and answered, and the stuck call is then
+#    owed its own answer - a 502 once its connect budget runs out, not a
+#    connection held until the inbound lifecycle gives up.
+#
+#    The `kill -0` is the discriminator, as in case 46: the unrelated read has
+#    to have been answered WHILE the dial was still outstanding. A server whose
+#    connect blocked the thread would answer it only after the dial finished,
+#    and nothing else here could tell the two apart.
+client proxy-read "$PORTDEAF" "$DEAFACCESS" "$APPVIEW_DID" "$TIMELINE" 502 '' \
+  >"$WORK/deafstalled.out" 2>&1 &
+DEAF_STALLED_PID=$!
+# Long enough for the request to have been received and the dial started, and
+# far short of the outbound connect budget.
+sleep 0.5
+
+client query "$PORTDEAF" "$DID" \
+  || fail 'case 50: an unrelated read was not answered while a proxied call was stuck connecting'
+
+kill -0 "$DEAF_STALLED_PID" 2>/dev/null || {
+  cat "$WORK/deafstalled.out" >&2
+  fail 'case 50: the stuck proxied call had already finished, so nothing was proven about what runs alongside one - either the server serialized them, or the unrelated read took longer than the outbound connect budget'
+}
+wait "$DEAF_STALLED_PID" || {
+  cat "$WORK/deafstalled.out" >&2
+  fail 'case 50: a proxied call to an unreachable proxy was not answered 502'
+}
+# Its own graded line, which went to a file rather than this transcript because
+# it was driven in the background. Printed here so the run reads in order.
+cat "$WORK/deafstalled.out"
+
+# 51. THE AMPLIFICATION CEILING. One in-flight proxied call accumulates its
+#    upstream response in a `Vector Int` - a tagged word per logical byte - so
+#    `maxHttpClientWireBytes` bounds one call's buffer at about six megabytes
+#    of logical bytes and an order of magnitude more of resident memory. What
+#    bounds the NUMBER of them is `maxConcurrentProxiedCalls`
+#    (`pds/shell/server.mdk`), which this case reads as the literal 8 below:
+#    eight dials are left stuck against the deaf proxy, and the ninth must be
+#    refused rather than admitted.
+#
+#    Graded on the error CODE and not just the status: 503 is also what the
+#    subscription ceiling answers, and a status-only assertion could not tell
+#    which ceiling fired. An ordinary read is asked for alongside it, because a
+#    ceiling on proxied calls that refused unrelated traffic would be an outage
+#    rather than a bound.
+PROXY_CEILING=8
+i=1
+CEILING_PIDS=""
+while [ "$i" -le "$PROXY_CEILING" ]; do
+  client proxy-read "$PORTDEAF" "$DEAFACCESS" "$APPVIEW_DID" "$TIMELINE" 502 '' \
+    >"$WORK/ceiling.$i.out" 2>&1 &
+  CEILING_PIDS="$CEILING_PIDS $!"
+  i=$((i + 1))
+done
+# Every one of the eight has to be IN FLIGHT before the ninth is sent - each
+# holds its slot for the whole of its connect budget, so a second is ample.
+sleep 1
+
+client proxy-read "$PORTDEAF" "$DEAFACCESS" "$APPVIEW_DID" "$TIMELINE" 503 \
+  ProxyLimitExceeded \
+  || fail 'case 51: a proxied read past the concurrency ceiling was not refused 503 ProxyLimitExceeded'
+client query "$PORTDEAF" "$DID" \
+  || fail 'case 51: an ordinary read was refused by the proxied-call ceiling'
+
+for pid in $CEILING_PIDS; do
+  wait "$pid" || {
+    cat "$WORK"/ceiling.*.out >&2
+    fail 'case 51: one of the eight in-flight proxied calls was not answered 502'
+  }
+done
+# The eight graded lines, driven in the background like case 50's.
+cat "$WORK"/ceiling.*.out
+
+# The slots the eight held are given back, so the ceiling bounds what is in
+# flight and not what has ever been sent: a call made after they finish is
+# forwarded like any other and answered 502 by the same deaf proxy.
+client proxy-read "$PORTDEAF" "$DEAFACCESS" "$APPVIEW_DID" "$TIMELINE" 502 '' \
+  || fail 'case 51: the ceiling did not give its slots back - a later proxied call was still refused'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servedeaf.err" 'case 50/51 (post-run)'
+require_empty "$WORK/deaf.err" 'deaf stub appview'
+kill "$STUB_DEAF_PID" 2>/dev/null || true
+wait "$STUB_DEAF_PID" 2>/dev/null || true
+
 # ── eighth and ninth --data dirs: requestCrawl (S-crawl-routes) ─────────────
 # The outbound half of discovery: an unauthenticated POST announcing this
 # server's own hostname to a configured relay, fired once at startup,
@@ -1657,4 +1796,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/stall.err" 'stalling stub appview'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the forwardable table'"'"'s own spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience, for a method this server answers itself and for one it neither serves nor forwards — none of them reaching the appview, proven live by the call that immediately followed, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, and the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the forwardable table'"'"'s own spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience, for a method this server answers itself and for one it neither serves nor forwards — none of them reaching the appview, proven live by the call that immediately followed, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable'

@@ -1887,6 +1887,8 @@ isNetExternW name = contains name [
   "netSetTimeout",
   "ioPoll",
   "netSetNonblock",
+  "netConnectStart",
+  "netConnectCheck",
   "netTryAccept",
   "netTryRecv",
   "netTrySend",

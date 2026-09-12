@@ -235,6 +235,35 @@ maxUnframedConnections = 64
 maxConcurrentSubscriptions : Int
 maxConcurrentSubscriptions = 32
 
+{- | How many proxied reads may be in flight at once.
+
+   The ceiling this one backs up is `maxHttpClientWireBytes`
+   (`pds/lib/resource_limits.mdk`), which bounds ONE upstream response's
+   accumulating buffer at about six megabytes. That bound is in LOGICAL bytes
+   and the buffer holding them is a `Vector Int` — one tagged 64-bit word per
+   byte, plus the doubling slack the vector carries — so one in-flight call
+   costs resident memory an order of magnitude above its logical ceiling, and
+   until this ceiling existed nothing bounded how many calls paid it at once:
+   `maxConcurrentConnections` admits 256, and 256 of them exceed the memory of
+   any box this server runs on. What that costs is not the caller's request —
+   it is the process, and with it every account's connections and every open
+   subscription.
+
+   Eight is what a legitimate client asks for rather than a share of the
+   connection census: a client rendering one view issues a handful of proxied
+   reads together, and eight is that with room left. Like every ceiling above
+   it, the call past it is refused with a cheap answer — a 503, and no
+   outbound call made at all — rather than admitted and then dropped.
+
+   It bounds CONCURRENCY, and `ProxyClass` (`pds/lib/ratelimit.mdk`) bounds
+   RATE; neither substitutes for the other, because a caller well within its
+   rate allowance still has all eight outstanding the moment the upstream is
+   slow. A buffer representation that packed bytes as bytes would lower the
+   per-call cost without removing the need for a ceiling on the count, which
+   is why this is a ceiling rather than a stopgap. -}
+maxConcurrentProxiedCalls : Int
+maxConcurrentProxiedCalls = 8
+
 {- | How long one request's header section may take to arrive in full (#2772).
 
    Distinct from `requestTimeout` and far shorter: a header section is capped
@@ -631,6 +660,33 @@ claimSubscription (SubscriptionCensus open) =
 releaseSubscription : SubscriptionCensus -> Unit
 releaseSubscription (SubscriptionCensus open) = open := !open - 1
 
+{- | How many proxied reads are in flight right now, bounded by
+   `maxConcurrentProxiedCalls`.
+
+   A type of its own for the reason `SubscriptionCensus` is one: it is a
+   third same-typed counter travelling this module, and one crossed with
+   another would bound the wrong resource while still looking like a census.
+   Unlike the other two it rides on `Serving` rather than beside them,
+   because the outbound path is the only thing that charges it and `Serving`
+   is already what that path reads its configuration from. -}
+data ProxyCensus = ProxyCensus (Ref Int)
+
+-- | Take a proxied-call slot if one is free. `False` means the ceiling is
+-- reached and nothing was charged.
+claimProxiedCall : ProxyCensus -> Bool
+claimProxiedCall (ProxyCensus inFlight) =
+  if !inFlight >= maxConcurrentProxiedCalls then
+    False
+  else
+    let () = inFlight := !inFlight + 1
+    True
+
+-- | Give a proxied-call slot back. Called on the ONE path a claimed call
+-- leaves by, so it needs no idempotence flag: `egressCall` answers every
+-- outcome it has with a `Result`, so there is no exit that skips the release.
+releaseProxiedCall : ProxyCensus -> Unit
+releaseProxiedCall (ProxyCensus inFlight) = inFlight := !inFlight - 1
+
 -- | Retire this connection's un-framed charge, if it still holds one.
 releaseUnframed : UnframedSlot -> Unit
 releaseUnframed (UnframedSlot unframed held) =
@@ -732,23 +788,30 @@ readBufferLive buf = sliceClamped 0 (readBufferLen buf) (readBufferBacking buf)
    a server configured for no appview answer every `atproto-proxy` header the
    way it did before there was an outbound path at all.
 
-   One value rather than two parameters, for the reason `admissionClasses`
+   One value rather than three parameters, for the reason `admissionClasses`
    states about its own arguments: these are threaded through eleven functions
    whose argument lists are already long, and a pair of them crossed at one
    call site would charge the wrong identity or sign for the wrong appview
-   while every signature still typechecked. -}
-export data Serving = Serving TrustedProxy (Option Egress)
+   while every signature still typechecked. The proxied-call census joins them
+   for the same reason and not because it is configuration: it is the one
+   counter only the outbound path charges, and this value is already on every
+   function between `acceptLoop` and `forwardProxied`. -}
+export data Serving = Serving TrustedProxy (Option Egress) ProxyCensus
 
 export
-makeServing : TrustedProxy -> Option Egress -> Serving
-makeServing trustedProxy egress = Serving trustedProxy egress
+makeServing : TrustedProxy -> Option Egress -> Ref Int -> Serving
+makeServing trustedProxy egress inFlight =
+  Serving trustedProxy egress (ProxyCensus inFlight)
 
 export
 servingTrustedProxy : Serving -> TrustedProxy
-servingTrustedProxy (Serving trustedProxy _) = trustedProxy
+servingTrustedProxy (Serving trustedProxy _ _) = trustedProxy
 
 servingEgress : Serving -> Option Egress
-servingEgress (Serving _ egress) = egress
+servingEgress (Serving _ egress _) = egress
+
+servingProxyCensus : Serving -> ProxyCensus
+servingProxyCensus (Serving _ _ census) = census
 
 -- | Accept connections until the listener fails or is closed, running each on
 -- its own task, never more than `maxConcurrentConnections` at a time.
@@ -1320,20 +1383,35 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
           rest
           keepAlive
           (serializeResponse proxyUpstreamFailureResponse)
-      Some egress => defer
-        answered <- egressCall egress admission.target admission.serviceAuth
-        sendAndContinue
-          server
-          dir
-          storeRef
-          limiterRef
-          census
-          serving
-          conn
-          slot
-          rest
-          keepAlive
-          (proxyAnswerBytes answered)
+      Some egress =>
+        if not (claimProxiedCall (servingProxyCensus serving)) then
+          sendAndContinue
+            server
+            dir
+            storeRef
+            limiterRef
+            census
+            serving
+            conn
+            slot
+            rest
+            keepAlive
+            (serializeResponse proxyCeilingResponse)
+        else defer
+          answered <- egressCall egress admission.target admission.serviceAuth
+          _ <- liftIO (u => releaseProxiedCall (servingProxyCensus serving))
+          sendAndContinue
+            server
+            dir
+            storeRef
+            limiterRef
+            census
+            serving
+            conn
+            slot
+            rest
+            keepAlive
+            (proxyAnswerBytes answered)
 
 {- | The bytes a proxied read answers with.
 
@@ -1342,6 +1420,23 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
    — is this server's business and tells a client nothing it can act on, and
    distinguishing them in the body would describe this deployment's internals to
    whoever asked. -}
+{- | What a proxied read past `maxConcurrentProxiedCalls` is told.
+
+   503 and not 502: nothing was asked of the upstream, so reporting a gateway
+   failure would blame a service that was never called, and a caller that
+   retries later is right to — the ceiling is on what is in flight now. The
+   claim and the release around the call it guards are the two halves of one
+   decision, the way `admitSubscription`'s are, so the slot is charged at the
+   one point the call is decided on and given back at the one point it has
+   finished. -}
+proxyCeilingResponse : Response
+proxyCeilingResponse =
+  xrpcErrorResponse
+    503
+    "Service Unavailable"
+    "ProxyLimitExceeded"
+    "too many proxied reads are in flight on this server"
+
 proxyAnswerBytes : Result String UpstreamAnswer -> Array Int
 proxyAnswerBytes (Err _) = serializeResponse proxyUpstreamFailureResponse
 proxyAnswerBytes (Ok answer) = match proxyUpstreamResponse answer
