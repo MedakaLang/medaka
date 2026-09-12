@@ -510,7 +510,9 @@ test "every read, sync and identity query is public, and so is createSession" = 
     "com.atproto.sync.getBlob",
     "com.atproto.sync.getLatestCommit",
     "com.atproto.sync.getRepo",
+    "com.atproto.sync.getRepoStatus",
     "com.atproto.sync.listBlobs",
+    "com.atproto.sync.listRepos",
     "com.atproto.sync.subscribeRepos",
   ]
 

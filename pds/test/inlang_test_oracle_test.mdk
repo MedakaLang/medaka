@@ -77,6 +77,7 @@ engineLabel NativeSpeed = "native (speed)"
 suites : List (String, (Int, Engine))
 suites = [
   ("skeleton_test", (2, Eval)),
+  ("httpclient_test", (1, Eval)),
   ("http_test", (85, Eval)),
   ("xrpc_test", (29, Eval)),
   ("server_core_test", (11, Eval)),
@@ -196,6 +197,9 @@ floorExpectation name = match lookup name excluded
 
 test "pds/test/skeleton_test.mdk executed >= 2 assertions" =
   floorExpectation "skeleton_test"
+
+test "pds/test/httpclient_test.mdk executed >= 1 assertions" =
+  floorExpectation "httpclient_test"
 
 test "pds/test/http_test.mdk executed >= 85 assertions" =
   floorExpectation "http_test"
