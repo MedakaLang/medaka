@@ -54,6 +54,7 @@ import frontend.ast.{
   TyConOrigin(..),
   Ns(..),
   Ident(..),
+  identOriginOf,
   identOriginFold,
   mkIdent,
   -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
@@ -12067,7 +12068,12 @@ extendMethodRow (TcEnv vs cs al lc) n row =
 extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
 extendMethodRows env [] = env
 extendMethodRows env (row :: rest) =
-  extendMethodRows (extendMethodRow env row.msrName row) rest
+  let env2 =
+    if methodRowCanCarry row then
+      extendMethodRow env row.msrName row
+    else
+      extendVar env row.msrName row.msrScheme
+  extendMethodRows env2 rest
 
 extendBindings : TcEnv -> List (String, EnvBinding) -> TcEnv
 extendBindings env [] = env
@@ -15721,9 +15727,13 @@ inferVarId env x id = match maybeStandaloneValueMono x
 
 inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVarPlainId env x id = match lookupVar env x
-  Some s =>
-    let inst = instantiateVarTrackedWithSubst x id s
-    recordMethodObligationOwned env x s (fst inst) (snd inst) None
+  Some s => match lookupMethodRow env x
+    Some _ =>
+      let inst = instantiateVarTrackedWithSubst x id s
+      recordMethodObligationOwned env x s (fst inst) (snd inst) None
+    None =>
+      let mono = instantiateVarTrackedId x id s
+      recordMethodObligationGuarded env x s mono
   None => unboundVarFresh x
 
 -- #11 soundness (native obligation hole, plain check path): a constrained binding used
@@ -15737,6 +15747,20 @@ inferVarPlainId env x id = match lookupVar env x
 -- lookup keys EXACTLY (x, id) — so a top-level `g`'s use can never pick up a
 -- where-helper `g`'s obligations.  id == 0 (local/where/cross-module/global, or
 -- any non-EVarId caller) falls to the bare-name scan — byte-identical to today.
+instantiateVarTrackedId : String -> Int -> Scheme -> Mono
+instantiateVarTrackedId x id s =
+  match lookupSchemeObls x id perRun.value.schemeObligationsRef.value
+    Some obs =>
+      let inst = instantiateTracked s
+      let _ = recordSchemeCallObligations id obs (snd inst)
+      fst inst
+    None => match declaredCrossModuleObls x
+      Some obs =>
+        let inst = instantiateTracked s
+        let _ = recordSchemeCallObligations id obs (snd inst)
+        fst inst
+      None => instantiate s
+
 instantiateVarTrackedWithSubst : String ->
   Int ->
   Scheme ->
@@ -16184,25 +16208,32 @@ recordMethodObligationGuarded env name s mono =
     recordImplObligation name mono
 
 exactReturnRow : TcEnv -> String -> Scheme -> Option MethodSchemeRow
-exactReturnRow env name scheme
-  | lookupLocalFlag env name || isMonoScheme scheme = None
-  | omHasKey name perRun.value.definerShadowNamesRef.value
-    || omHasKey name driverState.value.standaloneValuesRef.value = None
-  | isSome
-    (Scopes.enclosingDefaultBody (currentScopeStore ()) (captureScope ())) =
-    None
-  | listLen (admittedIfacesFor name) >= 2 = None
-  | otherwise = do
-    row <- lookupMethodRow env name
-    if isNone (mkIdent NsMethod row.msrIface.irOrigin row.msrName) then
-      None
-    else if anyArgMentions
-        (dispatchTyparams row.msrTyparams)
-        (methodArgs row.msrType)
-      || not (allMethodParamsMentioned row.msrTyparams row.msrType) then
+exactReturnRow env name scheme = match lookupMethodRow env name
+  None => None
+  Some row =>
+    if lookupLocalFlag env name
+      || isMonoScheme scheme
+      || omHasKey name perRun.value.definerShadowNamesRef.value
+      || omHasKey name driverState.value.standaloneValuesRef.value
+      || isSome
+        (Scopes.enclosingDefaultBody (currentScopeStore ()) (captureScope ()))
+      || listLen (admittedIfacesFor name) >= 2 then
       None
     else
       Some row
+
+-- `ebMethodRow = Some` certifies this predicate.  Every environment producer either
+-- calls `extendMethodRows`, or installs a row returned by `admittedRowFor`; both
+-- gate on this function.  Keeping the certificate at the binding boundary avoids
+-- rebuilding method identities and walking declared types at every occurrence.
+methodRowCanCarry : MethodSchemeRow -> Bool
+methodRowCanCarry row =
+  isSome (identOriginOf row.msrIface.irOrigin)
+    && not
+      (anyArgMentions
+        (dispatchTyparams row.msrTyparams)
+        (methodArgs row.msrType))
+    && allMethodParamsMentioned row.msrTyparams row.msrType
 
 allMethodParamsMentioned : List String -> Ty -> Bool
 allMethodParamsMentioned [] _ = True
@@ -29956,6 +29987,9 @@ checkBodyImpl seed mode prog0 =
   let prog = match mode
     Flat coreProg => coreProg ++ prog0
     Module _ _ _ => prog0
+  let aliasSpellings = match mode
+    Flat _ => []
+    Module _ _ _ => aliasMethodSpellings prog
   -- P1 (#1446) / DICT §8 I7: the four operator-and-literal classes' identities, read
   -- off the PRELUDE's own `DInterface` decls before any body is inferred (the operator
   -- handlers consult them during inference).  See `seedBuiltinClasses`.
@@ -30298,8 +30332,7 @@ checkBodyImpl seed mode prog0 =
       -- same rows, in the same module scope, on the same line as the supply they
       -- accompany — `originMethodName`'s source.  Empty on the Flat arm, whose
       -- single file has no import graph.
-      perRun.value.aliasMethodOriginsRef :=
-        omFromPairs (aliasMethodSpellings prog) omEmpty
+      perRun.value.aliasMethodOriginsRef := omFromPairs aliasSpellings omEmpty
       -- #2188 / S2-DECL (d): the SAME ladder's whole admitted set, for the names where
       -- the winner above is a floor rather than a decision.  Written HERE, beside the
       -- projection it accompanies, so the two can never be derived from different
@@ -30465,7 +30498,11 @@ checkBodyImpl seed mode prog0 =
   let visibleMethodRows = match mode
     Flat _ => []
     Module _ _ implDecls => ifaceMethodSchemeRows implDecls
-  let visibleMethodRowIndex = methodRowsByIdentity visibleMethodRows regEmpty
+  let visibleMethodRowIndex =
+    methodRowsByIdentity
+      (isNonEmptyL importerShadows)
+      visibleMethodRows
+      regEmpty
   let externS = userExternSchemes mode (externTyOriginScope []) prog
   let globalS = legacyMethodSchemes currentMethodRows ++ externS
   -- #2074 / F1 (epic #2070): the USER-EXTERN DECLARATION guards, all gated on
@@ -30532,7 +30569,7 @@ checkBodyImpl seed mode prog0 =
     Module _ _ _ =>
       annotateImportedMethodRows
         envSeed
-        seed
+        (importedMethodBindingNames prog0 aliasSpellings)
         (nameableIfaceMethodSet prog0)
         (namesToSet importerShadows omEmpty)
         visibleMethodRowIndex
@@ -40893,14 +40930,33 @@ methodEnvBinding row = EnvBinding {
   ebMethodRow = Some row,
 }
 
+-- Candidate spellings come from the same three binding sources the environment sees:
+-- nameable bare methods (including the implicit core row), selective-import local
+-- names, and module-alias-qualified names.  `lookupBinding` below remains the final
+-- no-new-name gate, while this bounded list avoids walking every ordinary seed binding.
+importedMethodBindingNames : List Decl -> List (String, String) -> List String
+importedMethodBindingNames prog aliases =
+  flatMap snd (nameableIfaceRows prog)
+    ++ importedMemberBindingNames prog
+    ++ map fst aliases
+
+importedMemberBindingNames : List Decl -> List String
+importedMemberBindingNames [] = []
+importedMemberBindingNames ((DAttrib _ decl) :: rest) =
+  importedMemberBindingNames [decl] ++ importedMemberBindingNames rest
+importedMemberBindingNames ((DUse _ path _) :: rest) =
+  map snd (optionOr [] (importedBindings path))
+    ++ importedMemberBindingNames rest
+importedMemberBindingNames (_ :: rest) = importedMemberBindingNames rest
+
 annotateImportedMethodRows : TcEnv ->
-  List (String, Scheme) ->
+  List String ->
   OrdMap Unit ->
   OrdMap Unit ->
   Registry MethodSchemeRow ->
   TcEnv
 annotateImportedMethodRows env [] _ _ _ = env
-annotateImportedMethodRows env ((name, _) :: rest) nameable shadows rows =
+annotateImportedMethodRows env (name :: rest) nameable shadows rows =
   let originName = originMethodName name
   let env2 =
     if omHasKey originName nameable
@@ -40918,7 +40974,8 @@ admittedRowFor n byId =
     None
   else do
     (iface, _, _, _) <- omLookup n perRun.value.methodIfaceParamsRef.value
-    lookupMethodRowById iface (originMethodName n) byId
+    row <- lookupMethodRowById iface (originMethodName n) byId
+    if methodRowCanCarry row then Some row else None
 
 -- The declaration `applyMethodScopeOverrides` resolved for [n] IN THIS MODULE, then
 -- that declaration's own scheme row.  `None` at either step means "this module's
@@ -40964,19 +41021,23 @@ lookupSchemeById iface n rows =
 methodRowKey : IfaceRef -> String -> RegKey
 methodRowKey iface method = regKeyNTab [
   ifaceTabKey iface.irOrigin iface.irName,
-  tabKeyOf NsMethod iface.irOrigin method,
+  TkBare NsMethod method,
 ]
 
-methodRowsByIdentity : List MethodSchemeRow ->
+methodRowsByIdentity : Bool ->
+  List MethodSchemeRow ->
   Registry MethodSchemeRow ->
   Registry MethodSchemeRow
-methodRowsByIdentity [] acc = acc
-methodRowsByIdentity (row :: rest) acc =
-  let key = methodRowKey row.msrIface row.msrName
-  let acc2 = match regLookupK key acc
-    Some _ => acc
-    None => regInsertK key row acc
-  methodRowsByIdentity rest acc2
+methodRowsByIdentity _ [] acc = acc
+methodRowsByIdentity includeAll (row :: rest) acc =
+  if not includeAll && not (methodRowCanCarry row) then
+    methodRowsByIdentity includeAll rest acc
+  else
+    let key = methodRowKey row.msrIface row.msrName
+    let acc2 = match regLookupK key acc
+      Some _ => acc
+      None => regInsertK key row acc
+    methodRowsByIdentity includeAll rest acc2
 
 -- Bug C: for each importer-shadow name, pick from [table] the scheme that is the
 -- imported STANDALONE — the one whose receiver (first arrow domain) heads in a
