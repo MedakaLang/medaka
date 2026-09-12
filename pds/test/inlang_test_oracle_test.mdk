@@ -92,7 +92,7 @@ suites = [
   ("rfc6979_test", (4, Eval)),
   ("ecdsa_test", (2, Eval)),
   ("pbkdf2_test", (4, NativeSpeed)),
-  ("jwt_test", (26, NativeSpeed)),
+  ("jwt_test", (32, NativeSpeed)),
   ("credential_test", (20, NativeSpeed)),
   ("session_routes_test", (29, NativeCapability)),
   ("auth_seam_test", (31, NativeCapability)),
@@ -242,7 +242,7 @@ test "pds/test/ecdsa_test.mdk executed >= 2 assertions" =
 test "pds/test/pbkdf2_test.mdk executed >= 4 assertions" =
   floorExpectation "pbkdf2_test"
 
-test "pds/test/jwt_test.mdk executed >= 26 assertions" =
+test "pds/test/jwt_test.mdk executed >= 32 assertions" =
   floorExpectation "jwt_test"
 
 test "pds/test/credential_test.mdk executed >= 20 assertions" =

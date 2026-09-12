@@ -331,6 +331,46 @@ The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
 `@atproto/crypto` version differs from the one its rows were derived at, so a
 newer image cannot silently answer a different question.
 
+### Service-auth interop
+
+`pds/lib/jwt.mdk`'s `mintServiceToken` is the other half of that answer key: it
+mints the credential whose shape the corpus records. The corpus can only grade
+the claim bytes, and `pds/test/jwt_test.mdk` does that — the SIGNATURE has to be
+graded by the reference verifier, because the party that checks a service-auth
+token is an off-box peer and nothing on this side can certify one without
+grading this implementation against itself.
+
+`pds/tools/check_pds_service_jwt.mjs` is that grading step, a fourth **library**
+route: `@atproto/crypto@0.5.4` from the pinned lockfile, no service and no
+image. `pds/test/service_jwt_interop_main.mdk` mints the tokens and prints them
+as its manifest. From the repository root:
+
+```sh
+WORK=$(mktemp -d)
+cp pds/tools/atproto_reference/package.json \
+   pds/tools/atproto_reference/package-lock.json "$WORK/"
+npm ci --ignore-scripts --prefix "$WORK"
+./medaka build pds/test/service_jwt_interop_main.mdk -o "$WORK/mint"
+"$WORK/mint" > "$WORK/manifest.txt"
+node pds/tools/check_pds_service_jwt.mjs "$WORK/node_modules" "$WORK/manifest.txt" 1700000030
+```
+
+Four rows: two accepts (with and without `lxm`) and two rejects (a token offered
+under the wrong `did:key`, and one minted for a different audience), so one run
+shows both polarities. The trailing argument is the instant `exp` is checked
+against; `1700000030` is inside the sixty-second window of the manifest's pinned
+`iat`. The script refuses a `@atproto/crypto` other than `0.5.4`, and refuses a
+manifest with no rows rather than reporting a pass over nothing.
+
+It verifies WITHOUT `allowMalleableSig`, which the corpus records the official
+verifier as passing — so this check is strictly stricter than the real peer, and
+an accept also certifies the low-S canonicalization `pds/lib/secp256k1.mdk`
+performs. It is a manual tool rather than a gate, for the same reason the corpus
+generators above are: it needs network access for `npm ci`. Nothing enrols it,
+because the CI coverage census enumerates `.sh` files and this is a `.mjs` —
+wrapping it in a shell driver would put it in scope and would then need a
+`test/CI-COVERAGE-TOOLS.txt` row.
+
 ## Phase 1 data model (#2136)
 
 The four Phase 1 vector gates grade external answer corpora on all production

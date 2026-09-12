@@ -1,12 +1,15 @@
-{- | JWT session tokens (RFC 7519) in the JWS Compact Serialization
-   (RFC 7515 §7.1), signed with HS256 (HMAC-SHA-256) over the server's own
-   symmetric secret.
+{- | JWT bearer tokens (RFC 7519) in the JWS Compact Serialization
+   (RFC 7515 §7.1), in the two shapes this server mints: session tokens,
+   signed with HS256 (HMAC-SHA-256) over the server's own symmetric secret,
+   and service-auth tokens, signed with ES256K over one account's secp256k1
+   repo key.
 
-   Pure function: no I/O, no clock, no entropy read in this module. The
-   secret is a caller-supplied 32-byte `Array Int` and the current instant is
-   a caller-supplied `Int` (seconds since the Unix epoch) — `verifyToken`
+   Pure functions: no I/O, no clock, no entropy read in this module. Every
+   key is caller-supplied — the session secret as a 32-byte `Array Int`, the
+   service-auth key as a `lib.sign.SecretKey` — and so is the current instant,
+   an `Int` of seconds since the Unix epoch, and every `jti`. `verifyToken`
    never reads a clock, so a test can place itself at any instant and the
-   shell layer owns both the secret and the time source.
+   shell layer owns the secrets, the time source and the entropy.
 
    The secret is the SERVER's, deliberately not the account's secp256k1
    signing key: that key authenticates commits to every other implementation
@@ -19,8 +22,16 @@
    the verifier is a peer holding no secret of ours, so the only key it can
    check is the account's, and service auth IS signed with it, as `ES256K`
    over a different claim set (no `nbf`, no `sub`, plus `lxm`). So `Claims`
-   below is this module's session-token claim set, not a shape to reuse there.
-   That wire shape is P16/§4.5 of the same document.
+   below is the session-token claim set and `ServiceAuthRequest` what a caller
+   supplies for the service-auth one; neither is a shape to reuse for the
+   other. That wire shape is
+   P16/§4.5 of the same document, and
+   `pds/test/vectors/pds_service_auth_shape_corpus.txt` records it byte-exact
+   as the official implementation's own `createServiceJwt` emits it.
+
+   Service auth is minted here and never verified here: the party that checks
+   one is an off-box peer resolving the issuer's key from the network, so a
+   verifier on this side would only grade this module against itself.
 
    `HS256` is pinned by the verifier, not read from the token. A token's own
    `alg` header is attacker-controlled input; selecting the verification
@@ -28,15 +39,19 @@
    `"alg": "none"` is one instance. `verifyToken` always computes HS256 and
    additionally rejects a header that claims anything else.
 
-   Graded against RFC 7520 §4.4's published HS256 worked example
-   (`pds/test/jwt_test.mdk`, provenance in
-   `pds/test/VECTOR-PROVENANCE.txt`) — G5: nothing here is a self-captured
-   golden. -}
+   Graded against RFC 7520 §4.4's published HS256 worked example, and the
+   service-auth half against the official implementation's own captured wire
+   shape plus an `@atproto/crypto` verification of a minted token
+   (`pds/test/jwt_test.mdk` and `pds/tools/check_pds_service_jwt.mjs`,
+   provenance in `pds/test/VECTOR-PROVENANCE.txt`) — G5: no expected value
+   here is graded only against this implementation. -}
 
 import base64.{decodeUrlSafe, encodeUrlSafe}
 import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
-import string.{fromUtf8, split, stripSuffix, toUtf8}
+import sha256.{sha256}
+import string.{fromUtf8, indexOf, split, stripSuffix, take, toUtf8}
 import lib.hmac_sha256.{hmacSha256FixedKey}
+import lib.sign.{SecretKey, signDigest, signatureCompact}
 
 {- | The claim set this server mints and accepts. `iat`, `nbf`, and `exp` are
      seconds since the Unix epoch (RFC 7519 §2 "NumericDate").
@@ -263,3 +278,98 @@ verifyToken secret expectedSub expectedAud now token = match split "." token
   [headerSeg, claimsSeg, sigSeg] =>
     verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg
   _ => Err JwtMalformed
+
+-- ── service auth: the credential an off-box peer verifies (P16/§4.5) ─────────
+
+{- | What a caller supplies to mint one service-auth credential.
+
+     `exp` is absent deliberately: the lifetime is this module's
+     (`serviceTokenLifetimeSeconds`), not the caller's, so no call site can
+     widen it.
+
+     `aud` may arrive carrying a `#<serviceId>` fragment — such a string names
+     a service OF a DID, and only the DID itself is ever the audience.
+
+     `lxm` is the NSID of the method the credential is being spent on. `None`
+     omits the claim rather than nulling it, and mints a token that authorizes
+     every method the audience exposes, so supply it wherever the call is
+     known. -}
+public export data ServiceAuthRequest = ServiceAuthRequest {
+  iss : String,
+  aud : String,
+  lxm : Option String,
+  jti : String,
+  iat : Int,
+}
+  deriving (Eq, Debug)
+
+{- | How many seconds a service-auth token stays valid.
+
+     Exported so a caller can size its own retry window against the figure
+     instead of re-deriving it. Sixty seconds is what the official
+     implementation mints, and therefore what a peer's clock-skew tolerance
+     is calibrated against. -}
+export
+serviceTokenLifetimeSeconds : Int
+serviceTokenLifetimeSeconds = 60
+
+-- `typ` precedes `alg` here, the reverse of `headerJson` above. A peer
+-- verifies the signature over the header segment exactly as serialized, so
+-- member order is wire-visible; this order reproduces the byte sequence in
+-- pds/test/vectors/pds_service_auth_shape_corpus.txt.
+serviceHeaderJson : Json
+serviceHeaderJson = jObject [("typ", JString "JWT"), ("alg", JString "ES256K")]
+
+-- `did:web:appview.example#bsky_appview` names the `bsky_appview` service of
+-- a DID; the audience is the DID. Signing the fragment in would mint a
+-- credential that no peer's `aud` comparison accepts.
+bareDid : String -> String
+bareDid serviceId = match indexOf "#" serviceId
+  Some at => take at serviceId
+  None => serviceId
+
+lxmMembers : Option String -> List (String, Json)
+lxmMembers (Some method) = [("lxm", JString method)]
+lxmMembers None = []
+
+-- The claim set, in the order the official implementation serializes it.
+serviceClaimsJson : ServiceAuthRequest -> Json
+serviceClaimsJson request =
+  jObject
+    ([
+        ("iat", JInt request.iat),
+        ("iss", JString request.iss),
+        ("aud", JString (bareDid request.aud)),
+        ("exp", JInt (request.iat + serviceTokenLifetimeSeconds)),
+      ]
+      ++ lxmMembers request.lxm
+      ++ [("jti", JString request.jti)])
+
+{- | The ES256K signature of a JWS Signing Input (RFC 7515 §5.1 step 5), as an
+     unpadded base64url string: the canonical low-S secp256k1 ECDSA signature
+     over the input's SHA-256 digest, serialized as the raw 64-byte IEEE P1363
+     `r || s`. Not DER — a peer's verifier refuses that encoding.
+
+     Exported for the reason `hs256Signature` is: it lets a test grade the
+     signature independently of the header and claim shapes
+     `mintServiceToken` chooses. -}
+export
+es256kSignature : SecretKey -> String -> Result String String
+es256kSignature key signingInput =
+  map
+    (signature => b64uEncode (signatureCompact signature))
+    (signDigest key (sha256 (toUtf8 signingInput)))
+
+{- | A service-auth token for `request`, signed with the issuing account's own
+     repo key.
+
+     `Err` carries `lib.sign.signDigest`'s message, and is reachable only when
+     the RFC 6979 nonce schedule exhausts its retry bound — which no input
+     chooses and no caller can provoke. -}
+export
+mintServiceToken : SecretKey -> ServiceAuthRequest -> Result String String
+mintServiceToken key request =
+  let headerSeg = b64uEncodeText (stringify serviceHeaderJson)
+  let claimsSeg = b64uEncodeText (stringify (serviceClaimsJson request))
+  let signingInput = "\{headerSeg}.\{claimsSeg}"
+  map (sigSeg => "\{signingInput}.\{sigSeg}") (es256kSignature key signingInput)
