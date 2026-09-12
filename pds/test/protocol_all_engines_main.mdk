@@ -16,6 +16,15 @@ import http.{
 }
 import string.{repeat, toUtf8}
 import lib.cid.{cidForRaw}
+import lib.httpclient as HC
+import lib.httpclient.{HttpClientMalformed, HttpClientResourceExcess}
+import lib.resource_limits.{
+  maxHttpClientBodyBytes,
+  maxHttpClientChunkBytes,
+  maxHttpClientHeaderBytes,
+  maxHttpClientHeaderFields,
+  maxHttpClientStatusLineBytes,
+}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -448,6 +457,173 @@ checkResource =
   else
     panic "protocol_all_engines: resource classification mismatch"
 
+-- # HTTP client codec (`lib.httpclient`) — response side
+
+clientFixedResponse : Array Int
+clientFixedResponse =
+  toUtf8
+    "HTTP/1.1 200 OK\r\ncontent-type: text/plain\r\ncontent-length: 5\r\n\r\nhello"
+
+checkClientFixedLength : <IO> Unit
+checkClientFixedLength = match HC.parseResponse clientFixedResponse
+  Err message =>
+    panic "protocol_all_engines: client fixed-length parse failed: \{message}"
+  Ok response =>
+    if HC.responseStatus response == 200
+      && HC.responseReason response == "OK"
+      && HC.responseBody response == toUtf8 "hello"
+      && HC.findHeader "content-type" (HC.responseHeaders response)
+        == Some (toUtf8 "text/plain") then
+      println "CELL client-fixed-length PASS status=200 body=hello"
+    else
+      panic "protocol_all_engines: client fixed-length mismatch"
+
+-- Two chunks, the first carrying a chunk-extension per RFC 9112 SS7.1.1, plus
+-- a trailer field the terminating chunk introduces.
+clientChunkedResponse : Array Int
+clientChunkedResponse =
+  toUtf8
+    "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n3;ext=1\r\nfoo\r\n3\r\nbar\r\n0\r\nx-trailer: done\r\n\r\n"
+
+checkClientChunked : <IO> Unit
+checkClientChunked = match HC.parseResponse clientChunkedResponse
+  Err message =>
+    panic "protocol_all_engines: client chunked parse failed: \{message}"
+  Ok response =>
+    if HC.responseStatus response == 200
+      && HC.responseBody response == toUtf8 "foobar"
+      && HC.findHeader "x-trailer" (HC.responseTrailers response)
+        == Some (toUtf8 "done") then
+      println "CELL client-chunked PASS chunks=2 body=foobar trailer=done"
+    else
+      panic "protocol_all_engines: client chunked mismatch"
+
+expectResourceExcess : String -> Array Int -> String -> <IO> Unit
+expectResourceExcess label bytes cellLine =
+  match HC.parseResponseClassified bytes
+    Ok _ => panic "protocol_all_engines: \{label} unexpectedly parsed"
+    Err (HttpClientMalformed message) =>
+      panic
+        "protocol_all_engines: \{label} reported malformed, not resource-excess: \{message}"
+    Err (HttpClientResourceExcess _) => println cellLine
+
+clientStatusLineOverLimit : Array Int
+clientStatusLineOverLimit =
+  toUtf8
+    ("HTTP/1.1 200 "
+      ++ repeat (maxHttpClientStatusLineBytes + 1) "a"
+      ++ "\r\n\r\n")
+
+checkClientStatusLineLimit : <IO> Unit
+checkClientStatusLineLimit =
+  expectResourceExcess
+    "client status-line ceiling"
+    clientStatusLineOverLimit
+    "CELL client-status-line-limit PASS refused"
+
+-- Ten headers of 7000 bytes each (70000 total) rather than one single
+-- 65537-byte value: the eval engine's tree-walking interpreter has no
+-- tail-call optimisation (`E-STACK-OVERFLOW` past ~25000 call depth), and a
+-- single CRLF-less scan that long would recurse once per byte. Ten short
+-- scans keep every recursion shallow while the CUMULATIVE ceiling this cell
+-- exercises still trips well before the unrelated 100-field ceiling would.
+clientHeaderBytesOverLimit : Array Int
+clientHeaderBytesOverLimit =
+  let perHeaderBytes = 7000
+  let headerCount = maxHttpClientHeaderBytes / perHeaderBytes + 2
+  toUtf8
+    ("HTTP/1.1 200 OK\r\n"
+      ++ repeat headerCount ("x-big: " ++ repeat perHeaderBytes "a" ++ "\r\n")
+      ++ "content-length: 0\r\n\r\n")
+
+checkClientHeaderBytesLimit : <IO> Unit
+checkClientHeaderBytesLimit =
+  expectResourceExcess
+    "client header-bytes ceiling"
+    clientHeaderBytesOverLimit
+    "CELL client-header-bytes-limit PASS refused"
+
+clientHeaderFieldsOverLimit : Array Int
+clientHeaderFieldsOverLimit =
+  toUtf8
+    ("HTTP/1.1 200 OK\r\n"
+      ++ repeat (maxHttpClientHeaderFields + 1) "x-h: 1\r\n"
+      ++ "content-length: 0\r\n\r\n")
+
+checkClientHeaderFieldsLimit : <IO> Unit
+checkClientHeaderFieldsLimit =
+  expectResourceExcess
+    "client header-fields ceiling"
+    clientHeaderFieldsOverLimit
+    "CELL client-header-fields-limit PASS refused"
+
+-- One chunk-size line declaring more than `maxHttpClientChunkBytes`; the
+-- ceiling is enforced on the declared size alone, so no matching chunk data
+-- needs to follow.
+clientChunkSizeOverLimit : Array Int
+clientChunkSizeOverLimit =
+  toUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n200000\r\n"
+
+checkClientChunkSizeLimit : <IO> Unit
+checkClientChunkSizeLimit =
+  expectResourceExcess
+    "client chunk-size ceiling"
+    clientChunkSizeOverLimit
+    "CELL client-chunk-size-limit PASS refused"
+
+-- `maxHttpClientChunks` itself is exercised directly against
+-- `checkHttpClientChunks` (`pds/lib/resource_limits.mdk`'s doctest), not
+-- here: exceeding it for real needs 65537 chunk-head parses, and the eval
+-- engine's tree-walking interpreter has no tail-call optimisation
+-- (`E-STACK-OVERFLOW` past ~25000 call depth) — the same constraint
+-- `clientHeaderBytesOverLimit` above works around by staying shallow, which
+-- is not available here since the recursion this ceiling bounds is one call
+-- per CHUNK, not per byte.
+
+-- A declared Content-Length alone is enough to trip this ceiling; no body
+-- bytes need to be supplied since the check runs before the body is read.
+clientBodyBytesOverLimit : Array Int
+clientBodyBytesOverLimit =
+  toUtf8
+    "HTTP/1.1 200 OK\r\ncontent-length: \{intToString (maxHttpClientBodyBytes + 1)}\r\n\r\n"
+
+checkClientBodyBytesLimit : <IO> Unit
+checkClientBodyBytesLimit =
+  expectResourceExcess
+    "client body-bytes ceiling"
+    clientBodyBytesOverLimit
+    "CELL client-body-bytes-limit PASS refused"
+
+clientMalformedStatusLine : Array Int
+clientMalformedStatusLine = toUtf8 "HTTP/1.1 20 OK\r\n\r\n"
+
+checkClientMalformedStatusLine : <IO> Unit
+checkClientMalformedStatusLine =
+  match HC.parseResponseClassified clientMalformedStatusLine
+    Ok _ =>
+      panic
+        "protocol_all_engines: malformed client status line unexpectedly parsed"
+    Err (HttpClientResourceExcess message) =>
+      panic
+        "protocol_all_engines: malformed client status line reported resource-excess, not malformed: \{message}"
+    Err (HttpClientMalformed _) =>
+      println "CELL client-malformed-status-line PASS refused"
+
+clientMalformedHeader : Array Int
+clientMalformedHeader =
+  toUtf8 "HTTP/1.1 200 OK\r\nbadheader\r\ncontent-length: 0\r\n\r\n"
+
+checkClientMalformedHeader : <IO> Unit
+checkClientMalformedHeader =
+  match HC.parseResponseClassified clientMalformedHeader
+    Ok _ =>
+      panic "protocol_all_engines: malformed client header unexpectedly parsed"
+    Err (HttpClientResourceExcess message) =>
+      panic
+        "protocol_all_engines: malformed client header reported resource-excess, not malformed: \{message}"
+    Err (HttpClientMalformed _) =>
+      println "CELL client-malformed-header PASS refused"
+
 main : <IO> Unit
 main =
   let () = checkFixedQuery
@@ -466,4 +642,13 @@ main =
   let () = checkEmptyIpPort
   let () = checkUnknown
   let () = checkResource
+  let () = checkClientFixedLength
+  let () = checkClientChunked
+  let () = checkClientStatusLineLimit
+  let () = checkClientHeaderBytesLimit
+  let () = checkClientHeaderFieldsLimit
+  let () = checkClientChunkSizeLimit
+  let () = checkClientBodyBytesLimit
+  let () = checkClientMalformedStatusLine
+  let () = checkClientMalformedHeader
   println "TOTAL: PASS"

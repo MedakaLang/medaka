@@ -1,0 +1,44 @@
+{- | Cost-independence for `pds/lib/httpclient.mdk`'s chunked-body accumulation
+   path (#2912). A response framed as N chunks is decoded through a
+   `bytebuilder.Builder` rather than repeated `Array` concatenation, so the
+   marginal allocation cost of parsing should grow with N, not with N^2 — the
+   same shape of assertion `pds/test/ratelimit_test.mdk` makes for a decision's
+   cost against the number of OTHER active identities. -}
+
+import string.{toUtf8, repeat}
+import test.{expectTrue}
+import lib.httpclient.{parseResponse}
+
+-- | A chunked response framed as `n` 3-byte chunks ("abc" each), terminated
+-- by the zero-length final chunk. Built and fully materialized BEFORE any
+-- `allocBytes` snapshot is taken, so the string concatenation this helper
+-- performs is never inside the measured window.
+chunkedResponseOf : Int -> Array Int
+chunkedResponseOf n =
+  toUtf8
+    ("HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n"
+      ++ repeat n "3\r\nabc\r\n"
+      ++ "0\r\n\r\n")
+
+-- | Bytes allocated by parsing exactly one already-built chunked response.
+allocForParse : Array Int -> <IO> Float
+allocForParse input =
+  let before = allocBytes ()
+  let result = parseResponse input
+  let after = allocBytes ()
+  after - before
+
+test "chunked-body parse cost grows linearly, not quadratically, with chunk count" =
+  let small = chunkedResponseOf 10
+  let medium = chunkedResponseOf 100
+  let large = chunkedResponseOf 1000
+  let costSmall = allocForParse small
+  let costMedium = allocForParse medium
+  let costLarge = allocForParse large
+  -- 100x more chunks: a quadratic accumulator would cost roughly 100x*100x =
+  -- 10,000x more than the 10-chunk baseline; a linear one costs roughly 100x.
+  -- The bound below is generous (300x, not 100x) to absorb fixed per-call
+  -- overhead at the smallest size without absorbing anything close to the
+  -- quadratic shape it is meant to catch.
+  expectTrue
+    (costMedium <= costSmall * 300.0 && costLarge <= costMedium * 300.0)
