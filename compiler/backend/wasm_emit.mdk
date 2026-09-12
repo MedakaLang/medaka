@@ -2228,7 +2228,7 @@ scanExprW7 emit (CApp f a) =
 scanExprW7 emit (CVar x _) =
   if x == "Ref" then setRef emit.useRefBox True else noteW8Extern emit x
 scanExprW7 emit (CDict _ routes) = scanDictRoutesW emit routes
-scanExprW7 emit (CMethod _ route implRoutes methRoutes) =
+scanExprW7 emit (CMethod _ _ route implRoutes methRoutes) =
   let _ = scanMethodRouteW emit route
   let _ = scanDictRoutesW emit implRoutes
   scanDictRoutesW emit methRoutes
