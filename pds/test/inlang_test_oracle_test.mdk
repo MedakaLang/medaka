@@ -77,6 +77,7 @@ engineLabel NativeSpeed = "native (speed)"
 suites : List (String, (Int, Engine))
 suites = [
   ("skeleton_test", (2, Eval)),
+  ("httpclient_test", (1, Eval)),
   ("http_test", (85, Eval)),
   ("xrpc_test", (29, Eval)),
   ("server_core_test", (11, Eval)),
@@ -92,7 +93,7 @@ suites = [
   ("rfc6979_test", (4, Eval)),
   ("ecdsa_test", (2, Eval)),
   ("pbkdf2_test", (4, NativeSpeed)),
-  ("jwt_test", (26, NativeSpeed)),
+  ("jwt_test", (32, NativeSpeed)),
   ("credential_test", (20, NativeSpeed)),
   ("session_routes_test", (29, NativeCapability)),
   ("auth_seam_test", (31, NativeCapability)),
@@ -197,6 +198,9 @@ floorExpectation name = match lookup name excluded
 test "pds/test/skeleton_test.mdk executed >= 2 assertions" =
   floorExpectation "skeleton_test"
 
+test "pds/test/httpclient_test.mdk executed >= 1 assertions" =
+  floorExpectation "httpclient_test"
+
 test "pds/test/http_test.mdk executed >= 85 assertions" =
   floorExpectation "http_test"
 
@@ -242,7 +246,7 @@ test "pds/test/ecdsa_test.mdk executed >= 2 assertions" =
 test "pds/test/pbkdf2_test.mdk executed >= 4 assertions" =
   floorExpectation "pbkdf2_test"
 
-test "pds/test/jwt_test.mdk executed >= 26 assertions" =
+test "pds/test/jwt_test.mdk executed >= 32 assertions" =
   floorExpectation "jwt_test"
 
 test "pds/test/credential_test.mdk executed >= 20 assertions" =

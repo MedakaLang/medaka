@@ -3,10 +3,11 @@
 -- Every operation here tries its syscall, and on would-block parks the task
 -- with `awaitAny` until the descriptor is ready, then retries.  Readiness is
 -- level-triggered, so a retry after any wake is correct.  The socket is
--- switched to non-blocking mode by `accept`; a `Connection` from the blocking
--- `net.connect` is switched on first use.  Deadlines are a wait set of the
--- descriptor plus a `WaitUntil`; the task itself decides to give up, so no
--- task is ever dropped (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
+-- switched to non-blocking mode by `accept` and by `connect`; a `Connection`
+-- from the blocking `net.connect` is switched on first use.  Deadlines are a
+-- wait set of the descriptor plus a `WaitUntil`; the task itself decides to
+-- give up, so no task is ever dropped
+-- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
 import net.{Connection(..), Listener(..)}
@@ -17,16 +18,106 @@ import time.{Duration}
 {- | TCP over the async scheduler: the `net` operations that park instead of
    blocking, so many connections share one thread.
 
-   `accept`, `recv`, `send`, and `sendAll` mirror their `net` namesakes but
-   return `Async` values that park until the socket is ready. `recvWithin`
-   and `sendAllWithin` give up after a `Duration` with `Err "timed out"`.
-   `serve` is an accept loop that runs each connection's handler as its
-   own task and closes the connection when the handler finishes. Use
-   `import net_async as A` and call `A.accept`, `A.recv`, and so on.
+   `connect`, `accept`, `recv`, `send`, and `sendAll` mirror their `net`
+   namesakes but return `Async` values that park until the socket is ready.
+   `connectWithin`, `recvWithin` and `sendAllWithin` give up after a
+   `Duration` with `Err "timed out"`. `serve` is an accept loop that runs each
+   connection's handler as its own task and closes the connection when the
+   handler finishes. Use `import net_async as A` and call `A.accept`,
+   `A.recv`, and so on.
 
    Every operation performs `<Net "_">`, and the deadline forms also read
    the clock. Drive the program with `runAsyncIO` or a `main : Async e Unit`.
    Networking works only in a program built for the native target. -}
+
+{- | Connects to `host` on `port`, parking until the handshake finishes
+   instead of blocking the thread in `connect(2)`.
+
+   The returned socket is already non-blocking, so the `recv`/`send` below
+   park on it without switching it first. Resolving `host` still blocks —
+   `netConnectStart` does that part before there is any descriptor to park
+   on — so this parks for the handshake, which is the wait an unreachable or
+   overloaded peer makes unbounded, and not for a name lookup.
+
+   A descriptor is never handed back except inside `Ok`: every other path
+   closes the socket this opened, because the caller has nothing to close
+   it with. -}
+export
+connect : String -> Int -> Async <Net "_" | e> (Result String Connection)
+connect host port =
+  deferThen (startConnect host port) (started => connectStarted started)
+
+startConnect : String -> Int -> Async <Net "_" | e> (Result String Int)
+startConnect host port = liftIO (u => netConnectStart host port)
+
+connectStarted : Result String Int ->
+  Async <Net "_" | e> (Result String Connection)
+connectStarted (Err e) = deferPure (Err e)
+connectStarted (Ok fd) = connectPending fd
+
+connectPending : Int -> Async <Net "_" | e> (Result String Connection)
+connectPending fd =
+  deferThen (liftIO (u => netConnectCheck fd)) (step => connectStep fd step)
+
+-- `Ok None` is a handshake still in flight, which is why the check is asked
+-- again after every wake rather than trusted to mean readiness: a woken task
+-- retries (stdlib/async.mdk's `Wait`), and an unconnected socket reports a
+-- zero `SO_ERROR` exactly like a connected one.
+connectStep : Int ->
+  Result String (Option Unit) ->
+  Async <Net "_" | e> (Result String Connection)
+connectStep fd (Ok None) =
+  deferThen (awaitAny [WaitWrite fd]) (_ => connectPending fd)
+connectStep fd (Ok (Some _)) = deferPure (Ok (Connection fd))
+connectStep fd (Err e) = abandonConnect fd e
+
+-- | `connect` that gives up after `d` with `Err "timed out"`.
+export
+connectWithin : Duration ->
+  String ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectWithin d host port =
+  deferThen (deadlineAfter d) (dl => connectFrom dl host port)
+
+connectFrom : Wait ->
+  String ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectFrom dl host port =
+  deferThen (startConnect host port) (started => connectUntilStarted dl started)
+
+connectUntilStarted : Wait ->
+  Result String Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectUntilStarted _ (Err e) = deferPure (Err e)
+connectUntilStarted dl (Ok fd) = connectUntil dl fd
+
+connectUntil : Wait ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectUntil dl fd = deferThen (liftIO (u => netConnectCheck fd)) (step =>
+  connectUntilStep dl fd step)
+
+connectUntilStep : Wait ->
+  Int ->
+  Result String (Option Unit) ->
+  Async <Clock, Net "_" | e> (Result String Connection)
+connectUntilStep dl fd (Ok None) = deferThen (expired dl) (late =>
+  if late then
+    abandonConnect fd "timed out"
+  else
+    deferThen (awaitAny [WaitWrite fd, dl]) (_ => connectUntil dl fd))
+connectUntilStep _ fd (Ok (Some _)) = deferPure (Ok (Connection fd))
+connectUntilStep _ fd (Err e) = abandonConnect fd e
+
+-- The socket belongs to the wrapper until a `Connection` reaches the caller,
+-- so a give-up path that left it open would leak one descriptor per failed
+-- dial — a server that proxies would run out of them while every dial still
+-- looked like an ordinary error.
+abandonConnect : Int -> String -> Async <Net "_" | e> (Result String Connection)
+abandonConnect fd message =
+  deferThen (close (Connection fd)) (_ => deferPure (Err message))
 
 -- | Accepts the next connection, parking until one arrives. The listener
 -- and the accepted socket are switched to non-blocking mode.

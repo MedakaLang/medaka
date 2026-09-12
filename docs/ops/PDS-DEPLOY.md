@@ -96,6 +96,63 @@ never sets it against anything but Caddy on the same box.
    curl -sS https://<hostname>/xrpc/com.atproto.server.describeServer
    ```
 
+## Appview proxying (optional, off by default)
+
+A client can ask this PDS to forward a read to an appview by sending an
+`atproto-proxy` header. **Nothing is ever forwarded unless both flags below
+are given** — with neither, such a header is refused `400 InvalidRequest` and
+no credential is minted.
+
+```
+--appview-did  did:web:api.bsky.app      # the ONE service a header may name
+--egress-port  3128                      # loopback port of the egress proxy
+```
+
+Each requires the other; giving one alone is refused before the bind, naming
+this file. `--appview-did` must be a **bare** DID with no `#service`
+fragment — a header may name a service OF it (`did:web:api.bsky.app#bsky_appview`)
+and the fragment is stripped from the credential's `aud`, because a peer checks
+`aud` against its own DID.
+
+Two operator-visible consequences:
+
+- **The outbound call is a plain loopback HTTP connection to
+  `127.0.0.1:<egress-port>`.** This process never dials the internet itself
+  and does no TLS outbound; reaching the real appview is the egress proxy's
+  job, exactly as reaching the internet inbound is Caddy's. The unit can
+  therefore keep egress confined to that one port.
+- **A forwarded read is metered as its own rate-limit class**
+  (`maxProxiedCallsPerWindow`, `docs/design/ATPROTO-PDS-DESIGN.md` § "Rate
+  limiting"), because one inbound request becomes one outbound request. The
+  shared request allowance does not bound it.
+
+Which methods a header may name is not configurable: it is derived from the
+official PDS's own route registration and is **default-deny** — see
+`docs/design/ATPROTO-PDS-DESIGN.md` § 4.5, "What a header is allowed to ask
+for". A method this server answers itself is answered, not forwarded, even
+when a header asks for it.
+
+## Discovery: announcing to a relay (optional, off by default)
+
+`com.atproto.sync.listRepos` and `com.atproto.sync.getRepoStatus` are pure
+reads this PDS always serves, so a relay that already knows about this server
+can find and check on its one hosted repository with no configuration at all.
+`--relay-port` covers the other half: telling a relay that has **never**
+heard of this server that it exists.
+
+```
+--relay-port  3129    # loopback port of a reverse proxy fronting the relay
+```
+
+With the flag given, this server sends one `com.atproto.sync.requestCrawl`
+call — `{"hostname": "<this server's --hostname>"}`, **no authorization
+header** — to `127.0.0.1:<relay-port>` once at startup. As with
+`--egress-port` above, this process never dials the internet itself; reaching
+the real relay is the reverse proxy's job. The call is best-effort: a relay
+that refuses the connection, times out, or answers with an error is logged to
+stderr and otherwise ignored — it neither blocks startup nor prevents this
+server from answering any other request.
+
 ## Backup and restore
 
 **Consistency, in one sentence:** take a file-level backup with the server

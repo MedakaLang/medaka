@@ -1,0 +1,362 @@
+{- | Gate A's stub appview (#2912): a loopback listener standing in for the
+   service a proxied read is forwarded to, and for the egress proxy in front of
+   it.
+
+   It exists to make the credential OBSERVABLE from outside this project. Every
+   other test of service auth in this tree grades a token against code that
+   minted it or against a vector file; this driver is the only place a token
+   crosses a socket and is read by something that never knew what the issuer
+   intended. So what it does with each call is log the claims it RECEIVED —
+   `aud`, `lxm`, `iss`, `jti` — and echo two of them back in its answer, which
+   is what lets `pds/test/serve_e2e.sh` assert, from the client's side of the
+   PDS, that the audience and method a token was minted for are the ones the
+   header asked for and not the ones an attacker did.
+
+   It verifies NOTHING. A stub that graded the signature would be asserting
+   self-consistency between two halves of this project; that judgement belongs
+   to `pds/tools/check_pds_service_jwt.mjs` and its reference verifier. This
+   driver is an observer, and an observer that refused a call could hide a
+   defect behind its own refusal.
+
+   Three modes:
+
+     appview_stub_main answer PORT LOGFILE STATUS
+     appview_stub_main stall PORT
+     appview_stub_main deaf PORT
+
+   `answer` serves one call at a time — read, log, reply, close — which is all
+   a sequential gate needs, and replies with `STATUS` so a case can prove the
+   upstream's own status code is relayed rather than replaced. `stall` accepts
+   and never answers: it is the head-of-line-blocking case's upstream, and the
+   claim under test there is about the PDS's scheduler, not about this driver.
+   `deaf` never accepts at all and fills its own accept queue until the kernel
+   stops answering handshakes, which is the only state in which a LOOPBACK dial
+   hangs rather than completing or being refused — the upstream a case about
+   the PDS's connect needs.
+
+   `PORT` may be 0, in which case the kernel picks one and the readiness line
+   on stdout names it — the same contract `pds/serve.mdk` has with this gate,
+   so neither side has to guess a free port. -}
+
+import array.{concat, sliceClamped}
+import base64.{decodeUrlSafe}
+import http.{
+  Header,
+  Request,
+  headerName,
+  headerValue,
+  makeHeader,
+  makeResponse,
+  parseRequest,
+  requestHeaders,
+  requestTarget,
+  serializeResponse,
+}
+import json.{Json(..), get, jObject, parse, stringify}
+import net.{
+  Connection,
+  Listener,
+  accept,
+  close,
+  listen,
+  listenPort,
+  recv,
+  recvAll,
+  sendAll,
+}
+import string.{drop, fromUtf8, split, startsWith, toInt, toUtf8}
+
+-- ── the claims a call arrived with ──────────────────────────────────────────
+
+{- | Base64url as RFC 7515 §2 writes it — no trailing padding — which
+   `base64.decodeUrlSafe` (RFC 4648 §5) rejects outright. The padding is put
+   back rather than the decoder relaxed.
+
+   `pds/lib/jwt.mdk` holds the same adaptation privately, and it stays private
+   there: this driver is supposed to read a token the way an off-box peer does,
+   with its own decoder, so sharing one would make the observation circular. -}
+-- This shares `base64.decode`'s declared signature but neither its alphabet nor
+-- its padding convention, which is the whole reason it exists;
+-- rule-stdlib-reimpl compares declared signatures only and cannot see the
+-- difference, so it is disabled for this file rather than delegated away.
+-- lint-disable-file rule-stdlib-reimpl
+segmentBytes : String -> Result String (Array Int)
+segmentBytes segment = match stringLength segment % 4
+  0 => decodeUrlSafe segment
+  2 => decodeUrlSafe "\{segment}=="
+  3 => decodeUrlSafe "\{segment}="
+  _ => Err "appview_stub: segment is not a valid unpadded base64url length"
+
+claimsJson : String -> Result String Json
+claimsJson token = match split "." token
+  [_, claimsSeg, _] => match segmentBytes claimsSeg
+    Err message => Err "appview_stub: claims segment: \{message}"
+    Ok bytes => parse (fromUtf8 bytes)
+  _ => Err "appview_stub: bearer credential is not three segments"
+
+-- A claim that is absent reads as `<absent>` rather than failing the call: a
+-- missing `lxm` is exactly the defect a gate asserting on this line is looking
+-- for, and a driver that refused the call would print nothing to assert on.
+stringClaim : String -> Json -> String
+stringClaim name claims = match get name claims
+  Some (JString text) => text
+  _ => "<absent>"
+
+intClaim : String -> Json -> String
+intClaim name claims = match get name claims
+  Some (JInt value) => intToString value
+  _ => "<absent>"
+
+-- ── the request ─────────────────────────────────────────────────────────────
+
+headerEnd : Array Int -> Int -> Option Int
+headerEnd buf i =
+  if i + 4 > arrayLength buf then
+    None
+  else if buf[i] == 13
+    && buf[i + 1] == 10
+    && buf[i + 2] == 13
+    && buf[i + 3] == 10 then
+    Some i
+  else
+    headerEnd buf (i + 1)
+
+findHeaderValue : String -> List Header -> Option String
+findHeaderValue _ [] = None
+findHeaderValue wanted (header :: rest) =
+  if headerName header == wanted then
+    Some (fromUtf8 (headerValue header))
+  else
+    findHeaderValue wanted rest
+
+bearerToken : Request -> Result String String
+bearerToken request =
+  match findHeaderValue "authorization" (requestHeaders request)
+    None => Err "appview_stub: call carried no authorization field"
+    Some value =>
+      if startsWith "Bearer " value then
+        Ok (drop 7 value)
+      else
+        Err "appview_stub: authorization field is not a bearer credential"
+
+-- ── the answer ──────────────────────────────────────────────────────────────
+
+mustJsonHeader : Header
+mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
+  Ok header => header
+  Err message => panic "appview_stub: header error: \{message}"
+
+{- | The stub's answer, echoing the audience and method the credential it was
+   handed actually named.
+
+   Echoing them is what makes the assertion available to the CLIENT. The gate
+   can read the log file too, but a body carrying `aud` and `lxm` proves one
+   thing the log cannot: that what the PDS relayed to its client is this
+   service's own answer to this service's own credential, rather than something
+   the PDS composed. -}
+answerBytes : Int -> String -> String -> Array Int
+answerBytes status aud lxm =
+  let body =
+    toUtf8
+      (stringify
+        (jObject [
+          ("appview", JString "stub"),
+          ("aud", JString aud),
+          ("lxm", JString lxm),
+        ]))
+  match makeResponse status "OK" [mustJsonHeader] body
+    Ok response => serializeResponse response
+    Err message => panic "appview_stub: response error: \{message}"
+
+{- | The answer for a call this driver could not read the claims of.
+
+   It is a 200 carrying `<absent>` claims, not a refusal: the PDS relays the
+   status it is given, so answering 400 here would make a stub-side read failure
+   indistinguishable from the PDS refusing the request itself — and telling
+   those two apart is the whole point of the cases this driver serves. -}
+unreadableBytes : Int -> Array Int
+unreadableBytes status = answerBytes status "<unreadable>" "<unreadable>"
+
+-- ── modes ───────────────────────────────────────────────────────────────────
+
+logLine : String -> String -> <FileWrite "_"> Unit
+logLine path line = match appendFile path "\{line}\n"
+  Ok () => ()
+  Err message => panic "appview_stub: could not log: \{message}"
+
+{- | One complete request head.
+
+   Read with `recv` and not `recvAll`: a proxied call does not close its end
+   before it expects an answer, so reading to EOF here would deadlock against
+   the very peer this driver exists to answer. The forwarded request carries no
+   body, so the `\r\n\r\n` terminator is the whole of it. -}
+recvRequest : Connection -> Array Int -> <Net "_"> Result String Request
+recvRequest conn buffer = match headerEnd buffer 0
+  Some at => parseRequest (sliceClamped 0 (at + 4) buffer)
+  None => match recv conn 65536
+    Err message => Err "appview_stub: read failed: \{message}"
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "appview_stub: call closed before its header terminator"
+      else
+        recvRequest conn (concat [|buffer, chunk|])
+
+answerCall : String ->
+  Int ->
+  Connection ->
+  <FileWrite "_", Net "_"> Result String Unit
+answerCall path status conn =
+  let bytes = match recvRequest conn [||]
+    Err message =>
+      let () = logLine path "unreadable \{message}"
+      unreadableBytes status
+    Ok request => match bearerToken request
+      Err message =>
+        let () = logLine path "unreadable \{message}"
+        unreadableBytes status
+      Ok token => match claimsJson token
+        Err message =>
+          let () = logLine path "unreadable \{message}"
+          unreadableBytes status
+        Ok claims =>
+          let aud = stringClaim "aud" claims
+          let lxm = stringClaim "lxm" claims
+          let () =
+            logLine
+              path
+              "call aud=\{aud} lxm=\{lxm} iss=\{stringClaim "iss" claims} jti=\{stringClaim "jti" claims} iat=\{intClaim "iat" claims} target=\{requestTarget request}"
+          answerBytes status aud lxm
+  sendAll conn bytes
+
+-- Reads the call to its end and answers nothing, holding the connection until
+-- the PDS's own outbound budget gives up on it. `serveLoop` then closes it and
+-- accepts the next one, so a stalled upstream can be asked twice.
+stallCall : Connection -> <Net "_"> Result String Unit
+stallCall conn = match recvAll conn
+  Err _ => Ok ()
+  Ok _ => Ok ()
+
+-- Announces the bound port and hands it back, so a mode that needs the port
+-- itself does not ask for it a second time and risk naming a different one in
+-- its own output than the gate read from this line.
+ready : Listener -> <IO, Net "_"> Int
+ready lis = match listenPort lis
+  Err message => panic "appview_stub: listener port unavailable: \{message}"
+  Ok port =>
+    let () = println "appview-stub: listening on 127.0.0.1:\{intToString port}"
+    let () = flushStdout ()
+    port
+
+{- | How long one `deaf` dial is given to complete before the accept queue is
+   taken to be full. A loopback handshake the kernel answers completes in
+   microseconds, so this is three orders of magnitude of slack. -}
+dialProbeMs : Int
+dialProbeMs = 300
+
+{- | How many dials `deaf` will make looking for the queue's edge. The kernel
+   takes the listen backlog plus one before it starts dropping handshakes
+   (`listen(fd, 128)`, `stdlib/net.mdk`), so this is comfortably past it while
+   still terminating if a future kernel queues far more. -}
+backlogDialAttempts : Int
+backlogDialAttempts = 512
+
+{- | Whether a dial to this box's own `port` finishes its handshake inside
+   `dialProbeMs`.
+
+   The readiness externs are used directly, rather than `net`'s blocking
+   `connect`, because the question is exactly the one a blocking connect cannot
+   answer: a dial into a FULL accept queue is not refused — the kernel drops
+   the handshake and `connect(2)` waits minutes on SYN retries — so a driver
+   that dialled with `net.connect` would itself hang at the edge it is looking
+   for, with nothing left to report the edge with.
+
+   A socket whose handshake never completed is deliberately left open: the
+   queue stays full only while those requests keep retransmitting, and closing
+   them would let the next dial through — including the PDS's, which is the
+   dial the case needs to hang. -}
+dialCompletes : Int -> <Net "_"> Bool
+dialCompletes port = match netConnectStart "127.0.0.1" port
+  Err message => panic "appview_stub: deaf dial failed: \{message}"
+  Ok fd => match ioPoll [|fd|] [|2|] dialProbeMs
+    Err message => panic "appview_stub: deaf poll failed: \{message}"
+    Ok _ => match netConnectCheck fd
+      Ok (Some _) => True
+      Ok None => False
+      Err message => panic "appview_stub: deaf dial refused: \{message}"
+
+{- | Dial this listener until a dial stops completing, then say so.
+
+   The readiness line is already out by the time this runs, so the gate waits
+   for THIS line before pointing a PDS at the port: a dial made while the queue
+   still had room would complete, and the case would grade a connect that never
+   hung. -}
+fillBacklog : Int -> Int -> <IO, Net "_"> Unit
+fillBacklog port attempts =
+  if attempts <= 0 then
+    panic "appview_stub: the accept queue never filled"
+  else if dialCompletes port then
+    fillBacklog port (attempts - 1)
+  else
+    let () =
+      println "appview-stub: accept queue full on 127.0.0.1:\{intToString port}"
+    flushStdout ()
+
+-- Nothing is ever accepted, so there is no loop to run: the process exists
+-- from here on only to hold the queue full and the sockets open.
+idleForever : Unit -> <Clock> Unit
+idleForever u =
+  let () = sleepMs 60000
+  idleForever ()
+
+deaf : Int -> <Clock, IO, Net "_"> Unit
+deaf port = match listen "127.0.0.1" port
+  Err message => panic "appview_stub: listen failed: \{message}"
+  Ok lis =>
+    let bound = ready lis
+    let () = fillBacklog bound backlogDialAttempts
+    idleForever ()
+
+{- | `stdlib/net`'s own `serveLoop` cannot carry this: its handler row is closed
+   at `<Net "_">`, and logging the claims a call arrived with is a file write.
+   One connection at a time, closed on every path, which is all a sequential
+   gate asks for. -}
+acceptLoop : Listener ->
+  (Connection -> <FileWrite "_", Net "_"> Result String Unit) ->
+  <FileWrite "_", Net "_"> Unit
+acceptLoop lis handle = match accept lis
+  Err message => panic "appview_stub: accept failed: \{message}"
+  Ok conn =>
+    let _ = handle conn
+    let _ = close conn
+    acceptLoop lis handle
+
+serve : Int ->
+  (Connection -> <FileWrite "_", Net "_"> Result String Unit) ->
+  <IO, Net "_"> Unit
+serve port handle = match listen "127.0.0.1" port
+  Err message => panic "appview_stub: listen failed: \{message}"
+  Ok lis =>
+    let _ = ready lis
+    acceptLoop lis handle
+
+mustPort : String -> Int
+mustPort text = match toInt text
+  Some port => port
+  None => panic "appview_stub: not a port: \{text}"
+
+mustStatus : String -> Int
+mustStatus text = match toInt text
+  Some status => status
+  None => panic "appview_stub: not a status code: \{text}"
+
+usage : String
+usage =
+  "usage: appview_stub_main <answer PORT LOGFILE STATUS|stall PORT|deaf PORT>"
+
+main : <Clock, IO, Env, Net "_"> Unit
+main = match args ()
+  ["answer", port, path, status] =>
+    serve (mustPort port) (answerCall path (mustStatus status))
+  ["stall", port] => serve (mustPort port) stallCall
+  ["deaf", port] => deaf (mustPort port)
+  _ => panic usage

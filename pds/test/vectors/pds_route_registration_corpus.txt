@@ -1,0 +1,106 @@
+# Generated only by pds/tools/extract_pds_proxy_answer_key.mjs; see pds/README.md.
+# Registration observed by running the pinned image's own dist/api/index.js against a
+# recording stub server; exact package routes are in VECTOR-PROVENANCE.txt.
+# Columns: nsid<TAB>registration<TAB>proxy-helpers-imported.
+#
+# registration   always         registered unconditionally
+#                appview-gated  registered only when PDS_BSKY_APP_VIEW_URL/DID are set
+#
+# An nsid ABSENT FROM THIS FILE is not registered at all and reaches the catch-all
+# proxyHandler, which forwards it to pipethrough.js defaultService -- bsky_appview for
+# everything except the enumerated tools.ozone (atproto_labeler) and
+# com.atproto.moderation.createReport cases. With no such service configured the oracle
+# answers 400 InvalidRequest "No service configured for <nsid>", which is the SAME answer
+# it gives for an nsid in no lexicon at all: an HTTP probe cannot distinguish
+# "forwarded" from "does not exist".
+#
+# proxy-helpers-imported is read from the route module's own source and is how a local
+# handler is told from a forwarding one:
+#   -                          answers entirely from PDS-local state
+#   pipethrough                answers locally for some requests and forwards others,
+#                              deciding per request -- getPreferences/putPreferences
+#                              forward only when an atproto-proxy header names a service
+#                              other than the configured appview, while repo.getRecord
+#                              forwards when this PDS does not host the repo at all.
+#                              Read the module to see which rule applies.
+#   pipethroughReadAfterWrite  forwards to the appview, then patches the response with
+#                              the caller's own not-yet-indexed writes
+#   serviceAuthHeaders         calls the target service itself, with a service-auth bearer
+app.bsky.actor.getPreferences	appview-gated	pipethrough
+app.bsky.actor.getProfile	appview-gated	pipethroughReadAfterWrite
+app.bsky.actor.getProfiles	appview-gated	pipethroughReadAfterWrite
+app.bsky.actor.putPreferences	appview-gated	pipethrough
+app.bsky.feed.getActorLikes	appview-gated	pipethroughReadAfterWrite
+app.bsky.feed.getAuthorFeed	appview-gated	pipethroughReadAfterWrite
+app.bsky.feed.getFeed	appview-gated	pipethrough
+app.bsky.feed.getPostThread	appview-gated	pipethroughReadAfterWrite
+app.bsky.feed.getTimeline	appview-gated	pipethroughReadAfterWrite
+app.bsky.notification.registerPush	appview-gated	serviceAuthHeaders
+app.bsky.notification.unregisterPush	appview-gated	serviceAuthHeaders
+com.atproto.admin.deleteAccount	always	-
+com.atproto.admin.disableAccountInvites	always	-
+com.atproto.admin.disableInviteCodes	always	-
+com.atproto.admin.enableAccountInvites	always	-
+com.atproto.admin.getAccountInfo	always	-
+com.atproto.admin.getAccountInfos	always	-
+com.atproto.admin.getInviteCodes	always	-
+com.atproto.admin.getSubjectStatus	always	-
+com.atproto.admin.sendEmail	always	-
+com.atproto.admin.updateAccountEmail	always	-
+com.atproto.admin.updateAccountHandle	always	-
+com.atproto.admin.updateAccountPassword	always	-
+com.atproto.admin.updateSubjectStatus	always	-
+com.atproto.identity.getRecommendedDidCredentials	always	-
+com.atproto.identity.requestPlcOperationSignature	always	-
+com.atproto.identity.resolveHandle	always	-
+com.atproto.identity.signPlcOperation	always	-
+com.atproto.identity.submitPlcOperation	always	-
+com.atproto.identity.updateHandle	always	-
+com.atproto.moderation.createReport	always	pipethrough,serviceAuthHeaders
+com.atproto.repo.applyWrites	always	-
+com.atproto.repo.createRecord	always	-
+com.atproto.repo.deleteRecord	always	-
+com.atproto.repo.describeRepo	always	-
+com.atproto.repo.getRecord	always	pipethrough
+com.atproto.repo.importRepo	always	-
+com.atproto.repo.listMissingBlobs	always	-
+com.atproto.repo.listRecords	always	-
+com.atproto.repo.putRecord	always	-
+com.atproto.repo.uploadBlob	always	-
+com.atproto.server.activateAccount	always	-
+com.atproto.server.checkAccountStatus	always	-
+com.atproto.server.confirmEmail	always	-
+com.atproto.server.createAccount	always	-
+com.atproto.server.createAppPassword	always	-
+com.atproto.server.createInviteCode	always	-
+com.atproto.server.createInviteCodes	always	-
+com.atproto.server.createSession	always	-
+com.atproto.server.deactivateAccount	always	-
+com.atproto.server.deleteAccount	always	-
+com.atproto.server.deleteSession	always	-
+com.atproto.server.describeServer	always	-
+com.atproto.server.getAccountInviteCodes	always	-
+com.atproto.server.getServiceAuth	always	pipethrough
+com.atproto.server.getSession	always	-
+com.atproto.server.listAppPasswords	always	-
+com.atproto.server.refreshSession	always	-
+com.atproto.server.requestAccountDelete	always	-
+com.atproto.server.requestEmailConfirmation	always	-
+com.atproto.server.requestEmailUpdate	always	-
+com.atproto.server.requestPasswordReset	always	-
+com.atproto.server.reserveSigningKey	always	-
+com.atproto.server.resetPassword	always	-
+com.atproto.server.revokeAppPassword	always	-
+com.atproto.server.updateEmail	always	-
+com.atproto.sync.getBlob	always	-
+com.atproto.sync.getBlocks	always	-
+com.atproto.sync.getCheckout	always	-
+com.atproto.sync.getHead	always	-
+com.atproto.sync.getLatestCommit	always	-
+com.atproto.sync.getRecord	always	-
+com.atproto.sync.getRepo	always	-
+com.atproto.sync.getRepoStatus	always	-
+com.atproto.sync.listBlobs	always	-
+com.atproto.sync.listRepos	always	-
+com.atproto.sync.subscribeRepos	always	-
+com.atproto.temp.checkSignupQueue	always	-

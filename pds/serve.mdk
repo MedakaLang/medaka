@@ -69,7 +69,7 @@ import args.{
   value,
 }
 import array as A
-import async.{Async, liftIO}
+import async.{Async, liftIO, spawn}
 import fs.{isDir}
 import hex.{decode, encode}
 import io.{isPrivateMode, writeFilePrivate}
@@ -84,6 +84,7 @@ import lib.credential.{
 import lib.jwt.{serverSecretBytes}
 import lib.ratelimit.{TrustedProxy(..)}
 import lib.handlers.{pdsServer}
+import lib.proxy.{AppviewPolicy, makeAppviewPolicy}
 import lib.repo.{
   Repo,
   repoCommitCid,
@@ -92,7 +93,7 @@ import lib.repo.{
   repoInitFromKeyBytes,
   repoLatestCommit,
 }
-import lib.server_core.{Server, makeAccount}
+import lib.server_core.{Server, accountHostname, makeAccount, serverAccount}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.cid.{Cid, cidToString}
 import lib.event_log_record.{eventLogRetentionSeconds}
@@ -106,6 +107,8 @@ import lib.store.{
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
 import shell.blobfile.{blobFileRead}
+import shell.crawl.{RelayTarget, makeRelayTarget, requestCrawl}
+import shell.egress.{Egress, makeEgress}
 import shell.eventlog.{eventLogRecover}
 import shell.keygen.{keygenRefusePath, keygenSigningKey, keygenTokenSecret}
 import shell.persist.{
@@ -115,7 +118,7 @@ import shell.persist.{
   persistLoad,
   persistSave,
 }
-import shell.server.{bindAddress, runServer}
+import shell.server.{Serving, bindAddress, makeServing, runServer}
 import string.{lines, stripSuffix, toInt, trim}
 import time.{now}
 
@@ -143,6 +146,18 @@ serveSpec = spec "serve" [
   switch
     ["--trusted-proxy"]
     "trust this connection's peer to be the reverse proxy in front of it, and read the client identity `X-Forwarded-For` names for rate limiting; without it every request shares one identity bucket",
+  value
+    ["--appview-did"]
+    "DID"
+    "the ONE appview service DID an atproto-proxy header may name; requires --egress-port, and without both no request is ever proxied",
+  intValue
+    ["--egress-port"]
+    "N"
+    "loopback port of the local egress proxy that forwards to --appview-did; requires --appview-did",
+  intValue
+    ["--relay-port"]
+    "N"
+    "loopback port of a local reverse proxy that forwards to a relay; announces this server's --hostname there once at startup, best-effort",
 ]
 
 {- | `pds keygen`'s roster. Both flags name a file to CREATE, and both are
@@ -211,6 +226,72 @@ requireTrustedBind bind (TrustedProxy trusted) =
   else
     Err
       "refusing to bind \{bind}: a non-loopback bind requires --trusted-proxy (see docs/ops/PDS-DEPLOY.md)"
+
+-- Port 0 is accepted for `--port` because the kernel picks a free one there.
+-- An egress port is a port this process must REACH, so 0 names nothing.
+egressPortOf : String -> Result String Int
+egressPortOf text = match toInt text
+  None => Err "--egress-port is not an integer: \{text}"
+  Some port =>
+    if port < 1 || port > 65535 then
+      Err "--egress-port must be in 1..65535"
+    else
+      Ok port
+
+{- | Where a proxied read goes, and the audience a client's `atproto-proxy`
+   header is allowed to name — or `None`, meaning this server proxies nothing.
+
+   All or none. `--appview-did` alone names an audience with no route to it and
+   `--egress-port` alone names a route with no audience allowed to claim it, so
+   either alone is a startup refusal rather than a silently inert proxy: an
+   operator who believes forwarding is configured and is wrong learns it here
+   rather than from a 400 on a route they expected to be forwarded.
+
+   With neither, every `atproto-proxy` header there is gets refused with
+   nothing signed, which is the only safe default for a server whose operator
+   has not said where its appview is — a proxy that defaults to somewhere is a
+   credential-bearing call to a destination nobody chose. -}
+configureEgress : Args -> SecretKey -> Result String (Option Egress)
+configureEgress parsed signingKey = match (
+  flagValue "--appview-did" parsed,
+  flagValue "--egress-port" parsed,
+)
+  (None, None) => Ok None
+  (Some _, None) =>
+    Err "--appview-did requires --egress-port (see docs/ops/PDS-DEPLOY.md)"
+  (None, Some _) =>
+    Err "--egress-port requires --appview-did (see docs/ops/PDS-DEPLOY.md)"
+  (Some did, Some portText) => do
+    policy <- appviewPolicyOf did
+    port <- egressPortOf portText
+    Ok (Some (makeEgress port policy signingKey))
+
+appviewPolicyOf : String -> Result String AppviewPolicy
+appviewPolicyOf did = match makeAppviewPolicy did
+  Err message => Err "--appview-did \{did}: \{message}"
+  Ok policy => Ok policy
+
+relayPortOf : String -> Result String Int
+relayPortOf text = match toInt text
+  None => Err "--relay-port is not an integer: \{text}"
+  Some port =>
+    if port < 1 || port > 65535 then
+      Err "--relay-port must be in 1..65535"
+    else
+      Ok port
+
+{- | `--relay-port`, or `None` to announce nowhere — the same "no flag, no
+   outbound call" default `configureEgress` uses for `--appview-did`.
+
+   Unlike the appview pair there is no second flag to cross-require: a relay
+   announce carries no credential and needs no audience DID, only a
+   destination, so one flag is the whole configuration. -}
+configureRelay : Args -> Result String (Option RelayTarget)
+configureRelay parsed = match flagValue "--relay-port" parsed
+  None => Ok None
+  Some portText => do
+    port <- relayPortOf portText
+    Ok (Some (makeRelayTarget port))
 
 -- The mode as `chmod` and `stat -c %a` spell it, so an operator can compare a
 -- rejection to the `0600` its remedy names without converting anything.
@@ -544,10 +625,11 @@ openRepo True dir did keyBytes secret =
     initRepo dir did keyBytes
 
 {- | Everything the server needs, or the first reason it may not run: the
-   configured server, its initial store, the data directory, the port, and
-   the address to bind. -}
+   configured server, its initial store, the data directory, the port, the
+   address to bind, and where (if anywhere) to announce this repository to a
+   relay. -}
 configure : Args ->
-  <Clock, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, TrustedProxy)
+  <Clock, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -565,6 +647,13 @@ configure parsed = do
   server <- pdsServer account
   keyBytes <- readHexBytes "signing key" keyPath
   secret <- secretKeyFromBytes keyBytes
+  -- Admitted here, beside the other flag-supplied configuration and ahead of
+  -- every generated secret, for the same reason `requireTrustedBind` is: a run
+  -- refused for a malformed appview DID must leave no session secret on disk
+  -- for the next run to adopt (#2659 item 4).
+  egress <- configureEgress parsed secret
+  let serving = makeServing trustedProxy egress (Ref 0)
+  relay <- configureRelay parsed
   () <- requireDir dir
   repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
   -- A previous process may have died between persisting a commit and
@@ -590,7 +679,8 @@ configure parsed = do
     dir,
     port,
     bind,
-    trustedProxy,
+    serving,
+    relay,
   )
 
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
@@ -605,42 +695,68 @@ reportOutcome : Result String Unit -> <Stderr> Unit
 reportOutcome (Ok ()) = ()
 reportOutcome (Err message) = abort "serve: accept loop ended: \{message}"
 
+{- | A single best-effort relay announce, fired once at startup rather than on
+   every sequenced event the way the reference implementation's rate-limited
+   trigger does (`NOTIFY_THRESHOLD`, 1200s) — a deliberate narrowing for this
+   slice (`S-crawl-routes`): this server has no event sequencer to hang a
+   per-event trigger off yet, and "announce once, if configured" already
+   gives an unheard-of server a way to be found without adding a second
+   background timer. Failure is logged only and never reaches `reportOutcome`
+   or `abort`: an unreachable relay must not prevent startup and must leave
+   no durable side effect from a run that reported failure (contract §7;
+   #2906, #2659 item 4). -}
+announceToRelay : RelayTarget ->
+  String ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+announceToRelay target hostname = defer
+  outcome <- requestCrawl target hostname
+  match outcome
+    Ok () => deferPure ()
+    Err message =>
+      liftIO (u => ePutStrLn "serve: relay announce failed: \{message}")
+
 announce : String ->
   Int ->
   Listener ->
   Store ->
   String ->
   Server ->
-  TrustedProxy ->
+  Serving ->
+  Option RelayTarget ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-announce bind port lis store dir server trustedProxy = defer
+announce bind port lis store dir server serving relay = defer
   _ <- liftIO (u => ready bind port)
+  _ <- match relay
+    None => deferPure ()
+    Some target =>
+      spawn (announceToRelay target (accountHostname (serverAccount server)))
   storeRef <- liftIO (u => Ref store)
-  outcome <- runServer server dir storeRef lis trustedProxy
+  outcome <- runServer server dir storeRef lis serving
   liftIO (u => reportOutcome outcome)
 
 bound : String ->
   Server ->
   Store ->
   String ->
-  TrustedProxy ->
+  Serving ->
+  Option RelayTarget ->
   Result String Listener ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-bound _ _ _ _ _ (Err message) =
+bound _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
-bound bind server store dir trustedProxy (Ok lis) = defer
+bound bind server store dir serving relay (Ok lis) = defer
   port <- liftIO (u => listenPort lis)
   match port
     Err message =>
       liftIO (u => abort "serve: listener port unavailable: \{message}")
-    Ok given => announce bind given lis store dir server trustedProxy
+    Ok given => announce bind given lis store dir server serving relay
 
-start : Result String (Server, Store, String, Int, String, TrustedProxy) ->
+start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget) ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
-start (Ok (server, store, dir, port, bind, trustedProxy)) = defer
+start (Ok (server, store, dir, port, bind, serving, relay)) = defer
   listener <- liftIO (u => bindAddress bind port)
-  bound bind server store dir trustedProxy listener
+  bound bind server store dir serving relay listener
 
 -- A `keygen` run touches no socket and no repository, so it finishes inside
 -- one synchronous step rather than entering the scheduler.

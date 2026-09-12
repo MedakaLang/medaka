@@ -38,6 +38,15 @@ CELL host-empty-reg-port PASS status=200 state=unchanged
 CELL host-empty-ip-port PASS status=200 state=unchanged
 CELL unknown-unchanged PASS status=404 state=unchanged
 CELL resource-unchanged PASS status=413 state=unchanged
+CELL client-fixed-length PASS status=200 body=hello
+CELL client-chunked PASS chunks=2 body=foobar trailer=done
+CELL client-status-line-limit PASS refused
+CELL client-header-bytes-limit PASS refused
+CELL client-header-fields-limit PASS refused
+CELL client-chunk-size-limit PASS refused
+CELL client-body-bytes-limit PASS refused
+CELL client-malformed-status-line PASS refused
+CELL client-malformed-header PASS refused
 TOTAL: PASS
 EOF
 
@@ -60,6 +69,15 @@ check_cells() {
   grep -F -q 'CELL host-empty-ip-port PASS status=200 state=unchanged' "$output" || fail "$label missed empty IP-literal port cell"
   grep -F -q 'CELL unknown-unchanged PASS status=404 state=unchanged' "$output" || fail "$label missed unknown-route cell"
   grep -F -q 'CELL resource-unchanged PASS status=413 state=unchanged' "$output" || fail "$label missed resource cell"
+  grep -F -q 'CELL client-fixed-length PASS status=200 body=hello' "$output" || fail "$label missed client fixed-length cell"
+  grep -F -q 'CELL client-chunked PASS chunks=2 body=foobar trailer=done' "$output" || fail "$label missed client chunked cell"
+  grep -F -q 'CELL client-status-line-limit PASS refused' "$output" || fail "$label missed client status-line ceiling cell"
+  grep -F -q 'CELL client-header-bytes-limit PASS refused' "$output" || fail "$label missed client header-bytes ceiling cell"
+  grep -F -q 'CELL client-header-fields-limit PASS refused' "$output" || fail "$label missed client header-fields ceiling cell"
+  grep -F -q 'CELL client-chunk-size-limit PASS refused' "$output" || fail "$label missed client chunk-size ceiling cell"
+  grep -F -q 'CELL client-body-bytes-limit PASS refused' "$output" || fail "$label missed client body-bytes ceiling cell"
+  grep -F -q 'CELL client-malformed-status-line PASS refused' "$output" || fail "$label missed client malformed-status-line cell"
+  grep -F -q 'CELL client-malformed-header PASS refused' "$output" || fail "$label missed client malformed-header cell"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from hand-authored cells"
 }
 

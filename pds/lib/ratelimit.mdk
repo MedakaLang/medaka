@@ -55,6 +55,7 @@ import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
   maxConnectionsPerWindow,
   maxCreateSessionPerWindow,
+  maxProxiedCallsPerWindow,
   maxRepoExportsPerWindow,
   maxRequestsPerWindow,
   maxWritesPerWindow,
@@ -77,12 +78,19 @@ export
 identityLabel : ClientIdentity -> String
 identityLabel (ClientIdentity label) = label
 
+{- | `ProxyClass` is the one class whose cost is not this server's own work: a
+   proxied read turns ONE inbound request into ONE outbound request to the
+   appview plus up to `maxHttpClientBodyBytes` of response to decode, so its
+   count and the shared request count are different quantities and the
+   amplifying one needs naming separately — exactly the argument
+   `RepoExportClass` rests on, in the outbound direction. -}
 public export data RateLimitClass =
   | ConnectionsClass
   | RequestsClass
   | WritesClass
   | CreateSessionClass
   | RepoExportClass
+  | ProxyClass
 
 public export data RateLimitVerdict = Admitted | Refused
 
@@ -102,9 +110,9 @@ public export data RateLimitVerdict = Admitted | Refused
 export data RateLimitState =
   | RateLimitState Int (Map String ClientCounters) (Map String ClientCounters)
 
-data ClientCounters = ClientCounters Int Int Int Int Int
+data ClientCounters = ClientCounters Int Int Int Int Int Int
 -- connections used, requests used, writes used, createSession used,
--- repo exports used
+-- repo exports used, proxied calls used
 
 -- | No window has been entered yet, so any first decision starts fresh: the
 -- index cannot collide with a real `now / rateLimitWindowSeconds`, which is
@@ -120,6 +128,7 @@ classAllowance RequestsClass = maxRequestsPerWindow
 classAllowance WritesClass = maxWritesPerWindow
 classAllowance CreateSessionClass = maxCreateSessionPerWindow
 classAllowance RepoExportClass = maxRepoExportsPerWindow
+classAllowance ProxyClass = maxProxiedCallsPerWindow
 
 {- | The two tables in view at `windowIdx`, given the pair a state holds and
    the index they were written at: the same pair while the index has not
@@ -189,26 +198,29 @@ step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key
     )
 
 emptyCounters : ClientCounters
-emptyCounters = ClientCounters 0 0 0 0 0
+emptyCounters = ClientCounters 0 0 0 0 0 0
 
 classUsed : RateLimitClass -> ClientCounters -> Int
-classUsed ConnectionsClass (ClientCounters c _ _ _ _) = c
-classUsed RequestsClass (ClientCounters _ r _ _ _) = r
-classUsed WritesClass (ClientCounters _ _ w _ _) = w
-classUsed CreateSessionClass (ClientCounters _ _ _ s _) = s
-classUsed RepoExportClass (ClientCounters _ _ _ _ x) = x
+classUsed ConnectionsClass (ClientCounters c _ _ _ _ _) = c
+classUsed RequestsClass (ClientCounters _ r _ _ _ _) = r
+classUsed WritesClass (ClientCounters _ _ w _ _ _) = w
+classUsed CreateSessionClass (ClientCounters _ _ _ s _ _) = s
+classUsed RepoExportClass (ClientCounters _ _ _ _ x _) = x
+classUsed ProxyClass (ClientCounters _ _ _ _ _ p) = p
 
 bumpClass : RateLimitClass -> ClientCounters -> ClientCounters
-bumpClass ConnectionsClass (ClientCounters c r wr s x) =
-  ClientCounters (c + 1) r wr s x
-bumpClass RequestsClass (ClientCounters c r wr s x) =
-  ClientCounters c (r + 1) wr s x
-bumpClass WritesClass (ClientCounters c r wr s x) =
-  ClientCounters c r (wr + 1) s x
-bumpClass CreateSessionClass (ClientCounters c r wr s x) =
-  ClientCounters c r wr (s + 1) x
-bumpClass RepoExportClass (ClientCounters c r wr s x) =
-  ClientCounters c r wr s (x + 1)
+bumpClass ConnectionsClass (ClientCounters c r wr s x p) =
+  ClientCounters (c + 1) r wr s x p
+bumpClass RequestsClass (ClientCounters c r wr s x p) =
+  ClientCounters c (r + 1) wr s x p
+bumpClass WritesClass (ClientCounters c r wr s x p) =
+  ClientCounters c r (wr + 1) s x p
+bumpClass CreateSessionClass (ClientCounters c r wr s x p) =
+  ClientCounters c r wr (s + 1) x p
+bumpClass RepoExportClass (ClientCounters c r wr s x p) =
+  ClientCounters c r wr s (x + 1) p
+bumpClass ProxyClass (ClientCounters c r wr s x p) =
+  ClientCounters c r wr s x (p + 1)
 
 -- | `RateLimit-Remaining` for a class, without mutating state: for response
 -- headers, computed AFTER the `step` call it accompanies so it reflects the
