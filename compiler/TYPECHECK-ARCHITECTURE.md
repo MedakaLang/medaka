@@ -111,8 +111,15 @@ same-spelled defaults remain order-sensitive there. Wasm dynamic-dictionary defa
 (#1020) retain their pre-existing limitation. Same-arity defaults still need full
 interface identity and remain subject to the existing first-match limitation.
 
-Ordinary method-return sites retain the legacy spelling-based path; this work does not
-complete the shared solver or return-family migration. The finalized scheme query
+Ordinary method-return sites with a recovered interface parameter vector select one
+instance row for both the method route and its prerequisites. Checking and return
+stamping share the full-vector instance-head matcher: a result `Box a` does not
+substitute `Box a` for the class parameter `a`. Numeric return and arithmetic routes
+use that matcher too. Ordinary sites without recoverable method metadata retain
+the scalar compatibility path; argument and nested routes retain their existing
+matching policy. Checking and stamping still select separately, and ordinary
+return selection remains spelling-based. This does not complete the shared solver
+or return-family migration. The finalized scheme query
 `checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
 live inference cells. Cache replacement and immutable publication remain with
 [#2549](https://github.com/MedakaLang/medaka/issues/2549).

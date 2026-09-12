@@ -1300,9 +1300,6 @@ numeric_predicate_required='import types.solver_contract.{ClassPredicate(..)}
   | SKNumReturn ClassPredicate Mono
   | OpNumLit Mono
   | EKNumReturn ClassPredicate Mono Bool (Option Loc)
-  match ieSelectRowByIface env predicate.predicateInterface goals
-      let route = RKey (methodRouteKeyForRow name env row) []
-      let routes = implDictRoutesForRow encl useScope m goals row
     _ => tagRef := numericReturnRoute route routes
       let split = binopRouteSplit route
 recordMethodDictsFromSlots anchor.msrMethodSlots (Ref []) (snd inst)
@@ -1313,6 +1310,20 @@ finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry'
 printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
     echo "FAIL: numeric return predicate migration is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+# Ordinary and numeric returns share the matcher, so a match in the ordinary arm
+# cannot establish that the numeric arm still consumes its exact predicate.
+numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$predicate_slot_src")"
+numeric_return_inst_required='  let goals = predicate.predicateArguments
+  match ieSelectRowByIface env predicate.predicateInterface goals
+      let route = RKey (methodRouteKeyForRow name env row) []
+      let routes = implDictRoutesForRow encl useScope goals row'
+printf '%s\n' "$numeric_return_inst_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$numeric_return_inst_body" | grep -Fq "$required"; then
+    echo "FAIL: numeric return instance arm is missing required source: $required"
     exit 1
   fi
 done || exit 1
