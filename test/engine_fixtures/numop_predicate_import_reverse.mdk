@@ -1,11 +1,41 @@
 -- The foreign interface exports the same method spellings as Num. Reversing
 -- these independent imports must not change the operator's prelude Num identity.
+-- lint-disable-file rule-missing-signature
 
 import numop_predicate.foreign.{add, sub, mul, div}
 import numop_predicate.box.{Box(..)}
+import numop_predicate.num.{numReady}
+
+signedAdd : Num a => a -> a -> a
+signedAdd x y = x + y
+
+signedSub : Num a => a -> a -> a
+signedSub x y = x - y
+
+signedMul : Num a => a -> a -> a
+signedMul x y = x * y
+
+signedDiv : Num a => a -> a -> a
+signedDiv x y = x / y
+
+inferredAdd x y = x + y
+
+inferredSub x y = x - y
+
+inferredMul x y = x * y
+
+inferredDiv x y = x / y
 
 main =
-  println (Box 12 + Box 3 == Box 15)
-  println (Box 12 - Box 3 == Box 9)
-  println (Box 12 * Box 3 == Box 36)
-  println (Box 12 / Box 3 == Box 4)
+  println (signedAdd (Box 12) (Box 3) == Box 1203)
+  println (signedSub (Box 12) (Box 3) == Box 1197)
+  println (signedMul (Box 12) (Box 3) == Box 12003)
+  println (signedDiv (Box 12) (Box 3) == Box 120003)
+  println (inferredAdd (Box 12) (Box 3) == Box 1203)
+  println (inferredSub (Box 12) (Box 3) == Box 1197)
+  println (inferredMul (Box 12) (Box 3) == Box 12003)
+  println (inferredDiv (Box 12) (Box 3) == Box 120003)
+  println (Box 12 + Box 3 == Box 1203)
+  println (Box 12 - Box 3 == Box 1197)
+  println (Box 12 * Box 3 == Box 12003)
+  println (Box 12 / Box 3 == Box 120003)

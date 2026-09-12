@@ -1,0 +1,15 @@
+import numop_predicate.box.{Box(..)}
+
+export
+numReady : Unit
+numReady = ()
+
+export impl Num (Box a) requires Num a where
+  add (Box x) (Box y) = Box (x * 100 + y)
+  sub (Box x) (Box y) = Box (x * 100 - y)
+  mul (Box x) (Box y) = Box (x * 1000 + y)
+  div (Box x) (Box y) = Box (x * 10000 + y)
+  negate (Box x) = Box (-x)
+  abs (Box x) = Box (abs x)
+  signum (Box x) = Box (signum x)
+  fromInt n = Box (fromInt n)

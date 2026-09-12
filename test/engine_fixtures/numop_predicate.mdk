@@ -4,6 +4,7 @@
 -- lint-disable-file rule-missing-signature
 
 import numop_predicate.box.{Box(..)}
+import numop_predicate.num.{numReady}
 import numop_predicate.foreign.{add, sub, mul, div}
 
 signedAdd : Num a => a -> a -> a
@@ -30,16 +31,16 @@ addOne : Num a => a -> a
 addOne x = x + 1
 
 main =
-  println (signedAdd (Box 12) (Box 3) == Box 15)
-  println (signedSub (Box 12) (Box 3) == Box 9)
-  println (signedMul (Box 12) (Box 3) == Box 36)
-  println (signedDiv (Box 12) (Box 3) == Box 4)
-  println (signedAdd (Box 1.5) (Box 2.25) == Box 3.75)
-  println (inferredAdd (Box 12) (Box 3) == Box 15)
-  println (inferredSub (Box 12) (Box 3) == Box 9)
-  println (inferredMul (Box 12) (Box 3) == Box 36)
-  println (inferredDiv (Box 12) (Box 3) == Box 4)
-  println (addOne (Box 41) == Box 42)
+  println (signedAdd (Box 12) (Box 3) == Box 1203)
+  println (signedSub (Box 12) (Box 3) == Box 1197)
+  println (signedMul (Box 12) (Box 3) == Box 12003)
+  println (signedDiv (Box 12) (Box 3) == Box 120003)
+  println (signedAdd (Box 1.5) (Box 2.25) == Box 152.25)
+  println (inferredAdd (Box 12) (Box 3) == Box 1203)
+  println (inferredSub (Box 12) (Box 3) == Box 1197)
+  println (inferredMul (Box 12) (Box 3) == Box 12003)
+  println (inferredDiv (Box 12) (Box 3) == Box 120003)
+  println (addOne (Box 41) == Box 4101)
   println (signedAdd (12 : Int) 3 == 15)
   println (signedSub (12 : Int) 3 == 9)
   println (signedMul (12 : Int) 3 == 36)

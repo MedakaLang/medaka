@@ -1,5 +1,13 @@
+import numop_predicate.box.{Box}
+
 export interface Forge a where
   add : a -> a -> a
   sub : a -> a -> a
   mul : a -> a -> a
   div : a -> a -> a
+
+export impl Forge (Box a) where
+  add x _ = x
+  sub x _ = x
+  mul x _ = x
+  div x _ = x
