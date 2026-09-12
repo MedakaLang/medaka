@@ -1277,6 +1277,180 @@ test "ordinary return shares declaration identity vector and goal destination" =
     expectEqual [True, True, True] (map methodTracePublishedOne trace),
   ]
 
+methodTraceOrigin : MethodReturnTraceEntry -> String
+methodTraceOrigin entry = match entry.mrtInterface.irOrigin
+  OriginModule moduleId => moduleId
+  _ => "<unresolved>"
+
+methodTraceIdentityView : MethodReturnTraceEntry ->
+  (MethodReturnTraceStage, String, Option (List String))
+methodTraceIdentityView entry =
+  (entry.mrtStage, methodTraceOrigin entry, methodTraceArgs entry)
+
+importedReturnObserved : Bool ->
+  (Int, List (MethodReturnTraceStage, String, Option (List String)))
+importedReturnObserved reverseOrder =
+  let owner = (
+    "return_owner",
+    joinNl [
+      "export interface OwnerChoice a where",
+      "  choose : Unit -> a",
+      "impl OwnerChoice Int where",
+      "  choose _ = 41",
+    ],
+  )
+  let foreign = (
+    "return_foreign",
+    joinNl [
+      "export interface ForeignChoice a where",
+      "  choose : Unit -> a",
+      "impl ForeignChoice Bool where",
+      "  choose _ = True",
+    ],
+  )
+  let imports =
+    if reverseOrder then
+      ["import return_foreign.{choose}", "import return_owner as O"]
+    else
+      ["import return_owner as O", "import return_foreign.{choose}"]
+  let entry = (
+    "return_importer",
+    joinNl (imports ++ ["value : Int", "value = O.choose ()"]),
+  )
+  let sources =
+    if reverseOrder then [foreign, owner, entry] else [owner, foreign, entry]
+  beginMethodReturnTrace ()
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parse numericPreludeSource))
+      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let trace =
+    map
+      methodTraceIdentityView
+      (filter (item => item.mrtMethod == "choose") (finishMethodReturnTrace ()))
+  (modErrorCount results, trace)
+
+test "alias-qualified ordinary returns keep owner identity across import orders" =
+  let forward = importedReturnObserved False
+  let backward = importedReturnObserved True
+  expectAll [
+    expectEqual 0 (fst forward),
+    expectEqual forward backward,
+    expectEqual
+      [
+        (MRTProduced, "return_owner", Some ["Int"]),
+        (MRTChecked, "return_owner", Some ["Int"]),
+        (MRTStamped, "return_owner", Some ["Int"]),
+      ]
+      (snd forward),
+  ]
+
+flatMethodReturnStages : String -> List MethodReturnTraceStage
+flatMethodReturnStages source =
+  beginMethodReturnTrace ()
+  let _ =
+    elaborateDict
+      []
+      []
+      ["value"]
+      (desugar (parse "\{numericPreludeSource}\n\{source}"))
+  map
+    (entry => entry.mrtStage)
+    (filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ()))
+
+test "Flat unresolved returns keep complete missing and shadow cases legacy" =
+  let missing = joinNl [
+    "interface HiddenChoice a b where",
+    "  choose : Unit -> a",
+    "impl HiddenChoice Int Bool where",
+    "  choose _ = 7",
+    "value : Int",
+    "value = choose ()",
+  ]
+  let shadow = joinNl [
+    "interface ShadowChoice a where",
+    "  choose : Unit -> a",
+    "impl ShadowChoice Int where",
+    "  choose _ = 7",
+    "choose _ = 9",
+    "value : Int",
+    "value = choose ()",
+  ]
+  expectEqual
+    ([], [], [])
+    (
+      flatMethodReturnStages returnIdentitySource,
+      flatMethodReturnStages missing,
+      flatMethodReturnStages shadow,
+    )
+
+freshMethodReturnStages : String -> List MethodReturnTraceStage
+freshMethodReturnStages moduleId =
+  beginMethodReturnTrace ()
+  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    moduleId,
+    desugar (parseLocated returnIdentitySource),
+  )
+  map
+    (entry => entry.mrtStage)
+    (filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ()))
+
+cachedMethodReturnObserved : String -> (Int, List MethodReturnTraceStage)
+cachedMethodReturnObserved entrySource =
+  let prefix = joinNl [
+    "export interface CachedChoice a where",
+    "  cachedChoose : Unit -> a",
+    "impl CachedChoice Int where",
+    "  cachedChoose _ = 41",
+    "export cached : Int",
+    "cached = cachedChoose ()",
+  ]
+  beginMethodReturnTrace ()
+  let results =
+    checkModulesDiagsChain
+      (Some (991, 997))
+      "method-return-identity-cache"
+      [Some "stable-method-return-prefix-v1", None]
+      []
+      (desugar (parse numericPreludeSource))
+      [
+        ("return_cache_prefix", desugar (parseLocated prefix)),
+        ("return_cache_entry", desugar (parseLocated entrySource)),
+      ]
+  let stages =
+    map
+      (entry => entry.mrtStage)
+      (filter
+        (entry => entry.mrtMethod == "cachedChoose")
+        (finishMethodReturnTrace ()))
+  (modErrorCount results, stages)
+
+test "ordinary return traces are fresh while cache hits replay no events" =
+  let first = freshMethodReturnStages "return_fresh"
+  let (failedErrors, _) = checkOneDiags [] [] (
+    "return_failed",
+    desugar (parseLocated "value : Int\nvalue = \"wrong\"\n"),
+  )
+  let afterFailure = freshMethodReturnStages "return_fresh"
+  let success = "import return_cache_prefix.{cached}\nentry = cached\n"
+  let cold = cachedMethodReturnObserved success
+  let hit = cachedMethodReturnObserved success
+  let failedHit = cachedMethodReturnObserved "entry : Int\nentry = \"wrong\"\n"
+  let afterFailedHit = cachedMethodReturnObserved success
+  expectAll [
+    expectEqual [MRTProduced, MRTChecked, MRTStamped] first,
+    expectEqual first afterFailure,
+    expectEqual True (listLen failedErrors > 0),
+    expectEqual (0, [MRTProduced, MRTChecked, MRTStamped]) cold,
+    expectEqual (0, []) hit,
+    expectEqual True (fst failedHit > 0 && snd failedHit == []),
+    expectEqual (0, []) afterFailedHit,
+  ]
+
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
 
 methodHeadArity : String -> CExpr -> Option Int

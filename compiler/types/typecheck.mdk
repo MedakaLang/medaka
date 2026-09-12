@@ -38769,6 +38769,266 @@ methodRowNumericAnchorProbe _ =
 -- > methodRowNumericAnchorProbe ()
 -- (0, "Foldable", ["t"], [("attrOnly", False, False, "", ""), ("directOnly", True, True, "String -> a", "String -> a"), ("attrThenDirect", True, True, "String -> a", "String -> a"), ("directThenAttr", False, False, "", ""), ("builtinThenUser", True, True, "Int -> a", "Int -> a"), ("userThenBuiltin", True, True, "Int -> a", "Int -> a")])
 
+methodReturnProbeIface : String -> String -> Ty -> Decl
+methodReturnProbeIface moduleId ifaceName methodTy =
+  methodRowTestIface
+    moduleId
+    ifaceName
+    ["a"]
+    [IfaceMethod "make" methodTy None None]
+
+methodReturnProbeImpl : String -> String -> Decl
+methodReturnProbeImpl moduleId ifaceName = DImpl {
+  pub = False,
+  iface = ifaceName,
+  tys = [tyConBuiltin "Int" None],
+  reqs = [],
+  methods = [ImplMethod "make" [] (ELit LUnit)],
+  implOrigin = OriginModule moduleId,
+}
+
+methodReturnProbeScope : String -> ScopeId
+methodReturnProbeScope moduleId =
+  let scope =
+    Scopes.freshScope (currentScopeStore ()) None 0 moduleId ModuleOwner
+  let _ = openScope scope
+  scope
+
+methodReturnProbeOccurrence : MethodSchemeRow -> (Mono, List (Int, Mono))
+methodReturnProbeOccurrence row =
+  let inst = instantiateTracked row.msrScheme
+  let _ = unify (stripArrows (fst inst)) (tconBuiltin "Int")
+  inst
+
+methodReturnProbeSpelling : MethodSchemeRow -> Unit
+methodReturnProbeSpelling row =
+  perRun.value.methodIfaceParamsRef :=
+    omInsert "make" (row.msrIface, row.msrTyparams, row.msrType, []) omEmpty
+
+methodReturnProbeRequest : MethodSchemeRow -> MethodReturnRequest
+methodReturnProbeRequest row =
+  let occurrence = fst (methodReturnProbeOccurrence row)
+  methodReturnRequest row occurrence None
+
+methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
+methodReturnProbeCodes ownedRow impls =
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let _ = methodReturnProbeScope "return-owner-checker"
+  let foreignRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-foreign"
+          "Foreign"
+          (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
+      ])
+  let request = methodReturnProbeRequest ownedRow
+  let _ = methodReturnProbeSpelling foreignRow
+  let _ = recordExactMethodObligation request
+  let universe = buildImplUniverse impls
+  let _ = checkCallObligationsU True universe (wAll perRun.value.implObls)
+  map tcCode (reverseL perRun.value.typeErrors.items.value)
+
+methodReturnProbeRouteKey : Route -> String
+methodReturnProbeRouteKey (RKey key _) = key
+methodReturnProbeRouteKey _ = ""
+
+methodReturnProbeStamp : MethodSchemeRow ->
+  MethodSchemeRow ->
+  List Decl ->
+  (String, String, String)
+methodReturnProbeStamp ownedRow foreignRow impls =
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let scope = methodReturnProbeScope "return-owner-stamper"
+  let request = methodReturnProbeRequest ownedRow
+  let _ = methodReturnProbeSpelling foreignRow
+  let env = buildFlatImplEnv impls
+  perRun.value.bodyImplEnvRef := env
+  let tagRef = Ref RNone
+  let implRef = Ref []
+  let resultMono = stripArrows request.mrrOccurrence
+  let _ =
+    resolveExactReturnSite
+      []
+      "make"
+      tagRef
+      implRef
+      resultMono
+      request
+      ""
+      None
+      scope
+  let goals = optionOr [] (methodReturnArgs request)
+  let ownedKey = match ieSelectRowByIface env ownedRow.msrIface goals
+    Some selected => methodRouteKeyForRow "make" env selected
+    None => ""
+  let foreignKey = match ieSelectRowByIface env foreignRow.msrIface goals
+    Some selected => methodRouteKeyForRow "make" env selected
+    None => ""
+  (methodReturnProbeRouteKey tagRef.value, ownedKey, foreignKey)
+
+-- The request is created before the spelling table is pointed at Foreign.  The checker
+-- must still reject a graph containing only Foreign's impl, its positive control must
+-- accept Owner's impl, and the stamper must select Owner's distinct route.
+methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
+methodReturnOwnershipProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  let savedSticky = typeErrorsSticky.value
+  let savedStickyDiags = typeErrorsStickyDiags.value
+  crossRun := freshCrossRun initialEnv
+  let ownedDecl =
+    methodReturnProbeIface
+      "return-owner"
+      "Owner"
+      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+  let foreignDecl =
+    methodReturnProbeIface
+      "return-foreign"
+      "Foreign"
+      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let ownedRow = firstMethodRow (ifaceMethodSchemeRows [ownedDecl])
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let foreignRow = firstMethodRow (ifaceMethodSchemeRows [foreignDecl])
+  let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
+  let foreignImpl = methodReturnProbeImpl "return-foreign" "Foreign"
+  let rejected = methodReturnProbeCodes ownedRow [foreignImpl]
+  let accepted = methodReturnProbeCodes ownedRow [foreignImpl, ownedImpl]
+  let (actualKey, ownedKey, foreignKey) =
+    methodReturnProbeStamp ownedRow foreignRow [foreignImpl, ownedImpl]
+  let observed = (
+    rejected,
+    accepted,
+    actualKey == ownedKey,
+    actualKey /= foreignKey,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  typeErrorsSticky := savedSticky
+  typeErrorsStickyDiags := savedStickyDiags
+  observed
+
+-- > methodReturnOwnershipProbe ()
+-- (["T-NO-IMPL"], [], True, True)
+
+methodReturnProbeSlotIfaces : List PredicateSlot -> List String
+methodReturnProbeSlotIfaces slots = map (slot => slot.psIface.irName) slots
+
+methodReturnProbeGoalIfaces : List Obligation -> List String
+methodReturnProbeGoalIfaces [] = []
+methodReturnProbeGoalIfaces (goal :: rest) = match goal.oPayload
+  GPMethodDict pending =>
+    methodReturnProbeSlotIfaces pending.pmdSlots
+      ++ methodReturnProbeGoalIfaces rest
+  _ => methodReturnProbeGoalIfaces rest
+
+methodReturnProbeOblIfaces : List UObligation -> List String
+methodReturnProbeOblIfaces [] = []
+methodReturnProbeOblIfaces (obl :: rest) =
+  let here = match obl.prov
+    PMethodLevel => [obl.pred.iface.irName]
+    _ => []
+  here ++ methodReturnProbeOblIfaces rest
+
+methodReturnProbeSlotCase : MethodSchemeRow ->
+  MethodSchemeRow ->
+  Bool ->
+  (List String, List String)
+methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let _ = methodReturnProbeScope "return-owner-slots"
+  perRun.value.methodPredicateSlotsRef := [("make", foreignRow.msrMethodSlots)]
+  let _ = methodReturnProbeSpelling foreignRow
+  let env =
+    if retainOwner then
+      extendMethodRow initialEnv "make" ownedRow
+    else
+      extendVar initialEnv "make" ownedRow.msrScheme
+  let inst = instantiateTracked ownedRow.msrScheme
+  let _ =
+    unify
+      (stripArrows (fst inst))
+      (tupleMono [tconBuiltin "Int", tconBuiltin "Int"])
+  let _ =
+    recordSite
+      env
+      "make"
+      ownedRow.msrScheme
+      (Ref RNone)
+      (Ref [])
+      (Ref [])
+      (fst inst)
+      (snd inst)
+  (
+    methodReturnProbeOblIfaces (wAll perRun.value.obls),
+    methodReturnProbeGoalIfaces graphRun.value.goals.value,
+  )
+
+-- The retained row owns Seed, the same-name legacy table owns Decoy, and an empty
+-- retained row is a known empty answer.  Only the missing-row compatibility control
+-- may fall back to Decoy.
+methodReturnSlotOwnershipProbe : Unit ->
+  ((List String, List String), (List String, List String), (List String, List String))
+methodReturnSlotOwnershipProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let ownedRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-owner-slots"
+          "OwnedSlots"
+          (TyConstrained
+            [methodRowTestConstraint "return-seed" "Seed" [TyVar "b"]]
+            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
+      ])
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let emptyRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-empty-slots"
+          "EmptySlots"
+          (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
+      ])
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let foreignRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-foreign-slots"
+          "ForeignSlots"
+          (TyConstrained
+            [methodRowTestConstraint "return-decoy" "Decoy" [TyVar "b"]]
+            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
+      ])
+  let observed = (
+    methodReturnProbeSlotCase ownedRow foreignRow True,
+    methodReturnProbeSlotCase emptyRow foreignRow True,
+    methodReturnProbeSlotCase ownedRow foreignRow False,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observed
+
+-- > methodReturnSlotOwnershipProbe ()
+-- ((["Seed"], ["Seed"]), ([], []), (["Decoy"], ["Decoy"]))
+
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
 -- writer that can ever answer a structured goal:
