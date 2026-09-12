@@ -184,11 +184,11 @@ fi
 #                              diff_compiler_snapshot_prelude.sh dump, per-fixture user
 #                              schemes to # TYPES_USER; typecheck_golden_batch had no other
 #                              consumer, so its oracle + entry source went with them)
-#   check_main              — diff_compiler_typecheck_errors.sh (driver B) / diff_compiler_check.sh
-#   check_batch             — diff_compiler_check_batch.sh
-#   check_modules_main      — diff_compiler_check_modules.sh
+#   check_main              — diff_compiler_typecheck_errors.sh (driver B) / diff_compiler_check
+#   check_batch             — diff_compiler_check (batched leg)
+#   check_modules_main      — diff_compiler_check (multi-module leg)
 #   check_all_main          — diff_compiler_selfproc.sh (LEG A)
-#   check_match_main        — diff_compiler_check_match.sh
+#   check_match_main        — diff_compiler_check (match-exhaustiveness leg)
 #   exhaust_main            — diff_compiler_exhaust.sh
 #   lint_main               — diff_compiler_lint.sh (added by the lint workstream)
 #   diagnostics_main        — diff_compiler_diagnostics.sh
@@ -402,10 +402,13 @@ if [ "${1:-}" = "--for" ]; then
   # "matched no gates" for a shard whose patterns are all outside test/.)
   #
   # A `kind = "native"` registry entry (#2591) has no `.sh` for those globs to
-  # find, so it resolves by registry NAME and the gate IS its `run` module. Such
-  # a gate reads no test/bin oracle, so it contributes none below — but it must
-  # still RESOLVE, or `--for` would report "matched no gates" for a diff whose
-  # whole derived pattern set is native, and preflight would abort on it.
+  # find, so it resolves by registry NAME and the gate IS its `run` module. Its
+  # oracles are then derived from that module the same way as from a script —
+  # the `test/bin/<name>` grep below reads a `.mdk` as happily as a `.sh`, which
+  # is why a native runner must spell its oracle paths literally. A native gate
+  # that reads none simply contributes none — but it must still RESOLVE, or
+  # `--for` would report "matched no gates" for a diff whose whole derived
+  # pattern set is native, and preflight would abort on it.
   #
   # `_native_rows` (one line per row: "<name> <repo-relative run path>") is
   # defined in test/gate_native_rows.sh, sourced here rather than pasted, so

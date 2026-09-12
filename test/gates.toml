@@ -1614,20 +1614,6 @@ sources = ["compiler/backend/*", "compiler/eval/*", "compiler/ir/core_ir_eval.md
 corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = []
 
-[[gate]]
-name = "diff_compiler_check_batch"
-area = "types"
-shard = "gates_8"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_check_batch.sh"
-oracles = ["check_batch"]
-sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_batch.sh"]
-corpus = ["test/diff_fixtures", "test/resolve_fixtures"]
-toolchain = []
 
 [[gate]]
 name = "diff_compiler_check_cli_modules"
@@ -1660,36 +1646,6 @@ corpus = ["test/check_json_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
-name = "diff_compiler_check_match"
-area = "types"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_check_match.sh"
-oracles = ["check_match_main"]
-sources = ["compiler/driver/*", "compiler/frontend/exhaust.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_match.sh"]
-corpus = ["test/check_match_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_check_modules"
-area = "types"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_check_modules.sh"
-oracles = ["check_modules_main"]
-sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check_modules.sh"]
-corpus = ["test/check_module_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_check_policy"
 area = "types"
 shard = "gates_2"
@@ -1711,12 +1667,12 @@ shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_check.sh"
-oracles = ["check_main"]
-sources = ["compiler/driver/*", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/diff_compiler_check.sh"]
-corpus = ["test/diff_fixtures", "test/import_error_fixtures", "test/resolve_fixtures"]
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_check_test.mdk"
+oracles = ["check_batch", "check_main", "check_match_main", "check_modules_main"]
+sources = ["compiler/driver/*", "compiler/frontend/exhaust.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_check_test.mdk"]
+corpus = ["test/check_match_fixtures", "test/check_module_fixtures", "test/diff_fixtures", "test/import_error_fixtures", "test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]

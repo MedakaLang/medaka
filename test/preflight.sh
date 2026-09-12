@@ -669,7 +669,10 @@ while IFS= read -r f; do
       add 'diff_compiler_core_ir_typed_modules'
       add 'diff_compiler_dict_semantics' ;;
     compiler/frontend/exhaust.mdk)
-      add 'diff_compiler_exhaust'; add 'diff_compiler_check_match' ;;
+      # diff_compiler_check_match's match-exhaustiveness corpus is a leg of
+      # the diff_compiler_check sweep; the gate that now carries it is named
+      # by the survivor, not by the retired script.
+      add 'diff_compiler_exhaust'; add 'diff_compiler_check' ;;
 
     # ── types ── (also the TYPES snapshot family: typecheck.mdk renders the
     #    `# TYPES` section of test/snapshots/typecheck{,_panic}_fixtures, #81 R5)
