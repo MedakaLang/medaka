@@ -1441,7 +1441,8 @@ the separate evaluator and backend validation.
 The modules arm of `test/wasm/diff_wasm_emitted_size.sh` exposed duplicated
 dispatch bodies after canonical dictionary aliases were admitted. An alias arm
 repeated the implementation call and its argument instructions; nested argument
-dispatches amplified that duplication. The repair in `4a3d2598d` keeps one body
+dispatches amplified that duplication. The repair measured at `4a3d2598d`
+(landed unchanged as `2f362bf91`) keeps one body
 per implementation and accepts its primary and canonical words in one condition.
 The existing Core pre-scan indexes materialized dictionary keys, so an unused
 canonical alias adds no comparison. Static principal method keys are excluded,

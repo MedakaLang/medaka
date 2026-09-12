@@ -311,22 +311,22 @@ gap is wider than the method-less impl #948 turned on — the derived-Ord ADT in
 Four independently derived values are now pinned after their ledger rows promoted:
 
 - `engine/nary_sig_requires_decoy` is `107`: `Ix Int (Box Int)` selects the
-  `requires Elem Int` instance, so its body computes `100 + elemOf 7`. At current
-  main `42a672d0428b8d49ced7a86ddeac08d3eccda52e`, eval still raised
-  `intToString: not an Int` while native and Wasm printed `107`; final head
+  `requires Elem Int` instance, so its body computes `100 + elemOf 7`. At
+  baseline `42a672d0428b8d49ced7a86ddeac08d3eccda52e`, eval still raised
+  `intToString: not an Int` while native and Wasm printed `107`; promotion head
   `b5fc35034cb3c95d4e942081578d6adc3d5762e8` prints `107` on all three.
 - `llvmM/module_local_route_word` is `boxint\nloudint`: module `a` calls its
   `Box Int` implementations, even though the complete program also contains the
-  `Box String` siblings from module `b`. Current main's eval/native arms printed
-  both lines while Wasm trapped at `unreachable`; final head prints both lines on
-  every arm.
+  `Box String` siblings from module `b`. The baseline's eval/native arms printed
+  both lines while Wasm trapped at `unreachable`; the promotion head prints both
+  lines on every arm.
 - `llvmT/impl_andthen_list` is `206`: `[1,101,2,102]` sums to `206`.
 - `llvmT/impl_ap_list` is `66`: `[11,12,21,22]` sums to `66`.
 
 The two typed value-main fixtures already produced their stated values under the
-gate's eval auto-printer and both shipping backends at current main; deleting their
-stale `native:autoprint-ambiguous` rows records that existing promotion. The final
-scoped differential reports `eq:eq:eq` and each new absolute pin passes.
+gate's eval auto-printer and both shipping backends at the baseline; deleting their
+stale `native:autoprint-ambiguous` rows records that existing promotion. The scoped
+differential at the promotion head reports `eq:eq:eq` and each new absolute pin passes.
 
 ---
 

@@ -30630,20 +30630,6 @@ inferUserImplBodies env allProg ce cur decls =
   let _ = wPushAll perRun.value.implObls (reverseL keptImpl)
   let _ = wPushAll perRun.value.obls (reverseL keptCall)
   ()
--- issue 1146: the typeErrors save/window/rebuild that used to close this function is
--- RETIRED — it was DEAD, an identity dressed as a filter.  It computed
--- `added = takeFirst (listLen curErrs - listLen savedErrs) curErrs` and wrote back
--- `added ++ savedErrs`, which IS `curErrs`: pushes are CONSED onto the head, and no
--- site replaces this channel wholesale within a `perRun` lifetime (this rebuild was
--- the last one).  So `savedErrs` was always a suffix of
--- `curErrs` and the rebuild always reproduced it.  The sticky recomputation
--- `savedSticky || isNonEmptyL added` was dead for the same reason: every push arms
--- the sticky flag in the SAME arm in which it stores, so "added is non-empty" and
--- "the flag was armed during this window" are the same fact, and the flag was
--- already set.  #782's decision to STOP suppressing the effect axis is what emptied
--- the filter (isSuppressedImplBodyErr, gone; see the history block above); nothing
--- replaced it, so what remained was a no-op.  Keeping the body's errors is now what
--- happens by DOING NOTHING, which is also what the comment block above describes.
 
 -- True for a DImpl whose head types carry NO type variable (a monomorphic receiver like
 -- `Eq Outer` / `Debug (List Int)`); False for a parametric head (`Eq (List a)`) and every

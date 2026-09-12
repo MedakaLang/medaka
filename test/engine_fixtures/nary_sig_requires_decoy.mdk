@@ -10,28 +10,11 @@
 --   the singleton, `inst` applies, and its context φ(Q) = { Elem Int } is discharged by
 --   `impl Elem Int`.  Body: 100 + elemOf 7 = 107.
 --
--- This fixture is clean and value-pinned at 107. At final head
--- b5fc35034cb3c95d4e942081578d6adc3d5762e8, eval, native, and Wasm all produce
--- the hand-derived value above.
---
--- WHY IT IS HERE.  The eval defect is PRE-EXISTING: the same program with the decoy
--- declared AFTER the winner panics on the pre-F-3a-ii binary too.  But before
--- F-3a-ii the shattered goal made this program mis-select the DECOY, so eval printed
--- 111 and agreed with native -- it dodged the panic by being wrong.  Now that the
--- goal became the whole predicate and selection became correct, eval reached the
--- `requires`-discharge path and died there. That historical divergence was ledgered
--- until the interpreter's route handling was repaired.
---   measured, both directions, on cold builds either side of F-3a-ii:
---     BASE  run 111 (exit 0) | native 111 (exit 0)   -- agreeing, both WRONG
---     PR    run E-PANIC (exit 1) | native 107 (exit 0) -- native now RIGHT
---     main 42a672d0428b8d49ced7a86ddeac08d3eccda52e
---            eval E-PANIC (exit 1) | native 107 | wasm 107
---     final  eval 107 | native 107 | wasm 107
---
 -- Its two positive discriminators are nary_sig_requires_no_decoy (no decoy at all)
 -- and nary_sig_decoy_no_requires (decoy present, winner has no `requires`); both
--- agree across engines and are value-pinned.  Together they localise the panic to the
--- `requires`-context discharge, not to the decoy and not to 2-ary selection.
+-- agree across engines and are value-pinned. Together they distinguish prerequisite
+-- discharge from decoy selection and predicate arity. Promotion history is recorded
+-- in test/ENGINE-DIVERGENCE.md, section 3.8.
 interface Elem c where
   elemOf : c -> Int
 
