@@ -2874,6 +2874,10 @@ data SiteKind =
   -- operator (EBinOp/EUnOp) site: the inImpl-body flag.  Primary mono = operand mono.
   -- (binop vs unop is carried by WHICH list holds it / the resolveOpSites flag, not here.)
   | SKOp Bool
+  -- arithmetic operator site whose fixed prelude Num predicate is known at the
+  -- producer.  The Bool retains the impl-body provenance carried by SKOp; the
+  -- predicate supplies the declaration identity and complete dispatch vector.
+  | SKPredicateOp Bool ClassPredicate
   -- standalone-shadow RLocal site: mangled standalone symbol, forceLocal (P0-20),
   -- and the shadowing standalone's own `=>`-constraint dict monos + iface names
   -- (S-1).  Primary mono = receiver mono; encl owns deferred dictionary routing.
@@ -9396,6 +9400,7 @@ public export data NumericPredicateTraceStage =
   | NPTProduced
   | NPTChecked
   | NPTReturn
+  | NPTArithmetic
   deriving (Eq, Debug)
 
 public export data NumericPredicateTraceEntry = NumericPredicateTraceEntry {
@@ -14638,8 +14643,7 @@ inferBinopE env op l r dref =
   let _ = match binopSpanLoc l r
     Some sp => currentLoc := Some sp
     None => ()
-  let _ = recordBinopSite op dref lt
-  let _ = recordArithSite op dref lt
+  let _ = recordBinopGoals op dref lt
   inferBinop op lt rt
 
 -- Synthesize the whole-binop span from its operand Exprs: file + start of the
@@ -14675,19 +14679,64 @@ recordBinopSite op dref m = match binopMethod op
         (freshEvId ()))
   None => ()
 
--- SHARED-FLOAT-RESIDUAL §3(C): stash an arithmetic binop's operand mono + route
--- ref for the deferred scalar-type stamp.  Non-arithmetic operators record
--- nothing (their route is handled by recordBinopSite or left RNone).  The operand
--- mono is [lt] (unified with [rt] by inferBinop).
+-- The four Num-dispatched arithmetic operators produce exactly one predicate-aware
+-- operator goal when the prelude Num declaration is present.  `%` and no-prelude
+-- arithmetic retain the scalar deferred stamp, while non-arithmetic operators use
+-- the legacy comparison/append recorder.
 isArithBinop : String -> Bool
 -- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
 isArithBinop op = contains op ["+", "-", "*", "/", "%"]
 
-recordArithSite : String -> Ref Route -> Mono -> Unit
-recordArithSite op dref m
-  | isArithBinop op = pushArithGoal dref m (freshEvId ())
-  | otherwise = ()
+arithDispatchMethod : String -> Option String
+arithDispatchMethod "+" = Some "add"
+arithDispatchMethod "-" = Some "sub"
+arithDispatchMethod "*" = Some "mul"
+arithDispatchMethod "/" = Some "div"
+arithDispatchMethod _ = None
+
+recordBinopGoals : String -> Ref Route -> Mono -> Unit
+recordBinopGoals op dref m = match arithDispatchMethod op
+  Some method =>
+    if builtinClassPresent BNum then
+      let predicate = ClassPredicate {
+        predicateInterface = builtinIfaceRef BNum,
+        predicateArguments = [m],
+      }
+      let scope = captureScope ()
+      let _ =
+        noteNumericPredicateTrace
+          NPTProduced
+          predicate
+          scope
+          !currentLoc
+          None
+          None
+          []
+      let _ =
+        pushSiteGoal
+          GKBinopSite
+          (PendingEntry
+            method
+            dref
+            m
+            perRun.value.currentFn.value
+            (SKPredicateOp perRun.value.currentImplBody.value predicate)
+            !currentLoc
+            scope
+            (freshEvId ()))
+      perRun.value.methodSiteFns :=
+        consSiteFn
+          perRun.value.currentFn.value
+          m
+          perRun.value.methodSiteFns.value
+    else
+      pushArithGoal dref m (freshEvId ())
+  None =>
+    if isArithBinop op then
+      pushArithGoal dref m (freshEvId ())
+    else
+      recordBinopSite op dref m
 
 -- Roadmap #18a: `++` is the surface operator for `Semigroup`'s `append`, so it
 -- joins the comparison operators on the recordBinopSite/resolveBinopSites seam —
@@ -22419,6 +22468,16 @@ resolveOpSites isBinop ((PendingEntry method tagRef operandMono encl kind loc sc
   let _ = match kind
     SKOp inImpl =>
       resolveOpSite isBinop method tagRef operandMono inImpl encl scope
+    SKPredicateOp inImpl predicate =>
+      resolvePredicateOpSite
+        isBinop
+        method
+        tagRef
+        operandMono
+        inImpl
+        predicate
+        encl
+        scope
     _ => ()
   resolveOpSites isBinop rest
 
@@ -22519,6 +22578,26 @@ resolveOpSite isBinop method tagRef operandMono inImpl encl scope =
     RNone => ()
     route => tagRef := route
 
+resolvePredicateOpSite : Bool ->
+  String ->
+  Ref Route ->
+  Mono ->
+  Bool ->
+  ClassPredicate ->
+  String ->
+  ScopeId ->
+  Unit
+resolvePredicateOpSite isBinop method tagRef operandMono inImpl predicate encl scope =
+  match (fst
+    (entail
+      method
+      operandMono
+      encl
+      scope
+      (EKPredicateOp isBinop inImpl predicate)))
+    RNone => ()
+    route => tagRef := route
+
 -- Native Gap C: a tuple (or other parametric-with-requires) Eq/Ord impl carries
 -- element `requires` dicts (Eq a, Eq b) that the rewritten `eq`/`compare` method body
 -- reads.  Stamp them into the RKey route's reqs so binopMethodApp can forward them
@@ -22605,6 +22684,72 @@ stampOpRouteVal isBinop encl useScope method operandMono tag =
       operandMono
       [operandMono]
     RKey key reqs
+
+-- Exact Num arithmetic uses the predicate selected by the producer for both the
+-- implementation word and its prerequisite routes.  Only the language primitive
+-- Int/Float heads bypass method dispatch; a user Num impl for any other head,
+-- including String/Bool/Char, is selected through the exact interface identity.
+stampPredicateOpRouteVal : String ->
+  ScopeId ->
+  String ->
+  Mono ->
+  String ->
+  ClassPredicate ->
+  Route
+stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
+  if tag == "Int" then
+    let route = RNone
+    let _ =
+      noteNumericPredicateTrace
+        NPTArithmetic
+        predicate
+        useScope
+        !goalSiteLoc
+        None
+        (Some route)
+        []
+    route
+  else if tag == "Float" then
+    let route = RScalar "Float"
+    let _ =
+      noteNumericPredicateTrace
+        NPTArithmetic
+        predicate
+        useScope
+        !goalSiteLoc
+        None
+        (Some route)
+        []
+    route
+  else
+    let env = perRun.value.bodyImplEnvRef.value
+    let goals = predicate.predicateArguments
+    match ieSelectRowByIface env predicate.predicateInterface goals
+      Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
+        let reqs = implDictRoutesForRow encl useScope operandMono goals row
+        let route = RKey (methodRouteKeyForRow method env row) reqs
+        let _ =
+          noteNumericPredicateTrace
+            NPTArithmetic
+            predicate
+            useScope
+            !goalSiteLoc
+            (Some selectedIface)
+            (Some route)
+            reqs
+        route
+      None =>
+        let route = RNone
+        let _ =
+          noteNumericPredicateTrace
+            NPTArithmetic
+            predicate
+            useScope
+            !goalSiteLoc
+            None
+            (Some route)
+            []
+        route
 -- Gap #21 (CLOSED): element reqs are now forwarded unconditionally on both eval and
 -- emit paths.  The impl method `eq`/`compare` carries leading `$dict_*` params
 -- (resolveArgStamps runs on both paths); emitter applies them; eval's methodAtNarrow
@@ -27699,6 +27844,10 @@ data EntailKind =
   -- separate implRef); fallback = RNone.  Both do-nothing arms preserved by the adapter's
   -- RNone guard (op-site refs are always Ref RNone-seeded — parser/desugar).
   | EKOp Bool Bool
+  -- Arithmetic operator site with the producer's exact prelude Num predicate.
+  -- Selection and assumption lookup use this identity and its complete args;
+  -- the method name remains separate for the route-word ABI.
+  | EKPredicateOp Bool Bool ClassPredicate
 
 -- 🚨 THE LADDER'S SELECTOR-REACHABILITY PROPERTY, inscribed so the next refactor
 -- cannot violate it silently.  Every impl-row SELECTOR call reachable from `entail`
@@ -27795,6 +27944,15 @@ noteNumericEntailment (EKNumReturn predicate _ _ origin) scope selected route pr
     selected
     (Some route)
     prereqs
+noteNumericEntailment (EKPredicateOp _ _ predicate) scope selected route prereqs =
+  noteNumericPredicateTrace
+    NPTArithmetic
+    predicate
+    scope
+    !goalSiteLoc
+    selected
+    (Some route)
+    prereqs
 noteNumericEntailment _ _ _ _ _ = ()
 
 -- #412: `assum`, both halves.  DICT-SEMANTICS §3 pins the precedence — `assum`/`super`
@@ -27827,6 +27985,10 @@ goalRequestOfKind _ (EKNumReturn predicate _ _ _) = Some PredicateRequest {
 }
 goalRequestOfKind name (EKArg fullMono) = goalPredOf name fullMono
 goalRequestOfKind name (EKOp _ _) = goalPredOfOp name
+goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
+  prIface = predicate.predicateInterface,
+  prArgs = PSArgsKnown predicate.predicateArguments,
+}
 goalRequestOfKind _ (EKNestedTop _ _ _ _ _) = None
 
 -- assum: which in-scope dict-param (if any) does [m]'s head constraint var read?  The
@@ -27869,6 +28031,8 @@ entailAssumVar request m encl name useScope (EKOp isBinop inImpl) =
   -- #1318 residual: the in-impl non-append operator arm in opDictVarOf retains its
   -- historical scalar bypass; fixing its parameter-offset contract is later work.
   opDictVarOf request isBinop name m inImpl encl useScope
+entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
+  activeDictVarOfEncl request m encl useScope
 
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumRoute dname (EKReturn _ isRp) =
@@ -27878,6 +28042,7 @@ entailAssumRoute dname (EKNumReturn _ _ isRp _) =
 entailAssumRoute dname (EKNestedTop _ _ _ _ _) = RDict dname
 entailAssumRoute dname (EKArg _) = RDict dname
 entailAssumRoute dname (EKOp _ _) = RDict dname
+entailAssumRoute dname (EKPredicateOp _ _ _) = RDict dname
 
 -- inst: a concrete head [tag].  EKReturn → canonical full-type key + split element routes
 -- (implRef-bound); EKNestedTop → the min⊑ winner's canonical key (bare head only when the
@@ -28036,6 +28201,8 @@ entailInst name m encl useScope tag (EKArg fullMono) =
   )
 entailInst name m encl useScope tag (EKOp isBinop _) =
   (stampOpRouteVal isBinop encl useScope name m tag, [])
+entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal encl useScope name m tag predicate, [])
 
 entailFallback : ScopeId -> EntailKind -> Route
 entailFallback _ (EKReturn _ _) = RNone
@@ -28044,6 +28211,7 @@ entailFallback scope (EKNestedTop _ policy _ _ _) =
   undeterminedRoute scope policy
 entailFallback _ (EKArg _) = RNone
 entailFallback _ (EKOp _ _) = RNone
+entailFallback _ (EKPredicateOp _ _ _) = RNone
 
 -- ONE constrained-call-arg route resolver — collapses routeOfMono (encl="",
 -- KeepNone) / routeOfMonoEncl (KeepNone) / routeOfMonoTop (encl="", CountImpls).
@@ -28728,7 +28896,7 @@ binopRouteSplit r = (r, [])
 
 binopMethodApp : String -> Expr -> Expr -> Ref Route -> Expr
 binopMethodApp op l r routeRef =
-  let method = optionOr "eq" (binopMethod op)
+  let method = optionOr "eq" (binopDispatchMethod op)
   let split = binopRouteSplit !routeRef
   let call =
     EApp
@@ -28737,6 +28905,11 @@ binopMethodApp op l r routeRef =
         l)
       r
   if op == "/=" then EApp (EVar "not") call else call
+
+binopDispatchMethod : String -> Option String
+binopDispatchMethod op = match arithDispatchMethod op
+  Some method => Some method
+  None => binopMethod op
 
 -- The EUnOp analogue of binopMethodApp: one operand, no `/=`-style postfix
 -- (unopMethod only ever routes `-`).  Reuses binopRouteSplit (a generic
@@ -31548,8 +31721,8 @@ noteNumericObligationChecked : UObligation -> Unit
 noteNumericObligationChecked o =
   if not numericPredicateTraceEnabled.value then
     ()
-  else match o.oblProj
-    OpNumLit _ =>
+  else match (o.prov, o.oblProj)
+    (_, OpNumLit _) =>
       noteNumericPredicateTrace
         NPTChecked
         ClassPredicate {
@@ -31561,6 +31734,20 @@ noteNumericObligationChecked o =
         None
         None
         []
+    (POperator, _) =>
+      let predicate = ClassPredicate {
+        predicateInterface = o.pred.iface,
+        predicateArguments = o.pred.args,
+      }
+      if sameIfaceDecl predicate.predicateInterface (builtinIfaceRef BNum) then
+        noteNumericPredicateTrace
+          NPTChecked
+          predicate
+          o.uoScope
+          o.loc
+          None
+          None
+          []
     _ => ()
 
 -- [occs] is the predicate's whole argument vector.  At arity 1 the match test stays
