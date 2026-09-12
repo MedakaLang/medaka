@@ -110,7 +110,7 @@ expect_mutation_red() {
 
 restore_mutation_tree
 expect_mutation_red wrong-codec-prefix "$WORK/mutation-tree/pds/lib/did_key.mdk" 'secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub' 'secp256k1Prefix = multicodecPrefix 0x1200' 'row 0 value mismatch'
-expect_mutation_red omitted-did-key "$WORK/mutation-tree/pds/lib/did_key.mdk" '"did:key:" ++ multibaseBase58btc payload' 'multibaseBase58btc payload' 'row 0 value mismatch'
+expect_mutation_red omitted-did-key "$WORK/mutation-tree/pds/lib/did_key.mdk" '"did:key:" ++ didKeyMultibase publicKey' 'didKeyMultibase publicKey' 'row 0 value mismatch'
 expect_mutation_red removed-codec-equality "$WORK/mutation-tree/pds/lib/did_key.mdk" 'if codec /= multicodecSecp256k1Pub then' 'if False then' 'MALFORMED wrong-codec FAIL accepted'
 expect_mutation_red short-payload-accepted "$WORK/mutation-tree/pds/lib/did_key.mdk" 'publicKeyFromCompressed keyBytes' 'if arrayLength keyBytes == 32 then publicKeyFromCompressed (keyBytes ++ [|0x98|]) else publicKeyFromCompressed keyBytes' 'MALFORMED short-payload FAIL accepted'
 expect_mutation_red disconnected-corpus "$WORK/mutation-tree/pds/test/did_key_all_engines_main.mdk" 'let rowCount = runRows rows 0' 'let rowCount = runRows [] 0' 'external row count expected 16, got 0'
