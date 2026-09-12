@@ -89,8 +89,8 @@ for sym in WGapMode WasmEmit freshWasmEmit emitProgramRecord; do
     exit 1
   }
 done
-has_wasm_pin '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput WasmEmit' || {
-  echo "FAIL wasm typed index ratchet: Prog must retain its index fields plus one WasmEmit field"
+has_wasm_pin '| Prog WasmProgramIndex (List String) (List String) Bool (List CImplEntry) WasmEmitInput (OrdMap Unit) WasmEmit' || {
+  echo "FAIL wasm typed index ratchet: Prog must retain its index fields, numeric context, and one WasmEmit field"
   exit 1
 }
 if grep -E '^(strSegsRef|strSegIdRef)[[:space:]]*:' "$WASM_SRC" >/dev/null; then

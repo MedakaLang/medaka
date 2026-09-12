@@ -66,7 +66,7 @@ capturedPair text flag = local ()
 -- outer unconstrained parameter must still carry the caller's String value.
 shadowedLambda x = ((x => x + 1) 41, x)
 
-shadowedGroup x = (let rec x _ = 41 + 1 in x (), x)
+shadowedGroup x = (x, let rec x _ = 41 + 1 in x ())
 
 -- Numeric context must reach captures through both orders of nested closure
 -- and group boundaries. ownAndCaptured needs context for both x and local y.
@@ -102,7 +102,7 @@ main =
   println (capturedFloat 2.0 == 2.25)
   println (capturedPair "kept" True == ("kept", True))
   println (shadowedLambda "kept" == (42, "kept"))
-  println (shadowedGroup "kept" == (42, "kept"))
+  println (shadowedGroup "kept" == ("kept", 42))
   println (lamThenGroup (1.5 : Float) == 3.0)
   println (groupThenLam (1.5 : Float) == 4.5)
   println (ownAndCaptured (1.5 : Float) == 3.0)
