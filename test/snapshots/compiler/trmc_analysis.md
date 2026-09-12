@@ -1,5 +1,5 @@
 # META
-source_lines=1673
+source_lines=1682
 stages=DESUGAR,MARK
 # SOURCE
 -- TRMC eligibility analysis (TRMC-DESIGN.md §"Phase 1 scope" + §"Backend portability").
@@ -163,9 +163,18 @@ freeVarsStmts b (_ :: rest) = freeVarsStmts b rest
 export
 freeVarsBinds : List String -> List CBind -> List String
 freeVarsBinds _ [] = []
-freeVarsBinds b ((CBind _ [CClause [] rhs]) :: rest) =
-  freeVars b rhs ++ freeVarsBinds b rest
-freeVarsBinds b (_ :: rest) = freeVarsBinds b rest
+freeVarsBinds b ((CBind _ clauses) :: rest) =
+  freeVarsClauses b clauses ++ freeVarsBinds b rest
+
+-- A CLetGroup's names are already present in [b]. Each clause adds its own
+-- parameter bindings independently: they are local to that clause, while an
+-- outer value or dictionary mentioned by any clause is free in the group.
+-- An enclosing lambda must capture these names even when the group body does
+-- not refer to them directly.
+freeVarsClauses : List String -> List CClause -> List String
+freeVarsClauses _ [] = []
+freeVarsClauses b ((CClause pats body) :: rest) =
+  freeVars (patVarNames pats ++ b) body ++ freeVarsClauses b rest
 
 export
 bindNames : List CBind -> List String
@@ -1741,8 +1750,10 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsBinds" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
-(DFunDef false "freeVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest")))
+(DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "clauses")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
+(DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsClauses" (PWild (PList)) (EListLit))
+(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVarNames") (EVar "pats")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EVar "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))
@@ -2197,8 +2208,10 @@ anyListM p (x :: rest) =
 (DFunDef false "freeVarsStmts" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsStmts") (EVar "b")) (EVar "rest")))
 (DTypeSig true "freeVarsBinds" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "freeVarsBinds" (PWild (PList)) (EListLit))
-(DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PList (PCon "CClause" (PList) (PVar "rhs")))) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EVar "b")) (EVar "rhs")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
-(DFunDef false "freeVarsBinds" ((PVar "b") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest")))
+(DFunDef false "freeVarsBinds" ((PVar "b") (PCons (PCon "CBind" PWild (PVar "clauses")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "clauses")) (EApp (EApp (EVar "freeVarsBinds") (EVar "b")) (EVar "rest"))))
+(DTypeSig false "freeVarsClauses" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "CClause")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "freeVarsClauses" (PWild (PList)) (EListLit))
+(DFunDef false "freeVarsClauses" ((PVar "b") (PCons (PCon "CClause" (PVar "pats") (PVar "body")) (PVar "rest"))) (EBinOp "++" (EApp (EApp (EVar "freeVars") (EBinOp "++" (EApp (EVar "patVarNames") (EVar "pats")) (EVar "b"))) (EVar "body")) (EApp (EApp (EVar "freeVarsClauses") (EVar "b")) (EVar "rest"))))
 (DTypeSig true "bindNames" (TyFun (TyApp (TyCon "List") (TyCon "CBind")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "bindNames" ((PVar "bs")) (EApp (EApp (EMethodRef "map") (EVar "bindName")) (EVar "bs")))
 (DTypeSig true "bindName" (TyFun (TyCon "CBind") (TyCon "String")))

@@ -1,5 +1,5 @@
 # META
-source_lines=1166
+source_lines=1161
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -882,11 +882,6 @@ mergeIfaceDecl (d@(DInterface { methods, ... })) =
 mergeIfaceDecl (DAttrib attrs d) = DAttrib attrs (mergeIfaceDecl d)
 mergeIfaceDecl d = d
 
--- #1018: the original shape did an O(k) `containsMethod` linear scan plus an
--- `acc ++ [m]` copy per method inside `foldlMethods` — O(n^2) in the widest
--- interface's method count.  Widest interface in the tree is `Num` at 8
--- methods, so this was always bounded, but the fix mirrors #953/#1017: an
--- `OrdMap IfaceMethod` gives O(log n) merge-lookup instead of the list scan.
 -- `OrdMap` iterates key-sorted, not insertion order, so "first-seen position"
 -- is preserved separately via `order` (a reversed name list, one cons per
 -- first-seen method, no per-step copy) and reconstructed at the end by

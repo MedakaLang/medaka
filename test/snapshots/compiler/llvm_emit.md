@@ -1,5 +1,5 @@
 # META
-source_lines=14850
+source_lines=14843
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -1876,22 +1876,15 @@ implEntryRouteKeyE e ent =
     (methodEntries e (implEntryMethodOf ent))
     ent
 
--- #1036 leg 2: EVERY dict word that any module's typecheck could stamp for this impl.
--- `keyForSiteByIface` picks the bare head tag when the SITE'S MODULE sees no collision
--- at that head and the canonical key when it does, so the impl legitimately answers to
--- both; which one arrives depends on the caller's imports, which the shared dispatcher
--- cannot know.  Emitting an arm per word makes the dispatcher accept the union instead
--- of betting on one.
---
--- When the head is unambiguous program-wide — every program in this tree today — the
--- route key IS the head tag, `dedupS` collapses the pair to ONE word, and the emitted
--- `icmp` is byte-identical to the pre-#1036 single test.  Only a genuine collision
--- yields two words and therefore two tests.
+-- A dictionary is shared by every method of its interface. A collision on another
+-- method can require the canonical instance key even when this method's head is
+-- unique. Accept that key alongside the legacy words without reselecting the impl.
 implEntryRouteWords : Emit -> CImplEntry -> List String
 implEntryRouteWords e (CImplEntry m s (CImplTagged t k iface ps pats body)) = dedupS
   [
     implEntryRouteKeyE e (CImplEntry m s (CImplTagged t k iface ps pats body)),
     t,
+    k,
   ]
 implEntryRouteWords _ _ = []
 
@@ -15136,7 +15129,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DTypeSig false "implEntryRouteKeyE" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyCon "String"))))
 (DFunDef false "implEntryRouteKeyE" ((PVar "e") (PVar "ent")) (EApp (EApp (EApp (EVar "implEntryRouteKey") (EFieldAccess (EFieldAccess (EVar "e") "input") "ifaceImplHeads")) (EApp (EApp (EVar "methodEntries") (EVar "e")) (EApp (EVar "implEntryMethodOf") (EVar "ent")))) (EVar "ent")))
 (DTypeSig false "implEntryRouteWords" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "implEntryRouteWords" ((PVar "e") (PCon "CImplEntry" (PVar "m") (PVar "s") (PCon "CImplTagged" (PVar "t") (PVar "k") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EVar "dedupS") (EListLit (EApp (EApp (EVar "implEntryRouteKeyE") (EVar "e")) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "t")) (EVar "k")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EVar "body")))) (EVar "t"))))
+(DFunDef false "implEntryRouteWords" ((PVar "e") (PCon "CImplEntry" (PVar "m") (PVar "s") (PCon "CImplTagged" (PVar "t") (PVar "k") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EVar "dedupS") (EListLit (EApp (EApp (EVar "implEntryRouteKeyE") (EVar "e")) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "t")) (EVar "k")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EVar "body")))) (EVar "t") (EVar "k"))))
 (DFunDef false "implEntryRouteWords" (PWild PWild) (EListLit))
 (DTypeSig false "installCtorTypeMap" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "installCtorTypeMap" ((PVar "e") (PVar "t")) (EBlock (DoLet false false (PVar "byType") (EApp (EVar "groupCtorsByType") (EVar "t"))) (DoLet false false (PVar "tys") (EApp (EVar "nubStr") (EApp (EVar "typeNamesOf") (EVar "t")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "ctorsByType")) (EApp (EVar "Some") (EVar "byType")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "ctorOrdinalMap")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "ctorOrdinalPairs") (EVar "byType")) (EVar "tys")))) (EVar "omEmpty"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "typeIdMap")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "numberFrom") (ELit (LInt 0))) (EVar "tys")))) (EVar "omEmpty"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "ctorTypeMap")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "t"))) (EVar "omEmpty")))))))
@@ -17623,7 +17616,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DTypeSig false "implEntryRouteKeyE" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyCon "String"))))
 (DFunDef false "implEntryRouteKeyE" ((PVar "e") (PVar "ent")) (EApp (EApp (EApp (EVar "implEntryRouteKey") (EFieldAccess (EFieldAccess (EVar "e") "input") "ifaceImplHeads")) (EApp (EApp (EVar "methodEntries") (EVar "e")) (EApp (EVar "implEntryMethodOf") (EVar "ent")))) (EVar "ent")))
 (DTypeSig false "implEntryRouteWords" (TyFun (TyCon "Emit") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "implEntryRouteWords" ((PVar "e") (PCon "CImplEntry" (PVar "m") (PVar "s") (PCon "CImplTagged" (PVar "t") (PVar "k") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EVar "dedupS") (EListLit (EApp (EApp (EVar "implEntryRouteKeyE") (EVar "e")) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "t")) (EVar "k")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EVar "body")))) (EVar "t"))))
+(DFunDef false "implEntryRouteWords" ((PVar "e") (PCon "CImplEntry" (PVar "m") (PVar "s") (PCon "CImplTagged" (PVar "t") (PVar "k") (PVar "iface") (PVar "ps") (PVar "pats") (PVar "body")))) (EApp (EVar "dedupS") (EListLit (EApp (EApp (EVar "implEntryRouteKeyE") (EVar "e")) (EApp (EApp (EApp (EVar "CImplEntry") (EVar "m")) (EVar "s")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "CImplTagged") (EVar "t")) (EVar "k")) (EVar "iface")) (EVar "ps")) (EVar "pats")) (EVar "body")))) (EVar "t") (EVar "k"))))
 (DFunDef false "implEntryRouteWords" (PWild PWild) (EListLit))
 (DTypeSig false "installCtorTypeMap" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "Unit"))))
 (DFunDef false "installCtorTypeMap" ((PVar "e") (PVar "t")) (EBlock (DoLet false false (PVar "byType") (EApp (EVar "groupCtorsByType") (EVar "t"))) (DoLet false false (PVar "tys") (EApp (EVar "nubStr") (EApp (EVar "typeNamesOf") (EVar "t")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "ctorsByType")) (EApp (EVar "Some") (EVar "byType")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "ctorOrdinalMap")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "ctorOrdinalPairs") (EVar "byType")) (EVar "tys")))) (EVar "omEmpty"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "typeIdMap")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "numberFrom") (ELit (LInt 0))) (EVar "tys")))) (EVar "omEmpty"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "e") "ctorTypeMap")) (EApp (EVar "Some") (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "t"))) (EVar "omEmpty")))))))

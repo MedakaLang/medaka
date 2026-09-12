@@ -242,13 +242,22 @@ interface Num a
   abs : a -> a
   signum : a -> a
   fromInt : Int -> a
+  rem : a -> a -> a
 ```
 
 Numeric types.
 
 The arithmetic operators are built in for `Int` and `Float`; on any other
-type, `+`, `-`, `*`, and `/` dispatch to `add`, `sub`, `mul`, and `div`.
-`div` truncates for `Int` and is true division for `Float`.
+type, `+`, `-`, `*`, `/`, and `%` dispatch to `add`, `sub`, `mul`, `div`,
+and `rem`. `div` truncates for `Int` and is true division for `Float`.
+`rem` keeps the dividend's sign for a nonzero result.
+
+```medaka
+> rem (-7) 3
+-1
+> rem 5.5 2.0
+1.5
+```
 
 ### `isEven`
 

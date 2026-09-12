@@ -1,5 +1,5 @@
 # META
-source_lines=12259
+source_lines=12255
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -5865,25 +5865,21 @@ emitClausesImpl : Prog ->
 emitClausesImpl prog fnName params arity clauses =
   emitClausesRef prog fnName params arity clauses
 
--- the candidate impls for a method: (symTag, routeKey) per group.  routeKey is the
--- key the RDict witness hashes (the canonical impl key); for the minimal slice the
--- bare head tag IS the key (sole impl per head), so symTag == routeKey == tag.
+-- Candidate implementations and the route words their dictionary witnesses use.
 methodImpls : Prog -> String -> List (String, String)
 methodImpls prog method =
   let mEntries = methodEntriesW prog method
   dedupPairs (flatMap (methodImplKey mEntries method) mEntries) []
 
--- one (symTag, routeKey) candidate per impl entry of [method].  #324: symTag is the
--- CALL symbol tag (bare head when unique, else the SANITIZED canonical key); routeKey
--- is the RUNTIME-dispatch hash tag (bare head when unique, else the RAW canonical
--- key), which `emitDispatchChain` hashes with `dictTag` to match the dict witness.
--- For a sole impl per head both are the bare head — byte-identical to the old (tag,
--- tag) — and dedupPairs collapses the multiple entries of one impl to a single arm;
--- two overlapping same-head impls yield two DISTINCT arms.
+-- A sibling method's collision can canonicalize the shared interface dictionary.
+-- Both words must call the same implementation symbol; accepting the canonical
+-- alias here avoids reconstructing typecheck's interface-wide collision decision.
 methodImplKey : List CImplEntry -> String -> CImplEntry -> List (String, String)
 methodImplKey entries method (CImplEntry n _ (CImplTagged t k _ _ _ _)) =
   if n == method then
-    [(implFnSymTagW entries method t k, implEntryRouteKeyW entries method t k)]
+    let sym = implFnSymTagW entries method t k
+    let route = implEntryRouteKeyW entries method t k
+    if route == k then [(sym, route)] else [(sym, route), (sym, k)]
   else
     []
 methodImplKey _ _ _ = []
@@ -13300,7 +13296,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "methodImpls" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "methodImpls" ((PVar "prog") (PVar "method")) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (DoExpr (EApp (EApp (EVar "dedupPairs") (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "methodImplKey") (EVar "mEntries")) (EVar "method"))) (EVar "mEntries"))) (EListLit)))))
 (DTypeSig false "methodImplKey" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")))) (EListLit)))
+(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (DoLet false false (PVar "route") (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (DoExpr (EIf (EBinOp "==" (EVar "route") (EVar "k")) (EListLit (ETuple (EVar "sym") (EVar "route"))) (EListLit (ETuple (EVar "sym") (EVar "route")) (ETuple (EVar "sym") (EVar "k")))))) (EListLit)))
 (DFunDef false "methodImplKey" (PWild PWild PWild) (EListLit))
 (DTypeSig false "narrowImplsByArityW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "narrowImplsByArityW" ((PVar "prog") (PVar "method") (PVar "impls") (PVar "nargs")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EBinOp "==" (EApp (EApp (EApp (EVar "methodArityOfTagW") (EVar "prog")) (EVar "method")) (EApp (EVar "snd") (EVar "p"))) (EVar "nargs")))) (EVar "impls")) (arm (PList) () (EVar "impls")) (arm (PVar "narrowed") () (EVar "narrowed"))))
@@ -15547,7 +15543,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "methodImpls" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
 (DFunDef false "methodImpls" ((PVar "prog") (PVar "method")) (EBlock (DoLet false false (PVar "mEntries") (EApp (EApp (EVar "methodEntriesW") (EVar "prog")) (EVar "method"))) (DoExpr (EApp (EApp (EVar "dedupPairs") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "methodImplKey") (EVar "mEntries")) (EVar "method"))) (EVar "mEntries"))) (EListLit)))))
 (DTypeSig false "methodImplKey" (TyFun (TyApp (TyCon "List") (TyCon "CImplEntry")) (TyFun (TyCon "String") (TyFun (TyCon "CImplEntry") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
-(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EListLit (ETuple (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")) (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k")))) (EListLit)))
+(DFunDef false "methodImplKey" ((PVar "entries") (PVar "method") (PCon "CImplEntry" (PVar "n") PWild (PCon "CImplTagged" (PVar "t") (PVar "k") PWild PWild PWild PWild))) (EIf (EBinOp "==" (EVar "n") (EVar "method")) (EBlock (DoLet false false (PVar "sym") (EApp (EApp (EApp (EApp (EVar "implFnSymTagW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (DoLet false false (PVar "route") (EApp (EApp (EApp (EApp (EVar "implEntryRouteKeyW") (EVar "entries")) (EVar "method")) (EVar "t")) (EVar "k"))) (DoExpr (EIf (EBinOp "==" (EVar "route") (EVar "k")) (EListLit (ETuple (EVar "sym") (EVar "route"))) (EListLit (ETuple (EVar "sym") (EVar "route")) (ETuple (EVar "sym") (EVar "k")))))) (EListLit)))
 (DFunDef false "methodImplKey" (PWild PWild PWild) (EListLit))
 (DTypeSig false "narrowImplsByArityW" (TyFun (TyCon "Prog") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))))
 (DFunDef false "narrowImplsByArityW" ((PVar "prog") (PVar "method") (PVar "impls") (PVar "nargs")) (EMatch (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EBinOp "==" (EApp (EApp (EApp (EVar "methodArityOfTagW") (EVar "prog")) (EVar "method")) (EApp (EVar "snd") (EVar "p"))) (EVar "nargs")))) (EVar "impls")) (arm (PList) () (EVar "impls")) (arm (PVar "narrowed") () (EVar "narrowed"))))
