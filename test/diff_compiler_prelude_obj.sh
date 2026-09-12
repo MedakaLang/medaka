@@ -66,6 +66,10 @@ export MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER"
 # `default_impl_override` covers `@mdk_default_*` (the other name-derived symbol
 # family both halves can demand); `superclass`/`nested_requires_dict` cover dicts
 # with `requires` element witnesses; the `deriving_*` pair covers generated impls.
+# The `numop_predicate` pair reverses independent same-method imports.  Its
+# primitive collision twin is the exact prelude-ownership hazard: core Num Int and
+# a program-local Forge Int share `(add, Int)`, while their canonical impl keys and
+# bodies remain distinct.
 SAMPLE="
 $ROOT/test/construct_fixtures/interface_impl.mdk
 $ROOT/test/construct_fixtures/superclass.mdk
@@ -79,6 +83,9 @@ $ROOT/test/construct_fixtures/multi_param_iface.mdk
 $ROOT/test/construct_fixtures/tuple_neq.mdk
 $ROOT/test/llvm_fixtures/guard_refut_clause_chain.mdk
 $ROOT/test/wasm/fixtures/adt_enum_nullary.mdk
+$ROOT/test/engine_fixtures/numop_predicate.mdk
+$ROOT/test/engine_fixtures/numop_predicate_import_reverse.mdk
+$ROOT/test/engine_fixtures/numop_predicate_primitive_collision.mdk
 "
 
 W="$(mktemp -d)"
