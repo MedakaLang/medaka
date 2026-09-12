@@ -54,6 +54,7 @@ import frontend.ast.{
   TyConOrigin(..),
   Ns(..),
   Ident(..),
+  identOriginOf,
   identOriginFold,
   mkIdent,
   -- #1111 Stage A-2 unit A-2.10: the ONE type-head comparison every "same
@@ -2860,6 +2861,10 @@ data SiteKind =
   -- return-position site: the EMethodAt impl-dicts ref to fill + the method's full
   -- (un-stripped) type.  The primary mono is the result mono.
   | SKReturn (Ref (List Route)) Mono
+  -- declaration-owned ordinary return: the same immutable request is carried by
+  -- the checker obligation and this stamping goal.  The PendingEntry's EvId is the
+  -- request's mrrGoalEv; the EMethodAt node's aggregate EvId remains separate.
+  | SKExactReturn (Ref (List Route)) MethodReturnRequest
   -- numeric-literal return site: the fixed Num predicate and the full fromInt
   -- occurrence mono.  The ENumLit's one route cell carries the selected word and
   -- its prerequisite routes together until rewriting splits them.
@@ -7575,6 +7580,40 @@ pushPendingObl iface typarams mty occ prov loc =
     perRun.value.implObls
     (mkMethodOccObl iface typarams mty occ prov loc (captureScope ()))
 
+pushExactReturnObl : MethodReturnRequest -> Unit
+pushExactReturnObl request = wPush perRun.value.implObls UObligation {
+  pred = Predicate { iface = request.mrrIface, args = [] },
+  originId = 0,
+  prov = PMethodOcc,
+  loc = request.mrrLoc,
+  uoScope = request.mrrScope,
+  oblProj = OpExactReturn request,
+}
+
+methodReturnRequest : MethodSchemeRow ->
+  Mono ->
+  Option EvId ->
+  MethodReturnRequest
+methodReturnRequest row occurrence goalEv = MethodReturnRequest {
+  mrrIface = row.msrIface,
+  mrrName = row.msrName,
+  mrrTyparams = row.msrTyparams,
+  mrrType = row.msrType,
+  mrrOccurrence = occurrence,
+  mrrLoc = !currentLoc,
+  mrrScope = captureScope (),
+  mrrGoalEv = goalEv,
+}
+
+methodReturnArgs : MethodReturnRequest -> Option (List Mono)
+methodReturnArgs request =
+  collectByParamGo
+    request.mrrTyparams
+    (walkDispatch
+      request.mrrTyparams
+      (stripTyConstraints request.mrrType)
+      request.mrrOccurrence)
+
 -- the mint for an impl-channel obligation.  `pred.args` is EMPTY and must stay so:
 -- the dispatch vector is `OpMethodOcc`'s to project, at check time, via `uOblArgs`.
 mkMethodOccObl : IfaceRef ->
@@ -7888,6 +7927,22 @@ data MethodSchemeRow = MethodSchemeRow {
   msrMethodSlots : List MethodPredicateSlot,
 }
 
+-- One ordinary method occurrence, tied to the declaration row that supplied its
+-- scheme.  The producer instantiates method-level slots immediately from that row and
+-- its tracked substitution, then retains only the declaration descriptor and live
+-- occurrence.  A marked return site adds the goal id minted at recordSite; the
+-- unmarked checker keeps None rather than minting an unconsumed evidence id.
+data MethodReturnRequest = MethodReturnRequest {
+  mrrIface : IfaceRef,
+  mrrName : String,
+  mrrTyparams : List String,
+  mrrType : Ty,
+  mrrOccurrence : Mono,
+  mrrLoc : Option Loc,
+  mrrScope : ScopeId,
+  mrrGoalEv : Option EvId,
+}
+
 data NumAnchorTestObservation = NumAnchorTestObservation {
   natoCase : String,
   natoHasRow : Bool,
@@ -8110,6 +8165,7 @@ data Provenance =
 data OblProjection =
   | OpProjected
   | OpMethodOcc (List String) Ty Mono
+  | OpExactReturn MethodReturnRequest
   | OpNumLit Mono
 
 data UObligation = UObligation {
@@ -8192,6 +8248,7 @@ uOblArgs : UObligation -> List Mono
 uOblArgs o = match o.oblProj
   OpProjected => o.pred.args
   OpMethodOcc typarams mty occ => dispatchMonosOf typarams mty occ
+  OpExactReturn request => optionOr [] (methodReturnArgs request)
   OpNumLit _ => o.pred.args
 
 -- the call channel's window, in the pre-#838 tuple shape (see oblAsTuple).
@@ -9411,6 +9468,23 @@ public export data NumericPredicateTraceEntry = NumericPredicateTraceEntry {
   nptPrerequisites : List Route,
 }
 
+public export data MethodReturnTraceStage =
+  | MRTProduced
+  | MRTChecked
+  | MRTStamped
+  deriving (Eq, Debug)
+
+public export data MethodReturnTraceEntry = MethodReturnTraceEntry {
+  mrtStage : MethodReturnTraceStage,
+  mrtInterface : IfaceRef,
+  mrtMethod : String,
+  mrtArguments : Option (List Mono),
+  mrtScope : ScopeId,
+  mrtOrigin : Option Loc,
+  mrtGoal : Option EvId,
+  mrtPublished : Option EvVal,
+}
+
 data AssumAnswer =
   | SemanticGiven SolverEvidence
   | LegacyScalar EvidenceBinderId
@@ -9428,6 +9502,12 @@ numericPredicateTraceEnabled = Ref False
 
 numericPredicateTraceEntries : Ref (List NumericPredicateTraceEntry)
 numericPredicateTraceEntries = Ref []
+
+methodReturnTraceEnabled : Ref Bool
+methodReturnTraceEnabled = Ref False
+
+methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
+methodReturnTraceEntries = Ref []
 
 defaultBodyRNoneTraceEnabled : Ref Bool
 defaultBodyRNoneTraceEnabled = Ref False
@@ -9476,6 +9556,70 @@ finishNumericPredicateTrace _ =
   numericPredicateTraceEntries := []
   numericPredicateTraceEnabled := False
   entries
+
+export
+beginMethodReturnTrace : Unit -> Unit
+beginMethodReturnTrace _ =
+  methodReturnTraceEntries := []
+  methodReturnTraceEnabled := True
+
+export
+finishMethodReturnTrace : Unit -> List MethodReturnTraceEntry
+finishMethodReturnTrace _ =
+  let evidence = methodCellEntries () ++ graphRun.value.evTable.value
+  let entries =
+    map
+      (publishMethodReturnTrace evidence)
+      (reverseL methodReturnTraceEntries.value)
+  methodReturnTraceEntries := []
+  methodReturnTraceEnabled := False
+  entries
+
+publishMethodReturnTrace : EvTable ->
+  MethodReturnTraceEntry ->
+  MethodReturnTraceEntry
+publishMethodReturnTrace evidence entry =
+  let published = match entry.mrtGoal
+    Some goal => lookupTraceEvidence goal evidence
+    None => None
+  MethodReturnTraceEntry {
+    mrtStage = entry.mrtStage,
+    mrtInterface = entry.mrtInterface,
+    mrtMethod = entry.mrtMethod,
+    mrtArguments = entry.mrtArguments,
+    mrtScope = entry.mrtScope,
+    mrtOrigin = entry.mrtOrigin,
+    mrtGoal = entry.mrtGoal,
+    mrtPublished = published,
+  }
+
+lookupTraceEvidence : EvId -> EvTable -> Option EvVal
+lookupTraceEvidence _ [] = None
+lookupTraceEvidence goal ((EvEntry candidate value) :: rest) =
+  if sameTraceEvId goal candidate then
+    Some value
+  else
+    lookupTraceEvidence goal rest
+
+sameTraceEvId : EvId -> EvId -> Bool
+sameTraceEvId (EvId moduleA ordinalA) (EvId moduleB ordinalB) =
+  moduleA == moduleB && ordinalA == ordinalB
+
+noteMethodReturnTrace : MethodReturnTraceStage -> MethodReturnRequest -> Unit
+noteMethodReturnTrace stage request =
+  if methodReturnTraceEnabled.value then
+    methodReturnTraceEntries :=
+      MethodReturnTraceEntry {
+          mrtStage = stage,
+          mrtInterface = request.mrrIface,
+          mrtMethod = request.mrrName,
+          mrtArguments = methodReturnArgs request,
+          mrtScope = request.mrrScope,
+          mrtOrigin = request.mrrLoc,
+          mrtGoal = request.mrrGoalEv,
+          mrtPublished = None,
+        }
+        :: methodReturnTraceEntries.value
 
 noteNumericPredicateTrace : NumericPredicateTraceStage ->
   ClassPredicate ->
@@ -11880,30 +12024,74 @@ restAtoms (_ :: rest) = rest
 -- old `(name, schemeIds)` key worked around).  Only `extendLocalVar[s]` set it;
 -- top-level / interface-method / ctor / SCC seeds use `extendVar[s]` and leave
 -- it absent.  Read by `lookupLocalFlag` at the two `recordImplObligation` guards.
+data EnvBinding = EnvBinding {
+  ebScheme : Scheme,
+  ebMethodRow : Option MethodSchemeRow,
+}
+
 data TcEnv =
-  | TcEnv (OrdMap Scheme) (OrdMap Scheme) (List (String, Expr)) (OrdMap Bool)  -- vars, ctors, alphaLets, isLocal
+  | TcEnv (OrdMap EnvBinding) (OrdMap Scheme) (List (String, Expr)) (OrdMap Bool)  -- vars, ctors, alphaLets, isLocal
+
+lookupBinding : TcEnv -> String -> Option EnvBinding
+lookupBinding (TcEnv vs _ _ _) n = omLookup n vs
 
 lookupVar : TcEnv -> String -> Option Scheme
 lookupVar (TcEnv vs cs _ _) n = match omLookup n vs
-  Some s => Some s
+  Some binding => Some binding.ebScheme
   None => omLookup n cs
+
+lookupMethodRow : TcEnv -> String -> Option MethodSchemeRow
+lookupMethodRow env n = match lookupBinding env n
+  Some binding => binding.ebMethodRow
+  None => None
 
 lookupCtor : TcEnv -> String -> Option Scheme
 lookupCtor (TcEnv _ cs _ _) n = omLookup n cs
 
 extendVar : TcEnv -> String -> Scheme -> TcEnv
-extendVar (TcEnv vs cs al lc) n s = TcEnv (omInsert n s vs) cs al lc
+extendVar (TcEnv vs cs al lc) n s =
+  TcEnv (omInsert n EnvBinding { ebScheme = s, ebMethodRow = None } vs) cs al lc
 
 extendVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendVars env [] = env
 extendVars env ((n, s) :: rest) = extendVars (extendVar env n s) rest
+
+extendMethodRow : TcEnv -> String -> MethodSchemeRow -> TcEnv
+extendMethodRow (TcEnv vs cs al lc) n row =
+  TcEnv
+    (omInsert
+      n
+      EnvBinding { ebScheme = row.msrScheme, ebMethodRow = Some row }
+      vs)
+    cs
+    al
+    lc
+
+extendMethodRows : TcEnv -> List MethodSchemeRow -> TcEnv
+extendMethodRows env [] = env
+extendMethodRows env (row :: rest) =
+  let env2 =
+    if methodRowCanCarry row then
+      extendMethodRow env row.msrName row
+    else
+      extendVar env row.msrName row.msrScheme
+  extendMethodRows env2 rest
+
+extendBindings : TcEnv -> List (String, EnvBinding) -> TcEnv
+extendBindings env [] = env
+extendBindings (TcEnv vs cs al lc) ((n, binding) :: rest) =
+  extendBindings (TcEnv (omInsert n binding vs) cs al lc) rest
 
 -- #837 incr2: like extendVar/extendVars, but FLAG the introduced names local.
 -- Route every genuine body-local binder (let/where/lambda/pattern/prop/do
 -- binders) through these; the is-local flag then answers the two guard sites.
 extendLocalVar : TcEnv -> String -> Scheme -> TcEnv
 extendLocalVar (TcEnv vs cs al lc) n s =
-  TcEnv (omInsert n s vs) cs al (omInsert n True lc)
+  TcEnv
+    (omInsert n EnvBinding { ebScheme = s, ebMethodRow = None } vs)
+    cs
+    al
+    (omInsert n True lc)
 
 extendLocalVars : TcEnv -> List (String, Scheme) -> TcEnv
 extendLocalVars env [] = env
@@ -12268,20 +12456,17 @@ inferMethodAt env name arityRef tagRef implRef methodRef =
     Some s =>
       let inst = instantiateTracked s
       arityRef := Some (funArity (fst inst))
-      let _ = recordMethodDicts name methodRef (snd inst)
-      -- #816/#818 shadow guard — shared with inferVarPlainId (the check path); see
-      -- recordMethodObligationGuarded for the full rationale.  The tracked
-      -- instantiation `fst inst` is already computed (its recordMethodDicts side-effect
-      -- fired above), so pass it in rather than re-instantiate.
-      let _ = recordMethodObligationGuarded env name s (fst inst)
       let _ = recordShadowStandaloneObls name (snd inst)
       let _ = recordRLocalSite env name tagRef (fst inst)
       let ret = match argDispatchOf name
         Some idx =>
+          let _ = recordMethodDicts name methodRef (snd inst)
+          let _ = recordMethodObligationGuarded env name s (fst inst)
           let _ = recordArgStamp name tagRef implRef idx (fst inst)
           let _ = recordArgSiteFn name idx (fst inst)
           fst inst
-        None => recordSite name tagRef implRef (fst inst)
+        None =>
+          recordSite env name s tagRef implRef methodRef (fst inst) (snd inst)
       -- P0-19 d4b (S4): a bare value-position definer shadow (`map size xs`, marked to
       -- `EMethodAt`) denotes the STANDALONE — return its declared scheme type so the type
       -- mismatches live-impl elements (Box vs Int) instead of dispatching, while the route
@@ -12642,9 +12827,35 @@ nthMethodMono i (_ :: xs) = nthMethodMono (i - 1) xs
 
 -- record a return-position method occurrence: resolveSite later stamps its route
 -- (RKey/RDict) once inference grounds the result mono.
-recordSite : String -> Ref Route -> Ref (List Route) -> Mono -> Mono
-recordSite name tagRef implRef methodType =
+recordSite : TcEnv ->
+  String ->
+  Scheme ->
+  Ref Route ->
+  Ref (List Route) ->
+  Ref (List Route) ->
+  Mono ->
+  List (Int, Mono) ->
+  Mono
+recordSite env name scheme tagRef implRef methodRef methodType subst =
   let stripped = stripArrows methodType
+  let ev = freshEvId ()
+  let exactRow = exactReturnRow env name scheme
+  let exact = map (row => methodReturnRequest row methodType (Some ev)) exactRow
+  let _ = match (exact, exactRow)
+    (Some request, Some row) =>
+      let _ =
+        recordMethodLevelSlotsOwned row subst request.mrrLoc request.mrrScope
+      let _ = recordExactMethodObligation request
+      if isEmptyL row.msrMethodSlots then
+        ()
+      else
+        recordMethodDictsFromSlots row.msrMethodSlots methodRef subst
+    _ =>
+      let _ = recordMethodObligationGuarded env name scheme methodType
+      recordMethodDicts name methodRef subst
+  let siteEv = match exact
+    Some request => optionOr ev request.mrrGoalEv
+    None => ev
   pushSiteGoal
     GKReturnSite
     (PendingEntry
@@ -12652,10 +12863,12 @@ recordSite name tagRef implRef methodType =
       tagRef
       stripped
       perRun.value.currentFn.value
-      (SKReturn implRef methodType)
+      (match exact
+        Some request => SKExactReturn implRef request
+        None => SKReturn implRef methodType)
       !currentLoc
       (captureScope ())
-      (freshEvId ()))
+      siteEv)
   perRun.value.methodSiteFns :=
     consSiteFn
       perRun.value.currentFn.value
@@ -15516,11 +15729,13 @@ inferVarId env x id = match maybeStandaloneValueMono x
 
 inferVarPlainId : TcEnv -> String -> Int -> Mono
 inferVarPlainId env x id = match lookupVar env x
-  Some s =>
-    let mono = instantiateVarTrackedId x id s
-    -- #816/#818 shadow guard — shared with inferMethodAt (the emit path); see
-    -- recordMethodObligationGuarded.  [mono] is the already-tracked instantiation.
-    recordMethodObligationGuarded env x s mono
+  Some s => match lookupMethodRow env x
+    Some _ =>
+      let inst = instantiateVarTrackedWithSubst x id s
+      recordMethodObligationOwned env x s (fst inst) (snd inst) None
+    None =>
+      let mono = instantiateVarTrackedId x id s
+      recordMethodObligationGuarded env x s mono
   None => unboundVarFresh x
 
 -- #11 soundness (native obligation hole, plain check path): a constrained binding used
@@ -15541,6 +15756,23 @@ instantiateVarTrackedId x id s =
       let inst = instantiateTracked s
       let _ = recordSchemeCallObligations id obs (snd inst)
       fst inst
+    None => match declaredCrossModuleObls x
+      Some obs =>
+        let inst = instantiateTracked s
+        let _ = recordSchemeCallObligations id obs (snd inst)
+        fst inst
+      None => instantiate s
+
+instantiateVarTrackedWithSubst : String ->
+  Int ->
+  Scheme ->
+  (Mono, List (Int, Mono))
+instantiateVarTrackedWithSubst x id s =
+  match lookupSchemeObls x id perRun.value.schemeObligationsRef.value
+    Some obs =>
+      let inst = instantiateTracked s
+      let _ = recordSchemeCallObligations id obs (snd inst)
+      inst
     -- #673: schemeObligationsRef is a PER-MODULE ref (reset per module), so a CROSS-MODULE
     -- constrained binding used as a plain EVar has NO entry here.  For a PRELUDE binding
     -- (`println : Display a => …`, the #673 repro) the plain-`instantiate` fallback silently
@@ -15550,8 +15782,8 @@ instantiateVarTrackedId x id s =
       Some obs =>
         let inst = instantiateTracked s
         let _ = recordSchemeCallObligations id obs (snd inst)
-        fst inst
-      None => instantiate s
+        inst
+      None => instantiateTracked s
 
 -- #673: the declared call obligations of a CROSS-MODULE constrained binding [x] used as a
 -- plain EVar, in schemeObligations shape (`(iface, quantified-var-id VECTOR)` list) so the
@@ -15976,6 +16208,90 @@ recordMethodObligationGuarded env name s mono =
     mono
   else
     recordImplObligation name mono
+
+exactReturnRow : TcEnv -> String -> Scheme -> Option MethodSchemeRow
+exactReturnRow env name scheme = match lookupMethodRow env name
+  None => None
+  Some row =>
+    if lookupLocalFlag env name
+      || isMonoScheme scheme
+      || omHasKey name perRun.value.definerShadowNamesRef.value
+      || omHasKey name driverState.value.standaloneValuesRef.value
+      || isSome
+        (Scopes.enclosingDefaultBody (currentScopeStore ()) (captureScope ()))
+      || listLen (admittedIfacesFor name) >= 2 then
+      None
+    else
+      Some row
+
+-- `ebMethodRow = Some` certifies this predicate.  Every environment producer either
+-- calls `extendMethodRows`, or installs a row returned by `admittedRowFor`; both
+-- gate on this function.  Keeping the certificate at the binding boundary avoids
+-- rebuilding method identities and walking declared types at every occurrence.
+methodRowCanCarry : MethodSchemeRow -> Bool
+methodRowCanCarry row =
+  isSome (identOriginOf row.msrIface.irOrigin)
+    && not
+      (anyArgMentions
+        (dispatchTyparams row.msrTyparams)
+        (methodArgs row.msrType))
+    && allMethodParamsMentioned row.msrTyparams row.msrType
+
+allMethodParamsMentioned : List String -> Ty -> Bool
+allMethodParamsMentioned [] _ = True
+allMethodParamsMentioned (param :: rest) ty =
+  argMentions [param] (stripTyConstraints ty)
+    && allMethodParamsMentioned rest ty
+
+recordMethodObligationOwned : TcEnv ->
+  String ->
+  Scheme ->
+  Mono ->
+  List (Int, Mono) ->
+  Option EvId ->
+  Mono
+recordMethodObligationOwned env name scheme occurrence subst goalEv =
+  match exactReturnRow env name scheme
+    Some row =>
+      let request = methodReturnRequest row occurrence goalEv
+      let _ =
+        recordMethodLevelSlotsOwned row subst request.mrrLoc request.mrrScope
+      recordExactMethodObligation request
+    None => recordMethodObligationGuarded env name scheme occurrence
+
+recordExactMethodObligation : MethodReturnRequest -> Mono
+recordExactMethodObligation request =
+  let _ = noteMethodReturnTrace MRTProduced request
+  let _ = pushExactReturnObl request
+  request.mrrOccurrence
+
+recordMethodLevelSlotsOwned : MethodSchemeRow ->
+  List (Int, Mono) ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+recordMethodLevelSlotsOwned row subst loc scope =
+  recordInstantiatedMethodLevelSlots
+    (instantiateMethodPredicateSlots row.msrMethodSlots subst)
+    loc
+    scope
+
+recordInstantiatedMethodLevelSlots : List PredicateSlot ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+recordInstantiatedMethodLevelSlots [] _ _ = ()
+recordInstantiatedMethodLevelSlots (slot :: rest) loc scope =
+  let _ = match slot.psArgs
+    PSArgsUnknown => ()
+    PSArgsKnown args =>
+      recordOblAt
+        Predicate { iface = slot.psIface, args = args }
+        0
+        PMethodLevel
+        loc
+        scope
+  recordInstantiatedMethodLevelSlots rest loc scope
 
 -- A numeric literal's checking obligation and method-level slots come from its
 -- identity-selected method row.  The local/standalone suppression policy remains the
@@ -20093,6 +20409,12 @@ methodOccArgIdPairs o = match o.prov
   PMethodOcc => match o.oblProj
     OpMethodOcc typarams mty occ =>
       methodOccArgIdPairsAt o.pred.iface.irName typarams mty occ
+    OpExactReturn request =>
+      methodOccArgIdPairsAt
+        request.mrrIface.irName
+        request.mrrTyparams
+        request.mrrType
+        request.mrrOccurrence
     OpProjected => []
     OpNumLit _ => []
   _ => []
@@ -20540,6 +20862,11 @@ numObligIds : UObligation -> List Int
 numObligIds o = match o.oblProj
   OpMethodOcc _ _ occ =>
     if o.pred.iface.irName == "Num" then monoUnboundIds occ else []
+  OpExactReturn request =>
+    if o.pred.iface.irName == "Num" then
+      monoUnboundIds request.mrrOccurrence
+    else
+      []
   OpProjected => []
   OpNumLit occ => monoUnboundIds occ
 
@@ -20695,6 +21022,12 @@ oblDispatchMonos o = match o.oblProj
   OpProjected => []
   OpMethodOcc typarams mty occ =>
     oblDispatchMonosGo o.pred.iface.irName typarams mty occ
+  OpExactReturn request =>
+    oblDispatchMonosGo
+      request.mrrIface.irName
+      request.mrrTyparams
+      request.mrrType
+      request.mrrOccurrence
   OpNumLit _ => []
 
 oblDispatchMonosGo : String -> List String -> Ty -> Mono -> List Mono
@@ -20728,6 +21061,17 @@ registerAmbiguousGo (o :: rest) groupLevel memberIds anchoredIds =
         occ
         o.loc
         o.uoScope
+        groupLevel
+        memberIds
+        anchoredIds
+    OpExactReturn request =>
+      registerOneAmbiguous
+        request.mrrIface
+        request.mrrTyparams
+        request.mrrType
+        request.mrrOccurrence
+        request.mrrLoc
+        request.mrrScope
         groupLevel
         memberIds
         anchoredIds
@@ -20854,6 +21198,13 @@ liveNumVarGo _ [] = None
 liveNumVarGo id (o :: rest) = match o.oblProj
   OpMethodOcc _ _ occ =>
     if o.pred.iface.irName == "Num" then match findTvarInMono occ id
+      Some m => Some m
+      None => liveNumVarGo id rest
+    else
+      liveNumVarGo id rest
+  OpExactReturn request =>
+    if o.pred.iface.irName
+      == "Num" then match findTvarInMono request.mrrOccurrence id
       Some m => Some m
       None => liveNumVarGo id rest
     else
@@ -21677,6 +22028,17 @@ resolveSites rpNames ((PendingEntry name tagRef resultMono encl kind loc scope _
   let _ = match kind
     SKReturn implRef fullMono =>
       resolveSite rpNames name tagRef implRef resultMono fullMono encl loc scope
+    SKExactReturn implRef request =>
+      resolveExactReturnSite
+        rpNames
+        name
+        tagRef
+        implRef
+        resultMono
+        request
+        encl
+        loc
+        scope
     SKNumReturn predicate fullMono =>
       resolveNumLitSite
         rpNames
@@ -21746,6 +22108,45 @@ resolveSite rpNames name tagRef implRef resultMono fullMono encl origin scope =
     RNone => noteDefaultBodyRNone DBRKReturn name origin scope tagBefore route
     _ => tagRef := route
   implRef := routes
+
+resolveExactReturnSite : List String ->
+  String ->
+  Ref Route ->
+  Ref (List Route) ->
+  Mono ->
+  MethodReturnRequest ->
+  String ->
+  Option Loc ->
+  ScopeId ->
+  Unit
+resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origin scope =
+  let _ = noteMethodReturnTrace MRTStamped request
+  match methodReturnArgs request
+    None =>
+      resolveSite
+        rpNames
+        name
+        tagRef
+        implRef
+        resultMono
+        request.mrrOccurrence
+        encl
+        origin
+        scope
+    Some _ =>
+      let tagBefore = tagRef.value
+      let (route, routes) =
+        entail
+          name
+          resultMono
+          encl
+          scope
+          (EKExactReturn request (contains name rpNames))
+      let _ = match route
+        RNone =>
+          noteDefaultBodyRNone DBRKReturn name origin scope tagBefore route
+        _ => tagRef := route
+      implRef := routes
 
 resolveNumLitSite : List String ->
   String ->
@@ -27869,6 +28270,7 @@ data EntailKind =
   -- return-position method site: the method's full (un-stripped) mono (for
   -- ifaceParamMonos), and whether the method is return-position.
   | EKReturn Mono Bool
+  | EKExactReturn MethodReturnRequest Bool
   -- Numeric return sites carry the producer's fixed class predicate.  The method
   -- name remains separate because the route-word collision ABI is method-keyed.
   | EKNumReturn ClassPredicate Mono Bool (Option Loc)
@@ -28038,6 +28440,11 @@ entailAssum m encl name useScope kind =
 
 goalRequestOfKind : String -> EntailKind -> Option PredicateRequest
 goalRequestOfKind name (EKReturn fullMono _) = goalPredOf name fullMono
+goalRequestOfKind _ (EKExactReturn request _) =
+  let args = match methodReturnArgs request
+    Some args => PSArgsKnown args
+    None => PSArgsUnknown
+  Some PredicateRequest { prIface = request.mrrIface, prArgs = args }
 goalRequestOfKind _ (EKNumReturn predicate _ _ _) = Some PredicateRequest {
   prIface = predicate.predicateInterface,
   prArgs = PSArgsKnown predicate.predicateArguments,
@@ -28070,6 +28477,8 @@ entailAssumVar : Option PredicateRequest ->
 -- constrained FUNCTION, not a method occurrence).
 entailAssumVar request m encl _ useScope (EKReturn _ _) =
   activeDictVarOfEncl request m encl useScope
+entailAssumVar request m encl _ useScope (EKExactReturn _ _) =
+  activeDictVarOfEncl request m encl useScope
 entailAssumVar request m encl _ useScope (EKNumReturn _ _ _ _) =
   activeDictVarOfEncl request m encl useScope
 entailAssumVar _ m encl _ useScope (EKNestedTop iface _ _ _ rest) =
@@ -28095,6 +28504,8 @@ entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
 
 entailAssumRoute : String -> EntailKind -> Route
 entailAssumRoute dname (EKReturn _ isRp) =
+  if isRp then RDictFwd dname else RDict dname
+entailAssumRoute dname (EKExactReturn _ isRp) =
   if isRp then RDictFwd dname else RDict dname
 entailAssumRoute dname (EKNumReturn _ _ isRp _) =
   if isRp then RDictFwd dname else RDict dname
@@ -28137,6 +28548,15 @@ entailInst name m encl useScope tag (EKReturn fullMono _) =
         let routes = legacyReturnReqRoutesForRow encl useScope m row
         (RKey routeKey [], routes)
       None => (RKey tag [], [])
+entailInst _ _ encl useScope tag (EKExactReturn request _) =
+  let goals = optionOr [] (methodReturnArgs request)
+  let env = perRun.value.bodyImplEnvRef.value
+  match ieSelectRowByIface env request.mrrIface goals
+    Some row =>
+      let routeKey = methodRouteKeyForRow request.mrrName env row
+      let routes = implDictRoutesForRow encl useScope goals row
+      (RKey routeKey [], routes)
+    None => (RKey tag [], [])
 entailInst name m encl useScope tag (kind@(EKNumReturn predicate _ _ _)) =
   let goals = predicate.predicateArguments
   let env = perRun.value.bodyImplEnvRef.value
@@ -28224,6 +28644,7 @@ entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
 
 entailFallback : ScopeId -> EntailKind -> Route
 entailFallback _ (EKReturn _ _) = RNone
+entailFallback _ (EKExactReturn _ _) = RNone
 entailFallback _ (EKNumReturn _ _ _ _) = RNone
 entailFallback scope (EKNestedTop _ policy _ _ _) =
   undeterminedRoute scope policy
@@ -29567,6 +29988,9 @@ checkBodyImpl seed mode prog0 =
   let prog = match mode
     Flat coreProg => coreProg ++ prog0
     Module _ _ _ => prog0
+  let aliasSpellings = match mode
+    Flat _ => []
+    Module _ _ _ => aliasMethodSpellings prog
   -- P1 (#1446) / DICT §8 I7: the four operator-and-literal classes' identities, read
   -- off the PRELUDE's own `DInterface` decls before any body is inferred (the operator
   -- handlers consult them during inference).  See `seedBuiltinClasses`.
@@ -29909,8 +30333,7 @@ checkBodyImpl seed mode prog0 =
       -- same rows, in the same module scope, on the same line as the supply they
       -- accompany — `originMethodName`'s source.  Empty on the Flat arm, whose
       -- single file has no import graph.
-      perRun.value.aliasMethodOriginsRef :=
-        omFromPairs (aliasMethodSpellings prog) omEmpty
+      perRun.value.aliasMethodOriginsRef := omFromPairs aliasSpellings omEmpty
       -- #2188 / S2-DECL (d): the SAME ladder's whole admitted set, for the names where
       -- the winner above is a floor rather than a decision.  Written HERE, beside the
       -- projection it accompanies, so the two can never be derived from different
@@ -30073,9 +30496,16 @@ checkBodyImpl seed mode prog0 =
   -- DECLARATION site (the program under check).  It builds the declared type
   -- verbatim; the two guards below are what hold a user extern to its row.
   let currentMethodRows = ifaceMethodSchemeRows prog
-  let globalS =
-    legacyMethodSchemes currentMethodRows
-      ++ userExternSchemes mode (externTyOriginScope []) prog
+  let visibleMethodRows = match mode
+    Flat _ => []
+    Module _ _ implDecls => ifaceMethodSchemeRows implDecls
+  let visibleMethodRowIndex =
+    methodRowsByIdentity
+      (isNonEmptyL importerShadows)
+      visibleMethodRows
+      regEmpty
+  let externS = userExternSchemes mode (externTyOriginScope []) prog
+  let globalS = legacyMethodSchemes currentMethodRows ++ externS
   -- #2074 / F1 (epic #2070): the USER-EXTERN DECLARATION guards, all gated on
   -- the same `ffiStampMode` ownership Bool — a stdlib-owned program's externs ARE
   -- the vocabulary and none of these rules owns them.  They run AFTER
@@ -30118,10 +30548,9 @@ checkBodyImpl seed mode prog0 =
       -- this reuses the schemes already minted above rather than eliciting new ids.
       let _ = seedNumLitFromIntAnchor currentMethodRows
       []
-    Module _ _ implDecls =>
+    Module _ _ _ =>
       -- The rows remain local: they carry live scheme cells needed only by setup and
       -- must not become another graph-lived authority.
-      let visibleMethodRows = ifaceMethodSchemeRows implDecls
       let ifaceSchemes = legacyMethodSchemes visibleMethodRows
       -- #259/#2157: seed both halves from the same already-minted row selection.
       let _ = seedNumLitFromIntAnchor visibleMethodRows
@@ -30129,13 +30558,25 @@ checkBodyImpl seed mode prog0 =
       -- name to the scheme of the declaration THIS module's import scope admits
       -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
       -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
-      let sm = pickSchemesByDecl importerShadows ifaceSchemes visibleMethodRows
+      let sm =
+        pickSchemesByDecl importerShadows ifaceSchemes visibleMethodRowIndex
       perRun.value.methodPredicateSlotsRef :=
         perRun.value.methodPredicateSlotsRef.value
           ++ crossRun.value.crossModuleMethodPredicateSlotsRef.value
       sm
-  let env1 =
-    extendVars (extendVars (extendVars dataEnv seed) globalS) shadowLayer
+  let envSeed = extendVars dataEnv seed
+  let envImported = match mode
+    Flat _ => envSeed
+    Module _ _ _ =>
+      annotateImportedMethodRows
+        envSeed
+        (importedMethodBindingNames prog0 aliasSpellings)
+        (nameableIfaceMethodSet prog0)
+        (namesToSet importerShadows omEmpty)
+        visibleMethodRowIndex
+  let envGlobal =
+    extendVars (extendMethodRows envImported currentMethodRows) externS
+  let env1 = extendBindings envGlobal shadowLayer
   let defs = funDefs progS
   let (topSchemes, groupedOut) =
     processTopGroups env1 sigs defs (groupNames defs omEmpty)
@@ -31741,6 +32182,9 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
   -- differential was the only thing in the tree that caught it.
   let occs = uOblArgs o
   let loc = o.loc
+  let _ = match o.oblProj
+    OpExactReturn request => noteMethodReturnTrace MRTChecked request
+    _ => ()
   let _ = noteNumericObligationChecked o occs
   let _ = checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
   checkCallObligationsU deferNonGround univ rest
@@ -32140,6 +32584,13 @@ groundMultiParamObligations prog (o :: rest) =
   let _ = match o.oblProj
     OpMethodOcc typarams mty occ =>
       groundOneObligation prog o.pred.iface.irName typarams mty occ
+    OpExactReturn request =>
+      groundOneObligation
+        prog
+        request.mrrIface.irName
+        request.mrrTyparams
+        request.mrrType
+        request.mrrOccurrence
     OpProjected => ()
     OpNumLit _ => ()
   groundMultiParamObligations prog rest
@@ -33479,6 +33930,19 @@ checkSurvivorObligations subject ownIface ownTyparams mty extraMap (o :: rest) l
         extraMap
         o.pred.iface.irName
         (dispatchMonosOf (dispatchTyparams otyparams) omty occ)
+        loc
+    OpExactReturn request =>
+      checkSurvivorDispatchMonos
+        subject
+        ownIface
+        ownTyparams
+        mty
+        extraMap
+        request.mrrIface.irName
+        (dispatchMonosOf
+          (dispatchTyparams request.mrrTyparams)
+          request.mrrType
+          request.mrrOccurrence)
         loc
     OpNumLit _ =>
       checkSurvivorDispatchMonos
@@ -37274,6 +37738,11 @@ oblPredOf o = match o.oblProj
   OpMethodOcc typarams mty occ => match dispatchMonosOf typarams mty occ
     [] => []
     ds => [(o.pred.iface, ds, o.loc)]
+  OpExactReturn request => match methodReturnArgs request
+    Some ds => match ds
+      [] => []
+      _ => [(request.mrrIface, ds, request.mrrLoc)]
+    None => []
   OpProjected => []
   OpNumLit _ => match o.pred.args
     [] => []
@@ -38301,6 +38770,320 @@ methodRowNumericAnchorProbe _ =
 -- > methodRowNumericAnchorProbe ()
 -- (0, "Foldable", ["t"], [("attrOnly", False, False, "", ""), ("directOnly", True, True, "String -> a", "String -> a"), ("attrThenDirect", True, True, "String -> a", "String -> a"), ("directThenAttr", False, False, "", ""), ("builtinThenUser", True, True, "Int -> a", "Int -> a"), ("userThenBuiltin", True, True, "Int -> a", "Int -> a")])
 
+methodReturnProbeIface : String -> String -> Ty -> Decl
+methodReturnProbeIface moduleId ifaceName methodTy =
+  methodRowTestIface
+    moduleId
+    ifaceName
+    ["a"]
+    [IfaceMethod "make" methodTy None None]
+
+methodReturnProbeImpl : String -> String -> Decl
+methodReturnProbeImpl moduleId ifaceName = DImpl {
+  pub = False,
+  iface = ifaceName,
+  tys = [tyConBuiltin "Int" None],
+  reqs = [],
+  methods = [ImplMethod "make" [] (ELit LUnit)],
+  implOrigin = OriginModule moduleId,
+}
+
+methodReturnProbeScope : String -> ScopeId
+methodReturnProbeScope moduleId =
+  let scope =
+    Scopes.freshScope (currentScopeStore ()) None 0 moduleId ModuleOwner
+  let _ = openScope scope
+  scope
+
+methodReturnProbeOccurrence : MethodSchemeRow -> (Mono, List (Int, Mono))
+methodReturnProbeOccurrence row =
+  let inst = instantiateTracked row.msrScheme
+  let _ = unify (stripArrows (fst inst)) (tconBuiltin "Int")
+  inst
+
+methodReturnProbeSpelling : MethodSchemeRow -> Unit
+methodReturnProbeSpelling row =
+  perRun.value.methodIfaceParamsRef :=
+    omInsert "make" (row.msrIface, row.msrTyparams, row.msrType, []) omEmpty
+
+methodReturnProbeRequest : MethodSchemeRow -> MethodReturnRequest
+methodReturnProbeRequest row =
+  let occurrence = fst (methodReturnProbeOccurrence row)
+  methodReturnRequest row occurrence None
+
+methodReturnVectorCompletenessProbe : Unit ->
+  (Option (List String), Option (List String), Bool, Bool)
+methodReturnVectorCompletenessProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let _ = methodReturnProbeScope "return-vector"
+  let zeroRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface "return-zero" "Zero" [] [
+          IfaceMethod
+            "make"
+            (TyFun (tyConBuiltin "Unit" None) (tyConBuiltin "Int" None))
+            None
+            None,
+        ],
+      ])
+  let partialRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface
+          "return-partial"
+          "Partial"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+              None
+              None,
+          ],
+      ])
+  let zeroArgs =
+    map (map ppMono) (methodReturnArgs (methodReturnProbeRequest zeroRow))
+  let partialArgs =
+    map (map ppMono) (methodReturnArgs (methodReturnProbeRequest partialRow))
+  let observed = (
+    zeroArgs,
+    partialArgs,
+    allMethodParamsMentioned zeroRow.msrTyparams zeroRow.msrType,
+    allMethodParamsMentioned partialRow.msrTyparams partialRow.msrType,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observed
+
+-- > methodReturnVectorCompletenessProbe ()
+-- (Some [], None, True, False)
+
+methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
+methodReturnProbeCodes ownedRow impls =
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let _ = methodReturnProbeScope "return-owner-checker"
+  let foreignRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-foreign"
+          "Foreign"
+          (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
+      ])
+  let request = methodReturnProbeRequest ownedRow
+  let _ = methodReturnProbeSpelling foreignRow
+  let _ = recordExactMethodObligation request
+  let universe = buildImplUniverse impls
+  let _ = checkCallObligationsU True universe (wAll perRun.value.implObls)
+  map tcCode (reverseL perRun.value.typeErrors.items.value)
+
+methodReturnProbeRouteKey : Route -> String
+methodReturnProbeRouteKey (RKey key _) = key
+methodReturnProbeRouteKey _ = ""
+
+methodReturnProbeStamp : MethodSchemeRow ->
+  MethodSchemeRow ->
+  List Decl ->
+  (String, String, String)
+methodReturnProbeStamp ownedRow foreignRow impls =
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let scope = methodReturnProbeScope "return-owner-stamper"
+  let request = methodReturnProbeRequest ownedRow
+  let _ = methodReturnProbeSpelling foreignRow
+  let env = buildFlatImplEnv impls
+  perRun.value.bodyImplEnvRef := env
+  let tagRef = Ref RNone
+  let implRef = Ref []
+  let resultMono = stripArrows request.mrrOccurrence
+  let _ =
+    resolveExactReturnSite
+      []
+      "make"
+      tagRef
+      implRef
+      resultMono
+      request
+      ""
+      None
+      scope
+  let goals = optionOr [] (methodReturnArgs request)
+  let ownedKey = match ieSelectRowByIface env ownedRow.msrIface goals
+    Some selected => methodRouteKeyForRow "make" env selected
+    None => ""
+  let foreignKey = match ieSelectRowByIface env foreignRow.msrIface goals
+    Some selected => methodRouteKeyForRow "make" env selected
+    None => ""
+  (methodReturnProbeRouteKey tagRef.value, ownedKey, foreignKey)
+
+-- The request is created before the spelling table is pointed at Foreign.  The checker
+-- must still reject a graph containing only Foreign's impl, its positive control must
+-- accept Owner's impl, and the stamper must select Owner's distinct route.
+methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
+methodReturnOwnershipProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  let savedSticky = typeErrorsSticky.value
+  let savedStickyDiags = typeErrorsStickyDiags.value
+  crossRun := freshCrossRun initialEnv
+  let ownedDecl =
+    methodReturnProbeIface
+      "return-owner"
+      "Owner"
+      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+  let foreignDecl =
+    methodReturnProbeIface
+      "return-foreign"
+      "Foreign"
+      (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let ownedRow = firstMethodRow (ifaceMethodSchemeRows [ownedDecl])
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let foreignRow = firstMethodRow (ifaceMethodSchemeRows [foreignDecl])
+  let ownedImpl = methodReturnProbeImpl "return-owner" "Owner"
+  let foreignImpl = methodReturnProbeImpl "return-foreign" "Foreign"
+  let rejected = methodReturnProbeCodes ownedRow [foreignImpl]
+  let accepted = methodReturnProbeCodes ownedRow [foreignImpl, ownedImpl]
+  let (actualKey, ownedKey, foreignKey) =
+    methodReturnProbeStamp ownedRow foreignRow [foreignImpl, ownedImpl]
+  let observed = (
+    rejected,
+    accepted,
+    actualKey == ownedKey,
+    actualKey /= foreignKey,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  typeErrorsSticky := savedSticky
+  typeErrorsStickyDiags := savedStickyDiags
+  observed
+
+-- > methodReturnOwnershipProbe ()
+-- (["T-NO-IMPL"], [], True, True)
+
+methodReturnProbeSlotIfaces : List PredicateSlot -> List String
+methodReturnProbeSlotIfaces slots = map (slot => slot.psIface.irName) slots
+
+methodReturnProbeGoalIfaces : List Obligation -> List String
+methodReturnProbeGoalIfaces [] = []
+methodReturnProbeGoalIfaces (goal :: rest) = match goal.oPayload
+  GPMethodDict pending =>
+    methodReturnProbeSlotIfaces pending.pmdSlots
+      ++ methodReturnProbeGoalIfaces rest
+  _ => methodReturnProbeGoalIfaces rest
+
+methodReturnProbeOblIfaces : List UObligation -> List String
+methodReturnProbeOblIfaces [] = []
+methodReturnProbeOblIfaces (obl :: rest) =
+  let here = match obl.prov
+    PMethodLevel => [obl.pred.iface.irName]
+    _ => []
+  here ++ methodReturnProbeOblIfaces rest
+
+methodReturnProbeSlotCase : MethodSchemeRow ->
+  MethodSchemeRow ->
+  Bool ->
+  (List String, List String)
+methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let _ = methodReturnProbeScope "return-owner-slots"
+  perRun.value.methodPredicateSlotsRef := [("make", foreignRow.msrMethodSlots)]
+  let _ = methodReturnProbeSpelling foreignRow
+  let env =
+    if retainOwner then
+      extendMethodRow initialEnv "make" ownedRow
+    else
+      extendVar initialEnv "make" ownedRow.msrScheme
+  let inst = instantiateTracked ownedRow.msrScheme
+  let _ =
+    unify
+      (stripArrows (fst inst))
+      (tupleMono [tconBuiltin "Int", tconBuiltin "Int"])
+  let _ =
+    recordSite
+      env
+      "make"
+      ownedRow.msrScheme
+      (Ref RNone)
+      (Ref [])
+      (Ref [])
+      (fst inst)
+      (snd inst)
+  (
+    methodReturnProbeOblIfaces (wAll perRun.value.obls),
+    methodReturnProbeGoalIfaces graphRun.value.goals.value,
+  )
+
+-- The retained row owns Seed, the same-name legacy table owns Decoy, and an empty
+-- retained row is a known empty answer.  Only the missing-row compatibility control
+-- may fall back to Decoy.
+methodReturnSlotOwnershipProbe : Unit ->
+  ((List String, List String), (List String, List String), (List String, List String))
+methodReturnSlotOwnershipProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let ownedRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-owner-slots"
+          "OwnedSlots"
+          (TyConstrained
+            [methodRowTestConstraint "return-seed" "Seed" [TyVar "b"]]
+            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
+      ])
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let emptyRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-empty-slots"
+          "EmptySlots"
+          (TyFun (tyConBuiltin "Unit" None) (TyVar "a")),
+      ])
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let foreignRow =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodReturnProbeIface
+          "return-foreign-slots"
+          "ForeignSlots"
+          (TyConstrained
+            [methodRowTestConstraint "return-decoy" "Decoy" [TyVar "b"]]
+            (TyFun (tyConBuiltin "Unit" None) (TyTuple [TyVar "b", TyVar "a"]))),
+      ])
+  let observed = (
+    methodReturnProbeSlotCase ownedRow foreignRow True,
+    methodReturnProbeSlotCase emptyRow foreignRow True,
+    methodReturnProbeSlotCase ownedRow foreignRow False,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observed
+
+-- > methodReturnSlotOwnershipProbe ()
+-- ((["Seed"], ["Seed"]), ([], []), (["Decoy"], ["Decoy"]))
+
 -- COULD a given for this goal still be registered, once the enclosing binding finishes
 -- generalizing?  Both conditions are `registerPredGiven`'s own, because it is the only
 -- writer that can ever answer a structured goal:
@@ -39065,6 +39848,13 @@ ifaceForConstraintIdGo id (o :: rest) = match o.oblProj
     TVar cell =>
       if tyvarId cell == id then
         o.pred.iface
+      else
+        ifaceForConstraintIdGo id rest
+    _ => ifaceForConstraintIdGo id rest
+  OpExactReturn request => match normalize request.mrrOccurrence
+    TVar cell =>
+      if tyvarId cell == id then
+        request.mrrIface
       else
         ifaceForConstraintIdGo id rest
     _ => ifaceForConstraintIdGo id rest
@@ -40435,20 +41225,78 @@ pickSchemes (n :: ns) table = match lookupAssoc n table
 -- today's answer for every shape this leaf does not decide.
 pickSchemesByDecl : List String ->
   List (String, Scheme) ->
-  List MethodSchemeRow ->
-  List (String, Scheme)
+  Registry MethodSchemeRow ->
+  List (String, EnvBinding)
 pickSchemesByDecl [] _ _ = []
-pickSchemesByDecl (n :: ns) table byId = match admittedSchemeFor n byId
-  Some s => (n, s) :: pickSchemesByDecl ns table byId
-  None => match lookupAssoc n table
-    Some s => (n, s) :: pickSchemesByDecl ns table byId
-    None => pickSchemesByDecl ns table byId
+pickSchemesByDecl (n :: ns) table byId = match admittedRowFor n byId
+  Some row => (n, methodEnvBinding row) :: pickSchemesByDecl ns table byId
+  None => match admittedSchemeFor n byId
+    Some s => (n, ordinaryEnvBinding s) :: pickSchemesByDecl ns table byId
+    None => match lookupAssoc n table
+      Some s => (n, ordinaryEnvBinding s) :: pickSchemesByDecl ns table byId
+      None => pickSchemesByDecl ns table byId
+
+ordinaryEnvBinding : Scheme -> EnvBinding
+ordinaryEnvBinding scheme = EnvBinding { ebScheme = scheme, ebMethodRow = None }
+
+methodEnvBinding : MethodSchemeRow -> EnvBinding
+methodEnvBinding row = EnvBinding {
+  ebScheme = row.msrScheme,
+  ebMethodRow = Some row,
+}
+
+-- Candidate spellings come from the same three binding sources the environment sees:
+-- nameable bare methods (including the implicit core row), selective-import local
+-- names, and module-alias-qualified names.  `lookupBinding` below remains the final
+-- no-new-name gate, while this bounded list avoids walking every ordinary seed binding.
+importedMethodBindingNames : List Decl -> List (String, String) -> List String
+importedMethodBindingNames prog aliases =
+  flatMap snd (nameableIfaceRows prog)
+    ++ importedMemberBindingNames prog
+    ++ map fst aliases
+
+importedMemberBindingNames : List Decl -> List String
+importedMemberBindingNames [] = []
+importedMemberBindingNames ((DAttrib _ decl) :: rest) =
+  importedMemberBindingNames [decl] ++ importedMemberBindingNames rest
+importedMemberBindingNames ((DUse _ path _) :: rest) =
+  map snd (optionOr [] (importedBindings path))
+    ++ importedMemberBindingNames rest
+importedMemberBindingNames (_ :: rest) = importedMemberBindingNames rest
+
+annotateImportedMethodRows : TcEnv ->
+  List String ->
+  OrdMap Unit ->
+  OrdMap Unit ->
+  Registry MethodSchemeRow ->
+  TcEnv
+annotateImportedMethodRows env [] _ _ _ = env
+annotateImportedMethodRows env (name :: rest) nameable shadows rows =
+  let originName = originMethodName name
+  let env2 =
+    if omHasKey originName nameable
+      && not (omHasKey name shadows)
+      && isSome (lookupBinding env name) then match admittedRowFor name rows
+      Some row => extendMethodRow env name row
+      None => env
+    else
+      env
+  annotateImportedMethodRows env2 rest nameable shadows rows
+
+admittedRowFor : String -> Registry MethodSchemeRow -> Option MethodSchemeRow
+admittedRowFor n byId =
+  if listLen (admittedIfacesFor n) >= 2 then
+    None
+  else do
+    (iface, _, _, _) <- omLookup n perRun.value.methodIfaceParamsRef.value
+    row <- lookupMethodRowById iface (originMethodName n) byId
+    if methodRowCanCarry row then Some row else None
 
 -- The declaration `applyMethodScopeOverrides` resolved for [n] IN THIS MODULE, then
 -- that declaration's own scheme row.  `None` at either step means "this module's
 -- scope does not decide it", and the caller keeps the bare-name answer — never a
 -- guess, the same discipline `scopedMethodEntry` states for the table itself.
-admittedSchemeFor : String -> List MethodSchemeRow -> Option Scheme
+admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
 -- #1386: the row half is keyed by the method's OWN declared name, the same asymmetry
 -- `dispatchIdxScoped` carries — an alias-qualified occurrence resolves its interface
 -- from the spelling and its row from the origin.  Both projections are read HERE, off
@@ -40458,20 +41306,53 @@ admittedSchemeFor n byId =
     None => None
     Some (iface, _, _, _) => lookupSchemeById iface (originMethodName n) byId
 
+lookupMethodRowById : IfaceRef ->
+  String ->
+  Registry MethodSchemeRow ->
+  Option MethodSchemeRow
+lookupMethodRowById iface n rows = match regLookupK (methodRowKey iface n) rows
+  Some row =>
+    if sameTyConHead
+      row.msrIface.irName
+      row.msrIface.irOrigin
+      iface.irName
+      iface.irOrigin then
+      Some row
+    else
+      None
+  None => None
+
 -- ⚠️ `sameTyConHead`, not a bare `irName` compare: this is a LOOKUP, where a false HIT
 -- is silent wrongness (the wrong interface's scheme), so absence-makes-no-claim plus
 -- name equality is the comparator the file's own rule (`cohSameIface`'s header) picks
 -- for this direction.  A false MISS costs only the fall-back to today's answer.
-lookupSchemeById : IfaceRef -> String -> List MethodSchemeRow -> Option Scheme
-lookupSchemeById _ _ [] = None
-lookupSchemeById iface n (row :: rest)
-  | row.msrName == n
-    && sameTyConHead
-      row.msrIface.irName
-      row.msrIface.irOrigin
-      iface.irName
-      iface.irOrigin = Some row.msrScheme
-  | otherwise = lookupSchemeById iface n rest
+lookupSchemeById : IfaceRef ->
+  String ->
+  Registry MethodSchemeRow ->
+  Option Scheme
+lookupSchemeById iface n rows =
+  map (row => row.msrScheme) (lookupMethodRowById iface n rows)
+
+methodRowKey : IfaceRef -> String -> RegKey
+methodRowKey iface method = regKeyNTab [
+  ifaceTabKey iface.irOrigin iface.irName,
+  TkBare NsMethod method,
+]
+
+methodRowsByIdentity : Bool ->
+  List MethodSchemeRow ->
+  Registry MethodSchemeRow ->
+  Registry MethodSchemeRow
+methodRowsByIdentity _ [] acc = acc
+methodRowsByIdentity includeAll (row :: rest) acc =
+  if not includeAll && not (methodRowCanCarry row) then
+    methodRowsByIdentity includeAll rest acc
+  else
+    let key = methodRowKey row.msrIface row.msrName
+    let acc2 = match regLookupK key acc
+      Some _ => acc
+      None => regInsertK key row acc
+    methodRowsByIdentity includeAll rest acc2
 
 -- Bug C: for each importer-shadow name, pick from [table] the scheme that is the
 -- imported STANDALONE — the one whose receiver (first arrow domain) heads in a
