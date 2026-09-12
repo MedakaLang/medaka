@@ -1,0 +1,432 @@
+{- | Conformance table for `stdlib/regex.mdk`, the RE2-family engine.
+
+   Every expected value here is decided from the published Go `regexp` and
+   RE2 test tables (`regexp/find_test.go` `findTests`, `regexp/all_test.go`
+   `replaceTests` and `splitTests`) and from the leftmost-first submatch
+   rules those tables encode, restricted to the subset
+   `docs/design/REGEX-DESIGN.md` section 3 accepts. It is decided from the
+   reference semantics and NOT from what this engine returns, which is the
+   whole reason the table lives in its own file instead of as doctests
+   beside the code.
+
+   The rows that matter most are the ones where leftmost-first and POSIX
+   leftmost-longest disagree: `a|ab` on `"ab"`, and
+   `(a|ab)(c|bcd)(d*)` on `"abcd"`, where Perl and RE2 pick `a`, `bcd`, `""`
+   and POSIX picks `ab`, `cd`, `""`. A table captured from an engine that
+   had POSIX submatching would look just as green.
+
+   Each test compares a table of (inputs, expected) against the same table
+   with the expected column recomputed, so a failure shows the offending row
+   with its pattern and subject rather than a bare pair of values. -}
+
+import regex.{
+  Group,
+  Match,
+  Regex,
+  RegexError,
+  compile,
+  escape,
+  find,
+  findAll,
+  findFrom,
+  fullMatch,
+  isFullMatch,
+  isMatch,
+  mustCompile,
+  replace,
+  replaceAll,
+  replaceAllWith,
+  source,
+  split,
+}
+import test.{expectEqual}
+
+-- A match reduced to what the reference tables state: the whole span, then
+-- one span per group, with (-1, -1) for a group that did not participate.
+-- Both `Match` and `Group` carry the matched text too, and comparing spans
+-- alone would let a wrong `text` through, so `spanOf` is only half the
+-- coverage -- `textRows` below pins the text against the spans.
+type Span = Option (Int, Int, List (Int, Int))
+
+spanOf : Option Match -> Span
+spanOf None = None
+spanOf (Some m) = Some (m.start, m.end, map groupSpan m.groups)
+
+groupSpan : Option Group -> (Int, Int)
+groupSpan None = (-1, -1)
+groupSpan (Some g) = (g.start, g.end)
+
+-- # find: leftmost-first spans and captures
+
+type FindRow = (String, String, Span)
+
+findRows : List FindRow
+findRows = [
+  -- Go findTests, the no-capture rows.
+  ("", "", Some (0, 0, [])),
+  ("^abcdefg", "abcdefg", Some (0, 7, [])),
+  ("a+", "baaab", Some (1, 4, [])),
+  ("abcd..", "abcdef", Some (0, 6, [])),
+  ("a", "a", Some (0, 1, [])),
+  ("x", "y", None),
+  ("b", "abc", Some (1, 2, [])),
+  (".", "a", Some (0, 1, [])),
+  (".*", "abcdef", Some (0, 6, [])),
+  ("^", "abcde", Some (0, 0, [])),
+  ("$", "abcde", Some (5, 5, [])),
+  ("^abcd$", "abcd", Some (0, 4, [])),
+  ("^bcd", "abcdef", None),
+  ("^abcd$", "abcde", None),
+  ("[a-c]+", "xayabbbcz", Some (1, 2, [])),
+  ("[^\\n]+", "abcd", Some (0, 4, [])),
+  ("[a-z]+", "abcd", Some (0, 4, [])),
+  -- Leftmost-first, not leftmost-longest: the alternation order decides.
+  ("a|ab", "ab", Some (0, 1, [])),
+  ("ab|a", "ab", Some (0, 2, [])),
+  ("foo|foobar", "foobar", Some (0, 3, [])),
+  ("foobar|foo", "foobar", Some (0, 6, [])),
+  -- An empty alternative matches the empty string at position 0.
+  ("a|", "b", Some (0, 0, [])),
+  -- Greedy and lazy.
+  ("a+", "aaa", Some (0, 3, [])),
+  ("a+?", "aaa", Some (0, 1, [])),
+  ("a*?", "aaa", Some (0, 0, [])),
+  ("a??", "aa", Some (0, 0, [])),
+  ("<.+>", "<a><b>", Some (0, 6, [])),
+  ("<.+?>", "<a><b>", Some (0, 3, [])),
+  -- Bounded repetition.
+  ("a{2}", "aaa", Some (0, 2, [])),
+  ("a{2,}", "aaa", Some (0, 3, [])),
+  ("a{2,3}", "aaaa", Some (0, 3, [])),
+  ("a{2,3}?", "aaaa", Some (0, 2, [])),
+  ("a{0}b", "b", Some (0, 1, [])),
+  -- ASCII classes and their complements.
+  ("\\d+", "ab123cd", Some (2, 5, [])),
+  ("[\\d]+", "a12b", Some (1, 3, [])),
+  ("[^\\d]+", "12ab34", Some (2, 4, [])),
+  ("\\w+", "  a_1  ", Some (2, 5, [])),
+  ("\\W+", "ab  cd", Some (2, 4, [])),
+  ("\\s+", "a \t b", Some (1, 4, [])),
+  ("\\S+", "  ab  ", Some (2, 4, [])),
+  ("[a-]", "-", Some (0, 1, [])),
+  -- Word boundaries, ASCII.
+  ("\\bfoo\\b", "a foo bar", Some (2, 5, [])),
+  ("\\bfoo\\b", "foobar", None),
+  ("\\Bfoo", "barfoo", Some (3, 6, [])),
+  ("\\bfoo", "barfoo", None),
+  -- `.` and `^`/`$` against a newline, with and without the flags.
+  ("a.b", "a\nb", None),
+  ("(?s)a.b", "a\nb", Some (0, 3, [])),
+  ("^b", "a\nb", None),
+  ("(?m)^b", "a\nb", Some (2, 3, [])),
+  ("a$", "a\nb", None),
+  ("(?m)a$", "a\nb", Some (0, 1, [])),
+  -- Case folding, ASCII.
+  ("(?i)abc", "xxABCyy", Some (2, 5, [])),
+  ("(?i)ABC", "xxabcyy", Some (2, 5, [])),
+  ("(?i)[a-z]+", "ABC", Some (0, 3, [])),
+  ("(?is)a.b", "A\nB", Some (0, 3, [])),
+  -- Escapes for a literal codepoint.
+  ("\\x41\\u{42}", "xABy", Some (1, 3, [])),
+  ("a\\.b", "axb", None),
+  ("a\\.b", "a.b", Some (0, 3, [])),
+  -- Go findTests, the capturing rows.
+  ("(a)(b)(c)", "abc", Some (0, 3, [(0, 1), (1, 2), (2, 3)])),
+  ("(a|b)c", "abc", Some (1, 3, [(1, 2)])),
+  ("(a*)(a*)", "aa", Some (0, 2, [(0, 2), (2, 2)])),
+  ("(a+)(a*)", "aaa", Some (0, 3, [(0, 3), (3, 3)])),
+  ("(a+|b)*", "ab", Some (0, 2, [(1, 2)])),
+  ("(a+|b)+", "ab", Some (0, 2, [(1, 2)])),
+  ("(a+|b)?", "ab", Some (0, 1, [(0, 1)])),
+  ("(ab){2}", "ababab", Some (0, 4, [(2, 4)])),
+  ("(?:ab)+", "ababab", Some (0, 6, [])),
+  -- A group outside the chosen alternative did not participate.
+  ("(a)|b", "b", Some (0, 1, [(-1, -1)])),
+  ("(a+)(b)?", "aa", Some (0, 2, [(0, 2), (-1, -1)])),
+  -- The leftmost-first submatch discriminator: POSIX would answer
+  -- (0, 4, [(0, 2), (2, 4)]) and (0, 4, [(0, 2), (2, 4), (4, 4)]).
+  ("(a|ab)(c|bcd)", "abcd", Some (0, 4, [(0, 1), (1, 4)])),
+  ("(a|ab)(c|bcd)(d*)", "abcd", Some (0, 4, [(0, 1), (1, 4), (4, 4)])),
+  ("(?i)(a)(b)", "AB", Some (0, 2, [(0, 1), (1, 2)])),
+]
+
+runFind : FindRow -> FindRow
+runFind (pat, subj, _) = (pat, subj, spanOf (find (mustCompile pat) subj))
+
+test "find agrees with the RE2 and Go regexp tables on spans and captures" =
+  expectEqual findRows (map runFind findRows)
+
+-- # The matched text agrees with the span it reports
+
+type TextRow = (String, String, Option (String, List String))
+
+textRows : List TextRow
+textRows = [
+  ("\\d+", "ab123cd", Some ("123", [])),
+  ("(a|ab)(c|bcd)(d*)", "abcd", Some ("abcd", ["a", "bcd", ""])),
+  ("(a)|b", "b", Some ("b", [""])),
+  ("(?i)[a-z]+", "AbC", Some ("AbC", [])),
+  ("z", "abc", None),
+]
+
+runText : TextRow -> TextRow
+runText (pat, subj, _) = (pat, subj, textOf (find (mustCompile pat) subj))
+
+textOf : Option Match -> Option (String, List String)
+textOf None = None
+textOf (Some m) = Some (m.text, map groupText m.groups)
+
+groupText : Option Group -> String
+groupText None = ""
+groupText (Some g) = g.text
+
+test "a match's text is the subject over the span it reports" =
+  expectEqual textRows (map runText textRows)
+
+-- # findAll: the empty-match advance rule
+
+type AllRow = (String, String, List (Int, Int))
+
+allRows : List AllRow
+allRows = [
+  -- Go findTests: `a*` over "baaab" reports three matches, not four; the
+  -- empty one at 4 is dropped because the previous match ended there.
+  ("a*", "baaab", [(0, 0), (1, 4), (5, 5)]),
+  ("a*", "abc", [(0, 1), (2, 2), (3, 3)]),
+  ("\\d*", "a1b", [(0, 0), (1, 2), (3, 3)]),
+  ("", "abc", [(0, 0), (1, 1), (2, 2), (3, 3)]),
+  ("\\d+", "a1b22c", [(1, 2), (3, 5)]),
+  ("a", "banana", [(1, 2), (3, 4), (5, 6)]),
+  ("x", "abc", []),
+  ("^a", "aaa", [(0, 1)]),
+  ("(?m)^a", "a\na\nb", [(0, 1), (2, 3)]),
+]
+
+runAll : AllRow -> AllRow
+runAll (pat, subj, _) =
+  (pat, subj, map spanPair (findAll (mustCompile pat) subj))
+
+spanPair : Match -> (Int, Int)
+spanPair m = (m.start, m.end)
+
+test "findAll keeps an empty match except where the previous match ended" =
+  expectEqual allRows (map runAll allRows)
+
+-- # split, per Go's splitTests
+
+type SplitRow = (String, String, List String)
+
+splitRows : List SplitRow
+splitRows = [
+  -- Go splitTests, verbatim for n = -1.
+  ("", "", []),
+  ("", "foo", ["f", "o", "o"]),
+  ("o", "foo", ["f", "", ""]),
+  ("o+", "foo", ["f", ""]),
+  ("a*", "abaabaccadaaae", ["", "b", "b", "c", "c", "d", "e"]),
+  ("a", "banana", ["b", "n", "n", ""]),
+  -- A separator at either end leaves an empty piece, as string.split does.
+  (",", ",a,", ["", "a", ""]),
+  (",\\s*", "a, b,c", ["a", "b", "c"]),
+  (",", "abc", ["abc"]),
+]
+
+runSplit : SplitRow -> SplitRow
+runSplit (pat, subj, _) = (pat, subj, split (mustCompile pat) subj)
+
+test "split cuts the subject as Go regexp Split does" =
+  expectEqual splitRows (map runSplit splitRows)
+
+-- # replace and replaceAll
+
+type ReplRow = (String, String, String, String, String)
+
+replRows : List ReplRow
+replRows = [
+  -- (pattern, replacement, subject, first-only, all)
+  ("x", "y", "abc", "abc", "abc"),
+  ("[bc]", "x", "abcabc", "axcabc", "axxaxx"),
+  ("\\d+", "N", "a1b2", "aNb2", "aNbN"),
+  ("a*", "-", "abc", "-bc", "-b-c-"),
+  ("(a+)(b+)", "$2$1", "aabbb", "bbbaa", "bbbaa"),
+  ("(\\w+)@(\\w+)", "$2/$1", "user@host", "host/user", "host/user"),
+  -- $0 is the whole match, $$ is a literal dollar, and a group that did not
+  -- participate expands to nothing.
+  ("b", "[$0]", "abc", "a[b]c", "a[b]c"),
+  ("b", "$$", "abc", "a$c", "a$c"),
+  ("(x)|b", "<$1>", "abc", "a<>c", "a<>c"),
+  -- A digit past the group count expands to nothing, as does a trailing $.
+  ("b", "$7", "abc", "ac", "ac"),
+  ("b", "$", "abc", "a$c", "a$c"),
+]
+
+runRepl : ReplRow -> ReplRow
+runRepl (pat, repl, subj, _, _) =
+  let re = mustCompile pat
+  (pat, repl, subj, replace re repl subj, replaceAll re repl subj)
+
+test "replace and replaceAll expand $0 to $9 and $$" =
+  expectEqual replRows (map runRepl replRows)
+
+-- # The whole-subject and boolean front doors
+
+type FullRow = (String, String, Span, Bool, Bool)
+
+fullRows : List FullRow
+fullRows = [
+  -- (pattern, subject, fullMatch span, isFullMatch, isMatch)
+  -- Anchoring both ends is not the same as running the unanchored match and
+  -- checking its span: leftmost-first would pick `a` here, and `fullMatch`
+  -- has to keep looking and pick `ab`.
+  ("a|ab", "ab", Some (0, 2, []), True, True),
+  ("a", "ab", None, False, True),
+  ("[a-z]+", "abc", Some (0, 3, []), True, True),
+  ("[a-z]+", "abc1", None, False, True),
+  ("(\\d{4})-(\\d{2})", "2026-09", Some (0, 7, [(0, 4), (5, 7)]), True, True),
+  ("", "", Some (0, 0, []), True, True),
+  ("", "a", None, False, True),
+  ("z", "abc", None, False, False),
+]
+
+runFull : FullRow -> FullRow
+runFull (pat, subj, _, _, _) =
+  let re = mustCompile pat
+  (pat, subj, spanOf (fullMatch re subj), isFullMatch re subj, isMatch re subj)
+
+test "fullMatch anchors both ends and outranks a shorter preferred alternative" =
+  expectEqual fullRows (map runFull fullRows)
+
+-- # findFrom
+
+type FromRow = (String, Int, String, Span)
+
+fromRows : List FromRow
+fromRows = [
+  -- `^` and `$` keep meaning the ends of the whole subject, not of the tail
+  -- being searched, which is Go's FindAllString behaviour for an anchored
+  -- pattern.
+  ("a", 3, "aaaaa", Some (3, 4, [])),
+  ("^a", 3, "aaaaa", None),
+  ("^a", 0, "aaaaa", Some (0, 1, [])),
+  ("a", 9, "aaaaa", None),
+  ("a", -4, "aaaaa", Some (0, 1, [])),
+  ("$", 2, "abc", Some (3, 3, [])),
+]
+
+runFrom : FromRow -> FromRow
+runFrom (pat, from, subj, _) =
+  (pat, from, subj, spanOf (findFrom from (mustCompile pat) subj))
+
+test "findFrom starts the search at an offset without moving the anchors" =
+  expectEqual fromRows (map runFrom fromRows)
+
+-- # escape
+
+type EscRow = (String, String)
+
+escRows : List EscRow
+escRows = [
+  ("a.b*c", "a\\.b\\*c"),
+  ("1+1=2", "1\\+1=2"),
+  ("[](){}", "\\[\\]\\(\\)\\{\\}"),
+  ("a|b^c$d", "a\\|b\\^c\\$d"),
+  ("back\\slash", "back\\\\slash"),
+  ("plain", "plain"),
+  ("", ""),
+]
+
+runEsc : EscRow -> EscRow
+runEsc (s, _) = (s, escape s)
+
+test "escape quotes exactly the metacharacters Go QuoteMeta does" =
+  expectEqual escRows (map runEsc escRows)
+
+-- A glob and a SQL LIKE pattern become regexes through escape, which is the
+-- migration shape the design doc names for gate_registry.globMatchAt and
+-- sqlite select.likeMatch.
+globRe : String -> String
+globRe pat = "^" ++ replaceAllWith starRe starOf (escape pat) ++ "$"
+
+starRe : Regex
+starRe = mustCompile "\\\\\\*|\\\\\\?"
+
+starOf : Match -> String
+starOf m = if m.text == "\\*" then ".*" else "."
+
+test "a glob translated through escape matches like a glob" =
+  expectEqual
+    [True, True, False, True, False]
+    [
+      isFullMatch (mustCompile (globRe "*.mdk")) "a.mdk",
+      isFullMatch (mustCompile (globRe "a?c")) "abc",
+      isFullMatch (mustCompile (globRe "a?c")) "ac",
+      isFullMatch (mustCompile (globRe "a*b*c")) "aXbYc",
+      isFullMatch (mustCompile (globRe "*.mdk")) "a.mdkx",
+    ]
+
+-- # Rejected patterns
+--
+-- The design doc's section 3 lists what is deliberately out. Each of these
+-- must be an Err rather than a pattern that silently means something else,
+-- because a quietly reinterpreted pattern is the failure mode that costs
+-- most here.
+
+type ErrRow = (String, Option String)
+
+errRows : List ErrRow
+errRows = [
+  ("(a", Some "pattern is missing a closing )"),
+  ("a)", Some "unbalanced closing )"),
+  ("[a", Some "character class is missing a closing ]"),
+  ("[]", Some "empty character class"),
+  ("[z-a]", Some "character class range is reversed"),
+  ("*a", Some "repetition operator with nothing to repeat"),
+  ("a{3,2}", Some "repetition bounds are out of order"),
+  ("a{1001}", Some "repetition bound is larger than the maximum of 1000"),
+  ("(a)\\1", Some "backreferences are not supported"),
+  ("(?=a)", Some "lookahead is not supported"),
+  ("(?!a)", Some "lookahead is not supported"),
+  ("(?<=a)", Some "named groups and lookbehind are not supported"),
+  ("(?<n>a)", Some "named groups and lookbehind are not supported"),
+  ("(?P<n>a)", Some "named groups are not supported"),
+  ("[[:alpha:]]", Some "POSIX character classes are not supported"),
+  ("\\p{L}", Some "Unicode character classes are not supported"),
+  ("\\pL", Some "Unicode character classes are not supported"),
+  ("a(?i)b", Some "flags are only allowed at the start of the pattern"),
+  ("a\\", Some "pattern ends in a backslash"),
+  ("\\q", Some "unknown escape sequence"),
+  ("\\x4", Some "incomplete hexadecimal escape"),
+  ("\\u41", Some "\\u must be followed by a braced hexadecimal codepoint"),
+  ("\\u{41", Some "\\u{ is missing its closing brace"),
+  ("\\u{}", Some "\\u{} needs at least one hexadecimal digit"),
+  ("\\u{110000}", Some "codepoint is above the Unicode maximum"),
+  -- A `{` that opens no valid bound is a literal `{`, as in RE2, so these
+  -- are accepted rather than rejected.
+  ("a{", None),
+  ("a{2,", None),
+  ("a{,3}", None),
+  ("a{b}", None),
+  ("(?i)(?m)(?s)a", None),
+  ("(?ims)a", None),
+]
+
+runErr : ErrRow -> ErrRow
+runErr (pat, _) = (pat, errOf (compile pat))
+
+errOf : Result RegexError Regex -> Option String
+errOf (Err e) = Some e.message
+errOf (Ok _) = None
+
+test "a pattern outside the accepted subset is an Err naming what is missing" =
+  expectEqual errRows (map runErr errRows)
+
+-- # source round-trips the pattern
+
+test "source returns the pattern the regex was compiled from" =
+  expectEqual
+    ["a+b", "(?i)^\\d{2,4}$", ""]
+    [
+      source (mustCompile "a+b"),
+      source (mustCompile "(?i)^\\d{2,4}$"),
+      source (mustCompile ""),
+    ]

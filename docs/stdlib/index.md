@@ -652,6 +652,29 @@ PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2), the password-hashing key derivation functi
 
 - [`pbkdf2HmacSha256`](pbkdf2.md#pbkdf2hmacsha256)
 
+## [`regex`](regex.md)
+
+Regular expressions, matched in linear time.
+
+- [`Regex`](regex.md#regex)
+- [`RegexError`](regex.md#regexerror)
+- [`Group`](regex.md#group)
+- [`Match`](regex.md#match)
+- [`compile`](regex.md#compile)
+- [`mustCompile`](regex.md#mustcompile)
+- [`source`](regex.md#source)
+- [`escape`](regex.md#escape)
+- [`isMatch`](regex.md#ismatch)
+- [`isFullMatch`](regex.md#isfullmatch)
+- [`find`](regex.md#find)
+- [`findFrom`](regex.md#findfrom)
+- [`fullMatch`](regex.md#fullmatch)
+- [`findAll`](regex.md#findall)
+- [`replace`](regex.md#replace)
+- [`replaceAll`](regex.md#replaceall)
+- [`replaceAllWith`](regex.md#replaceallwith)
+- [`split`](regex.md#split)
+
 ## [`runtime`](runtime.md)
 
 The host primitives.
