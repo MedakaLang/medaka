@@ -1,0 +1,11 @@
+data Counter = Counter
+
+interface Walk a where
+  walk : a -> Int -> Int -> Int
+
+impl Walk Counter where
+  walk counter n acc = if n <= 0 then acc else walk counter (n - 1) (acc + 1)
+
+-- The recursive Walk Counter implementation increments the accumulator exactly
+-- 10,000 times, so the hand-derived result is 10,000.
+main = println (walk Counter 10000 0)

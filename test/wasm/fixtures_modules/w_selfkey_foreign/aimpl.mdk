@@ -1,0 +1,5 @@
+import common.{T}
+import ia.{IA, walk}
+
+export impl IA T where
+  walk receiver n acc = if n <= 0 then acc else walk receiver (n - 1) (acc + 1)

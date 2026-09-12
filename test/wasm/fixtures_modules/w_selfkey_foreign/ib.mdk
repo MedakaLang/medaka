@@ -1,0 +1,2 @@
+export interface IB a where
+  walk : a -> Int -> Int
