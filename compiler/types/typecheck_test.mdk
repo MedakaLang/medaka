@@ -470,23 +470,43 @@ test "an unsigned recursive sibling cannot default a declared numeric root" =
   ]
 
 test "unsupported recursive evidence keeps erased and expansive siblings rejected" =
-  let erased = joinNl [
-    "consume : a -> Int",
-    "consume _ = 1",
-    "signed : Num a => Int -> a",
-    "signed n = if ping n == 0 then fromInt n else fromInt n",
-    "ping n = if n == 0 then 1 else consume (signed (n - 1))",
-    "floating : Float",
-    "floating = signed 2",
-  ]
-  let expansive = joinNl [
-    "signed : Num a => Int -> a",
-    "signed n = if n == 0 then ping else fromInt n",
-    "ping = signed 1",
-    "floating : Float",
-    "floating = signed 0",
-  ]
+  let floatInstance =
+    joinNl [
+        "impl Num Float where",
+        "  fromInt _ = 0.0",
+      ]
+      ++ "\n"
+  let erased =
+    floatInstance
+      ++ joinNl [
+        "consume : a -> Int",
+        "consume _ = 1",
+        "signed : Num a => Int -> a",
+        "signed n = if ping n == 0 then fromInt n else fromInt n",
+        "ping n = if n == 0 then 1 else consume (signed (n - 1))",
+        "floating : Float",
+        "floating = signed 2",
+      ]
+  let expansive =
+    floatInstance
+      ++ joinNl [
+        "signed : Num a => Int -> a",
+        "signed n = if n == 0 then ping else fromInt n",
+        "ping = signed 1",
+        "floating : Float",
+        "floating = signed 0",
+      ]
   expectAll [
+    expectEqual
+      []
+      (declaredNumErrorCodes
+        (floatInstance
+          ++ joinNl [
+            "signed : Num a => Int -> a",
+            "signed n = fromInt n",
+            "floating : Float",
+            "floating = signed 2",
+          ])),
     expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes erased),
     expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes expansive),
   ]
