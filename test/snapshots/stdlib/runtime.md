@@ -1,5 +1,5 @@
 # META
-source_lines=653
+source_lines=665
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -296,6 +296,18 @@ extern netSetNonblock : Int -> Bool -> <Net "_"> Result String Unit
 
 -- | `netTcpAccept` that returns `None` instead of blocking.
 extern netTryAccept : Int -> <Net "_"> Result String (Option Int)
+
+{- | `netTcpConnect` that returns as soon as the handshake is under way. The
+   result is a non-blocking descriptor that is not connected yet: wait for it
+   to become writable, then ask `netConnectCheck` whether it arrived. Name
+   resolution still blocks. -}
+extern netConnectStart : String -> Int -> <Net "_"> Result String Int
+
+{- | Whether a descriptor from `netConnectStart` has finished its handshake.
+   `None` means not yet, so a woken task retries this rather than trusting the
+   wake. `Err` is the handshake's own failure — a refused or unreachable peer —
+   and leaves the descriptor for the caller to close. -}
+extern netConnectCheck : Int -> <Net "_"> Result String (Option Unit)
 
 -- | `netRecv` that returns `None` instead of blocking. `Some []` is end of
 -- stream.
@@ -711,6 +723,8 @@ extern stringToLower : String -> String
 (DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DExtern false "netConnectStart" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
 (DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
@@ -860,6 +874,8 @@ extern stringToLower : String -> String
 (DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
+(DExtern false "netConnectStart" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netConnectCheck" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Unit"))))))
 (DExtern false "netTryRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netTrySend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
 (DExtern false "netTrySendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))))
