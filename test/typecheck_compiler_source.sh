@@ -1336,11 +1336,64 @@ require_numeric_projection_arm numObligIds defaultAmbiguousNum 'OpNumLit occ => 
 require_numeric_projection_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
 require_numeric_projection_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
 require_numeric_projection_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
-require_numeric_projection_arm noteNumericObligationChecked checkOneCallObligation 'OpNumLit _ =>'
+require_numeric_projection_arm noteNumericObligationChecked checkOneCallObligation '(_, OpNumLit _) =>'
 require_numeric_projection_arm groundMultiParamObligations groundOneObligation 'OpNumLit _ => ()'
 require_numeric_projection_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
 require_numeric_projection_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
 require_numeric_projection_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
+
+# Arithmetic with a prelude Num declaration carries that exact predicate through
+# its single route goal. The scalar-only recorder remains only as the fallback
+# inside recordBinopGoals for prelude-free arithmetic.
+numeric_operator_required='  | SKPredicateOp Bool ClassPredicate
+  | EKPredicateOp Bool Bool ClassPredicate
+  | NPTArithmetic
+  let _ = recordBinopGoals op dref lt
+goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
+entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
+entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal encl useScope name m tag predicate, [])'
+printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: exact numeric operator predicate transport is missing: $required"
+    exit 1
+  fi
+done || exit 1
+
+if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
+  echo "FAIL: retired parallel arithmetic site recorder remains"
+  exit 1
+fi
+
+# Local numeric defaulting uses the just-exited level. Keep the producer census
+# separate from the unrestricted SCC and implementation-body policies.
+local_num_boundaries='blockRecLet blockLet defaultAmbiguousNumOwnedBy
+blockLet inferRecordCreate defaultAmbiguousNumOwnedBy
+inferRecLet registerLocalScheme defaultAmbiguousNumOwnedBy
+inferLetSimple inferLetBody defaultAmbiguousNumOwnedBy
+processLetGroup inferLetBinds defaultGroupNumOwnedBy'
+printf '%s\n' "$local_num_boundaries" | while read -r reader next helper; do
+  require_numeric_projection_arm "$reader" "$next" "$helper"
+  require_numeric_projection_arm "$reader" "$next" 'let _ = exitLevel ()'
+  require_numeric_projection_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
+done || exit 1
+
+local_num_expected="$(printf '%s\n' "$local_num_boundaries" | wc -l | tr -d ' ')"
+local_num_actual="$(grep -Ec '^[[:space:]]+default(Ambiguous|Group)NumOwnedBy([[:space:]]|$)' "$predicate_slot_src")"
+if [ "$local_num_actual" -ne "$local_num_expected" ]; then
+  echo "FAIL: local numeric owner call census changed: $local_num_actual calls, $local_num_expected checked boundaries"
+  exit 1
+fi
+
+require_numeric_projection_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows (Some level) m = match normalize m'
+require_numeric_projection_arm numDefaultOwnerAllows groundNumVars 'Unbound _ owner => owner == level'
+require_numeric_projection_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows None _ = True'
+require_numeric_projection_arm defaultAmbiguousNum defaultAmbiguousNumOwnedBy 'defaultAmbiguousNumWith None protectedIds obls t'
+require_numeric_projection_arm defaultGroupNum defaultGroupNumOwnedBy 'defaultGroupNumWith None protectedIds obls monos'
+require_numeric_projection_arm groundNumVars groundNumVarsWith 'groundNumVarsWith None obls ids'
+require_numeric_projection_arm defaultBodyLocalNum defaultEachMember 'groundNumVars obls'
+require_numeric_projection_arm defaultEachMember registerAmbiguousConstraints 'defaultAmbiguousNum protectedIds obls m'
+require_numeric_projection_arm processSCC isLetrecGroup 'defaultGroupNum protectedSigIds defaultObls'
 
 # Impl bodies read their method declaration and graded scope from one identity-keyed
 # ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.

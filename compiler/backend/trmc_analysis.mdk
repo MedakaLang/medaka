@@ -165,9 +165,8 @@ freeVarsBinds b ((CBind _ clauses) :: rest) =
 -- A CLetGroup's names are already present in [b]. Each clause adds its own
 -- parameter bindings independently: they are local to that clause, while an
 -- outer value or dictionary mentioned by any clause is free in the group.
--- Scanning only nullary bindings made an enclosing LLVM lambda omit captures
--- used solely inside a nested local function. Wasm's independent walk already
--- applies this all-clause rule.
+-- An enclosing lambda must capture these names even when the group body does
+-- not refer to them directly.
 freeVarsClauses : List String -> List CClause -> List String
 freeVarsClauses _ [] = []
 freeVarsClauses b ((CClause pats body) :: rest) =

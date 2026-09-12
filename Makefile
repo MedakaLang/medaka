@@ -116,7 +116,7 @@ test: medaka
 	./medaka test compiler/types
 	./medaka test compiler/eval/eval_test.mdk
 	## The shared free-variable walker in trmc_analysis.mdk drives TRMC safety and
-	## closure capture in both emitters. Its sibling is outside the test roster
+	## LLVM closure capture. Its sibling is outside the test roster
 	## for compiler/types and otherwise has no runner.
 	./medaka test compiler/backend/trmc_analysis_test.mdk
 	## S-reach-derive (#2179): same reason. `gate reach`'s fail-open rules live in

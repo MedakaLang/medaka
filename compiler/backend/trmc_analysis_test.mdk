@@ -1,5 +1,5 @@
--- Structural regressions for the shared Core free-variable walk used by TRMC
--- and closure capture in both emitters.
+-- Structural regressions for the Core free-variable walk used by shared TRMC
+-- analysis and LLVM closure capture.
 
 import test.{expectAll, expectEqual}
 import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..)}
@@ -22,15 +22,26 @@ multiClauseGroup =
             CVar "g" AGlobal,
             CMethod "add" (RDict "$d0") [] [RDictFwd "$d1"],
           ]),
-        CClause [PVar "q" loc] (CTuple [CVar "q" AGlobal, CVar "g" AGlobal]),
+        CClause
+          [PVar "q" loc]
+          (CTuple [
+            CVar "q" AGlobal,
+            CVar "g" AGlobal,
+            CVar "p" AGlobal,
+            CVar "secondOuter" AGlobal,
+          ]),
       ],
     ]
     (CApp (CVar "g" AGlobal) (CVar "after" AGlobal))
 
 test "freeVars visits every let-group clause with lexical subtraction" = expectAll
   [
-    expectEqual ["outer", "$d0", "$d1", "after"] (freeVars [] multiClauseGroup),
-    expectEqual ["$d1", "after"] (freeVars ["outer", "$d0"] multiClauseGroup),
+    expectEqual
+      ["outer", "$d0", "$d1", "p", "secondOuter", "after"]
+      (freeVars [] multiClauseGroup),
+    expectEqual
+      ["$d1", "p", "secondOuter", "after"]
+      (freeVars ["outer", "$d0"] multiClauseGroup),
   ]
 
 helperBind : CExpr -> CBind

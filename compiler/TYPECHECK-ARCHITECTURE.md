@@ -30,7 +30,7 @@ and [#2586](https://github.com/MedakaLang/medaka/issues/2586).
 |---|---|
 | [repr.mdk](types/repr.mdk) | Type representation, normalization, row algebra and rendering; reads no typechecker state. |
 | [evidence.mdk](types/evidence.mdk) | Nominal scope, binder, goal and request-instance identities, plus request-owned evidence data. |
-| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. Numeric return sites consume its complete class predicate; the shared outcome and qualified-scheme contracts do not yet replace production solving. |
+| [solver_contract.mdk](types/solver_contract.mdk) | Scoped wanteds, solver outcomes and qualified schemes. Instantiation applies one substitution to the body and ordered predicate/binder pairs. Numeric return and arithmetic sites consume its complete class predicate; the shared outcome and qualified-scheme contracts do not yet replace production solving. |
 | [scopes.mdk](types/scopes.mdk) | Abstract scope storage, frame allocation, ancestry, visibility, default-body identity, cursor operations and detached copying. Imports evidence identities and representation data, with no dependency on the typechecker. |
 | [typecheck.mdk](types/typecheck.mdk) | Inference, live-type givens, method rows, obligation scheduling and route compatibility. Owns the scope cursor, dictionary-name rendering and opt-in provenance observations. |
 
@@ -51,16 +51,37 @@ signatures. In a recursive group, protection requires every member to be a
 syntactic value that can generalize the root; one membership index serves both
 defaulting passes. This preserves the correspondence between the
 published scheme and its registered dictionary slots; inferred result-only
-numeric variables still default before generalization. Local binding and
-implementation-body defaulting retain their existing policies. Whole-graph
-defaulting and finalized scheme queries remain tracked by
+numeric variables still default before generalization. The five local binding
+boundaries default only normalized unbound roots owned by the just-exited level;
+outer and deeper roots survive that boundary. Implementation-body defaulting and
+the SCC fallback retain their existing policies. Expected-result propagation,
+whole-graph defaulting, and finalized scheme queries remain tracked by
 [#2646](https://github.com/MedakaLang/medaka/issues/2646). Measurements are in the
 [performance log](PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
 
 Numeric return sites carry the prelude's Num predicate from occurrence inference
 to obligation checking and route construction. The route and prerequisite
-dictionaries come from the same selected instance row. Ordinary method-return
-sites retain the legacy spelling-based path; this numeric prerequisite does not
+dictionaries come from the same selected instance row. Arithmetic `+`, `-`, `*`,
+`/`, and `%` likewise carry the exact Num predicate in one scoped operator route goal per
+site. Inferred schemes retain their residual obligation predicates. An active
+given supplies the dictionary; a concrete custom instance supplies both the method
+route and prerequisites from one selected row. Arithmetic and numeric literals
+resolved through these routes lower to method calls whose dictionaries use the
+existing closure capture ABI. Independently generalized local numeric functions
+still need local dictionary abstraction ([#1082](https://github.com/MedakaLang/medaka/issues/1082));
+capturing an existing outer dictionary does not provide that abstraction.
+Concrete Int and Float retain primitive routes. Arithmetic without the
+prelude retains its scalar-only route path. The opt-in numeric predicate
+trace observes production, checking, and arithmetic or return stamping.
+
+Constrained calls and nested instance prerequisites select one instance row for
+both the dictionary word and prerequisite routes. A shared method at the receiver
+head can require a canonical dictionary word for every method of the interface.
+Native and Wasm dispatch accept that canonical instance key alongside legacy
+words. The collision test uses the selected row's implemented methods; inherited
+default-only collisions remain part of the unfinished default-evidence work.
+
+Ordinary method-return sites retain the legacy spelling-based path; this work does not
 complete the shared solver or return-family migration. The finalized scheme query
 `checkOneSchemeFullK` drains the graph, but its current Scheme payload still contains
 live inference cells. Cache replacement and immutable publication remain with
