@@ -1398,7 +1398,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             keepAlive
             (serializeResponse proxyCeilingResponse)
         else defer
-          answered <- egressCall egress admission.target admission.serviceAuth
+          answered <- egressCall egress admission
           _ <- liftIO (u => releaseProxiedCall (servingProxyCensus serving))
           sendAndContinue
             server

@@ -1225,13 +1225,82 @@ runBodyStallFlood port sockets budgetSeconds =
    so a proxied read is an `AuthenticatedRoute` like any other and an anonymous
    one is refused 401 before the audience it named is looked at.
 
+   An empty `service` sends no `atproto-proxy` field at all, which is the
+   header-ABSENT call: a client that names no audience is forwarded to the one
+   this operator configured. It is not the same request as one naming the empty
+   string, which names no service DID and is refused for it.
+
    `xff` identifies the caller to the rate limiter exactly as in the limit cases,
    and an empty one sends no field at all — so the cases that are about proxying
    and the case that is about its ceiling build their requests the same way. -}
+proxyHeaderField : String -> String
+proxyHeaderField service =
+  if service == "" then "" else "atproto-proxy: \{service}\r\n"
+
 proxyRequest : String -> String -> String -> String -> Array Int
 proxyRequest xff token service path =
   toUtf8
-    "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}atproto-proxy: \{service}\r\n\r\n"
+    "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}\{proxyHeaderField service}\r\n"
+
+{- | The content negotiation a proxied write carries. Fixed here rather than
+   passed in: what the gate asserts is that this value reached the upstream,
+   and a value the gate also chose could be reported back to it by a PDS that
+   forwarded nothing. -}
+proxyWriteLanguage : String
+proxyWriteLanguage = "de-DE"
+
+{- | A POST asking to be proxied: a body, the two inbound fields a forward
+   relays for one, and the audience header.
+
+   The language and the body are the halves a GET cannot exercise. A forward
+   that dropped either would still answer this client with the upstream's own
+   reply, so neither is gradeable here — they are gradeable at the STUB, which
+   logs what it received; what this builder owes is to send them. -}
+proxyWriteRequest : String -> String -> String -> String -> Array Int
+proxyWriteRequest token service path body =
+  toUtf8
+    "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\{proxyHeaderField service}accept-language: \{proxyWriteLanguage}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
+
+{- | Drive one proxied write and grade what came back, response FIELDS
+   included.
+
+   `field` is text the response header block must contain. It is the only
+   assertion in this file that a proxied answer's own fields reached the
+   client: the upstream sets `atproto-repo-rev`, nothing on this side of the
+   PDS can invent it, and a relay that kept only the body would pass every
+   other proxy case here unchanged. -}
+runProxyWrite : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runProxyWrite port token service path body want marker field =
+  let conn = mustConnect port
+  let () = mustSend conn (proxyWriteRequest token service path body)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "PROXYWRITE" False message
+    Ok (status, headerText, responseBody, _) =>
+      let bodyText = fromUtf8 responseBody
+      if status /= want then
+        report
+          "PROXYWRITE"
+          False
+          "want status \{intToString want}, got \{intToString status}: \{bodyText}"
+      else if marker /= "" && not (contains marker bodyText) then
+        report "PROXYWRITE" False "body did not carry '\{marker}': \{bodyText}"
+      else if field /= "" && not (contains field headerText) then
+        report
+          "PROXYWRITE"
+          False
+          "response fields did not carry '\{field}': \{headerText}"
+      else
+        report "PROXYWRITE" True "status=\{intToString status}"
 
 {- | Drive one proxied read and grade what came back.
 
@@ -1293,7 +1362,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-write|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1350,6 +1419,16 @@ main = match args ()
       rkeyPrefix
   ["proxy-read", port, token, service, path, want, marker] =>
     runProxyRead (mustPort port) token service path (mustStatus want) marker
+  ["proxy-write", port, token, service, path, body, want, marker, field] =>
+    runProxyWrite
+      (mustPort port)
+      token
+      service
+      path
+      body
+      (mustStatus want)
+      marker
+      field
   ["rl-proxy", port, xff, token, service, path, count, want] =>
     runProxyFlood
       (mustPort port)

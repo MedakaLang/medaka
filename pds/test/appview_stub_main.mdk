@@ -12,6 +12,15 @@
    PDS, that the audience and method a token was minted for are the ones the
    header asked for and not the ones an attacker did.
 
+   It logs the same way what the call itself carried: the verb, the relayed
+   request fields, and the body. A forwarded call is no longer a bodyless GET,
+   and a relay that quietly dropped a field or a body would otherwise be
+   invisible from either side of the PDS — the client sees only an upstream
+   answer, which a PDS that forwarded nothing at all can still produce. Its
+   answer carries an `atproto-repo-rev` field for the same reason in the other
+   direction: only the upstream can set it, so seeing it at the client proves
+   the response half of the relay.
+
    It verifies NOTHING. A stub that graded the signature would be asserting
    self-consistency between two halves of this project; that judgement belongs
    to `pds/tools/check_pds_service_jwt.mjs` and its reference verifier. This
@@ -42,14 +51,18 @@ import array.{concat, sliceClamped}
 import base64.{decodeUrlSafe}
 import http.{
   Header,
+  HttpFrame(..),
   Request,
   headerName,
   headerValue,
   makeHeader,
   makeResponse,
   parseRequest,
+  requestBody,
   requestHeaders,
+  requestMethod,
   requestTarget,
+  scanRequestBoundary,
   serializeResponse,
 }
 import json.{Json(..), get, jObject, parse, stringify}
@@ -109,18 +122,6 @@ intClaim name claims = match get name claims
 
 -- ── the request ─────────────────────────────────────────────────────────────
 
-headerEnd : Array Int -> Int -> Option Int
-headerEnd buf i =
-  if i + 4 > arrayLength buf then
-    None
-  else if buf[i] == 13
-    && buf[i + 1] == 10
-    && buf[i + 2] == 13
-    && buf[i + 3] == 10 then
-    Some i
-  else
-    headerEnd buf (i + 1)
-
 findHeaderValue : String -> List Header -> Option String
 findHeaderValue _ [] = None
 findHeaderValue wanted (header :: rest) =
@@ -146,6 +147,17 @@ mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
   Ok header => header
   Err message => panic "appview_stub: header error: \{message}"
 
+{- | A repository revision this driver invents. Nothing interprets the value;
+   what a case asserts on is that a field only the upstream could have set
+   reaches the client. -}
+stubRepoRev : String
+stubRepoRev = "3lstubrev0000"
+
+mustRepoRevHeader : Header
+mustRepoRevHeader = match makeHeader "atproto-repo-rev" (toUtf8 stubRepoRev)
+  Ok header => header
+  Err message => panic "appview_stub: header error: \{message}"
+
 {- | The stub's answer, echoing the audience and method the credential it was
    handed actually named.
 
@@ -164,7 +176,7 @@ answerBytes status aud lxm =
           ("aud", JString aud),
           ("lxm", JString lxm),
         ]))
-  match makeResponse status "OK" [mustJsonHeader] body
+  match makeResponse status "OK" [mustJsonHeader, mustRepoRevHeader] body
     Ok response => serializeResponse response
     Err message => panic "appview_stub: response error: \{message}"
 
@@ -184,22 +196,40 @@ logLine path line = match appendFile path "\{line}\n"
   Ok () => ()
   Err message => panic "appview_stub: could not log: \{message}"
 
-{- | One complete request head.
+{- | One complete request, head and body.
 
    Read with `recv` and not `recvAll`: a proxied call does not close its end
    before it expects an answer, so reading to EOF here would deadlock against
-   the very peer this driver exists to answer. The forwarded request carries no
-   body, so the `\r\n\r\n` terminator is the whole of it. -}
+   the very peer this driver exists to answer. Where the request ends is
+   `stdlib/http`'s own framer rather than a terminator search, because a
+   forwarded call can carry a body and a driver that stopped at the header
+   terminator would answer before the body it is supposed to observe had
+   arrived. -}
 recvRequest : Connection -> Array Int -> <Net "_"> Result String Request
-recvRequest conn buffer = match headerEnd buffer 0
-  Some at => parseRequest (sliceClamped 0 (at + 4) buffer)
-  None => match recv conn 65536
+recvRequest conn buffer = match scanRequestBoundary buffer 0
+  HttpFramedAt at => parseRequest (sliceClamped 0 at buffer)
+  -- The framer refused what it has; parse the same bytes for the diagnostic
+  -- rather than keeping a second wording of it here.
+  HttpFrameFailed _ => parseRequest buffer
+  HttpNeedMore => match recv conn 65536
     Err message => Err "appview_stub: read failed: \{message}"
     Ok chunk =>
       if arrayLength chunk == 0 then
-        Err "appview_stub: call closed before its header terminator"
+        Err "appview_stub: call closed before its request was complete"
       else
         recvRequest conn (concat [|buffer, chunk|])
+
+observedField : String -> Request -> String
+observedField name request = match findHeaderValue name (requestHeaders request)
+  Some value => value
+  None => "<absent>"
+
+-- One call is one log line, so a body with a newline in it would split the
+-- record. Nothing this gate forwards carries one, and a body that did would
+-- show up as a short line rather than a wrong one.
+observedCall : Request -> String
+observedCall request =
+  "verb=\{requestMethod request} content-type=\{observedField "content-type" request} accept-language=\{observedField "accept-language" request} body=\{fromUtf8 (requestBody request)}"
 
 answerCall : String ->
   Int ->
@@ -224,7 +254,7 @@ answerCall path status conn =
           let () =
             logLine
               path
-              "call aud=\{aud} lxm=\{lxm} iss=\{stringClaim "iss" claims} jti=\{stringClaim "jti" claims} iat=\{intClaim "iat" claims} target=\{requestTarget request}"
+              "call aud=\{aud} lxm=\{lxm} iss=\{stringClaim "iss" claims} jti=\{stringClaim "jti" claims} iat=\{intClaim "iat" claims} target=\{requestTarget request} \{observedCall request}"
           answerBytes status aud lxm
   sendAll conn bytes
 

@@ -40,7 +40,7 @@
 
 import http.{Request, parseRequest, serializeResponse}
 import json.{Json(..), jObject, get, parse}
-import string.{contains, fromUtf8, split, toUtf8}
+import string.{contains, fromUtf8, join, split, toUtf8}
 import lib.handlers.{pdsServer}
 import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
 import lib.proxy.{AppviewPolicy, makeAppviewPolicy}
@@ -283,6 +283,29 @@ proxyRequest verb header target =
   toUtf8
     "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{header}\r\n\r\n"
 
+{- | A forwarded write: a POST carrying a body, the two inbound fields a
+   forward relays for it, and one field it must NOT relay.
+
+   The unrelayed field is what makes this a whitelist test rather than a
+   copy test: the relayed list is printed in full by `proxyOutcome`, so a seam
+   that carried `x-medaka-not-relayed` along would fail here even though every
+   field the client asked to be relayed did arrive. -}
+proxyPostRequest : String -> String -> Array Int
+proxyPostRequest target body =
+  toUtf8
+    "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\naccept-language: en-GB\r\nx-medaka-not-relayed: 1\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
+
+{- | A call that names NO audience, made by the logged-in account.
+
+   A forward is made on the account's behalf whether or not the client named
+   where to, so the header-absent arm needs the same credential the header-
+   bearing one does; this is `proxyRequest` with the `atproto-proxy` field and
+   nothing else removed. -}
+proxyRequestNoHeader : String -> Array Int
+proxyRequestNoHeader target =
+  toUtf8
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}\r\n"
+
 {- | The same request `proxy-admitted-timeline` sends, with the caller's own
    credential left out. An anonymous caller asking this server to forward under
    the ACCOUNT's identity is the confused deputy in its plainest form, so it is
@@ -321,13 +344,30 @@ claimText : ServiceAuthRequest -> String
 claimText claims =
   "iss=\{claims.iss} aud=\{claims.aud} lxm=\{lxmText claims.lxm} jti=\{claims.jti} iat=\{intToString claims.iat}"
 
+{- | The relayed inbound fields, as the admission selected them.
+
+   Printed in full rather than counted: the fields are a WHITELIST, so a cell
+   asserting on this string fails both when a listed field is dropped and when
+   an unlisted one is carried along. -}
+relayedText : List (String, String) -> String
+relayedText fields = join "," (map ((name, value) => "\{name}=\{value}") fields)
+
+{- | Everything an admission licenses the shell to do, in one line.
+
+   `verb`, `relayed` and `body` are here because a forward now carries them:
+   the seam chooses them and the shell only sends what it is handed, so a cell
+   that graded the target and the claims alone would not see a lost body or a
+   dropped field at all. `audience` and the claim's `aud` are printed
+   separately because they are allowed to differ — the first is the bare DID
+   this server admitted and may open a socket to, the second is the header's
+   own text a token is signed for. -}
 proxyOutcome : ProxyDecision -> String
 proxyOutcome NotProxied = "decision=not-proxied signed=none"
 proxyOutcome (ProxyRefused response) =
   let bytes = serializeResponse response
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
 proxyOutcome (ProxyAdmitted admission) =
-  "decision=admitted target=\{admission.target} \{claimText admission.serviceAuth}"
+  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{fromUtf8 admission.body}"
 
 proxyCell : String -> Option AppviewPolicy -> Array Int -> String -> <IO> Int
 proxyCell label policy bytes expected =
@@ -360,9 +400,20 @@ expectedJti = "05101b26313c47525d68737e89949faa"
 notProxiedLine : String
 notProxiedLine = "decision=not-proxied signed=none"
 
+admittedWith : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String
+admittedWith verb target audience aud nsid relayed body =
+  "decision=admitted verb=\{verb} target=\{target} audience=\{audience} iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000 relayed=[\{relayed}] body=\{body}"
+
+-- A forwarded GET: no body, and therefore no body fields relayed with it.
 admittedLine : String -> String -> String -> String
-admittedLine target aud nsid =
-  "decision=admitted target=\{target} iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000"
+admittedLine target aud nsid = admittedWith "GET" target aud aud nsid "" ""
 
 refusedLine : String -> String -> String -> String
 refusedLine status code message =
@@ -379,6 +430,24 @@ noCredentialLine =
 
 timelineTarget : String
 timelineTarget = xrpc "app.bsky.feed.getTimeline?limit=2"
+
+-- | A read this server does not register, used by both header-absent cells.
+followsTarget : String
+followsTarget = xrpc "app.bsky.graph.getFollows?actor=\{accountDidText}"
+
+updateSeenTarget : String
+updateSeenTarget = xrpc "app.bsky.notification.updateSeen"
+
+updateSeenBody : String
+updateSeenBody = "{\"seenAt\":\"2026-09-12T00:00:00.000Z\"}"
+
+{- | An nsid in no namespace this server forwards and in no registry it holds.
+
+   `com.atproto.temp.*` is deliberately not one of the account-management
+   methods: what the two cells on it assert is the NAMESPACE bound, which owes
+   the same answer to a method whose only property is being outside it. -}
+outOfNamespaceTarget : String
+outOfNamespaceTarget = xrpc "com.atproto.temp.checkSignupQueue"
 
 {- | The same method `timelineTarget` names, spelled with an upper-case
    authority.
@@ -408,9 +477,21 @@ runProxyCells =
     xrpc "app.bsky.feed.getAuthorFeed?actor=\{accountDidText}"
   let absent =
     proxyCell
-      "proxy-header-absent"
+      "proxy-header-absent-default-appview"
       configuredPolicy
-      (getRequest timelineTarget)
+      (proxyRequestNoHeader followsTarget)
+      (admittedLine
+        followsTarget
+        configuredAppviewDid
+        "app.bsky.graph.getFollows")
+  -- Anonymous ON PURPOSE: a deployment with no appview has no forward to make,
+  -- so this path must stay the router's 404 and must not become the 401 a
+  -- credential check would answer first.
+  let absentUnconfigured =
+    proxyCell
+      "proxy-header-absent-no-appview"
+      noPolicy
+      (getRequest followsTarget)
       notProxiedLine
   let admitted =
     proxyCell
@@ -426,10 +507,14 @@ runProxyCells =
       "proxy-admitted-service-fragment"
       configuredPolicy
       (proxyRequest "GET" "\{configuredAppviewDid}#bsky_appview" profileTarget)
-      (admittedLine
+      (admittedWith
+        "GET"
         profileTarget
+        configuredAppviewDid
         "\{configuredAppviewDid}#bsky_appview"
-        "app.bsky.actor.getProfile")
+        "app.bsky.actor.getProfile"
+        ""
+        "")
   let mixedCase =
     proxyCell
       "proxy-header-name-case-insensitive"
@@ -468,16 +553,15 @@ runProxyCells =
         (xrpc "com.atproto.admin.deleteAccount"))
       (invalidRequestLine
         "No service configured for com.atproto.admin.deleteAccount")
-  let protectedRegistered =
+  let registeredWithHeader =
     proxyCell
-      "proxy-protected-method-registered"
+      "proxy-registered-method-with-header"
       configuredPolicy
       (proxyRequest
         "GET"
         configuredAppviewDid
-        (xrpc "com.atproto.server.createSession"))
-      (invalidRequestLine
-        "this server answers com.atproto.server.createSession itself and does not proxy it")
+        (xrpc "com.atproto.server.getSession"))
+      notProxiedLine
   let localMiss =
     proxyCell
       "proxy-forward-on-local-miss"
@@ -488,30 +572,59 @@ runProxyCells =
         (xrpc
           "com.atproto.repo.getRecord?repo=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka-a"))
       notProxiedLine
-  let pdsHosted =
+  let preferences =
     proxyCell
-      "proxy-pds-hosted-preferences"
+      "proxy-admitted-preferences"
       configuredPolicy
       (proxyRequest
         "GET"
         configuredAppviewDid
         (xrpc "app.bsky.actor.getPreferences"))
-      notProxiedLine
+      (admittedLine
+        (xrpc "app.bsky.actor.getPreferences")
+        configuredAppviewDid
+        "app.bsky.actor.getPreferences")
   let unconfigured =
     proxyCell
       "proxy-no-appview-configured"
       noPolicy
       (proxyRequest "GET" configuredAppviewDid timelineTarget)
       (invalidRequestLine "No service configured for app.bsky.feed.getTimeline")
-  let needsGet =
+  let postBody =
     proxyCell
-      "proxy-forwardable-requires-get"
+      "proxy-admitted-post-body"
       configuredPolicy
-      (proxyRequest "POST" configuredAppviewDid timelineTarget)
+      (proxyPostRequest updateSeenTarget updateSeenBody)
+      (admittedWith
+        "POST"
+        updateSeenTarget
+        configuredAppviewDid
+        configuredAppviewDid
+        "app.bsky.notification.updateSeen"
+        "accept-language=en-GB,content-type=application/json"
+        updateSeenBody)
+  let needsGetOrPost =
+    proxyCell
+      "proxy-forwardable-requires-get-or-post"
+      configuredPolicy
+      (proxyRequest "DELETE" configuredAppviewDid timelineTarget)
       (refusedLine
         "405"
         "MethodNotAllowed"
-        "a proxied XRPC method requires GET")
+        "a proxied XRPC method requires GET or POST")
+  let outOfNamespaceHeader =
+    proxyCell
+      "proxy-out-of-namespace-with-header"
+      configuredPolicy
+      (proxyRequest "GET" configuredAppviewDid outOfNamespaceTarget)
+      (invalidRequestLine
+        "No service configured for com.atproto.temp.checkSignupQueue")
+  let outOfNamespaceAbsent =
+    proxyCell
+      "proxy-out-of-namespace-header-absent"
+      configuredPolicy
+      (getRequest outOfNamespaceTarget)
+      notProxiedLine
   let wellKnown =
     proxyCell
       "proxy-header-on-well-known"
@@ -534,6 +647,7 @@ runProxyCells =
         configuredAppviewDid
         "app.bsky.feed.getTimeline")
   absent
+    + absentUnconfigured
     + admitted
     + fragment
     + mixedCase
@@ -541,11 +655,14 @@ runProxyCells =
     + notADid
     + repeated
     + protectedUnregistered
-    + protectedRegistered
+    + registeredWithHeader
     + localMiss
-    + pdsHosted
+    + preferences
     + unconfigured
-    + needsGet
+    + postBody
+    + needsGetOrPost
+    + outOfNamespaceHeader
+    + outOfNamespaceAbsent
     + wellKnown
     + unauthenticated
     + mixedCaseNsid
@@ -699,8 +816,8 @@ runCells =
       + unregistered
   let () =
     println
-      "cells: \{intToString cells}/36 repository-free routes and proxy dispositions"
-  if cells == 36 then
+      "cells: \{intToString cells}/40 repository-free routes and proxy dispositions"
+  if cells == 40 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

@@ -1,7 +1,8 @@
 #!/usr/bin/env node
-// Derive two corpora from the pinned official PDS image: which XRPC methods it
-// registers locally, and the wire shape of the inter-service credential it mints
-// for a proxied call. Procedure to run this: pds/README.md, "Proxy answer key".
+// Derive three corpora from the pinned official PDS image: which XRPC methods it
+// registers locally, the methods it refuses to proxy or service-auth at all, and
+// the wire shape of the inter-service credential it mints for a proxied call.
+// Procedure to run this: pds/README.md, "Proxy answer key".
 //
 // The route table is produced by RUNNING the image's own dist/api/index.js
 // against a recording stub server, twice -- once with an appview configured and
@@ -15,6 +16,12 @@
 // a module imports is exactly what distinguishes a handler that answers from
 // PDS-local state from one that forwards, and the corpus header states the
 // mapping so a reader draws the verdict from the evidence.
+//
+// The protected list is READ OUT of the image's own pipethrough module rather
+// than transcribed: PROTECTED_METHODS is an LxmSet whose iterator yields the
+// lexicon constants it was built from, so the corpus is that set's own members
+// in its own spelling. A transcription could go stale against the image without
+// anything noticing; this cannot.
 //
 // The credential shape is produced by calling the same createServiceJwt the
 // image's AppContext.serviceAuthJwt() calls. `iat` is pinned by the caller and
@@ -171,6 +178,30 @@ for (const nsid of full) {
 }
 await writeFile(join(output, 'pds_route_registration_corpus.txt'), rows.join('\n') + '\n')
 
+// ── the protected list ──────────────────────────────────────────────────────
+
+const { PROTECTED_METHODS } = await load('@atproto/pds', 'dist/pipethrough.js')
+const protectedMethods = [...PROTECTED_METHODS].sort()
+if (protectedMethods.length === 0) throw new Error('PROTECTED_METHODS is empty')
+
+const protectedRows = []
+const prow = (...cells) => protectedRows.push(cells.join('\t'))
+prow("# Generated only by pds/tools/extract_pds_proxy_answer_key.mjs; see pds/README.md.")
+prow('# The pinned image\'s own PROTECTED_METHODS set (pipethrough.js), read out of the')
+prow('# module rather than transcribed: these are the account-management methods the')
+prow('# official PDS will neither proxy nor accept a service-auth lxm for. Its own comment:')
+prow('# "These endpoints are related to account management and must be used directly, not')
+prow('# proxied or service-authed. Service auth may be utilized between PDS and entryway')
+prow('# for these methods."')
+prow('#')
+prow('# Matching in the oracle is case-insensitive over the WHOLE lxm, authority and method')
+prow('# name alike (LxmSet lowercases its members and every probe); the rows below are the')
+prow('# set\'s own original spelling, which is what it iterates.')
+prow('#')
+prow('# Columns: nsid.')
+for (const nsid of protectedMethods) prow(nsid)
+await writeFile(join(output, 'pds_protected_methods_corpus.txt'), protectedRows.join('\n') + '\n')
+
 const shape = []
 const srow = (...cells) => shape.push(cells.join('\t'))
 srow('# Generated only by pds/tools/extract_pds_proxy_answer_key.mjs; see pds/README.md.')
@@ -212,5 +243,6 @@ await writeFile(join(output, 'pds_service_auth_shape_corpus.txt'), shape.join('\
 
 console.log(
   `routes: ${bare.length} always + ${full.length - bare.length} appview-gated = ${full.length}; ` +
+    `protected: ${protectedMethods.length}; ` +
     `service-auth alg=${withLxm.header.alg} lifetime=${withLxm.payload.exp - withLxm.payload.iat}s`,
 )

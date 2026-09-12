@@ -39,6 +39,7 @@
 import async.{Async, Wait, deadlineAfter, expired}
 import lib.httpclient.{
   findHeader,
+  Header,
   makeRequestHeader,
   parseResponse,
   responseBody,
@@ -47,8 +48,9 @@ import lib.httpclient.{
   responseStatus,
   serializeRequest,
 }
-import lib.jwt.{ServiceAuthRequest, mintServiceToken}
-import lib.proxy.{AppviewPolicy, UpstreamAnswer(..)}
+import lib.jwt.{mintServiceToken}
+import lib.server_core.{ProxyAdmission}
+import lib.proxy.{AppviewPolicy, relayedResponseFields, UpstreamAnswer(..)}
 import lib.resource_limits.{maxHttpClientWireBytes}
 import lib.sign.{SecretKey}
 import net.{Connection}
@@ -122,6 +124,13 @@ egressAppview (Egress _ appview _) = appview
 egressPort : Egress -> Int
 egressPort (Egress port _ _) = port
 
+-- The account's own repo signing key, for the ONE caller that signs with it.
+-- It is private to this module and has no export: the key enters through
+-- `makeEgress` and leaves only as a signature over a claim set
+-- `lib.server_core` built.
+egressSigningKey : Egress -> SecretKey
+egressSigningKey (Egress _ _ signingKey) = signingKey
+
 -- The `Host` field's value: the egress proxy's own address. See the module
 -- header on why that is the right value rather than the appview's hostname.
 egressHostValue : Egress -> String
@@ -134,20 +143,51 @@ egressHostValue egress = "\{egressAddress}:\{intToString (egressPort egress)}"
    secrets reaching a string interpolation, and a minted token belongs to that
    class whether or not the grep's word list happens to name it.
 
-   Not one inbound header is relayed. The three fields sent are this server's
-   own, so there is nothing a client can put in a header that reaches the
-   appview, and `lib.httpclient` owns every framing field besides. -}
-egressRequestBytes : Egress -> String -> String -> Result String (Array Int)
-egressRequestBytes egress target minted = do
+   The only inbound fields relayed are the ones `lib.server_core` already
+   selected and graded (`lib.proxy`'s `relayedRequestHeaders`); this module
+   adds no field of the client's and re-decides nothing. Its own three are
+   after them, so a relayed field can never displace the credential, and
+   `lib.httpclient` owns every framing field besides — including the one
+   `content-length`, computed from the body actually being sent rather than
+   copied from what the client claimed. -}
+egressRequestBytes : Egress ->
+  ProxyAdmission ->
+  String ->
+  Result String (Array Int)
+egressRequestBytes egress admission minted = do
+  relayed <- relayedRequestFieldsOf admission.headers
   authorization <- makeRequestHeader "authorization" ("Bearer " ++ minted)
   accept <- makeRequestHeader "accept" "application/json"
   closing <- makeRequestHeader "connection" "close"
   serializeRequest
-    "GET"
-    target
+    admission.verb
+    admission.target
     (egressHostValue egress)
-    [authorization, accept, closing]
-    [||]
+    (relayed ++ [authorization, accept, closing])
+    admission.body
+
+-- The relayed pairs `lib.server_core` selected, in the outbound serializer's
+-- own `Header` type. `makeRequestHeader` grades them a second time and cannot
+-- disagree with the first — the pure core admitted only printable ASCII under
+-- names from its own list — so an `Err` here is a defect in one of the two
+-- gradings rather than something a client can provoke.
+relayedRequestFieldsOf : List (String, String) -> Result String (List Header)
+relayedRequestFieldsOf [] = Ok []
+relayedRequestFieldsOf ((name, value) :: rest) = do
+  header <- makeRequestHeader name value
+  tail <- relayedRequestFieldsOf rest
+  Ok (header :: tail)
+
+-- The fields `lib.proxy` says an answer may carry back, paired with their
+-- values, in that module's order. A field the upstream did not send is absent
+-- rather than empty: `proxyUpstreamResponse` relays what is here and nothing
+-- else, so an empty value would be this server asserting something the appview
+-- did not say.
+relayedAnswerFields : List Header -> List String -> List (String, Array Int)
+relayedAnswerFields _ [] = []
+relayedAnswerFields headers (name :: rest) = match findHeader name headers
+  Some value => (name, value) :: relayedAnswerFields headers rest
+  None => relayedAnswerFields headers rest
 
 {- | Decode one complete upstream buffer.
 
@@ -165,6 +205,7 @@ decodeUpstream buffer = match parseResponse buffer
         (responseStatus response)
         (responseReason response)
         (findHeader "content-type" (responseHeaders response))
+        (relayedAnswerFields (responseHeaders response) relayedResponseFields)
         (responseBody response))
 
 -- Read until the peer closes, which is what `connection: close` asked it to
@@ -249,28 +290,29 @@ egressConnect host port bytes = defer
 
 {- | Make one proxied call and return what the appview answered.
 
-   The verb is GET and is not a parameter: `classifyProxy` admits only XRPC
-   queries and refuses every other method, so a verb argument here would be a
-   second place the verb is decided and the two could disagree. No request body
-   is forwarded for the same reason.
+   Nothing about the call is chosen here, and the parameter says so: a
+   `ProxyAdmission` is the pure classifier's own output and there is no other
+   way to obtain one, so the verb, the target, the relayed fields, the body and
+   the claim set all arrive already decided. This module signs and sends. A
+   verb chosen here would be a second place the verb is decided, and the two
+   could disagree.
 
    `Err` is every way the call can fail to produce an answer — the token could
    not be minted, the target the client sent is not a serializable origin-form
-   target, the proxy refused the connection, a budget ran out, the response did
-   not decode. The caller turns all of them into one 502: which of them
-   happened is this server's business and not the client's. -}
+   target, a relayed field is not serializable, the proxy refused the
+   connection, a budget ran out, the response did not decode. The caller turns
+   all of them into one 502: which of them happened is this server's business
+   and not the client's. -}
 export
 egressCall : Egress ->
-  String ->
-  ServiceAuthRequest ->
+  ProxyAdmission ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
-egressCall (Egress port appview signingKey) target serviceAuth =
-  match mintServiceToken signingKey serviceAuth
+egressCall egress admission =
+  match mintServiceToken (egressSigningKey egress) admission.serviceAuth
     Err message =>
       deferPure (Err "egress: could not mint a service credential: \{message}")
-    Ok minted =>
-      match egressRequestBytes (Egress port appview signingKey) target minted
-        Err message =>
-          deferPure
-            (Err "egress: outbound request is not serializable: \{message}")
-        Ok bytes => egressConnect egressAddress port bytes
+    Ok minted => match egressRequestBytes egress admission minted
+      Err message =>
+        deferPure
+          (Err "egress: outbound request is not serializable: \{message}")
+      Ok bytes => egressConnect egressAddress (egressPort egress) bytes

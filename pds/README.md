@@ -308,13 +308,15 @@ provisions it.
 
 ### Proxy answer key
 
-`pds/test/vectors/pds_route_registration_corpus.txt` and
-`pds/test/vectors/pds_service_auth_shape_corpus.txt` are the appview-proxying
+`pds/test/vectors/pds_route_registration_corpus.txt`,
+`pds/test/vectors/pds_service_auth_shape_corpus.txt` and
+`pds/test/vectors/pds_protected_methods_corpus.txt` are the appview-proxying
 answer key behind design P16/§4.5: which XRPC methods the official PDS registers
-locally (and which of those only when an appview is configured), and the wire
-shape of the service-auth credential it mints for a proxied call. Both are
-produced by one command, a third **library** route alongside the two above — Node
-only, no service started and no XRPC call:
+locally (and which of those only when an appview is configured), the wire shape
+of the service-auth credential it mints for a proxied call, and the
+account-management methods it will neither proxy nor service-auth at all. All
+three are produced by one command, a third **library** route alongside the two
+above — Node only, no service started and no XRPC call:
 
 ```sh
 docker run --rm --entrypoint node \
@@ -325,8 +327,9 @@ docker run --rm --entrypoint node \
 ```
 
 Run it from the repository root. The trailing argument pins `iat` so the minted
-token is reproducible; re-running must reproduce both files byte-for-byte, which
-is what `pds/test/vector_provenance.sh` checks the committed digests against.
+token is reproducible; re-running must reproduce all three files byte-for-byte,
+which is what `pds/test/vector_provenance.sh` checks the committed digests
+against.
 The extractor refuses if the image's `@atproto/pds`, `@atproto/xrpc-server`, or
 `@atproto/crypto` version differs from the one its rows were derived at, so a
 newer image cannot silently answer a different question.

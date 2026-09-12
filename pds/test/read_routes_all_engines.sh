@@ -26,7 +26,12 @@
 # The second cell group (#2912) is the APPVIEW-PROXY seam, here for the same
 # reason: deciding whether a client's `atproto-proxy` header may have a service
 # credential minted for it reads the registry, the account and the open
-# sessions, and no repository, so all three engines can grade it. Those cells
+# sessions, and no repository, so all three engines can grade it. Under ruling
+# R1 that decision is default-ALLOW on the METHOD axis within app.bsky.*/
+# chat.bsky.* and still default-DENY on the AUDIENCE axis, so the cells assert
+# BOTH: an unregistered method in those namespaces is forwarded (header or no
+# header, GET or POST, body and relayed fields carried along), and an audience
+# this server was not configured for is refused with nothing signed. Those cells
 # call as a real session (a session secret and one minted access token, still no
 # repository) because a forward is made on behalf of the logged-in account and
 # an anonymous caller is refused 401 before the audience is looked at. The
@@ -86,23 +91,27 @@ CELL list-repos-empty PASS status=200 media=application/json body={"repos":[]} s
 CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged
 CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged
-CELL proxy-header-absent PASS decision=not-proxied signed=none
-CELL proxy-admitted-timeline PASS decision=admitted target=/xrpc/app.bsky.feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000
-CELL proxy-admitted-service-fragment PASS decision=admitted target=/xrpc/app.bsky.actor.getProfile?actor=$DID iss=$DID aud=$AVDID#bsky_appview lxm=app.bsky.actor.getProfile jti=$JTI iat=1700000000
-CELL proxy-header-name-case-insensitive PASS decision=admitted target=/xrpc/app.bsky.feed.getAuthorFeed?actor=$DID iss=$DID aud=$AVDID lxm=app.bsky.feed.getAuthorFeed jti=$JTI iat=1700000000
+CELL proxy-header-absent-default-appview PASS decision=admitted verb=GET target=/xrpc/app.bsky.graph.getFollows?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.graph.getFollows jti=$JTI iat=1700000000 relayed=[] body=
+CELL proxy-header-absent-no-appview PASS decision=not-proxied signed=none
+CELL proxy-admitted-timeline PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000 relayed=[] body=
+CELL proxy-admitted-service-fragment PASS decision=admitted verb=GET target=/xrpc/app.bsky.actor.getProfile?actor=$DID audience=$AVDID iss=$DID aud=$AVDID#bsky_appview lxm=app.bsky.actor.getProfile jti=$JTI iat=1700000000 relayed=[] body=
+CELL proxy-header-name-case-insensitive PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getAuthorFeed?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getAuthorFeed jti=$JTI iat=1700000000 relayed=[] body=
 CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none
 CELL proxy-audience-not-a-did PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy does not name a service DID signed=none
 CELL proxy-header-repeated PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy must not be repeated signed=none
 CELL proxy-protected-method-unregistered PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.admin.deleteAccount signed=none
-CELL proxy-protected-method-registered PASS decision=refused status=400 error=InvalidRequest message=this server answers com.atproto.server.createSession itself and does not proxy it signed=none
+CELL proxy-registered-method-with-header PASS decision=not-proxied signed=none
 CELL proxy-forward-on-local-miss PASS decision=not-proxied signed=none
-CELL proxy-pds-hosted-preferences PASS decision=not-proxied signed=none
+CELL proxy-admitted-preferences PASS decision=admitted verb=GET target=/xrpc/app.bsky.actor.getPreferences audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.actor.getPreferences jti=$JTI iat=1700000000 relayed=[] body=
 CELL proxy-no-appview-configured PASS decision=refused status=400 error=InvalidRequest message=No service configured for app.bsky.feed.getTimeline signed=none
-CELL proxy-forwardable-requires-get PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET signed=none
+CELL proxy-admitted-post-body PASS decision=admitted verb=POST target=/xrpc/app.bsky.notification.updateSeen audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.notification.updateSeen jti=$JTI iat=1700000000 relayed=[accept-language=en-GB,content-type=application/json] body={"seenAt":"2026-09-12T00:00:00.000Z"}
+CELL proxy-forwardable-requires-get-or-post PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET or POST signed=none
+CELL proxy-out-of-namespace-with-header PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.temp.checkSignupQueue signed=none
+CELL proxy-out-of-namespace-header-absent PASS decision=not-proxied signed=none
 CELL proxy-header-on-well-known PASS decision=not-proxied signed=none
 CELL proxy-unauthenticated PASS decision=refused status=401 error=AuthenticationRequired message=Authentication Required signed=none
-CELL proxy-admitted-nsid-authority-case PASS decision=admitted target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000
-cells: 36/36 repository-free routes and proxy dispositions
+CELL proxy-admitted-nsid-authority-case PASS decision=admitted verb=GET target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000 relayed=[] body=
+cells: 40/40 repository-free routes and proxy dispositions
 TOTAL: PASS
 EOF
 
@@ -125,17 +134,29 @@ check_cells() {
     || fail "$label missed the empty-server listRepos cell"
   grep -F -q 'CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound' "$output" \
     || fail "$label missed the unconfigured getRepoStatus refusal"
-  grep -F -q "CELL proxy-admitted-timeline PASS decision=admitted target=/xrpc/app.bsky.feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI" "$output" \
+  grep -F -q "CELL proxy-admitted-timeline PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI" "$output" \
     || fail "$label missed the admitted proxied read's claim set"
+  grep -F -q "CELL proxy-header-absent-default-appview PASS decision=admitted verb=GET target=/xrpc/app.bsky.graph.getFollows?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.graph.getFollows" "$output" \
+    || fail "$label missed the read that named no audience being forwarded to the configured one"
+  grep -F -q 'CELL proxy-header-absent-no-appview PASS decision=not-proxied signed=none' "$output" \
+    || fail "$label missed the header-absent read staying local on a server with no appview"
+  grep -F -q 'CELL proxy-admitted-post-body PASS decision=admitted verb=POST target=/xrpc/app.bsky.notification.updateSeen' "$output" \
+    || fail "$label missed the admitted proxied WRITE"
+  grep -F -q 'relayed=[accept-language=en-GB,content-type=application/json] body={"seenAt":"2026-09-12T00:00:00.000Z"}' "$output" \
+    || fail "$label missed the body and the relayed fields the proxied write carries"
+  grep -F -q 'CELL proxy-out-of-namespace-with-header PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.temp.checkSignupQueue signed=none' "$output" \
+    || fail "$label missed the refusal of a method outside the forwardable namespaces"
+  grep -F -q 'CELL proxy-out-of-namespace-header-absent PASS decision=not-proxied signed=none' "$output" \
+    || fail "$label missed the untouched router answer for that same method with no header"
   grep -F -q 'CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none' "$output" \
     || fail "$label missed the confused-deputy refusal"
-  grep -F -q 'CELL proxy-protected-method-registered PASS decision=refused' "$output" \
-    || fail "$label missed the refusal of a method this server answers itself"
+  grep -F -q 'CELL proxy-registered-method-with-header PASS decision=not-proxied signed=none' "$output" \
+    || fail "$label missed a method this server registers being served locally despite the header"
   grep -F -q 'CELL proxy-unauthenticated PASS decision=refused status=401 error=AuthenticationRequired message=Authentication Required signed=none' "$output" \
     || fail "$label missed the refusal of a proxied read whose caller presented no credential"
-  grep -F -q "CELL proxy-admitted-nsid-authority-case PASS decision=admitted target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline" "$output" \
+  grep -F -q "CELL proxy-admitted-nsid-authority-case PASS decision=admitted verb=GET target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline" "$output" \
     || fail "$label missed the canonical lxm of a method the client spelled differently"
-  grep -F -q 'cells: 36/36 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
+  grep -F -q 'cells: 40/40 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
@@ -284,4 +305,4 @@ cmp "$WORK/source-pristine.mdk" "$SOURCE" \
 echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'MUTATION proxy-foreign-audience PASS direct-red'
 echo 'MUTATION proxy-no-credential PASS direct-red'
-echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 36/36 named cells; eval == native == Wasm; three direct-red mutations; bytes restored'
+echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 40/40 named cells; eval == native == Wasm; three direct-red mutations; bytes restored'
