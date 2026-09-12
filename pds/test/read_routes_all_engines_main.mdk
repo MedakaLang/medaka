@@ -538,6 +538,18 @@ runCells =
         (xrpc "com.atproto.sync.getLatestCommit?did=\{accountDidText}"))
       "400"
       "RepoNotFound"
+  let listRepos =
+    okCell
+      "list-repos-empty"
+      (getRequest (xrpc "com.atproto.sync.listRepos"))
+      "application/json"
+      "{\"repos\":[]}"
+  let getRepoStatus =
+    failCell
+      "get-repo-status-unconfigured"
+      (getRequest (xrpc "com.atproto.sync.getRepoStatus?did=\{accountDidText}"))
+      "400"
+      "RepoNotFound"
   let readNeedsGet =
     failCell
       "read-route-requires-get"
@@ -570,12 +582,14 @@ runCells =
       + describeRepo
       + getRepo
       + latestCommit
+      + listRepos
+      + getRepoStatus
       + readNeedsGet
       + unregistered
   let () =
     println
-      "cells: \{intToString cells}/32 repository-free routes and proxy dispositions"
-  if cells == 32 then
+      "cells: \{intToString cells}/34 repository-free routes and proxy dispositions"
+  if cells == 34 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

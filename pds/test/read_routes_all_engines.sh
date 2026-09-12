@@ -76,6 +76,8 @@ CELL list-records-unconfigured PASS status=400 error=RepoNotFound state=unchange
 CELL describe-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL get-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL get-latest-commit-unconfigured PASS status=400 error=RepoNotFound state=unchanged
+CELL list-repos-empty PASS status=200 media=application/json body={"repos":[]} state=unchanged
+CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged
 CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged
 CELL proxy-header-absent PASS decision=not-proxied signed=none
@@ -92,7 +94,7 @@ CELL proxy-pds-hosted-preferences PASS decision=not-proxied signed=none
 CELL proxy-no-appview-configured PASS decision=refused status=400 error=InvalidRequest message=No service configured for app.bsky.feed.getTimeline signed=none
 CELL proxy-forwardable-requires-get PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET signed=none
 CELL proxy-header-on-well-known PASS decision=not-proxied signed=none
-cells: 32/32 repository-free routes and proxy dispositions
+cells: 34/34 repository-free routes and proxy dispositions
 TOTAL: PASS
 EOF
 
@@ -111,13 +113,17 @@ check_cells() {
     || fail "$label missed the resolveHandle cell"
   grep -F -q 'CELL get-repo-unconfigured PASS status=400 error=RepoNotFound' "$output" \
     || fail "$label missed the unconfigured sync.getRepo refusal"
+  grep -F -q 'CELL list-repos-empty PASS status=200 media=application/json body={"repos":[]}' "$output" \
+    || fail "$label missed the empty-server listRepos cell"
+  grep -F -q 'CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound' "$output" \
+    || fail "$label missed the unconfigured getRepoStatus refusal"
   grep -F -q "CELL proxy-admitted-timeline PASS decision=admitted target=/xrpc/app.bsky.feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI" "$output" \
     || fail "$label missed the admitted proxied read's claim set"
   grep -F -q 'CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none' "$output" \
     || fail "$label missed the confused-deputy refusal"
   grep -F -q 'CELL proxy-protected-method-registered PASS decision=refused' "$output" \
     || fail "$label missed the refusal of a method this server answers itself"
-  grep -F -q 'cells: 32/32 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
+  grep -F -q 'cells: 34/34 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
@@ -226,4 +232,4 @@ cmp "$WORK/source-pristine.mdk" "$SOURCE" \
 
 echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'MUTATION proxy-foreign-audience PASS direct-red'
-echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 32/32 named cells; eval == native == Wasm; two direct-red mutations; bytes restored'
+echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 34/34 named cells; eval == native == Wasm; two direct-red mutations; bytes restored'

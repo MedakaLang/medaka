@@ -132,6 +132,27 @@ official PDS's own route registration and is **default-deny** — see
 for". A method this server answers itself is answered, not forwarded, even
 when a header asks for it.
 
+## Discovery: announcing to a relay (optional, off by default)
+
+`com.atproto.sync.listRepos` and `com.atproto.sync.getRepoStatus` are pure
+reads this PDS always serves, so a relay that already knows about this server
+can find and check on its one hosted repository with no configuration at all.
+`--relay-port` covers the other half: telling a relay that has **never**
+heard of this server that it exists.
+
+```
+--relay-port  3129    # loopback port of a reverse proxy fronting the relay
+```
+
+With the flag given, this server sends one `com.atproto.sync.requestCrawl`
+call — `{"hostname": "<this server's --hostname>"}`, **no authorization
+header** — to `127.0.0.1:<relay-port>` once at startup. As with
+`--egress-port` above, this process never dials the internet itself; reaching
+the real relay is the reverse proxy's job. The call is best-effort: a relay
+that refuses the connection, times out, or answers with an error is logged to
+stderr and otherwise ignored — it neither blocks startup nor prevents this
+server from answering any other request.
+
 ## Backup and restore
 
 **Consistency, in one sentence:** take a file-level backup with the server

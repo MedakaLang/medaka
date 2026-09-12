@@ -52,8 +52,11 @@ import time.{Duration, seconds}
 import vector.{Vector}
 import vector as V
 
--- | The loopback address the egress proxy is reached at. See the module header
--- for why this is a constant and not a flag.
+{- | The loopback address every outbound call this shell makes is reached at.
+   See the module header for why this is a constant and not a flag — it holds
+   just as much for `pds/shell/crawl.mdk`'s relay announce as it does for a
+   proxied read: this process dials no address but its own box. -}
+export
 egressAddress : String
 egressAddress = "127.0.0.1"
 
@@ -202,6 +205,30 @@ opened conn bytes = defer
   _ <- A.close conn
   deferPure outcome
 
+{- | Connect to `host`:`port`, send `bytes`, and return what came back —
+   the whole connect/write/read-until-close/decode/close sequence, with
+   neither a fixed address nor a signed credential baked in.
+
+   This is the one piece of `egressCall` below that has nothing to do with the
+   loopback proxy or a service credential: it is exactly the scaffolding
+   `pds/shell/crawl.mdk`'s `requestCrawl` also needs, for a call to a
+   configured relay that carries no authorization header at all. Both callers
+   share this rather than each opening their own socket, so a fix to the
+   silence/deadline/wire-ceiling budgets here reaches every outbound call this
+   shell makes. -}
+export
+egressConnect : String ->
+  Int ->
+  Array Int ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+egressConnect host port bytes = defer
+  connected <- liftIO (u => connect host port)
+  match connected
+    Err message =>
+      deferPure
+        (Err "egress: could not reach \{host}:\{intToString port}: \{message}")
+    Ok conn => opened conn bytes
+
 {- | Make one proxied call and return what the appview answered.
 
    The verb is GET and is not a parameter: `classifyProxy` admits only XRPC
@@ -228,10 +255,4 @@ egressCall (Egress port appview signingKey) target serviceAuth =
         Err message =>
           deferPure
             (Err "egress: outbound request is not serializable: \{message}")
-        Ok bytes => defer
-          connected <- liftIO (u => connect egressAddress port)
-          match connected
-            Err message =>
-              deferPure
-                (Err "egress: could not reach the egress proxy: \{message}")
-            Ok conn => opened conn bytes
+        Ok bytes => egressConnect egressAddress port bytes

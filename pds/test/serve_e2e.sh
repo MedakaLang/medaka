@@ -13,6 +13,7 @@ SERVE_SRC="$ROOT/pds/serve.mdk"
 CLIENT_SRC="$ROOT/pds/test/serve_client_main.mdk"
 SUBSCRIBE_SRC="$ROOT/pds/test/serve_subscribe_main.mdk"
 STUB_SRC="$ROOT/pds/test/appview_stub_main.mdk"
+CRAWL_STUB_SRC="$ROOT/pds/test/crawl_stub_main.mdk"
 
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-serve-e2e.XXXXXX")
 SERVER_PID=""
@@ -91,6 +92,13 @@ if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$STUB_SRC" \
 then
   cat "$WORK/build_appview.log" >&2
   fail 'native appview_stub_main.mdk build failed'
+fi
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$CRAWL_STUB_SRC" \
+  -o "$WORK/crawlstub" > "$WORK/build_crawlstub.log" 2>&1
+then
+  cat "$WORK/build_crawlstub.log" >&2
+  fail 'native crawl_stub_main.mdk build failed'
 fi
 
 # ── fixed fixture identity, mirroring store_persistence_main's convention ──
@@ -182,6 +190,27 @@ wait_for_stub_port() {
   i=0
   while [ "$i" -lt 100 ]; do
     if grep -F 'appview-stub: listening on 127.0.0.1:' "$logfile" >/dev/null 2>&1
+    then
+      sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$logfile" | head -1
+      return 0
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+      return 1
+    fi
+    i=$((i + 1))
+    sleep 0.1
+  done
+  return 1
+}
+
+# The same readiness contract, for the stub relay: `$1` is the log of its
+# stdout, `$2` the pid to watch.
+wait_for_crawl_stub_port() {
+  logfile=$1
+  pid=$2
+  i=0
+  while [ "$i" -lt 100 ]; do
+    if grep -F 'crawl-stub: listening on 127.0.0.1:' "$logfile" >/dev/null 2>&1
     then
       sed -n 's/.*listening on 127\.0\.0\.1:\([0-9]*\).*/\1/p' "$logfile" | head -1
       return 0
@@ -307,9 +336,11 @@ BLOB2_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB2_MIME" "$BLOB2_TEXT") \
 client slow-upload "$PORT1" "$TOKEN" "$SLOW_MIME" \
   || fail 'case 4d: a slow but progressing upload did not complete'
 
-# 5. every remaining route: the six XRPC NSIDs no other case drives, plus
-#    /.well-known/did.json. With cases 1, 4, and 9 that is all nine NSIDs and
-#    both well-knowns proven by this gate rather than by reading the registry.
+# 5. every remaining route: the eight XRPC NSIDs no other case drives
+#    (including listRepos/getRepoStatus, whose repo-bearing shape only exists
+#    once case 4 has committed a write), plus /.well-known/did.json. With
+#    cases 1, 4, and 9 that is all eleven NSIDs and both well-knowns proven
+#    by this gate rather than by reading the registry.
 client endpoints "$PORT1" "$TOKEN" "$DID" "$HANDLE" "$COLLECTION" "$RKEY" \
   || fail 'case 5: remaining endpoint coverage'
 
@@ -1477,6 +1508,101 @@ kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/servehol.err" 'case 46 (post-run)'
+
+# ── eighth and ninth --data dirs: requestCrawl (S-crawl-routes) ─────────────
+# The outbound half of discovery: an unauthenticated POST announcing this
+# server's own hostname to a configured relay, fired once at startup,
+# best-effort. Case 48 proves what it sends when the relay is there; case 49
+# proves startup and ordinary service survive when it isn't.
+
+"$WORK/crawlstub" 0 "$WORK/crawl.log" 200 \
+  >"$WORK/crawl.out" 2>"$WORK/crawl.err" &
+CRAWL_STUB_PID=$!
+STUB_PIDS="$STUB_PIDS $CRAWL_STUB_PID"
+CRAWLPORT=$(wait_for_crawl_stub_port "$WORK/crawl.out" "$CRAWL_STUB_PID") || {
+  cat "$WORK/crawl.err" >&2
+  fail 'the stub relay did not report readiness'
+}
+
+DATACRAWL="$WORK/data-crawl"
+mkdir -p "$DATACRAWL"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATACRAWL" --port 0 --init --relay-port "$CRAWLPORT" \
+  >"$WORK/servecrawl.out" 2>"$WORK/servecrawl.err" &
+SERVER_PID=$!
+PORTCRAWL=$(wait_for_port "$WORK/servecrawl.out") || {
+  cat "$WORK/servecrawl.err" >&2
+  fail 'case 48: the crawl-announcing server did not report readiness'
+}
+require_empty "$WORK/servecrawl.err" 'case 48 startup'
+
+# 48. the announce itself: a POST to requestCrawl naming this server's own
+#    hostname, with NO authorization header — the reference implementation
+#    sends this call unauthenticated, and the stub relay sees it as such. The
+#    announce is fired in the background at startup, so give it a moment to
+#    land before grading the stub's log.
+i=0
+while [ "$i" -lt 100 ]; do
+  if grep -F -q 'call method=POST target=/xrpc/com.atproto.sync.requestCrawl' \
+    "$WORK/crawl.log" 2>/dev/null
+  then
+    break
+  fi
+  i=$((i + 1))
+  sleep 0.1
+done
+grep -F -q "call method=POST target=/xrpc/com.atproto.sync.requestCrawl hostname=$HOSTNAME authorization=absent" \
+  "$WORK/crawl.log" || {
+  cat "$WORK/crawl.log" >&2
+  fail "case 48: the stub relay did not see an unauthenticated requestCrawl naming this server's own hostname"
+}
+client query "$PORTCRAWL" "$DID" \
+  || fail 'case 48: the server did not still answer an ordinary request'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servecrawl.err" 'case 48 (post-run)'
+kill "$CRAWL_STUB_PID" 2>/dev/null || true
+wait "$CRAWL_STUB_PID" 2>/dev/null || true
+
+# 49. the relay is unreachable: startup still succeeds and the server still
+#    answers ordinary requests. A throwaway stub reserves a port and exits,
+#    exactly the shape `crawl_stub_main.mdk`'s own header describes — no
+#    driver mode is needed for "unreachable", only a port nothing is
+#    listening on when the announce dials it.
+"$WORK/crawlstub" 0 "$WORK/crawl_dead.log" 200 \
+  >"$WORK/crawl_dead.out" 2>"$WORK/crawl_dead.err" &
+DEAD_STUB_PID=$!
+DEADPORT=$(wait_for_crawl_stub_port "$WORK/crawl_dead.out" "$DEAD_STUB_PID") || {
+  cat "$WORK/crawl_dead.err" >&2
+  fail 'the throwaway stub relay did not report readiness'
+}
+kill "$DEAD_STUB_PID" 2>/dev/null || true
+wait "$DEAD_STUB_PID" 2>/dev/null || true
+
+DATANOCRAWL="$WORK/data-crawl-unreachable"
+mkdir -p "$DATANOCRAWL"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATANOCRAWL" --port 0 --init --relay-port "$DEADPORT" \
+  >"$WORK/servenocrawl.out" 2>"$WORK/servenocrawl.err" &
+SERVER_PID=$!
+PORTNOCRAWL=$(wait_for_port "$WORK/servenocrawl.out") || {
+  cat "$WORK/servenocrawl.err" >&2
+  fail 'case 49: startup with an unreachable relay did not succeed'
+}
+client query "$PORTNOCRAWL" "$DID" \
+  || fail 'case 49: the server did not still answer an ordinary request with the relay unreachable'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
 require_empty "$WORK/stall.err" 'stalling stub appview'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, a confused-deputy refusal for an unconfigured audience, for a method this server answers itself and for one it neither serves nor forwards — none of them reaching the appview, proven live by the call that immediately followed, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, and the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, a confused-deputy refusal for an unconfigured audience, for a method this server answers itself and for one it neither serves nor forwards — none of them reaching the appview, proven live by the call that immediately followed, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, and the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable'

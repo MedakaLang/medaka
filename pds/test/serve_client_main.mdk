@@ -578,10 +578,16 @@ checkRoute label port want request =
   let () = expectStatus label want (readResponse conn [||])
   ignoreResult (close conn)
 
-{- | The endpoints the other cases do not already drive, so that all nine XRPC
-   NSIDs and both well-knowns are proven by this gate rather than by reading
-   the routing table. `createRecord` is CHUNKED's, `getRecord` is RESUME's, and
-   `/.well-known/atproto-did` is QUERY's; the rest are here.
+{- | The endpoints the other cases do not already drive, so that all eleven
+   XRPC NSIDs and both well-knowns are proven by this gate rather than by
+   reading the routing table. `createRecord` is CHUNKED's, `getRecord` is
+   RESUME's, and `/.well-known/atproto-did` is QUERY's; the rest are here.
+
+   `listRepos`/`getRepoStatus` run here rather than in a case of their own
+   because this is the first point in the gate where the hosted repository
+   has a commit (case 4's chunked write) — the repository-free shape of both
+   is already covered by `read_routes_all_engines.sh`'s cells, so what this
+   gate adds is the repo-bearing shape neither engine harness can produce.
 
    `putRecord` and `deleteRecord` do mutate, so they work on a scratch record
    key of their own and the delete puts the repository back — RESUME reads the
@@ -627,6 +633,18 @@ runEndpoints port token did handle collection rkey =
       200
       (getRequest
         "\{xrpcPath "com.atproto.identity.resolveHandle"}?handle=\{handle}")
+  let () =
+    checkRoute
+      "LISTREPOS"
+      port
+      200
+      (getRequest (xrpcPath "com.atproto.sync.listRepos"))
+  let () =
+    checkRoute
+      "GETREPOSTATUS"
+      port
+      200
+      (getRequest "\{xrpcPath "com.atproto.sync.getRepoStatus"}?did=\{did}")
   let () = checkRoute "DIDJSON" port 200 (getRequest didJsonPath)
   let () =
     checkRoute

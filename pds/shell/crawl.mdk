@@ -1,0 +1,69 @@
+{- | The outbound half of discovery: `com.atproto.sync.requestCrawl`, a POST
+   announcing this server's own hostname to a configured relay so a relay that
+   has never heard of us can find us and backfill.
+
+   This is NOT a route this server serves — `pds/lib/handlers.mdk` owns every
+   route this server answers, and `requestCrawl` is absent from that set on
+   purpose (slice 1's derivation: it is a relay-side method the reference PDS
+   only ever *calls*). This module is the caller.
+
+   `pds/shell/egress.mdk`'s `egressConnect` supplies the connect/write/
+   read-until-close/decode/close scaffolding, and its `egressAddress`
+   (loopback) is the destination here too: this process dials no address but
+   its own box for the appview proxy, and a relay announce is no exception —
+   reaching the real relay is a local reverse proxy's job, exactly as reaching
+   the appview is (`docs/ops/PDS-DEPLOY.md` § "Appview proxying"). What makes
+   this its own kind of call is that the request carries NO authorization
+   header at all — the reference implementation sends it unauthenticated, and
+   minting a service credential here would assert an identity no verifier
+   this call reaches asks for. -}
+
+import async.{Async}
+import json.{jObject, Json(..), stringify}
+import lib.httpclient.{makeRequestHeader, serializeRequest}
+import shell.egress.{egressAddress, egressConnect}
+import string.{toUtf8}
+
+-- | The loopback port of the reverse proxy fronting the real relay.
+export data RelayTarget = RelayTarget Int
+
+export
+makeRelayTarget : Int -> RelayTarget
+makeRelayTarget port = RelayTarget port
+
+relayPort : RelayTarget -> Int
+relayPort (RelayTarget port) = port
+
+-- | `{"hostname": <own hostname>}` — the reference implementation's exact
+-- body shape (`pds/test/vectors/pds_service_auth_shape_corpus.txt`).
+requestCrawlBody : String -> Array Int
+requestCrawlBody hostname =
+  toUtf8 (stringify (jObject [("hostname", JString hostname)]))
+
+requestCrawlBytes : RelayTarget -> String -> Result String (Array Int)
+requestCrawlBytes target hostname = do
+  contentType <- makeRequestHeader "content-type" "application/json"
+  serializeRequest
+    "POST"
+    "/xrpc/com.atproto.sync.requestCrawl"
+    "\{egressAddress}:\{intToString (relayPort target)}"
+    [contentType]
+    (requestCrawlBody hostname)
+
+{- | Announce `hostname` to `target`. `Err` covers every way the call can fail
+   to reach or be answered by the relay — connect failure, a timeout, an
+   undecodable response. The caller logs and moves on: an announce that fails
+   must block nothing else this server does (contract §7; the shape of #2906
+   and #2659 item 4). -}
+export
+requestCrawl : RelayTarget ->
+  String ->
+  Async <Clock, Net "_" | e> (Result String Unit)
+requestCrawl target hostname = match requestCrawlBytes target hostname
+  Err message =>
+    deferPure (Err "crawl: outbound request is not serializable: \{message}")
+  Ok bytes => defer
+    answer <- egressConnect egressAddress (relayPort target) bytes
+    match answer
+      Err message => deferPure (Err message)
+      Ok _ => deferPure (Ok ())
