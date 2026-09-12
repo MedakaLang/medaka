@@ -4,12 +4,14 @@
 #
 # ── WHY THIS GATE IS REPOSITORY-FREE ─────────────────────────────────────────
 #
-# Every cell runs against `storeEmpty`, so nothing here signs. That is what
+# No cell builds a REPOSITORY, so nothing here signs a commit. That is what
 # makes an EVAL arm possible: one `repoInit` under the tree-walking interpreter
 # does not complete in 600s on this box (measured in P4-C), which is why
 # pds/test/repo_vectors.sh has no `medaka run` arm any more (#2208). A gate that
 # built a repository here would move a seconds-long merge-queue check into the
-# >10-minute band #2181 removed from this project.
+# >10-minute band #2181 removed from this project. A session secret and one
+# minted access token, which the proxy cells below need, cost an HMAC over a
+# short string and are not that.
 #
 # The repository-BEARING read routes — getRecord/listRecords/describeRepo/
 # sync.getRepo/sync.getLatestCommit against a real signed repo, graded against
@@ -23,9 +25,13 @@
 #
 # The second cell group (#2912) is the APPVIEW-PROXY seam, here for the same
 # reason: deciding whether a client's `atproto-proxy` header may have a service
-# credential minted for it reads the registry and the account and no store, so
-# all three engines can grade it. The socket half — a real proxied read, a real
-# stalled upstream, the limiter's charge — is pds/test/serve_e2e.sh's.
+# credential minted for it reads the registry, the account and the open
+# sessions, and no repository, so all three engines can grade it. Those cells
+# call as a real session (a session secret and one minted access token, still no
+# repository) because a forward is made on behalf of the logged-in account and
+# an anonymous caller is refused 401 before the audience is looked at. The
+# socket half — a real proxied read, a real stalled upstream, the limiter's
+# charge — is pds/test/serve_e2e.sh's.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
@@ -94,7 +100,9 @@ CELL proxy-pds-hosted-preferences PASS decision=not-proxied signed=none
 CELL proxy-no-appview-configured PASS decision=refused status=400 error=InvalidRequest message=No service configured for app.bsky.feed.getTimeline signed=none
 CELL proxy-forwardable-requires-get PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET signed=none
 CELL proxy-header-on-well-known PASS decision=not-proxied signed=none
-cells: 34/34 repository-free routes and proxy dispositions
+CELL proxy-unauthenticated PASS decision=refused status=401 error=AuthenticationRequired message=Authentication Required signed=none
+CELL proxy-admitted-nsid-authority-case PASS decision=admitted target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000
+cells: 36/36 repository-free routes and proxy dispositions
 TOTAL: PASS
 EOF
 
@@ -123,7 +131,11 @@ check_cells() {
     || fail "$label missed the confused-deputy refusal"
   grep -F -q 'CELL proxy-protected-method-registered PASS decision=refused' "$output" \
     || fail "$label missed the refusal of a method this server answers itself"
-  grep -F -q 'cells: 34/34 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
+  grep -F -q 'CELL proxy-unauthenticated PASS decision=refused status=401 error=AuthenticationRequired message=Authentication Required signed=none' "$output" \
+    || fail "$label missed the refusal of a proxied read whose caller presented no credential"
+  grep -F -q "CELL proxy-admitted-nsid-authority-case PASS decision=admitted target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline" "$output" \
+    || fail "$label missed the canonical lxm of a method the client spelled differently"
+  grep -F -q 'cells: 36/36 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
@@ -227,9 +239,49 @@ grep -F -q 'CELL proxy-foreign-audience FAIL decision=admitted' "$WORK/mutated-a
   fail 'foreign-audience mutation failed for an unrelated reason'
 }
 
+# ── third direct-red mutation: the caller's own credential ─────────────────
+# Drop the `Authorization` field from every proxied request, leaving each cell
+# otherwise exactly as it is: correctly audienced, correctly cased, GET. Every
+# ADMITTED cell must then fail, because a forward carries the ACCOUNT's identity
+# and an anonymous caller may not ask for one.
+#
+# This is the mutation that matters for the confused deputy's other half: the
+# audience mutation above proves the seam grades WHICH service a credential
+# would be minted for, and this one proves it grades WHETHER the caller is
+# entitled to one at all. A seam that checked only the audience would pass every
+# cell above and still hand an anonymous request the account's signature.
+mkdir -p "$WORK/mutation-no-credential"
+cp -R "$ROOT/pds" "$WORK/mutation-no-credential/pds"
+
+python3 - "$WORK/mutation-no-credential/pds/test/read_routes_all_engines_main.mdk" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+old = 'proxyAuthField = "Authorization: Bearer \\{proxyAccessToken}\\r\\n"'
+new = 'proxyAuthField = ""'
+text = path.read_text()
+if text.count(old) != 1:
+    raise SystemExit(f'mutation anchor count is {text.count(old)}, expected 1')
+path.write_text(text.replace(old, new))
+PY
+
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-no-credential/pds/test/read_routes_all_engines_main.mdk" -o "$WORK/mutated-no-credential" > "$WORK/mutated-no-credential-build.log" 2>&1 || {
+  cat "$WORK/mutated-no-credential-build.log" >&2
+  fail 'no-credential mutation failed to build'
+}
+if "$WORK/mutated-no-credential" > "$WORK/mutated-no-credential.out" 2>&1; then
+  fail 'no-credential mutation unexpectedly passed'
+fi
+grep -F -q 'CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired' "$WORK/mutated-no-credential.out" || {
+  cat "$WORK/mutated-no-credential.out" >&2
+  fail 'no-credential mutation failed for an unrelated reason'
+}
+
 cmp "$WORK/source-pristine.mdk" "$SOURCE" \
   || fail 'read_routes_all_engines_main.mdk (the live source of truth) was left modified by the mutation test — it should only ever touch the throwaway mutation-tree copy'
 
 echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'MUTATION proxy-foreign-audience PASS direct-red'
-echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 34/34 named cells; eval == native == Wasm; two direct-red mutations; bytes restored'
+echo 'MUTATION proxy-no-credential PASS direct-red'
+echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 36/36 named cells; eval == native == Wasm; three direct-red mutations; bytes restored'

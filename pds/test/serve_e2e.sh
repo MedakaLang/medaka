@@ -1338,6 +1338,15 @@ PORTPX=$(wait_for_port "$WORK/servepx.out") || {
 }
 require_empty "$WORK/servepx.err" 'proxy server startup'
 
+# One session for every proxy case below. A forward is made on behalf of the
+# logged-in account and carries the ACCOUNT's own signature, so a proxied read is
+# an `AuthenticatedRoute` like any write: the caller must present an access
+# token of its own, and case 44d is the one case here that presents none.
+PXLOGIN=$(client login "$PORTPX" "$HANDLE" "$PASSWORD") \
+  || fail 'case 44: login against the proxy server'
+PXACCESS=${PXLOGIN%% *}
+[ -n "$PXACCESS" ] || fail 'case 44: createSession issued an empty access token'
+
 # 44. a proxied read end to end: the answer a client gets back is the stub
 #    appview's own — its status code, not a 200 this server composed — and the
 #    credential it was reached with names the configured audience and the
@@ -1345,8 +1354,8 @@ require_empty "$WORK/servepx.err" 'proxy server startup'
 #    sides: in the stub's log, which is what the appview saw, and in the body
 #    the stub echoed them into, which is what the client saw. A PDS that
 #    answered a proxied read out of its own state would fail both.
-client proxy-read "$PORTPX" "$APPVIEW_DID" "$TIMELINE" "$STUB_STATUS" \
-  '"lxm":"app.bsky.feed.getTimeline"' \
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  "$STUB_STATUS" '"lxm":"app.bsky.feed.getTimeline"' \
   || fail 'case 44: a proxied read did not return the appview answer'
 grep -F -q "call aud=$APPVIEW_DID lxm=app.bsky.feed.getTimeline iss=$DID" \
   "$WORK/stub.log" || {
@@ -1361,8 +1370,8 @@ grep -F -q "target=$TIMELINE" "$WORK/stub.log" \
 #    and the service id is not part of it. A peer checking `aud` against its own
 #    DID would refuse a token carrying the fragment, so this is the difference
 #    between a proxied read that works against a real appview and one that 401s.
-client proxy-read "$PORTPX" "$APPVIEW_DID#bsky_appview" "$TIMELINE" \
-  "$STUB_STATUS" '"appview":"stub"' \
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID#bsky_appview" \
+  "$TIMELINE" "$STUB_STATUS" '"appview":"stub"' \
   || fail 'case 44b: a header naming a service of the configured DID was not proxied'
 if grep -F -q '#bsky_appview' "$WORK/stub.log"; then
   cat "$WORK/stub.log" >&2
@@ -1378,6 +1387,47 @@ JTI2=$(sed -n 's/^call .* jti=\([0-9a-f]*\) .*/\1/p' "$WORK/stub.log" | sed -n 2
   || fail "case 44c: jti is ${#JTI1} characters wide, expected 32"
 [ "$JTI1" != "$JTI2" ] \
   || fail 'case 44c: two proxied reads were signed with the same jti'
+
+# 44d. AN ANONYMOUS CALLER. The header is correctly audienced, the method is
+#    forwardable, the verb is GET — everything case 44 sends — and the one thing
+#    missing is the caller's own access token. A server that forwarded this would
+#    be signing with the ACCOUNT's repo key on behalf of whoever asked, which is
+#    the confused deputy with the deputy's own identity lent out wholesale. The
+#    live oracle answers 401 `AuthenticationRequired` to exactly this request.
+#
+#    Graded on the error CODE and not just the status, and on the stub's call log
+#    being unmoved: "refused" and "refused before anything was minted or sent"
+#    are different claims, and only the second one is the defense.
+CALLS_PRE_ANON=$(stub_calls "$WORK/stub.log")
+client proxy-read "$PORTPX" '' "$APPVIEW_DID" "$TIMELINE" 401 \
+  'AuthenticationRequired' \
+  || fail 'case 44d: an unauthenticated proxied read was not refused 401'
+CALLS_POST_ANON=$(stub_calls "$WORK/stub.log")
+[ "$CALLS_PRE_ANON" = "$CALLS_POST_ANON" ] || {
+  cat "$WORK/stub.log" >&2
+  fail "case 44d: an unauthenticated proxied read still reached the appview ($CALLS_PRE_ANON -> $CALLS_POST_ANON calls)"
+}
+
+# 44e. the same request WITH a credential still forwards, sent immediately after
+#    44d so the 401 above is the credential's absence and not a server that
+#    stopped proxying. Its `lxm` is the FORWARDABLE TABLE's spelling of the
+#    method and not the client's: the authority half of an NSID is compared
+#    case-insensitively (`lib.nsid`'s `sameNsidIdentity`), so `App.Bsky.Feed.`
+#    names the same method, and a claim signed for the client's bytes would name
+#    a value this server never graded.
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID" \
+  '/xrpc/App.Bsky.Feed.getTimeline?limit=2' "$STUB_STATUS" \
+  '"lxm":"app.bsky.feed.getTimeline"' \
+  || fail 'case 44e: a proxied read spelled with an upper-case nsid authority was not forwarded'
+grep -F -q "call aud=$APPVIEW_DID lxm=app.bsky.feed.getTimeline iss=$DID" \
+  "$WORK/stub.log" || {
+  cat "$WORK/stub.log" >&2
+  fail 'case 44e: the credential did not carry the canonical method name'
+}
+if grep -F -q 'lxm=App.Bsky.Feed.getTimeline' "$WORK/stub.log"; then
+  cat "$WORK/stub.log" >&2
+  fail "case 44e: the credential carried the CLIENT's spelling of the method"
+fi
 
 # 45. THE CONFUSED DEPUTY (#2912's S0). `atproto-proxy` is client-controlled and
 #    it names the audience a credential is minted for, so every one of these
@@ -1395,13 +1445,13 @@ JTI2=$(sed -n 's/^call .* jti=\([0-9a-f]*\) .*/\1/p' "$WORK/stub.log" | sed -n 2
 #    writable at that moment, so the three missing lines are three calls that
 #    were never made rather than three lines that could not be written.
 CALLS_BEFORE=$(stub_calls "$WORK/stub.log")
-client proxy-read "$PORTPX" "$ATTACKER_DID" "$TIMELINE" 400 \
+client proxy-read "$PORTPX" "$PXACCESS" "$ATTACKER_DID" "$TIMELINE" 400 \
   'atproto-proxy names a service this server does not proxy to' \
   || fail 'case 45: a header naming another service was not refused'
-client proxy-read "$PORTPX" "$APPVIEW_DID" \
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID" \
   '/xrpc/com.atproto.server.createSession' 400 'does not proxy it' \
   || fail 'case 45: a method this server answers itself was not refused'
-client proxy-read "$PORTPX" "$APPVIEW_DID" \
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID" \
   '/xrpc/com.atproto.admin.deleteAccount' 400 \
   'No service configured for com.atproto.admin.deleteAccount' \
   || fail 'case 45: a method this server neither serves nor forwards was not refused'
@@ -1410,8 +1460,8 @@ CALLS_AFTER=$(stub_calls "$WORK/stub.log")
   cat "$WORK/stub.log" >&2
   fail "case 45: a refused request still reached the appview ($CALLS_BEFORE -> $CALLS_AFTER calls)"
 }
-client proxy-read "$PORTPX" "$APPVIEW_DID" "$TIMELINE" "$STUB_STATUS" \
-  '"appview":"stub"' \
+client proxy-read "$PORTPX" "$PXACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  "$STUB_STATUS" '"appview":"stub"' \
   || fail 'case 45: the proxy stopped working after a refusal'
 CALLS_LIVE=$(stub_calls "$WORK/stub.log")
 [ "$CALLS_LIVE" -eq $((CALLS_AFTER + 1)) ] \
@@ -1425,11 +1475,13 @@ CALLS_LIVE=$(stub_calls "$WORK/stub.log")
 #    the class has to be independent and per-identity, not merely a lower global
 #    number.
 wait_for_window_room
-client rl-proxy "$PORTPX" 203.0.113.61 "$APPVIEW_DID" "$TIMELINE" 61 429 \
+client rl-proxy "$PORTPX" 203.0.113.61 "$PXACCESS" "$APPVIEW_DID" \
+  "$TIMELINE" 61 429 \
   || fail 'case 47: the proxied-read class did not refuse at its ceiling'
 client rl-req "$PORTPX" 203.0.113.61 1 200 \
   || fail 'case 47: a plain read was refused by the proxied-read ceiling'
-client rl-proxy "$PORTPX" 203.0.113.62 "$APPVIEW_DID" "$TIMELINE" 1 "$STUB_STATUS" \
+client rl-proxy "$PORTPX" 203.0.113.62 "$PXACCESS" "$APPVIEW_DID" \
+  "$TIMELINE" 1 "$STUB_STATUS" \
   || fail "case 47: a second identity was refused by the first one's ceiling"
 
 kill "$SERVER_PID" 2>/dev/null || true
@@ -1480,7 +1532,7 @@ HOLLOGIN=$(client login "$PORTHOL" "$HANDLE" "$PASSWORD") \
   || fail 'case 46: login against the stalled-upstream server'
 HOLACCESS=${HOLLOGIN%% *}
 
-client proxy-read "$PORTHOL" "$APPVIEW_DID" "$TIMELINE" 502 '' \
+client proxy-read "$PORTHOL" "$HOLACCESS" "$APPVIEW_DID" "$TIMELINE" 502 '' \
   >"$WORK/stalled.out" 2>&1 &
 STALLED_PID=$!
 # Long enough for the request to have been received and the outbound connection
@@ -1605,4 +1657,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/stall.err" 'stalling stub appview'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, a confused-deputy refusal for an unconfigured audience, for a method this server answers itself and for one it neither serves nor forwards — none of them reaching the appview, proven live by the call that immediately followed, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, and the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, a subscribeRepos subscription receiving live events in order, a future cursor refused and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the forwardable table'"'"'s own spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience, for a method this server answers itself and for one it neither serves nor forwards — none of them reaching the appview, proven live by the call that immediately followed, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, and the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable'

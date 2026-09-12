@@ -1171,7 +1171,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
             (serializeResponse refusal)
         NotAnUpgrade => defer
           proxy <- liftIO (u =>
-            proxyDecisionFor server serving nowSeconds parsed)
+            proxyDecisionFor server serving storeRef nowSeconds parsed)
           match proxy
             ProxyAdmitted admission =>
               forwardProxied
@@ -1232,14 +1232,22 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
 
    The nonce drawn here is what identifies any token minted for this request
    (`jti`), so it comes from `osEntropyBytes` per request, the same source
-   `upgradeDecision` and `applyRequest` draw their own from. -}
+   `upgradeDecision` and `applyRequest` draw their own from.
+
+   The store is read here for the reason `upgradeDecision` reads it: a forward
+   is made on behalf of the logged-in account, so the seam resolves the
+   caller's own credential against the open sessions before it admits one.
+   Nothing about that transitions the store, so it does not belong inside
+   `applyRequest`'s indivisible sequence, and an admitted forward never reaches
+   `applyRequest` at all. -}
 proxyDecisionFor : Server ->
   Serving ->
+  Ref Store ->
   Int ->
   Result HttpParseFailure Request ->
   <Rand> ProxyDecision
-proxyDecisionFor _ _ _ (Err _) = NotProxied
-proxyDecisionFor server serving nowSeconds (Ok request) =
+proxyDecisionFor _ _ _ _ (Err _) = NotProxied
+proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
   classifyProxy
     server
     RequestContext {
@@ -1247,6 +1255,7 @@ proxyDecisionFor server serving nowSeconds (Ok request) =
       nonce = osEntropyBytes requestNonceBytes,
     }
     (map egressAppview (servingEgress serving))
+    !storeRef
     request
 
 {- | Make the one outbound call an admitted proxied read authorizes, and answer

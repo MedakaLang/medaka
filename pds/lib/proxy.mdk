@@ -181,8 +181,34 @@ pdsHostedMethods = [
   "app.bsky.actor.putPreferences",
 ]
 
+{- | Which name of `names` this nsid IS, in the table's own spelling, or `None`
+   when it is none of them.
+
+   "Does it match" and "which spelling did it match" are different questions
+   because `sameNsidIdentity` folds the case of an NSID's authority: a client
+   asking for `App.Bsky.Actor.getProfile` names the same method as the table's
+   `app.bsky.actor.getProfile` without sending the same bytes. Anything that
+   goes on to be SIGNED must carry the table's spelling — the value the
+   authorization decision was taken against — and not the client's, which is
+   attacker-influenced text that merely compared equal. -}
+canonicalMethodMatch : String -> List String -> Option String
+canonicalMethodMatch _ [] = None
+canonicalMethodMatch wanted (name :: rest) =
+  if sameNsidIdentity wanted name then
+    Some name
+  else
+    canonicalMethodMatch wanted rest
+
 namesMethod : String -> List String -> Bool
-namesMethod wanted names = any (name => sameNsidIdentity wanted name) names
+namesMethod wanted names = isSome (canonicalMethodMatch wanted names)
+
+{- | The canonical spelling of a forwardable method, for the one caller that
+   needs it: the claim set minted for an admitted forward (`lib.server_core`'s
+   `disposeProxy`). Every other disposition arm mints nothing, so the `Bool`
+   form below is all they need. -}
+export
+canonicalForwardableMethod : String -> Option String
+canonicalForwardableMethod nsid = canonicalMethodMatch nsid forwardableMethods
 
 {- | Whether a token may ever be minted for this method. Exported on its own as
    well as through `proxyDisposition`, because "is this nsid forward-eligible"
@@ -190,7 +216,7 @@ namesMethod wanted names = any (name => sameNsidIdentity wanted name) names
    able to ask it without constructing a registry. -}
 export
 forwardableProxyMethod : String -> Bool
-forwardableProxyMethod nsid = namesMethod nsid forwardableMethods
+forwardableProxyMethod nsid = isSome (canonicalForwardableMethod nsid)
 
 registryHolds : Registry -> String -> Bool
 registryHolds registry nsid =

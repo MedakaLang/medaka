@@ -33,6 +33,7 @@ import lib.jwt.{
 import lib.proxy.{
   AppviewPolicy,
   appviewPolicyDid,
+  canonicalForwardableMethod,
   ProxyDisposition(..),
   ProxyHeader(..),
   proxyDisposition,
@@ -521,9 +522,10 @@ classifyUpgrade (Server account registry _) context store request =
    first, and only a `NotProxied` answer reaches the ordinary path.
 
    Every DECISION is taken here: whether the header is a proxy instruction at
-   all, whether the audience it names is the one this server was configured to
-   mint for, whether the method may be forwarded, and — when all three hold —
-   the exact claim set a token must carry. The shell signs that claim set and
+   all, whether the CALLER holds a credential of this account's own, whether the
+   audience it names is the one this server was configured to mint for, whether
+   the method may be forwarded, and — when all four hold — the exact claim set a
+   token must carry. The shell signs that claim set and
    sends the call; it chooses none of it. That is what makes "nothing was
    signed" a property of this type rather than of the shell's care: a refusal
    carries no `ServiceAuthRequest`, so there is nothing for the shell to sign
@@ -556,9 +558,13 @@ public export data ProxyAdmission = ProxyAdmission {
    (`pds/test/vectors/pds_service_auth_shape_corpus.txt`). `aud` is the
    header's value including any `#serviceId` fragment — `lib.jwt` strips it
    when it mints, and the value that reaches here has already been compared
-   against the configured appview in its stripped form. `jti` is this request's
-   own nonce, which is 16 bytes of `osEntropyBytes` and therefore 32 hex
-   characters, the width the corpus records. -}
+   against the configured appview in its stripped form. `lxm` is the
+   FORWARDABLE TABLE's own spelling of the method and not the client's: the two
+   can differ in the case of the nsid's authority (`lib.nsid`'s
+   `sameNsidIdentity`), and a signed claim must name the value the
+   authorization decision was taken against. `jti` is this request's own nonce,
+   which is 16 bytes of `osEntropyBytes` and therefore 32 hex characters, the
+   width the corpus records. -}
 serviceAuthFor : Account ->
   RequestContext ->
   String ->
@@ -584,15 +590,21 @@ disposeProxy : Account ->
   ProxyDecision
 disposeProxy account registry context request nsid audience =
   match proxyDisposition registry nsid
-    ProxyForwardable =>
-      if requestMethod request /= "GET" then
-        ProxyRefused proxyMethodRefusalResponse
-      else
-        ProxyAdmitted ProxyAdmission {
-          nsid = nsid,
-          target = requestTarget request,
-          serviceAuth = serviceAuthFor account context nsid audience,
-        }
+    ProxyForwardable => match canonicalForwardableMethod nsid
+      -- Unreachable: `proxyDisposition` chose this arm off the same table this
+      -- lookup reads. It refuses rather than falling back to the client's own
+      -- spelling because the fallback would be a signature for a value nothing
+      -- graded, which is the whole class of defect this seam exists to prevent.
+      None => ProxyRefused (proxyRefusalResponse (proxyNoServiceMessage nsid))
+      Some canonical =>
+        if requestMethod request /= "GET" then
+          ProxyRefused proxyMethodRefusalResponse
+        else
+          ProxyAdmitted ProxyAdmission {
+            nsid = nsid,
+            target = requestTarget request,
+            serviceAuth = serviceAuthFor account context canonical audience,
+          }
     ProxyForwardOnLocalMiss => NotProxied
     ProxyPdsHosted => NotProxied
     ProxyLocallyServed =>
@@ -635,14 +647,29 @@ admitProxyAudience account registry context policy request nsid raw =
    every respect. A request carrying one but naming no XRPC method — a
    well-known path, or a path outside `/xrpc/` — is `NotProxied` too: there is
    no method to forward, and the local path already owns the answer it is
-   owed. -}
+   owed.
+
+   A request that IS a proxy instruction must carry the account's own
+   credential, and that is asked BEFORE the audience and the method. A forward
+   is made on behalf of the logged-in account — the shell signs it with the
+   ACCOUNT's repo key — so a caller holding no access token is asking this
+   server to lend its identity to an anonymous request, and is owed the 401
+   every other gated route owes one. `AuthenticatedRoute` is the policy and no
+   nsid-keyed lookup is involved: a forwardable `app.bsky.*` read is not one of
+   this server's own routes and is not in its `Registry` at all, and there is
+   exactly one account this server ever serves.
+
+   Asking it first means an unauthenticated caller naming a foreign audience is
+   refused for having no credential rather than for the audience, which is the
+   right order: who is calling is prior to what they asked for. -}
 export
 classifyProxy : Server ->
   RequestContext ->
   Option AppviewPolicy ->
+  Store ->
   Request ->
   ProxyDecision
-classifyProxy (Server account registry _) context policy request =
+classifyProxy (Server account registry _) context policy store request =
   match proxyHeader (requestHeaders request)
     ProxyHeaderAbsent => NotProxied
     ProxyHeaderRepeated =>
@@ -650,7 +677,12 @@ classifyProxy (Server account registry _) context policy request =
     ProxyHeaderValue raw => match requestNsid request
       None => NotProxied
       Some nsid =>
-        admitProxyAudience account registry context policy request nsid raw
+        let credential =
+          resolveCredential account AuthenticatedRoute context store request
+        match credential
+          GoodCredential _ _ =>
+            admitProxyAudience account registry context policy request nsid raw
+          refused => ProxyRefused (refusalFor refused)
 
 malformedHttpResponse : Response
 malformedHttpResponse =

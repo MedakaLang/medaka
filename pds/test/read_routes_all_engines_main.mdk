@@ -1,7 +1,7 @@
 {- | P4-D: the routes that need NO repository, on all three engines.
 
-   Every cell here runs against `storeEmpty` — no account repository, and
-   therefore no signing. That is deliberate and is what makes an EVAL arm
+   No cell here builds an account repository, and so nothing here signs a
+   commit. That is deliberate and is what makes an EVAL arm
    possible at all: one `repoInit` under the tree-walking interpreter does not
    complete in 600s on this box (measured in P4-C, and the reason
    `pds/test/repo_vectors.sh` has no `medaka run` arm any more, #2208). The
@@ -19,22 +19,30 @@
    resolveHandle` and `com.atproto.server.describeServer` need no repository
    either, so both are graded here in full.
 
-   No cell may change the `Store`: every one of them asserts the successor is
-   still the empty, unconfigured store.
+   No route cell may change the `Store`: every one of them runs against
+   `storeEmpty` and asserts the successor is still that empty, unconfigured
+   store.
 
    The second group of cells grades the APPVIEW-PROXY seam (`classifyProxy`),
-   which belongs here for the same reason: it reads the route registry and the
-   account and no store at all, so the question "may a service credential be
-   minted for this client's `atproto-proxy` header" is answerable on all three
-   engines. Those cells never reach a socket — what they assert is the decision
-   itself, including that a refused request carries no claim set for anything to
-   sign. -}
+   which belongs here for the same reason: it reads the route registry, the
+   account and the open sessions, and no repository, so the question "may a
+   service credential be minted for this client's `atproto-proxy` header" is
+   answerable on all three engines. Those cells never reach a socket — what they
+   assert is the decision itself, including that a refused request carries no
+   claim set for anything to sign.
+
+   They run against a store holding a session secret and one open session
+   (`proxySessionStore`) rather than `storeEmpty`, because a forward is made on
+   behalf of the logged-in account and the seam resolves the caller's credential
+   before admitting one. That is still repository-free, which is what the eval
+   arm's cost turns on: a session is an HMAC over a short string, and `repoInit`
+   is what does not finish. -}
 
 import http.{Request, parseRequest, serializeResponse}
 import json.{Json(..), jObject, get, parse}
 import string.{contains, fromUtf8, split, toUtf8}
 import lib.handlers.{pdsServer}
-import lib.jwt.{ServiceAuthRequest}
+import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
 import lib.proxy.{AppviewPolicy, makeAppviewPolicy}
 import lib.server_core.{
   Account,
@@ -42,11 +50,20 @@ import lib.server_core.{
   ProxyDecision(..),
   RequestContext(..),
   Server,
+  accessAudience,
   classifyProxy,
   handleBytes,
   makeAccount,
 }
-import lib.store.{Store, storeEmpty, storeRepo, storeSize}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeEmpty,
+  storeRepo,
+  storeSessionOpen,
+  storeSize,
+  storeWithServerSecret,
+}
 
 accountDidText : String
 accountDidText = "did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"
@@ -213,6 +230,49 @@ configuredPolicy = match makeAppviewPolicy configuredAppviewDid
   Ok policy => Some policy
   Err message => panic "read_routes: appview policy setup failed: \{message}"
 
+{- | The session every proxy cell below calls as.
+
+   A proxied read is made on behalf of the logged-in account, so `classifyProxy`
+   refuses one whose caller presented no access token of its own — which means
+   these cells need a real minted token and a store that has the secret it was
+   minted with and an open session for it. The values are fixed rather than
+   drawn from anywhere: what the cells grade is the DECISION, and a token is
+   only an input to it.
+
+   The refresh fingerprint is an unrelated constant. No cell presents a refresh
+   token, and the two halves of a session are distinct fingerprints, so giving
+   this one the access token's value would say something untrue about the store
+   rather than nothing. -}
+proxySessionSecret : Array Int
+proxySessionSecret = arrayMakeWith serverSecretBytes (i => (i * 13 + 7) % 256)
+
+proxyAccessToken : String
+proxyAccessToken =
+  mintToken
+    proxySessionSecret
+    accountDidText
+    (accessAudience mustAccount)
+    "read-routes-proxy-cells"
+    1699999000
+    1700003600
+
+proxySessionStore : Store
+proxySessionStore = match storeWithServerSecret proxySessionSecret storeEmpty
+  Err message =>
+    panic "read_routes: proxy session store setup failed: \{message}"
+  Ok store =>
+    storeSessionOpen
+      (sessionFingerprint proxyAccessToken)
+      (sessionFingerprint "read-routes-proxy-refresh")
+      1700090000
+      store
+
+{- | The `Authorization` field every proxied request below carries, built once
+   so that the ONE cell that presents no credential
+   (`proxyRequestUnauthenticated`) is the only place this file differs on it. -}
+proxyAuthField : String
+proxyAuthField = "Authorization: Bearer \{proxyAccessToken}\r\n"
+
 -- A server with no `--appview-did` at all, which is what every deployment that
 -- has not configured an appview runs.
 noPolicy : Option AppviewPolicy
@@ -221,14 +281,23 @@ noPolicy = None
 proxyRequest : String -> String -> String -> Array Int
 proxyRequest verb header target =
   toUtf8
-    "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\natproto-proxy: \{header}\r\n\r\n"
+    "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{header}\r\n\r\n"
+
+{- | The same request `proxy-admitted-timeline` sends, with the caller's own
+   credential left out. An anonymous caller asking this server to forward under
+   the ACCOUNT's identity is the confused deputy in its plainest form, so it is
+   refused before the audience it named is even looked at. -}
+proxyRequestUnauthenticated : String -> Array Int
+proxyRequestUnauthenticated target =
+  toUtf8
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\natproto-proxy: \{configuredAppviewDid}\r\n\r\n"
 
 -- Field names are case-insensitive on the wire, so the seam must find the
 -- header under the spelling a client chose rather than the one it expects.
 proxyMixedCaseRequest : String -> Array Int
 proxyMixedCaseRequest target =
   toUtf8
-    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAtproto-Proxy: \{configuredAppviewDid}\r\n\r\n"
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}Atproto-Proxy: \{configuredAppviewDid}\r\n\r\n"
 
 -- Two fields, the first naming the configured appview and the second naming
 -- somewhere else. A seam that took the first would be proxying a request whose
@@ -236,7 +305,7 @@ proxyMixedCaseRequest target =
 proxyRepeatedRequest : String -> Array Int
 proxyRepeatedRequest target =
   toUtf8
-    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\natproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
 
 mustRequest : Array Int -> Request
 mustRequest bytes = match parseRequest bytes
@@ -262,7 +331,13 @@ proxyOutcome (ProxyAdmitted admission) =
 
 proxyCell : String -> Option AppviewPolicy -> Array Int -> String -> <IO> Int
 proxyCell label policy bytes expected =
-  let decision = classifyProxy mustServer testContext policy (mustRequest bytes)
+  let decision =
+    classifyProxy
+      mustServer
+      testContext
+      policy
+      proxySessionStore
+      (mustRequest bytes)
   let got = proxyOutcome decision
   check label (got == expected) got
 
@@ -296,8 +371,27 @@ refusedLine status code message =
 invalidRequestLine : String -> String
 invalidRequestLine message = refusedLine "400" "InvalidRequest" message
 
+-- `refusalFor NoCredential`'s own body, which is what every other gated route
+-- answers a caller that presented nothing.
+noCredentialLine : String
+noCredentialLine =
+  refusedLine "401" "AuthenticationRequired" "Authentication Required"
+
 timelineTarget : String
 timelineTarget = xrpc "app.bsky.feed.getTimeline?limit=2"
+
+{- | The same method `timelineTarget` names, spelled with an upper-case
+   authority.
+
+   `lib.nsid`'s `sameNsidIdentity` folds the case of an NSID's authority and
+   not of its method name, so this IS `app.bsky.feed.getTimeline` and is
+   forwarded — while `App.Bsky.Feed.GetTimeline` would be a different method and
+   forwarded for nothing. What the cell asserts is that the `lxm` claim carries
+   the TABLE's spelling and not this one: a signed claim must name the value the
+   authorization decision was taken against, and the client chose these
+   bytes. -}
+mixedCaseNsidTarget : String
+mixedCaseNsidTarget = xrpc "App.Bsky.Feed.getTimeline?limit=2"
 
 {- | The proxy-disposition half of this file: the same request bytes the socket
    shell frames, graded at the pure seam that decides whether anything may be
@@ -424,6 +518,21 @@ runProxyCells =
       configuredPolicy
       (proxyRequest "GET" configuredAppviewDid "/.well-known/did.json")
       notProxiedLine
+  let unauthenticated =
+    proxyCell
+      "proxy-unauthenticated"
+      configuredPolicy
+      (proxyRequestUnauthenticated timelineTarget)
+      noCredentialLine
+  let mixedCaseNsid =
+    proxyCell
+      "proxy-admitted-nsid-authority-case"
+      configuredPolicy
+      (proxyRequest "GET" configuredAppviewDid mixedCaseNsidTarget)
+      (admittedLine
+        mixedCaseNsidTarget
+        configuredAppviewDid
+        "app.bsky.feed.getTimeline")
   absent
     + admitted
     + fragment
@@ -438,6 +547,8 @@ runProxyCells =
     + unconfigured
     + needsGet
     + wellKnown
+    + unauthenticated
+    + mixedCaseNsid
 
 runCells : <IO> Unit
 runCells =
@@ -588,8 +699,8 @@ runCells =
       + unregistered
   let () =
     println
-      "cells: \{intToString cells}/34 repository-free routes and proxy dispositions"
-  if cells == 34 then
+      "cells: \{intToString cells}/36 repository-free routes and proxy dispositions"
+  if cells == 36 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

@@ -1210,13 +1210,19 @@ runBodyStallFlood port sockets budgetSeconds =
    one client-controlled header that names the audience a service credential
    would be minted for.
 
+   `token` is the caller's own access token, and an empty one sends no
+   `Authorization` field at all. It is not optional decoration: a forward is
+   made on behalf of the logged-in account and carries the ACCOUNT's signature,
+   so a proxied read is an `AuthenticatedRoute` like any other and an anonymous
+   one is refused 401 before the audience it named is looked at.
+
    `xff` identifies the caller to the rate limiter exactly as in the limit cases,
    and an empty one sends no field at all — so the cases that are about proxying
    and the case that is about its ceiling build their requests the same way. -}
-proxyRequest : String -> String -> String -> Array Int
-proxyRequest xff service path =
+proxyRequest : String -> String -> String -> String -> Array Int
+proxyRequest xff token service path =
   toUtf8
-    "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}atproto-proxy: \{service}\r\n\r\n"
+    "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}atproto-proxy: \{service}\r\n\r\n"
 
 {- | Drive one proxied read and grade what came back.
 
@@ -1229,10 +1235,16 @@ proxyRequest xff service path =
    what tells a refused AUDIENCE apart from a refused METHOD: both are 400
    `InvalidRequest`, and a case graded on the status alone could not tell which
    defense fired or whether either did. -}
-runProxyRead : Int -> String -> String -> Int -> String -> <IO, Net "_"> Unit
-runProxyRead port service path want marker =
+runProxyRead : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  <IO, Net "_"> Unit
+runProxyRead port token service path want marker =
   let conn = mustConnect port
-  let () = mustSend conn (proxyRequest "" service path)
+  let () = mustSend conn (proxyRequest "" token service path)
   let result = readResponse conn [||]
   let () = ignoreResult (close conn)
   match result
@@ -1259,13 +1271,14 @@ runProxyFlood : Int ->
   String ->
   String ->
   String ->
+  String ->
   Int ->
   Int ->
   <IO, Net "_"> Unit
-runProxyFlood port xff service path count want =
+runProxyFlood port xff token service path count want =
   let conn = mustConnect port
   let (status, headerText, body) =
-    floodLoop conn count (_ => proxyRequest xff service path)
+    floodLoop conn count (_ => proxyRequest xff token service path)
   let () = ignoreResult (close conn)
   reportRateLimit "RLPROXY" want status headerText body
 
@@ -1326,12 +1339,13 @@ main = match args ()
       did
       collection
       rkeyPrefix
-  ["proxy-read", port, service, path, want, marker] =>
-    runProxyRead (mustPort port) service path (mustStatus want) marker
-  ["rl-proxy", port, xff, service, path, count, want] =>
+  ["proxy-read", port, token, service, path, want, marker] =>
+    runProxyRead (mustPort port) token service path (mustStatus want) marker
+  ["rl-proxy", port, xff, token, service, path, count, want] =>
     runProxyFlood
       (mustPort port)
       xff
+      token
       service
       path
       (mustCount count)
