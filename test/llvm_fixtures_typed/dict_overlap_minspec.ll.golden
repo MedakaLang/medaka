@@ -323,36 +323,38 @@ entry:
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
   %t4 = icmp eq i64 %t1, 193460240
-  br i1 %t4, label %dispyes5, label %dispnext5
-dispyes5:
-  %t6 = call i64 @mdk_force_$memo_Int_def()
-  store i64 %t6, ptr %t2
+  %t5 = icmp eq i64 %t1, 4168916346331191341
+  %t6 = or i1 %t4, %t5
+  br i1 %t6, label %dispyes7, label %dispnext7
+dispyes7:
+  %t8 = call i64 @mdk_force_$memo_Int_def()
+  store i64 %t8, ptr %t2
   br label %dispend3
-dispnext5:
-  %t7 = icmp eq i64 %t1, 1329440703857575389
-  %t8 = icmp eq i64 %t1, 193452654
-  %t9 = or i1 %t7, %t8
-  br i1 %t9, label %dispyes10, label %dispnext10
-dispyes10:
-  %t11 = inttoptr i64 %dict to ptr
-  %t12 = getelementptr i8, ptr %t11, i64 8
-  %t13 = load i64, ptr %t12
-  %t14 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 %t13)
-  store i64 %t14, ptr %t2
+dispnext7:
+  %t9 = icmp eq i64 %t1, 193452654
+  %t10 = icmp eq i64 %t1, 1329440703857575389
+  %t11 = or i1 %t9, %t10
+  br i1 %t11, label %dispyes12, label %dispnext12
+dispyes12:
+  %t13 = inttoptr i64 %dict to ptr
+  %t14 = getelementptr i8, ptr %t13, i64 8
+  %t15 = load i64, ptr %t14
+  %t16 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 %t15)
+  store i64 %t16, ptr %t2
   br label %dispend3
-dispnext10:
-  %t15 = icmp eq i64 %t1, -308483285326192921
-  %t16 = icmp eq i64 %t1, 193452654
-  %t17 = or i1 %t15, %t16
-  br i1 %t17, label %dispyes18, label %dispnext18
-dispyes18:
-  %t19 = call i64 @mdk_force_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def()
-  store i64 %t19, ptr %t2
+dispnext12:
+  %t17 = icmp eq i64 %t1, 193452654
+  %t18 = icmp eq i64 %t1, -308483285326192921
+  %t19 = or i1 %t17, %t18
+  br i1 %t19, label %dispyes20, label %dispnext20
+dispyes20:
+  %t21 = call i64 @mdk_force_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def()
+  store i64 %t21, ptr %t2
   br label %dispend3
-dispnext18:
+dispnext20:
   call void @mdk_dispatch_no_impl()
   unreachable
 dispend3:
-  %t20 = load i64, ptr %t2
-  ret i64 %t20
+  %t22 = load i64, ptr %t2
+  ret i64 %t22
 }
