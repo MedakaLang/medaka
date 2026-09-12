@@ -221,26 +221,6 @@
 
 # A plain compiler differential that reads an oracle binary.
 [[gate]]
-name = "diff_compiler_parse_result"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_parse_result.sh"
-oracles = ["parse_result_main"]
-sources = ["compiler/frontend/ast.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "test/diff_compiler_parse_result.sh"]
-corpus = ["test/parse_error_fixtures"]
-toolchain = []
-
-# ⚠️ INVERTED POLARITY ([G-MUST-FAIL]): every fixture under
-# test/must_fail_fixtures/ pins an OPEN bug, so RED is this gate's healthy
-# state. It is enrolled here precisely to prove the schema does NOT normalize
-# polarity — there is no ok/failing field, and nothing in an entry claims what
-# a passing run looks like. Whatever runs a gate keeps owning that.
-[[gate]]
 name = "diff_compiler_must_fail"
 area = "soundness"
 shard = "other-job"
@@ -1670,9 +1650,9 @@ cost = "cheap"
 kind = "native"
 migration = "done"
 run = "test/diff_compiler_check_test.mdk"
-oracles = ["check_batch", "check_main", "check_match_main", "check_modules_main"]
-sources = ["compiler/driver/*", "compiler/frontend/exhaust.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_check_test.mdk"]
-corpus = ["test/check_match_fixtures", "test/check_module_fixtures", "test/diff_fixtures", "test/import_error_fixtures", "test/resolve_fixtures"]
+oracles = ["check_batch", "check_main", "check_match_main", "check_modules_main", "parse_main", "parse_result_main", "resolve_batch", "resolve_main", "resolve_modules_main"]
+sources = ["compiler/driver/*", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_check_test.mdk"]
+corpus = ["test/check_match_fixtures", "test/check_module_fixtures", "test/diff_fixtures", "test/import_error_fixtures", "test/parse_error_fixtures", "test/resolve_fixtures", "test/resolve_module_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2546,21 +2526,6 @@ corpus = ["test/parse_error_loc_fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_parse_errors"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_parse_errors.sh"
-oracles = ["parse_main"]
-sources = ["compiler/frontend/ast.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "test/diff_compiler_parse_errors.sh"]
-corpus = ["test/parse_error_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_perf_scaling"
 area = "infra"
 shard = "gates_6"
@@ -2753,51 +2718,6 @@ run = "test/diff_compiler_repl.sh"
 oracles = ["repl_main"]
 sources = ["compiler/tools/repl.mdk", "test/diff_compiler_repl.sh"]
 corpus = ["test/repl_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_resolve_batch"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_resolve_batch.sh"
-oracles = ["resolve_batch"]
-sources = ["compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "test/diff_compiler_resolve_batch.sh"]
-corpus = ["test/resolve_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_resolve_modules"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_resolve_modules.sh"
-oracles = ["resolve_modules_main"]
-sources = ["compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "test/diff_compiler_resolve_modules.sh"]
-corpus = ["test/resolve_module_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_resolve"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_resolve.sh"
-oracles = ["resolve_main"]
-sources = ["compiler/frontend/marker.mdk", "compiler/frontend/resolve.mdk", "test/diff_compiler_resolve.sh"]
-corpus = ["test/resolve_fixtures"]
 toolchain = []
 
 [[gate]]

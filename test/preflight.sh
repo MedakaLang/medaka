@@ -628,13 +628,18 @@ while IFS= read -r f; do
     # ── front-end: everything downstream of it is suspect ──
     compiler/frontend/lexer.mdk)
       add 'diff_compiler_lex*'
-      add 'diff_compiler_parse*'; add 'diff_compiler_snapshot*' ;;
+      # parse_main/parse_result_main (the former diff_compiler_parse_errors/
+      # _result) are now legs of the survivor diff_compiler_check, whose name
+      # the diff_compiler_parse* glob no longer matches — named explicitly.
+      add 'diff_compiler_parse*'; add 'diff_compiler_check'
+      add 'diff_compiler_snapshot*' ;;
     # #1131: parser.mdk/ast.mdk are cited implementing sites in BOTH
     # docs/spec/SHADOW-SEMANTICS.md §3 and docs/spec/DICT-SEMANTICS.md's own
     # enforcement table (`grep -oE 'compiler/[a-zA-Z_/]+\.mdk' docs/spec/*-SEMANTICS.md`),
     # so both spec-conformance gates belong here too.
     compiler/frontend/parser.mdk|compiler/frontend/ast.mdk)
-      add 'diff_compiler_parse*'
+      # Same diff_compiler_check repoint as the lexer.mdk arm above.
+      add 'diff_compiler_parse*'; add 'diff_compiler_check'
       add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'
       # #1110: ast.mdk declares TyConOrigin and mapTyInDecl — the carrier and the
       # traversal BOTH the stamper and the agreement probe walk; parser.mdk mints the

@@ -155,12 +155,14 @@ fi
 #                           (diff_compiler_lexer.sh MIGRATED to the # TOKENS section of
 #                           test/diff_compiler_snapshot_frontend.sh, #81 R4; lex_main
 #                           survives because those three still drive it)
-#   parse_main            — diff_compiler_parse_errors.sh
-#   parse_result_main     — diff_compiler_parse_result.sh
+#   parse_main            — diff_compiler_check (test/diff_compiler_check_test.mdk):
+#                           a sibling test, not a Row/Leg — the driver's pass condition
+#                           is a non-zero exit, the opposite of every Row's.
+#   parse_result_main     — diff_compiler_check, same file, same reason.
 #   (parse/desugar/mark:  MIGRATED to test/diff_compiler_snapshot_frontend.sh — the
 #                         snapshot runner calls the stages in-process, so those five
 #                         gates need no probe binary at all.  parse_main survives only
-#                         because diff_compiler_parse_errors.sh still drives it.)
+#                         because diff_compiler_check still drives it.)
 #   origin_agreement_main — diff_compiler_origin_agreement.sh (#1110): drives the
 #                           flat / single-module / graph elaboration entry points over
 #                           ONE loader graph and diffs the resulting agreement table.
@@ -172,9 +174,10 @@ fi
 #                           multi-module emit seam and prints transport receipts.
 #   anf_identity_main     — diff_compiler_anf_identity.sh (#1400 X-A): validates
 #                           and serializes the non-authoritative StableNodeId substrate.
-#   resolve_main          — diff_compiler_resolve.sh
-#   resolve_batch         — diff_compiler_resolve_batch.sh
-#   resolve_modules_main  — diff_compiler_resolve_modules.sh
+#   resolve_main          — diff_compiler_check, same file: a Row over resolveLeg.
+#   resolve_batch         — diff_compiler_check, same file, batched.
+#   resolve_modules_main  — diff_compiler_check, same file: a Row over the
+#                           `OrderedModules`-shaped resolve_module_fixtures.
 #   ── Phase 2 §2b typecheck/check/error gates ──
 #   typecheck_main          — diff_compiler_typecheck_errors.sh
 #                             (was also _typecheck.sh + _panic_errors.sh — migrated to the

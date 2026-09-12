@@ -7,10 +7,10 @@
 --
 -- Pure-functional: each check returns a `List ResError` rather than mutating a
 -- ref; locations are dropped (the self-host AST has none), so the dump is the
--- sorted error structure — matching `dev/diagdump.exe --resolve`
--- (test/diff_compiler_resolve.sh).  The multi-module path (imports validated
--- against real exports, privacy, aliases) is the reference's resolve_module and
--- is NOT needed here: single-file mode stubs imports into scope.
+-- sorted error structure graded by `test/diff_compiler_check_test.mdk`'s
+-- `resolve_main` row.  The multi-module path (imports validated against real
+-- exports, privacy, aliases) is `resolveModulesToLines` and is NOT needed
+-- here: single-file mode stubs imports into scope.
 
 import frontend.ast.{
   Loc(..),
