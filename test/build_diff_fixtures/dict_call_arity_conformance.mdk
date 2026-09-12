@@ -1,0 +1,33 @@
+-- Constrained-call arity conformance. The emitted define for adder3 binds the
+-- dictionary, a, and b; c is supplied by the returned lambda. Calls with fewer,
+-- exactly as many, or more words than that define must respectively build a PAP,
+-- call it directly, or apply the surplus to its returned closure.
+adder3 : Num a => a -> a -> a -> a
+-- lint-disable-next-line rule-lambda-section
+adder3 a = b => c => a + b + c
+
+exactPrefix : Num a => a -> a -> a -> a
+exactPrefix a b = adder3 a b
+
+underPrefix : Num a => a -> a -> a -> a
+underPrefix a = adder3 a
+
+cross : Num a => a -> a -> a -> a
+cross a b c = adder3 a b c
+
+-- The recursive call is not in tail position and must remain an ordinary call.
+nonTail : Num a => Int -> a
+nonTail n = if n == 0 then 0 else 1 + nonTail (n - 1)
+
+-- The dictionary-carrying recursive call is exactly saturated and must remain a
+-- musttail call, including every leading dictionary word.
+tail : Num a => Int -> a -> a
+tail n acc = if n == 0 then acc else tail (n - 1) (acc + 1)
+
+-- Hand-derived: each adder3 route computes 100+20+3. nonTail 5 is 5, then tail
+-- increments it five times.
+main =
+  println (exactPrefix 100 20 3)
+  println (underPrefix 100 20 3)
+  println (cross 100 20 3)
+  println (tail 5 (nonTail 5 : Int))
