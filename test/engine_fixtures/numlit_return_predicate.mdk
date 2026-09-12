@@ -18,6 +18,7 @@ impl Num Ding where
   abs (Ding a) = Ding a
   signum (Ding _) = Ding 1
   fromInt n = Ding (n + 1000)
+  rem (Ding a) (Ding b) = Ding (a % b)
 
 unDing : Ding -> Int
 unDing (Ding n) = n

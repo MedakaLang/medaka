@@ -20,6 +20,7 @@ impl Num (Box a) requires Num a where
   abs (Box x) = Box (abs x)
   signum (Box x) = Box (signum x)
   fromInt n = Box (lift n + lift 1000)
+  rem (Box x) (Box y) = Box (x % y)
 
 unBox : Box a -> a
 unBox (Box x) = x

@@ -5,9 +5,11 @@ export interface Forge a where
   sub : a -> a -> a
   mul : a -> a -> a
   div : a -> a -> a
+  rem : a -> a -> a
 
 export impl Forge (Box a) where
   add x _ = x
   sub x _ = x
   mul x _ = x
   div x _ = x
+  rem x _ = x

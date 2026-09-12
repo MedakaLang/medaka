@@ -393,6 +393,7 @@ arithmeticPreludeSource = joinNl [
   "  abs : a -> a",
   "  signum : a -> a",
   "  fromInt : Int -> a",
+  "  rem : a -> a -> a",
   "impl Num Int where",
   "  add x _ = x",
   "  sub x _ = x",
@@ -402,6 +403,7 @@ arithmeticPreludeSource = joinNl [
   "  abs x = x",
   "  signum x = x",
   "  fromInt n = n",
+  "  rem x _ = x",
   "impl Num Float where",
   "  add x _ = x",
   "  sub x _ = x",
@@ -411,6 +413,7 @@ arithmeticPreludeSource = joinNl [
   "  abs x = x",
   "  signum x = x",
   "  fromInt _ = 0.0",
+  "  rem x _ = x",
 ]
 
 arithmeticFunctionsSource : String
@@ -423,10 +426,13 @@ arithmeticFunctionsSource = joinNl [
   "signedMul x y = x * y",
   "signedDiv : Num a => a -> a -> a",
   "signedDiv x y = x / y",
+  "signedRem : Num a => a -> a -> a",
+  "signedRem x y = x % y",
   "inferredAdd x y = x + y",
   "inferredSub x y = x - y",
   "inferredMul x y = x * y",
   "inferredDiv x y = x / y",
+  "inferredRem x y = x % y",
 ]
 
 isArithmeticFunction : String -> Bool
@@ -435,10 +441,12 @@ isArithmeticFunction name = contains name [
   "signedSub",
   "signedMul",
   "signedDiv",
+  "signedRem",
   "inferredAdd",
   "inferredSub",
   "inferredMul",
   "inferredDiv",
+  "inferredRem",
 ]
 
 arithmeticSchemeObserved : Option (Int, Int) ->
@@ -495,10 +503,12 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
         ("signedSub", 1, "a -> a -> a"),
         ("signedMul", 1, "a -> a -> a"),
         ("signedDiv", 1, "a -> a -> a"),
+        ("signedRem", 1, "a -> a -> a"),
         ("inferredAdd", 1, "a -> a -> a"),
         ("inferredSub", 1, "a -> a -> a"),
         ("inferredMul", 1, "a -> a -> a"),
         ("inferredDiv", 1, "a -> a -> a"),
+        ("inferredRem", 1, "a -> a -> a"),
       ]
       (fst cold),
     expectEqual cold keyed,
@@ -507,6 +517,7 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
     expectEqual True (listLen failed > 0),
     expectEqual
       [
+        ("binding:signedRem", "binding:signedRem", 0),
         ("binding:signedDiv", "binding:signedDiv", 0),
         ("binding:signedMul", "binding:signedMul", 0),
         ("binding:signedSub", "binding:signedSub", 0),
@@ -574,6 +585,36 @@ test "operator events correlate by whole span scope and exact prelude Num predic
       assumptions,
   ]
 
+test "generic remainder uses the same scoped Num evidence route" =
+  let (errors, trace, assumptions) =
+    arithmeticTraceObserved "value : Num a => a -> a -> a\nvalue x y = x % y\n"
+  let operator = filter (view => view.ntvOrigin == (2, 12, 2, 17)) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [NPTProduced, NPTChecked, NPTArithmetic]
+      (numericStages operator),
+    expectEqual
+      [
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+      ]
+      (map
+        (view => (view.ntvInterface, view.ntvArguments, view.ntvOwner))
+        operator),
+    expectEqual
+      [("", True, [])]
+      (map
+        (view => (
+          view.ntvSelectedIdentity,
+          view.ntvGiven,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTArithmetic) operator)),
+    expectEqual [("binding:value", "binding:value", 0)] assumptions,
+  ]
+
 arithmeticImportedObserved : Bool -> (Int, List NumericTraceView)
 arithmeticImportedObserved reverseOrder =
   let shape = ("arithmetic_shape", "public export data Box a = Box a")
@@ -590,6 +631,7 @@ arithmeticImportedObserved reverseOrder =
       "  abs x = x",
       "  signum x = x",
       "  fromInt n = Box (fromInt n)",
+      "  rem x _ = x",
     ],
   )
   let forge = (
@@ -601,23 +643,25 @@ arithmeticImportedObserved reverseOrder =
       "  sub : a -> a -> a",
       "  mul : a -> a -> a",
       "  div : a -> a -> a",
+      "  rem : a -> a -> a",
       "impl Forge (Box a) where",
       "  add x _ = x",
       "  sub x _ = x",
       "  mul x _ = x",
       "  div x _ = x",
+      "  rem x _ = x",
     ],
   )
   let imports =
     if reverseOrder then
       [
-        "import arithmetic_forge.{Forge, add, sub, mul, div}",
+        "import arithmetic_forge.{Forge, add, sub, mul, div, rem}",
         "import arithmetic_numeric",
       ]
     else
       [
         "import arithmetic_numeric",
-        "import arithmetic_forge.{Forge, add, sub, mul, div}",
+        "import arithmetic_forge.{Forge, add, sub, mul, div, rem}",
       ]
   let entry = (
     "arithmetic_entry",
@@ -637,6 +681,8 @@ arithmeticImportedObserved reverseOrder =
           "mulValue = left * right",
           "divValue : Box Int",
           "divValue = left / right",
+          "remValue : Box Int",
+          "remValue = left % right",
         ]),
   )
   let sources =
@@ -663,6 +709,7 @@ arithmeticImportedObserved reverseOrder =
             "binding:subValue",
             "binding:mulValue",
             "binding:divValue",
+            "binding:remValue",
           ])
       trace
   (modErrorCount results, arithmetic)
@@ -675,6 +722,7 @@ test "arithmetic collision imports select the exact Num row and prerequisites" =
     expectEqual forward backward,
     expectEqual
       [
+        ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
         ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
         ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),
         ("core::Num", "core::Num", "core::Num|(Box a)|[]", ["Int[]"]),

@@ -13,3 +13,4 @@ export impl Num (Box a) requires Num a where
   abs (Box x) = Box (abs x)
   signum (Box x) = Box (signum x)
   fromInt n = Box (fromInt n)
+  rem (Box x) (Box y) = Box (x % y + 100000)
