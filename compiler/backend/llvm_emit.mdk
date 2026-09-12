@@ -8051,21 +8051,11 @@ emitDictApp e env name routes argOps =
   if isKnownFn e name then
     let dictWords = dictWordsOf e env routes
     let allWords = dictWords ++ argOps
-    -- E22: a constrained fn that RETURNS A CLOSURE is under-applied at the call site
-    -- (`mkEq : Eq a => a -> (a -> Bool); mkEq y = (z => eq y z)` called `mkEq 1`).
-    -- Its #12-eta-saturated define has `nDicts + sigValueArity` params, but the site
-    -- supplies fewer value args (the rest go to the returned closure).  A direct call
-    -- would under-supply the trailing param (garbage → a bad closure word indirectly
-    -- called → SIGSEGV).  When the RECORDED define arity says we are short, build a
-    -- residual PAP capturing the dict + supplied words.  Saturated sites (the only
-    -- shape the compiler's own source produces) keep the byte-identical direct call
-    -- below, so the self-compile fixpoint is unaffected.
+    -- E22: measure a constrained call against the RECORDED define arity.  A short
+    -- call needs a residual PAP; a surplus must apply to the returned closure
+    -- instead of being silently ignored by the fixed-arity LLVM define.
     match defArityOf e name
-      Some n =>
-        if lengthS allWords < n then
-          emitPapClosure e ("mdk_" ++ name) allWords n
-        else
-          emitDictAppDirect e name allWords
+      Some n => emitKnownFnSat e ("mdk_" ++ name) allWords n (fnRetTy e name)
       None => emitDictAppDirect e name allWords
   else
     gapE e ("CDict head '" ++ name ++ "' is not a known top-level function")
@@ -12686,6 +12676,26 @@ emitFnBody e env self other =
         let r = freshReg e
         let kw = if fname == self then "musttail call" else "call"
         let _ = emit e "  \{r} = \{kw} i64 @mdk_\{fname}(\{argDecls argOps})"
+        emit e ("  ret i64 " ++ r)
+      else
+        emitValueRet e env other
+    CDict fname routes =>
+      -- A constrained self-call carries its leading dictionary words in the
+      -- CDict head, outside `args`.  Count both lists against the actual emitted
+      -- define arity before selecting musttail; mismatched calls keep the normal
+      -- PAP/over-application path through emitDictApp.
+      let nwords = listLen routes + lengthS args
+      if isKnownFn e fname
+        && nwords > 0
+        && tailCallSaturated e fname nwords then
+        let dictWords = dictWordsOf e env routes
+        let argOps = emitArgs e env args
+        let r = freshReg e
+        let kw = if fname == self then "musttail call" else "call"
+        let _ =
+          emit
+            e
+            "  \{r} = \{kw} i64 @mdk_\{fname}(\{argDecls (dictWords ++ argOps)})"
         emit e ("  ret i64 " ++ r)
       else
         emitValueRet e env other
