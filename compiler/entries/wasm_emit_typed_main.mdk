@@ -102,7 +102,7 @@ typedInput runtimeDecls preludeDecls userDecls =
   let livePrelude = dropShadowedExp userNames preludeDecls
   let combined = livePrelude ++ userDecls
   makeWasmEmitInputFull
-    []
+    (methodIfaceTable combined)
     (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
     (ctorFieldTypeNames combined)
     False
