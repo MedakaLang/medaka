@@ -32,14 +32,21 @@ import sha256.{sha256}
 
 data MstEntry = MstEntry (Array Int) Cid Int
 
--- | An immutable MST with cached canonical root and reachable node blocks.
-export data Mst = Mst (List MstEntry) Cid (Array Int) (List (Cid, Array Int))
+-- | An immutable MST with cached canonical root and built node structure.
+export data Mst = Mst (List MstEntry) Cid (Array Int) MstNode
 
-data BuiltNode = BuiltNode Cid (Array Int) (List (Cid, Array Int))
+{- | One built node: its CID, its canonical bytes, and its children in the
+   protocol's interleaved order — the optional left subtree, then each leaf
+   followed by its optional right subtree. That flat interleaving is what the
+   covering-proof descent indexes into, so it is the node's authoritative shape
+   here and the `l`/`e` encoding is derived from it. -}
+data MstNode = MstNode Cid (Array Int) (List NodeEntry)
+
+data NodeEntry = NodeLeaf (Array Int) Cid | NodeSubtree MstNode
 
 data LayerSplit = LayerSplit (List MstEntry) (Option (MstEntry, List MstEntry))
 
-data BuiltEntries = BuiltEntries (List DagCbor) (List (Cid, Array Int))
+data BuiltEntries = BuiltEntries (List DagCbor) (List NodeEntry)
 
 data DecodedEntry = DecodedEntry (Array Int) Cid (Option Cid)
 
@@ -163,7 +170,7 @@ mustEncodeNode value = match dagCborEncode value
   Ok bytes => bytes
   Err message => panic "mst: internal node encoding failed: \{message}"
 
-childFor : List MstEntry -> Int -> Option BuiltNode
+childFor : List MstEntry -> Int -> Option MstNode
 childFor [] _ = None
 childFor entries layer =
   if layer < 0 then
@@ -171,23 +178,33 @@ childFor entries layer =
   else
     Some (buildNode entries layer)
 
-childValue : Option BuiltNode -> DagCbor
+childValue : Option MstNode -> DagCbor
 childValue None = DcNull
-childValue (Some (BuiltNode cid _ _)) = DcLink cid
+childValue (Some (MstNode cid _ _)) = DcLink cid
 
-childBlocks : Option BuiltNode -> List (Cid, Array Int)
-childBlocks None = []
-childBlocks (Some (BuiltNode _ _ blocks)) = blocks
+childEntries : Option MstNode -> List NodeEntry
+childEntries None = []
+childEntries (Some node) = [NodeSubtree node]
 
-buildNode : List MstEntry -> Int -> BuiltNode
+buildNode : List MstEntry -> Int -> MstNode
 buildNode entries layer =
   let (LayerSplit before first) = splitLayer entries layer
   let left = childFor before (layer - 1)
-  let (BuiltEntries wireEntries rightBlocks) = buildWireEntries first layer None
+  let (BuiltEntries wireEntries rightEntries) =
+    buildWireEntries first layer None
   let bytes =
     mustEncodeNode (DcMap [("l", childValue left), ("e", DcArray wireEntries)])
   let cid = cidForDagCbor bytes
-  BuiltNode cid bytes ((cid, bytes) :: childBlocks left ++ rightBlocks)
+  MstNode cid bytes (childEntries left ++ rightEntries)
+
+nodeBlocks : MstNode -> List (Cid, Array Int)
+nodeBlocks (MstNode cid bytes entries) = (cid, bytes) :: subtreeBlocks entries
+
+subtreeBlocks : List NodeEntry -> List (Cid, Array Int)
+subtreeBlocks [] = []
+subtreeBlocks ((NodeLeaf _ _) :: rest) = subtreeBlocks rest
+subtreeBlocks ((NodeSubtree node) :: rest) =
+  nodeBlocks node ++ subtreeBlocks rest
 
 buildWireEntries : Option (MstEntry, List MstEntry) ->
   Int ->
@@ -206,14 +223,17 @@ buildWireEntries (Some (MstEntry key value _, rest)) layer previous =
     ("v", DcLink value),
     ("t", childValue right),
   ]
-  let (BuiltEntries later laterBlocks) = buildWireEntries next layer (Some key)
-  BuiltEntries (wire :: later) (childBlocks right ++ laterBlocks)
+  let (BuiltEntries later laterEntries) = buildWireEntries next layer (Some key)
+  BuiltEntries
+    (wire :: later)
+    (NodeLeaf key value :: childEntries right ++ laterEntries)
 
 buildMst : List MstEntry -> Mst
 buildMst entries =
   let layer = if length entries == 0 then 0 else maximumDepth entries 0
-  let (BuiltNode root bytes blocks) = buildNode entries layer
-  Mst entries root bytes blocks
+  let node = buildNode entries layer
+  let (MstNode root bytes _) = node
+  Mst entries root bytes node
 
 -- | The one canonical empty repository tree.
 export
@@ -311,7 +331,7 @@ copyBlocks ((cid, bytes) :: rest) = (cid, arrayCopy bytes) :: copyBlocks rest
 -- | Complete root-first reachable set of canonical MST node blocks.
 export
 mstNodeBlocks : Mst -> List (Cid, Array Int)
-mstNodeBlocks (Mst _ _ _ blocks) = copyBlocks blocks
+mstNodeBlocks (Mst _ _ _ node) = copyBlocks (nodeBlocks node)
 
 decodeOptionalLink : String -> DagCbor -> Result String (Option Cid)
 decodeOptionalLink _ DcNull = Ok None
@@ -722,3 +742,138 @@ mstFromBlocks root blocks = do
     Ok tree
   else
     Err "mst: rebuilt tree root does not match the supplied root"
+
+entryLeafAtOrAbove : Array Int -> NodeEntry -> Bool
+entryLeafAtOrAbove key (NodeLeaf candidate _) = bytesCompare candidate key /= Lt
+entryLeafAtOrAbove _ (NodeSubtree _) = False
+
+{- | Index of the first leaf whose key is at or above `key`, or the entry count
+   when every leaf sorts below it. Subtrees never match, so the index can land
+   on a subtree slot or one past the end; `entryAt` is total for both. -}
+findLeafIndex : Array Int -> List NodeEntry -> Int
+findLeafIndex key entries = findLeafIndexFrom key entries 0
+
+findLeafIndexFrom : Array Int -> List NodeEntry -> Int -> Int
+findLeafIndexFrom _ [] index = index
+findLeafIndexFrom key (entry :: rest) index =
+  if entryLeafAtOrAbove key entry then
+    index
+  else
+    findLeafIndexFrom key rest (index + 1)
+
+entryAt : Int -> List NodeEntry -> Option NodeEntry
+entryAt _ [] = None
+entryAt index (entry :: rest) =
+  if index < 0 then
+    None
+  else if index == 0 then
+    Some entry
+  else
+    entryAt (index - 1) rest
+
+subtreeAt : Int -> List NodeEntry -> Option MstNode
+subtreeAt index entries = match entryAt index entries
+  Some (NodeSubtree node) => Some node
+  _ => None
+
+{- | Nodes proving where `key` sits. When this node holds the key as a leaf the
+   descent stops here; otherwise it continues into the subtree immediately left
+   of the insertion point. A node with no such subtree proves nothing on its own
+   and contributes no block, which is why this walk can return the empty list
+   while the two sibling walks below always contribute their own node. -}
+proofForKey : Array Int -> MstNode -> List (Cid, Array Int)
+proofForKey key (MstNode cid bytes entries) =
+  let index = findLeafIndex key entries
+  let exact = match entryAt index entries
+    Some (NodeLeaf candidate _) => bytesCompare candidate key == Eq
+    _ => False
+  if exact then
+    [(cid, bytes)]
+  else match subtreeAt (index - 1) entries
+    None => []
+    Some previous => proofForKey key previous ++ [(cid, bytes)]
+
+-- | Nodes proving the nearest key below `key`.
+proofForLeftSib : Array Int -> MstNode -> List (Cid, Array Int)
+proofForLeftSib key (MstNode cid bytes entries) =
+  let index = findLeafIndex key entries
+  let below = match subtreeAt (index - 1) entries
+    None => []
+    Some previous => proofForLeftSib key previous
+  below ++ [(cid, bytes)]
+
+-- | Nodes proving the nearest key above `key`.
+proofForRightSib : Array Int -> MstNode -> List (Cid, Array Int)
+proofForRightSib key (MstNode cid bytes entries) =
+  let index = findLeafIndex key entries
+  let found = match entryAt index entries
+    None => entryAt (index - 1) entries
+    present => present
+  let below = match found
+    None => []
+    Some (NodeSubtree node) => proofForRightSib key node
+    Some (NodeLeaf candidate _) =>
+      let neighbor =
+        if bytesCompare candidate key == Eq then
+          entryAt (index + 1) entries
+        else
+          entryAt (index - 1) entries
+      match neighbor
+        Some (NodeSubtree node) => proofForRightSib key node
+        _ => []
+  below ++ [(cid, bytes)]
+
+coveringProof : Array Int -> MstNode -> List (Cid, Array Int)
+coveringProof key node =
+  proofForKey key node ++ proofForLeftSib key node ++ proofForRightSib key node
+
+unionBlocks : List (Cid, Array Int) ->
+  Map String Unit ->
+  List (Cid, Array Int) ->
+  (Map String Unit, List (Cid, Array Int))
+unionBlocks [] seen acc = (seen, acc)
+unionBlocks ((cid, bytes) :: rest) seen acc =
+  let key = cidKey cid
+  if has key seen then
+    unionBlocks rest seen acc
+  else
+    unionBlocks rest (set key () seen) ((cid, bytes) :: acc)
+
+coveringProofGo : List (Array Int) ->
+  MstNode ->
+  Map String Unit ->
+  List (Cid, Array Int) ->
+  List (Cid, Array Int)
+coveringProofGo [] _ _ acc = reverse acc
+coveringProofGo (key :: rest) node seen acc =
+  let (nextSeen, nextAcc) = unionBlocks (coveringProof key node) seen acc
+  coveringProofGo rest node nextSeen nextAcc
+
+checkProofKeys : List (Array Int) -> Result String Unit
+checkProofKeys [] = Ok ()
+checkProofKeys (key :: rest) = match mstKeyDepth key
+  Err message => Err message
+  Ok _ => checkProofKeys rest
+
+{- | Union of the covering proofs for `keys` against this tree.
+
+   A covering proof for one key is every MST node — leaf records excluded —
+   needed to prove that key's value and the values of its immediate lexical
+   neighbors against this tree's root. It therefore includes nodes on the path
+   that a write at `keys` never touched: those are exactly what convinces a
+   reader that the rest of the tree is unchanged, and no diff between two trees
+   can supply them.
+
+   The result is a set: duplicates across keys are dropped, and callers must not
+   read anything into the order. On any tree deeper than a single node it is a
+   strict subset of `mstNodeBlocks`, which is the point of calling it.
+
+   Keys need not be present. A relay verifying a delete proves the key's absence
+   from exactly the same nodes. -}
+export
+mstCoveringProofBlocks : List (Array Int) ->
+  Mst ->
+  Result String (List (Cid, Array Int))
+mstCoveringProofBlocks keys (Mst _ _ _ node) = do
+  _ <- checkProofKeys keys
+  Ok (copyBlocks (coveringProofGo keys node Tip []))

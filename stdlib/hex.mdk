@@ -14,6 +14,7 @@
 -- lint-disable-file rule-stdlib-reimpl
 
 import array.{get, fromList}
+import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 
 -- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
@@ -90,14 +91,17 @@ encodeString s = encode (toUtf8 s)
 
 -- # Decoding
 
+-- Bytes are consed on and reversed once at the end: appending each byte to
+-- the accumulator instead would be linear in the bytes already decoded,
+-- making the whole decode quadratic in the input's length.
 decodeGo : Array Char -> Int -> Int -> List Int -> Result String (List Int)
 decodeGo chars i n acc
-  | i >= n = Ok acc
+  | i >= n = Ok (reverse acc)
   | otherwise = match fromDigit (charAt i chars)
     None => Err "hex.decode: invalid hex digit"
     Some hi => match fromDigit (charAt (i + 1) chars)
       None => Err "hex.decode: invalid hex digit"
-      Some lo => decodeGo chars (i + 2) n (acc ++ [hi * 16 + lo])
+      Some lo => decodeGo chars (i + 2) n (hi * 16 + lo :: acc)
 
 {- | The bytes written in a hex string.
 

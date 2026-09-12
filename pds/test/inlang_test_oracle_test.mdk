@@ -69,10 +69,11 @@ engineLabel NativeSpeed = "native (speed)"
    `lib.repo`'s call graph, which the interpreter's capability policy does
    not bind.
 
-   `NativeSpeed` (5 files): eval completes but is materially slower —
+   `NativeSpeed` (6 files): eval completes but is materially slower —
    `field_test` 159 s vs 2.2 s, `scalar_test` and `pbkdf2_test` both past a
-   180 s timeout vs 2.5 s / 18.0 s, and the two JWT/PBKDF2 files roughly
-   4-5x. -}
+   180 s timeout vs 2.5 s / 18.0 s, the two JWT/PBKDF2 files roughly 4-5x,
+   and `websocket_test` 295 s vs 4 s (RFC 3174's one-million-byte SHA-1
+   vector is most of that). -}
 suites : List (String, (Int, Engine))
 suites = [
   ("skeleton_test", (2, Eval)),
@@ -98,6 +99,9 @@ suites = [
   ("blob_routes_test", (15, NativeCapability)),
   ("ratelimit_test", (25, Eval)),
   ("read_buffer_test", (12, Eval)),
+  ("websocket_test", (43, NativeSpeed)),
+  ("event_log_test", (22, NativeCapability)),
+  ("sync_event_test", (3, Eval)),
 ]
 
 {- | Exclusion ledger: file stem paired with the reason it is not run today,
@@ -258,6 +262,15 @@ test "pds/test/ratelimit_test.mdk executed >= 25 assertions" =
 
 test "pds/test/read_buffer_test.mdk executed >= 12 assertions" =
   floorExpectation "read_buffer_test"
+
+test "pds/test/websocket_test.mdk executed >= 43 assertions" =
+  floorExpectation "websocket_test"
+
+test "pds/test/event_log_test.mdk executed >= 22 assertions" =
+  floorExpectation "event_log_test"
+
+test "pds/test/sync_event_test.mdk executed >= 3 assertions" =
+  floorExpectation "sync_event_test"
 
 -- # Non-vacuity
 

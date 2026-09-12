@@ -416,6 +416,28 @@ export
 repoRootCid : Repo -> Cid
 repoRootCid (Repo _ _ _ tree _ _) = mstRootCid tree
 
+{- | The current MST itself.
+
+   Handing out the tree is safe where handing out the block store would not
+   be: `Mst`'s constructors are private, so a caller can read it and cannot
+   forge one. A firehose event needs the trees on BOTH sides of a write to
+   state which nodes it created and which it merely proves, and neither is
+   derivable from a root CID. -}
+export
+repoTree : Repo -> Mst
+repoTree (Repo _ _ _ tree _ _) = tree
+
+{- | The CID currently stored at one path, without decoding the record.
+
+   `repoLookup` answers with the record; a `#commit` op's `prev` field wants
+   the CID and must be read BEFORE the write it describes, since afterwards
+   the path names the new record or nothing at all. -}
+export
+repoRecordCid : Array Int -> Repo -> Result String (Option Cid)
+repoRecordCid path (Repo _ _ _ tree _ _) = do
+  () <- validatePath path
+  Ok (mstLookup path tree)
+
 ensureNewer : Tid -> RepoCommit -> Result String Unit
 ensureNewer next prior =
   if tidCompare next (repoCommitRev prior) == Gt then

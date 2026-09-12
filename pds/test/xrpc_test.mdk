@@ -101,7 +101,7 @@ reasonFor 404 = "Not Found"
 reasonFor 405 = "Method Not Allowed"
 reasonFor 413 = "Payload Too Large"
 reasonFor 415 = "Unsupported Media Type"
-reasonFor 501 = "Not Implemented"
+reasonFor 426 = "Upgrade Required"
 reasonFor _ = "Unexpected"
 
 expectedFailure : Int -> String -> String -> Array Int
@@ -487,12 +487,12 @@ test "raw input ceiling accepts at and returns exact 413 over" =
       maxRawBodyBytes
       "Raw request body exceeds 5242880 bytes")
 
-test "known subscription is 501 while its wrong method is 405" =
+test "known subscription is 426 while its wrong method is 405" =
   expectTrue
     (failureMatches
-        501
-        "NotImplemented"
-        "XRPC subscription is not implemented: com.atproto.sync.subscribeRepos"
+        426
+        "UpgradeRequired"
+        "XRPC subscription requires a WebSocket upgrade: com.atproto.sync.subscribeRepos"
         (noBodyRequest "GET" "/xrpc/com.atproto.sync.subscribeRepos")
       && failureMatches
         405

@@ -1,0 +1,289 @@
+{- | SHA-1 hashing of a byte array (FIPS 180-4 §6.1, RFC 3174).
+
+   A message is an `Array Int` with each element from `0` to `255`, the same
+   form `readFileBytes` and `hex.decode` use. The digest is 20 bytes, most
+   significant byte of each word first.
+
+   SHA-1 is here for ONE reason: RFC 6455 §4.2.2 defines the WebSocket
+   opening handshake's `Sec-WebSocket-Accept` as a SHA-1 of the client key
+   concatenated with a fixed GUID. That use is a protocol constant, not a
+   security claim — the digest authenticates nothing and keeps no secret.
+   Nothing else in this server may hash with it; `stdlib/sha256.mdk` is the
+   hash for every content-addressing and signing path.
+
+   `sha1` panics when any element is outside `0` to `255`. Reducing such an
+   element modulo 256 would map two different messages onto one digest.
+   `sha1FixedBytes` is the same hash without that scan, for a caller whose
+   bytes are already known to be in range.
+
+   There is no incremental form. A message is hashed in one call. -}
+
+-- Arithmetic contract, identical to `stdlib/sha256.mdk`'s. Every word is an
+-- `Int` in [0, 2^32). `mask32 x = bitAnd x 4294967295`, and every `+`,
+-- `shiftLeft` and `bitNot` result is immediately followed by `mask32`.
+-- `shiftRight` needs no mask: it is logical/unsigned (`stdlib/runtime.mdk`)
+-- and its input is already masked. A sum of five 32-bit values is < 2^35,
+-- well inside the 63-bit fixnum, so no intermediate overflows; the mask
+-- enforces the modulus, not fixnum safety.
+--
+-- Message words are big-endian (FIPS 180-4 §3.1) and the digest is emitted in
+-- H0..H4 order.
+--
+-- No padded copy of the whole message is ever materialized: full 64-byte
+-- blocks are read directly from the input by offset, and only the final one
+-- or two blocks are synthesized to hold the 0x80 marker, the zero padding and
+-- the 64-bit big-endian bit length.
+
+-- SHA-1 and SHA-256 share the Merkle-Damgard skeleton the whole SHA-2 family
+-- shares — same padding rule, same big-endian word order, same block-folding
+-- shape — so the two modules read alike by construction. They are different
+-- compression functions over different state widths with different round
+-- constants, and neither can be expressed in terms of the other.
+-- lint-disable-file rule-stdlib-reimpl
+-- lint-disable-file rule-duplicate-body
+
+import array.{blit, get, make, setInPlace}
+
+-- ── Constants ────────────────────────────────────────────────────────
+
+-- FIPS 180-4 §5.3.1 initial hash value H(0).
+h0Init : (Int, Int, Int, Int, Int)
+h0Init = (0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0)
+
+-- FIPS 180-4 §4.2.1 round constants, one per twenty-round quarter.
+roundConstant : Int -> Int
+roundConstant t =
+  if t < 20 then
+    0x5a827999
+  else if t < 40 then
+    0x6ed9eba1
+  else if t < 60 then
+    0x8f1bbcdc
+  else
+    0xca62c1d6
+
+-- ── Bit / word arithmetic ────────────────────────────────────────────
+
+mask32 : Int -> Int
+mask32 x = bitAnd x 4294967295
+
+rotl32 : Int -> Int -> Int
+rotl32 n x = mask32 (bitOr (shiftLeft x n) (shiftRight x (32 - n)))
+
+-- FIPS 180-4 §4.1.1 f(t, b, c, d), by quarter.
+roundF : Int -> Int -> Int -> Int -> Int
+roundF t b c d =
+  if t < 20 then
+    bitOr (bitAnd b c) (bitAnd (mask32 (bitNot b)) d)
+  else if t < 40 then
+    bitXor (bitXor b c) d
+  else if t < 60 then
+    bitOr (bitOr (bitAnd b c) (bitAnd b d)) (bitAnd c d)
+  else
+    bitXor (bitXor b c) d
+
+-- In-bounds indexing via the safe `Array.get`, panicking on a miss. Every
+-- call site below only ever indexes within a known length, so the `None`
+-- arm is unreachable (same idiom as `stdlib/sha256.mdk`'s `byteAt`).
+byteAt : Array Int -> Int -> Int
+byteAt arr i = match get i arr
+  Some b => b
+  None => panic "sha1: byteAt index out of bounds"
+
+wordAt : Array Int -> Int -> Int
+wordAt arr i = match get i arr
+  Some w => w
+  None => panic "sha1: wordAt index out of bounds"
+
+-- ── Message schedule ─────────────────────────────────────────────────
+
+-- Big-endian 32-bit word starting at byte index `i*4`, read through an
+-- arbitrary byte accessor (so the caller decides whether bytes come from
+-- the original message or a synthesized tail block).
+scheduleWord : (Int -> Int) -> Int -> Int
+scheduleWord byteOf i =
+  let b0 = byteOf (i * 4)
+  let b1 = byteOf (i * 4 + 1)
+  let b2 = byteOf (i * 4 + 2)
+  let b3 = byteOf (i * 4 + 3)
+  mask32
+    (bitOr
+      (bitOr (bitOr (shiftLeft b0 24) (shiftLeft b1 16)) (shiftLeft b2 8))
+      b3)
+
+fillFirst16 : Array Int -> (Int -> Int) -> Int -> Unit
+fillFirst16 w byteOf i =
+  if i >= 16 then
+    ()
+  else
+    setInPlace i (scheduleWord byteOf i) w
+    fillFirst16 w byteOf (i + 1)
+
+-- FIPS 180-4 §6.1.2 step 1: W[t] = ROTL^1(W[t-3] xor W[t-8] xor W[t-14]
+-- xor W[t-16]).
+extendSchedule : Array Int -> Int -> Unit
+extendSchedule w i =
+  if i >= 80 then
+    ()
+  else
+    let x =
+      bitXor
+        (bitXor
+          (bitXor (wordAt w (i - 3)) (wordAt w (i - 8)))
+          (wordAt w (i - 14)))
+        (wordAt w (i - 16))
+    setInPlace i (rotl32 1 x) w
+    extendSchedule w (i + 1)
+
+-- Build the 80-word message schedule for one block from a byte accessor
+-- covering that block's 64 bytes (offsets 0..63).
+buildSchedule : (Int -> Int) -> Array Int
+buildSchedule byteOf =
+  let w = make 80 0
+  fillFirst16 w byteOf 0
+  extendSchedule w 16
+  w
+
+-- ── Compression ──────────────────────────────────────────────────────
+
+type State = (Int, Int, Int, Int, Int)
+
+compressRounds : Array Int -> State -> Int -> State
+compressRounds w (a, b, c, d, e) t =
+  if t >= 80 then
+    (a, b, c, d, e)
+  else
+    let tv =
+      mask32
+        (mask32
+            (mask32 (mask32 (rotl32 5 a + roundF t b c d) + e)
+              + roundConstant t)
+          + wordAt w t)
+    compressRounds w (tv, a, rotl32 30 b, c, d) (t + 1)
+
+-- One 64-byte block, addressed via `byteOf` (offsets 0..63 relative to the
+-- block start), folded into the running hash state.
+compressBlock : (Int -> Int) -> State -> State
+compressBlock byteOf (h0, h1, h2, h3, h4) =
+  let w = buildSchedule byteOf
+  let (a, b, c, d, e) = compressRounds w (h0, h1, h2, h3, h4) 0
+  (
+    mask32 (h0 + a),
+    mask32 (h1 + b),
+    mask32 (h2 + c),
+    mask32 (h3 + d),
+    mask32 (h4 + e),
+  )
+
+-- ── Driving the blocks ───────────────────────────────────────────────
+
+-- Fold every FULL 64-byte block of `msg` directly by offset — no copy of
+-- the message is ever made.
+processFullBlocks : Array Int -> Int -> State -> Int -> State
+processFullBlocks msg numFull st blockIdx =
+  if blockIdx >= numFull then
+    st
+  else
+    let base = blockIdx * 64
+    processFullBlocks
+      msg
+      numFull
+      (compressBlock (j => byteAt msg (base + j)) st)
+      (blockIdx + 1)
+
+-- The message's bit length, big-endian, into the last 8 bytes of the
+-- synthesized padded region.
+writeLenGo : Array Int -> Int -> Int -> Int -> Unit
+writeLenGo out offset bitLen i =
+  if i >= 8 then
+    ()
+  else
+    let shiftAmt = (7 - i) * 8
+    setInPlace (offset + i) (bitAnd (shiftRight bitLen shiftAmt) 255) out
+    writeLenGo out offset bitLen (i + 1)
+
+-- The number of bytes in the final, padded region (one block if the tail
+-- plus the 0x80 marker plus the 8-byte length fits in 64 bytes, else two).
+padLength : Int -> Int
+padLength tailLen = if tailLen + 1 + 8 <= 64 then 64 else 128
+
+-- Synthesize the final one-or-two padded blocks: `tailLen` message bytes
+-- (copied via `blit`, never the whole message), then `0x80`, then zero
+-- bytes, then the 64-bit big-endian bit length of the WHOLE message.
+buildTail : Array Int -> Int -> Int -> Array Int
+buildTail msg len tailLen =
+  let size = padLength tailLen
+  let out = make size 0
+  blit msg (len - tailLen) out 0 tailLen
+  setInPlace tailLen 0x80 out
+  writeLenGo out (size - 8) (len * 8) 0
+  out
+
+processTail : Array Int -> State -> State
+processTail tail st =
+  let numBlocks = arrayLength tail / 64
+  processFullBlocks tail numBlocks st 0
+
+digestWord : Array Int -> Int -> Int -> Unit
+digestWord out i word =
+  setInPlace (i * 4) (bitAnd (shiftRight word 24) 255) out
+  setInPlace (i * 4 + 1) (bitAnd (shiftRight word 16) 255) out
+  setInPlace (i * 4 + 2) (bitAnd (shiftRight word 8) 255) out
+  setInPlace (i * 4 + 3) (bitAnd word 255) out
+
+digestBytes : State -> Array Int
+digestBytes (h0, h1, h2, h3, h4) =
+  let out = make 20 0
+  digestWord out 0 h0
+  digestWord out 1 h1
+  digestWord out 2 h2
+  digestWord out 3 h3
+  digestWord out 4 h4
+  out
+
+-- ── Public entry points ──────────────────────────────────────────────
+
+sha1AssumeByteDomain : Array Int -> Array Int
+sha1AssumeByteDomain msg =
+  let len = arrayLength msg
+  let numFull = len / 64
+  let tailLen = len - numFull * 64
+  let afterFull = processFullBlocks msg numFull h0Init 0
+  let tail = buildTail msg len tailLen
+  digestBytes (processTail tail afterFull)
+
+-- Is every element of `msg[0 .. len)` inside the `0..255` byte domain? A
+-- tail-recursive index scan over safe indexing, allocating nothing.
+--
+-- This must stay a full-arity self tail call: native lowers that shape to
+-- `musttail`, and the tree-walking interpreter does not TCO at all, so a
+-- non-tail rewrite here is a stack overflow rather than a slowdown.
+byteDomainOk : Array Int -> Int -> Int -> Bool
+byteDomainOk msg len i =
+  if i >= len then
+    True
+  else
+    let b = msg[i]
+    if b < 0 || b > 255 then False else byteDomainOk msg len (i + 1)
+
+{- | The 20-byte SHA-1 digest of `msg`, skipping the byte-domain check.
+
+   Every element of `msg` must still be in `0` to `255`. Nothing here checks
+   that, and an element outside the range silently digests as some other
+   message. Prefer `sha1` unless the bytes come from a source that already
+   guarantees the range. -}
+export
+sha1FixedBytes : Array Int -> Array Int
+sha1FixedBytes msg = sha1AssumeByteDomain msg
+
+{- | The 20-byte SHA-1 digest of `msg`.
+
+   Panics when any element of `msg` is outside `0` to `255`. -}
+export
+sha1 : Array Int -> Array Int
+sha1 msg =
+  let len = arrayLength msg
+  if not (byteDomainOk msg len 0) then
+    panic "sha1: every element must be a byte in 0..255"
+  else
+    sha1AssumeByteDomain msg

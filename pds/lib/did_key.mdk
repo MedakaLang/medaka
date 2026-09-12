@@ -18,12 +18,22 @@ import lib.sign.{PublicKey, publicKeyCompressed, publicKeyFromCompressed}
 secp256k1Prefix : Array Int
 secp256k1Prefix = multicodecPrefix multicodecSecp256k1Pub
 
+{- | The multibase half of a secp256k1 `did:key` identifier, without the
+   method prefix.
+
+   It is also what a DID document's `publicKeyMultibase` holds for a
+   `Multikey` verification method, which is why this is exported separately
+   rather than being reached by stripping `didKeyFromPublicKey`'s prefix
+   back off. -}
+export
+didKeyMultibase : PublicKey -> String
+didKeyMultibase publicKey =
+  multibaseBase58btc (secp256k1Prefix ++ publicKeyCompressed publicKey)
+
 -- | Encode a secp256k1 public key as its canonical `did:key` identifier.
 export
 didKeyFromPublicKey : PublicKey -> String
-didKeyFromPublicKey publicKey =
-  let payload = secp256k1Prefix ++ publicKeyCompressed publicKey
-  "did:key:" ++ multibaseBase58btc payload
+didKeyFromPublicKey publicKey = "did:key:" ++ didKeyMultibase publicKey
 
 -- | Decode exactly one lower-case secp256k1 `did:key` identifier.
 export

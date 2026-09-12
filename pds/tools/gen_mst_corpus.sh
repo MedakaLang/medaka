@@ -17,4 +17,5 @@ npm ci --ignore-scripts --prefix "$WORK"
 
 node "$ROOT/pds/tools/gen_mst_corpus.mjs" \
   "$WORK/node_modules" \
-  "$ROOT/pds/test/vectors/mst_reference_corpus.txt"
+  "$ROOT/pds/test/vectors/mst_reference_corpus.txt" \
+  "$ROOT/pds/test/vectors/mst_covering_proof_corpus.txt"

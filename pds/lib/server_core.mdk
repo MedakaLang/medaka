@@ -12,12 +12,14 @@ import http.{
   headerValue,
   HttpParseFailure(..),
   parseRequestClassified,
+  QueryParam(..),
   Request,
   requestHeaders,
   Response,
   serializeResponse,
 }
-import string.{fromUtf8, splitAt, toLower}
+import lib.websocket.{handshakeAccept}
+import string.{contains, fromUtf8, splitAt, toInt, toLower, trim}
 import lib.atsyntax.{validateDid, validateHandle}
 import lib.jwt.{Claims(..), JwtError(..), verifyToken}
 import lib.store.{
@@ -33,6 +35,7 @@ import lib.xrpc.{
   RouteResult(..),
   XrpcCall,
   routeRequest,
+  subscriptionRoute,
   xrpcErrorResponse,
   xrpcFailureResponse,
 }
@@ -305,6 +308,184 @@ handle (Server account registry handler) context store request =
         (_, GoodCredential did fingerprint) =>
           handler context (Authenticated did fingerprint) store call
         (_, refused) => (store, refusalFor refused)
+
+-- ── the subscription upgrade seam ───────────────────────────────────────────
+
+{- | What a framed request means to the socket shell BEFORE it applies it: an
+   ordinary request, a refused upgrade, or an upgrade to admit.
+
+   It exists because a subscription leaves the request/response lifecycle
+   permanently and nothing downstream of `handle` can express that — `handle`
+   returns a complete `Response` and `handleBytes` a complete `Array Int`. So
+   the shell asks this question first, and only a `NotAnUpgrade` answer
+   reaches the ordinary path. Every DECISION in it is taken here rather than
+   in the shell: routing, NSID admission, the handshake's own well-formedness,
+   the auth policy the registry holds, and the cursor's syntax are all
+   questions about a request's bytes, and none of them is a question about a
+   socket. -}
+public export data UpgradeDecision =
+  | NotAnUpgrade
+  | UpgradeRefused Response
+  | UpgradeAdmitted UpgradeAdmission
+
+{- | An admitted upgrade: the subscription route's NSID, the
+   `Sec-WebSocket-Accept` value the 101 must echo, and the cursor the client
+   asked to resume from.
+
+   `cursor` is `None` for a client that named none, which is not the same
+   request as `Some 0`: the first asks for the live tail and the second asks
+   for everything the log still holds (`lib.event_log_record`'s
+   `eventLogAfterCursor` fixes what a cursor VALUE means; this only records
+   whether one was sent).
+
+   The auth outcome is deliberately NOT carried. It is resolved and ENFORCED
+   here, against the policy the route was registered under, exactly as
+   `handle` enforces it for an ordinary route; carrying it onward would be a
+   value with no reader, and a reader is what would make a second, divergent
+   enforcement possible. -}
+public export data UpgradeAdmission = UpgradeAdmission {
+  nsid : String,
+  accept : String,
+  cursor : Option Int,
+}
+
+-- One header's single value, or why there is not exactly one. Two
+-- `Sec-WebSocket-Key` headers are a handshake whose key is ambiguous, which
+-- is not a key — the same rule `presentedHeader` applies to `Authorization`.
+data HeaderPick = HeaderMissing | HeaderRepeated | HeaderPicked String
+
+pickHeader : String -> List Header -> Int -> Option (Array Int) -> HeaderPick
+pickHeader _ [] 0 _ = HeaderMissing
+pickHeader _ [] 1 (Some value) = HeaderPicked (fromUtf8 value)
+pickHeader _ [] _ _ = HeaderRepeated
+pickHeader wanted (header :: rest) count value =
+  if headerName header == wanted then
+    pickHeader wanted rest (count + 1) (Some (headerValue header))
+  else
+    pickHeader wanted rest count value
+
+-- A repeated field is joined by commas rather than refused (RFC 9110 §5.3),
+-- and `Connection` legitimately carries a token list, so both fields are
+-- tested by containment of their lowercased text rather than by equality.
+headerMentions : String -> String -> List Header -> Bool
+headerMentions wanted token headers = match pickHeader wanted headers 0 None
+  HeaderPicked value => contains token (toLower value)
+  _ => False
+
+{- | Whether this request is the opening half of a WebSocket handshake (RFC
+   6455 §4.1): `Upgrade: websocket` and a `Connection` field naming `upgrade`.
+
+   Those two alone, because they are what makes the request an UPGRADE at all.
+   Everything else the handshake requires — the version, the key — is graded
+   below, where a violation can be answered; a request failing one of those
+   asked for a WebSocket and is owed a refusal, not a 404 for the page it
+   never wanted. -}
+requestsUpgrade : Request -> Bool
+requestsUpgrade request =
+  let headers = requestHeaders request
+  headerMentions "upgrade" "websocket" headers
+    && headerMentions "connection" "upgrade" headers
+
+-- RFC 6455 §4.1: the only version this server speaks.
+webSocketVersion : String
+webSocketVersion = "13"
+
+badHandshakeResponse : String -> Response
+badHandshakeResponse detail =
+  xrpcErrorResponse 400 "Bad Request" "InvalidRequest" detail
+
+{- | RFC 6455 §4.4: a client asking for a version this server does not speak,
+   or naming none at all, is answered 426 and told which version it does
+   speak. The version is stated in the error message rather than in a
+   `Sec-WebSocket-Version` response field because the JSON error envelope is
+   the one shape every other refusal on this server takes, and a client that
+   cannot read it cannot read a field either. -}
+wrongVersionResponse : Response
+wrongVersionResponse =
+  xrpcErrorResponse
+    426
+    "Upgrade Required"
+    "UnsupportedWebSocketVersion"
+    "This server speaks WebSocket version \{webSocketVersion}"
+
+cursorOf : List QueryParam ->
+  Int ->
+  Option String ->
+  Result Response (Option Int)
+cursorOf [] 0 _ = Ok None
+cursorOf [] 1 (Some text) = match toInt (trim text)
+  Some seq => Ok (Some seq)
+  None =>
+    Err
+      (badHandshakeResponse "Query parameter 'cursor' is not a sequence number")
+cursorOf [] _ _ =
+  Err (badHandshakeResponse "Query parameter 'cursor' must not be repeated")
+cursorOf ((QueryParam key value) :: rest) count found =
+  if key == "cursor" then
+    cursorOf rest (count + 1) (Some value)
+  else
+    cursorOf rest count found
+
+-- The handshake's own well-formedness, once the route is known to be a
+-- registered subscription: the version, then the key.
+admitHandshake : Request -> String -> List QueryParam -> UpgradeDecision
+admitHandshake request nsid params =
+  match pickHeader "sec-websocket-version" (requestHeaders request) 0 None
+    HeaderPicked version =>
+      if trim version /= webSocketVersion then
+        UpgradeRefused wrongVersionResponse
+      else
+        admitKey request nsid params
+    HeaderMissing => UpgradeRefused wrongVersionResponse
+    HeaderRepeated =>
+      UpgradeRefused
+        (badHandshakeResponse "Sec-WebSocket-Version must not be repeated")
+
+admitKey : Request -> String -> List QueryParam -> UpgradeDecision
+admitKey request nsid params =
+  match pickHeader "sec-websocket-key" (requestHeaders request) 0 None
+    HeaderMissing =>
+      UpgradeRefused (badHandshakeResponse "Sec-WebSocket-Key is required")
+    HeaderRepeated =>
+      UpgradeRefused
+        (badHandshakeResponse "Sec-WebSocket-Key must not be repeated")
+    HeaderPicked key => match handshakeAccept (trim key)
+      Err detail => UpgradeRefused (badHandshakeResponse detail)
+      Ok accept => match cursorOf params 0 None
+        Err refusal => UpgradeRefused refusal
+        Ok cursor => UpgradeAdmitted UpgradeAdmission {
+          nsid = nsid,
+          accept = accept,
+          cursor = cursor,
+        }
+
+{- | Whether this request is an upgrade to a registered subscription route,
+   and if so whether it may be admitted.
+
+   The order is deliberate and is the cheap-first order: a request that is not
+   an upgrade at all costs two header scans, and only a request that both asks
+   for a WebSocket and names a registered subscription reaches the handshake
+   grading or the credential resolution. A non-upgrade GET to a subscription
+   route answers `NotAnUpgrade` and is then owed the 426 `routeEndpoint`
+   gives it — the one place that answer lives. -}
+export
+classifyUpgrade : Server ->
+  RequestContext ->
+  Store ->
+  Request ->
+  UpgradeDecision
+classifyUpgrade (Server account registry _) context store request =
+  if not (requestsUpgrade request) then
+    NotAnUpgrade
+  else match subscriptionRoute registry request
+    None => NotAnUpgrade
+    Some (nsid, params, auth) => match (
+      auth,
+      resolveCredential account auth context store request,
+    )
+      (PublicRoute, _) => admitHandshake request nsid params
+      (_, GoodCredential _ _) => admitHandshake request nsid params
+      (_, refused) => UpgradeRefused (refusalFor refused)
 
 malformedHttpResponse : Response
 malformedHttpResponse =

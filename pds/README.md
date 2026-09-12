@@ -394,7 +394,7 @@ half is structurally incapable of writing, and `pdsHandler` returns the input
 |---|---|---|
 | `com.atproto.repo.getRecord` | `{uri, cid, value}` | `RecordNotFound` when absent, or when an explicit `cid` parameter names a different record |
 | `com.atproto.repo.listRecords` | `{records, cursor?}` | — |
-| `com.atproto.repo.describeRepo` | `{did, handle, collections, handleIsCorrect}` | `RepoNotFound` |
+| `com.atproto.repo.describeRepo` | `{did, handle, didDoc, collections, handleIsCorrect}` | `RepoNotFound` |
 | `com.atproto.sync.getRepo` | the repository CAR, `application/vnd.ipld.car` | `since` is refused, not ignored |
 | `com.atproto.sync.getLatestCommit` | `{cid, rev}` | `RepoNotFound` |
 | `com.atproto.identity.resolveHandle` | `{did}` | `HandleNotFound`; needs no repository |
@@ -423,8 +423,8 @@ otherwise). Every OTHER path outside `/xrpc/` still 404s with
 
 `/.well-known/did.json` serves **this PDS's own did:web document**, keyed by the
 hostname `makeAccount` admitted — it describes the SERVER's atproto service
-endpoint, not the hosted account, which is a `did:key` and owns a different
-document this server does not serve. `/.well-known/atproto-did` serves the
+endpoint, not the hosted account, whose own document is
+`describeRepo`'s `didDoc` instead. `/.well-known/atproto-did` serves the
 hosted account's DID as bare `text/plain; charset=utf-8`, with no trailing
 newline.
 
@@ -507,9 +507,14 @@ this project. A record write against an unconfigured store is refused with
   `handleIsCorrect` is `true` by that same construction — `makeAccount`
   admitted the DID/handle pair and `resolveHandle` answers from it — not by a
   bidirectional resolution this core cannot perform.
-- **No `didDoc` on `describeRepo`.** The lexicon has the field; this server
-  omits it. The account DID is a `did:key` and there is no DID resolver in the
-  pure core, so any document printed here would be invented.
+- **`describeRepo`'s `didDoc` is synthesized, not resolved.** There is no DID
+  resolver in the pure core, so the document is built from state this server
+  actually holds: `id`/`alsoKnownAs`/`serviceEndpoint` from configuration, and
+  a `#atproto` `Multikey` verification method whose `publicKeyMultibase` is
+  `repoPublicKey`'s — the key that signed the commits this server serves, so a
+  verifier can check a commit signature against it. When `--did` names a
+  `did:plc:` or `did:web:` whose real document lives elsewhere, this one
+  restates the operator's own configuration rather than that document.
 - **No `since` on `sync.getRepo`.** Incremental sync is not implemented, so the
   parameter is REFUSED rather than ignored: answering the whole-repository
   question when a narrower one was asked would return something plausible and

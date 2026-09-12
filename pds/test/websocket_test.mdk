@@ -1,0 +1,434 @@
+{- | Vector-graded tests for `pds/lib/sha1.mdk` and `pds/lib/websocket.mdk`
+   (S-ws-transport, #2608 subscribeRepos inbound surface).
+
+   Every expected value below is EXTERNALLY sourced (G5) and none is captured
+   from this implementation:
+
+   - the SHA-1 digests are RFC 3174 §7.3's four published test vectors,
+     committed byte-for-byte at `pds/test/vectors/rfc3174_sha1.txt` and
+     ledgered in `pds/test/VECTOR-PROVENANCE.txt`;
+   - the handshake key/accept pair is RFC 6455 §1.3's worked example and the
+     frame byte strings are RFC 6455 §5.7's, committed at
+     `pds/test/vectors/rfc6455_handshake_frames.txt`.
+
+   The literals here were read back against those two files. Inputs (the
+   messages hashed, the masking key) need no provenance row of their own;
+   only the expected outputs are graded values.
+
+   The adversarial cases below have no published vector — a rejection is a
+   requirement of RFC 6455 §5.1/§5.2/§5.5, not a byte string anyone
+   publishes — so each names the clause it enforces. -}
+
+import array.{blit, fill, make, setInPlace}
+import hex.{encode}
+import string.{fromUtf8, toUtf8}
+import test.{expectTrue}
+import lib.sha1.{sha1, sha1FixedBytes}
+import lib.websocket.{
+  AssembleEvent(..),
+  DecodeResult(..),
+  Direction(..),
+  Frame(..),
+  Opcode(..),
+  assembleFrame,
+  closeFrame,
+  decodeFrame,
+  encodeClientFrame,
+  encodeServerFrame,
+  handshakeAccept,
+  parseClosePayload,
+}
+
+-- # Helpers
+
+-- The message of RFC 3174 TEST3/TEST4: `pattern` repeated `n` times, built
+-- as bytes so the huge repeat count never materializes a String.
+repeated : Array Int -> Int -> Array Int
+repeated pattern n =
+  let unit = arrayLength pattern
+  let out = make (unit * n) 0
+  repeatInto out pattern unit 0 n
+  out
+
+repeatInto : Array Int -> Array Int -> Int -> Int -> Int -> Unit
+repeatInto out pattern unit i n =
+  if i >= n then
+    ()
+  else
+    blit pattern 0 out (i * unit) unit
+    repeatInto out pattern unit (i + 1) n
+
+-- A decode that is expected to succeed, reduced to the four things every
+-- assertion below asks about.
+decodedAs : DecodeResult -> Option (Bool, Opcode, Array Int, Int)
+decodedAs (Decoded (Frame fin opcode payload) consumed) =
+  Some (fin, opcode, payload, consumed)
+decodedAs NeedMore = None
+decodedAs (Rejected _ _) = None
+
+rejectedWith : Int -> DecodeResult -> Bool
+rejectedWith code (Rejected c _) = c == code
+rejectedWith _ (Decoded _ _) = False
+rejectedWith _ NeedMore = False
+
+isNeedMore : DecodeResult -> Bool
+isNeedMore NeedMore = True
+isNeedMore (Decoded _ _) = False
+isNeedMore (Rejected _ _) = False
+
+eventRejectedWith : Int -> AssembleEvent -> Bool
+eventRejectedWith code (EventRejected c _) = c == code
+eventRejectedWith _ EventPartial = False
+eventRejectedWith _ (EventMessage _ _) = False
+eventRejectedWith _ (EventControl _) = False
+
+-- The largest payload the decode assertions below will allocate for. Every
+-- "declared length" case is graded against this number, not against the
+-- bytes that happen to be present.
+maxPayload : Int
+maxPayload = 65536
+
+-- # SHA-1 — RFC 3174 §7.3
+
+test "RFC 3174 §7.3 TEST1: \"abc\"" =
+  expectTrue
+    (encode (sha1 (toUtf8 "abc")) == "a9993e364706816aba3e25717850c26c9cd0d89d")
+
+test "RFC 3174 §7.3 TEST2: the 56-byte alphabet string" =
+  expectTrue
+    (encode
+        (sha1
+          (toUtf8 "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"))
+      == "84983e441c3bd26ebaae4aa1f95129e5e54670f1")
+
+-- RFC 3174 TEST3's message: the one byte of "a", a million times. Built by
+-- `make` rather than by `repeated`, whose per-repeat recursion would be a
+-- million frames deep under the tree-walking interpreter.
+millionA : Array Int
+millionA =
+  let a = toUtf8 "a"
+  make 1000000 a[0]
+
+test "RFC 3174 §7.3 TEST3: one million 'a'" =
+  expectTrue
+    (encode (sha1FixedBytes millionA)
+      == "34aa973cd4c4daa4f61eeb2bdbad27316534016f")
+
+test "RFC 3174 §7.3 TEST4: a 64-byte pattern ten times (exact block multiple)" =
+  expectTrue
+    (encode
+        (sha1
+          (repeated
+            (toUtf8
+              "0123456701234567012345670123456701234567012345670123456701234567")
+            10))
+      == "dea356a2cddd90c7a7ecedc5ebb563934f460452")
+
+test "the digest is 20 bytes" =
+  expectTrue (arrayLength (sha1 (toUtf8 "")) == 20)
+
+-- # The opening handshake — RFC 6455 §1.3
+
+test "RFC 6455 §1.3 worked example: the key's accept value, byte for byte" =
+  expectTrue
+    (handshakeAccept "dGhlIHNhbXBsZSBub25jZQ=="
+      == Ok "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+
+test "a Sec-WebSocket-Key that does not decode to 16 bytes is refused (§4.1)" =
+  match handshakeAccept "c2hvcnQ="
+    Ok _ => expectTrue False
+    Err _ => expectTrue True
+
+test "a Sec-WebSocket-Key that is not base64 at all is refused" =
+  match handshakeAccept "not base64!!"
+    Ok _ => expectTrue False
+    Err _ => expectTrue True
+
+-- # Frame encoding — RFC 6455 §5.7
+
+hello : Array Int
+hello = toUtf8 "Hello"
+
+-- The masking key of §5.7's two masked examples.
+sampleMaskKey : Array Int
+sampleMaskKey = [|0x37, 0xfa, 0x21, 0x3d|]
+
+test "§5.7: a single-frame unmasked text message" =
+  expectTrue
+    (encodeServerFrame (Frame True Text hello)
+      == [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|])
+
+test "§5.7: a single-frame masked text message" =
+  expectTrue
+    (encodeClientFrame sampleMaskKey (Frame True Text hello)
+      == [|0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|])
+
+test "§5.7: a fragmented unmasked text message, both frames" =
+  let first = encodeServerFrame (Frame False Text (toUtf8 "Hel"))
+  let second = encodeServerFrame (Frame True Continuation (toUtf8 "lo"))
+  expectTrue
+    (first == [|0x01, 0x03, 0x48, 0x65, 0x6c|]
+      && second == [|0x80, 0x02, 0x6c, 0x6f|])
+
+test "§5.7: an unmasked Ping request and a masked Pong response" =
+  let ping = encodeServerFrame (Frame True Ping hello)
+  let pong = encodeClientFrame sampleMaskKey (Frame True Pong hello)
+  expectTrue
+    (ping == [|0x89, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
+      && pong
+        == [|0x8a, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|])
+
+-- The two extended-length examples state a header and leave the payload
+-- unspecified, so these grade the header and the total length.
+test "§5.7: 256 bytes of binary in one unmasked frame uses the 16-bit length" =
+  let body = make 256 0x61
+  let wire = encodeServerFrame (Frame True Binary body)
+  expectTrue
+    (arrayLength wire == 4 + 256
+      && wire[0] == 0x82
+      && wire[1] == 0x7e
+      && wire[2] == 0x01
+      && wire[3] == 0x00)
+
+test "§5.7: 64KiB of binary in one unmasked frame uses the 64-bit length" =
+  let body = make 65536 0x62
+  let wire = encodeServerFrame (Frame True Binary body)
+  expectTrue
+    (arrayLength wire == 10 + 65536
+      && wire[0] == 0x82
+      && wire[1] == 0x7f
+      && wire[2] == 0x00
+      && wire[3] == 0x00
+      && wire[4] == 0x00
+      && wire[5] == 0x00
+      && wire[6] == 0x00
+      && wire[7] == 0x01
+      && wire[8] == 0x00
+      && wire[9] == 0x00)
+
+-- # Frame decoding — RFC 6455 §5.7's own bytes, read back
+
+maskedHelloWire : Array Int
+maskedHelloWire =
+  [|0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
+
+unmaskedHelloWire : Array Int
+unmaskedHelloWire = [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
+
+test "§5.7's masked text frame decodes to an unmasked \"Hello\"" =
+  match decodedAs (decodeFrame FromClient maxPayload maskedHelloWire 0)
+    None => expectTrue False
+    Some (fin, opcode, payload, consumed) =>
+      expectTrue
+        (fin && opcode == Text && fromUtf8 payload == "Hello" && consumed == 11)
+
+test "§5.7's unmasked text frame decodes on the server-to-client side" =
+  match decodedAs (decodeFrame FromServer maxPayload unmaskedHelloWire 0)
+    None => expectTrue False
+    Some (fin, opcode, payload, consumed) =>
+      expectTrue
+        (fin && opcode == Text && fromUtf8 payload == "Hello" && consumed == 7)
+
+test "a second frame in the same buffer decodes at the reported offset" =
+  let buffer = [|
+    0x89,
+    0x05,
+    0x48,
+    0x65,
+    0x6c,
+    0x6c,
+    0x6f,
+    0x81,
+    0x05,
+    0x48,
+    0x65,
+    0x6c,
+    0x6c,
+    0x6f,
+  |]
+  match decodedAs (decodeFrame FromServer maxPayload buffer 0)
+    None => expectTrue False
+    Some (_, first, _, consumed) =>
+      match decodedAs (decodeFrame FromServer maxPayload buffer consumed)
+        None => expectTrue False
+        Some (_, second, payload, _) =>
+          expectTrue
+            (first == Ping && second == Text && fromUtf8 payload == "Hello")
+
+test "a 16-bit-length frame this module encoded decodes back to its payload" =
+  let body = make 300 0x61
+  let wire = encodeServerFrame (Frame True Binary body)
+  match decodedAs (decodeFrame FromServer maxPayload wire 0)
+    None => expectTrue False
+    Some (fin, opcode, payload, consumed) =>
+      expectTrue
+        (fin
+          && opcode == Binary
+          && payload == body
+          && consumed == arrayLength wire)
+
+-- # Fragmentation — RFC 6455 §5.4
+
+test "§5.7's two fragments reassemble into one \"Hello\" message" =
+  let (afterFirst, firstEvent) =
+    assembleFrame None (Frame False Text (toUtf8 "Hel"))
+  let (afterSecond, secondEvent) =
+    assembleFrame afterFirst (Frame True Continuation (toUtf8 "lo"))
+  match (firstEvent, secondEvent, afterSecond)
+    (EventPartial, EventMessage Text payload, None) =>
+      expectTrue (fromUtf8 payload == "Hello")
+    _ => expectTrue False
+
+test "an unfragmented data frame is delivered without opening an assembly" =
+  match assembleFrame None (Frame True Text hello)
+    (None, EventMessage Text payload) =>
+      expectTrue (fromUtf8 payload == "Hello")
+    _ => expectTrue False
+
+test "a control frame interleaved in a fragmented message leaves it open" =
+  let (afterFirst, _) = assembleFrame None (Frame False Text (toUtf8 "Hel"))
+  let (afterPing, pingEvent) = assembleFrame afterFirst (Frame True Ping [||])
+  let (_, finalEvent) =
+    assembleFrame afterPing (Frame True Continuation (toUtf8 "lo"))
+  match (pingEvent, finalEvent)
+    (EventControl _, EventMessage Text payload) =>
+      expectTrue (fromUtf8 payload == "Hello")
+    _ => expectTrue False
+
+test "a continuation frame with nothing open is refused with 1002 (§5.4)" =
+  let (_, event) = assembleFrame None (Frame True Continuation hello)
+  expectTrue (eventRejectedWith 1002 event)
+
+test "a new data frame while a fragmented message is open is refused (§5.4)" =
+  let (afterFirst, _) = assembleFrame None (Frame False Text (toUtf8 "Hel"))
+  let (_, event) = assembleFrame afterFirst (Frame True Text hello)
+  expectTrue (eventRejectedWith 1002 event)
+
+-- # Adversarial input
+
+test "an unmasked client frame is REFUSED, not read anyway (§5.1)" =
+  expectTrue
+    (rejectedWith 1002 (decodeFrame FromClient maxPayload unmaskedHelloWire 0))
+
+test "a masked server frame is refused (§5.1)" =
+  expectTrue
+    (rejectedWith 1002 (decodeFrame FromServer maxPayload maskedHelloWire 0))
+
+test "a set RSV bit is refused with 1002 (§5.2)" =
+  expectTrue
+    (rejectedWith
+      1002
+      (decodeFrame FromServer maxPayload [|0xc1, 0x01, 0x41|] 0))
+
+test "a reserved opcode is refused with 1002 (§5.2)" =
+  expectTrue
+    (rejectedWith
+      1002
+      (decodeFrame FromServer maxPayload [|0x83, 0x01, 0x41|] 0))
+
+test "a control frame declaring over 125 bytes is refused with 1002 (§5.5)" =
+  expectTrue
+    (rejectedWith
+      1002
+      (decodeFrame FromServer maxPayload [|0x89, 0x7e, 0x01, 0x00|] 0))
+
+test "a fragmented control frame is refused with 1002 (§5.5)" =
+  expectTrue
+    (rejectedWith
+      1002
+      (decodeFrame FromServer maxPayload [|0x09, 0x01, 0x41|] 0))
+
+test "a 64-bit length with the most significant bit set is refused (§5.2)" =
+  let wire = make 10 0x00
+  setInPlace 0 0x82 wire
+  setInPlace 1 0x7f wire
+  setInPlace 2 0x80 wire
+  expectTrue (rejectedWith 1002 (decodeFrame FromServer maxPayload wire 0))
+
+test "a non-minimally encoded length is refused with 1002 (§5.2)" =
+  expectTrue
+    (rejectedWith
+      1002
+      (decodeFrame FromServer maxPayload [|0x82, 0x7e, 0x00, 0x05, 0x41|] 0))
+
+-- The two assertions that matter most: NOTHING is ever allocated to the size
+-- an attacker declared. A terabyte declared in a ten-byte frame is refused
+-- before any allocation, and a length merely larger than the bytes in hand
+-- asks for more bytes rather than allocating for the promise.
+test "a terabyte declared in a 10-byte frame is refused with 1009, not allocated" =
+  let wire = make 10 0x00
+  setInPlace 0 0x82 wire
+  setInPlace 1 0x7f wire
+  setInPlace 3 0x01 wire
+  expectTrue (rejectedWith 1009 (decodeFrame FromServer maxPayload wire 0))
+
+test "a declared length beyond the bytes in hand needs more, never allocates" =
+  expectTrue
+    (isNeedMore
+      (decodeFrame FromServer maxPayload [|0x81, 0x64, 0x48, 0x65, 0x6c|] 0))
+
+test "a truncated two-byte header needs more bytes" =
+  expectTrue (isNeedMore (decodeFrame FromServer maxPayload [|0x81|] 0))
+
+test "a 16-bit length field with only one of its two bytes needs more" =
+  expectTrue
+    (isNeedMore (decodeFrame FromServer maxPayload [|0x82, 0x7e, 0x01|] 0))
+
+-- # The close handshake — RFC 6455 §5.5.1, §7.4
+
+test "a close frame carries its status code big-endian, then the reason" =
+  match closeFrame 1000 "bye"
+    Frame fin opcode payload =>
+      expectTrue
+        (fin && opcode == Close && payload == [|0x03, 0xe8, 0x62, 0x79, 0x65|])
+
+test "a close payload parses back to its code and reason" =
+  match parseClosePayload [|0x03, 0xe8, 0x62, 0x79, 0x65|]
+    Ok (Some (code, reason)) =>
+      expectTrue (code == 1000 && fromUtf8 reason == "bye")
+    _ => expectTrue False
+
+test "an empty close payload is no status, not a zero status (§5.5.1)" =
+  match parseClosePayload [||]
+    Ok None => expectTrue True
+    _ => expectTrue False
+
+test "a one-byte close payload is a violation, not half a code (§5.5.1)" =
+  match parseClosePayload [|0x03|]
+    Err _ => expectTrue True
+    _ => expectTrue False
+
+test "close code 1005 may not appear on the wire (§7.4.1)" =
+  match parseClosePayload [|0x03, 0xed|]
+    Err _ => expectTrue True
+    _ => expectTrue False
+
+test "a private-range close code 4000 is accepted (§7.4.2)" =
+  match parseClosePayload [|0x0f, 0xa0|]
+    Ok (Some (code, _)) => expectTrue (code == 4000)
+    _ => expectTrue False
+
+-- A masked payload is unmasked into a FRESH array; the read buffer a caller
+-- may still be holding must not have been rewritten under it.
+test "decoding does not mutate the caller's read buffer" =
+  let wire = make 11 0x00
+  blit
+    [|0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
+    0
+    wire
+    0
+    11
+  let before = arrayCopy wire
+  let _ = decodeFrame FromClient maxPayload wire 0
+  expectTrue (wire == before)
+
+-- `fill` is imported for this one assertion: a payload built by mutation is
+-- the cheapest way to state "the length form, not the contents, is what is
+-- under test" without a 65536-element literal.
+test "an all-ones 126-byte payload round-trips through the 16-bit length form" =
+  let body = make 126 0
+  fill 0xff body
+  let wire = encodeServerFrame (Frame True Binary body)
+  match decodedAs (decodeFrame FromServer maxPayload wire 0)
+    Some (_, _, payload, _) => expectTrue (payload == body)
+    None => expectTrue False

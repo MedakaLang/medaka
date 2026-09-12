@@ -1,0 +1,38 @@
+RFC 6455 — the protocol's own worked examples, transcribed verbatim from the
+RFC's text: the opening handshake of section 1.3 and the frame examples of
+section 5.7.
+
+SECTION 1.3 — OPENING HANDSHAKE
+
+  Sec-WebSocket-Key:    dGhlIHNhbXBsZSBub25jZQ==
+  Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+
+  The accept value is base64(SHA-1(key ++ "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")),
+  with the key taken as its own base64 CHARACTERS, not decoded first
+  (section 4.2.2, step 5.4). The GUID is quoted from section 1.3.
+
+SECTION 5.7 — FRAME EXAMPLES
+
+  A single-frame unmasked text message (contains "Hello")
+    0x81 0x05 0x48 0x65 0x6c 0x6c 0x6f
+
+  A single-frame masked text message (contains "Hello")
+    0x81 0x85 0x37 0xfa 0x21 0x3d 0x7f 0x9f 0x4d 0x51 0x58
+
+  A fragmented unmasked text message (contains "Hel" then "lo")
+    0x01 0x03 0x48 0x65 0x6c
+    0x80 0x02 0x6c 0x6f
+
+  Unmasked Ping request (body "Hello") and masked Pong response
+    0x89 0x05 0x48 0x65 0x6c 0x6c 0x6f
+    0x8a 0x85 0x37 0xfa 0x21 0x3d 0x7f 0x9f 0x4d 0x51 0x58
+
+  256 bytes binary message in a single unmasked frame
+    0x82 0x7E 0x0100 [256 bytes of binary data]
+
+  64KiB binary message in a single unmasked frame
+    0x82 0x7F 0x0000000000010000 [65536 bytes of binary data]
+
+The two length-form examples state only the header; the RFC leaves the payload
+bytes unspecified ("[256 bytes of binary data]"), so a consumer grades the
+HEADER against these and chooses its own payload.
