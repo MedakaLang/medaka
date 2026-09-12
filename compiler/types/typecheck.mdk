@@ -2875,8 +2875,9 @@ data SiteKind =
   -- (binop vs unop is carried by WHICH list holds it / the resolveOpSites flag, not here.)
   | SKOp Bool
   -- arithmetic operator site whose fixed prelude Num predicate is known at the
-  -- producer.  The Bool retains the impl-body provenance carried by SKOp; the
-  -- predicate supplies the declaration identity and complete dispatch vector.
+  -- producer.  The Bool retains SKOp's producer provenance for the shared carrier;
+  -- exact-predicate routing does not consult it.  The predicate supplies the
+  -- declaration identity and complete dispatch vector.
   | SKPredicateOp Bool ClassPredicate
   -- standalone-shadow RLocal site: mangled standalone symbol, forceLocal (P0-20),
   -- and the shadowing standalone's own `=>`-constraint dict monos + iface names
@@ -14680,9 +14681,10 @@ recordBinopSite op dref m = match binopMethod op
   None => ()
 
 -- The four Num-dispatched arithmetic operators produce exactly one predicate-aware
--- operator goal when the prelude Num declaration is present.  `%` and no-prelude
--- arithmetic retain the scalar deferred stamp, while non-arithmetic operators use
--- the legacy comparison/append recorder.
+-- ROUTE goal and destination when the prelude Num declaration is present (the
+-- separate UObligation remains the checker evidence).  `%` and no-prelude arithmetic
+-- retain the scalar deferred stamp, while non-arithmetic operators use the legacy
+-- comparison/append recorder.
 isArithBinop : String -> Bool
 -- Intentional cross-file duplicate of the same helper in wasm_emit.mdk; not consolidating (tiny helper / divergent-by-design backend pair).
 -- lint-disable-next-line rule-duplicate-body
@@ -22727,7 +22729,8 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
     match ieSelectRowByIface env predicate.predicateInterface goals
       Some (row@(ImplRow _ _ selectedIface _ _ _)) =>
         let reqs = implDictRoutesForRow encl useScope operandMono goals row
-        let route = RKey (methodRouteKeyForRow method env row) reqs
+        let key = methodRouteKeyForRow method env row
+        let route = RKey key reqs
         let _ =
           noteNumericPredicateTrace
             NPTArithmetic
@@ -22735,7 +22738,7 @@ stampPredicateOpRouteVal encl useScope method operandMono tag predicate =
             useScope
             !goalSiteLoc
             (Some selectedIface)
-            (Some route)
+            (Some (RKey key []))
             reqs
         route
       None =>
@@ -31713,12 +31716,12 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
   -- differential was the only thing in the tree that caught it.
   let occs = uOblArgs o
   let loc = o.loc
-  let _ = noteNumericObligationChecked o
+  let _ = noteNumericObligationChecked o occs
   let _ = checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
   checkCallObligationsU deferNonGround univ rest
 
-noteNumericObligationChecked : UObligation -> Unit
-noteNumericObligationChecked o =
+noteNumericObligationChecked : UObligation -> List Mono -> Unit
+noteNumericObligationChecked o occs =
   if not numericPredicateTraceEnabled.value then
     ()
   else match (o.prov, o.oblProj)
@@ -31737,7 +31740,7 @@ noteNumericObligationChecked o =
     (POperator, _) =>
       let predicate = ClassPredicate {
         predicateInterface = o.pred.iface,
-        predicateArguments = o.pred.args,
+        predicateArguments = occs,
       }
       if sameIfaceDecl predicate.predicateInterface (builtinIfaceRef BNum) then
         noteNumericPredicateTrace
