@@ -1,5 +1,5 @@
 # META
-source_lines=15098
+source_lines=15058
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -7493,54 +7493,21 @@ emitMethodArgDispatch e method siteArity argOps =
 
 -- #1075: the route decision reads BOTH the emittable inheriting heads and the RAW
 -- ones, because "no arm can be emitted for this head" is NOT the same answer as "no
--- head inherits the default", and collapsing the two re-created #1046 exactly.
+-- head inherits the default".
 --
 -- [emittable] is [raw] filtered by `argDefaultEmittableAt`.  A primitive head (`Int`)
 -- that inherits the default owns no runtime constructors, so it is dropped from
--- [emittable] and cannot carry a selected-arity default arm.  Before this fix
--- the empty [emittable] alone selected the pre-#1046 branch, whose single-group arm is
--- an UNCONDITIONAL direct call with no tag test — so an `Int` receiver silently ran the
--- one impl that happens to define the method, exit 0, at every opt level.  Measured:
--- `meow|meow` where `medaka run` and the semantics both say `woof|meow`.
+-- [emittable] and cannot carry a selected-arity default arm.  The presence of any
+-- raw inheriting head still requires the tag-tested chain: an untestable head must
+-- reach `@mdk_dispatch_no_impl`, rather than turn the one emittable group into an
+-- unconditional call.  Dispatching primitive receivers requires primitive arg-tag
+-- discrimination, which remains #1075.
 --
--- The correction is to keep the tag-tested CHAIN whenever any head inherits, even when
--- none of the inheriting heads can be given an arm.  The chain still tests only the
--- heads it can test; the untestable ones reach the terminal `@mdk_dispatch_no_impl`
--- trap, which is loud.  That is the property `argDefaultEmittableAt`'s own comment already
--- claimed and did not have: a dropped head falls to the trap, it does not fold back into
--- a silent direct call.  Dispatching an `Int` receiver CORRECTLY needs primitive-typed
--- arg-tag discrimination, which is a separate change (#1075 stays open for it).
---
--- Byte-identity: [raw] is empty for every method whose every declared impl defines it,
--- so those sites take the same branch as before.  With [raw] non-empty and [emittable]
--- empty at >=2 groups, `emitArgTagDispatchWith … []` emits exactly what
--- `emitArgTagDispatch` did.  Only the single-group case changes shape.
--- #2445: THE UNDECIDABLE-BY-CONSTRUCTION TRAP.  Every arm of the arg-tag chain
--- below tests the receiver cell's CONSTRUCTOR tag (`emitTagMatch`/`ctorsOfType`), and
--- a group's tag is its impl's HEAD tycon -- so two declared impls of one interface at
--- the SAME head (`impl Wrap (Pair Int)` and `impl Wrap (Pair String)`) mint two arms
--- whose `icmp eq` compares against the IDENTICAL constant.  The second arm is dead
--- code and the first one wins every receiver, at exit 0, with no diagnostic: measured
--- `1|1` where the semantics and `medaka run` both say `1|2`.
---
--- This USED to be a `gapE` refusal of the whole `medaka build`, keyed on the
--- DECLARATION facts at the route's single entry.  That shape cannot be scoped, and the
--- measurement is in the sprint's F-1 report: for a live dynamic collision and for
--- a program that declares the colliding impls but never
--- CONSTRUCTS a receiver at that head, the emitter's static candidate set at this seam
--- is IDENTICAL in shape -- a duplicate `Pair`-tagged arm in the chain it is about to
--- emit.  The two differ only in which receivers the program builds at RUN TIME, a
--- whole-program receiver-reachability fact the emitter does not have.  So any static
--- test that refuses the true positive also refuses the correct unreachable-collision
--- program, and any test that admits the latter re-admits the S0.
---
--- The loudness is therefore RETIMED, not scoped: emit the chain as normal, but for the
--- specific arm(s) whose head tag is shared by two or more declared impls, emit
--- `@mdk_dispatch_ambiguous` instead of the impl call.  That scopes the guard by ACTUAL
--- receiver, exactly the way the interpreter's `checkArgTagDecidable` already is (which
--- is why eval never had this false positive -- only the build-time-refusal design did).
--- Both engines stay loud on an undecidable cell; only the PHASE moves, and moving it is
--- what stops an unreachable collision being collateral damage.
+-- #2445: every chain arm tests the receiver's constructor tag.  Two declared impls
+-- at the same head therefore create indistinguishable tests, so the guard is emitted
+-- inside the colliding arm as `@mdk_dispatch_ambiguous`.  This keeps declarations at
+-- an unreachable colliding head from rejecting the whole program while making an
+-- actually received ambiguous value loud.
 --
 -- The site's head multiset is `groups` (each already a HEAD tag) plus the inheriting
 -- declared impls `raw` -- and `raw` carries ROUTE WORDS, which at a collision are
@@ -7558,13 +7525,6 @@ emitMethodArgDispatch e method siteArity argOps =
 -- EMPTY, so a driver that never lowered through `lowerImpls` sees only the group heads
 -- and degrades toward today's silent output rather than trapping.  The guard is a floor
 -- on the installed path, not a proof.
---
--- Byte-identity: every interface in the tree today whose method reaches an arg-tag site
--- has at most one declared impl per head (the one live witness,
--- `test/dict_fixtures/i7-flatten-arm-fresh-universe.mdk`, chains prelude `fold` over
--- List/Option/Result), so the colliding-head list is EMPTY at every such site and every
--- arm emits the unchanged call below.  The only tree-wide IR change is the preamble's
--- one extra `declare` line.
 argTagCollidingHeads : Emit ->
   String ->
   Int ->

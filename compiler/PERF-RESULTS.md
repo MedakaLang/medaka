@@ -1487,3 +1487,10 @@ The repaired output fits the existing 2,450,000-byte ceiling without changing it
 The 15 numeric literal/arithmetic engine fixtures also retain identical pinned
 results across eval, native and Wasm. The index is fresh for each emission; it
 does not introduce a cache across programs.
+
+The expanded corpus at `9787d6b24` adds two executable self-tail and foreign-key
+regressions. All 46 module fixtures emit, assemble, validate and run; the size
+gate reports 2,330,014 bytes and 3,071 functions, within the unchanged ceiling.
+Its other arms also remain complete: 157 plain fixtures (366,491 bytes) and nine
+typed fixtures (17,459 bytes). The typed producer supplies declaration metadata
+to the selected-arity consumer, preserving all nine executable cases.
