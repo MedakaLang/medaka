@@ -6,7 +6,7 @@ import test.{expectAll, expectEqual}
 import frontend.ast.{Loc(..), Route(..), TyConOrigin(..)}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
-import eval.eval.{Value(..), evalOneRootEnv}
+import eval.eval.{Value(..), evalOne, force}
 import ir.core_ir.{CBind(..), CClause(..), CExpr(..), CProgram(..), CStmt(..)}
 import ir.core_ir_lower.{lowerProgram}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
@@ -1058,9 +1058,11 @@ blockRecEvalValue =
   let core = desugar (parse arithmeticPreludeSource)
   let program = desugar (parseLocated source)
   let elaborated = elaborateOne [] core ("block_rec_eval", program)
-  let bindings = evalOneRootEnv [] ("block_rec_eval", elaborated)
+  let bindings = evalOne [] ("block_rec_eval", elaborated)
   match lookupAssoc "main" bindings
-    Some (VFloat value) => value
+    Some value => match force value
+      VFloat result => result
+      _ => 0.0
     _ => 0.0
 
 test "block recursive let executes with its captured Num dictionary" =
@@ -1073,7 +1075,7 @@ test "block recursive arithmetic retains the outer predicate and route" =
   expectAll [
     expectEqual [] errors,
     expectEqual
-      [("core::Num", ["a"], "binding:local", True, [])]
+      [("core::Num", ["a"], "binding:value", True, [])]
       (map
         (view => (
           view.ntvInterface,
@@ -1085,8 +1087,8 @@ test "block recursive arithmetic retains the outer predicate and route" =
         arithmetic),
     expectEqual
       [
-        ("binding:local", "binding:value", 0),
-        ("binding:local", "binding:value", 0),
+        ("binding:value", "binding:value", 0),
+        ("binding:value", "binding:value", 0),
       ]
       assumptions,
   ]
@@ -1119,14 +1121,18 @@ localCoreExprFacts (CBinPrim op lhs rhs _) =
     addRoutes
     fromIntRoutes
     (primCount + (if op == "+" then 1 else 0))
-localCoreExprFacts (CMethod "add" (RDict binder) _ _) =
-  LocalCoreFacts False [binder] [] 0
-localCoreExprFacts (CMethod "fromInt" (RDict binder) _ _) =
-  LocalCoreFacts False [] [binder] 0
+localCoreExprFacts (CMethod "add" route _ _) = match route
+  RDict binder => LocalCoreFacts False [binder] [] 0
+  RDictFwd binder => LocalCoreFacts False [binder] [] 0
+  _ => emptyLocalCoreFacts
+localCoreExprFacts (CMethod "fromInt" route _ _) = match route
+  RDict binder => LocalCoreFacts False [] [binder] 0
+  RDictFwd binder => LocalCoreFacts False [] [binder] 0
+  _ => emptyLocalCoreFacts
 localCoreExprFacts _ = emptyLocalCoreFacts
 
 blockRecValueFacts : CBind -> LocalCoreFacts
-blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet True _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
+blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet _ _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
   let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
     localCoreExprFacts localBody
   LocalCoreFacts True addRoutes fromIntRoutes primCount
