@@ -4,7 +4,7 @@
 -- phantom type guarantee is real: comparing an `Expr Int` column to an
 -- `Expr String` literal (`eEq (eColInt "age") (eLitT "x")`) must fail
 -- unification (`Int` vs `String`), and `eAnd` on a non-`Bool` operand must
--- fail too.  See test/select_oracle.sh / the doctests for the POSITIVE side.
+-- fail too.  See sqlite/test/oracle_test.mdk / the doctests for the POSITIVE side.
 --
 -- Run:  medaka check sqlite/test/select_typeerror.mdk   => expect FAILURE.
 --

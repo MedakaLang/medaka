@@ -1,0 +1,618 @@
+{- | The READ-path differential oracles for the Medaka SQLite library, as one
+   native runner, migrated from ten `sqlite/test/*_oracle.sh` scripts under
+   #2592 / #2593.
+
+   Each row builds a demo from `sqlite/`, seeds a database with the REAL
+   `sqlite3` CLI, runs the demo against it, and compares the demo's output
+   against the answer `sqlite3` itself gives to the equivalent SQL — asked at
+   run time, never read back from committed bytes. That live question is the
+   whole point of an oracle gate: a row that could be satisfied from the tree
+   alone would still pass if both the library and its golden were wrong
+   together.
+
+   Two rows (`oracle`, `multipage`) ALSO diff the demo against a committed
+   golden, exactly as their scripts did. Those are separate assertions from
+   the live-oracle ones and neither stands in for the other. Nothing here ever
+   writes a golden; the retired scripts' `--capture` mode has no successor,
+   and re-blessing is `test/capture_goldens.sh`'s job, not a test's.
+
+   The rows retired here are the READ group: `oracle`, `multipage_oracle`,
+   `select_oracle`, `groupby_oracle`, `aggregate_oracle`, `projection_oracle`,
+   `join_oracle`, `left_join_oracle`, `distinct_oracle`, `typed_oracle`. The
+   demos they drive (`sqlite/*_demo.mdk`, `sqlite/main.mdk`) are INPUTS and are
+   untouched.
+
+   Run: `medaka gate run sqlite/test/oracle`. -}
+
+import io.{getEnvOr, runVerb}
+import list.{lookup}
+import string.{join, trim, unwords}
+import test.{Expectation(..)}
+import test.oracle_support.{
+  OracleRow(..),
+  Piece(..),
+  Seed(..),
+  Step(..),
+  expectLines,
+  flatLines,
+  outLines,
+  typedUserLine,
+}
+import test_process.{
+  boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
+}
+
+-- # Spawning
+
+-- A `medaka build` of a demo compiles and links a native binary, so its
+-- ceiling is minutes; a `sqlite3` query and a built demo's own run are
+-- bounded far below it, and get a ceiling that still names a hang as a
+-- failure of the row rather than of the job.
+buildTimeoutSeconds : Int
+buildTimeoutSeconds = 600
+
+queryTimeoutSeconds : Int
+queryTimeoutSeconds = 120
+
+emitterBin : <IO> String
+emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
+
+-- `MEDAKA_ROOT` and `MEDAKA_EMITTER` named explicitly, as the retired scripts
+-- exported them: a gate shard does not export either, and a `medaka build`
+-- left to find its own emitter is one refactor away from being graded on a
+-- verb that silently did nothing.
+spawnEnv : <IO> List String
+spawnEnv = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{emitterBin}"]
+
+{- | `cmd` run with `args` under a `secs` ceiling, its stdout on exit 0, and a
+   named failure otherwise.
+
+   Every spawn in this file goes through here, so a missing toolchain has ONE
+   wording on every row — `spawn failed: <cmd> not found on PATH` — and is a
+   failure rather than a skip: the registry declares `toolchain = ["sqlite3"]`
+   and there is no skip marker to reach for (#2599 item 8).
+
+   `env` carries the two variables, and carries them for a second reason:
+   `boundedVerbSeconds` execs through `perl`, whose failed `exec` RETURNS
+   instead of exiting, so a missing `cmd` spawned through it directly reports
+   exit 0 with no output — indistinguishable from a program that ran and
+   printed nothing. `env` is always present, so the 127 that comes back is the
+   host's own. -}
+spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
+spawnOut secs cmd args =
+  let line = unwords (cmd :: args)
+  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
+    Err e => Err "spawn failed: could not start `\{line}`: \{e}"
+    Ok (127, _, err) =>
+      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
+    Ok (0, out, _) => Ok out
+    Ok (code, out, err) =>
+      Err "`\{line}` exited \{intToString code}: \{debug (out ++ err)}"
+
+-- # Running one row
+
+-- One row's two line lists, ready to compare.
+data RowOutput = RowOutput { actual : List String, expected : List String }
+
+seedSql : Seed -> <FileRead "_", IO> Result String String
+seedSql (SeedSql sql) = Ok sql
+seedSql (SeedFile rel) = match readFile (underRoot rel)
+  Err e => Err "could not read \{rel}: \{e}"
+  Ok text => Ok text
+
+seedDb : String -> List Seed -> <Exec "_", FileRead "_", IO> Result String Unit
+seedDb _ [] = Ok ()
+seedDb db (s :: rest) = match seedSql s
+  Err e => Err e
+  Ok sql => match spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
+    Err e => Err e
+    Ok _ => seedDb db rest
+
+buildDemo : OracleRow -> String -> <Exec "_", IO> Result String Unit
+buildDemo row bin =
+  let args = ["build"] ++ row.buildFlags ++ [underRoot row.entry, "-o", bin]
+  map (_ => ()) (spawnOut buildTimeoutSeconds medakaBin args)
+
+pieceLines : String ->
+  String ->
+  Piece ->
+  <Exec "_", IO> Result String (List String)
+pieceLines _ _ (PLine l) = Ok [l]
+pieceLines bin db (PRun extra) =
+  map outLines (spawnOut queryTimeoutSeconds bin (db :: extra))
+
+sqlite3Rows : String -> List String -> <Exec "_", IO> Result String String
+sqlite3Rows db args = spawnOut queryTimeoutSeconds "sqlite3" (db :: args)
+
+stepLines : String -> Step -> <Exec "_", IO> Result String (List String)
+stepLines _ (Line l) = Ok [l]
+stepLines db (Rows sql) = map outLines (sqlite3Rows db [sql])
+stepLines db (NullRows sql) =
+  map outLines (sqlite3Rows db ["-cmd", ".nullvalue NULL", sql])
+stepLines db (TypedRows sql) =
+  map (out => map typedUserLine (outLines out)) (sqlite3Rows db [sql])
+
+rowOutput : OracleRow ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String RowOutput
+rowOutput row db bin = match seedDb db row.seed
+  Err e => Err "\{row.name}: seeding the database: \{e}"
+  Ok _ => match buildDemo row bin
+    Err e => Err "\{row.name}: building \{row.entry}: \{e}"
+    Ok _ => match traverse (pieceLines bin db) row.pieces
+      Err e => Err "\{row.name}: running the demo: \{e}"
+      Ok got => match traverse (stepLines db) row.expect
+        Err e => Err "\{row.name}: asking sqlite3 for the expected rows: \{e}"
+        Ok want =>
+          Ok RowOutput { actual = flatLines got, expected = flatLines want }
+
+{- | Where one row's database and built demo live: a path PREFIX unique to the
+   row, inside this process's scratch directory.
+
+   `test_process.scratchDir` is a nullary binding, so it is memoized: every
+   caller in one process gets the SAME directory, not a fresh one per call.
+   Rows are therefore separated by file name and each removes only its own two
+   files — a row that removed the directory would delete the next row's
+   workspace out from under it. Concurrency across gate runs is still covered,
+   since the directory itself is a per-process `mktemp -d`. -}
+rowPrefix : OracleRow -> <Exec "_"> Result String String
+rowPrefix row = match scratchDir
+  Err e => Err "\{row.name}: \{e}"
+  Ok dir => Ok "\{dir}/\{row.name}"
+
+runRow : OracleRow -> <Exec "_", FileRead "_", IO> Result String RowOutput
+runRow row = match rowPrefix row
+  Err e => Err e
+  Ok prefix => runRowIn row prefix
+
+runRowIn : OracleRow ->
+  String ->
+  <Exec "_", FileRead "_", IO> Result String RowOutput
+runRowIn row prefix =
+  let out = rowOutput row "\{prefix}.db" "\{prefix}.demo"
+  let _ = runVerb "rm" ["-rf", "\{prefix}.db", "\{prefix}.demo"]
+  out
+
+-- # The rows
+
+-- Every row's database is seeded by the real `sqlite3` CLI from the same SQL
+-- its retired script used, so the fixture under test is the engine's own file
+-- format rather than anything this tree wrote.
+rows : List OracleRow
+rows = [
+  oracleRow,
+  multipageRow,
+  selectRow,
+  groupbyRow,
+  aggregateRow,
+  projectionRow,
+  joinRow,
+  leftJoinRow,
+  distinctRow,
+  typedRow,
+]
+
+-- `sqlite/test/oracle.sh`: schema + four whole tables, through the reader's
+-- `<db>` and `<db> <table>` forms, against both sqlite3 and `basic.golden`.
+oracleRow : OracleRow
+oracleRow = OracleRow {
+  name = "oracle",
+  entry = "sqlite/main.mdk",
+  buildFlags = [],
+  seed = [SeedFile "sqlite/test/basic.sql"],
+  pieces = [
+    PLine "# schema",
+    PRun [],
+    PLine "# table users",
+    PRun ["users"],
+    PLine "# table items",
+    PRun ["items"],
+    PLine "# table notes",
+    PRun ["notes"],
+    PLine "# table prices",
+    PRun ["prices"],
+  ],
+  expect = [
+    Line "# schema",
+    Rows "SELECT type, name, rootpage FROM sqlite_master",
+    Line "# table users",
+    Rows "SELECT * FROM users",
+    Line "# table items",
+    Rows "SELECT * FROM items",
+    Line "# table notes",
+    Rows "SELECT * FROM notes",
+    Line "# table prices",
+    Rows "SELECT * FROM prices",
+  ],
+  golden = Some "sqlite/test/basic.golden",
+}
+
+-- `sqlite/test/multipage_oracle.sh`: 2000 rows, which is what pushes the
+-- table's root page from a leaf to an INTERIOR page and so exercises multi-page
+-- B-tree traversal. The script generated these rows with python3 and asserted
+-- the page type only as a printed warning; the page type is a real assertion
+-- below, since it is this row's whole premise.
+multipageRow : OracleRow
+multipageRow = OracleRow {
+  name = "multipage",
+  entry = "sqlite/main.mdk",
+  buildFlags = [],
+  seed = [SeedSql multipageSchema, SeedSql multipageInsert],
+  pieces = [PRun ["t"]],
+  expect = [Rows "SELECT * FROM t"],
+  golden = Some "sqlite/test/multipage.golden",
+}
+
+multipageSchema : String
+multipageSchema = "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT);"
+
+multipageInsert : String
+multipageInsert =
+  "INSERT INTO t VALUES \{join ", " (map multipageValues [1..=2000])};"
+
+multipageValues : Int -> String
+multipageValues i = "(\{intToString i}, 'item_\{intToString i}')"
+
+-- `sqlite/test/select_oracle.sh`: the typed ADT query executor — comparison,
+-- AND/OR, IS NULL, LIMIT/OFFSET, ORDER BY, and WHERE-arithmetic.
+selectRow : OracleRow
+selectRow = OracleRow {
+  name = "select",
+  entry = "sqlite/select_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER); INSERT INTO users VALUES (1,'Alice',30),(2,'Bob',NULL),(3,'Carol',25),(4,'Dave',40),(5,'Eve',22),(6,'Frank',30);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- age > 25 --",
+    Rows "SELECT id,name,age FROM users WHERE age > 25 ORDER BY rowid;",
+    Line "-- age > 20 AND age < 40 --",
+    Rows
+      "SELECT id,name,age FROM users WHERE age > 20 AND age < 40 ORDER BY rowid;",
+    Line "-- name = Bob OR age = 40 --",
+    Rows
+      "SELECT id,name,age FROM users WHERE name='Bob' OR age = 40 ORDER BY rowid;",
+    Line "-- age IS NULL --",
+    Rows "SELECT id,name,age FROM users WHERE age IS NULL ORDER BY rowid;",
+    Line "-- age IS NOT NULL --",
+    Rows "SELECT id,name,age FROM users WHERE age IS NOT NULL ORDER BY rowid;",
+    Line "-- limit 2 --",
+    Rows "SELECT id,name,age FROM users ORDER BY rowid LIMIT 2;",
+    Line "-- limit 2 offset 1 --",
+    Rows "SELECT id,name,age FROM users ORDER BY rowid LIMIT 2 OFFSET 1;",
+    Line "-- age > 25 limit 1 --",
+    Rows "SELECT id,name,age FROM users WHERE age > 25 ORDER BY rowid LIMIT 1;",
+    Line "-- order by age asc --",
+    Rows "SELECT id,name,age FROM users ORDER BY age ASC;",
+    Line "-- order by age desc --",
+    Rows "SELECT id,name,age FROM users ORDER BY age DESC;",
+    Line "-- order by name asc --",
+    Rows "SELECT id,name,age FROM users ORDER BY name ASC;",
+    Line "-- order by age asc limit 2 offset 1 --",
+    Rows "SELECT id,name,age FROM users ORDER BY age ASC LIMIT 2 OFFSET 1;",
+    Line "-- order by age asc, name desc --",
+    Rows "SELECT id,name,age FROM users ORDER BY age ASC, name DESC;",
+    Line "-- age + 5 > 30 --",
+    Rows "SELECT id,name,age FROM users WHERE age + 5 > 30 ORDER BY rowid;",
+    Line "-- age * 2 >= 60 --",
+    Rows "SELECT id,name,age FROM users WHERE age * 2 >= 60 ORDER BY rowid;",
+    Line "-- age % 10 = 0 --",
+    Rows "SELECT id,name,age FROM users WHERE age % 10 = 0 ORDER BY rowid;",
+    Line "-- age / 10 = 2 --",
+    Rows "SELECT id,name,age FROM users WHERE age / 10 = 2 ORDER BY rowid;",
+  ],
+  golden = None,
+}
+
+-- `sqlite/test/groupby_oracle.sh`: the unified engine's GROUP BY / aggregate
+-- path. The last block is a label pair rather than a query: sqlite ACCEPTS a
+-- non-aggregate projection outside the GROUP BY and picks an arbitrary row,
+-- and Medaka deliberately disagrees, so that one is asserted, not diffed.
+groupbyRow : OracleRow
+groupbyRow = OracleRow {
+  name = "groupby",
+  entry = "sqlite/groupby_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT); CREATE TABLE orders (id INTEGER PRIMARY KEY, uid INTEGER, amount INTEGER, qty INTEGER); INSERT INTO users VALUES (1,'ada'),(2,'bob'),(3,'cyd'),(4,'dee'); INSERT INTO orders VALUES (1,1,100,2),(2,1,200,3),(3,1,300,4),(4,2,150,1),(5,2,250,3),(6,3,75,5),(7,3,NULL,2);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- join+group name: count* sum(amount) --",
+    Rows
+      "SELECT users.name,count(*),sum(orders.amount) FROM users INNER JOIN orders ON users.id = orders.uid GROUP BY users.name ORDER BY users.name ASC;",
+    Line "-- join+group name: order by count* desc, name asc limit 2 --",
+    Rows
+      "SELECT users.name,count(*) FROM users INNER JOIN orders ON users.id = orders.uid GROUP BY users.name ORDER BY count(*) DESC, users.name ASC LIMIT 2;",
+    Line "-- orders: amount, qty, amount*qty order by amount*qty desc --",
+    Rows "SELECT amount,qty,amount*qty FROM orders ORDER BY amount*qty DESC;",
+    Line
+      "-- join+group name: having count*>1 order by sum(amount) asc limit 1 --",
+    Rows
+      "SELECT users.name,count(*),sum(orders.amount) FROM users INNER JOIN orders ON users.id = orders.uid GROUP BY users.name HAVING count(*)>1 ORDER BY sum(orders.amount) ASC LIMIT 1;",
+    Line "-- group uid: min max avg sum(amount) --",
+    Rows
+      "SELECT uid,min(amount),max(amount),avg(amount),sum(amount) FROM orders GROUP BY uid ORDER BY uid ASC;",
+    Line "-- reject: non-aggregate column not in GROUP BY --",
+    Line
+      "query error: column 'orders.amount' must appear in the GROUP BY clause or be used in an aggregate function",
+  ],
+  golden = None,
+}
+
+-- `sqlite/test/aggregate_oracle.sh`: the aggregate executor. The last block is
+-- a label alone: a GROUP BY over an empty filtered set yields zero rows.
+aggregateRow : OracleRow
+aggregateRow = OracleRow {
+  name = "aggregate",
+  entry = "sqlite/aggregate_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE emp (id INTEGER PRIMARY KEY, dept TEXT, salary INTEGER, bonus REAL); INSERT INTO emp VALUES (1,'eng',100,1.5),(2,'eng',250,NULL),(3,'sales',100,2.5),(4,'sales',NULL,3.0),(5,'sales',200,NULL),(6,'hr',NULL,NULL);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- whole: count* count(sal) sum avg min max --",
+    Rows
+      "SELECT count(*),count(salary),sum(salary),avg(salary),min(salary),max(salary) FROM emp;",
+    Line "-- group dept: count* sum(sal) --",
+    Rows
+      "SELECT dept,count(*),sum(salary) FROM emp GROUP BY dept ORDER BY dept;",
+    Line "-- group dept: avg(sal) --",
+    Rows "SELECT dept,avg(salary) FROM emp GROUP BY dept ORDER BY dept;",
+    Line "-- group dept having count* > 1 --",
+    Rows
+      "SELECT dept,count(*) FROM emp GROUP BY dept HAVING count(*)>1 ORDER BY dept;",
+    Line "-- group dept,salary: count* --",
+    Rows
+      "SELECT dept,salary,count(*) FROM emp GROUP BY dept,salary ORDER BY dept,salary;",
+    Line "-- group dept: sum(bonus) [real] --",
+    Rows "SELECT dept,sum(bonus) FROM emp GROUP BY dept ORDER BY dept;",
+    Line "-- group dept: min(sal) max(sal) --",
+    Rows
+      "SELECT dept,min(salary),max(salary) FROM emp GROUP BY dept ORDER BY dept;",
+    Line "-- where dept=sales, group dept: count* sum --",
+    Rows
+      "SELECT dept,count(*),sum(salary) FROM emp WHERE dept='sales' GROUP BY dept ORDER BY dept;",
+    Line "-- where none, whole: count* sum(sal) --",
+    Rows "SELECT count(*),sum(salary) FROM emp WHERE dept='zzz';",
+    Line "-- where none, group dept: count* (no rows) --",
+  ],
+  golden = None,
+}
+
+-- `sqlite/test/projection_oracle.sh`: computed SELECT columns.
+projectionRow : OracleRow
+projectionRow = OracleRow {
+  name = "projection",
+  entry = "sqlite/projection_demo.mdk",
+  buildFlags = ["--allow-internal"],
+  seed = [
+    SeedSql
+      "CREATE TABLE nums(id INTEGER PRIMARY KEY, a INTEGER, b INTEGER, name TEXT); INSERT INTO nums VALUES (1,10,5,'Carol'),(2,3,7,'Alice'),(3,20,0,'Bob'),(4,1,1,'Dave'); CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users VALUES (1,'Alice'),(2,'Bob'); CREATE TABLE orders(oid INTEGER PRIMARY KEY, uid INTEGER, total INTEGER); INSERT INTO orders VALUES (1,1,100),(2,2,50),(3,1,25);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- SELECT a+b, name ORDER BY name --",
+    Rows "SELECT a+b, name FROM nums ORDER BY name;",
+    Line "-- SELECT name, id ORDER BY id --",
+    Rows "SELECT name, id FROM nums ORDER BY id;",
+    Line "-- SELECT users.name, orders.total+10 JOIN ORDER BY orders.total --",
+    Rows
+      "SELECT users.name, orders.total+10 FROM users JOIN orders ON users.id=orders.uid ORDER BY orders.total;",
+    Line "-- SELECT DISTINCT a*0 --",
+    Rows "SELECT DISTINCT a*0 FROM nums;",
+  ],
+  golden = None,
+}
+
+-- `sqlite/test/join_oracle.sh`: 2-table and 3-table INNER equi-joins.
+joinRow : OracleRow
+joinRow = OracleRow {
+  name = "join",
+  entry = "sqlite/join_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users VALUES (1,'Alice'),(2,'Bob'),(3,'Carol'); CREATE TABLE orders(oid INTEGER PRIMARY KEY, uid INTEGER, amount INTEGER); INSERT INTO orders VALUES (10,1,100),(11,1,250),(12,2,175),(13,3,50),(14,99,999); CREATE TABLE ta(aid INTEGER PRIMARY KEY, av INTEGER); INSERT INTO ta VALUES (1,111),(2,222); CREATE TABLE tb(bid INTEGER PRIMARY KEY, aref INTEGER); INSERT INTO tb VALUES (100,1),(101,2),(102,1); CREATE TABLE tc(cid INTEGER PRIMARY KEY, bref INTEGER); INSERT INTO tc VALUES (1000,100),(1001,102),(1002,101),(1003,999);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- join users/orders --",
+    Rows
+      "SELECT users.id,users.name,orders.oid,orders.uid,orders.amount FROM users INNER JOIN orders ON users.id=orders.uid ORDER BY orders.oid ASC;",
+    Line "-- join users/orders where amount>100 --",
+    Rows
+      "SELECT users.id,users.name,orders.oid,orders.uid,orders.amount FROM users INNER JOIN orders ON users.id=orders.uid WHERE orders.amount>100 ORDER BY orders.amount ASC;",
+    Line "-- join users/orders where users.id=1 --",
+    Rows
+      "SELECT users.id,users.name,orders.oid,orders.uid,orders.amount FROM users INNER JOIN orders ON users.id=orders.uid WHERE users.id=1 ORDER BY orders.amount DESC;",
+    Line "-- join ta/tb/tc --",
+    Rows
+      "SELECT ta.aid,ta.av,tb.bid,tb.aref,tc.cid,tc.bref FROM ta INNER JOIN tb ON ta.aid=tb.aref INNER JOIN tc ON tb.bid=tc.bref ORDER BY tc.cid ASC;",
+  ],
+  golden = None,
+}
+
+-- `sqlite/test/left_join_oracle.sh`: LEFT JOIN, seeded so some left rows have
+-- no match. `NullRows` is `sqlite3 -cmd ".nullvalue NULL"`, which renders SQL
+-- NULL as the literal text the demo itself prints.
+leftJoinRow : OracleRow
+leftJoinRow = OracleRow {
+  name = "left_join",
+  entry = "sqlite/left_join_demo.mdk",
+  buildFlags = ["--allow-internal"],
+  seed = [
+    SeedSql
+      "CREATE TABLE users(id INTEGER PRIMARY KEY, name TEXT); INSERT INTO users VALUES (1,'Alice'),(2,'Bob'),(3,'Carol'),(4,'Dave'); CREATE TABLE orders(oid INTEGER PRIMARY KEY, uid INTEGER, amount INTEGER); INSERT INTO orders VALUES (10,1,100),(11,1,250),(12,2,175),(13,3,50); CREATE TABLE ta(aid INTEGER PRIMARY KEY, av INTEGER); INSERT INTO ta VALUES (1,111),(2,222); CREATE TABLE tb(bid INTEGER PRIMARY KEY, aref INTEGER); INSERT INTO tb VALUES (100,1),(101,2); CREATE TABLE tc(cid INTEGER PRIMARY KEY, bref INTEGER); INSERT INTO tc VALUES (1000,100);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- left join users/orders --",
+    NullRows
+      "SELECT users.id,users.name,orders.oid,orders.uid,orders.amount FROM users LEFT JOIN orders ON users.id=orders.uid ORDER BY users.id ASC, orders.oid ASC;",
+    Line "-- left join where amount>100 order amount --",
+    NullRows
+      "SELECT users.id,users.name,orders.oid,orders.uid,orders.amount FROM users LEFT JOIN orders ON users.id=orders.uid WHERE orders.amount>100 ORDER BY orders.amount ASC;",
+    Line "-- inner ta/tb then left tc --",
+    NullRows
+      "SELECT ta.aid,ta.av,tb.bid,tb.aref,tc.cid,tc.bref FROM ta INNER JOIN tb ON ta.aid=tb.aref LEFT JOIN tc ON tb.bid=tc.bref ORDER BY tb.bid ASC;",
+  ],
+  golden = None,
+}
+
+-- `sqlite/test/distinct_oracle.sh`: SELECT DISTINCT, seeded with duplicates.
+distinctRow : OracleRow
+distinctRow = OracleRow {
+  name = "distinct",
+  entry = "sqlite/distinct_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE nums (n INTEGER); INSERT INTO nums VALUES (2),(1),(2),(3),(2); CREATE TABLE pairs (a INTEGER, b INTEGER); INSERT INTO pairs VALUES (1,1),(1,2),(1,1),(2,1),(1,2);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- distinct n from nums order by n --",
+    Rows "SELECT DISTINCT n FROM nums ORDER BY n;",
+    Line "-- distinct a,b from pairs order by a,b --",
+    Rows "SELECT DISTINCT a,b FROM pairs ORDER BY a,b;",
+    Line "-- distinct n from nums order by n limit 2 --",
+    Rows "SELECT DISTINCT n FROM nums ORDER BY n LIMIT 2;",
+  ],
+  golden = None,
+}
+
+-- `sqlite/test/typed_oracle.sh`: the typed-result (RowType) layer. Its
+-- expected lines are sqlite3's own rows put through the script's `typed_line`
+-- renderer, kept as `typedUserLine` — derived from the ENGINE's answer, not
+-- re-derived from the demo's Medaka source.
+typedRow : OracleRow
+typedRow = OracleRow {
+  name = "typed",
+  entry = "sqlite/query_demo.mdk",
+  buildFlags = [],
+  seed = [
+    SeedSql
+      "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT, age INTEGER); INSERT INTO users VALUES (1,'Alice',30),(2,'Bob',NULL),(3,'Carol',25),(4,'Dave',40);",
+  ],
+  pieces = [PRun []],
+  expect = [
+    Line "-- fetchAll users --",
+    TypedRows "SELECT id,name,age FROM users ORDER BY id;",
+    Line "-- scanTable users WHERE age > 25 --",
+    TypedRows "SELECT id,name,age FROM users WHERE age > 25 ORDER BY id;",
+  ],
+  golden = None,
+}
+
+-- # Grading
+
+-- Every row run exactly once and shared by every assertion below: a top-level
+-- nullary binding is memoized, so the ten builds happen once rather than once
+-- per `test` block that reads them.
+results : <Exec "_", FileRead "_", IO> List (String, Result String RowOutput)
+results = map (r => (r.name, runRow r)) rows
+
+resultOf : String -> <Exec "_", FileRead "_", IO> Result String RowOutput
+resultOf name = match lookup name results
+  None => Err "no `results` entry for row \{name} — is it in `rows`?"
+  Some r => r
+
+-- The differential itself: the demo's own output against the answer the real
+-- sqlite3 CLI gave, at run time, for the equivalent SQL.
+oracleExpectation : String -> <Exec "_", FileRead "_", IO> Expectation
+oracleExpectation name = match resultOf name
+  Err e => Fail e "sqlite3's own answer" "the row did not run"
+  Ok out => expectLines out.expected out.actual
+
+-- The golden leg, for the two rows whose scripts diffed BOTH. Read-only: a
+-- missing or unreadable golden fails here, it is never written.
+goldenExpectation : String -> String -> <Exec "_", FileRead "_", IO> Expectation
+goldenExpectation name path = match resultOf name
+  Err e => Fail e "the committed golden" "the row did not run"
+  Ok out => match readFile (underRoot path)
+    Err e => Fail "could not read \{path}: \{e}" path "unreadable"
+    Ok text => expectLines (outLines text) out.actual
+
+test "oracle: reader output matches sqlite3" = oracleExpectation "oracle"
+
+test "oracle: reader output matches sqlite/test/basic.golden" =
+  goldenExpectation "oracle" "sqlite/test/basic.golden"
+
+test "multipage: reader output matches sqlite3" = oracleExpectation "multipage"
+
+test "multipage: reader output matches sqlite/test/multipage.golden" =
+  goldenExpectation "multipage" "sqlite/test/multipage.golden"
+
+test "select: typed ADT query output matches sqlite3" =
+  oracleExpectation "select"
+
+test "groupby: unified GROUP BY / aggregate output matches sqlite3" =
+  oracleExpectation "groupby"
+
+test "aggregate: aggregate query output matches sqlite3" =
+  oracleExpectation "aggregate"
+
+test "projection: computed-column projection output matches sqlite3" =
+  oracleExpectation "projection"
+
+test "join: typed ADT INNER JOIN output matches sqlite3" =
+  oracleExpectation "join"
+
+test "left_join: typed ADT LEFT JOIN output matches sqlite3" =
+  oracleExpectation "left_join"
+
+test "distinct: DISTINCT query output matches sqlite3" =
+  oracleExpectation "distinct"
+
+test "typed: typed query output matches sqlite3" = oracleExpectation "typed"
+
+-- # The multipage row's premise
+
+{- | The page-type byte of `t`'s root page, as hex, read back out of the file
+   by sqlite3 itself.
+
+   `05` is a table-interior page and `0D` a table leaf. The retired script
+   computed this with python3 and printed a warning when it was not `05`; a
+   warning nobody reads is how a multi-page traversal test quietly becomes a
+   single-page one, so it is an assertion here. -}
+multipageRootPageType : <Exec "_", FileRead "_", IO> Result String String
+multipageRootPageType = match scratchDir
+  Err e => Err e
+  Ok dir => rootPageTypeIn "\{dir}/multipage-pagetype.db"
+
+-- Its own database, not the `multipage` row's: `scratchDir` is shared (see
+-- `rowPrefix`), and that row removes its file as soon as it is graded.
+rootPageTypeIn : String -> <Exec "_", FileRead "_", IO> Result String String
+rootPageTypeIn db =
+  let out = rootPageTypeOf db
+  let _ = runVerb "rm" ["-rf", db]
+  out
+
+rootPageTypeOf : String -> <Exec "_", FileRead "_", IO> Result String String
+rootPageTypeOf db =
+  match seedDb db [SeedSql multipageSchema, SeedSql multipageInsert]
+    Err e => Err e
+    Ok _ => map trim (sqlite3Rows db [rootPageTypeSql db])
+
+rootPageTypeSql : String -> String
+rootPageTypeSql db =
+  "SELECT hex(substr(readfile('\{db}'), ((SELECT rootpage FROM sqlite_master WHERE name='t') - 1) * (SELECT page_size FROM pragma_page_size) + 1, 1));"
+
+test "multipage: 2000 rows put the root page on an interior page (0x05)" =
+  match multipageRootPageType
+    Err e => Fail e "root page type 05" "could not read the page type"
+    Ok t =>
+      if t == "05" then
+        Pass "root page type 05" "root page type 05"
+      else
+        Fail
+          "the multipage fixture's root page is type \{t}, not 05 (interior) — this row no longer exercises multi-page B-tree traversal"
+          "root page type 05"
+          "root page type \{t}"

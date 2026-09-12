@@ -3,7 +3,7 @@
 -- Reads a real sqlite3-created DB and runs several `queryAgg db (AggQuery{...}) rt`
 -- calls through the aggregate model in lib.aggregate.  Prints one line per output
 -- group, prefixed by a per-query label, for diffing against `sqlite3` in
--- test/aggregate_oracle.sh.
+-- sqlite/test/oracle_test.mdk.
 --
 -- Usage: medaka build sqlite/aggregate_demo.mdk -o /tmp/adem && /tmp/adem <db>
 

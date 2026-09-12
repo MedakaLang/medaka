@@ -3,7 +3,7 @@
 -- Reads a real sqlite3-created DB and runs several `query db (Select{...}) rt`
 -- calls through the ADT query model in lib.select.  Prints one line per typed
 -- row, prefixed by a label per query, for diffing against `sqlite3` in
--- test/select_oracle.sh.
+-- sqlite/test/oracle_test.mdk.
 --
 -- Usage: medaka build sqlite/select_demo.mdk -o /tmp/sdemo && /tmp/sdemo <db>
 

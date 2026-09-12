@@ -1,7 +1,7 @@
 -- | Typed-query differential demo.
 --
 -- Reads a real sqlite3-created DB, runs a typed SELECT via `RowType`, and prints
--- the typed rows.  Compared against `sqlite3` output by test/typed_oracle.sh.
+-- the typed rows.  Compared against `sqlite3` output by sqlite/test/oracle_test.mdk.
 --
 -- Usage (build path — readFileBytes works only when compiled):
 --   medaka build sqlite/query_demo.mdk -o /tmp/qdemo && /tmp/qdemo <db-path>

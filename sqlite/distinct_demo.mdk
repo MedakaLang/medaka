@@ -3,7 +3,7 @@
 -- Reads a real sqlite3-created DB (with DUPLICATE values) and runs several
 -- `queryDistinct db (Select{...}) rt` calls through the ADT query model in
 -- lib.select.  Prints one line per typed row, prefixed by a label per query,
--- for diffing against `sqlite3 SELECT DISTINCT ...` in test/distinct_oracle.sh.
+-- for diffing against `sqlite3 SELECT DISTINCT ...` in sqlite/test/oracle_test.mdk.
 --
 -- The engine has NO projection field on `Select` (decision d2) — it always
 -- scans `SELECT *`.  So "distinct on a subset of columns" is modeled here by

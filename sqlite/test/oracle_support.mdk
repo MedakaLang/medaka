@@ -1,0 +1,175 @@
+{- | The shared model behind the `sqlite/` differential oracle runners.
+
+   A differential oracle here is one ROW: a demo entry to build, the SQL that
+   seeds a database, how the demo's own output is produced, and how the
+   EXPECTED output is derived by asking the real `sqlite3` CLI the equivalent
+   question. This module carries the part of that with no process in it — the
+   row shape, the two step languages, and the line comparison.
+
+   The spawns stay OUT of here, in each runner's own file, deliberately:
+   `medaka gate verify`'s native-grading clause reads the source text of the
+   module a gate's `run =` names (`ungradedSpawnSites`,
+   `compiler/tools/gate_cmd.mdk`), so a spawn routed through this module would
+   be invisible to it. A runner therefore spawns and grades in one file and
+   reaches here only for values.
+
+   Import what you need: `import test.oracle_support.{OracleRow(..), Step(..)}`. -}
+
+import list.{dropWhileEnd, intercalate}
+import string.{join, lines, split}
+import test.{Expectation(..)}
+
+-- # One row
+
+{- | How a row's database is seeded before its demo runs: SQL written here, or
+   SQL read from a checked-in `.sql` fixture named relative to the tree root.
+
+ -}
+-- Two one-field constructors is `Result`'s SHAPE, not its meaning: neither arm
+-- is a failure, so folding them onto `Ok`/`Err` would leave the reader guessing
+-- which spelling of SQL each one carried.
+-- lint-disable-next-line rule-clone-type
+public export data Seed = SeedSql String | SeedFile String
+
+{- | One piece of a row's ACTUAL output: a literal line the retired script
+   printed itself, or one run of the built demo with these arguments appended
+   after the database path. -}
+-- `Result`'s shape again, and again not its meaning: a literal line and a
+-- command to run are two kinds of output, not a success and a failure.
+-- lint-disable-next-line rule-clone-type
+public export data Piece = PLine String | PRun (List String)
+
+{- | One piece of a row's EXPECTED output.
+
+   `Rows` is the differential itself: the lines the real `sqlite3` CLI prints
+   for that SQL, asked at run time. `NullRows` is the same with
+   `.nullvalue NULL`, for a demo that renders SQL NULL as the text `NULL`
+   rather than as the empty string. `TypedRows` is the same again through
+   `typedUserLine`, for a demo that prints a decoded record rather than a
+   pipe-joined row. `Line` is a fixed label, which is the only kind of
+   expected line that does not consult `sqlite3`. -}
+public export data Step =
+  | Line String
+  | Rows String
+  | NullRows String
+  | TypedRows String
+
+{- | One retired `*_oracle.sh` gate, as data.
+
+   `entry` and `golden` are tree-root-relative paths. `buildFlags` sit before
+   the entry on the `medaka build` command line, so a demo that reaches an
+   internal module keeps its `--allow-internal`. `golden` is `Some` only for a
+   row whose script diffed the demo against a committed golden AS WELL AS
+   against `sqlite3`; the two checks are separate assertions, and neither
+   substitutes for the other. -}
+public export data OracleRow = OracleRow {
+  name : String,
+  entry : String,
+  buildFlags : List String,
+  seed : List Seed,
+  pieces : List Piece,
+  expect : List Step,
+  golden : Option String,
+}
+
+-- # Comparing output
+
+{- | The lines of a captured stdout, without the empty tail that a trailing
+   newline leaves behind.
+
+   The retired scripts compared `$(…)` captures, which strip trailing
+   newlines, against goldens `diff` compared line-wise; both are this.
+
+   > outLines "a\nb\n"
+   ["a", "b"]
+   > outLines ""
+   [] -}
+export
+outLines : String -> List String
+-- `rule-stdlib-reimpl` matches on the declared signature alone, which
+-- `string.lines` shares; taking its suggestion would drop the trailing-empty
+-- trim that is the entire point here.
+-- lint-disable-next-line rule-stdlib-reimpl
+outLines out = dropWhileEnd (== "") (lines out)
+
+{- | The `typed_line` shell function of the retired `typed_oracle.sh`: one
+   `sqlite3` `id|name|age` row rendered in `query_demo.mdk`'s own form, with an
+   empty age column (SQL NULL) becoming `None`.
+
+   A row of any other shape renders as a self-describing marker rather than
+   silently as something plausible, so a column-list change fails the row's
+   diff instead of being absorbed by it.
+
+   > typedUserLine "1|Alice|30"
+   "User { id=1, name=\"Alice\", age=Some 30 }"
+   > typedUserLine "2|Bob|"
+   "User { id=2, name=\"Bob\", age=None }"
+   > typedUserLine "2|Bob"
+   "unexpected sqlite3 row shape: \"2|Bob\"" -}
+export
+typedUserLine : String -> String
+typedUserLine row = match split "|" row
+  [i, n, a] =>
+    if a == "" then
+      "User { id=\{i}, name=\"\{n}\", age=None }"
+    else
+      "User { id=\{i}, name=\"\{n}\", age=Some \{a} }"
+  _ => "unexpected sqlite3 row shape: \{debug row}"
+
+{- | The one list built from many, in order.
+
+   > flatLines [["a"], [], ["b", "c"]]
+   ["a", "b", "c"] -}
+export
+flatLines : List (List String) -> List String
+flatLines parts = intercalate [] parts
+
+{- | Passes when `actual` is `expected`, line for line, naming the first line
+   at which the two diverge.
+
+   Line lists rather than whole texts, and this rather than
+   `test.expectEqualText`: that one normalizes away a last line that is
+   exactly `0`, and `projection_demo.mdk`'s `SELECT DISTINCT a*0` block ends
+   in exactly that line — a demo that dropped the block entirely would
+   normalize to the same text as one that printed it.
+
+   > expectLines ["a"] ["a"]
+   Pass "1 line" "1 line"
+   > expectLines ["a", "b"] ["a", "c"]
+   Fail "line 2: expected \"b\" but got \"c\"" "a\nb" "a\nc"
+   > expectLines ["a"] ["a", "b"]
+   Fail "line 2: expected end of output but got \"b\" (1 line remaining)" "a" "a\nb" -}
+export
+expectLines : List String -> List String -> Expectation
+expectLines expected actual =
+  if expected == actual then
+    Pass (countMsg expected) (countMsg actual)
+  else
+    Fail
+      (firstDivergence 1 expected actual)
+      (join "\n" expected)
+      (join "\n" actual)
+
+countMsg : List String -> String
+countMsg ls = match length ls
+  1 => "1 line"
+  n => "\{intToString n} lines"
+
+firstDivergence : Int -> List String -> List String -> String
+firstDivergence _ [] [] = "no divergence"
+firstDivergence n (e :: es) (a :: rest) =
+  if e == a then
+    firstDivergence (n + 1) es rest
+  else
+    "line \{intToString n}: expected \{debug e} but got \{debug a}"
+-- The remaining case is one side running out first. It is ONE clause, not one
+-- per side, because running out is a fact about the PAIR: the reader needs to
+-- know which side stopped and how much of the other was still to come, and
+-- splitting that across two messages makes the shorter side's count the thing
+-- nobody prints.
+firstDivergence n expected actual =
+  "line \{intToString n}: expected \{tailMsg expected} but got \{tailMsg actual}"
+
+tailMsg : List String -> String
+tailMsg [] = "end of output"
+tailMsg (l :: rest) = "\{debug l} (\{countMsg (l :: rest)} remaining)"

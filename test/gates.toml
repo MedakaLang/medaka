@@ -326,23 +326,6 @@ sources = []
 corpus = ["test/wasm/fixtures"]
 toolchain = ["wasm-tools", "node>=24"]
 
-# A gate OUTSIDE test/ entirely, owned by another project, with its own
-# external oracle binary (the real sqlite3 CLI) as a toolchain requirement.
-[[gate]]
-name = "sqlite/test/select_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/select_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
 # ── Full enrolment (S-2, #2191): the remaining candidates ────────────────────
 #
 # Derived by test/preflight.sh's own _gate_candidates logic (tracked-or-
@@ -894,21 +877,6 @@ corpus = []
 toolchain = ["node>=24"]
 
 [[gate]]
-name = "sqlite/test/aggregate_oracle"
-area = "engines"
-shard = "gates_7"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/aggregate_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
 name = "sqlite/test/delete_negative_oracle"
 area = "engines"
 shard = "gates_2"
@@ -939,21 +907,6 @@ corpus = []
 toolchain = ["sqlite3"]
 
 [[gate]]
-name = "sqlite/test/distinct_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/distinct_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
 shard = "gates_8"
@@ -963,21 +916,6 @@ cost = "medium"
 kind = "exec"
 migration = "native-wrap"
 run = "sqlite/test/dml_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/groupby_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/groupby_oracle.sh"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []
@@ -1014,51 +952,6 @@ corpus = []
 toolchain = []
 
 [[gate]]
-name = "sqlite/test/join_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/join_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/left_join_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/left_join_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/multipage_oracle"
-area = "engines"
-shard = "gates_7"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/multipage_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
 name = "sqlite/test/multipage_write_oracle"
 area = "engines"
 shard = "gates_4"
@@ -1088,6 +981,11 @@ sources = ["sqlite/*"]
 corpus = []
 toolchain = ["sqlite3"]
 
+# A gate OUTSIDE test/ entirely, owned by another project, needing an external
+# oracle binary (the real sqlite3 CLI) as a toolchain requirement. It is also
+# the READ group's single row: ten `sqlite/test/*_oracle.sh` scripts became ten
+# cases of one native runner (#2592/#2593), and it keeps this NAME so it keeps
+# `sqlite_test_oracle`'s cost history.
 [[gate]]
 name = "sqlite/test/oracle"
 area = "engines"
@@ -1095,9 +993,9 @@ shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/oracle.sh"
+kind = "native"
+migration = "done"
+run = "sqlite/test/oracle_test.mdk"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []
@@ -1113,21 +1011,6 @@ cost = "medium"
 kind = "exec"
 migration = "split-first"
 run = "sqlite/test/overflow_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/projection_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/projection_oracle.sh"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []
@@ -1158,21 +1041,6 @@ cost = "medium"
 kind = "exec"
 migration = "split-first"
 run = "sqlite/test/sql_oracle.sh"
-oracles = []
-sources = ["sqlite/*"]
-corpus = []
-toolchain = ["sqlite3"]
-
-[[gate]]
-name = "sqlite/test/typed_oracle"
-area = "engines"
-shard = "gates_2"
-project = "sqlite"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "sqlite/test/typed_oracle.sh"
 oracles = []
 sources = ["sqlite/*"]
 corpus = []

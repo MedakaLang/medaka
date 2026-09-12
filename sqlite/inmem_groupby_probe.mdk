@@ -13,7 +13,7 @@
 -- runs IDENTICALLY under the native LLVM backend and the WasmGC backend;
 -- `test/wasm/diff_sqlite.sh` builds it for both targets and diffs stdout.
 --
--- Same schema + data as test/groupby_oracle.sh, so the two agree row-for-row:
+-- Same schema + data as sqlite/test/oracle_test.mdk, so the two agree row-for-row:
 -- user `dee` has no orders (the INNER JOIN drops her) and order 7 has a NULL
 -- amount (COUNT(*) still counts the row; SUM/AVG/MIN/MAX skip it).
 
