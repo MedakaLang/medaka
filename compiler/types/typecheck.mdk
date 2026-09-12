@@ -29589,13 +29589,20 @@ checkBodyImpl seed mode prog0 =
       -- whole-table replacement of `funConstraintsRef` owes one of these.
       perRun.value.funConstraintDeclaredRef :=
         crossRun.value.crossModuleFunConstraintDeclaredRef.value
+      -- A module alias (`import m as A`) has no `currentImportDefinersRef` row for
+      -- each dotted member, so its call sites resolve through these alias-local rows.
+      -- The source is nevertheless exact: `aliasConstraintEntries` selects only the
+      -- `(defining module, exported name)` row admitted by that alias. Preserve the
+      -- complete predicate vectors here; stripping them reduces distinct predicates
+      -- such as `Tweak a Int` and `Tweak a Bool` to the ambiguous goal `Tweak a`.
+      -- The graph-wide bare-name snapshot below remains vector-free because it lacks
+      -- this source identity.
       let _ =
         setRef
           perRun.value.funPredicateSlotsRef
-          (predicateSlotTableWithoutArgs
-              (aliasConstraintEntries
-                prog
-                crossRun.value.crossModuleFunPredicateSlotsQualRef.value)
+          (aliasConstraintEntries
+              prog
+              crossRun.value.crossModuleFunPredicateSlotsQualRef.value
             ++ perRun.value.funPredicateSlotsRef.value)
       let _ =
         setRef
