@@ -1872,22 +1872,15 @@ implEntryRouteKeyE e ent =
     (methodEntries e (implEntryMethodOf ent))
     ent
 
--- #1036 leg 2: EVERY dict word that any module's typecheck could stamp for this impl.
--- `keyForSiteByIface` picks the bare head tag when the SITE'S MODULE sees no collision
--- at that head and the canonical key when it does, so the impl legitimately answers to
--- both; which one arrives depends on the caller's imports, which the shared dispatcher
--- cannot know.  Emitting an arm per word makes the dispatcher accept the union instead
--- of betting on one.
---
--- When the head is unambiguous program-wide — every program in this tree today — the
--- route key IS the head tag, `dedupS` collapses the pair to ONE word, and the emitted
--- `icmp` is byte-identical to the pre-#1036 single test.  Only a genuine collision
--- yields two words and therefore two tests.
+-- A dictionary is shared by every method of its interface. A collision on another
+-- method can require the canonical instance key even when this method's head is
+-- unique. Accept that key alongside the legacy words without reselecting the impl.
 implEntryRouteWords : Emit -> CImplEntry -> List String
 implEntryRouteWords e (CImplEntry m s (CImplTagged t k iface ps pats body)) = dedupS
   [
     implEntryRouteKeyE e (CImplEntry m s (CImplTagged t k iface ps pats body)),
     t,
+    k,
   ]
 implEntryRouteWords _ _ = []
 

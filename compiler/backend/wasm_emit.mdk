@@ -5861,25 +5861,21 @@ emitClausesImpl : Prog ->
 emitClausesImpl prog fnName params arity clauses =
   emitClausesRef prog fnName params arity clauses
 
--- the candidate impls for a method: (symTag, routeKey) per group.  routeKey is the
--- key the RDict witness hashes (the canonical impl key); for the minimal slice the
--- bare head tag IS the key (sole impl per head), so symTag == routeKey == tag.
+-- Candidate implementations and the route words their dictionary witnesses use.
 methodImpls : Prog -> String -> List (String, String)
 methodImpls prog method =
   let mEntries = methodEntriesW prog method
   dedupPairs (flatMap (methodImplKey mEntries method) mEntries) []
 
--- one (symTag, routeKey) candidate per impl entry of [method].  #324: symTag is the
--- CALL symbol tag (bare head when unique, else the SANITIZED canonical key); routeKey
--- is the RUNTIME-dispatch hash tag (bare head when unique, else the RAW canonical
--- key), which `emitDispatchChain` hashes with `dictTag` to match the dict witness.
--- For a sole impl per head both are the bare head — byte-identical to the old (tag,
--- tag) — and dedupPairs collapses the multiple entries of one impl to a single arm;
--- two overlapping same-head impls yield two DISTINCT arms.
+-- A sibling method's collision can canonicalize the shared interface dictionary.
+-- Both words must call the same implementation symbol; accepting the canonical
+-- alias here avoids reconstructing typecheck's interface-wide collision decision.
 methodImplKey : List CImplEntry -> String -> CImplEntry -> List (String, String)
 methodImplKey entries method (CImplEntry n _ (CImplTagged t k _ _ _ _)) =
   if n == method then
-    [(implFnSymTagW entries method t k, implEntryRouteKeyW entries method t k)]
+    let sym = implFnSymTagW entries method t k
+    let route = implEntryRouteKeyW entries method t k
+    if route == k then [(sym, route)] else [(sym, route), (sym, k)]
   else
     []
 methodImplKey _ _ _ = []
