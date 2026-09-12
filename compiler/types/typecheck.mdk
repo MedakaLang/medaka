@@ -21584,6 +21584,7 @@ resolveNumLitSite rpNames name tagRef resultMono fullMono predicate encl origin 
   let _ = match route
     RNone => noteDefaultBodyRNone DBRKReturn name origin scope tagBefore route
     _ => tagRef := numericReturnRoute route routes
+  ()
 
 numericReturnRoute : Route -> List Route -> Route
 numericReturnRoute (RKey key _) routes = RKey key routes
@@ -30401,6 +30402,7 @@ inferUserImplBodies env allProg ce cur decls =
   let _ = wRestore perRun.value.obls callSnap
   let _ = wPushAll perRun.value.implObls (reverseL keptImpl)
   let _ = wPushAll perRun.value.obls (reverseL keptCall)
+  ()
 -- issue 1146: the typeErrors save/window/rebuild that used to close this function is
 -- RETIRED — it was DEAD, an identity dressed as a filter.  It computed
 -- `added = takeFirst (listLen curErrs - listLen savedErrs) curErrs` and wrote back
