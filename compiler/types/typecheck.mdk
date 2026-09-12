@@ -20466,7 +20466,7 @@ anyIn xs ys = anyList (x => containsI x ys) xs
 -- `processSCC` separately protects declared variables, including result-only and nullary
 -- variables. A recursive group retains only roots every member can generalize: the
 -- current per-member schemes cannot publish a group's hidden constraint-only variables.
--- Lexical binding boundaries require exact level ownership. This is partial D4:
+-- Lexical binding boundaries require exact level ownership; numeric
 -- expected-result propagation and deeper roots reaching the SCC fallback remain separate
 -- (#2646).
 monoArgUnboundIds : Mono -> List Int
@@ -20747,7 +20747,7 @@ monoUnboundVarLevels t = match normalize t
   TFun a _ b => monoUnboundVarLevels a ++ monoUnboundVarLevels b
   TEff _ => []
 
--- D4 ownership is exact at lexical boundaries: an outer or deeper root survives.
+-- Ownership is exact at lexical boundaries: an outer or deeper root survives.
 -- None preserves the legacy SCC/body-local policy until graph-end defaulting (#2646)
 -- can safely own the roots that exact SCC filtering would strand.
 numDefaultOwnerAllows : Option Int -> Mono -> Bool
@@ -38801,8 +38801,8 @@ inferredPredicateSlots m ids vecs =
   let covered = inferredSlotCoveredIds slots omEmpty
   inferredPredicateSlotsGo m ids buckets covered []
 
--- An empty interface never carried a known vector before this repair: preserve that
--- compatibility by leaving it to the trace-only PSArgsUnknown fallback.
+-- An empty interface has no known vector. Its compatibility representation is the
+-- trace-only PSArgsUnknown fallback.
 inferredPredicatePair : (IfaceRef, Int, List Mono) -> List (CSlot, List Mono)
 inferredPredicatePair (iface, id, args)
   | iface.irName == "" = []
