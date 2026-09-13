@@ -556,16 +556,45 @@ admissionClasses : Bool ->
 admissionClasses firstRequest parsed =
   baseClasses firstRequest ++ nsidClasses parsed
 
--- | An unparseable request carries no headers this module may trust, so it is
--- charged to the shared `direct` bucket rather than to a reconstructed
--- identity. Garbage is not the shape a legitimate client sends, so a shared
--- ceiling on it costs a well-behaved client nothing.
+{- | An unparseable request carries no headers this module may trust, so it is
+   charged to the shared `direct` bucket rather than to a reconstructed
+   identity. Garbage is not the shape a legitimate client sends, so a shared
+   ceiling on it costs a well-behaved client nothing.
+
+   `Err` is the other outcome and it is not that one: the request parsed, its
+   `X-Forwarded-For` reached `identifyClient`, and the header was refused
+   against a ceiling. What that request is owed is an answer, not a bucket —
+   `forwardedForRefusal`. -}
 admissionIdentity : TrustedProxy ->
   Result HttpParseFailure Request ->
-  ClientIdentity
-admissionIdentity _ (Err _) = directIdentity
+  Result String ClientIdentity
+admissionIdentity _ (Err _) = Ok directIdentity
 admissionIdentity trustedProxy (Ok request) =
   identifyClient trustedProxy (requestHeaders request)
+
+{- | The bucket a request counts against when no identity of its own could be
+   derived: the shared one, the same bucket an unparseable buffer uses.
+
+   A refused header is charged too, and then refused anyway. Leaving it
+   uncharged would reopen the hole `applyRateLimit`'s contract closes — every
+   buffer that reaches the framer costs a parse and a response, so an
+   uncharged failure is a work channel with no ceiling. The charge buys its
+   sender nothing, because the answer is a 4xx whatever the verdict says, and
+   it is no stronger a lever on the shared bucket than sending no
+   `X-Forwarded-For` at all, which is already charged there. -}
+chargedIdentity : Result String ClientIdentity -> ClientIdentity
+chargedIdentity (Ok identity) = identity
+chargedIdentity (Err _) = directIdentity
+
+{- | What a client whose `X-Forwarded-For` violated one of its ceilings is
+   told. A refusal rather than a demotion to the shared bucket: the shared
+   bucket is a DIFFERENT bucket, so answering out of it hands a client whose
+   own allowance is spent a fresh one for the price of padding a header it
+   writes itself. The message is `lib.resource_limits`' own — it names the
+   ceiling and nothing about this request. -}
+forwardedForRefusal : String -> Response
+forwardedForRefusal message =
+  xrpcErrorResponse 400 "Bad Request" "InvalidRequest" message
 
 admitClasses : RateLimitState ->
   ClientIdentity ->
@@ -1223,23 +1252,30 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
     Ok request => requestKeepAlive request
     Err _ => False
   let rest = readBufferFrom boundary buf
+  let identified = admissionIdentity (servingTrustedProxy serving) parsed
   let charged =
     applyRateLimit
       limiterRef
-      (admissionIdentity (servingTrustedProxy serving) parsed)
+      (chargedIdentity identified)
       (admissionClasses firstRequest parsed)
       nowSeconds
   {- The answer owed before any classification runs: the rate-limit refusal,
-     or the preflight answer. The preflight is taken AFTER the charge rather
-     than before it, because `applyRateLimit`'s contract is that every buffer
-     reaching the framer is charged — a preflight costs the same parse and
-     response as anything else, and answering one for free would be the
-     unmetered work channel that contract exists to close. Only the refusal is
-     passed through `withAllowOrigin`: `preflightResponse` already carries its
-     own complete header set, allow-origin included. -}
+     the refused-identity refusal, or the preflight answer. The preflight is
+     taken AFTER the charge rather than before it, because `applyRateLimit`'s
+     contract is that every buffer reaching the framer is charged — a
+     preflight costs the same parse and response as anything else, and
+     answering one for free would be the unmetered work channel that contract
+     exists to close. The refused identity is taken after the charge for the
+     same reason, and after the 429 because the 429 carries the `RateLimit-*`
+     fields a client needs to retry; either way it is answered, never routed.
+     Only the refusals are passed through `withAllowOrigin`:
+     `preflightResponse` already carries its own complete header set,
+     allow-origin included. -}
   let earlyAnswer = match charged
     Some refusal => Some (withAllowOrigin refusal)
-    None => preflightAnswer parsed
+    None => match identified
+      Err message => Some (withAllowOrigin (forwardedForRefusal message))
+      Ok _ => preflightAnswer parsed
   match earlyAnswer
     Some response =>
       sendAndContinue
@@ -1300,7 +1336,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 rest
                 keepAlive
                 nowSeconds
-                (admissionIdentity (servingTrustedProxy serving) parsed)
+                (chargedIdentity identified)
                 admission
             ProxyRefused refusal =>
               sendAndContinue

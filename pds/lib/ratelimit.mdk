@@ -34,7 +34,12 @@
    missing header, or a last hop that is not IPv4/IPv6-shaped all fall back
    to one shared `direct` identity: a spoofable identity is worse than one
    shared bucket, because it hands an attacker every other client's bucket
-   to evict. -}
+   to evict.
+
+   A header that violates one of `maxXffHeaderBytes`/`maxXffTokens` is the
+   one case that does NOT fall back — `identifyClient` returns `Err` and the
+   caller refuses the request. Falling back would make the fallback bucket
+   the reward for violating the ceiling. -}
 
 import http.{Header, headerName, headerValue}
 import list.{head, reverse}
@@ -295,17 +300,26 @@ nsidRateLimitClasses nsid =
    for brevity. -}
 public export data TrustedProxy = TrustedProxy Bool
 
--- | Derive the caller's identity for this request. The trust assertion is
--- supplied by the caller (`--trusted-proxy`'s value, tested once at
--- configuration); this module never inspects a socket.
+{- | Derive the caller's identity for this request. The trust assertion is
+   supplied by the caller (`--trusted-proxy`'s value, tested once at
+   configuration); this module never inspects a socket.
+
+   Three outcomes, not two. `Ok` names the bucket to charge: the last hop's
+   address when a trusted peer forwarded a well-formed one, and the shared
+   `direct` bucket when there was nothing to derive one from at all. `Err` is
+   a client-supplied header this module REFUSED against a ceiling, and the
+   caller owes that request a 4xx rather than a bucket — every identity still
+   derivable at that point is a bucket the refused client did not earn, so
+   answering out of one hands a fresh allowance to whoever asks for it. -}
 export
-identifyClient : TrustedProxy -> List Header -> ClientIdentity
+identifyClient : TrustedProxy -> List Header -> Result String ClientIdentity
 identifyClient (TrustedProxy isTrustedPeer) headers =
   if not isTrustedPeer then
-    directIdentity
+    Ok directIdentity
   else match xffLastHop headers
-    Some address => ClientIdentity address
-    None => directIdentity
+    Ok (Some address) => Ok (ClientIdentity address)
+    Ok None => Ok directIdentity
+    Err message => Err message
 
 isXffHeader : Header -> Bool
 isXffHeader h = headerName h == "x-forwarded-for"
@@ -321,23 +335,35 @@ isXffHeader h = headerName h == "x-forwarded-for"
    escape hatch rather than a penalty: the shared bucket is a DIFFERENT
    bucket, so a client whose own bucket was exhausted could win a fresh
    allowance by sending its address twice. -}
-xffLastHop : List Header -> Option String
+xffLastHop : List Header -> Result String (Option String)
 xffLastHop headers = match head (reverse (filter isXffHeader headers))
-  Some nearest => lastHopToken (fromUtf8 (headerValue nearest))
-  None => None
+  Some nearest => lastHopToken (headerValue nearest)
+  None => Ok None
 
-lastHopToken : String -> Option String
-lastHopToken raw =
-  if isErr (checkXffHeaderBytes (stringLength raw)) then
-    None
-  else
-    let tokens = map trim (split "," raw)
-    if isErr (checkXffTokens (length tokens)) then
-      None
-    else match head (reverse tokens)
-      Some candidate =>
-        if isAddressToken candidate then Some candidate else None
-      None => None
+{- | The nearest field's last hop, read from the RAW header bytes.
+
+   Bytes, not codepoints: `stringLength` counts codepoints, so measuring the
+   decoded string admits a header of up to four times the byte ceiling
+   `maxXffHeaderBytes` names. `headerValue` is the wire form, and it is
+   measured before `fromUtf8` decodes it and before `split` allocates a
+   substring per token — both of which are the work each ceiling exists to
+   bound, so neither may run ahead of the check that bounds it.
+
+   A violated ceiling is `Err`, distinct from the `Ok None` a header this
+   module simply could not read an address out of: `Ok None` is charged to
+   the shared bucket, and charging a capped header there is the escape hatch
+   the cap was added to close. -}
+lastHopToken : Array Int -> Result String (Option String)
+lastHopToken bytes = match checkXffHeaderBytes (arrayLength bytes)
+  Err message => Err message
+  Ok () =>
+    let tokens = map trim (split "," (fromUtf8 bytes))
+    match checkXffTokens (length tokens)
+      Err message => Err message
+      Ok () => match head (reverse tokens)
+        Some candidate =>
+          if isAddressToken candidate then Ok (Some candidate) else Ok None
+        None => Ok None
 
 isAddressToken : String -> Bool
 isAddressToken token = isIPv4Address token || isIPv6Address token

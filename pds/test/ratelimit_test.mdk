@@ -3,7 +3,7 @@
    `(state, identity, class, now) -> (state, verdict)` step and the identity
    derivation from `X-Forwarded-For`. -}
 
-import http.{Header, makeHeader}
+import http.{Header, makeHeader, parseRequest, requestHeaders}
 import list.{replicate}
 import string.{join, repeat, toUtf8}
 import test.{expectAll, expectEqual, expectTrue}
@@ -43,6 +43,22 @@ mustHeader name value = match makeHeader name (toUtf8 value)
 
 xffHeader : String -> Header
 xffHeader = mustHeader "x-forwarded-for"
+
+{- | The bucket label a derivation produced, or the one word `refused` when
+   the header violated a ceiling.
+
+   `refused` is deliberately not a label any bucket can have: the whole point
+   of #2949's fix is that a capped header is NOT demoted to `direct`, so an
+   expectation that cannot tell those two apart would pass against the bug. -}
+labelOf : Result String ClientIdentity -> String
+labelOf (Ok identity) = identityLabel identity
+labelOf (Err _) = "refused"
+
+-- | The identity a derivation that must succeed produced, for the cases that
+-- go on to make a rate-limit decision with it.
+mustIdentity : Result String ClientIdentity -> ClientIdentity
+mustIdentity (Ok identity) = identity
+mustIdentity (Err message) = panic message
 
 isRefused : RateLimitVerdict -> Bool
 isRefused Refused = True
@@ -173,54 +189,44 @@ test "the rate-limit refusal is a 429 RateLimitExceeded" =
 -- the single "direct" bucket rather than becoming its own identity.
 test "an untrusted peer's X-Forwarded-For is ignored" =
   let headers = [xffHeader "203.0.113.7"]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy False) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy False) headers)) "direct"
 
 test "a trusted peer's well-formed X-Forwarded-For is honored" =
   let headers = [xffHeader "203.0.113.7"]
   expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
+    (labelOf (identifyClient (TrustedProxy True) headers))
     "203.0.113.7"
 
 test "a trusted peer's forwarded chain picks the LAST hop" =
   let headers = [xffHeader "203.0.113.7, 198.51.100.9, 192.0.2.44"]
   expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
+    (labelOf (identifyClient (TrustedProxy True) headers))
     "192.0.2.44"
 
 -- (d) a malformed header never admits a second identity.
 test "malformed X-Forwarded-For (garbage) falls back to direct" =
   let headers = [xffHeader "garbage"]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "direct"
 
 test "malformed X-Forwarded-For (empty) falls back to direct" =
   let headers = [xffHeader ""]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "direct"
 
 test "malformed X-Forwarded-For (bare comma) falls back to direct" =
   let headers = [xffHeader ","]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "direct"
 
 test "malformed X-Forwarded-For (last hop not an address) falls back to direct" =
   let headers = [xffHeader "203.0.113.7, not-an-address"]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "direct"
 
 test "no X-Forwarded-For at all falls back to direct" =
-  expectEqual (identityLabel (identifyClient (TrustedProxy True) [])) "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) [])) "direct"
 
--- (d2) #2949: the header is capped on byte length before it is ever split,
--- independent of the proxy layer that should already be overwriting it. A
--- value at the cap, ending in a real address, is unaffected; one byte past
--- it falls back to `direct` exactly like any other malformed header.
+-- (d2) #2949: the header is capped on byte length before it is ever decoded
+-- or split, independent of the proxy layer that should already be overwriting
+-- it. A value at the cap, ending in a real address, is unaffected; one byte
+-- past it is REFUSED — not demoted to `direct`, which is (d4) below.
 lastHopAddress : String
 lastHopAddress = "203.0.113.7"
 
@@ -231,33 +237,109 @@ xffOfByteLength n =
 test "an X-Forwarded-For at the byte-length cap is honored" =
   let headers = [xffHeader (xffOfByteLength maxXffHeaderBytes)]
   expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
+    (labelOf (identifyClient (TrustedProxy True) headers))
     lastHopAddress
 
-test "an X-Forwarded-For one byte past the byte-length cap falls back to direct" =
+test "an X-Forwarded-For one byte past the byte-length cap is refused" =
   let headers = [xffHeader (xffOfByteLength (maxXffHeaderBytes + 1))]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "refused"
+
+{- (d2b) #2949 second round: the ceiling is on BYTES, and it used to be
+   measured on `stringLength`, which is codepoints. A header built out of
+   4-byte codepoints was therefore admitted at four times the ceiling its own
+   error message names.
+
+   The padding is a 4-byte UTF-8 codepoint (U+1F600), so a value well under
+   the cap in codepoints is over it in bytes. The ASCII cases above and these
+   differ ONLY in which unit the padding is counted in, which is exactly the
+   distinction the bug could not make.
+
+   These go through the real inbound parser rather than `xffHeader`:
+   `http.makeHeader` is the RESPONSE-side constructor and admits printable
+   ASCII only, while the request parser admits every byte above 31 except
+   DEL. So parsing is not a convenience here — it is the construction that
+   proves a multi-byte value reaches `identifyClient` on the wire at all. -}
+fourByteCodepoint : String
+fourByteCodepoint = "😀"
+
+-- | The headers of a real parsed request carrying `value` as its
+-- `X-Forwarded-For`.
+parsedXffHeaders : String -> List Header
+parsedXffHeaders value =
+  let line = "x-forwarded-for: \{value}"
+  let raw = "GET /xrpc/_health HTTP/1.1\r\nhost: pds.example\r\n\{line}\r\n\r\n"
+  match parseRequest (toUtf8 raw)
+    Ok request => requestHeaders request
+    Err message => panic message
+
+xffOfCodepointLength : Int -> String
+xffOfCodepointLength n = "\{repeat n fourByteCodepoint},\{lastHopAddress}"
+
+test "a multi-byte X-Forwarded-For is measured in bytes, not codepoints" =
+  let value = xffOfCodepointLength (maxXffHeaderBytes / 4)
+  expectAll [
+    expectTrue (stringLength value <= maxXffHeaderBytes),
+    expectTrue (arrayLength (toUtf8 value) > maxXffHeaderBytes),
+    expectEqual
+      (labelOf (identifyClient (TrustedProxy True) (parsedXffHeaders value)))
+      "refused",
+  ]
+
+-- A multi-byte header genuinely UNDER the byte ceiling is still honored, so
+-- the fix above is a change of unit and not a blanket refusal of non-ASCII.
+test "a multi-byte X-Forwarded-For under the byte ceiling is still honored" =
+  let value = xffOfCodepointLength (maxXffHeaderBytes / 8)
+  expectAll [
+    expectTrue (arrayLength (toUtf8 value) <= maxXffHeaderBytes),
+    expectEqual
+      (labelOf (identifyClient (TrustedProxy True) (parsedXffHeaders value)))
+      lastHopAddress,
+  ]
 
 -- (d3) #2949: the header is also capped on token count, independent of its
 -- byte length — a short header can still hold many short tokens. At the cap,
--- ending in a real address, it is unaffected; one token past it falls back
--- to `direct`.
+-- ending in a real address, it is unaffected; one token past it is refused.
 xffOfTokenCount : Int -> String
 xffOfTokenCount n = join "," (replicate (n - 1) "1" ++ [lastHopAddress])
 
 test "an X-Forwarded-For at the token-count cap is honored" =
   let headers = [xffHeader (xffOfTokenCount maxXffTokens)]
   expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
+    (labelOf (identifyClient (TrustedProxy True) headers))
     lastHopAddress
 
-test "an X-Forwarded-For one token past the token-count cap falls back to direct" =
+test "an X-Forwarded-For one token past the token-count cap is refused" =
   let headers = [xffHeader (xffOfTokenCount (maxXffTokens + 1))]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "refused"
+
+{- (d4) #2949 second round, the escape hatch itself: a cap violation must not
+   resolve to ANY bucket.
+
+   Demotion to `direct` is not a penalty, because `direct` is a DIFFERENT
+   bucket — the same argument (e) below makes about a repeated field, and the
+   caps arrived after that comment was written without inheriting it. A client
+   whose own bucket is spent pads the header it writes itself past a ceiling
+   and is charged somewhere it has never been.
+
+   Graded as the charging outcome and not just as a label, because a label is
+   what the bug got right: the over-cap header derives `direct` under the old
+   code, and `direct` is a perfectly good bucket that admits. -}
+test "an over-cap X-Forwarded-For cannot escape its own exhausted bucket" =
+  let spender =
+    mustIdentity (identifyClient (TrustedProxy True) [xffHeader lastHopAddress])
+  let overCap = identifyClient (TrustedProxy True) [
+    xffHeader (xffOfByteLength (maxXffHeaderBytes + 1)),
+  ]
+  let saturated = saturatedFor spender
+  expectAll
+    [
+      expectTrue (isRefused (verdictFor saturated spender)),
+      -- The bucket an over-cap header would have been demoted to is fresh, and
+      -- would admit — so "refused" here is the fix and not the state of a
+      -- coincidentally-spent shared bucket.
+      expectTrue (isAdmitted (verdictFor saturated directIdentity)),
+      expectTrue (isErr overCap),
+    ]
 
 -- (e) repeated X-Forwarded-For fields are ONE chain in field order: a proxy
 -- appends rather than replaces, so the nearest hop is the last hop of the
@@ -266,15 +348,18 @@ test "an X-Forwarded-For one token past the token-count cap falls back to direct
 test "repeated X-Forwarded-For fields take the last field's last hop" =
   let headers = [xffHeader "203.0.113.7", xffHeader "198.51.100.9"]
   expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
+    (labelOf (identifyClient (TrustedProxy True) headers))
     "198.51.100.9"
 
 test "repeating X-Forwarded-For cannot escape an exhausted bucket" =
-  let single = identifyClient (TrustedProxy True) [xffHeader "203.0.113.77"]
-  let doubled = identifyClient (TrustedProxy True) [
-    xffHeader "203.0.113.77",
-    xffHeader "203.0.113.77",
-  ]
+  let single =
+    mustIdentity (identifyClient (TrustedProxy True) [xffHeader "203.0.113.77"])
+  let doubled =
+    mustIdentity
+      (identifyClient (TrustedProxy True) [
+        xffHeader "203.0.113.77",
+        xffHeader "203.0.113.77",
+      ])
   let saturated = saturatedFor single
   expectAll [
     expectTrue (isRefused (verdictFor saturated single)),
@@ -286,14 +371,16 @@ test "repeating X-Forwarded-For cannot escape an exhausted bucket" =
 test "an IPv4-mapped last hop is its own identity" =
   let headers = [xffHeader "::ffff:203.0.113.5"]
   expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
+    (labelOf (identifyClient (TrustedProxy True) headers))
     "::ffff:203.0.113.5"
 
 test "distinct IPv4-mapped last hops are distinct buckets" =
   let first =
-    identifyClient (TrustedProxy True) [xffHeader "::ffff:198.51.100.1"]
+    mustIdentity
+      (identifyClient (TrustedProxy True) [xffHeader "::ffff:198.51.100.1"])
   let second =
-    identifyClient (TrustedProxy True) [xffHeader "::ffff:198.51.100.2"]
+    mustIdentity
+      (identifyClient (TrustedProxy True) [xffHeader "::ffff:198.51.100.2"])
   let saturated = saturatedFor first
   expectAll [
     expectTrue (isRefused (verdictFor saturated first)),
@@ -302,9 +389,7 @@ test "distinct IPv4-mapped last hops are distinct buckets" =
 
 test "a truncated IPv4-mapped last hop is still rejected" =
   let headers = [xffHeader "::ffff:203.0.113"]
-  expectEqual
-    (identityLabel (identifyClient (TrustedProxy True) headers))
-    "direct"
+  expectEqual (labelOf (identifyClient (TrustedProxy True) headers)) "direct"
 
 -- (g) #2774 second half: a decision's cost must not scale with how many
 -- OTHER identities are active. `RateLimitState` is opaque, so this is the
@@ -323,7 +408,8 @@ addressFor : Int -> String
 addressFor n = "10.0.\{intToString (n / 256)}.\{intToString (n % 256)}"
 
 otherIdentity : Int -> ClientIdentity
-otherIdentity n = identifyClient (TrustedProxy True) [xffHeader (addressFor n)]
+otherIdentity n =
+  mustIdentity (identifyClient (TrustedProxy True) [xffHeader (addressFor n)])
 
 -- | `state` with `n` distinct OTHER identities each having made one
 -- `RequestsClass` decision at `now` — never `directIdentity`, so the target

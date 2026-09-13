@@ -177,13 +177,21 @@ maxRepoExportsPerWindow : Int
 maxRepoExportsPerWindow = 100
 
 {- | Ceilings on the inbound `X-Forwarded-For` header itself (#2949), enforced
-   by `pds/lib/ratelimit.mdk` before it splits the header on `,` to find the
-   last hop. The framing-level `stdlib/http.mdk` header-section cap bounds
-   the WHOLE header block, not any one header's share of it, so a single
-   comma-separated value can still arrive holding thousands of short tokens
-   within that shared budget — cheap on the wire, but each one is a
-   substring the split allocates and a candidate the parse then walks. A real
-   proxy chain is a handful of hops; neither ceiling is reachable by one. -}
+   by `pds/lib/ratelimit.mdk`. The framing-level `stdlib/http.mdk`
+   header-section cap bounds the WHOLE header block, not any one header's
+   share of it, so a single comma-separated value can still arrive holding
+   thousands of short tokens within that shared budget — cheap on the wire,
+   but each one is a substring the split allocates and a candidate the parse
+   then walks.
+
+   The byte ceiling is checked on the RAW header bytes, ahead of both the
+   UTF-8 decode and the split, because those are the work it exists to bound.
+   The token ceiling is checked on the split's result, the only place a token
+   count exists at all — so what it bounds is the WALK over the tokens, and
+   what bounds the split itself is the byte ceiling above it. Violating
+   either refuses the request rather than demoting it to the shared bucket.
+   A real proxy chain is a handful of hops; neither ceiling is reachable by
+   one. -}
 export
 maxXffHeaderBytes : Int
 maxXffHeaderBytes = 4096

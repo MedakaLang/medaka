@@ -1453,10 +1453,9 @@ require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 # ── sixth --data dir: the X-Forwarded-For byte/token caps (#2949) ──────────
 # `--trusted-proxy` is on, matching the identity path this exercises: the
 # byte-length and token-count caps in `lastHopToken` (`pds/lib/ratelimit.mdk`)
-# apply BEFORE the header is split on `,`, so an over-cap header must fall
-# back to the shared `direct` identity — same as any other malformed header —
-# rather than being parsed at all, and the request right after it must still
-# be served normally rather than the connection wedging on the oversized one.
+# REFUSE the request — 400 InvalidRequest — rather than demoting it to the
+# shared `direct` identity, and the server goes on serving everyone else
+# rather than wedging on the oversized value.
 DATAXFF="$WORK/data-xff"
 mkdir -p "$DATAXFF"
 "$WORK/pdsd" \
@@ -1472,13 +1471,36 @@ PORTXFF=$(wait_for_port "$WORK/servexff.out") || {
 }
 require_empty "$WORK/servexff.err" 'x-forwarded-for cap server startup'
 
-# 24a. an X-Forwarded-For far past the byte-length cap (well under the
-#    framing-level header-section cap, so it reaches the rate limiter at
-#    all) is answered cheaply rather than parsed token-by-token, and the
-#    NEXT request on the same server still succeeds.
+# 24a. an over-cap X-Forwarded-For is REFUSED, not demoted to the shared
+#    bucket. Driven as the escape hatch itself, because a status-only "it was
+#    answered" assertion passes just as well against a check that does
+#    nothing: demotion answered 200 out of a bucket the sender had never
+#    touched, which is a fresh allowance handed to whoever asks.
+#
+#    The setup is what makes the two outcomes tell apart. One identity spends
+#    its OWN connections allowance (120 per window, the cheapest class to
+#    reach), leaving `direct` on this freshly-started server untouched. That
+#    same identity then sends its address behind an over-cap pad: demotion
+#    lands it on the fresh `direct` bucket and is served, while a refusal is
+#    400 InvalidRequest whatever any bucket says. Asserting 400 exactly — not
+#    "some 4xx" — is also what keeps a coincidental 429 from passing this.
+#
+#    Both ceilings are driven, since either alone leaves the other's arm
+#    unexercised: 8192 bytes of padding for `maxXffHeaderBytes`, and 64 short
+#    hops ahead of the address for `maxXffTokens` (141 bytes, well under the
+#    byte ceiling, so it can only be the token one that refuses it).
+XFFCLIENT=203.0.113.202
 XFFPAD=$(head -c 8192 /dev/zero | tr '\0' 'a')
-client rl-req "$PORTXFF" "${XFFPAD},203.0.113.7" 1 200 \
-  || fail 'case 24a: an over-cap X-Forwarded-For was not answered cheaply'
+XFFHOPS=$(head -c 64 /dev/zero | tr '\0' '1' | sed 's/./&,/g')
+wait_for_window_room
+client rl-conn "$PORTXFF" "$XFFCLIENT" 121 429 \
+  || fail "case 24a: the client's own connections class did not refuse at its ceiling"
+client rl-req "$PORTXFF" "${XFFPAD},${XFFCLIENT}" 1 400 \
+  || fail 'case 24a: an over-cap X-Forwarded-For escaped to the shared bucket'
+client rl-req "$PORTXFF" "${XFFHOPS}${XFFCLIENT}" 1 400 \
+  || fail 'case 24a: an over-token X-Forwarded-For escaped to the shared bucket'
+# ...and a different, honest client is still served, so refusing the padded
+# header is not a server-wide outage.
 client rl-req "$PORTXFF" 203.0.113.201 1 200 \
   || fail 'case 24a: the request after an over-cap X-Forwarded-For was refused'
 
