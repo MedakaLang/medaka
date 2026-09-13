@@ -1375,7 +1375,44 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-# ── sixth and seventh --data dirs: the appview proxy (#2912) ────────────────
+# ── sixth --data dir: the X-Forwarded-For byte/token caps (#2949) ──────────
+# `--trusted-proxy` is on, matching the identity path this exercises: the
+# byte-length and token-count caps in `lastHopToken` (`pds/lib/ratelimit.mdk`)
+# apply BEFORE the header is split on `,`, so an over-cap header must fall
+# back to the shared `direct` identity — same as any other malformed header —
+# rather than being parsed at all, and the request right after it must still
+# be served normally rather than the connection wedging on the oversized one.
+DATAXFF="$WORK/data-xff"
+mkdir -p "$DATAXFF"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATAXFF" --port 0 --init --trusted-proxy \
+  >"$WORK/servexff.out" 2>"$WORK/servexff.err" &
+SERVER_PID=$!
+PORTXFF=$(wait_for_port "$WORK/servexff.out") || {
+  cat "$WORK/servexff.err" >&2
+  fail 'x-forwarded-for cap server did not report readiness'
+}
+require_empty "$WORK/servexff.err" 'x-forwarded-for cap server startup'
+
+# 24a. an X-Forwarded-For far past the byte-length cap (well under the
+#    framing-level header-section cap, so it reaches the rate limiter at
+#    all) is answered cheaply rather than parsed token-by-token, and the
+#    NEXT request on the same server still succeeds.
+XFFPAD=$(head -c 8192 /dev/zero | tr '\0' 'a')
+client rl-req "$PORTXFF" "${XFFPAD},203.0.113.7" 1 200 \
+  || fail 'case 24a: an over-cap X-Forwarded-For was not answered cheaply'
+client rl-req "$PORTXFF" 203.0.113.201 1 200 \
+  || fail 'case 24a: the request after an over-cap X-Forwarded-For was refused'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servexff.err" 'x-forwarded-for cap server (post-run)'
+
+# ── seventh and eighth --data dirs: the appview proxy (#2912) ───────────────
 # A proxied read is the first thing this server does that makes an OUTBOUND call
 # and the first thing that signs with the account's repo key for an audience a
 # CLIENT named. Both halves are graded: what a forwarded call carries and what it

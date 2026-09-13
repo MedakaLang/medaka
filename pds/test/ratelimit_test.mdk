@@ -4,11 +4,14 @@
    derivation from `X-Forwarded-For`. -}
 
 import http.{Header, makeHeader}
-import string.{toUtf8}
+import list.{replicate}
+import string.{join, repeat, toUtf8}
 import test.{expectAll, expectEqual, expectTrue}
 import lib.resource_limits.{
   maxCreateSessionPerWindow,
   maxRepoExportsPerWindow,
+  maxXffHeaderBytes,
+  maxXffTokens,
   rateLimitWindowSeconds,
 }
 import lib.ratelimit.{
@@ -213,6 +216,48 @@ test "malformed X-Forwarded-For (last hop not an address) falls back to direct" 
 
 test "no X-Forwarded-For at all falls back to direct" =
   expectEqual (identityLabel (identifyClient (TrustedProxy True) [])) "direct"
+
+-- (d2) #2949: the header is capped on byte length before it is ever split,
+-- independent of the proxy layer that should already be overwriting it. A
+-- value at the cap, ending in a real address, is unaffected; one byte past
+-- it falls back to `direct` exactly like any other malformed header.
+lastHopAddress : String
+lastHopAddress = "203.0.113.7"
+
+xffOfByteLength : Int -> String
+xffOfByteLength n =
+  "\{repeat (n - stringLength lastHopAddress - 1) "a"},\{lastHopAddress}"
+
+test "an X-Forwarded-For at the byte-length cap is honored" =
+  let headers = [xffHeader (xffOfByteLength maxXffHeaderBytes)]
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    lastHopAddress
+
+test "an X-Forwarded-For one byte past the byte-length cap falls back to direct" =
+  let headers = [xffHeader (xffOfByteLength (maxXffHeaderBytes + 1))]
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "direct"
+
+-- (d3) #2949: the header is also capped on token count, independent of its
+-- byte length — a short header can still hold many short tokens. At the cap,
+-- ending in a real address, it is unaffected; one token past it falls back
+-- to `direct`.
+xffOfTokenCount : Int -> String
+xffOfTokenCount n = join "," (replicate (n - 1) "1" ++ [lastHopAddress])
+
+test "an X-Forwarded-For at the token-count cap is honored" =
+  let headers = [xffHeader (xffOfTokenCount maxXffTokens)]
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    lastHopAddress
+
+test "an X-Forwarded-For one token past the token-count cap falls back to direct" =
+  let headers = [xffHeader (xffOfTokenCount (maxXffTokens + 1))]
+  expectEqual
+    (identityLabel (identifyClient (TrustedProxy True) headers))
+    "direct"
 
 -- (e) repeated X-Forwarded-For fields are ONE chain in field order: a proxy
 -- appends rather than replaces, so the nearest hop is the last hop of the

@@ -43,6 +43,8 @@ import regex.{Regex, isFullMatch, mustCompile}
 import string.{fromUtf8, split, trim}
 import lib.nsid.{sameNsidIdentity}
 import lib.resource_limits.{
+  checkXffHeaderBytes,
+  checkXffTokens,
   maxConnectionsPerWindow,
   maxCreateSessionPerWindow,
   maxProxiedCallsPerWindow,
@@ -311,10 +313,16 @@ xffLastHop headers = match head (reverse (filter isXffHeader headers))
 
 lastHopToken : String -> Option String
 lastHopToken raw =
-  let tokens = map trim (split "," raw)
-  match head (reverse tokens)
-    Some candidate => if isAddressToken candidate then Some candidate else None
-    None => None
+  if isErr (checkXffHeaderBytes (stringLength raw)) then
+    None
+  else
+    let tokens = map trim (split "," raw)
+    if isErr (checkXffTokens (length tokens)) then
+      None
+    else match head (reverse tokens)
+      Some candidate =>
+        if isAddressToken candidate then Some candidate else None
+      None => None
 
 isAddressToken : String -> Bool
 isAddressToken token = isIPv4Address token || isIPv6Address token
