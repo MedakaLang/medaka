@@ -127,6 +127,11 @@ BLOB2_MIME='application/x-e2e-second'
 # finds a sidecar on disk by its declared type, and two blobs sharing one type
 # would make that lookup pick either of them.
 SLOW_MIME='application/x-e2e-slow'
+# A blob declared `text/html` (#2948) — the MIME type a browser navigating
+# straight to the blob URL would otherwise render as this origin's own live
+# document rather than download.
+HTML_BLOB_TEXT='<script>pds serve_e2e gate fixture html blob</script>'
+HTML_BLOB_MIME='text/html'
 
 # The session-token secret, which is NOT the repository signing key: the two
 # are separate secrets by design, and this gate proves the server accepts a
@@ -327,6 +332,19 @@ BLOB_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB_MIME" "$BLOB_TEXT") \
 [ -n "$BLOB_CID" ] || fail 'case 4b: uploadBlob returned an empty CID'
 client get-blob "$PORT1" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
   || fail 'case 4b: getBlob before the restart'
+
+# 4b-html. a blob declared `text/html` (#2948) must not come back as a live
+#    document: `getBlob` must refuse to serve it renderable under this
+#    origin, and the server must keep answering the next request afterward.
+HTML_BLOB_CID=$(
+  client upload-blob "$PORT1" "$TOKEN" "$HTML_BLOB_MIME" "$HTML_BLOB_TEXT"
+) || fail 'case 4b-html: uploadBlob of a text/html blob'
+[ -n "$HTML_BLOB_CID" ] \
+  || fail 'case 4b-html: uploadBlob returned an empty CID'
+client get-blob-not-live "$PORT1" "$DID" "$HTML_BLOB_CID" \
+  || fail 'case 4b-html: getBlob served a text/html blob as a live document'
+client query "$PORT1" "$DID" \
+  || fail 'case 4b-html: server stopped answering after the html blob fetch'
 
 BLOB2_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB2_MIME" "$BLOB2_TEXT") \
   || fail 'case 4c: second uploadBlob'

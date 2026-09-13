@@ -1726,6 +1726,8 @@ main = match args ()
     runUploadBlob (mustPort port) token mimeType text
   ["get-blob", port, did, cid, mimeType, text] =>
     runGetBlob (mustPort port) did cid mimeType text
+  ["get-blob-not-live", port, did, cid] =>
+    runGetBlobNotLive (mustPort port) did cid
   ["repo-digest", port, did] => runRepoDigest (mustPort port) did
   ["get-blob-missing", port, did, cid] =>
     runGetBlobMissing (mustPort port) did cid
@@ -1948,6 +1950,27 @@ runGetBlob port did cid mimeType text =
         "GETBLOB"
         (status == 200 && mediaType == mimeType && bodyText == text)
         "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (arrayLength body)} byte(s)"
+  ignoreResult (close conn)
+
+{- | Fetch a blob back and grade that `getBlob` refuses to serve it as a live
+   document under this origin: the response must carry both
+   `x-content-type-options: nosniff` and `content-disposition: attachment`,
+   whatever the blob's declared MIME type. Response headers are always
+   lowercase (`serializeResponse`'s doing), so a plain substring check is
+   exact. -}
+runGetBlobNotLive : Int -> String -> String -> <IO, Net "_"> Unit
+runGetBlobNotLive port did cid =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getBlobPath did cid))
+  let () = match readHeaderResponse conn [||]
+    Err message => report "GETBLOBNOTLIVE" False message
+    Ok (status, headerText, _, _) =>
+      report
+        "GETBLOBNOTLIVE"
+        (status == 200
+          && contains "x-content-type-options: nosniff" headerText
+          && contains "content-disposition: attachment" headerText)
+        "status \{intToString status}, headers:\n\{headerText}"
   ignoreResult (close conn)
 
 {- | Fetch a blob the server must NOT hold and grade the refusal: a blob whose
