@@ -116,13 +116,13 @@ seedPreserved store =
 expectedTextResponse : Int -> String -> String -> Array Int
 expectedTextResponse status reason body =
   toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: text/plain\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
 
 expectedError : Int -> String -> String -> String -> Array Int
 expectedError status reason code message =
   let body = "{\"error\":\"\{code}\",\"message\":\"\{message}\"}"
   toUtf8
-    "HTTP/1.1 \{intToString status} \{reason}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
+    "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
 
 fixedQuery : Array Int
 fixedQuery =
