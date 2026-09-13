@@ -127,6 +127,11 @@ BLOB2_MIME='application/x-e2e-second'
 # finds a sidecar on disk by its declared type, and two blobs sharing one type
 # would make that lookup pick either of them.
 SLOW_MIME='application/x-e2e-slow'
+# A blob declared `text/html` (#2948) — the MIME type a browser navigating
+# straight to the blob URL would otherwise render as this origin's own live
+# document rather than download.
+HTML_BLOB_TEXT='<script>pds serve_e2e gate fixture html blob</script>'
+HTML_BLOB_MIME='text/html'
 
 # The session-token secret, which is NOT the repository signing key: the two
 # are separate secrets by design, and this gate proves the server accepts a
@@ -166,7 +171,7 @@ printf '%s\n' "$PASSWORD" > "$WORK/password"
 # secret before it binds (case 25 below proves the refusal), so every hex
 # secret this gate hands it is owner-only. `mktemp -d` already made $WORK 0700;
 # these are the files inside it the server actually grades.
-chmod 600 "$WORK/key.hex" "$WORK/token.hex"
+chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
 
 # Prints the readiness port once `pattern` (readiness line) appears in
 # `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
@@ -328,6 +333,19 @@ BLOB_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB_MIME" "$BLOB_TEXT") \
 client get-blob "$PORT1" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
   || fail 'case 4b: getBlob before the restart'
 
+# 4b-html. a blob declared `text/html` (#2948) must not come back as a live
+#    document: `getBlob` must refuse to serve it renderable under this
+#    origin, and the server must keep answering the next request afterward.
+HTML_BLOB_CID=$(
+  client upload-blob "$PORT1" "$TOKEN" "$HTML_BLOB_MIME" "$HTML_BLOB_TEXT"
+) || fail 'case 4b-html: uploadBlob of a text/html blob'
+[ -n "$HTML_BLOB_CID" ] \
+  || fail 'case 4b-html: uploadBlob returned an empty CID'
+client get-blob-not-live "$PORT1" "$DID" "$HTML_BLOB_CID" \
+  || fail 'case 4b-html: getBlob served a text/html blob as a live document'
+client query "$PORT1" "$DID" \
+  || fail 'case 4b-html: server stopped answering after the html blob fetch'
+
 BLOB2_CID=$(client upload-blob "$PORT1" "$TOKEN" "$BLOB2_MIME" "$BLOB2_TEXT") \
   || fail 'case 4c: second uploadBlob'
 [ -n "$BLOB2_CID" ] || fail 'case 4c: second uploadBlob returned an empty CID'
@@ -423,6 +441,16 @@ client get-session "$PORT1" "$TOKEN" "$DID" || fail 'case 5c: getSession'
 #    this proves the running server produces it.
 client login-refused "$PORT1" "$HANDLE" 'not the password' \
   || fail 'case 5d: wrong password refused'
+
+# 5e. a record nested deeper than the DAG-CBOR codec can read back is refused
+#    at WRITE time (#2947), and the collection is still readable afterwards.
+#    Case 5's LISTRECORDS is the before-picture: until the encoder carried the
+#    decoder's own 128-level bound, this write was COMMITTED with a 200 and
+#    every later listRecords for the WHOLE collection — not merely getRecord
+#    for this one key — answered 400 from then on. The second half of the case
+#    is the one that proves the poisoning is gone rather than moved.
+client deep-record "$PORT1" "$TOKEN" "$DID" "$COLLECTION" e2edeeprecord 129 \
+  || fail 'case 5e: an over-deep record was accepted, or poisoned the collection'
 
 # 11. the session lifecycle, end to end and over the socket: log in, write,
 #    log out, and find the SAME access token refused afterwards. Its signature
@@ -882,6 +910,53 @@ if grep -F 'serve: listening on' "$WORK/serve25.out" >/dev/null 2>&1; then
 fi
 if grep -F "$SECRET_HEX" "$WORK/serve25.err" >/dev/null 2>&1; then
   fail 'case 25: the refusal printed the signing key itself'
+fi
+
+# 25a. a --password-file any other account on the box can read is refused
+#    BEFORE the listener binds, the same way case 25's signing key is.
+DATA25A="$WORK/data25a"
+mkdir -p "$DATA25A"
+cp "$WORK/password" "$WORK/password25a"
+chmod 644 "$WORK/password25a"
+run_until_exit "$WORK/serve25a.out" "$WORK/serve25a.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --password-file "$WORK/password25a" \
+  --data "$DATA25A" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 25a: a 0644 password file was accepted'
+grep -F "password file $WORK/password25a is mode 0644, readable by accounts other than its owner" \
+  "$WORK/serve25a.err" >/dev/null \
+  || fail 'case 25a: the refusal did not name the mode and the path'
+if grep -F 'serve: listening on' "$WORK/serve25a.out" >/dev/null 2>&1; then
+  fail 'case 25a: the listener bound before the password file was graded'
+fi
+[ ! -e "$DATA25A/credential" ] \
+  || fail 'case 25a: a refused password file still produced a credential'
+
+# 25b. a --data/credential any other account on the box can read is refused
+#    BEFORE the listener binds, on a RESUME (no --password-file): first
+#    bootstrap a real credential, then widen its mode and start again.
+DATA25B="$WORK/data25b"
+mkdir -p "$DATA25B"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --password-file "$WORK/password" \
+  --data "$DATA25B" --port 0 --init \
+  > "$WORK/serve25b_bootstrap.out" 2> "$WORK/serve25b_bootstrap.err" &
+SERVER_PID=$!
+wait_for_port "$WORK/serve25b_bootstrap.out" >/dev/null \
+  || fail 'case 25b: the bootstrap server did not report readiness'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+chmod 644 "$DATA25B/credential"
+run_until_exit "$WORK/serve25b.out" "$WORK/serve25b.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --data "$DATA25B" --port 0
+[ "$RC" -ne 0 ] || fail 'case 25b: a 0644 credential file was accepted'
+grep -F "credential $DATA25B/credential is mode 0644, readable by accounts other than its owner" \
+  "$WORK/serve25b.err" >/dev/null \
+  || fail 'case 25b: the refusal did not name the mode and the path'
+if grep -F 'serve: listening on' "$WORK/serve25b.out" >/dev/null 2>&1; then
+  fail 'case 25b: the listener bound before the credential file was graded'
 fi
 
 # 26. a configuration rejected for a bad SUPPLIED secret leaves no GENERATED
@@ -1375,7 +1450,66 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 
-# ── sixth and seventh --data dirs: the appview proxy (#2912) ────────────────
+# ── sixth --data dir: the X-Forwarded-For byte/token caps (#2949) ──────────
+# `--trusted-proxy` is on, matching the identity path this exercises: the
+# byte-length and token-count caps in `lastHopToken` (`pds/lib/ratelimit.mdk`)
+# REFUSE the request — 400 InvalidRequest — rather than demoting it to the
+# shared `direct` identity, and the server goes on serving everyone else
+# rather than wedging on the oversized value.
+DATAXFF="$WORK/data-xff"
+mkdir -p "$DATAXFF"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATAXFF" --port 0 --init --trusted-proxy \
+  >"$WORK/servexff.out" 2>"$WORK/servexff.err" &
+SERVER_PID=$!
+PORTXFF=$(wait_for_port "$WORK/servexff.out") || {
+  cat "$WORK/servexff.err" >&2
+  fail 'x-forwarded-for cap server did not report readiness'
+}
+require_empty "$WORK/servexff.err" 'x-forwarded-for cap server startup'
+
+# 24a. an over-cap X-Forwarded-For is REFUSED, not demoted to the shared
+#    bucket. Driven as the escape hatch itself, because a status-only "it was
+#    answered" assertion passes just as well against a check that does
+#    nothing: demotion answered 200 out of a bucket the sender had never
+#    touched, which is a fresh allowance handed to whoever asks.
+#
+#    The setup is what makes the two outcomes tell apart. One identity spends
+#    its OWN connections allowance (120 per window, the cheapest class to
+#    reach), leaving `direct` on this freshly-started server untouched. That
+#    same identity then sends its address behind an over-cap pad: demotion
+#    lands it on the fresh `direct` bucket and is served, while a refusal is
+#    400 InvalidRequest whatever any bucket says. Asserting 400 exactly — not
+#    "some 4xx" — is also what keeps a coincidental 429 from passing this.
+#
+#    Both ceilings are driven, since either alone leaves the other's arm
+#    unexercised: 8192 bytes of padding for `maxXffHeaderBytes`, and 64 short
+#    hops ahead of the address for `maxXffTokens` (141 bytes, well under the
+#    byte ceiling, so it can only be the token one that refuses it).
+XFFCLIENT=203.0.113.202
+XFFPAD=$(head -c 8192 /dev/zero | tr '\0' 'a')
+XFFHOPS=$(head -c 64 /dev/zero | tr '\0' '1' | sed 's/./&,/g')
+wait_for_window_room
+client rl-conn "$PORTXFF" "$XFFCLIENT" 121 429 \
+  || fail "case 24a: the client's own connections class did not refuse at its ceiling"
+client rl-req "$PORTXFF" "${XFFPAD},${XFFCLIENT}" 1 400 \
+  || fail 'case 24a: an over-cap X-Forwarded-For escaped to the shared bucket'
+client rl-req "$PORTXFF" "${XFFHOPS}${XFFCLIENT}" 1 400 \
+  || fail 'case 24a: an over-token X-Forwarded-For escaped to the shared bucket'
+# ...and a different, honest client is still served, so refusing the padded
+# header is not a server-wide outage.
+client rl-req "$PORTXFF" 203.0.113.201 1 200 \
+  || fail 'case 24a: the request after an over-cap X-Forwarded-For was refused'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servexff.err" 'x-forwarded-for cap server (post-run)'
+
+# ── seventh and eighth --data dirs: the appview proxy (#2912) ───────────────
 # A proxied read is the first thing this server does that makes an OUTBOUND call
 # and the first thing that signs with the account's repo key for an audience a
 # CLIENT named. Both halves are graded: what a forwarded call carries and what it

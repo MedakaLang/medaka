@@ -5,6 +5,13 @@
 # three claims are then made for the BLOB half, which persists beside the
 # repository under `<data>/blobs` — plus a fourth, that a blob the pure layer
 # refuses never reaches a file at all.
+#
+# Cases 7-10 grade the HALF-WRITTEN directories a process crash can leave: each
+# of the three write paths promotes with `rename` after writing what the
+# promotion points at, so the reachable interrupted states are a finite set and
+# each is built directly rather than raced. They cover process-crash
+# consistency only; no path here calls `fsync`, so what the kernel may reorder
+# across a power loss is outside what any of them can observe (#2952).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -188,4 +195,136 @@ OVERSIZE_FILES=$(find "$OVERSIZE" -type f | wc -l | tr -d ' ')
 [ "$OVERSIZE_FILES" = '0' ] \
   || fail "an oversize blob left $OVERSIZE_FILES file(s) on disk"
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; key absent'
+# ── 7. a crash between the last block write and the head `rename` ──────────
+# None of cases 7-10 races a process kill. Every write path here promotes with
+# `rename`, so the states a crash can leave are a finite set with fixed
+# contents, and building each one directly is both exhaustive where a kill
+# would be a sample and deterministic where a kill would be flaky.
+#
+# `persistSave` writes the blocks and promotes the head last, so the state a
+# crash in between leaves is the NEWER generation's blocks on disk under a head
+# file still naming the older one. The claim is not merely that this loads: it
+# is that it loads as the previous repository EXACTLY, blocks it cannot reach
+# notwithstanding.
+CRASH="$WORK/crash-blocks-ahead"
+"$WORK/driver" crash-save-old "$CRASH" > "$WORK/old.out" 2> "$WORK/old.err"
+require_empty "$WORK/old.err" crash-save-old
+[ "$(tail -1 "$WORK/old.out")" = 'CRASH-SAVE-OLD: PASS' ] \
+  || fail 'old-generation save route did not pass'
+cp "$CRASH/head" "$WORK/head.old"
+"$WORK/driver" save "$CRASH" > "$WORK/crashsave.out" 2> "$WORK/crashsave.err"
+require_empty "$WORK/crashsave.err" save
+# The head `rename` is the step that never ran.
+cp "$WORK/head.old" "$CRASH/head"
+"$WORK/driver" load "$CRASH" > "$WORK/crashload.out" 2> "$WORK/crashload.err"
+require_empty "$WORK/crashload.err" load
+[ "$(tail -1 "$WORK/crashload.out")" = 'LOAD: PASS' ] \
+  || fail 'an unpromoted head did not reload at all'
+sed -n 's/^OLD /STATE /p' "$WORK/old.out" > "$WORK/old.state"
+sed -n 's/^LOAD /STATE /p' "$WORK/crashload.out" > "$WORK/crashload.state"
+[ -s "$WORK/old.state" ] || fail 'old-generation save produced no state summary'
+cmp "$WORK/old.state" "$WORK/crashload.state" \
+  || fail 'an unpromoted head served a repository that is not the previous one'
+echo "unpromoted head resumed $(sed -n 's/^STATE head //p' "$WORK/old.state")"
+
+# The same crash on a FIRST save leaves blocks with no head at all, which must
+# be refused rather than answered from whatever the block directory holds.
+FIRST="$WORK/crash-first-save"
+"$WORK/driver" save "$FIRST" > "$WORK/first.out" 2> "$WORK/first.err"
+require_empty "$WORK/first.err" save
+rm "$FIRST/head"
+"$WORK/driver" reject "$FIRST" > "$WORK/firstreject.out" 2> "$WORK/firstreject.err"
+require_empty "$WORK/firstreject.err" reject
+grep -q '^REJECT: PASS ' "$WORK/firstreject.out" || {
+  cat "$WORK/firstreject.out" >&2
+  fail 'a block directory with no head file was loaded anyway'
+}
+sed -n 's/^REJECT: PASS /headless directory refused: /p' "$WORK/firstreject.out"
+
+# ── 8. the inverse: a head promoted over a graph that is not all there ─────
+# Every persisted block in turn rather than one sample: a single tolerated
+# absence is a repository served with records silently missing, and which
+# block would be tolerated is exactly what a sample cannot say.
+BLOCKS_TRIED=0
+for VICTIM_REL in $(find "$DATA/blocks" -type f | sed "s|^$DATA/||" | sort); do
+  rm -rf "$WORK/headahead"
+  cp -R "$DATA" "$WORK/headahead"
+  rm "$WORK/headahead/$VICTIM_REL"
+  "$WORK/driver" reject "$WORK/headahead" > "$WORK/headahead.out" \
+    2> "$WORK/headahead.err"
+  require_empty "$WORK/headahead.err" reject
+  grep -q '^REJECT: PASS ' "$WORK/headahead.out" || {
+    cat "$WORK/headahead.out" >&2
+    fail "a head over a graph missing $VICTIM_REL was served anyway"
+  }
+  BLOCKS_TRIED=$((BLOCKS_TRIED + 1))
+done
+[ "$BLOCKS_TRIED" -ge 4 ] \
+  || fail "expected several persisted blocks to remove, found $BLOCKS_TRIED"
+echo "head over an incomplete graph refused, each of $BLOCKS_TRIED block(s) removed in turn"
+
+# ── 9. the blob half, interrupted in BOTH promote orders ───────────────────
+# `blobfile.mdk` promotes the MIME sidecar first and the bytes last, so a crash
+# between them leaves a sidecar naming no bytes. The reverse state is built
+# too: that ordering is a preference the code states it cannot guarantee, so
+# the half it does not expect has to be graded as well as the half it does.
+# Both must lose exactly the one blob they belong to — never the read.
+BYTES_VICTIM=$(find "$DATA/blobs" -type f ! -name '*.mime' | sort | sed -n '1p')
+[ -n "$BYTES_VICTIM" ] || fail 'no persisted blob to interrupt'
+BLOB_REL=${BYTES_VICTIM#"$DATA/"}
+
+rm -rf "$WORK/sidecar-only"
+cp -R "$DATA" "$WORK/sidecar-only"
+rm "$WORK/sidecar-only/$BLOB_REL"
+"$WORK/driver" blob-survey "$WORK/sidecar-only" > "$WORK/sidecaronly.out" \
+  2> "$WORK/sidecaronly.err"
+require_empty "$WORK/sidecaronly.err" blob-survey
+[ "$(tail -1 "$WORK/sidecaronly.out")" = 'BLOB-SURVEY: OK 1' ] || {
+  cat "$WORK/sidecaronly.out" >&2
+  fail 'a sidecar promoted without its bytes did not cost exactly its own blob'
+}
+sed -n 's/^BLOB-SURVEY: /sidecar without bytes: /p' "$WORK/sidecaronly.out"
+
+rm -rf "$WORK/bytes-only"
+cp -R "$DATA" "$WORK/bytes-only"
+rm "$WORK/bytes-only/$BLOB_REL.mime"
+"$WORK/driver" blob-survey "$WORK/bytes-only" > "$WORK/bytesonly.out" \
+  2> "$WORK/bytesonly.err"
+require_empty "$WORK/bytesonly.err" blob-survey
+[ "$(tail -1 "$WORK/bytesonly.out")" = 'BLOB-SURVEY: OK 1' ] || {
+  cat "$WORK/bytesonly.out" >&2
+  fail 'bytes promoted without their sidecar did not cost exactly their own blob'
+}
+sed -n 's/^BLOB-SURVEY: /bytes without sidecar: /p' "$WORK/bytesonly.out"
+
+# ── 10. the event log's two crash points, against a REAL persisted head ────
+# `pds/test/event_log_test.mdk` already grades `eventLogRecover` over CID
+# strings it supplies itself. What it cannot reach is the discriminator the
+# server actually hands it — `persistLoad`'s head — so these two cases stage an
+# entry over a genuinely persisted repository and let the file on disk decide.
+# Both directions, because a recovery that discarded everything would satisfy
+# the orphan case alone.
+EVENTOWED="$WORK/event-owed"
+"$WORK/driver" event-recover-owed "$EVENTOWED" > "$WORK/eventowed.out" \
+  2> "$WORK/eventowed.err"
+require_empty "$WORK/eventowed.err" event-recover-owed
+grep -q '^EVENTBEFORE staged .* entries 0$' "$WORK/eventowed.out" \
+  || fail 'the owed case did not stage an entry to recover'
+grep -q '^EVENTAFTER staged none entries 1$' "$WORK/eventowed.out" || {
+  cat "$WORK/eventowed.out" >&2
+  fail 'an entry naming the persisted head was not finished'
+}
+
+EVENTORPHAN="$WORK/event-orphan"
+"$WORK/driver" event-recover-orphan "$EVENTORPHAN" > "$WORK/eventorphan.out" \
+  2> "$WORK/eventorphan.err"
+require_empty "$WORK/eventorphan.err" event-recover-orphan
+grep -q '^EVENTBEFORE staged .* entries 0$' "$WORK/eventorphan.out" \
+  || fail 'the orphan case did not stage an entry to recover'
+grep -q '^EVENTAFTER staged none entries 0$' "$WORK/eventorphan.out" || {
+  cat "$WORK/eventorphan.out" >&2
+  fail 'an entry naming no persisted head was not discarded'
+}
+echo 'staged event finished when the head is on disk, discarded when it is not'
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; key absent'

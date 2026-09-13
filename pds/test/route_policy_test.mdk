@@ -1,0 +1,219 @@
+{- | The per-route policy table: for every registered XRPC route, the auth
+   policy that gates it, the rate-limit classes it is charged against, and
+   the request-body ceiling it admits.
+
+   The three facts live in three different places — `AuthPolicy` on the
+   `Endpoint`, the NSID predicates in `lib.ratelimit`, and `InputPolicy`'s
+   ceiling in `stdlib/http` — and nothing joined them, so a route could be
+   registered with a ceiling nobody had looked at and no test would say so.
+
+   The route set and its three classifications are DERIVED from the live
+   `lib.handlers.pdsRegistry`; only the expected column is committed here. A
+   route registered without a row therefore fails this suite rather than
+   passing uncounted. The reverse closure is asserted too, so a row left
+   behind by a removed route fails instead of sitting there as a comment.
+
+   The ceilings are written as literal byte counts rather than as the
+   `stdlib/http` constants they are derived from: naming the constant on both
+   sides would make the column a tautology, whereas the literal makes a
+   change to `maxJsonBodyBytes` land here as a red row someone has to
+   acknowledge. -}
+
+import http.{maxJsonBodyBytes, maxRawBodyBytes, maxTextBodyBytes}
+import list.{lookup, somes}
+import string.{join}
+import test.{expectEqual}
+import lib.handlers.{pdsRegistry}
+import lib.ratelimit.{RateLimitClass(..), nsidRateLimitClasses}
+import lib.xrpc.{
+  AuthPolicy(..),
+  Endpoint,
+  InputPolicy(..),
+  endpointAuth,
+  endpointInput,
+  endpointNsid,
+  registryEndpoints,
+}
+
+{- | What this table commits per route: the auth policy, the rate-limit
+   classes beyond the per-request ones every framed request clears, and the
+   request-body ceiling in bytes.
+
+   The ceiling is optional because `None` and `Some 0` are different facts: a
+   query or a subscription has no body position at all, while `Some 0` is a
+   procedure registered under `NoInput`, which does have one and admits
+   exactly zero bytes in it. -}
+data RoutePolicy = RoutePolicy AuthPolicy (List RateLimitClass) (Option Int)
+
+{- | The committed table, in registration order: five record writes, five
+   session routes, two preference routes, eleven reads and one subscription.
+
+   `app.bsky.actor.putPreferences` is deliberately spelled with no
+   rate-limit class of its own. It is an authenticated JSON procedure that
+   writes to the store, but `isWriteNsid` names only the five
+   `com.atproto.repo` write procedures, so it clears the shared request
+   allowance alone. That is what the code does today; this row records it
+   rather than hiding it. -}
+committedPolicies : List (String, RoutePolicy)
+committedPolicies = [
+  (
+    "com.atproto.repo.createRecord",
+    RoutePolicy AuthenticatedRoute [WritesClass] (Some 153600),
+  ),
+  (
+    "com.atproto.repo.putRecord",
+    RoutePolicy AuthenticatedRoute [WritesClass] (Some 153600),
+  ),
+  (
+    "com.atproto.repo.deleteRecord",
+    RoutePolicy AuthenticatedRoute [WritesClass] (Some 153600),
+  ),
+  (
+    "com.atproto.repo.applyWrites",
+    RoutePolicy AuthenticatedRoute [WritesClass] (Some 153600),
+  ),
+  (
+    "com.atproto.repo.uploadBlob",
+    RoutePolicy AuthenticatedRoute [WritesClass] (Some 5242880),
+  ),
+  (
+    "com.atproto.server.createSession",
+    RoutePolicy PublicRoute [CreateSessionClass] (Some 153600),
+  ),
+  ("com.atproto.server.refreshSession", RoutePolicy RefreshRoute [] (Some 0)),
+  ("com.atproto.server.deleteSession", RoutePolicy RefreshRoute [] (Some 0)),
+  ("com.atproto.server.getSession", RoutePolicy AuthenticatedRoute [] None),
+  (
+    "com.atproto.server.getServiceAuth",
+    RoutePolicy AuthenticatedRoute [] None,
+  ),
+  ("app.bsky.actor.getPreferences", RoutePolicy AuthenticatedRoute [] None),
+  (
+    "app.bsky.actor.putPreferences",
+    RoutePolicy AuthenticatedRoute [] (Some 153600),
+  ),
+  ("com.atproto.repo.getRecord", RoutePolicy PublicRoute [] None),
+  ("com.atproto.repo.listRecords", RoutePolicy PublicRoute [] None),
+  ("com.atproto.repo.describeRepo", RoutePolicy PublicRoute [] None),
+  ("com.atproto.server.describeServer", RoutePolicy PublicRoute [] None),
+  (
+    "com.atproto.sync.getRepo",
+    RoutePolicy PublicRoute [RepoExportClass] None,
+  ),
+  ("com.atproto.sync.getLatestCommit", RoutePolicy PublicRoute [] None),
+  ("com.atproto.sync.getBlob", RoutePolicy PublicRoute [] None),
+  ("com.atproto.sync.listBlobs", RoutePolicy PublicRoute [] None),
+  ("com.atproto.sync.listRepos", RoutePolicy PublicRoute [] None),
+  ("com.atproto.sync.getRepoStatus", RoutePolicy PublicRoute [] None),
+  ("com.atproto.identity.resolveHandle", RoutePolicy PublicRoute [] None),
+  ("com.atproto.sync.subscribeRepos", RoutePolicy PublicRoute [] None),
+]
+
+-- The count the registry and the table must both report. It is pinned so
+-- that dropping a route AND its row together still shows up here, which the
+-- pair of closure checks alone cannot see.
+registeredRouteCount : Int
+registeredRouteCount = 24
+
+authName : AuthPolicy -> String
+authName PublicRoute = "public"
+authName AuthenticatedRoute = "authenticated"
+authName RefreshRoute = "refresh"
+
+className : RateLimitClass -> String
+className ConnectionsClass = "connections"
+className RequestsClass = "requests"
+className WritesClass = "writes"
+className CreateSessionClass = "createSession"
+className RepoExportClass = "repoExport"
+className ProxyClass = "proxy"
+
+classSetName : List RateLimitClass -> String
+classSetName [] = "none"
+classSetName classes = join "+" (map className classes)
+
+ceilingName : Option Int -> String
+ceilingName None = "no-body"
+ceilingName (Some bytes) = "\{bytes}"
+
+-- One route's three classifications as a single comparable line, so a
+-- mismatch reports which column moved instead of only that something did.
+renderPolicy : RoutePolicy -> String
+renderPolicy (RoutePolicy auth classes ceiling) =
+  "\{authName auth} | \{classSetName classes} | \{ceilingName ceiling}"
+
+-- The ceiling the router will actually enforce for this endpoint, read from
+-- the live `stdlib/http` constants rather than from this file.
+ceilingFor : Option InputPolicy -> Option Int
+ceilingFor None = None
+ceilingFor (Some NoInput) = Some 0
+ceilingFor (Some JsonInput) = Some maxJsonBodyBytes
+ceilingFor (Some TextInput) = Some maxTextBodyBytes
+ceilingFor (Some RawInput) = Some maxRawBodyBytes
+
+derivedPolicy : Endpoint -> RoutePolicy
+derivedPolicy endpoint =
+  RoutePolicy
+    (endpointAuth endpoint)
+    (nsidRateLimitClasses (endpointNsid endpoint))
+    (ceilingFor (endpointInput endpoint))
+
+{- | Every live route paired with its derived policy line, in registration
+   order.
+
+   A registry that failed to build yields the empty list, which would make
+   both closure checks pass vacuously — the count assertion is what refuses
+   that, so it is not an ornament. -}
+derivedRoutes : List (String, String)
+derivedRoutes = match pdsRegistry
+  Err _ => []
+  Ok registry =>
+    map
+      (endpoint =>
+        (endpointNsid endpoint, renderPolicy (derivedPolicy endpoint)))
+      (registryEndpoints registry)
+
+committedLines : List (String, String)
+committedLines =
+  map (entry => (fst entry, renderPolicy (snd entry))) committedPolicies
+
+-- Routes the registry holds that this table has no row for.
+routesWithoutRows : List String
+routesWithoutRows =
+  map
+    fst
+    (filter (route => isNone (lookup (fst route) committedLines)) derivedRoutes)
+
+-- Rows this table holds that the registry no longer registers.
+rowsWithoutRoutes : List String
+rowsWithoutRoutes =
+  map
+    fst
+    (filter (row => isNone (lookup (fst row) derivedRoutes)) committedLines)
+
+disagreement : (String, String) -> Option String
+disagreement (nsid, actual) = match lookup nsid committedLines
+  None => None
+  Some expected =>
+    if expected == actual then
+      None
+    else
+      Some "\{nsid}: expected \{expected} but registry says \{actual}"
+
+-- Routes whose committed line disagrees with the live one.
+mismatchedRoutes : List String
+mismatchedRoutes = somes (map disagreement derivedRoutes)
+
+test "every registered route has a committed policy row" =
+  expectEqual [] routesWithoutRows
+
+test "every committed policy row names a registered route" =
+  expectEqual [] rowsWithoutRoutes
+
+test "every route's auth, rate-limit classes and body ceiling match its row" =
+  expectEqual [] mismatchedRoutes
+
+test "the registry and the committed table hold the same route count" =
+  expectEqual
+    (registeredRouteCount, registeredRouteCount)
+    (length derivedRoutes, length committedLines)

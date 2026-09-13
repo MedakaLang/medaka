@@ -148,6 +148,20 @@ export
 endpointAuth : Endpoint -> AuthPolicy
 endpointAuth (Endpoint _ _ auth) = auth
 
+{- | The body policy this endpoint accepts, or `None` when it accepts no
+   request body at all.
+
+   `None` and `Some NoInput` are different facts and must stay
+   distinguishable: a query or a subscription carries no `InputPolicy`,
+   whereas `Some NoInput` is a procedure that was registered to admit a body
+   of exactly zero bytes. Collapsing the two would let a test claim a
+   ceiling for a route that has no body position to put one on. -}
+export
+endpointInput : Endpoint -> Option InputPolicy
+endpointInput (Endpoint _ QueryEndpoint _) = None
+endpointInput (Endpoint _ (ProcedureEndpoint policy) _) = Some policy
+endpointInput (Endpoint _ SubscriptionEndpoint _) = None
+
 nameMember : String -> List String -> Bool
 nameMember _ [] = False
 nameMember wanted (name :: rest) =
