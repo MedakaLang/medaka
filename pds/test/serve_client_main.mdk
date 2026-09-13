@@ -519,12 +519,38 @@ runChunked port token did collection rkey text =
     Err _ => ()
   ignoreResult (close conn)
 
+{- | The verdict every case that grades CORS shares: the status wanted, the
+   one header every response of this server carries, and the absence of the
+   credentialed form — `Access-Control-Allow-Credentials` and `origin: *` are
+   mutually exclusive in the CORS spec and this server never issues the
+   credentialed one, so a case that only checked for the allow-origin header
+   would pass a response carrying both. -}
+corsVerdict : String -> Int -> Int -> String -> <IO> Unit
+corsVerdict label want got headerText =
+  if got /= want then
+    report
+      label
+      False
+      "want status \{intToString want}, got \{intToString got}: \{headerText}"
+  else if not (contains "access-control-allow-origin: *" headerText) then
+    report label False "missing allow-origin header: \{headerText}"
+  else if contains "access-control-allow-credentials" headerText then
+    report label False "answered with allow-credentials: \{headerText}"
+  else
+    report label True "status=\{intToString got}"
+
+-- Graded on the allow-origin header as well as the status: this answer comes
+-- from `lib.server_core`'s `handleBytes` Err arm, which never reaches `handle`
+-- and so is not one of the exits that gets the header for free.
 runMalformed : Int -> <IO, Net "_"> Unit
 runMalformed port =
   let conn = mustConnect port
   let () = mustSend conn (toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n")
-  let result = readResponse conn [||]
-  let () = expectStatus "MALFORMED" 400 result
+  let result = readHeaderResponse conn [||]
+  let () = match result
+    Err message => report "MALFORMED" False message
+    Ok (status, headerText, _, _) =>
+      corsVerdict "MALFORMED" 400 status headerText
   ignoreResult (close conn)
 
 overcapFillerBytes : Int
@@ -544,11 +570,13 @@ runOvercap port =
   -- already decided on can be read back. That closure IS the rejection, so it
   -- counts as one. What does not count: any status other than 413, or a server
   -- that accepted the whole over-cap body and then answered nothing.
+  --
+  -- When a 413 IS read back it is graded on the allow-origin header too: this
+  -- is the other `handleBytes` Err arm, and it reaches no `handle` exit either.
   let sent = sendAll conn request
-  let result = readResponse conn [||]
+  let result = readHeaderResponse conn [||]
   let () = match result
-    Ok (got, _, _) =>
-      report "OVERCAP" (got == 413) "status \{intToString got} (wanted 413)"
+    Ok (got, headerText, _, _) => corsVerdict "OVERCAP" 413 got headerText
     Err message => match sent
       Err sendMessage =>
         report
@@ -886,15 +914,7 @@ runPutPreferencesCors port token want =
   match result
     Err message => report "PUTPREFSCORS" False message
     Ok (status, headerText, _, _) =>
-      if status /= want then
-        report
-          "PUTPREFSCORS"
-          False
-          "want status \{intToString want}, got \{intToString status}"
-      else if not (contains "access-control-allow-origin: *" headerText) then
-        report "PUTPREFSCORS" False "missing allow-origin header: \{headerText}"
-      else
-        report "PUTPREFSCORS" True "status=\{intToString status}"
+      corsVerdict "PUTPREFSCORS" want status headerText
 
 {- | A `putPreferences` body this server must refuse 400: either an item with
    no `$type` at all, or one whose `$type` names a namespace other than
@@ -1466,18 +1486,128 @@ runProxyReadCors port token service path want =
   match result
     Err message => report "PROXYREADCORS" False message
     Ok (status, headerText, _, _) =>
+      corsVerdict "PROXYREADCORS" want status headerText
+
+{- | The `Access-Control-Request-Headers` value a preflight case sends, named
+   rather than passed as text: two of the four shapes are a single byte the
+   inbound parser accepts and the outbound serializer refuses, and a raw TAB
+   or a raw high byte does not survive a trip through `sh` argv legibly.
+
+   `tab` is byte 9 and `high` is byte 195 — both admitted by `http`'s
+   `validFieldValue` (which takes TAB and everything above 127) and both
+   refused by `validResponseValue` (`32..126`), which is the exact gap that
+   used to panic `lib.cors` and take the whole server process with it. -}
+requestedHeadersBytes : String -> Array Int
+requestedHeadersBytes "none" = [||]
+requestedHeadersBytes "tab" = concat [|toUtf8 "a", [|9|], toUtf8 "b"|]
+requestedHeadersBytes "high" = concat [|toUtf8 "a", [|195|], toUtf8 "b"|]
+requestedHeadersBytes named = toUtf8 named
+
+-- | An `OPTIONS` preflight, with the named `Access-Control-Request-Headers`
+-- value or none at all when the name is `none`.
+preflightRequest : String -> String -> Array Int
+preflightRequest path named =
+  let value = requestedHeadersBytes named
+  if arrayLength value == 0 then
+    toUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
+  else
+    concat [|
+      toUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}",
+      toUtf8 "Access-Control-Request-Headers: ",
+      value,
+      toUtf8 "\r\n\r\n",
+    |]
+
+-- | The five headers `cors@2.8.6`'s defaults produce, minus the one whose
+-- value this case is asserting itself.
+preflightHeaderFields : List String
+preflightHeaderFields = [
+  "access-control-allow-origin: *",
+  "access-control-allow-methods: GET,HEAD,PUT,PATCH,POST,DELETE",
+  "vary: Access-Control-Request-Headers",
+  "access-control-max-age: 86400",
+]
+
+-- | The `Access-Control-Allow-Headers` value a case expects, with `-` naming
+-- the empty one: `sh` argv can carry an empty word, but a case list reads far
+-- worse when the interesting value is invisible.
+wantedAllowHeaders : String -> String
+wantedAllowHeaders "-" = ""
+wantedAllowHeaders value = value
+
+missingField : String -> List String -> Option String
+missingField _ [] = None
+missingField headerText (field :: rest) =
+  if contains field headerText then missingField headerText rest else Some field
+
+{- | A CORS preflight over the real socket, graded on the status, the five
+   answer headers, and the exact `Access-Control-Allow-Headers` value.
+
+   `wantAllowed` is the value the answer must carry, with `-` standing for the
+   empty one — which is what a client that asked for nothing gets, and also
+   what a client that asked with bytes this server cannot repeat gets. The
+   value is asserted rather than merely present: a preflight that answered 204
+   while echoing an attacker's bytes back verbatim would pass a presence check
+   and is the shape that used to crash the process.
+
+   This runs against the LIVE shell, not `handleBytes`, because the ordering
+   under test is the shell's: `pds/shell/server.mdk`'s `respondAt` answers the
+   preflight before `upgradeDecision`/`proxyDecisionFor`/
+   `serviceAuthDecisionFor`, and an in-process cell calling `handleBytes`
+   directly sits below all three and cannot see that ordering at all. -}
+runPreflight : Int -> String -> String -> Int -> String -> <IO, Net "_"> Unit
+runPreflight port path named want wantAllowed =
+  let allowed = wantedAllowHeaders wantAllowed
+  let conn = mustConnect port
+  let () = mustSend conn (preflightRequest path named)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  let wantedField = "access-control-allow-headers: \{allowed}\r\n"
+  match result
+    Err message => report "PREFLIGHT" False message
+    Ok (status, headerText, _, _) =>
+      -- The read stops AT the blank line, so the last field carries no CRLF of
+      -- its own; the needle above ends in one, so restore it before searching.
+      let terminated = "\{headerText}\r\n"
       if status /= want then
         report
-          "PROXYREADCORS"
+          "PREFLIGHT"
           False
-          "want status \{intToString want}, got \{intToString status}"
-      else if not (contains "access-control-allow-origin: *" headerText) then
+          "want status \{intToString want}, got \{intToString status}: \{headerText}"
+      else if contains "access-control-allow-credentials" headerText then
         report
-          "PROXYREADCORS"
+          "PREFLIGHT"
           False
-          "missing allow-origin header: \{headerText}"
-      else
-        report "PROXYREADCORS" True "status=\{intToString status}"
+          "answered with allow-credentials: \{headerText}"
+      else if not (contains wantedField terminated) then
+        report
+          "PREFLIGHT"
+          False
+          "want allow-headers '\{allowed}': \{headerText}"
+      else match missingField headerText preflightHeaderFields
+        Some field =>
+          report "PREFLIGHT" False "missing '\{field}': \{headerText}"
+        None => report "PREFLIGHT" True "status=\{intToString status}"
+
+{- | Any GET, graded on the allow-origin header and the status alone — the
+   shape every shell response exit outside `lib.server_core`'s `handle` needs
+   asserted, since `handle` is the only thing that appends the header for
+   free.
+
+   The label is a parameter because this one shape serves several distinct
+   exits (a `getServiceAuth` success, a service-auth refusal, a proxy
+   refusal), and a shared label would make a failure name the wrong case. An
+   empty `token` sends no `Authorization` header, which is what a refusal case
+   needs. -}
+runCorsGet : String -> Int -> String -> String -> Int -> <IO, Net "_"> Unit
+runCorsGet label port token path want =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token path)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report label False message
+    Ok (status, headerText, _, _) => corsVerdict label want status headerText
 
 {- | Ask this server for a service credential, then SPEND it on the service it
    was minted for.
@@ -1552,7 +1682,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1619,6 +1749,10 @@ main = match args ()
     runProxyReadCors (mustPort port) token service path (mustStatus want)
   ["put-preferences-cors", port, token, want] =>
     runPutPreferencesCors (mustPort port) token (mustStatus want)
+  ["preflight", port, path, named, want, wantAllowed] =>
+    runPreflight (mustPort port) path named (mustStatus want) wantAllowed
+  ["cors-get", label, port, token, path, want] =>
+    runCorsGet label (mustPort port) token path (mustStatus want)
   ["service-auth", port, token, audience, nsid, stubPort] =>
     runServiceAuth (mustPort port) token audience nsid (mustPort stubPort)
   ["proxy-write", port, token, service, path, body, want, marker, field] =>

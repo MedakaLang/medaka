@@ -1786,6 +1786,78 @@ fi
 # transcript is a log too.
 echo "SERVICEAUTH: PASS the chat service read back the minted credential's own aud and lxm; ${#SA_TOKEN} characters, absent from the server's output"
 
+# 58a. A REAL BROWSER PREFLIGHT on a proxied route (S-cors-fix, #2938). A
+#    browser sends `OPTIONS` with no `Authorization` header before every
+#    non-simple call, so this is the exact shape every proxied `app.bsky.*` /
+#    `chat.bsky.*` call from the web arrives as. It must be answered 204 with
+#    the five CORS headers, and it must not be forwarded.
+#
+#    It is driven HERE, over the live socket, and not as a `read_routes_
+#    all_engines` cell: those call `lib.server_core`'s `handleBytes` directly,
+#    which sits BELOW the three shell classifications (`upgradeDecision`,
+#    `proxyDecisionFor`, `serviceAuthDecisionFor`) whose ordering is what this
+#    fix changed. `proxyDecisionFor` resolves a credential before it looks at
+#    the verb, so before the fix this exact request was answered 401 by
+#    `admitForwardable` and `handleBytes` was never reached at all — a cell
+#    below that seam cannot tell the two behaviors apart.
+CALLS_PRE_PF=$(stub_calls "$WORK/stub.log")
+CHAT_PRE_PF=$(stub_calls "$WORK/chatstub.log")
+client preflight "$PORTPX" '/xrpc/app.bsky.feed.getTimeline' authorization \
+  204 authorization \
+  || fail 'case 58a: an unauthenticated preflight on a proxied app.bsky route was not answered 204'
+client preflight "$PORTPX" '/xrpc/chat.bsky.convo.listConvos' authorization \
+  204 authorization \
+  || fail 'case 58a: an unauthenticated preflight on a proxied chat.bsky route was not answered 204'
+[ "$CALLS_PRE_PF" = "$(stub_calls "$WORK/stub.log")" ] \
+  || fail 'case 58a: a preflight was forwarded to the appview'
+[ "$CHAT_PRE_PF" = "$(stub_calls "$WORK/chatstub.log")" ] \
+  || fail 'case 58a: a preflight was forwarded to the chat service'
+
+# 58b. THE PREFLIGHT VALUE IS CLIENT BYTES. `Access-Control-Request-Headers`
+#    reaches this server through `http`'s inbound `validFieldValue`, which
+#    admits TAB and every byte above 127; the outbound `validResponseValue`
+#    admits only `32..126`. Before this fix the gap was a `panic` in
+#    `lib.cors`'s `preflightResponse` — a single TAB byte from an
+#    unauthenticated client killed the whole server process, and every
+#    subsequent case on that server got nothing at all.
+#
+#    Both shapes must answer 204 with an EMPTY allow-headers value: the value
+#    is dropped whole rather than echoed or stripped, so the answer allows no
+#    extra request headers and the browser refuses the real call. The status is
+#    asserted together with the value, because a 204 that echoed the bytes back
+#    would satisfy a status-only check and is the shape that crashed.
+#
+#    The case AFTER each is the point: an ordinary request on the SAME server,
+#    proving the process is still alive.
+client preflight "$PORTPX" '/' tab 204 - \
+  || fail 'case 58b: a TAB-bearing preflight was not answered 204 with an empty allow-headers'
+client cors-get PREFLIGHTSURVIVEDTAB "$PORTPX" '' '/.well-known/atproto-did' \
+  200 || fail 'case 58b: the server did not survive a TAB-bearing preflight'
+client preflight "$PORTPX" '/' high 204 - \
+  || fail 'case 58b: a high-byte preflight was not answered 204 with an empty allow-headers'
+client cors-get PREFLIGHTSURVIVEDHIGH "$PORTPX" '' '/.well-known/atproto-did' \
+  200 || fail 'case 58b: the server did not survive a high-byte preflight'
+client preflight "$PORTPX" '/' none 204 - \
+  || fail 'case 58b: a preflight asking for no headers was not answered 204'
+
+# 58c. ALLOW-ORIGIN ON THE SHELL'S OWN EXITS (S-cors-fix, #2938). Eleven shell
+#    responses are built and serialized without ever passing through
+#    `lib.server_core`'s `handle`, which is the only thing that appends the
+#    header for free. Two of them are graded here: `getServiceAuth`'s 200,
+#    this sprint's own new browser-facing route, whose bytes come from
+#    `mintedTokenBytes`; and the `ServiceAuthRefused` exit the same route takes
+#    with no `Authorization` header. Neither may carry
+#    `Access-Control-Allow-Credentials` — that header and `origin: *` are
+#    mutually exclusive, and this server never issues the credentialed form.
+client cors-get SERVICEAUTHCORS "$PORTPX" "$PXACCESS" \
+  "/xrpc/com.atproto.server.getServiceAuth?aud=$CHAT_DID&lxm=chat.bsky.convo.listConvos" \
+  200 \
+  || fail 'case 58c: the getServiceAuth 200 did not carry the allow-origin header'
+client cors-get SERVICEAUTHREFUSEDCORS "$PORTPX" '' \
+  "/xrpc/com.atproto.server.getServiceAuth?aud=$CHAT_DID&lxm=chat.bsky.convo.listConvos" \
+  401 \
+  || fail 'case 58c: the getServiceAuth refusal did not carry the allow-origin header'
+
 # 47. the proxied-read class: one inbound request became one outbound call, so
 #    the amplification is metered. Driven over ONE connection (the connections
 #    class is charged per connection and its ceiling is lower, so a

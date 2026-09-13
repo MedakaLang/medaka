@@ -55,7 +55,7 @@ import http.{
 import list.{filter}
 import string.{fromUtf8, indexOf, startsWith, take, toLower, toUtf8}
 import lib.atsyntax.{validateDid}
-import lib.cors.{allowOriginHeader}
+import lib.cors.{allowOriginHeader, printableAscii}
 import lib.nsid.{canonicalNsid, sameNsidIdentity, validateNsid}
 import lib.xrpc.{Registry, endpointNsid, registryEndpoints, xrpcErrorResponse}
 
@@ -386,13 +386,6 @@ relayedRequestFields =
 export
 relayedBodyFields : List String
 relayedBodyFields = ["content-type", "content-encoding"]
-
-printableAscii : Array Int -> Int -> Bool
-printableAscii value i =
-  if i >= arrayLength value then
-    True
-  else
-    value[i] >= 32 && value[i] <= 126 && printableAscii value (i + 1)
 
 {- | The one field named `name`, or `None` when the request carried none or
    carried more than one.

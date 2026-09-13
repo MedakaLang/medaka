@@ -10,9 +10,10 @@
    `cors@2.8.6` image's behavior under its one non-default option
    (`maxAge: DAY / SECOND`, `index.js:189`): `origin: '*'`,
    `methods: 'GET,HEAD,PUT,PATCH,POST,DELETE'`, `optionsSuccessStatus: 204`,
-   and the request's own `Access-Control-Request-Headers` reflected back
-   verbatim with `Vary: Access-Control-Request-Headers`
-   (`cors/lib/index.js:8-13,94-115,178-179`). -}
+   and the request's own `Access-Control-Request-Headers` reflected back with
+   `Vary: Access-Control-Request-Headers`
+   (`cors/lib/index.js:8-13,94-115,178-179`) — reflected as far as this
+   server's own serializer will carry it; see `requestedHeaders`. -}
 
 import http.{
   Header,
@@ -58,13 +59,51 @@ varyHeader = match makeHeader "vary" (toUtf8 "Access-Control-Request-Headers")
   Ok header => header
   Err message => panic "lib.cors: internal vary header error: \{message}"
 
+{- | True iff every byte of `value` from `i` on is printable ASCII, `32..126`
+   — the range `stdlib/http`'s `makeHeader` accepts in an outbound response
+   field value, and a narrower one than the inbound parser's `validFieldValue`
+   accepts, which also admits TAB and every byte above 127.
+
+   Exported because the relay path grades borrowed request values against the
+   same rule (`lib.proxy`'s `pickFields`): a value a client sent and this
+   server repeats is repeatable only when the serializer will take it, and
+   one rule for that is one function. -}
+export
+printableAscii : Array Int -> Int -> Bool
+printableAscii value i =
+  if i >= arrayLength value then
+    True
+  else
+    value[i] >= 32 && value[i] <= 126 && printableAscii value (i + 1)
+
+{- | What the client's `Access-Control-Request-Headers` asked for, or an empty
+   value when it asked for nothing — and also when it asked with bytes the
+   outbound serializer will not take.
+
+   That value is entirely client-controlled and arrives through the inbound
+   parser, which accepts bytes `makeHeader` rejects, so an unusable value is
+   DROPPED WHOLE rather than repeated or stripped byte by byte. Dropping
+   answers "no extra request headers are allowed", which makes the browser
+   refuse the real request; stripping would answer with a header list no
+   client asked for, the same forgery `lib.proxy`'s `soleField` refuses when
+   a relayed field is ambiguous. -}
 requestedHeaders : List Header -> Array Int
 requestedHeaders [] = [||]
 requestedHeaders (header :: rest) =
   if headerName header == "access-control-request-headers" then
-    headerValue header
+    let value = headerValue header
+    if printableAscii value 0 then value else [||]
   else
     requestedHeaders rest
+
+-- | The `Access-Control-Allow-Headers` answer carrying no allowance at all.
+-- A constant, so the one response field built from client bytes has a
+-- known-good value to fall back to rather than a crash.
+emptyAllowHeadersHeader : Header
+emptyAllowHeadersHeader = match makeHeader "access-control-allow-headers" [||]
+  Ok header => header
+  Err message =>
+    panic "lib.cors: internal allow-headers header error: \{message}"
 
 -- | Is this request a CORS preflight — an `OPTIONS` request — that must be
 -- answered before ordinary routing runs, ahead of `xrpc`'s `methodNotAllowed`
@@ -73,8 +112,14 @@ export
 isPreflight : Request -> Bool
 isPreflight request = requestMethod request == "OPTIONS"
 
--- | The complete preflight answer: 204, no body, and the five headers
--- `cors@2.8.6`'s defaults plus its one configured option produce.
+{- | The complete preflight answer: 204, no body, and the five headers
+   `cors@2.8.6`'s defaults plus its one configured option produce.
+
+   Total on every `Request`: `requestedHeaders` has already graded the one
+   client-controlled value against the serializer's own rule, so the `Err`
+   arm below is unreachable, and it answers with the empty allowance rather
+   than a panic anyway — a client-reachable crash path here kills the whole
+   process. -}
 export
 preflightResponse : Request -> Response
 preflightResponse request =
@@ -83,8 +128,7 @@ preflightResponse request =
       "access-control-allow-headers"
       (requestedHeaders (requestHeaders request)))
       Ok header => header
-      Err message =>
-        panic "lib.cors: internal allow-headers header error: \{message}"
+      Err _ => emptyAllowHeadersHeader
   let headers = [
     allowOriginHeader,
     allowMethodsHeader,

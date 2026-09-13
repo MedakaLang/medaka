@@ -262,6 +262,31 @@ preflightCell label target requestedHeaders =
       && storeIsEmpty next
   check label ok "status=\{status}"
 
+{- | A preflight whose `Access-Control-Request-Headers` this server cannot
+   repeat: the value is still 204, still carries the other four headers, and
+   answers an EMPTY allowance rather than the client's own bytes.
+
+   The value here is a TAB, which `http`'s inbound `validFieldValue` admits
+   and its outbound `validResponseValue` (`32..126`) refuses. That gap used to
+   be a `panic` reachable from any unauthenticated client. The allowance is
+   asserted TERMINATED, so a response that echoed `a<TAB>b` back cannot
+   satisfy it by prefix — and the drop is pure, so all three engines owe the
+   same answer. -}
+preflightDroppedCell : String -> String -> <IO> Int
+preflightDroppedCell label target =
+  let (next, response) =
+    handleBytes mustServer testContext storeEmpty (optionsRequest target "a\tb")
+  let status = statusText response
+  let head = headText response
+  let ok =
+    status == "204"
+      && contains "access-control-allow-headers: \r\n" "\{head}\r\n"
+      && contains "access-control-allow-origin: *" head
+      && contains "vary: Access-Control-Request-Headers" head
+      && not (contains "access-control-allow-credentials" head)
+      && storeIsEmpty next
+  check label ok "status=\{status}"
+
 -- | Any non-preflight response: the allow-origin header this server puts on
 -- everything, and NONE of the preflight-only headers or the credentialed
 -- form it must never send.
@@ -1160,6 +1185,8 @@ runCells corpus =
       "preflight-atproto-did"
       "/.well-known/atproto-did"
       "content-type"
+  let preflightDropped =
+    preflightDroppedCell "preflight-unrepeatable-value" timelineTarget
   let originOnly200 =
     originOnlyCell
       "origin-only-on-200"
@@ -1199,13 +1226,14 @@ runCells corpus =
       + unregistered
       + preflightTimeline
       + preflightWellKnown
+      + preflightDropped
       + originOnly200
       + originOnly401
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/56 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 56 then
+      "cells: \{intToString cells}/57 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 57 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

@@ -39,7 +39,7 @@ import http.{
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
-import lib.cors.{withAllowOrigin}
+import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.credential.{
   credentialDigest,
   credentialIterations,
@@ -1157,6 +1157,24 @@ endOfStream : ReadBuffer -> Result String Unit
 endOfStream buf =
   if readBufferIsEmpty buf then Ok () else Err "connection closed mid-request"
 
+{- | The CORS preflight answer this buffer is owed, or `None` when it is not a
+   preflight. A buffer that did not parse is never one, for the reason it is
+   never an upgrade: there is no `Request` to grade.
+
+   `lib.server_core`'s `handle` keeps a short-circuit of its own, but it sits
+   below `applyRequest`, and three classifications run above that: a browser
+   preflights with no `Authorization` header and `admitForwardable` resolves a
+   credential before it looks at the verb, so an `OPTIONS` to a forwardable
+   nsid is refused 401 before `applyRequest` is ever called. Answering here
+   makes the preflight independent of which of the four downstream paths the
+   real request would have taken. Nothing in the answer depends on them:
+   `preflightResponse` reads the request's own headers, and neither touches
+   the store nor charges anything. -}
+preflightAnswer : Result HttpParseFailure Request -> Option Response
+preflightAnswer (Err _) = None
+preflightAnswer (Ok request) =
+  if isPreflight request then Some (preflightResponse request) else None
+
 -- The rate-limit decision is taken here, once per framed request, because
 -- this is the one place that holds both the parsed `Request` (headers, for
 -- `identifyClient`, and target, for the routed NSID) and the point of
@@ -1216,8 +1234,19 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
       (admissionIdentity (servingTrustedProxy serving) parsed)
       (admissionClasses firstRequest parsed)
       nowSeconds
-  match charged
-    Some refusal =>
+  {- The answer owed before any classification runs: the rate-limit refusal,
+     or the preflight answer. The preflight is taken AFTER the charge rather
+     than before it, because `applyRateLimit`'s contract is that every buffer
+     reaching the framer is charged — a preflight costs the same parse and
+     response as anything else, and answering one for free would be the
+     unmetered work channel that contract exists to close. Only the refusal is
+     passed through `withAllowOrigin`: `preflightResponse` already carries its
+     own complete header set, allow-origin included. -}
+  let earlyAnswer = match charged
+    Some refusal => Some (withAllowOrigin refusal)
+    None => preflightAnswer parsed
+  match earlyAnswer
+    Some response =>
       sendAndContinue
         server
         dir
@@ -1229,7 +1258,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
         slot
         rest
         keepAlive
-        (serializeResponse refusal)
+        (serializeResponse response)
     None => defer
       decision <- liftIO (u =>
         upgradeDecision server storeRef nowSeconds parsed)
@@ -1258,7 +1287,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
             slot
             rest
             False
-            (serializeResponse refusal)
+            (serializeResponse (withAllowOrigin refusal))
         NotAnUpgrade => defer
           proxy <- liftIO (u =>
             proxyDecisionFor server serving storeRef nowSeconds parsed)
@@ -1290,7 +1319,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 slot
                 rest
                 keepAlive
-                (serializeResponse refusal)
+                (serializeResponse (withAllowOrigin refusal))
             NotProxied => defer
               credential <- liftIO (u =>
                 serviceAuthDecisionFor
@@ -1325,7 +1354,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                     slot
                     rest
                     keepAlive
-                    (serializeResponse refusal)
+                    (serializeResponse (withAllowOrigin refusal))
                 NotServiceAuth => defer
                   response <- liftIO (u =>
                     applyRequest
@@ -1443,10 +1472,11 @@ serviceAuthDecisionFor server serving storeRef nowSeconds (Ok request) =
    server declining. -}
 mintedTokenBytes : Serving -> ServiceAuthRequest -> Array Int
 mintedTokenBytes serving claims = match servingEgress serving
-  None => serializeResponse serviceAuthUnavailableResponse
+  None => serializeResponse (withAllowOrigin serviceAuthUnavailableResponse)
   Some egress => match egressMintToken egress claims
-    Err _ => serializeResponse serviceAuthMintFailureResponse
-    Ok minted => serializeResponse (serviceAuthTokenResponse minted)
+    Err _ => serializeResponse (withAllowOrigin serviceAuthMintFailureResponse)
+    Ok minted =>
+      serializeResponse (withAllowOrigin (serviceAuthTokenResponse minted))
 
 -- | What a client is told when the signature itself did not come out. The
 -- reason is not in the body for the reason a proxied read's 502 does not carry
@@ -1507,7 +1537,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
         slot
         rest
         keepAlive
-        (serializeResponse refusal)
+        (serializeResponse (withAllowOrigin refusal))
     None => match servingEgress serving
       None =>
         sendAndContinue
@@ -1521,7 +1551,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
           slot
           rest
           keepAlive
-          (serializeResponse proxyUpstreamFailureResponse)
+          (serializeResponse (withAllowOrigin proxyUpstreamFailureResponse))
       Some egress =>
         if not (claimProxiedCall (servingProxyCensus serving)) then
           sendAndContinue
@@ -1535,7 +1565,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             slot
             rest
             keepAlive
-            (serializeResponse proxyCeilingResponse)
+            (serializeResponse (withAllowOrigin proxyCeilingResponse))
         else defer
           answered <- egressCall egress admission
           _ <- liftIO (u => releaseProxiedCall (servingProxyCensus serving))
@@ -1577,9 +1607,10 @@ proxyCeilingResponse =
     "too many proxied reads are in flight on this server"
 
 proxyAnswerBytes : Result String UpstreamAnswer -> Array Int
-proxyAnswerBytes (Err _) = serializeResponse proxyUpstreamFailureResponse
+proxyAnswerBytes (Err _) =
+  serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
 proxyAnswerBytes (Ok answer) = match proxyUpstreamResponse answer
-  Err _ => serializeResponse proxyUpstreamFailureResponse
+  Err _ => serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
   Ok response => serializeResponse response
 
 {- | Whether this request is a subscription upgrade, asked of the pure core
@@ -1654,7 +1685,7 @@ admitSubscription server dir storeRef limiterRef census serving conn slot rest a
       slot
       rest
       False
-      (serializeResponse subscriptionCeilingResponse)
+      (serializeResponse (withAllowOrigin subscriptionCeilingResponse))
   else defer
     outcome <- runSubscription
       dir
@@ -1748,7 +1779,10 @@ rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds =
       nowSeconds
   match charged
     Some refusal =>
-      A.sendAllWithin writeTimeout conn (serializeResponse refusal)
+      A.sendAllWithin
+        writeTimeout
+        conn
+        (serializeResponse (withAllowOrigin refusal))
     None => defer
       response <- liftIO (u =>
         applyRequest server dir storeRef (readBufferLive buf))

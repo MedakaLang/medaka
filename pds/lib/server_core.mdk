@@ -1090,9 +1090,10 @@ handleBytes : Server ->
   Array Int ->
   (Store, Array Int)
 handleBytes server context store bytes = match parseRequestClassified bytes
-  Err (HttpMalformed _) => (store, serializeResponse malformedHttpResponse)
+  Err (HttpMalformed _) =>
+    (store, serializeResponse (withAllowOrigin malformedHttpResponse))
   Err (HttpResourceExcess _) =>
-    (store, serializeResponse resourceExcessResponse)
+    (store, serializeResponse (withAllowOrigin resourceExcessResponse))
   Ok request =>
     let (next, response) = handle server context store request
     (next, serializeResponse response)
