@@ -43,6 +43,11 @@ public export data DagCbor =
   | DcMap (List (String, DagCbor))
   | DcLink Cid
 
+{- | The nesting ceiling both directions of this codec enforce. It is a
+   ceiling on the DECODER's recursion, so the encoder must refuse the same
+   values: bytes this module produced but cannot read back would be a record
+   committed to a repository that no read path can ever return. -}
+export
 maxDepth : Int
 maxDepth = 128
 
@@ -90,45 +95,56 @@ compareKeyBytes left right i =
     Eq => compareKeyBytes left right (i + 1)
     order => order
 
-emitValue : DagCbor -> Builder -> Result String Unit
-emitValue DcNull out =
+{- | The depth gate, split from the constructor dispatch exactly as
+   `parseValueAt` is split from `parseMajor`, so the two directions count the
+   same nesting levels: a value's children are emitted one level below it, a
+   map key counts as a child alongside its value, and a tag-42 link is a leaf. -}
+emitValue : DagCbor -> Int -> Builder -> Result String Unit
+emitValue value depth out =
+  if depth > maxDepth then
+    Err "dagcbor: nesting depth exceeds \{intToString maxDepth}"
+  else
+    emitValueAt value depth out
+
+emitValueAt : DagCbor -> Int -> Builder -> Result String Unit
+emitValueAt DcNull _ out =
   emitU8 0xf6 out
   Ok ()
-emitValue (DcBool False) out =
+emitValueAt (DcBool False) _ out =
   emitU8 0xf4 out
   Ok ()
-emitValue (DcBool True) out =
+emitValueAt (DcBool True) _ out =
   emitU8 0xf5 out
   Ok ()
-emitValue (DcInt value) out =
+emitValueAt (DcInt value) _ out =
   if value >= 0 then
     emitArgument 0 value out
   else
     emitArgument 1 (0 - 1 - value) out
   Ok ()
-emitValue (DcBytes bytes) out =
+emitValueAt (DcBytes bytes) _ out =
   if not (validBytes bytes 0) then
     Err "dagcbor: byte string element outside byte range 0..255"
   else
     emitArgument 2 (arrayLength bytes) out
     emitBytes (arrayBytes bytes 0) out
     Ok ()
-emitValue (DcString text) out =
+emitValueAt (DcString text) _ out =
   let bytes = toUtf8 text
   emitArgument 3 (arrayLength bytes) out
   emitBytes (arrayBytes bytes 0) out
   Ok ()
-emitValue (DcArray values) out =
+emitValueAt (DcArray values) depth out =
   emitArgument 4 (length values) out
-  emitValues values out
-emitValue (DcMap fields) out =
+  emitValues values (depth + 1) out
+emitValueAt (DcMap fields) depth out =
   let sorted = sortBy ((left, _) (right, _) => keyCompare left right) fields
   match firstDuplicate sorted None
     Some key => Err "dagcbor: duplicate map key '\{key}'"
     None =>
       emitArgument 5 (length sorted) out
-      emitFields sorted out
-emitValue (DcLink cid) out =
+      emitFields sorted (depth + 1) out
+emitValueAt (DcLink cid) _ out =
   let bytes = cidToBytes cid
   emitU8 0xd8 out
   emitU8 0x2a out
@@ -137,19 +153,20 @@ emitValue (DcLink cid) out =
   emitBytes (arrayBytes bytes 0) out
   Ok ()
 
-emitValues : List DagCbor -> Builder -> Result String Unit
-emitValues [] _ = Ok ()
-emitValues (value :: rest) out = match emitValue value out
+emitValues : List DagCbor -> Int -> Builder -> Result String Unit
+emitValues [] _ _ = Ok ()
+emitValues (value :: rest) depth out = match emitValue value depth out
   Err message => Err message
-  Ok () => emitValues rest out
+  Ok () => emitValues rest depth out
 
-emitFields : List (String, DagCbor) -> Builder -> Result String Unit
-emitFields [] _ = Ok ()
-emitFields ((key, value) :: rest) out = match emitValue (DcString key) out
-  Err message => Err message
-  Ok () => match emitValue value out
+emitFields : List (String, DagCbor) -> Int -> Builder -> Result String Unit
+emitFields [] _ _ = Ok ()
+emitFields ((key, value) :: rest) depth out =
+  match emitValue (DcString key) depth out
     Err message => Err message
-    Ok () => emitFields rest out
+    Ok () => match emitValue value depth out
+      Err message => Err message
+      Ok () => emitFields rest depth out
 
 firstDuplicate : List (String, DagCbor) -> Option String -> Option String
 firstDuplicate [] _ = None
@@ -162,7 +179,7 @@ export
 dagCborEncode : DagCbor -> Result String (Array Int)
 dagCborEncode value =
   let out = newBuilder ()
-  map (_ => buildArray out) (emitValue value out)
+  map (_ => buildArray out) (emitValue value 0 out)
 
 foldUInt : Array Int -> Int -> Int
 foldUInt bytes i = foldUIntGo bytes i 0

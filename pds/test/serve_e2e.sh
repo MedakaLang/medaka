@@ -442,6 +442,16 @@ client get-session "$PORT1" "$TOKEN" "$DID" || fail 'case 5c: getSession'
 client login-refused "$PORT1" "$HANDLE" 'not the password' \
   || fail 'case 5d: wrong password refused'
 
+# 5e. a record nested deeper than the DAG-CBOR codec can read back is refused
+#    at WRITE time (#2947), and the collection is still readable afterwards.
+#    Case 5's LISTRECORDS is the before-picture: until the encoder carried the
+#    decoder's own 128-level bound, this write was COMMITTED with a 200 and
+#    every later listRecords for the WHOLE collection — not merely getRecord
+#    for this one key — answered 400 from then on. The second half of the case
+#    is the one that proves the poisoning is gone rather than moved.
+client deep-record "$PORT1" "$TOKEN" "$DID" "$COLLECTION" e2edeeprecord 129 \
+  || fail 'case 5e: an over-deep record was accepted, or poisoned the collection'
+
 # 11. the session lifecycle, end to end and over the socket: log in, write,
 #    log out, and find the SAME access token refused afterwards. Its signature
 #    is still good and its two-hour window is still open, so a server that
