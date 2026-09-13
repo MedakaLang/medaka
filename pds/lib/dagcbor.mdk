@@ -219,7 +219,7 @@ readArgument _ pos _ = BErr "dagcbor: reserved additional-information value" pos
 parseValueAt : Array Int -> Int -> Int -> BResult DagCbor
 parseValueAt input pos depth =
   if depth > maxDepth then
-    BErr "dagcbor: nesting depth exceeds 128" pos
+    BErr "dagcbor: nesting depth exceeds \{intToString maxDepth}" pos
   else if pos >= arrayLength input then
     BErr "dagcbor: truncated value" pos
   else
