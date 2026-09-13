@@ -337,6 +337,31 @@ createRecordJson did collection rkey text =
       ),
     ])
 
+-- | `n` nested single-key objects around one leaf string.
+nestedJson : Int -> Json
+nestedJson n =
+  if n <= 0 then JString "leaf" else jObject [("n", nestedJson (n - 1))]
+
+{- | A `createRecord` body whose record nests objects until its deepest value
+   sits at DAG-CBOR nesting depth `depth`. The record map is itself depth 0
+   and its own field values are depth 1, so reaching `depth` takes `depth - 1`
+   nested objects around the leaf. -}
+deepRecordJson : String -> String -> String -> Int -> String
+deepRecordJson did collection rkey depth =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+      (
+        "record",
+        jObject [
+          ("$type", JString "app.bsky.feed.post"),
+          ("nested", nestedJson (depth - 1)),
+        ],
+      ),
+    ])
+
 createSessionJson : String -> String -> String
 createSessionJson identifier password =
   stringify
@@ -710,6 +735,36 @@ runEndpoints port token did handle collection rkey =
       token
       (xrpcPath "com.atproto.repo.deleteRecord")
       (deleteRecordJson did collection scratch))
+
+{- | A record nested deeper than the DAG-CBOR codec can read back must be
+   refused at WRITE time. The `listRecords` half is the half that matters:
+   until the encoder carried the decoder's own depth bound, the write was
+   COMMITTED and every later read of the WHOLE COLLECTION answered 400, not
+   merely `getRecord` for this one key. A case that graded the refusal alone
+   would pass a server that still bricked the collection. -}
+runDeepRecord : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  <IO, Net "_"> Unit
+runDeepRecord port token did collection rkey depth =
+  let () =
+    checkRoute
+      "DEEPRECORD"
+      port
+      400
+      (postRequest
+        token
+        createRecordPath
+        (deepRecordJson did collection rkey depth))
+  checkRoute
+    "DEEPRECORDLIST"
+    port
+    200
+    (getRequest
+      "\{xrpcPath "com.atproto.repo.listRecords"}?repo=\{did}&collection=\{collection}")
 
 runResume : Int -> String -> String -> String -> String -> <IO, Net "_"> Unit
 runResume port did collection rkey text =
@@ -1682,7 +1737,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1693,6 +1748,8 @@ main = match args ()
     runChunked (mustPort port) token did collection rkey text
   ["endpoints", port, token, did, handle, collection, rkey] =>
     runEndpoints (mustPort port) token did handle collection rkey
+  ["deep-record", port, token, did, collection, rkey, depth] =>
+    runDeepRecord (mustPort port) token did collection rkey (mustCount depth)
   ["unauthorized", port, did, collection, rkey] =>
     runUnauthorized (mustPort port) did collection rkey
   ["login", port, identifier, password] =>
@@ -1726,6 +1783,8 @@ main = match args ()
     runUploadBlob (mustPort port) token mimeType text
   ["get-blob", port, did, cid, mimeType, text] =>
     runGetBlob (mustPort port) did cid mimeType text
+  ["get-blob-not-live", port, did, cid] =>
+    runGetBlobNotLive (mustPort port) did cid
   ["repo-digest", port, did] => runRepoDigest (mustPort port) did
   ["get-blob-missing", port, did, cid] =>
     runGetBlobMissing (mustPort port) did cid
@@ -1948,6 +2007,27 @@ runGetBlob port did cid mimeType text =
         "GETBLOB"
         (status == 200 && mediaType == mimeType && bodyText == text)
         "status \{intToString status}, type '\{mediaType}' (wanted '\{mimeType}'), \{intToString (arrayLength body)} byte(s)"
+  ignoreResult (close conn)
+
+{- | Fetch a blob back and grade that `getBlob` refuses to serve it as a live
+   document under this origin: the response must carry both
+   `x-content-type-options: nosniff` and `content-disposition: attachment`,
+   whatever the blob's declared MIME type. Response headers are always
+   lowercase (`serializeResponse`'s doing), so a plain substring check is
+   exact. -}
+runGetBlobNotLive : Int -> String -> String -> <IO, Net "_"> Unit
+runGetBlobNotLive port did cid =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getBlobPath did cid))
+  let () = match readHeaderResponse conn [||]
+    Err message => report "GETBLOBNOTLIVE" False message
+    Ok (status, headerText, _, _) =>
+      report
+        "GETBLOBNOTLIVE"
+        (status == 200
+          && contains "x-content-type-options: nosniff" headerText
+          && contains "content-disposition: attachment" headerText)
+        "status \{intToString status}, headers:\n\{headerText}"
   ignoreResult (close conn)
 
 {- | Fetch a blob the server must NOT hold and grade the refusal: a blob whose

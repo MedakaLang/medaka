@@ -510,6 +510,7 @@ bootstrapCredential dir password = do
 
 loadCredential : String -> <FileRead "_"> Result String CredentialRecord
 loadCredential dir = do
+  () <- requirePrivateMode "credential" (credentialPath dir)
   text <- match readFile (credentialPath dir)
     Err message => Err "unreadable credential \{credentialPath dir}: \{message}"
     Ok given => Ok given
@@ -552,6 +553,7 @@ planCredential parsed dir =
 -- where nothing has been written yet.
 readPassword : String -> <FileRead "_"> Result String String
 readPassword path = do
+  () <- requirePrivateMode "password file" path
   text <- match readFile path
     Err message => Err "unreadable password file \{path}: \{message}"
     Ok given => Ok given

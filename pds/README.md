@@ -684,6 +684,44 @@ requires its peer address, which this runtime cannot obtain (#2757). Treat
 `--trusted-proxy` as part of exposing the server, not as a later tuning
 step.
 
+### What the shipped Caddyfile does about the header (#2949)
+
+`pds/Caddyfile`'s `reverse_proxy` block carries one line that this flag
+depends on:
+
+```
+header_up X-Forwarded-For {remote_host}
+```
+
+`header_up` **sets** the field to the connecting peer as Caddy saw it,
+replacing whatever the client sent. Without that line Caddy appends instead,
+which leaves the field as `<whatever the client wrote>, <real peer>` — still
+readable, because this server takes the *last* hop, but it means a client
+chooses the entire prefix. Setting it removes the ambiguity at the one place
+that can: the hop nearest this process.
+
+### Ceilings on the header itself
+
+`X-Forwarded-For` arrives from outside, so it has two ceilings of its own
+(`pds/lib/resource_limits.mdk`):
+
+| Ceiling | Value | What it bounds |
+|---|---|---|
+| `maxXffHeaderBytes` | 4096 | the raw field, in **bytes on the wire** — checked before the value is decoded or split |
+| `maxXffTokens` | 64 | comma-separated hops, checked on the split's result |
+
+A field that violates either is **refused** — `400 Bad Request`,
+`error: "InvalidRequest"` — and not demoted to the shared `direct` bucket.
+Demotion would be a fresh allowance rather than a penalty: `direct` is a
+different bucket, so a caller whose own budget was spent could pad a header
+it writes itself and go on being served. The request is still charged to
+`direct` before it is refused, for the same reason an unparseable request is:
+answering it costs a parse and a response, and an uncharged failure is a work
+channel with no ceiling.
+
+A real proxy chain is a handful of short hops, so neither ceiling is
+reachable by one.
+
 ## secp256k1 scalar arithmetic (S-scalar, #1700)
 
 `pds/lib/scalar.mdk` is arithmetic modulo the secp256k1 **group order**
