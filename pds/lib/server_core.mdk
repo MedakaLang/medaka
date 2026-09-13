@@ -22,6 +22,7 @@ import http.{
   serializeResponse,
 }
 import hex as Hex
+import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
 import string.{contains, fromUtf8, splitAt, toInt, toLower, trim}
 import lib.atsyntax.{validateDid, validateHandle}
@@ -324,10 +325,25 @@ refusalFor _ =
    token is a broken server, not a secure one.
 
    Neither a route failure nor an auth refusal invokes the handler, and both
-   return the identical input Store. -}
+   return the identical input Store.
+
+   A CORS preflight (`OPTIONS`) is answered here, ahead of `routeRequest`, so
+   it never reaches `xrpc`'s `methodNotAllowed` — CORS is an HTTP-layer
+   answer, prior to XRPC admission, and must reach non-XRPC paths too. Every
+   other response gets the allow-origin header every response carries;
+   `handleRouted`'s own exits are the ones this appends it to, since a
+   preflight answer already carries its own complete header set. -}
 export
 handle : Server -> RequestContext -> Store -> Request -> (Store, Response)
-handle (Server account registry handler) context store request =
+handle server context store request =
+  if isPreflight request then
+    (store, preflightResponse request)
+  else
+    let (next, response) = handleRouted server context store request
+    (next, withAllowOrigin response)
+
+handleRouted : Server -> RequestContext -> Store -> Request -> (Store, Response)
+handleRouted (Server account registry handler) context store request =
   match routeRequest registry request
     RouteFailure failed => (store, xrpcFailureResponse failed)
     RouteCall auth call =>

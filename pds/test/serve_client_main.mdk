@@ -873,6 +873,29 @@ runPutPreferences port token want =
     expectStatus "PUTPREFS\{intToString want}" want (readResponse conn [||])
   ignoreResult (close conn)
 
+-- | The same call, graded on the allow-origin header instead of the body —
+-- used for the persist-failure 500 path, the other response
+-- `lib.server_core`'s `handle` never sees.
+runPutPreferencesCors : Int -> String -> Int -> <IO, Net "_"> Unit
+runPutPreferencesCors port token want =
+  let conn = mustConnect port
+  let () =
+    mustSend conn (postRequest token putPreferencesPath preferencesBodyJson)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "PUTPREFSCORS" False message
+    Ok (status, headerText, _, _) =>
+      if status /= want then
+        report
+          "PUTPREFSCORS"
+          False
+          "want status \{intToString want}, got \{intToString status}"
+      else if not (contains "access-control-allow-origin: *" headerText) then
+        report "PUTPREFSCORS" False "missing allow-origin header: \{headerText}"
+      else
+        report "PUTPREFSCORS" True "status=\{intToString status}"
+
 {- | A `putPreferences` body this server must refuse 400: either an item with
    no `$type` at all, or one whose `$type` names a namespace other than
    `app.bsky`. -}
@@ -1426,6 +1449,36 @@ runProxyRead port token service path want marker =
       else
         report "PROXYREAD" True "status=\{intToString status}"
 
+-- | The same proxied read, graded on the allow-origin header instead of the
+-- body — the one response `lib.server_core`'s `handle` never sees, so it is
+-- the exit that most needs its own check that the header still reaches it.
+runProxyReadCors : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  <IO, Net "_"> Unit
+runProxyReadCors port token service path want =
+  let conn = mustConnect port
+  let () = mustSend conn (proxyRequest "" token service path)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "PROXYREADCORS" False message
+    Ok (status, headerText, _, _) =>
+      if status /= want then
+        report
+          "PROXYREADCORS"
+          False
+          "want status \{intToString want}, got \{intToString status}"
+      else if not (contains "access-control-allow-origin: *" headerText) then
+        report
+          "PROXYREADCORS"
+          False
+          "missing allow-origin header: \{headerText}"
+      else
+        report "PROXYREADCORS" True "status=\{intToString status}"
+
 {- | Ask this server for a service credential, then SPEND it on the service it
    was minted for.
 
@@ -1499,7 +1552,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1562,6 +1615,10 @@ main = match args ()
       rkeyPrefix
   ["proxy-read", port, token, service, path, want, marker] =>
     runProxyRead (mustPort port) token service path (mustStatus want) marker
+  ["proxy-read-cors", port, token, service, path, want] =>
+    runProxyReadCors (mustPort port) token service path (mustStatus want)
+  ["put-preferences-cors", port, token, want] =>
+    runPutPreferencesCors (mustPort port) token (mustStatus want)
   ["service-auth", port, token, audience, nsid, stubPort] =>
     runServiceAuth (mustPort port) token audience nsid (mustPort stubPort)
   ["proxy-write", port, token, service, path, body, want, marker, field] =>

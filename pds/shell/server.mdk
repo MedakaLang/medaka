@@ -39,6 +39,7 @@ import http.{
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
+import lib.cors.{withAllowOrigin}
 import lib.credential.{
   credentialDigest,
   credentialIterations,
@@ -299,14 +300,18 @@ export
 bindAddress : String -> Int -> <Net "_"> Result String Listener
 bindAddress addr port = listen addr port
 
+-- This response never reaches `lib.server_core`'s `handle`, so the
+-- allow-origin header every response carries is added here rather than
+-- inherited.
 persistFailureBytes : Array Int
 persistFailureBytes =
   serializeResponse
-    (xrpcErrorResponse
-      500
-      "Internal Server Error"
-      "InternalServerError"
-      "Repository state could not be persisted")
+    (withAllowOrigin
+      (xrpcErrorResponse
+        500
+        "Internal Server Error"
+        "InternalServerError"
+        "Repository state could not be persisted"))
 
 {- | Apply one framed request to the shared `Store`.
 

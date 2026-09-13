@@ -359,6 +359,48 @@ client put-preferences "$PORT1" "$TOKEN" 200 \
 client get-preferences "$PORT1" "$TOKEN" fixture \
   || fail 'case 4e: getPreferences reads back the item just written'
 
+# 4f. the persist-failure 500 path (S-cors, #2938): `persistPreferences`
+#    stages its write at "<data>/preferences.tmp" before renaming it onto the
+#    real file, so putting a DIRECTORY at that exact path forces the write to
+#    fail regardless of who this process runs as — root ignores permission
+#    bits, which a chmod-based failure would not survive. This is the ONE
+#    response `pds/shell/server.mdk`'s `persistFailureBytes` builds, which
+#    bypasses `lib.server_core`'s `handle` entirely, so it is graded on the
+#    allow-origin header rather than on the body.
+#
+#    Run against a DEDICATED server instance, not $PORT1: `persistFailureBytes`
+#    logs the failure to stderr (`ePutStrLn`), which every other case in this
+#    gate treats as a failure in its own right (`require_empty`) — this is the
+#    one case that must SEE that line and grades it directly instead.
+#    `$SERVER_PID` is saved and restored around it so the later `kill
+#    "$SERVER_PID"` for $PORT1 still targets the right process.
+MAIN_SERVER_PID="$SERVER_PID"
+DATACORS="$WORK/data-cors"
+mkdir -p "$DATACORS"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATACORS" --port 0 --init \
+  >"$WORK/servecors.out" 2>"$WORK/servecors.err" &
+SERVER_PID=$!
+PORTCORS=$(wait_for_port "$WORK/servecors.out") || {
+  cat "$WORK/servecors.err" >&2
+  fail 'case 4f: dedicated CORS server did not report readiness'
+}
+require_empty "$WORK/servecors.err" 'case 4f startup'
+CORSLOGIN=$(client login "$PORTCORS" "$HANDLE" "$PASSWORD") \
+  || fail 'case 4f: could not log in to the dedicated CORS server'
+CORSTOKEN=${CORSLOGIN%% *}
+mkdir "$DATACORS/preferences.tmp"
+client put-preferences-cors "$PORTCORS" "$CORSTOKEN" 500 \
+  || fail 'case 4f: a persist failure did not answer 500 with the allow-origin header'
+grep -F -q 'persist failed, state not advanced: Is a directory' "$WORK/servecors.err" \
+  || fail 'case 4f: the persist failure was not logged as expected'
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID="$MAIN_SERVER_PID"
+
 # 5. every remaining route: the eight XRPC NSIDs no other case drives
 #    (including listRepos/getRepoStatus, whose repo-bearing shape only exists
 #    once case 4 has committed a write), plus /.well-known/did.json. With
@@ -1467,6 +1509,14 @@ grep -F -q "call aud=$APPVIEW_DID lxm=app.bsky.feed.getTimeline iss=$DID" \
 }
 grep -F -q "target=$TIMELINE" "$WORK/stub.log" \
   || fail 'case 44: the forwarded target was not the client'"'"'s own'
+
+# 44a. the allow-origin header (S-cors, #2938) reaches a PROXIED response too —
+#    `lib.proxy`'s `proxyUpstreamResponse` builds this one, and it never
+#    reaches `lib.server_core`'s `handle`, so nothing puts the header on it for
+#    free.
+client proxy-read-cors "$PORTPX" "$PXACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  "$STUB_STATUS" \
+  || fail 'case 44a: a proxied response did not carry the allow-origin header'
 
 # 44b. a header naming a SERVICE OF the configured DID (`did:web:x#bsky_appview`)
 #    is proxied, and the credential's audience is the BARE DID: `aud` is a DID,

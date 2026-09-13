@@ -1495,6 +1495,11 @@ export
 responseBody : Response -> Array Int
 responseBody (Response _ _ _ body) = arrayCopy body
 
+-- | The response reason phrase, exactly as constructed.
+export
+responseReason : Response -> String
+responseReason (Response _ reason _ _) = reason
+
 emitAscii : String -> Builder -> Unit
 emitAscii text out = emitArray (toUtf8 text) 0 out
 

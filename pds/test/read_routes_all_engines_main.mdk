@@ -136,6 +136,13 @@ postRequest target =
   toUtf8
     "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
 
+-- | A CORS preflight, carrying the one request header a browser's own
+-- preflight always asks about so the reflection can be graded.
+optionsRequest : String -> String -> Array Int
+optionsRequest target requestedHeaders =
+  toUtf8
+    "OPTIONS \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAccess-Control-Request-Headers: \{requestedHeaders}\r\n\r\n"
+
 -- ── response inspection ─────────────────────────────────────────────────────
 
 headerEnd : Array Int -> Int -> Int
@@ -228,6 +235,50 @@ failCell label request expectedStatus expectedCode =
   let code = errorCode response
   let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next
   check label ok "status=\{status} error=\{code} state=unchanged"
+
+-- | A CORS preflight against any path: 204, no other route ever reached, and
+-- exactly the five headers `lib.cors`'s defaults produce, the request's own
+-- `Access-Control-Request-Headers` reflected back verbatim.
+preflightCell : String -> String -> String -> <IO> Int
+preflightCell label target requestedHeaders =
+  let (next, response) =
+    handleBytes
+      mustServer
+      testContext
+      storeEmpty
+      (optionsRequest target requestedHeaders)
+  let status = statusText response
+  let head = headText response
+  let ok =
+    status == "204"
+      && contains "access-control-allow-origin: *" head
+      && contains
+        "access-control-allow-methods: GET,HEAD,PUT,PATCH,POST,DELETE"
+        head
+      && contains "access-control-allow-headers: \{requestedHeaders}" head
+      && contains "vary: Access-Control-Request-Headers" head
+      && contains "access-control-max-age: 86400" head
+      && not (contains "access-control-allow-credentials" head)
+      && storeIsEmpty next
+  check label ok "status=\{status}"
+
+-- | Any non-preflight response: the allow-origin header this server puts on
+-- everything, and NONE of the preflight-only headers or the credentialed
+-- form it must never send.
+originOnlyCell : String -> Array Int -> String -> <IO> Int
+originOnlyCell label request expectedStatus =
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
+  let status = statusText response
+  let head = headText response
+  let ok =
+    status == expectedStatus
+      && contains "access-control-allow-origin: *" head
+      && not (contains "access-control-allow-methods" head)
+      && not (contains "access-control-allow-headers" head)
+      && not (contains "access-control-max-age" head)
+      && not (contains "access-control-allow-credentials" head)
+      && storeIsEmpty next
+  check label ok "status=\{status}"
 
 -- ── the appview-proxy seam ──────────────────────────────────────────────────
 
@@ -1099,6 +1150,28 @@ runCells corpus =
       (getRequest (xrpc "com.atproto.repo.listMissingBlobs"))
       "404"
       "NotFound"
+  let preflightTimeline =
+    preflightCell
+      "preflight-timeline"
+      timelineTarget
+      "authorization,content-type"
+  let preflightWellKnown =
+    preflightCell
+      "preflight-atproto-did"
+      "/.well-known/atproto-did"
+      "content-type"
+  let originOnly200 =
+    originOnlyCell
+      "origin-only-on-200"
+      (getRequest "/.well-known/atproto-did")
+      "200"
+  let originOnly401 =
+    originOnlyCell
+      "origin-only-on-401"
+      (getRequest (xrpc "com.atproto.server.getSession"))
+      "401"
+  let originOnly404 =
+    originOnlyCell "origin-only-on-404" (getRequest "/favicon.ico") "404"
   let proxied = runProxyCells
   let serviceAuth = runServiceAuthCells corpus
   let cells =
@@ -1124,10 +1197,15 @@ runCells corpus =
       + getRepoStatus
       + readNeedsGet
       + unregistered
+      + preflightTimeline
+      + preflightWellKnown
+      + originOnly200
+      + originOnly401
+      + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/51 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 51 then
+      "cells: \{intToString cells}/56 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 56 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

@@ -55,6 +55,7 @@ import http.{
 import list.{filter}
 import string.{fromUtf8, indexOf, startsWith, take, toLower, toUtf8}
 import lib.atsyntax.{validateDid}
+import lib.cors.{allowOriginHeader}
 import lib.nsid.{canonicalNsid, sameNsidIdentity, validateNsid}
 import lib.xrpc.{Registry, endpointNsid, registryEndpoints, xrpcErrorResponse}
 
@@ -554,11 +555,14 @@ relayedFields ((name, value) :: rest) = match makeHeader name value
    reason phrase carrying a control or non-ASCII byte. A reason phrase that
    fails that grading is replaced rather than refusing the whole answer: it
    carries no information a client acts on, so dropping the response over it
-   would turn a cosmetic upstream defect into a failed read. -}
+   would turn a cosmetic upstream defect into a failed read. This response
+   never reaches `lib.server_core`'s `handle`, so the allow-origin header
+   every response carries is added here rather than inherited. -}
 export
 proxyUpstreamResponse : UpstreamAnswer -> Result String Response
 proxyUpstreamResponse (UpstreamAnswer status reason contentType relayed body) =
-  let headers = relayedContentType contentType :: relayedFields relayed
+  let headers =
+    allowOriginHeader :: relayedContentType contentType :: relayedFields relayed
   match makeResponse status reason headers body
     Ok response => Ok response
     Err _ => makeResponse status "Upstream Response" headers body

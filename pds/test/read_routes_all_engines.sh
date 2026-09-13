@@ -112,6 +112,11 @@ CELL list-repos-empty PASS status=200 media=application/json body={"repos":[]} s
 CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged
 CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged
+CELL preflight-timeline PASS status=204
+CELL preflight-atproto-did PASS status=204
+CELL origin-only-on-200 PASS status=200
+CELL origin-only-on-401 PASS status=401
+CELL origin-only-on-404 PASS status=404
 CELL proxy-header-absent-default-appview PASS decision=admitted verb=GET target=/xrpc/app.bsky.graph.getFollows?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.graph.getFollows jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
 CELL proxy-header-absent-no-appview PASS decision=not-proxied signed=none
 CELL proxy-admitted-timeline PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
@@ -143,7 +148,7 @@ CELL service-auth-foreign-audience PASS decision=refused status=400 error=Invali
 CELL service-auth-protected-lxm PASS decision=refused status=400 error=InvalidRequest message=cannot request a service auth token for the following method: com.atproto.server.getSession signed=none
 CELL service-auth-exp-beyond-an-hour PASS decision=refused status=400 error=BadExpiration message=cannot request a token with an expiration more than an hour in the future signed=none
 CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set
-cells: 51/51 repository-free routes, proxy dispositions and service-auth mints
+cells: 56/56 repository-free routes, proxy dispositions and service-auth mints
 TOTAL: PASS
 EOF
 
@@ -166,6 +171,16 @@ check_cells() {
     || fail "$label missed the empty-server listRepos cell"
   grep -F -q 'CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound' "$output" \
     || fail "$label missed the unconfigured getRepoStatus refusal"
+  grep -F -q 'CELL preflight-timeline PASS status=204' "$output" \
+    || fail "$label missed the CORS preflight against an XRPC route"
+  grep -F -q 'CELL preflight-atproto-did PASS status=204' "$output" \
+    || fail "$label missed the CORS preflight against a non-XRPC well-known path"
+  grep -F -q 'CELL origin-only-on-200 PASS status=200' "$output" \
+    || fail "$label missed the allow-origin-only check on an ordinary 200"
+  grep -F -q 'CELL origin-only-on-401 PASS status=401' "$output" \
+    || fail "$label missed the allow-origin-only check on a 401"
+  grep -F -q 'CELL origin-only-on-404 PASS status=404' "$output" \
+    || fail "$label missed the allow-origin-only check on a 404"
   grep -F -q "CELL proxy-admitted-timeline PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI" "$output" \
     || fail "$label missed the admitted proxied read's claim set"
   grep -F -q "CELL proxy-header-absent-default-appview PASS decision=admitted verb=GET target=/xrpc/app.bsky.graph.getFollows?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.graph.getFollows" "$output" \
@@ -210,7 +225,7 @@ check_cells() {
     || fail "$label missed the refusal of a window beyond an hour"
   grep -F -q 'CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set' "$output" \
     || fail "$label missed the transcribed protected-methods list being compared to the corpus"
-  grep -F -q 'cells: 51/51 repository-free routes, proxy dispositions and service-auth mints' "$output" || fail "$label cell count is incomplete"
+  grep -F -q 'cells: 56/56 repository-free routes, proxy dispositions and service-auth mints' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
@@ -400,4 +415,4 @@ echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'MUTATION proxy-foreign-audience PASS direct-red'
 echo 'MUTATION proxy-no-credential PASS direct-red'
 echo 'MUTATION proxy-audience-routing PASS direct-red'
-echo 'PASS: PDS repository-free read routes, appview-proxy dispositions and service-auth mints — 51/51 named cells; eval == native == Wasm; four direct-red mutations; bytes restored'
+echo 'PASS: PDS repository-free read routes, appview-proxy dispositions and service-auth mints — 56/56 named cells; eval == native == Wasm; four direct-red mutations; bytes restored'
