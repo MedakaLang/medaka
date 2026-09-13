@@ -18,7 +18,15 @@
    The `prefs-*` routes are the same save/load claim for the preferences half
    (`shell.persist`'s `persistPreferences`/`persistLoadPreferences`), written
    into the same data directory as the repository and blob halves so the
-   signing-key sweep in `store_persistence.sh` covers it too. -}
+   signing-key sweep in `store_persistence.sh` covers it too.
+
+   The remaining routes are for HALF-WRITTEN directories. None of them races a
+   process kill: each write path here promotes with `rename`, so the states a
+   crash can leave are a finite set that can be built directly and graded
+   deterministically. `crash-save-old` persists an earlier generation the gate
+   rewinds the head file to; `blob-survey` reports what the blob reader makes
+   of a blob whose two files did not both land; `event-recover-*` stages an
+   entry against a persisted head and runs `eventLogRecover` over it. -}
 
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -28,6 +36,7 @@ import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
 import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..)}
+import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
 import lib.repo.{
   Repo,
   repoCommitCid,
@@ -39,12 +48,19 @@ import lib.repo.{
   repoLatestCommit,
   repoList,
   repoMutationState,
+  repoRootCid,
 }
 import sha256.{sha256}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}
 import shell.blobfile.{blobFileRead, blobFileWrite}
+import shell.eventlog.{
+  eventLogRead,
+  eventLogRecover,
+  eventLogStage,
+  eventLogStaged,
+}
 import shell.persist.{
   persistLoad,
   persistLoadPreferences,
@@ -94,10 +110,13 @@ write path text rev repo =
       repoMutationState
       (repoCreate (toUtf8 path) (post text) (mustTid rev) repo))
 
--- | The repository the `save` route persists: three records at fixed revisions,
--- so every byte of the result is deterministic.
-fixtureRepo : Repo
-fixtureRepo =
+{- | The generation before the one `save` persists: two records at fixed
+   revisions. It exists so the crash routes have a real EARLIER head to rewind
+   to — a head file naming this repository, over a blocks directory that also
+   holds `fixtureRepo`'s, is exactly what a crash between the last block write
+   and the head `rename` leaves behind. -}
+olderRepo : Repo
+olderRepo =
   let base =
     mustRepo
       (repoInitFromKeyBytes
@@ -106,9 +125,13 @@ fixtureRepo =
         (mustTid "3lba2s5ykxs2a"))
   let one =
     write "app.bsky.feed.post/3lba2s5ykxs2b" "first" "3lba2s5ykxs2b" base
-  let two =
-    write "app.bsky.feed.post/3lba2s5ykxs2c" "second" "3lba2s5ykxs2c" one
-  write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" two
+  write "app.bsky.feed.post/3lba2s5ykxs2c" "second" "3lba2s5ykxs2c" one
+
+-- | The repository the `save` route persists: three records at fixed revisions,
+-- so every byte of the result is deterministic.
+fixtureRepo : Repo
+fixtureRepo =
+  write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" olderRepo
 
 mustCar : Repo -> Array Int
 mustCar repo = match repoExportCar repo
@@ -150,6 +173,19 @@ runSave dir =
     Ok () =>
       let () = summary "SAVE" repo
       println "SAVE: PASS"
+
+{- | Persist the EARLIER generation, so a later `save` into the same directory
+   leaves both generations' blocks on disk and only the head distinguishes
+   them. The summary is the one a rewound head must reproduce exactly. -}
+runCrashSaveOld : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runCrashSaveOld dir =
+  let repo = olderRepo
+  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+    Err message =>
+      panic "store_persistence: old-generation save failed: \{message}"
+    Ok () =>
+      let () = summary "OLD" repo
+      println "CRASH-SAVE-OLD: PASS"
 
 reload : String -> <FileRead "_"> Result String Repo
 reload dir = do
@@ -250,6 +286,21 @@ runBlobLoad dir = match verifiedBlobs dir
     let () = println "BLOBLOAD count \{intToString (length loaded)}"
     println "BLOB-LOAD: PASS"
 
+{- | Report what the blob reader actually makes of `<dir>/blobs`, whatever that
+   is — the count and each surviving row, or the error.
+
+   Unlike `blob-load` this asserts nothing about which blobs are there, because
+   the states it is pointed at are half-written ones: a sidecar promoted with
+   its bytes still missing, or bytes promoted with the sidecar still missing.
+   What the reader does with each is the measurement, so the route records it
+   rather than demanding it. -}
+runBlobSurvey : String -> <IO, FileRead "_"> Unit
+runBlobSurvey dir = match verifiedBlobs dir
+  Err message => println "BLOB-SURVEY: ERR \{message}"
+  Ok rows =>
+    let () = printBlobs "BLOBSURVEY" rows
+    println "BLOB-SURVEY: OK \{intToString (length rows)}"
+
 runBlobReject : String -> <IO, FileRead "_"> Unit
 runBlobReject dir = match verifiedBlobs dir
   Ok _ =>
@@ -315,17 +366,90 @@ runPrefsLoad dir = match persistLoadPreferences dir
       let () = println "PREFS LOAD: FAIL mismatch"
       exit 1
 
+-- ── the event-log half ──────────────────────────────────────────────────────
+
+-- Fixed, so the entry's file name and the retention decision taken over it are
+-- both deterministic; passed as `nowSeconds` too, which puts the entry at the
+-- near end of the window and keeps the sweep out of the measurement.
+eventFixtureTime : Int
+eventFixtureTime = 1756771200
+
+eventFixture : String -> EventLogEntry
+eventFixture commitCid = EventLogEntry {
+  seq = 1,
+  timeSeconds = eventFixtureTime,
+  commitCid = commitCid,
+  frameHex = "a1",
+}
+
+-- What the log holds right now: the pending entry, if any, and how many
+-- entries have been promoted.
+eventSurvey : String -> String -> <IO, FileRead "_"> Unit
+eventSurvey label dir =
+  let staged = match eventLogStaged dir
+    Err message => "staged-unreadable(\{message})"
+    Ok None => "staged none"
+    Ok (Some entry) => "staged \{entry.commitCid}"
+  let promoted = match eventLogRead dir 0
+    Err message => "entries-unreadable(\{message})"
+    Ok entries => "entries \{intToString (length entries)}"
+  println "\{label} \{staged} \{promoted}"
+
+{- | Persist a repository, leave a staged entry behind it as a crash between
+   the stage and the promote would, and run `eventLogRecover` against the head
+   that is actually on disk.
+
+   `announceHead` picks which of the header comment's crash points is staged:
+   `True` announces the persisted head (crashed AFTER the commit — the entry is
+   owed and must be finished), `False` announces the MST root instead, which is
+   a real CID this repository has but never a commit CID (crashed BEFORE the
+   commit — the entry is owed to nobody and must be dropped). -}
+runEventRecover : String -> Bool -> <IO, FileRead "_", FileWrite "_"> Unit
+runEventRecover dir announceHead =
+  let repo = fixtureRepo
+  let () =
+    match (persistSave
+      dir
+      (repoCommitCid (repoLatestCommit repo))
+      (blocksOf repo))
+      Err message =>
+        panic "store_persistence: event-log save failed: \{message}"
+      Ok () => ()
+  let onDisk = match persistLoad dir
+    Err message =>
+      panic "store_persistence: event-log head unreadable: \{message}"
+    Ok (head, _) => cidToString head
+  let announced =
+    if announceHead then onDisk else cidToString (repoRootCid repo)
+  match eventLogStage dir (eventFixture announced)
+    Err message => panic "store_persistence: event stage failed: \{message}"
+    Ok () =>
+      let () = eventSurvey "EVENTBEFORE" dir
+      match (eventLogRecover
+        dir
+        (Some onDisk)
+        eventLogRetentionSeconds
+        eventFixtureTime)
+        Err message => println "EVENT-RECOVER: ERR \{message}"
+        Ok () =>
+          let () = eventSurvey "EVENTAFTER" dir
+          println "EVENT-RECOVER: OK"
+
 main : <IO, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()
   ["save", dir] => runSave dir
+  ["crash-save-old", dir] => runCrashSaveOld dir
   ["load", dir] => runLoad dir
   ["reject", dir] => runReject dir
   ["blob-save", dir] => runBlobSave dir
   ["blob-load", dir] => runBlobLoad dir
+  ["blob-survey", dir] => runBlobSurvey dir
   ["blob-reject", dir] => runBlobReject dir
   ["blob-oversize", dir] => runBlobOversize dir
   ["prefs-save", dir] => runPrefsSave dir
   ["prefs-load", dir] => runPrefsLoad dir
+  ["event-recover-owed", dir] => runEventRecover dir True
+  ["event-recover-orphan", dir] => runEventRecover dir False
   _ =>
     panic
-      "usage: store_persistence_main <save|load|reject|blob-save|blob-load|blob-reject|blob-oversize|prefs-save|prefs-load> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan> <dir>"
