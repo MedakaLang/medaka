@@ -1,5 +1,5 @@
 # META
-source_lines=1865
+source_lines=1870
 stages=DESUGAR,MARK
 # SOURCE
 {- | Pure, bounded HTTP/1.1 request framing and response building.
@@ -1499,6 +1499,11 @@ export
 responseBody : Response -> Array Int
 responseBody (Response _ _ _ body) = arrayCopy body
 
+-- | The response reason phrase, exactly as constructed.
+export
+responseReason : Response -> String
+responseReason (Response _ reason _ _) = reason
+
 emitAscii : String -> Builder -> Unit
 emitAscii text out = emitArray (toUtf8 text) 0 out
 
@@ -2162,6 +2167,8 @@ decodeRequestBody (Request _ _ headers _ body _) = do
 (DFunDef false "responseHeaders" ((PCon "Response" PWild PWild (PVar "headers") PWild)) (EApp (EVar "copyHeaders") (EVar "headers")))
 (DTypeSig true "responseBody" (TyFun (TyCon "Response") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "responseBody" ((PCon "Response" PWild PWild PWild (PVar "body"))) (EApp (EVar "arrayCopy") (EVar "body")))
+(DTypeSig true "responseReason" (TyFun (TyCon "Response") (TyCon "String")))
+(DFunDef false "responseReason" ((PCon "Response" PWild (PVar "reason") PWild PWild)) (EVar "reason"))
 (DTypeSig false "emitAscii" (TyFun (TyCon "String") (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitAscii" ((PVar "text") (PVar "out")) (EApp (EApp (EApp (EVar "emitArray") (EApp (EVar "toUtf8") (EVar "text"))) (ELit (LInt 0))) (EVar "out")))
 (DTypeSig false "emitResponseHeaders" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyFun (TyCon "Builder") (TyCon "Unit"))))
@@ -2501,6 +2508,8 @@ decodeRequestBody (Request _ _ headers _ body _) = do
 (DFunDef false "responseHeaders" ((PCon "Response" PWild PWild (PVar "headers") PWild)) (EApp (EVar "copyHeaders") (EVar "headers")))
 (DTypeSig true "responseBody" (TyFun (TyCon "Response") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "responseBody" ((PCon "Response" PWild PWild PWild (PVar "body"))) (EApp (EVar "arrayCopy") (EVar "body")))
+(DTypeSig true "responseReason" (TyFun (TyCon "Response") (TyCon "String")))
+(DFunDef false "responseReason" ((PCon "Response" PWild (PVar "reason") PWild PWild)) (EVar "reason"))
 (DTypeSig false "emitAscii" (TyFun (TyCon "String") (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitAscii" ((PVar "text") (PVar "out")) (EApp (EApp (EApp (EVar "emitArray") (EApp (EVar "toUtf8") (EVar "text"))) (ELit (LInt 0))) (EVar "out")))
 (DTypeSig false "emitResponseHeaders" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyFun (TyCon "Builder") (TyCon "Unit"))))

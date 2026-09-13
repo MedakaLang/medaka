@@ -19,9 +19,11 @@
    power loss: nothing here calls `fsync`, so the kernel is free to make the
    `rename` visible before the block writes it was ordered after. -}
 
+import array
 import fs.{mkdirAll}
 import hex.{encode}
 import io.{writeFilePrivate}
+import json.{Json, asArray, jArray, parse, stringify}
 import lib.cid.{Cid, cidFromString, cidToString}
 import lib.credential.{
   CredentialRecord,
@@ -105,3 +107,38 @@ persistLoad dir = do
     Ok value => Ok value
   blocks <- blockFileRead (blocksDir dir)
   Ok (head, blocks)
+
+preferencesPath : String -> String
+preferencesPath dir = "\{dir}/preferences"
+
+{- | Persist the account's whole `app.bsky` preference set beneath `dir`,
+   staged then `rename`d exactly like the head file: a process that dies
+   mid-write leaves the previous preference set readable, never a torn one. -}
+export
+persistPreferences : String ->
+  List Json ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistPreferences dir prefs = do
+  () <- mkdirAll dir
+  let staged = "\{preferencesPath dir}.tmp"
+  () <- writeFile staged (stringify (jArray prefs))
+  rename staged (preferencesPath dir)
+
+{- | Read back the persisted preference set, or the empty list when `dir` has
+   never had one written — a fresh account, or one that has never called
+   `putPreferences`. -}
+export
+persistLoadPreferences : String -> <FileRead "_"> Result String (List Json)
+persistLoadPreferences dir =
+  if not (fileExists (preferencesPath dir)) then
+    Ok []
+  else do
+    text <- match readFile (preferencesPath dir)
+      Err message => Err "persist: unreadable preferences file: \{message}"
+      Ok value => Ok value
+    value <- match parse text
+      Err message => Err "persist: preferences file is not JSON: \{message}"
+      Ok value => Ok value
+    match asArray value
+      None => Err "persist: preferences file is not a JSON array"
+      Some items => Ok (toList items)

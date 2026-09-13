@@ -12,7 +12,11 @@
    the four
    `com.atproto.server.{createSession, refreshSession, deleteSession,
    getSession}` routes, which transition the `Store`'s auth half rather than
-   its repository or blob half. **Well-knowns** are the two non-XRPC paths
+   its repository or blob half. **Preferences** are
+   `app.bsky.actor.{getPreferences, putPreferences}`, which transition the
+   `Store`'s preferences half — `putPreferences` replaces the whole `app.bsky`
+   namespace's item list, and `getPreferences` reads it back. **Well-knowns**
+   are the two non-XRPC paths
    `lib.xrpc` routes as their own class:
    `/.well-known/did.json` (this PDS's own did:web document) and
    `/.well-known/atproto-did` (the hosted account's DID, as bare text).
@@ -22,12 +26,14 @@
    successor `Store` at all — `uploadBlob` lives there for exactly that
    reason, not because it is a repository write.
 
-   Every registration carries its own `AuthPolicy`: the five writes and
-   `getSession` are `AuthenticatedRoute`, the eleven reads are `PublicRoute`,
-   `refreshSession`/`deleteSession` are `RefreshRoute`, `createSession` is
-   `PublicRoute` (it is the login that issues the tokens the other session
-   routes require), and the two well-knowns are public by construction
-   (`lib.xrpc` routes them by path, with no registry entry to classify).
+   Every registration carries its own `AuthPolicy`: the five writes,
+   `getSession`, `getServiceAuth`, and both preference routes are
+   `AuthenticatedRoute`, the eleven reads are `PublicRoute`,
+   `refreshSession`/`deleteSession` are `RefreshRoute`,
+   `createSession` is `PublicRoute` (it is the login that issues the tokens the
+   other session routes require), and the two well-knowns are public by
+   construction (`lib.xrpc` routes them by path, with no registry entry to
+   classify).
    `lib.server_core`'s `handle` enforces that before dispatch, so nothing in
    this module checks a credential — see `readEndpoints`/`recordEndpoints`/
    `sessionEndpoints` for where each classification comes from.
@@ -72,7 +78,7 @@ import http.{
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{filter, last, sort, take}
-import string.{fromUtf8, split, toInt, toLower, toUtf8}
+import string.{fromUtf8, split, startsWith, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
@@ -107,6 +113,7 @@ import lib.credential.{
   defaultIterations,
 }
 import lib.jwt.{mintToken}
+import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{PublicKey}
 import lib.server_core.{
   Account,
@@ -118,8 +125,10 @@ import lib.server_core.{
   accountDid,
   accountHandle,
   accountHostname,
+  getServiceAuthNsid,
   makeServer,
   refreshAudience,
+  serviceAuthUnavailableResponse,
 }
 import lib.store.{
   Store,
@@ -129,6 +138,7 @@ import lib.store.{
   storeBlobMimeType,
   storeCredential,
   storeGet,
+  storePreferences,
   storePutBlob,
   storeRepo,
   storeServerSecret,
@@ -137,6 +147,7 @@ import lib.store.{
   storeSessionRotate,
   storeSessionsPrune,
   storeWithCredential,
+  storeWithPreferences,
   storeWithRepo,
 }
 import lib.tid.{Tid, tidClockId, tidMicros, tidNext, tidToString}
@@ -223,6 +234,12 @@ deleteSessionNsid = "com.atproto.server.deleteSession"
 
 getSessionNsid : String
 getSessionNsid = "com.atproto.server.getSession"
+
+getPreferencesNsid : String
+getPreferencesNsid = "app.bsky.actor.getPreferences"
+
+putPreferencesNsid : String
+putPreferencesNsid = "app.bsky.actor.putPreferences"
 
 -- ── responses ───────────────────────────────────────────────────────────────
 
@@ -1173,19 +1190,63 @@ applyDescribeRepo account store params = do
 
 -- ── com.atproto.server.describeServer ───────────────────────────────────────
 
+{- | The operator-configured links `describeServer` may report: a privacy
+   policy URL, a terms-of-service URL, and a contact email — each `None`
+   unless `pds/serve.mdk`'s matching flag was given. All three travel
+   together because they are read from the same place (the CLI flags) and
+   reported in the same response; nothing else in this module needs them. -}
+export data ServerLinks =
+  | ServerLinks (Option String) (Option String) (Option String)
+
+-- | No operator-configured links or contact — `describeServer` reports
+-- neither `links` nor `contact`.
+export
+serverLinksEmpty : ServerLinks
+serverLinksEmpty = ServerLinks None None None
+
+-- | Build `ServerLinks` from the three optional flag values, in the order
+-- `pds/serve.mdk` reads them: privacy policy, terms of service, contact
+-- email.
+export
+makeServerLinks : Option String -> Option String -> Option String -> ServerLinks
+makeServerLinks privacyPolicy termsOfService contactEmail =
+  ServerLinks privacyPolicy termsOfService contactEmail
+
+optionalMember : String -> Option String -> List (String, Json)
+optionalMember _ None = []
+optionalMember name (Some value) = [(name, JString value)]
+
+-- `links` and `contact` are each present only when the operator configured
+-- at least one of their own fields — an operator who set none of the three
+-- flags gets a `describeServer` with neither key, not one with empty
+-- objects.
+describeServerLinks : ServerLinks -> List (String, Json)
+describeServerLinks (ServerLinks privacyPolicy termsOfService contactEmail) =
+  let links =
+    optionalMember "privacyPolicy" privacyPolicy
+      ++ optionalMember "termsOfService" termsOfService
+  let contact = optionalMember "email" contactEmail
+  (if links == [] then [] else [("links", jObject links)])
+    ++ (if contact == [] then [] else [("contact", jObject contact)])
+
 {- | This is the preflight a relay or a Bluesky client runs before trusting
    the server at all, so it needs no credential and answers about the server
    itself, not the hosted account: `availableUserDomains` is empty and
    `inviteCodeRequired` is `false` because this server is single-account, with
-   no signup surface of its own to describe. -}
-applyDescribeServer : Account -> Result Response Json
-applyDescribeServer account =
+   no signup surface of its own to describe. `blobUploadLimit` is
+   `lib.resource_limits`' own `maxBlobBytes` — the exact ceiling
+   `uploadBlob` enforces, not a second copy of the number. -}
+applyDescribeServer : Account -> ServerLinks -> Result Response Json
+applyDescribeServer account links =
   Ok
-    (jObject [
-      ("did", JString (accountDid account)),
-      ("availableUserDomains", jArray []),
-      ("inviteCodeRequired", JBool False),
-    ])
+    (jObject
+      ([
+          ("did", JString (accountDid account)),
+          ("availableUserDomains", jArray []),
+          ("inviteCodeRequired", JBool False),
+          ("blobUploadLimit", JInt maxBlobBytes),
+        ]
+        ++ describeServerLinks links))
 
 -- ── com.atproto.sync.getRepo ────────────────────────────────────────────────
 
@@ -1500,6 +1561,7 @@ sessionOutput account access refresh = jObject [
   ("handle", JString (accountHandle account)),
   ("accessJwt", JString access),
   ("refreshJwt", JString refresh),
+  ("active", JBool True),
 ]
 
 -- Sessions whose refresh token has expired are dropped whenever the session
@@ -1647,21 +1709,30 @@ applyGetSession : Account -> Json
 applyGetSession account = jObject [
   ("did", JString (accountDid account)),
   ("handle", JString (accountHandle account)),
+  ("active", JBool True),
 ]
 
 finishSession : Store -> Result Response (Store, Json) -> (Store, Response)
 finishSession store (Err response) = (store, response)
 finishSession _ (Ok (next, output)) = (next, jsonOkResponse output)
 
-{- | The four session routes, or `None` for a call this half does not own.
+{- | The five session routes, or `None` for a call this half does not own.
 
-   `refreshSession`, `deleteSession`, and `getSession` are reachable only with
-   an `Authenticated` outcome (they are `RefreshRoute`/`AuthenticatedRoute`,
-   which the seam refuses unauthenticated), so their `Unauthenticated` arms
-   are unreachable through `handle`; they answer 401 rather than panicking or
-   reporting an account identity, because a direct caller of this function is
-   not the seam and must not be told a different story than a request would
-   be. -}
+   `refreshSession`, `deleteSession`, `getSession` and `getServiceAuth` are
+   reachable only with an `Authenticated` outcome (they are
+   `RefreshRoute`/`AuthenticatedRoute`, which the seam refuses
+   unauthenticated), so their `Unauthenticated` arms are unreachable through
+   `handle`; they answer 401 rather than panicking or reporting an account
+   identity, because a direct caller of this function is not the seam and must
+   not be told a different story than a request would be.
+
+   `getServiceAuth`'s AUTHENTICATED arm is unreachable through a socket for a
+   different reason, and answers 501 for it: its answer is a signature under
+   the account's repo key, which lives in the shell, so the socket path decides
+   it before dispatch (`lib.server_core`'s `classifyServiceAuth`) and this arm
+   is reached only by a direct caller of `handle`. Such a caller holds no key
+   either, and is told so rather than being handed a 404 for a route that
+   exists. -}
 sessionHandled : Account ->
   RequestContext ->
   AuthOutcome ->
@@ -1692,10 +1763,26 @@ sessionHandled account _ outcome store (QueryCall nsid _)
     Unauthenticated =>
       Some (store, authenticationRequired "Authentication Required")
     Authenticated _ _ => Some (store, jsonOkResponse (applyGetSession account))
+  | nsid == getServiceAuthNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ _ => Some (store, serviceAuthUnavailableResponse)
   | otherwise = None
 sessionHandled _ _ _ _ _ = None
 
-{- | The four session routes, one per policy class it takes.
+{- | The success envelope `com.atproto.server.getServiceAuth` answers with,
+   once the shell has signed the claim set the seam produced.
+
+   It is here, with the other route answers, rather than in the shell: the
+   shape of a route's 200 is the route's business, and the shell's is the
+   signature. Nothing about the token is inspected — it is the one value this
+   module could not have computed. -}
+export
+serviceAuthTokenResponse : String -> Response
+serviceAuthTokenResponse token =
+  jsonOkResponse (jObject [("token", JString token)])
+
+{- | The five session routes, one per policy class it takes.
 
    `createSession` is PUBLIC: it is how a client that holds no token at all
    gets one, so gating it would make every session unreachable. `getSession`
@@ -1703,14 +1790,34 @@ sessionHandled _ _ _ _ _ = None
    `refreshSession` and `deleteSession` are `RefreshRoute`, which is atproto's
    own classification — both are authenticated by the session's REFRESH token,
    so a client whose access token has already expired can still refresh it and
-   can still log out. -}
+   can still log out.
+
+   `getServiceAuth` is `AuthenticatedRoute` for the reason a proxied forward
+   is: what it hands back bears the ACCOUNT's identity, so an anonymous caller
+   asking for one is asking this server to lend that identity to whoever holds
+   the answer. Registering it here is also what makes it locally served rather
+   than forwardable (`lib.proxy`'s `proxyDisposition`), so an `atproto-proxy`
+   header cannot send a request for this account's credential to somebody
+   else. -}
 sessionEndpoints : Result String (List Endpoint)
 sessionEndpoints = do
   create <- procedureEndpoint createSessionNsid JsonInput PublicRoute
   refresh <- procedureEndpoint refreshSessionNsid NoInput RefreshRoute
   remove <- procedureEndpoint deleteSessionNsid NoInput RefreshRoute
   get <- queryEndpoint getSessionNsid AuthenticatedRoute
-  Ok [create, refresh, remove, get]
+  serviceAuth <- queryEndpoint getServiceAuthNsid AuthenticatedRoute
+  Ok [create, refresh, remove, get, serviceAuth]
+
+{- | The two preference routes. Both are `AuthenticatedRoute`: an account's
+   `app.bsky` preferences are readable and writable only by that account,
+   unlike the public read half below. Registering them here is also what
+   makes them locally served rather than forwardable
+   (`lib.proxy`'s `proxyDisposition`). -}
+preferencesEndpoints : Result String (List Endpoint)
+preferencesEndpoints = do
+  get <- queryEndpoint getPreferencesNsid AuthenticatedRoute
+  put <- procedureEndpoint putPreferencesNsid JsonInput AuthenticatedRoute
+  Ok [get, put]
 
 -- ── read dispatch ───────────────────────────────────────────────────────────
 
@@ -1725,17 +1832,18 @@ finishRead (Ok value) = jsonOkResponse value
 {- | The six read/sync/identity queries and the two well-knowns, or `None` for
    a call this half does not own. It returns a bare `Response` because no route
    here can transition the `Store`. -}
-readHandled : Account -> Store -> XrpcCall -> Option Response
-readHandled account _ (WellKnownCall wellKnown) =
+readHandled : Account -> ServerLinks -> Store -> XrpcCall -> Option Response
+readHandled account _ _ (WellKnownCall wellKnown) =
   Some (wellKnownResponse account wellKnown)
-readHandled account store (QueryCall nsid params)
+readHandled account links store (QueryCall nsid params)
   | nsid == getRecordNsid =
     Some (finishRead (applyGetRecord account store params))
   | nsid == listRecordsNsid =
     Some (finishRead (applyListRecords account store params))
   | nsid == describeRepoNsid =
     Some (finishRead (applyDescribeRepo account store params))
-  | nsid == describeServerNsid = Some (finishRead (applyDescribeServer account))
+  | nsid == describeServerNsid =
+    Some (finishRead (applyDescribeServer account links))
   | nsid == getRepoNsid =
     Some (collapseResponse (applyGetRepo account store params))
   | nsid == getLatestCommitNsid =
@@ -1751,35 +1859,122 @@ readHandled account store (QueryCall nsid params)
   | nsid == resolveHandleNsid =
     Some (finishRead (applyResolveHandle account params))
   | otherwise = None
-readHandled _ _ _ = None
+readHandled _ _ _ _ = None
+
+-- ── app.bsky.actor.getPreferences / putPreferences ──────────────────────────
+
+{- | Whether a preference item's `$type` names the `app.bsky` namespace: the
+   literal value `app.bsky`, or anything prefixed `app.bsky.`. This server
+   only ever writes that one namespace, so nothing reachable here needs to
+   distinguish a second one from a third. -}
+preferenceInNamespace : String -> Bool
+preferenceInNamespace kind = kind == "app.bsky" || startsWith "app.bsky." kind
+
+requirePreferencesField : Json -> Result Response (Array Json)
+requirePreferencesField body = match get "preferences" body
+  None => Err (invalidRequest "Request field 'preferences' is required")
+  Some (JArray values) => Ok values
+  Some _ => Err (invalidRequest "Request field 'preferences' must be an array")
+
+{- | Every preference item, admitted in order: each must carry a string
+   `$type`, and every `$type` must name the `app.bsky` namespace. Rejecting
+   either replaces nothing — `putPreferences` is all-or-nothing over its
+   whole array, exactly like `applyWrites` is over its. -}
+requirePreferenceItems : Array Json -> Int -> Result Response (List Json)
+requirePreferenceItems items i =
+  if i >= arrayLength items then
+    Ok []
+  else
+    let item = items[i]
+    match get "$type" item
+      Some (JString kind) =>
+        if preferenceInNamespace kind then do
+          rest <- requirePreferenceItems items (i + 1)
+          Ok (item :: rest)
+        else
+          Err
+            (invalidRequest
+              "Some preferences are not in the app.bsky namespace")
+      _ => Err (invalidRequest "Preference is missing a $type")
+
+-- | `app.bsky.actor.getPreferences`: the whole `app.bsky` preference set, in
+-- the order `putPreferences` last wrote it. `[]` on an account that has
+-- never called `putPreferences`.
+applyGetPreferences : Store -> Json
+applyGetPreferences store =
+  jObject [("preferences", jArray (storePreferences store))]
+
+{- | `app.bsky.actor.putPreferences`: replace the WHOLE `app.bsky` preference
+   set. There is exactly one namespace this server ever writes, so a
+   whole-namespace replace and a whole-store replace coincide; a future
+   multi-namespace server would need to merge here instead of overwriting. -}
+applyPutPreferences : Store -> Json -> Result Response (Store, Json)
+applyPutPreferences store body = do
+  () <- requireObject body
+  items <- requirePreferencesField body
+  validated <- requirePreferenceItems items 0
+  Ok (storeWithPreferences validated store, jObject [])
+
+finishPreferences : Store -> Result Response (Store, Json) -> (Store, Response)
+finishPreferences store (Err response) = (store, response)
+finishPreferences _ (Ok (next, output)) = (next, jsonOkResponse output)
+
+-- | The two preference routes, both `AuthenticatedRoute`: an account's
+-- preferences are its own, not public data. `None` for a call this half does
+-- not own.
+preferencesHandled : AuthOutcome ->
+  Store ->
+  XrpcCall ->
+  Option (Store, Response)
+preferencesHandled outcome store (QueryCall nsid _)
+  | nsid == getPreferencesNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ _ =>
+      Some (store, jsonOkResponse (applyGetPreferences store))
+  | otherwise = None
+preferencesHandled outcome store (ProcedureJsonCall nsid _ body)
+  | nsid == putPreferencesNsid = match outcome
+    Unauthenticated =>
+      Some (store, authenticationRequired "Authentication Required")
+    Authenticated _ _ =>
+      Some (finishPreferences store (applyPutPreferences store body))
+  | otherwise = None
+preferencesHandled _ _ _ = None
 
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
-{- | The complete handler: five record writes, four session routes, nine
-   reads, two well-knowns. The halves are disjoint by construction — each owns
-   a distinct set of NSIDs, and the read half additionally owns the two
-   well-knowns — so the order below is a formality rather than a
-   precedence. -}
+{- | The complete handler: five record writes, five session routes, two
+   preference routes, nine reads, two well-knowns. The halves are disjoint by
+   construction — each owns a distinct set of NSIDs, and the read half
+   additionally owns the two well-knowns — so the order below is a formality
+   rather than a precedence. -}
 export
-pdsHandler : Account -> Handler
-pdsHandler account context outcome store call =
+pdsHandler : Account -> ServerLinks -> Handler
+pdsHandler account links context outcome store call =
   match recordHandled account store call
     Some result => result
     None => match sessionHandled account context outcome store call
       Some result => result
-      None => match readHandled account store call
-        Some response => (store, response)
-        None => (store, unhandledRoute call)
+      None => match preferencesHandled outcome store call
+        Some result => result
+        None => match readHandled account links store call
+          Some response => (store, response)
+          None => (store, unhandledRoute call)
 
--- | The registry of all twenty-one XRPC endpoints. The two well-known paths are
--- NOT here: they have no NSID, and `lib.xrpc` routes them by path.
+-- | The registry of all twenty-four XRPC endpoints. The two well-known paths
+-- are NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
 pdsRegistry = do
   writes <- recordEndpoints
   sessions <- sessionEndpoints
+  preferences <- preferencesEndpoints
   reads <- readEndpoints
-  makeRegistry (concatEndpoints writes (concatEndpoints sessions reads))
+  makeRegistry
+    (concatEndpoints
+      writes
+      (concatEndpoints sessions (concatEndpoints preferences reads)))
 
 {- | The eleven read queries and the one event-stream subscription, every one
    of them public.
@@ -1835,9 +2030,10 @@ concatEndpoints : List Endpoint -> List Endpoint -> List Endpoint
 concatEndpoints [] rest = rest
 concatEndpoints (endpoint :: more) rest = endpoint :: concatEndpoints more rest
 
--- | A configured full-API server for one account.
+-- | A configured full-API server for one account, with the operator's
+-- `describeServer` links.
 export
-pdsServer : Account -> Result String Server
-pdsServer account = do
+pdsServer : Account -> ServerLinks -> Result String Server
+pdsServer account links = do
   registry <- pdsRegistry
-  Ok (makeServer account registry (pdsHandler account))
+  Ok (makeServer account registry (pdsHandler account links))

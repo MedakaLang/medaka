@@ -11,8 +11,16 @@
 // Manifest grammar; `#` comments and blank lines are ignored, fields are
 // whitespace-separated:
 //
-//   case <name> <accept|reject> <did:key:...> <expected-aud> <expected-lxm|-> <token>
+//   case <name> <accept|reject> <did:key:...> <expected-aud> <expected-lxm|-> <token> [<lifetime>]
 //   <other key> <value>      informational, ignored
+//
+// <lifetime> is the exact `exp - iat` the row's token must carry, in seconds. A
+// row that omits it is graded against 60, which is what a service-auth request
+// naming no expiry of its own mints. The field is per row rather than fixed
+// here because com.atproto.server.getServiceAuth lets a client ask for its own
+// window: a single hardcoded figure would refuse every such token before any
+// claim was looked at, and deleting the assertion instead would stop grading
+// the mint shape at all.
 //
 // Every row states its OWN expectation, so one run covers both the accept and
 // the reject cases and exits nonzero when any row's outcome differs from what
@@ -67,7 +75,7 @@ if (!Number.isInteger(now)) {
 
 const expectedHeader = '{"typ":"JWT","alg":"ES256K"}'
 const expectedAlg = 'ES256K'
-const lifetimeSeconds = 60
+const defaultLifetimeSeconds = 60
 const jtiPattern = /^[0-9a-f]{32}$/
 
 const b64urlToBytes = (segment) => Buffer.from(segment, 'base64url')
@@ -75,7 +83,13 @@ const b64urlToText = (segment) => b64urlToBytes(segment).toString('utf8')
 
 // Returns null when the token is good for this audience and method, or the
 // reason it was refused.
-const refusal = async (token, didKey, expectedAud, expectedLxm) => {
+const refusal = async (
+  token,
+  didKey,
+  expectedAud,
+  expectedLxm,
+  lifetimeSeconds,
+) => {
   const segments = token.split('.')
   if (segments.length !== 3) return `expected 3 segments, got ${segments.length}`
   const [headerSeg, payloadSeg, sigSeg] = segments
@@ -140,7 +154,8 @@ let failures = 0
 for (const line of lines) {
   const fields = line.trim().split(/\s+/)
   if (fields[0] !== 'case') continue
-  const [, name, expectation, didKey, expectedAud, lxmField, token] = fields
+  const [, name, expectation, didKey, expectedAud, lxmField, token, lifeField] =
+    fields
   if (!token) {
     console.log(`${name} MALFORMED ROW`)
     failures += 1
@@ -151,12 +166,23 @@ for (const line of lines) {
     failures += 1
     continue
   }
+  // An unreadable lifetime is a MALFORMED ROW and not a silent fall back to
+  // the default: a row that names a window and is graded against 60 anyway
+  // would report a pass for an assertion nobody made.
+  const lifetimeSeconds =
+    lifeField === undefined ? defaultLifetimeSeconds : Number(lifeField)
+  if (!Number.isInteger(lifetimeSeconds) || lifetimeSeconds <= 0) {
+    console.log(`${name} MALFORMED ROW lifetime=${lifeField}`)
+    failures += 1
+    continue
+  }
   cases += 1
   const reason = await refusal(
     token,
     didKey,
     expectedAud,
     lxmField === '-' ? null : lxmField,
+    lifetimeSeconds,
   )
   const got = reason === null ? 'accept' : 'reject'
   const ok = got === expectation

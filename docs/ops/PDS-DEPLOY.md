@@ -104,8 +104,9 @@ are given** — with neither, such a header is refused `400 InvalidRequest` and
 no credential is minted.
 
 ```
---appview-did  did:web:api.bsky.app      # the ONE service a header may name
---egress-port  3128                      # loopback port of the egress proxy
+--appview-did  did:web:api.bsky.app      # the DEFAULT service, used when no
+                                         #   atproto-proxy header is sent
+--egress-port  3128                      # loopback port of its egress proxy
 ```
 
 Each requires the other; giving one alone is refused before the bind, naming
@@ -114,13 +115,50 @@ fragment — a header may name a service OF it (`did:web:api.bsky.app#bsky_appvi
 and the fragment is stripped from the credential's `aud`, because a peer checks
 `aud` against its own DID.
 
+### More than one service
+
+A header may name any service in a configured **set**, and each one gets its
+own egress port. Additional services are configured a row at a time with a
+repeatable flag; the pair above is always the first row, and the first row is
+the default the header-absent reads go to.
+
+```
+--proxy-audience  did:web:api.bsky.chat=3130    # repeat for each further service
+```
+
+Which DIDs belong in the set is entirely yours: this server knows no service
+name of its own, so a deployment that wants Bluesky's chat service reachable
+puts `did:web:api.bsky.chat` in the set, and one that wants something else
+puts that instead. Each row takes the same **bare** DID as `--appview-did`,
+and a header naming a service OF a configured DID still has its fragment
+stripped from `aud`.
+
+Three refusals, all before the bind:
+
+- a row missing either half (`--proxy-audience did:web:api.bsky.chat`, or
+  `--proxy-audience =3130`) — the same all-or-none rule `--appview-did` and
+  `--egress-port` already answer to;
+- `--proxy-audience` with no `--appview-did`/`--egress-port` pair: a
+  header-absent read has to go somewhere, and which of your services receives
+  it is not this program's choice to make;
+- the same DID twice. Two ports for one DID are two upstreams a credential
+  minted for that DID could reach, and picking between them is exactly the
+  routing choice this server refuses to guess at.
+
+**Each row needs its own egress proxy**, on the port that row names — one
+more `reverse_proxy`-equivalent hop beside the one `--egress-port` already
+needs, forwarding `127.0.0.1:3130` to the real chat service. A header naming a
+DID in no row is still refused `400 InvalidRequest` with no credential minted,
+exactly as it is with a single service configured.
+
 Two operator-visible consequences:
 
 - **The outbound call is a plain loopback HTTP connection to
-  `127.0.0.1:<egress-port>`.** This process never dials the internet itself
-  and does no TLS outbound; reaching the real appview is the egress proxy's
-  job, exactly as reaching the internet inbound is Caddy's. The unit can
-  therefore keep egress confined to that one port.
+  `127.0.0.1:<port of the service the header named>`.** This process never
+  dials the internet itself and does no TLS outbound; reaching the real
+  service is the egress proxy's job, exactly as reaching the internet inbound
+  is Caddy's. The unit can therefore keep egress confined to the configured
+  ports.
 - **A forwarded read is metered as its own rate-limit class**
   (`maxProxiedCallsPerWindow`, `docs/design/ATPROTO-PDS-DESIGN.md` § "Rate
   limiting"), because one inbound request becomes one outbound request. The

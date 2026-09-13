@@ -36,22 +36,43 @@
    behalf of the logged-in account and the seam resolves the caller's credential
    before admitting one. That is still repository-free, which is what the eval
    arm's cost turns on: a session is an HMAC over a short string, and `repoInit`
-   is what does not finish. -}
+   is what does not finish.
+
+   The third group grades the other direction of the same seam,
+   `com.atproto.server.getServiceAuth`: there the signature travels outward on
+   a call this server makes, here the client asks for the credential itself and
+   keeps it. It is repository-free for the same reason, and it is also where
+   the transcribed `protectedMethods` list is compared against the extracted
+   corpus it claims to copy — which is why this driver takes that corpus as its
+   one argument. -}
 
 import http.{Request, parseRequest, serializeResponse}
+import io.{readLines}
 import json.{Json(..), jObject, get, parse}
-import string.{contains, fromUtf8, split, toUtf8}
-import lib.handlers.{pdsServer}
+import string.{
+  contains, fromUtf8, join, split, startsWith, toLower, toUtf8, trim
+}
+import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.jwt.{ServiceAuthRequest, mintToken, serverSecretBytes}
-import lib.proxy.{AppviewPolicy, makeAppviewPolicy}
+import lib.proxy.{
+  AppviewRoute,
+  appviewRouteFor,
+  appviewRoutePort,
+  AppviewTable,
+  makeAppviewRoute,
+  makeAppviewTable,
+  protectedMethods,
+}
 import lib.server_core.{
   Account,
   ProxyAdmission,
   ProxyDecision(..),
   RequestContext(..),
   Server,
+  ServiceAuthDecision(..),
   accessAudience,
   classifyProxy,
+  classifyServiceAuth,
   handleBytes,
   makeAccount,
 }
@@ -84,7 +105,7 @@ mustAccount = match makeAccount accountDidText accountHandleText accountHostText
   Err message => panic "read_routes: account setup failed: \{message}"
 
 mustServer : Server
-mustServer = match pdsServer mustAccount
+mustServer = match pdsServer mustAccount serverLinksEmpty
   Ok server => server
   Err message => panic "read_routes: server setup failed: \{message}"
 
@@ -114,6 +135,13 @@ postRequest : String -> Array Int
 postRequest target =
   toUtf8
     "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+
+-- | A CORS preflight, carrying the one request header a browser's own
+-- preflight always asks about so the reflection can be graded.
+optionsRequest : String -> String -> Array Int
+optionsRequest target requestedHeaders =
+  toUtf8
+    "OPTIONS \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAccess-Control-Request-Headers: \{requestedHeaders}\r\n\r\n"
 
 -- ── response inspection ─────────────────────────────────────────────────────
 
@@ -208,27 +236,128 @@ failCell label request expectedStatus expectedCode =
   let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next
   check label ok "status=\{status} error=\{code} state=unchanged"
 
+-- | A CORS preflight against any path: 204, no other route ever reached, and
+-- exactly the five headers `lib.cors`'s defaults produce, the request's own
+-- `Access-Control-Request-Headers` reflected back verbatim.
+preflightCell : String -> String -> String -> <IO> Int
+preflightCell label target requestedHeaders =
+  let (next, response) =
+    handleBytes
+      mustServer
+      testContext
+      storeEmpty
+      (optionsRequest target requestedHeaders)
+  let status = statusText response
+  let head = headText response
+  let ok =
+    status == "204"
+      && contains "access-control-allow-origin: *" head
+      && contains
+        "access-control-allow-methods: GET,HEAD,PUT,PATCH,POST,DELETE"
+        head
+      && contains "access-control-allow-headers: \{requestedHeaders}" head
+      && contains "vary: Access-Control-Request-Headers" head
+      && contains "access-control-max-age: 86400" head
+      && not (contains "access-control-allow-credentials" head)
+      && storeIsEmpty next
+  check label ok "status=\{status}"
+
+{- | A preflight whose `Access-Control-Request-Headers` this server cannot
+   repeat: the value is still 204, still carries the other four headers, and
+   answers an EMPTY allowance rather than the client's own bytes.
+
+   The value here is a TAB, which `http`'s inbound `validFieldValue` admits
+   and its outbound `validResponseValue` (`32..126`) refuses. That gap used to
+   be a `panic` reachable from any unauthenticated client. The allowance is
+   asserted TERMINATED, so a response that echoed `a<TAB>b` back cannot
+   satisfy it by prefix — and the drop is pure, so all three engines owe the
+   same answer. -}
+preflightDroppedCell : String -> String -> <IO> Int
+preflightDroppedCell label target =
+  let (next, response) =
+    handleBytes mustServer testContext storeEmpty (optionsRequest target "a\tb")
+  let status = statusText response
+  let head = headText response
+  let ok =
+    status == "204"
+      && contains "access-control-allow-headers: \r\n" "\{head}\r\n"
+      && contains "access-control-allow-origin: *" head
+      && contains "vary: Access-Control-Request-Headers" head
+      && not (contains "access-control-allow-credentials" head)
+      && storeIsEmpty next
+  check label ok "status=\{status}"
+
+-- | Any non-preflight response: the allow-origin header this server puts on
+-- everything, and NONE of the preflight-only headers or the credentialed
+-- form it must never send.
+originOnlyCell : String -> Array Int -> String -> <IO> Int
+originOnlyCell label request expectedStatus =
+  let (next, response) = handleBytes mustServer testContext storeEmpty request
+  let status = statusText response
+  let head = headText response
+  let ok =
+    status == expectedStatus
+      && contains "access-control-allow-origin: *" head
+      && not (contains "access-control-allow-methods" head)
+      && not (contains "access-control-allow-headers" head)
+      && not (contains "access-control-max-age" head)
+      && not (contains "access-control-allow-credentials" head)
+      && storeIsEmpty next
+  check label ok "status=\{status}"
+
 -- ── the appview-proxy seam ──────────────────────────────────────────────────
 
-{- | The one appview these cells are configured to proxy to, and a SECOND
-   service DID nothing here is configured for.
+{- | The audiences these cells are configured to proxy to, and a THIRD service
+   DID nothing here is configured for.
 
-   The confused-deputy cells turn entirely on the difference between the two: a
-   header naming the second must be refused with nothing signed, and a cell
-   that printed a claim set for it would be exactly the defect the seam exists
-   to prevent. The transcript is therefore graded on the whole outcome string —
-   a refusal prints `signed=none` and an admission prints the claims, so the
-   two can never be confused for each other. -}
+   The confused-deputy cells turn on the difference between a configured
+   audience and an unconfigured one: a header naming the third must be refused
+   with nothing signed, and a cell that printed a claim set for it would be
+   exactly the defect the seam exists to prevent. The transcript is therefore
+   graded on the whole outcome string — a refusal prints `signed=none` and an
+   admission prints the claims, so the two can never be confused for each
+   other.
+
+   The two CONFIGURED audiences carry the other half of the same property. They
+   differ only in their DID and their port, so an admitted call that reached
+   the wrong one is visible as a `port=` that names the other row rather than
+   as anything about the claim set, which is what makes a routing confusion
+   gradeable here at all. -}
 configuredAppviewDid : String
 configuredAppviewDid = "did:web:appview.example"
+
+configuredChatDid : String
+configuredChatDid = "did:web:chat.example"
 
 foreignServiceDid : String
 foreignServiceDid = "did:web:other.example"
 
-configuredPolicy : Option AppviewPolicy
-configuredPolicy = match makeAppviewPolicy configuredAppviewDid
-  Ok policy => Some policy
-  Err message => panic "read_routes: appview policy setup failed: \{message}"
+{- | The loopback ports the two configured audiences are reached at.
+
+   Arbitrary numbers, and deliberately adjacent: nothing here opens a socket,
+   so what a port means in this file is only "which row", and two values a
+   transposition would swap is the shape a routing cell wants. -}
+configuredAppviewPort : Int
+configuredAppviewPort = 3128
+
+configuredChatPort : Int
+configuredChatPort = 3129
+
+mustRoute : String -> Int -> AppviewRoute
+mustRoute did port = match makeAppviewRoute did port
+  Ok route => route
+  Err message => panic "read_routes: audience row setup failed: \{message}"
+
+configuredAudiences : Option AppviewTable
+configuredAudiences =
+  let configured = makeAppviewTable (mustRoute
+    configuredAppviewDid
+    configuredAppviewPort) [
+    mustRoute configuredChatDid configuredChatPort,
+  ]
+  match configured
+    Ok table => Some table
+    Err message => panic "read_routes: audience table setup failed: \{message}"
 
 {- | The session every proxy cell below calls as.
 
@@ -275,13 +404,36 @@ proxyAuthField = "Authorization: Bearer \{proxyAccessToken}\r\n"
 
 -- A server with no `--appview-did` at all, which is what every deployment that
 -- has not configured an appview runs.
-noPolicy : Option AppviewPolicy
+noPolicy : Option AppviewTable
 noPolicy = None
 
 proxyRequest : String -> String -> String -> Array Int
 proxyRequest verb header target =
   toUtf8
     "\{verb} \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{header}\r\n\r\n"
+
+{- | A forwarded write: a POST carrying a body, the two inbound fields a
+   forward relays for it, and one field it must NOT relay.
+
+   The unrelayed field is what makes this a whitelist test rather than a
+   copy test: the relayed list is printed in full by `proxyOutcome`, so a seam
+   that carried `x-medaka-not-relayed` along would fail here even though every
+   field the client asked to be relayed did arrive. -}
+proxyPostRequest : String -> String -> Array Int
+proxyPostRequest target body =
+  toUtf8
+    "POST \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\naccept-language: en-GB\r\nx-medaka-not-relayed: 1\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
+
+{- | A call that names NO audience, made by the logged-in account.
+
+   A forward is made on the account's behalf whether or not the client named
+   where to, so the header-absent arm needs the same credential the header-
+   bearing one does; this is `proxyRequest` with the `atproto-proxy` field and
+   nothing else removed. -}
+proxyRequestNoHeader : String -> Array Int
+proxyRequestNoHeader target =
+  toUtf8
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}\r\n"
 
 {- | The same request `proxy-admitted-timeline` sends, with the caller's own
    credential left out. An anonymous caller asking this server to forward under
@@ -321,15 +473,48 @@ claimText : ServiceAuthRequest -> String
 claimText claims =
   "iss=\{claims.iss} aud=\{claims.aud} lxm=\{lxmText claims.lxm} jti=\{claims.jti} iat=\{intToString claims.iat}"
 
-proxyOutcome : ProxyDecision -> String
-proxyOutcome NotProxied = "decision=not-proxied signed=none"
-proxyOutcome (ProxyRefused response) =
+{- | The relayed inbound fields, as the admission selected them.
+
+   Printed in full rather than counted: the fields are a WHITELIST, so a cell
+   asserting on this string fails both when a listed field is dropped and when
+   an unlisted one is carried along. -}
+relayedText : List (String, String) -> String
+relayedText fields = join "," (map ((name, value) => "\{name}=\{value}") fields)
+
+{- | Everything an admission licenses the shell to do, in one line.
+
+   `verb`, `relayed` and `body` are here because a forward now carries them:
+   the seam chooses them and the shell only sends what it is handed, so a cell
+   that graded the target and the claims alone would not see a lost body or a
+   dropped field at all. `audience` and the claim's `aud` are printed
+   separately because they are allowed to differ — the first is the bare DID
+   this server admitted and may open a socket to, the second is the header's
+   own text a token is signed for. -}
+{- | The loopback port a forward this admission licensed would leave by, as the
+   shell finds it: by asking the configured table for the row whose DID is the
+   ADMITTED audience (`pds/shell/egress.mdk`'s `egressCall`).
+
+   It is looked up here rather than read off the admission because the
+   admission carries no port — the seam decides WHO may be talked to and the
+   shell decides which socket that is, and grading the second against the first
+   is what makes an audience that routed to another audience's proxy visible.
+   `<unrouted>` is what an admitted audience no row holds would print, which is
+   a state nothing should be able to reach. -}
+routeText : Option AppviewTable -> String -> String
+routeText None _ = "<no-table>"
+routeText (Some table) did = match appviewRouteFor table did
+  Some route => intToString (appviewRoutePort route)
+  None => "<unrouted>"
+
+proxyOutcome : Option AppviewTable -> ProxyDecision -> String
+proxyOutcome _ NotProxied = "decision=not-proxied signed=none"
+proxyOutcome _ (ProxyRefused response) =
   let bytes = serializeResponse response
   "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
-proxyOutcome (ProxyAdmitted admission) =
-  "decision=admitted target=\{admission.target} \{claimText admission.serviceAuth}"
+proxyOutcome table (ProxyAdmitted admission) =
+  "decision=admitted verb=\{admission.verb} target=\{admission.target} audience=\{admission.audience} \{claimText admission.serviceAuth} relayed=[\{relayedText admission.headers}] body=\{fromUtf8 admission.body} port=\{routeText table admission.audience}"
 
-proxyCell : String -> Option AppviewPolicy -> Array Int -> String -> <IO> Int
+proxyCell : String -> Option AppviewTable -> Array Int -> String -> <IO> Int
 proxyCell label policy bytes expected =
   let decision =
     classifyProxy
@@ -338,7 +523,7 @@ proxyCell label policy bytes expected =
       policy
       proxySessionStore
       (mustRequest bytes)
-  let got = proxyOutcome decision
+  let got = proxyOutcome policy decision
   check label (got == expected) got
 
 xrpc : String -> String
@@ -360,9 +545,22 @@ expectedJti = "05101b26313c47525d68737e89949faa"
 notProxiedLine : String
 notProxiedLine = "decision=not-proxied signed=none"
 
-admittedLine : String -> String -> String -> String
-admittedLine target aud nsid =
-  "decision=admitted target=\{target} iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000"
+admittedWith : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String
+admittedWith verb target audience aud nsid relayed body port =
+  "decision=admitted verb=\{verb} target=\{target} audience=\{audience} iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000 relayed=[\{relayed}] body=\{body} port=\{intToString port}"
+
+-- A forwarded GET: no body, and therefore no body fields relayed with it.
+admittedLine : String -> String -> String -> Int -> String
+admittedLine target aud nsid port =
+  admittedWith "GET" target aud aud nsid "" "" port
 
 refusedLine : String -> String -> String -> String
 refusedLine status code message =
@@ -379,6 +577,31 @@ noCredentialLine =
 
 timelineTarget : String
 timelineTarget = xrpc "app.bsky.feed.getTimeline?limit=2"
+
+-- | A read this server does not register, used by both header-absent cells.
+followsTarget : String
+followsTarget = xrpc "app.bsky.graph.getFollows?actor=\{accountDidText}"
+
+updateSeenTarget : String
+updateSeenTarget = xrpc "app.bsky.notification.updateSeen"
+
+updateSeenBody : String
+updateSeenBody = "{\"seenAt\":\"2026-09-12T00:00:00.000Z\"}"
+
+-- | A read in the OTHER forwardable namespace, used by every second-audience
+-- cell. `chat.bsky.*` is the DM service's lexicon and this server registers
+-- none of it, so the method half of every one of those cells is settled by the
+-- namespace bound and only the audience half is in question.
+listConvosTarget : String
+listConvosTarget = xrpc "chat.bsky.convo.listConvos"
+
+{- | An nsid in no namespace this server forwards and in no registry it holds.
+
+   `com.atproto.temp.*` is deliberately not one of the account-management
+   methods: what the two cells on it assert is the NAMESPACE bound, which owes
+   the same answer to a method whose only property is being outside it. -}
+outOfNamespaceTarget : String
+outOfNamespaceTarget = xrpc "com.atproto.temp.checkSignupQueue"
 
 {- | The same method `timelineTarget` names, spelled with an upper-case
    authority.
@@ -408,90 +631,109 @@ runProxyCells =
     xrpc "app.bsky.feed.getAuthorFeed?actor=\{accountDidText}"
   let absent =
     proxyCell
-      "proxy-header-absent"
-      configuredPolicy
-      (getRequest timelineTarget)
+      "proxy-header-absent-default-appview"
+      configuredAudiences
+      (proxyRequestNoHeader followsTarget)
+      (admittedLine
+        followsTarget
+        configuredAppviewDid
+        "app.bsky.graph.getFollows"
+        configuredAppviewPort)
+  -- Anonymous ON PURPOSE: a deployment with no appview has no forward to make,
+  -- so this path must stay the router's 404 and must not become the 401 a
+  -- credential check would answer first.
+  let absentUnconfigured =
+    proxyCell
+      "proxy-header-absent-no-appview"
+      noPolicy
+      (getRequest followsTarget)
       notProxiedLine
   let admitted =
     proxyCell
       "proxy-admitted-timeline"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" configuredAppviewDid timelineTarget)
       (admittedLine
         timelineTarget
         configuredAppviewDid
-        "app.bsky.feed.getTimeline")
+        "app.bsky.feed.getTimeline"
+        configuredAppviewPort)
   let fragment =
     proxyCell
       "proxy-admitted-service-fragment"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" "\{configuredAppviewDid}#bsky_appview" profileTarget)
-      (admittedLine
+      (admittedWith
+        "GET"
         profileTarget
+        configuredAppviewDid
         "\{configuredAppviewDid}#bsky_appview"
-        "app.bsky.actor.getProfile")
+        "app.bsky.actor.getProfile"
+        ""
+        ""
+        configuredAppviewPort)
   let mixedCase =
     proxyCell
       "proxy-header-name-case-insensitive"
-      configuredPolicy
+      configuredAudiences
       (proxyMixedCaseRequest authorFeedTarget)
       (admittedLine
         authorFeedTarget
         configuredAppviewDid
-        "app.bsky.feed.getAuthorFeed")
+        "app.bsky.feed.getAuthorFeed"
+        configuredAppviewPort)
   let foreign =
     proxyCell
       "proxy-foreign-audience"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" foreignServiceDid timelineTarget)
       (invalidRequestLine
         "atproto-proxy names a service this server does not proxy to")
   let notADid =
     proxyCell
       "proxy-audience-not-a-did"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" "https://appview.example" timelineTarget)
       (invalidRequestLine "atproto-proxy does not name a service DID")
   let repeated =
     proxyCell
       "proxy-header-repeated"
-      configuredPolicy
+      configuredAudiences
       (proxyRepeatedRequest timelineTarget)
       (invalidRequestLine "atproto-proxy must not be repeated")
   let protectedUnregistered =
     proxyCell
       "proxy-protected-method-unregistered"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
         (xrpc "com.atproto.admin.deleteAccount"))
       (invalidRequestLine
         "No service configured for com.atproto.admin.deleteAccount")
-  let protectedRegistered =
+  let registeredWithHeader =
     proxyCell
-      "proxy-protected-method-registered"
-      configuredPolicy
+      "proxy-registered-method-with-header"
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
-        (xrpc "com.atproto.server.createSession"))
-      (invalidRequestLine
-        "this server answers com.atproto.server.createSession itself and does not proxy it")
+        (xrpc "com.atproto.server.getSession"))
+      notProxiedLine
   let localMiss =
     proxyCell
       "proxy-forward-on-local-miss"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
         (xrpc
           "com.atproto.repo.getRecord?repo=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka-a"))
       notProxiedLine
-  let pdsHosted =
+  let preferences =
     proxyCell
-      "proxy-pds-hosted-preferences"
-      configuredPolicy
+      "proxy-locally-served-preferences"
+      configuredAudiences
       (proxyRequest
         "GET"
         configuredAppviewDid
@@ -503,37 +745,135 @@ runProxyCells =
       noPolicy
       (proxyRequest "GET" configuredAppviewDid timelineTarget)
       (invalidRequestLine "No service configured for app.bsky.feed.getTimeline")
-  let needsGet =
+  let postBody =
     proxyCell
-      "proxy-forwardable-requires-get"
-      configuredPolicy
-      (proxyRequest "POST" configuredAppviewDid timelineTarget)
+      "proxy-admitted-post-body"
+      configuredAudiences
+      (proxyPostRequest updateSeenTarget updateSeenBody)
+      (admittedWith
+        "POST"
+        updateSeenTarget
+        configuredAppviewDid
+        configuredAppviewDid
+        "app.bsky.notification.updateSeen"
+        "accept-language=en-GB,content-type=application/json"
+        updateSeenBody
+        configuredAppviewPort)
+  let needsGetOrPost =
+    proxyCell
+      "proxy-forwardable-requires-get-or-post"
+      configuredAudiences
+      (proxyRequest "DELETE" configuredAppviewDid timelineTarget)
       (refusedLine
         "405"
         "MethodNotAllowed"
-        "a proxied XRPC method requires GET")
+        "a proxied XRPC method requires GET or POST")
+  let outOfNamespaceHeader =
+    proxyCell
+      "proxy-out-of-namespace-with-header"
+      configuredAudiences
+      (proxyRequest "GET" configuredAppviewDid outOfNamespaceTarget)
+      (invalidRequestLine
+        "No service configured for com.atproto.temp.checkSignupQueue")
+  let outOfNamespaceAbsent =
+    proxyCell
+      "proxy-out-of-namespace-header-absent"
+      configuredAudiences
+      (getRequest outOfNamespaceTarget)
+      notProxiedLine
   let wellKnown =
     proxyCell
       "proxy-header-on-well-known"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" configuredAppviewDid "/.well-known/did.json")
       notProxiedLine
   let unauthenticated =
     proxyCell
       "proxy-unauthenticated"
-      configuredPolicy
+      configuredAudiences
       (proxyRequestUnauthenticated timelineTarget)
       noCredentialLine
   let mixedCaseNsid =
     proxyCell
       "proxy-admitted-nsid-authority-case"
-      configuredPolicy
+      configuredAudiences
       (proxyRequest "GET" configuredAppviewDid mixedCaseNsidTarget)
       (admittedLine
         mixedCaseNsidTarget
         configuredAppviewDid
-        "app.bsky.feed.getTimeline")
-  absent
+        "app.bsky.feed.getTimeline"
+        configuredAppviewPort)
+  -- The SECOND configured audience, named by a header. Everything but the DID
+  -- and the port is what the appview cells send, so what this cell adds over
+  -- them is the routing: the admitted audience is the chat DID and the port a
+  -- forward would leave by is the chat row's, not the default row's.
+  let chatAudience =
+    proxyCell
+      "proxy-admitted-chat-audience"
+      configuredAudiences
+      (proxyRequest "GET" configuredChatDid listConvosTarget)
+      (admittedLine
+        listConvosTarget
+        configuredChatDid
+        "chat.bsky.convo.listConvos"
+        configuredChatPort)
+  -- A service OF the second audience. The fragment is stripped before the
+  -- table is asked, so the row that matches is the chat row and not the
+  -- default one — a strip that fell through to the default would send a
+  -- credential minted for the chat service to the appview's proxy.
+  let chatFragment =
+    proxyCell
+      "proxy-admitted-chat-service-fragment"
+      configuredAudiences
+      (proxyRequest "GET" "\{configuredChatDid}#bsky_chat" listConvosTarget)
+      (admittedWith
+        "GET"
+        listConvosTarget
+        configuredChatDid
+        "\{configuredChatDid}#bsky_chat"
+        "chat.bsky.convo.listConvos"
+        ""
+        ""
+        configuredChatPort)
+  -- The two axes stay independent: a `chat.bsky.*` method is forwardable on
+  -- namespace alone, and the audience it goes to is the one the HEADER named.
+  -- A server that routed on the method's namespace would send this to the chat
+  -- row; the client asked for the appview.
+  let chatMethodDefaultAudience =
+    proxyCell
+      "proxy-chat-method-default-audience"
+      configuredAudiences
+      (proxyRequest "GET" configuredAppviewDid listConvosTarget)
+      (admittedLine
+        listConvosTarget
+        configuredAppviewDid
+        "chat.bsky.convo.listConvos"
+        configuredAppviewPort)
+  -- A DID's method-specific identifier is case-SENSITIVE, so neither of these
+  -- is a configured audience and neither may be admitted for the row it
+  -- resembles. They are the audience-routing-confusion pair: a comparison that
+  -- folded case would admit one of them and then route it somewhere.
+  let chatAudienceCaseFolded =
+    proxyCell
+      "proxy-chat-audience-case-folded"
+      configuredAudiences
+      (proxyRequest "GET" "did:web:Chat.Example" listConvosTarget)
+      (invalidRequestLine
+        "atproto-proxy names a service this server does not proxy to")
+  let appviewAudienceCaseFolded =
+    proxyCell
+      "proxy-appview-audience-case-folded"
+      configuredAudiences
+      (proxyRequest "GET" "did:web:Appview.Example" timelineTarget)
+      (invalidRequestLine
+        "atproto-proxy names a service this server does not proxy to")
+  chatAudience
+    + chatFragment
+    + chatMethodDefaultAudience
+    + chatAudienceCaseFolded
+    + appviewAudienceCaseFolded
+    + absent
+    + absentUnconfigured
     + admitted
     + fragment
     + mixedCase
@@ -541,17 +881,178 @@ runProxyCells =
     + notADid
     + repeated
     + protectedUnregistered
-    + protectedRegistered
+    + registeredWithHeader
     + localMiss
-    + pdsHosted
+    + preferences
     + unconfigured
-    + needsGet
+    + postBody
+    + needsGetOrPost
+    + outOfNamespaceHeader
+    + outOfNamespaceAbsent
     + wellKnown
     + unauthenticated
     + mixedCaseNsid
 
-runCells : <IO> Unit
-runCells =
+-- ── the service-auth mint seam ──────────────────────────────────────────────
+
+{- | The `exp` a decision resolved to, or the absence of one.
+
+   Printed separately from `claimText` rather than folded into it because the
+   two seams answer differently: a forward this server makes takes `lib.jwt`'s
+   own default window and names no instant, while a credential handed to a
+   client states the instant it was graded against. -}
+expiryText : Option Int -> String
+expiryText None = "<absent>"
+expiryText (Some at) = intToString at
+
+serviceClaimText : ServiceAuthRequest -> String
+serviceClaimText claims = "\{claimText claims} exp=\{expiryText claims.exp}"
+
+{- | Everything the shell may do with a framed request for the mint route, in
+   one line.
+
+   `signed=none` on every arm that is not a mint is the whole point: the shell
+   signs a `ServiceAuthRequest` and nothing else, so a decision that carries
+   none cannot produce a token. A cell asserting on this string therefore fails
+   both when a refusal turns into a mint and when it turns into a DIFFERENT
+   refusal. -}
+serviceAuthOutcome : ServiceAuthDecision -> String
+serviceAuthOutcome NotServiceAuth = "decision=not-service-auth signed=none"
+serviceAuthOutcome (ServiceAuthRefused response) =
+  let bytes = serializeResponse response
+  "decision=refused status=\{statusText bytes} error=\{errorCode bytes} message=\{errorMessage bytes} signed=none"
+serviceAuthOutcome (ServiceAuthMinted claims) =
+  "decision=minted \{serviceClaimText claims}"
+
+serviceAuthCell : String ->
+  Option AppviewTable ->
+  Array Int ->
+  String ->
+  <IO> Int
+serviceAuthCell label policy bytes expected =
+  let decision =
+    classifyServiceAuth
+      mustServer
+      testContext
+      policy
+      proxySessionStore
+      (mustRequest bytes)
+  let got = serviceAuthOutcome decision
+  check label (got == expected) got
+
+serviceAuthTarget : String -> String
+serviceAuthTarget query = xrpc "com.atproto.server.getServiceAuth?\{query}"
+
+mintedLine : String -> String -> Int -> String
+mintedLine aud nsid expiry =
+  "decision=minted iss=\{accountDidText} aud=\{aud} lxm=\{nsid} jti=\{expectedJti} iat=1700000000 exp=\{intToString expiry}"
+
+-- | `lib.jwt`'s own default window, which is what a request naming no `exp`
+-- resolves to. Written out rather than imported: what the cells assert is the
+-- instant a client is handed, and re-deriving it from the same constant the
+-- seam used would assert nothing.
+defaultExpiry : Int
+defaultExpiry = 1700000060
+
+-- | Two hours past the fixed instant, which is outside the hour the route
+-- grants any credential at all.
+twoHoursOut : Int
+twoHoursOut = 1700007200
+
+-- | One of the sixteen account-management methods, named by a client asking
+-- for a credential it could spend on this very server's own session route.
+protectedLxm : String
+protectedLxm = "com.atproto.server.getSession"
+
+{- | The corpus rows, as the comparison cell reads them: the file's own
+   commentary and blank lines dropped, nothing else changed. -}
+corpusMethodRows : List String -> List String
+corpusMethodRows rows =
+  filter (line => line /= "" && not (startsWith "#" line)) (map trim rows)
+
+{- | The transcribed `protectedMethods` list against the extracted corpus it
+   claims to be a copy of.
+
+   `pds/lib/` declares no effect row and so cannot read a file, which is why
+   the list is transcribed there at all; this cell is what keeps the
+   transcription honest. Compared as a SET and case-insensitively, because that
+   is how the official implementation's own `LxmSet` matches — so a row that
+   moved is not a failure and a row that was dropped, added, or misspelled
+   is. -}
+protectedMethodsCell : List String -> <IO> Int
+protectedMethodsCell rows =
+  let corpus = map toLower (corpusMethodRows rows)
+  let transcribed = map toLower protectedMethods
+  let sameSet =
+    all (nsid => elem nsid transcribed) corpus
+      && all (nsid => elem nsid corpus) transcribed
+  check
+    "service-auth-protected-methods-corpus"
+    (sameSet && length corpus == 16 && length transcribed == 16)
+    "corpus=\{intToString (length corpus)} transcribed=\{intToString (length transcribed)} same-set"
+
+{- | The mint seam's own cells: who may ask this server to sign the account's
+   identity over to a service, and on what terms.
+
+   They belong beside the proxy cells for the same reason those belong here —
+   `classifyServiceAuth` reads the registry, the account and the open sessions
+   and no repository, so all three engines can grade it for the price of the
+   cells. The socket half, where a real client spends a real token on the chat
+   stub, is `pds/test/serve_e2e.sh`'s. -}
+runServiceAuthCells : List String -> <IO> Int
+runServiceAuthCells corpus =
+  let mintedWithLxm =
+    serviceAuthCell
+      "service-auth-minted-with-lxm"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{configuredChatDid}&lxm=chat.bsky.convo.listConvos"))
+      (mintedLine configuredChatDid "chat.bsky.convo.listConvos" defaultExpiry)
+  let mintedNoLxm =
+    serviceAuthCell
+      "service-auth-minted-no-lxm"
+      configuredAudiences
+      (proxyRequestNoHeader (serviceAuthTarget "aud=\{configuredAppviewDid}"))
+      (mintedLine configuredAppviewDid "<absent>" defaultExpiry)
+  -- The confused deputy on this route: the client asks for the credential
+  -- itself, so a `aud` this operator never configured must produce no claim
+  -- set for anything to sign.
+  let foreignAudience =
+    serviceAuthCell
+      "service-auth-foreign-audience"
+      configuredAudiences
+      (proxyRequestNoHeader (serviceAuthTarget "aud=\{foreignServiceDid}"))
+      (invalidRequestLine
+        "aud names a service this server does not mint credentials for")
+  let protectedMethod =
+    serviceAuthCell
+      "service-auth-protected-lxm"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{configuredAppviewDid}&lxm=\{protectedLxm}"))
+      (invalidRequestLine
+        "cannot request a service auth token for the following method: \{protectedLxm}")
+  let farExpiry =
+    serviceAuthCell
+      "service-auth-exp-beyond-an-hour"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{configuredAppviewDid}&lxm=app.bsky.feed.getTimeline&exp=\{intToString twoHoursOut}"))
+      (refusedLine
+        "400"
+        "BadExpiration"
+        "cannot request a token with an expiration more than an hour in the future")
+  mintedWithLxm
+    + mintedNoLxm
+    + foreignAudience
+    + protectedMethod
+    + farExpiry
+    + protectedMethodsCell corpus
+
+runCells : List String -> <IO> Unit
+runCells corpus =
   let didJson =
     okCell
       "wellknown-did-json"
@@ -613,7 +1114,7 @@ runCells =
       "describe-server"
       (getRequest (xrpc "com.atproto.server.describeServer"))
       "application/json"
-      "{\"did\":\"\{accountDidText}\",\"availableUserDomains\":[],\"inviteCodeRequired\":false}"
+      "{\"did\":\"\{accountDidText}\",\"availableUserDomains\":[],\"inviteCodeRequired\":false,\"blobUploadLimit\":5242880}"
   let getRecord =
     failCell
       "get-record-unconfigured"
@@ -674,9 +1175,35 @@ runCells =
       (getRequest (xrpc "com.atproto.repo.listMissingBlobs"))
       "404"
       "NotFound"
+  let preflightTimeline =
+    preflightCell
+      "preflight-timeline"
+      timelineTarget
+      "authorization,content-type"
+  let preflightWellKnown =
+    preflightCell
+      "preflight-atproto-did"
+      "/.well-known/atproto-did"
+      "content-type"
+  let preflightDropped =
+    preflightDroppedCell "preflight-unrepeatable-value" timelineTarget
+  let originOnly200 =
+    originOnlyCell
+      "origin-only-on-200"
+      (getRequest "/.well-known/atproto-did")
+      "200"
+  let originOnly401 =
+    originOnlyCell
+      "origin-only-on-401"
+      (getRequest (xrpc "com.atproto.server.getSession"))
+      "401"
+  let originOnly404 =
+    originOnlyCell "origin-only-on-404" (getRequest "/favicon.ico") "404"
   let proxied = runProxyCells
+  let serviceAuth = runServiceAuthCells corpus
   let cells =
     proxied
+      + serviceAuth
       + didJson
       + atprotoDid
       + wellKnownPost
@@ -697,14 +1224,26 @@ runCells =
       + getRepoStatus
       + readNeedsGet
       + unregistered
+      + preflightTimeline
+      + preflightWellKnown
+      + preflightDropped
+      + originOnly200
+      + originOnly401
+      + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/36 repository-free routes and proxy dispositions"
-  if cells == 36 then
+      "cells: \{intToString cells}/57 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 57 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
     exit 1
 
-main : <IO> Unit
-main = runCells
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [corpusPath] => match readLines corpusPath
+    Err message =>
+      panic "read_routes: cannot read protected-methods corpus: \{message}"
+    Ok rows => runCells rows
+  _ =>
+    panic "usage: read_routes_all_engines_main <pds_protected_methods_corpus>"

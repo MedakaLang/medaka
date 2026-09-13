@@ -39,6 +39,7 @@ import http.{
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
 import lib.cid.{Cid, cidToString}
+import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.credential.{
   credentialDigest,
   credentialIterations,
@@ -71,18 +72,23 @@ import lib.proxy.{
   proxyUpstreamFailureResponse,
   proxyUpstreamResponse,
 }
+import lib.handlers.{serviceAuthTokenResponse}
+import lib.jwt.{ServiceAuthRequest}
 import lib.server_core.{
   ProxyAdmission(..),
   ProxyDecision(..),
   RequestContext(..),
   Server,
+  ServiceAuthDecision(..),
   UpgradeAdmission(..),
   UpgradeDecision(..),
   accountDid,
   classifyProxy,
+  classifyServiceAuth,
   classifyUpgrade,
   handleBytes,
   serverAccount,
+  serviceAuthUnavailableResponse,
 }
 import lib.store.{
   Store,
@@ -90,6 +96,7 @@ import lib.store.{
   storeBlobMimeIndex,
   storeBlobMimeType,
   storeCredential,
+  storePreferences,
   storeRepo,
   storeSize,
 }
@@ -102,14 +109,14 @@ import lib.xrpc.{
 import net.{Connection, Listener, listen}
 import net_async as A
 import shell.blobfile.{blobFileWrite}
-import shell.egress.{Egress, egressAppview, egressCall}
+import shell.egress.{Egress, egressAppviews, egressCall, egressMintToken}
 import shell.eventlog.{
   eventLogDiscardStaged,
   eventLogNextSequence,
   eventLogPromote,
   eventLogStage,
 }
-import shell.persist.{persistCredential, persistSave}
+import shell.persist.{persistCredential, persistPreferences, persistSave}
 import shell.subscribe.{runSubscription}
 import string.{toUtf8}
 import time.{Duration, formatIso, fromEpochSeconds, now, seconds}
@@ -293,14 +300,18 @@ export
 bindAddress : String -> Int -> <Net "_"> Result String Listener
 bindAddress addr port = listen addr port
 
+-- This response never reaches `lib.server_core`'s `handle`, so the
+-- allow-origin header every response carries is added here rather than
+-- inherited.
 persistFailureBytes : Array Int
 persistFailureBytes =
   serializeResponse
-    (xrpcErrorResponse
-      500
-      "Internal Server Error"
-      "InternalServerError"
-      "Repository state could not be persisted")
+    (withAllowOrigin
+      (xrpcErrorResponse
+        500
+        "Internal Server Error"
+        "InternalServerError"
+        "Repository state could not be persisted"))
 
 {- | Apply one framed request to the shared `Store`.
 
@@ -356,7 +367,23 @@ persistTransition : String ->
 persistTransition dir did nowSeconds before after = do
   () <- persistRepoHalf dir did nowSeconds before after
   () <- persistCredentialHalf dir before after
-  if blobsMoved before after then persistBlobHalf dir after else Ok ()
+  () <- if blobsMoved before after then persistBlobHalf dir after else Ok ()
+  persistPreferencesHalf dir before after
+
+{- | Persist the preference half when the transition moved it, which
+   `putPreferences` does (a wholesale replace) and every other route does
+   not. Comparing the two lists is exactly `persistCredentialHalf`'s shape,
+   one level simpler: there is no re-derivation case to distinguish, only
+   "moved" or "did not". -}
+persistPreferencesHalf : String ->
+  Store ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistPreferencesHalf dir before after =
+  if storePreferences before == storePreferences after then
+    Ok ()
+  else
+    persistPreferences dir (storePreferences after)
 
 {- | Persist the account credential when the transition moved it, which one
    route does: a login whose stored record predates today's iteration count is
@@ -1130,6 +1157,24 @@ endOfStream : ReadBuffer -> Result String Unit
 endOfStream buf =
   if readBufferIsEmpty buf then Ok () else Err "connection closed mid-request"
 
+{- | The CORS preflight answer this buffer is owed, or `None` when it is not a
+   preflight. A buffer that did not parse is never one, for the reason it is
+   never an upgrade: there is no `Request` to grade.
+
+   `lib.server_core`'s `handle` keeps a short-circuit of its own, but it sits
+   below `applyRequest`, and three classifications run above that: a browser
+   preflights with no `Authorization` header and `admitForwardable` resolves a
+   credential before it looks at the verb, so an `OPTIONS` to a forwardable
+   nsid is refused 401 before `applyRequest` is ever called. Answering here
+   makes the preflight independent of which of the four downstream paths the
+   real request would have taken. Nothing in the answer depends on them:
+   `preflightResponse` reads the request's own headers, and neither touches
+   the store nor charges anything. -}
+preflightAnswer : Result HttpParseFailure Request -> Option Response
+preflightAnswer (Err _) = None
+preflightAnswer (Ok request) =
+  if isPreflight request then Some (preflightResponse request) else None
+
 -- The rate-limit decision is taken here, once per framed request, because
 -- this is the one place that holds both the parsed `Request` (headers, for
 -- `identifyClient`, and target, for the routed NSID) and the point of
@@ -1189,8 +1234,19 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
       (admissionIdentity (servingTrustedProxy serving) parsed)
       (admissionClasses firstRequest parsed)
       nowSeconds
-  match charged
-    Some refusal =>
+  {- The answer owed before any classification runs: the rate-limit refusal,
+     or the preflight answer. The preflight is taken AFTER the charge rather
+     than before it, because `applyRateLimit`'s contract is that every buffer
+     reaching the framer is charged — a preflight costs the same parse and
+     response as anything else, and answering one for free would be the
+     unmetered work channel that contract exists to close. Only the refusal is
+     passed through `withAllowOrigin`: `preflightResponse` already carries its
+     own complete header set, allow-origin included. -}
+  let earlyAnswer = match charged
+    Some refusal => Some (withAllowOrigin refusal)
+    None => preflightAnswer parsed
+  match earlyAnswer
+    Some response =>
       sendAndContinue
         server
         dir
@@ -1202,7 +1258,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
         slot
         rest
         keepAlive
-        (serializeResponse refusal)
+        (serializeResponse response)
     None => defer
       decision <- liftIO (u =>
         upgradeDecision server storeRef nowSeconds parsed)
@@ -1231,7 +1287,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
             slot
             rest
             False
-            (serializeResponse refusal)
+            (serializeResponse (withAllowOrigin refusal))
         NotAnUpgrade => defer
           proxy <- liftIO (u =>
             proxyDecisionFor server serving storeRef nowSeconds parsed)
@@ -1263,26 +1319,61 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 slot
                 rest
                 keepAlive
-                (serializeResponse refusal)
+                (serializeResponse (withAllowOrigin refusal))
             NotProxied => defer
-              response <- liftIO (u =>
-                applyRequest
+              credential <- liftIO (u =>
+                serviceAuthDecisionFor
                   server
-                  dir
+                  serving
                   storeRef
-                  (sliceClamped 0 boundary (readBufferBacking buf)))
-              sendAndContinue
-                server
-                dir
-                storeRef
-                limiterRef
-                census
-                serving
-                conn
-                slot
-                rest
-                keepAlive
-                response
+                  nowSeconds
+                  parsed)
+              match credential
+                ServiceAuthMinted claims =>
+                  sendAndContinue
+                    server
+                    dir
+                    storeRef
+                    limiterRef
+                    census
+                    serving
+                    conn
+                    slot
+                    rest
+                    keepAlive
+                    (mintedTokenBytes serving claims)
+                ServiceAuthRefused refusal =>
+                  sendAndContinue
+                    server
+                    dir
+                    storeRef
+                    limiterRef
+                    census
+                    serving
+                    conn
+                    slot
+                    rest
+                    keepAlive
+                    (serializeResponse (withAllowOrigin refusal))
+                NotServiceAuth => defer
+                  response <- liftIO (u =>
+                    applyRequest
+                      server
+                      dir
+                      storeRef
+                      (sliceClamped 0 boundary (readBufferBacking buf)))
+                  sendAndContinue
+                    server
+                    dir
+                    storeRef
+                    limiterRef
+                    census
+                    serving
+                    conn
+                    slot
+                    rest
+                    keepAlive
+                    response
 
 {- | Whether this request asked to be proxied, asked of the pure core
    (`lib.server_core`'s `classifyProxy`) after the upgrade question and before
@@ -1317,9 +1408,87 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
       nowSeconds = nowSeconds,
       nonce = osEntropyBytes requestNonceBytes,
     }
-    (map egressAppview (servingEgress serving))
+    (map egressAppviews (servingEgress serving))
     !storeRef
     request
+
+{- | Whether this request asked for a service credential of its own, asked of
+   the pure core (`lib.server_core`'s `classifyServiceAuth`) after the proxy
+   question and before `applyRequest`.
+
+   It is a separate question from the proxy one and is asked second, because
+   the two never both apply: `com.atproto.server.getServiceAuth` is a route
+   this server REGISTERS, so the proxy seam answers `NotProxied` for it
+   whatever header it carries, and every request the proxy seam did admit or
+   refuse has already left by the time this runs.
+
+   It draws its OWN nonce, for the same reason `proxyDecisionFor` draws one: it
+   is the `jti` of whatever credential is minted for this request, and two
+   credentials sharing one would be indistinguishable to the peer that spends
+   them. The two calls cannot both mint on one request, so nothing here reuses
+   the other's.
+
+   The store is read for the reason the proxy seam reads it: this route is
+   gated on the caller's own access token, which is resolved against the open
+   sessions. Nothing about that transitions the store, and a minted credential
+   never reaches `applyRequest` at all. -}
+serviceAuthDecisionFor : Server ->
+  Serving ->
+  Ref Store ->
+  Int ->
+  Result HttpParseFailure Request ->
+  <Rand> ServiceAuthDecision
+serviceAuthDecisionFor _ _ _ _ (Err _) = NotServiceAuth
+serviceAuthDecisionFor server serving storeRef nowSeconds (Ok request) =
+  classifyServiceAuth
+    server
+    RequestContext {
+      nowSeconds = nowSeconds,
+      nonce = osEntropyBytes requestNonceBytes,
+    }
+    (map egressAppviews (servingEgress serving))
+    !storeRef
+    request
+
+{- | What a client that asked for a service credential is answered: the
+   credential, signed here with the account's own repo key.
+
+   Nothing about the claim set is chosen here, and the parameter says so: a
+   `ServiceAuthRequest` is the pure classifier's own output and there is no
+   other way to obtain one, so the issuer, the audience, the method and the
+   expiry all arrive already decided. This function signs, and the key never
+   leaves `pds/shell/egress.mdk` — `egressMintToken` takes the claim set and
+   returns a signature.
+
+   `None` for the egress is unreachable: a `ServiceAuthMinted` decision is only
+   produced when an `AppviewTable` was supplied, and the only source of one is
+   a configured `Egress`. It answers the same 501 a deployment with no key
+   configured gets, rather than a panic, for the reason the proxy path's
+   unreachable `None` is a 502: a reachability argument is not a reason to add
+   a crash path to a function a client can reach over the network.
+
+   An `Err` from the mint is 500 and not 501: the key IS configured and the
+   signature did not come out, which is this server failing rather than this
+   server declining. -}
+mintedTokenBytes : Serving -> ServiceAuthRequest -> Array Int
+mintedTokenBytes serving claims = match servingEgress serving
+  None => serializeResponse (withAllowOrigin serviceAuthUnavailableResponse)
+  Some egress => match egressMintToken egress claims
+    Err _ => serializeResponse (withAllowOrigin serviceAuthMintFailureResponse)
+    Ok minted =>
+      serializeResponse (withAllowOrigin (serviceAuthTokenResponse minted))
+
+-- | What a client is told when the signature itself did not come out. The
+-- reason is not in the body for the reason a proxied read's 502 does not carry
+-- one: which internal step failed is this server's business and tells a client
+-- nothing it can act on.
+serviceAuthMintFailureResponse : Response
+serviceAuthMintFailureResponse =
+  xrpcErrorResponse
+    500
+    "Internal Server Error"
+    "InternalServerError"
+    "the service credential could not be signed"
 
 {- | Make the one outbound call an admitted proxied read authorizes, and answer
    the client with what came back.
@@ -1336,7 +1505,7 @@ proxyDecisionFor server serving storeRef nowSeconds (Ok request) =
    function chooses the identity it charges and nothing else.
 
    `None` for the egress is unreachable — a `ProxyAdmitted` decision is only
-   produced when an `AppviewPolicy` was supplied, and the only source of one is
+   produced when an `AppviewTable` was supplied, and the only source of one is
    a configured `Egress` — and it is answered 502 rather than by a panic: a
    reachability argument is not a reason to add a crash path to the one
    function a client can reach over the network. -}
@@ -1368,7 +1537,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
         slot
         rest
         keepAlive
-        (serializeResponse refusal)
+        (serializeResponse (withAllowOrigin refusal))
     None => match servingEgress serving
       None =>
         sendAndContinue
@@ -1382,7 +1551,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
           slot
           rest
           keepAlive
-          (serializeResponse proxyUpstreamFailureResponse)
+          (serializeResponse (withAllowOrigin proxyUpstreamFailureResponse))
       Some egress =>
         if not (claimProxiedCall (servingProxyCensus serving)) then
           sendAndContinue
@@ -1396,9 +1565,9 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             slot
             rest
             keepAlive
-            (serializeResponse proxyCeilingResponse)
+            (serializeResponse (withAllowOrigin proxyCeilingResponse))
         else defer
-          answered <- egressCall egress admission.target admission.serviceAuth
+          answered <- egressCall egress admission
           _ <- liftIO (u => releaseProxiedCall (servingProxyCensus serving))
           sendAndContinue
             server
@@ -1438,9 +1607,10 @@ proxyCeilingResponse =
     "too many proxied reads are in flight on this server"
 
 proxyAnswerBytes : Result String UpstreamAnswer -> Array Int
-proxyAnswerBytes (Err _) = serializeResponse proxyUpstreamFailureResponse
+proxyAnswerBytes (Err _) =
+  serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
 proxyAnswerBytes (Ok answer) = match proxyUpstreamResponse answer
-  Err _ => serializeResponse proxyUpstreamFailureResponse
+  Err _ => serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
   Ok response => serializeResponse response
 
 {- | Whether this request is a subscription upgrade, asked of the pure core
@@ -1515,7 +1685,7 @@ admitSubscription server dir storeRef limiterRef census serving conn slot rest a
       slot
       rest
       False
-      (serializeResponse subscriptionCeilingResponse)
+      (serializeResponse (withAllowOrigin subscriptionCeilingResponse))
   else defer
     outcome <- runSubscription
       dir
@@ -1609,7 +1779,10 @@ rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds =
       nowSeconds
   match charged
     Some refusal =>
-      A.sendAllWithin writeTimeout conn (serializeResponse refusal)
+      A.sendAllWithin
+        writeTimeout
+        conn
+        (serializeResponse (withAllowOrigin refusal))
     None => defer
       response <- liftIO (u =>
         applyRequest server dir storeRef (readBufferLive buf))

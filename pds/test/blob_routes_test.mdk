@@ -15,7 +15,7 @@ import test.{expectEqual, expectTrue}
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
 import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
-import lib.handlers.{pdsServer}
+import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -43,7 +43,7 @@ account = match makeAccount accountDidText accountHandleText accountHostText
   Err message => panic "blob_routes_test: account: \{message}"
 
 server : Server
-server = match pdsServer account
+server = match pdsServer account serverLinksEmpty
   Ok made => made
   Err message => panic "blob_routes_test: server: \{message}"
 

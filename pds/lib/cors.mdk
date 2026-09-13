@@ -1,0 +1,159 @@
+{- | The CORS answer this server gives every request, browser or not.
+
+   This server serves one public, unauthenticated, credential-free surface —
+   every route is either `PublicRoute` or bearer-authenticated by an
+   `Authorization` header a browser's CORS machinery never gates — so the
+   allow-origin answer is unconditional: `*` on every response, never a
+   reflected origin, and never `Access-Control-Allow-Credentials` (the two
+   are mutually exclusive in the CORS spec, and this server never needs the
+   credentialed form). The preflight defaults below reproduce the pinned
+   `cors@2.8.6` image's behavior under its one non-default option
+   (`maxAge: DAY / SECOND`, `index.js:189`): `origin: '*'`,
+   `methods: 'GET,HEAD,PUT,PATCH,POST,DELETE'`, `optionsSuccessStatus: 204`,
+   and the request's own `Access-Control-Request-Headers` reflected back with
+   `Vary: Access-Control-Request-Headers`
+   (`cors/lib/index.js:8-13,94-115,178-179`) — reflected as far as this
+   server's own serializer will carry it; see `requestedHeaders`. -}
+
+import http.{
+  Header,
+  headerName,
+  headerValue,
+  makeHeader,
+  makeResponse,
+  Request,
+  requestHeaders,
+  requestMethod,
+  Response,
+  responseBody,
+  responseHeaders,
+  responseReason,
+  responseStatus,
+}
+import string.{toUtf8}
+
+-- | `Access-Control-Allow-Origin: *`, the one header every response carries.
+export
+allowOriginHeader : Header
+allowOriginHeader = match makeHeader "access-control-allow-origin" (toUtf8 "*")
+  Ok header => header
+  Err message =>
+    panic "lib.cors: internal allow-origin header error: \{message}"
+
+allowMethodsHeader : Header
+allowMethodsHeader =
+  match (makeHeader
+    "access-control-allow-methods"
+    (toUtf8 "GET,HEAD,PUT,PATCH,POST,DELETE"))
+    Ok header => header
+    Err message =>
+      panic "lib.cors: internal allow-methods header error: \{message}"
+
+maxAgeHeader : Header
+maxAgeHeader = match makeHeader "access-control-max-age" (toUtf8 "86400")
+  Ok header => header
+  Err message => panic "lib.cors: internal max-age header error: \{message}"
+
+varyHeader : Header
+varyHeader = match makeHeader "vary" (toUtf8 "Access-Control-Request-Headers")
+  Ok header => header
+  Err message => panic "lib.cors: internal vary header error: \{message}"
+
+{- | True iff every byte of `value` from `i` on is printable ASCII, `32..126`
+   — the range `stdlib/http`'s `makeHeader` accepts in an outbound response
+   field value, and a narrower one than the inbound parser's `validFieldValue`
+   accepts, which also admits TAB and every byte above 127.
+
+   Exported because the relay path grades borrowed request values against the
+   same rule (`lib.proxy`'s `pickFields`): a value a client sent and this
+   server repeats is repeatable only when the serializer will take it, and
+   one rule for that is one function. -}
+export
+printableAscii : Array Int -> Int -> Bool
+printableAscii value i =
+  if i >= arrayLength value then
+    True
+  else
+    value[i] >= 32 && value[i] <= 126 && printableAscii value (i + 1)
+
+{- | What the client's `Access-Control-Request-Headers` asked for, or an empty
+   value when it asked for nothing — and also when it asked with bytes the
+   outbound serializer will not take.
+
+   That value is entirely client-controlled and arrives through the inbound
+   parser, which accepts bytes `makeHeader` rejects, so an unusable value is
+   DROPPED WHOLE rather than repeated or stripped byte by byte. Dropping
+   answers "no extra request headers are allowed", which makes the browser
+   refuse the real request; stripping would answer with a header list no
+   client asked for, the same forgery `lib.proxy`'s `soleField` refuses when
+   a relayed field is ambiguous. -}
+requestedHeaders : List Header -> Array Int
+requestedHeaders [] = [||]
+requestedHeaders (header :: rest) =
+  if headerName header == "access-control-request-headers" then
+    let value = headerValue header
+    if printableAscii value 0 then value else [||]
+  else
+    requestedHeaders rest
+
+-- | The `Access-Control-Allow-Headers` answer carrying no allowance at all.
+-- A constant, so the one response field built from client bytes has a
+-- known-good value to fall back to rather than a crash.
+emptyAllowHeadersHeader : Header
+emptyAllowHeadersHeader = match makeHeader "access-control-allow-headers" [||]
+  Ok header => header
+  Err message =>
+    panic "lib.cors: internal allow-headers header error: \{message}"
+
+-- | Is this request a CORS preflight — an `OPTIONS` request — that must be
+-- answered before ordinary routing runs, ahead of `xrpc`'s `methodNotAllowed`
+-- (which would otherwise answer it 405)?
+export
+isPreflight : Request -> Bool
+isPreflight request = requestMethod request == "OPTIONS"
+
+{- | The complete preflight answer: 204, no body, and the five headers
+   `cors@2.8.6`'s defaults plus its one configured option produce.
+
+   Total on every `Request`: `requestedHeaders` has already graded the one
+   client-controlled value against the serializer's own rule, so the `Err`
+   arm below is unreachable, and it answers with the empty allowance rather
+   than a panic anyway — a client-reachable crash path here kills the whole
+   process. -}
+export
+preflightResponse : Request -> Response
+preflightResponse request =
+  let allowHeadersHeader =
+    match (makeHeader
+      "access-control-allow-headers"
+      (requestedHeaders (requestHeaders request)))
+      Ok header => header
+      Err _ => emptyAllowHeadersHeader
+  let headers = [
+    allowOriginHeader,
+    allowMethodsHeader,
+    allowHeadersHeader,
+    varyHeader,
+    maxAgeHeader,
+  ]
+  match makeResponse 204 "No Content" headers [||]
+    Ok response => response
+    Err message =>
+      panic "lib.cors: internal preflight response error: \{message}"
+
+-- | Append the one header every non-preflight response carries. Any caller
+-- that builds a `Response` outside `lib.server_core`'s `handle` (a proxied
+-- upstream answer, a persist-failure 500) must call this before returning
+-- it, since only `handle`'s own exits get it for free.
+export
+withAllowOrigin : Response -> Response
+withAllowOrigin response =
+  let headers = allowOriginHeader :: responseHeaders response
+  match (makeResponse
+    (responseStatus response)
+    (responseReason response)
+    headers
+    (responseBody response))
+    Ok withHeader => withHeader
+    Err message =>
+      panic "lib.cors: internal allow-origin append error: \{message}"

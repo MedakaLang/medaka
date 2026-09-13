@@ -26,17 +26,33 @@
 # The second cell group (#2912) is the APPVIEW-PROXY seam, here for the same
 # reason: deciding whether a client's `atproto-proxy` header may have a service
 # credential minted for it reads the registry, the account and the open
-# sessions, and no repository, so all three engines can grade it. Those cells
+# sessions, and no repository, so all three engines can grade it. Under ruling
+# R1 that decision is default-ALLOW on the METHOD axis within app.bsky.*/
+# chat.bsky.* and still default-DENY on the AUDIENCE axis, so the cells assert
+# BOTH: an unregistered method in those namespaces is forwarded (header or no
+# header, GET or POST, body and relayed fields carried along), and an audience
+# this server was not configured for is refused with nothing signed. Those cells
 # call as a real session (a session secret and one minted access token, still no
 # repository) because a forward is made on behalf of the logged-in account and
 # an anonymous caller is refused 401 before the audience is looked at. The
 # socket half — a real proxied read, a real stalled upstream, the limiter's
 # charge — is pds/test/serve_e2e.sh's.
+#
+# The third cell group is com.atproto.server.getServiceAuth: the same seam
+# pointed the other way, where the client asks for the credential itself
+# rather than for a forward made with one. The audience axis stays
+# default-DENY there too, the sixteen account-management methods may not be
+# named at all, and the window a client may ask for is bounded. This is also
+# where the protectedMethods list transcribed into pds/lib/proxy.mdk is
+# compared against pds/test/vectors/pds_protected_methods_corpus.txt, which
+# is why the driver now takes that corpus as its one argument: pds/lib
+# declares no effect row and so cannot read the file it copies.
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/../.." && pwd)
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 SOURCE="$ROOT/pds/test/read_routes_all_engines_main.mdk"
+CORPUS="$ROOT/pds/test/vectors/pds_protected_methods_corpus.txt"
 WASM_EMITTER=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-read-routes.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
@@ -57,10 +73,20 @@ require_empty() {
 
 DID='did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9'
 DIDDOC='{"@context":["https://www.w3.org/ns/did/v1"],"id":"did:web:pds.example","service":[{"id":"#atproto_pds","type":"AtprotoPersonalDataServer","serviceEndpoint":"https://pds.example"}]}'
-# The ONE appview the proxy cells are configured for, and the `jti` every
-# admitted credential must carry: the hex of the driver's fixed per-request
-# nonce, 32 characters wide, written out here rather than recomputed.
+# The TWO audiences the proxy cells are configured for with the loopback port
+# each one's forwards would leave by, and the `jti` every admitted credential
+# must carry: the hex of the driver's fixed per-request nonce, 32 characters
+# wide, written out here rather than recomputed.
+#
+# The ports are what make an audience ROUTING confusion gradeable: the two rows
+# differ only in their DID and their port, so a call admitted for one and sent
+# to the other's proxy shows up as a `port=` naming the wrong row rather than as
+# anything about the claim set. The first row is also the DEFAULT audience, the
+# one a request carrying no `atproto-proxy` header at all is forwarded to.
 AVDID='did:web:appview.example'
+AVPORT='3128'
+CHATDID='did:web:chat.example'
+CHATPORT='3129'
 JTI='05101b26313c47525d68737e89949faa'
 
 # The expected transcript is hand-authored here, not captured: each line is the
@@ -76,7 +102,7 @@ CELL resolve-handle PASS status=200 media=application/json body={"did":"$DID"} s
 CELL resolve-handle-unknown PASS status=400 error=HandleNotFound state=unchanged
 CELL resolve-handle-repeated-param PASS status=400 error=InvalidRequest state=unchanged
 CELL resolve-handle-missing-param PASS status=400 error=InvalidRequest state=unchanged
-CELL describe-server PASS status=200 media=application/json body={"did":"$DID","availableUserDomains":[],"inviteCodeRequired":false} state=unchanged
+CELL describe-server PASS status=200 media=application/json body={"did":"$DID","availableUserDomains":[],"inviteCodeRequired":false,"blobUploadLimit":5242880} state=unchanged
 CELL get-record-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL list-records-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL describe-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
@@ -86,23 +112,44 @@ CELL list-repos-empty PASS status=200 media=application/json body={"repos":[]} s
 CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged
 CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged
-CELL proxy-header-absent PASS decision=not-proxied signed=none
-CELL proxy-admitted-timeline PASS decision=admitted target=/xrpc/app.bsky.feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000
-CELL proxy-admitted-service-fragment PASS decision=admitted target=/xrpc/app.bsky.actor.getProfile?actor=$DID iss=$DID aud=$AVDID#bsky_appview lxm=app.bsky.actor.getProfile jti=$JTI iat=1700000000
-CELL proxy-header-name-case-insensitive PASS decision=admitted target=/xrpc/app.bsky.feed.getAuthorFeed?actor=$DID iss=$DID aud=$AVDID lxm=app.bsky.feed.getAuthorFeed jti=$JTI iat=1700000000
+CELL preflight-timeline PASS status=204
+CELL preflight-atproto-did PASS status=204
+CELL preflight-unrepeatable-value PASS status=204
+CELL origin-only-on-200 PASS status=200
+CELL origin-only-on-401 PASS status=401
+CELL origin-only-on-404 PASS status=404
+CELL proxy-header-absent-default-appview PASS decision=admitted verb=GET target=/xrpc/app.bsky.graph.getFollows?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.graph.getFollows jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
+CELL proxy-header-absent-no-appview PASS decision=not-proxied signed=none
+CELL proxy-admitted-timeline PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
+CELL proxy-admitted-service-fragment PASS decision=admitted verb=GET target=/xrpc/app.bsky.actor.getProfile?actor=$DID audience=$AVDID iss=$DID aud=$AVDID#bsky_appview lxm=app.bsky.actor.getProfile jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
+CELL proxy-header-name-case-insensitive PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getAuthorFeed?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getAuthorFeed jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
 CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none
 CELL proxy-audience-not-a-did PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy does not name a service DID signed=none
 CELL proxy-header-repeated PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy must not be repeated signed=none
 CELL proxy-protected-method-unregistered PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.admin.deleteAccount signed=none
-CELL proxy-protected-method-registered PASS decision=refused status=400 error=InvalidRequest message=this server answers com.atproto.server.createSession itself and does not proxy it signed=none
+CELL proxy-registered-method-with-header PASS decision=not-proxied signed=none
 CELL proxy-forward-on-local-miss PASS decision=not-proxied signed=none
-CELL proxy-pds-hosted-preferences PASS decision=not-proxied signed=none
+CELL proxy-locally-served-preferences PASS decision=not-proxied signed=none
 CELL proxy-no-appview-configured PASS decision=refused status=400 error=InvalidRequest message=No service configured for app.bsky.feed.getTimeline signed=none
-CELL proxy-forwardable-requires-get PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET signed=none
+CELL proxy-admitted-post-body PASS decision=admitted verb=POST target=/xrpc/app.bsky.notification.updateSeen audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.notification.updateSeen jti=$JTI iat=1700000000 relayed=[accept-language=en-GB,content-type=application/json] body={"seenAt":"2026-09-12T00:00:00.000Z"} port=$AVPORT
+CELL proxy-forwardable-requires-get-or-post PASS decision=refused status=405 error=MethodNotAllowed message=a proxied XRPC method requires GET or POST signed=none
+CELL proxy-out-of-namespace-with-header PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.temp.checkSignupQueue signed=none
+CELL proxy-out-of-namespace-header-absent PASS decision=not-proxied signed=none
 CELL proxy-header-on-well-known PASS decision=not-proxied signed=none
 CELL proxy-unauthenticated PASS decision=refused status=401 error=AuthenticationRequired message=Authentication Required signed=none
-CELL proxy-admitted-nsid-authority-case PASS decision=admitted target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000
-cells: 36/36 repository-free routes and proxy dispositions
+CELL proxy-admitted-nsid-authority-case PASS decision=admitted verb=GET target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
+CELL proxy-admitted-chat-audience PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=$CHATDID iss=$DID aud=$CHATDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 relayed=[] body= port=$CHATPORT
+CELL proxy-admitted-chat-service-fragment PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=$CHATDID iss=$DID aud=$CHATDID#bsky_chat lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 relayed=[] body= port=$CHATPORT
+CELL proxy-chat-method-default-audience PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=$AVDID iss=$DID aud=$AVDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT
+CELL proxy-chat-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none
+CELL proxy-appview-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none
+CELL service-auth-minted-with-lxm PASS decision=minted iss=$DID aud=$CHATDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 exp=1700000060
+CELL service-auth-minted-no-lxm PASS decision=minted iss=$DID aud=$AVDID lxm=<absent> jti=$JTI iat=1700000000 exp=1700000060
+CELL service-auth-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=aud names a service this server does not mint credentials for signed=none
+CELL service-auth-protected-lxm PASS decision=refused status=400 error=InvalidRequest message=cannot request a service auth token for the following method: com.atproto.server.getSession signed=none
+CELL service-auth-exp-beyond-an-hour PASS decision=refused status=400 error=BadExpiration message=cannot request a token with an expiration more than an hour in the future signed=none
+CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set
+cells: 57/57 repository-free routes, proxy dispositions and service-auth mints
 TOTAL: PASS
 EOF
 
@@ -125,26 +172,70 @@ check_cells() {
     || fail "$label missed the empty-server listRepos cell"
   grep -F -q 'CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound' "$output" \
     || fail "$label missed the unconfigured getRepoStatus refusal"
-  grep -F -q "CELL proxy-admitted-timeline PASS decision=admitted target=/xrpc/app.bsky.feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI" "$output" \
+  grep -F -q 'CELL preflight-timeline PASS status=204' "$output" \
+    || fail "$label missed the CORS preflight against an XRPC route"
+  grep -F -q 'CELL preflight-atproto-did PASS status=204' "$output" \
+    || fail "$label missed the CORS preflight against a non-XRPC well-known path"
+  grep -F -q 'CELL origin-only-on-200 PASS status=200' "$output" \
+    || fail "$label missed the allow-origin-only check on an ordinary 200"
+  grep -F -q 'CELL origin-only-on-401 PASS status=401' "$output" \
+    || fail "$label missed the allow-origin-only check on a 401"
+  grep -F -q 'CELL origin-only-on-404 PASS status=404' "$output" \
+    || fail "$label missed the allow-origin-only check on a 404"
+  grep -F -q "CELL proxy-admitted-timeline PASS decision=admitted verb=GET target=/xrpc/app.bsky.feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline jti=$JTI" "$output" \
     || fail "$label missed the admitted proxied read's claim set"
+  grep -F -q "CELL proxy-header-absent-default-appview PASS decision=admitted verb=GET target=/xrpc/app.bsky.graph.getFollows?actor=$DID audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.graph.getFollows" "$output" \
+    || fail "$label missed the read that named no audience being forwarded to the configured one"
+  grep -F -q 'CELL proxy-header-absent-no-appview PASS decision=not-proxied signed=none' "$output" \
+    || fail "$label missed the header-absent read staying local on a server with no appview"
+  grep -F -q 'CELL proxy-admitted-post-body PASS decision=admitted verb=POST target=/xrpc/app.bsky.notification.updateSeen' "$output" \
+    || fail "$label missed the admitted proxied WRITE"
+  grep -F -q 'relayed=[accept-language=en-GB,content-type=application/json] body={"seenAt":"2026-09-12T00:00:00.000Z"}' "$output" \
+    || fail "$label missed the body and the relayed fields the proxied write carries"
+  grep -F -q 'CELL proxy-out-of-namespace-with-header PASS decision=refused status=400 error=InvalidRequest message=No service configured for com.atproto.temp.checkSignupQueue signed=none' "$output" \
+    || fail "$label missed the refusal of a method outside the forwardable namespaces"
+  grep -F -q 'CELL proxy-out-of-namespace-header-absent PASS decision=not-proxied signed=none' "$output" \
+    || fail "$label missed the untouched router answer for that same method with no header"
   grep -F -q 'CELL proxy-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none' "$output" \
     || fail "$label missed the confused-deputy refusal"
-  grep -F -q 'CELL proxy-protected-method-registered PASS decision=refused' "$output" \
-    || fail "$label missed the refusal of a method this server answers itself"
+  grep -F -q 'CELL proxy-registered-method-with-header PASS decision=not-proxied signed=none' "$output" \
+    || fail "$label missed a method this server registers being served locally despite the header"
   grep -F -q 'CELL proxy-unauthenticated PASS decision=refused status=401 error=AuthenticationRequired message=Authentication Required signed=none' "$output" \
     || fail "$label missed the refusal of a proxied read whose caller presented no credential"
-  grep -F -q "CELL proxy-admitted-nsid-authority-case PASS decision=admitted target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline" "$output" \
+  grep -F -q "CELL proxy-admitted-nsid-authority-case PASS decision=admitted verb=GET target=/xrpc/App.Bsky.Feed.getTimeline?limit=2 audience=$AVDID iss=$DID aud=$AVDID lxm=app.bsky.feed.getTimeline" "$output" \
     || fail "$label missed the canonical lxm of a method the client spelled differently"
-  grep -F -q 'cells: 36/36 repository-free routes and proxy dispositions' "$output" || fail "$label cell count is incomplete"
+  grep -F -q "CELL proxy-admitted-chat-audience PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=$CHATDID iss=$DID aud=$CHATDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 relayed=[] body= port=$CHATPORT" "$output" \
+    || fail "$label missed the second configured audience being admitted and routed to its OWN port"
+  grep -F -q "CELL proxy-admitted-chat-service-fragment PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=$CHATDID iss=$DID aud=$CHATDID#bsky_chat lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 relayed=[] body= port=$CHATPORT" "$output" \
+    || fail "$label missed a service OF the second audience routing to the second audience rather than falling through to the default"
+  grep -F -q "CELL proxy-chat-method-default-audience PASS decision=admitted verb=GET target=/xrpc/chat.bsky.convo.listConvos audience=$AVDID iss=$DID aud=$AVDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 relayed=[] body= port=$AVPORT" "$output" \
+    || fail "$label missed a chat.bsky.* method going to the audience the HEADER named rather than to the chat row"
+  grep -F -q 'CELL proxy-chat-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none' "$output" \
+    || fail "$label missed the refusal of a case-folded spelling of the second audience"
+  grep -F -q 'CELL proxy-appview-audience-case-folded PASS decision=refused status=400 error=InvalidRequest message=atproto-proxy names a service this server does not proxy to signed=none' "$output" \
+    || fail "$label missed the refusal of a case-folded spelling of the default audience"
+  grep -F -q "CELL service-auth-minted-with-lxm PASS decision=minted iss=$DID aud=$CHATDID lxm=chat.bsky.convo.listConvos jti=$JTI iat=1700000000 exp=1700000060" "$output" \
+    || fail "$label missed the credential minted for the second configured audience"
+  grep -F -q "CELL service-auth-minted-no-lxm PASS decision=minted iss=$DID aud=$AVDID lxm=<absent> jti=$JTI iat=1700000000 exp=1700000060" "$output" \
+    || fail "$label missed the method-less credential and its default window"
+  grep -F -q 'CELL service-auth-foreign-audience PASS decision=refused status=400 error=InvalidRequest message=aud names a service this server does not mint credentials for signed=none' "$output" \
+    || fail "$label missed the confused-deputy refusal on the mint route"
+  grep -F -q 'CELL service-auth-protected-lxm PASS decision=refused status=400 error=InvalidRequest message=cannot request a service auth token for the following method: com.atproto.server.getSession signed=none' "$output" \
+    || fail "$label missed the refusal of an account-management lxm"
+  grep -F -q 'CELL service-auth-exp-beyond-an-hour PASS decision=refused status=400 error=BadExpiration message=cannot request a token with an expiration more than an hour in the future signed=none' "$output" \
+    || fail "$label missed the refusal of a window beyond an hour"
+  grep -F -q 'CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set' "$output" \
+    || fail "$label missed the transcribed protected-methods list being compared to the corpus"
+  grep -F -q 'cells: 57/57 repository-free routes, proxy dispositions and service-auth mints' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
-MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$SOURCE" > "$WORK/eval.out" 2> "$WORK/eval.err"
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" run "$SOURCE" "$CORPUS" > "$WORK/eval.out" 2> "$WORK/eval.err"
 require_empty "$WORK/eval.err" eval
 check_cells "$WORK/eval.out" eval
 
 MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SOURCE" -o "$WORK/native" > "$WORK/native-build.log" 2>&1
-"$WORK/native" > "$WORK/native.out" 2> "$WORK/native.err"
+"$WORK/native" "$CORPUS" > "$WORK/native.out" 2> "$WORK/native.err"
 require_empty "$WORK/native.err" native
 check_cells "$WORK/native.out" native
 cmp "$WORK/eval.out" "$WORK/native.out" || fail 'eval and native output differ'
@@ -154,7 +245,7 @@ command -v node >/dev/null 2>&1 || fail 'Wasm is required but node is unavailabl
 command -v wasm-tools >/dev/null 2>&1 || fail 'Wasm is required but wasm-tools is unavailable'
 
 MEDAKA_ROOT="$ROOT" MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$SOURCE" -o "$WORK/read-routes.wasm" > "$WORK/wasm-build.log" 2>&1
-node "$ROOT/test/wasm/run.js" "$WORK/read-routes.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
+MDK_ARGS="$CORPUS" node "$ROOT/test/wasm/run.js" "$WORK/read-routes.wasm" > "$WORK/wasm-raw.out" 2> "$WORK/wasm.err"
 require_empty "$WORK/wasm.err" wasm
 check_cells "$WORK/wasm-raw.out" wasm
 cmp "$WORK/native.out" "$WORK/wasm-raw.out" || fail 'native and Wasm output differ'
@@ -192,7 +283,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-tree/pds/tes
   cat "$WORK/mutated-build.log" >&2
   fail 'did:web hostname mutation failed to build'
 }
-if "$WORK/mutated-native" > "$WORK/mutated.out" 2>&1; then
+if "$WORK/mutated-native" "$CORPUS" > "$WORK/mutated.out" 2>&1; then
   fail 'did:web hostname mutation unexpectedly passed'
 fi
 grep -F -q 'CELL wellknown-did-json FAIL' "$WORK/mutated.out" || {
@@ -231,7 +322,7 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-audience/pds
   cat "$WORK/mutated-audience-build.log" >&2
   fail 'foreign-audience mutation failed to build'
 }
-if "$WORK/mutated-audience" > "$WORK/mutated-audience.out" 2>&1; then
+if "$WORK/mutated-audience" "$CORPUS" > "$WORK/mutated-audience.out" 2>&1; then
   fail 'foreign-audience mutation unexpectedly passed'
 fi
 grep -F -q 'CELL proxy-foreign-audience FAIL decision=admitted' "$WORK/mutated-audience.out" || {
@@ -270,12 +361,52 @@ MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-no-credentia
   cat "$WORK/mutated-no-credential-build.log" >&2
   fail 'no-credential mutation failed to build'
 }
-if "$WORK/mutated-no-credential" > "$WORK/mutated-no-credential.out" 2>&1; then
+if "$WORK/mutated-no-credential" "$CORPUS" > "$WORK/mutated-no-credential.out" 2>&1; then
   fail 'no-credential mutation unexpectedly passed'
 fi
 grep -F -q 'CELL proxy-admitted-timeline FAIL decision=refused status=401 error=AuthenticationRequired' "$WORK/mutated-no-credential.out" || {
   cat "$WORK/mutated-no-credential.out" >&2
   fail 'no-credential mutation failed for an unrelated reason'
+}
+
+# ── fourth direct-red mutation: which audience a forward is ROUTED to ───────
+# Look the egress port up under the DEFAULT audience instead of the one the
+# seam ADMITTED, leaving every DID, every claim and the configured table exactly
+# as they are. This is the audience-routing confusion itself: the grading still
+# admits the right service and signs the right `aud`, and the call still goes to
+# the appview's proxy.
+#
+# It is invisible to every assertion about a claim set — a credential minted for
+# the chat service and handed to the appview's proxy carries a perfectly correct
+# `aud` — so only a cell that names the port discriminates it. The appview cells
+# stay green under this mutation and the chat ones go red, which is what says
+# the port they name is read per-audience rather than written down twice.
+mkdir -p "$WORK/mutation-route"
+cp -R "$ROOT/pds" "$WORK/mutation-route/pds"
+
+python3 - "$WORK/mutation-route/pds/test/read_routes_all_engines_main.mdk" <<'PY'
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+old = 'match appviewRouteFor table did'
+new = 'match appviewRouteFor table configuredAppviewDid'
+text = path.read_text()
+if text.count(old) != 1:
+    raise SystemExit(f'mutation anchor count is {text.count(old)}, expected 1')
+path.write_text(text.replace(old, new))
+PY
+
+MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/mutation-route/pds/test/read_routes_all_engines_main.mdk" -o "$WORK/mutated-route" > "$WORK/mutated-route-build.log" 2>&1 || {
+  cat "$WORK/mutated-route-build.log" >&2
+  fail 'audience-routing mutation failed to build'
+}
+if "$WORK/mutated-route" "$CORPUS" > "$WORK/mutated-route.out" 2>&1; then
+  fail 'audience-routing mutation unexpectedly passed'
+fi
+grep -F -q "CELL proxy-admitted-chat-audience FAIL decision=admitted" "$WORK/mutated-route.out" || {
+  cat "$WORK/mutated-route.out" >&2
+  fail 'audience-routing mutation failed for an unrelated reason'
 }
 
 cmp "$WORK/source-pristine.mdk" "$SOURCE" \
@@ -284,4 +415,5 @@ cmp "$WORK/source-pristine.mdk" "$SOURCE" \
 echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'MUTATION proxy-foreign-audience PASS direct-red'
 echo 'MUTATION proxy-no-credential PASS direct-red'
-echo 'PASS: PDS repository-free read routes and appview-proxy dispositions — 36/36 named cells; eval == native == Wasm; three direct-red mutations; bytes restored'
+echo 'MUTATION proxy-audience-routing PASS direct-red'
+echo 'PASS: PDS repository-free read routes, appview-proxy dispositions and service-auth mints — 57/57 named cells; eval == native == Wasm; four direct-red mutations; bytes restored'

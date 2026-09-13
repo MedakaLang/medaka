@@ -19,7 +19,7 @@ import lib.credential.{
   saltBytes,
 }
 import sha256.{sha256}
-import json.{Json(..), get, jObject, parse, stringify}
+import json.{Json(..), get, jArray, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
 import string.{
@@ -376,6 +376,12 @@ deleteSessionPath = xrpcPath "com.atproto.server.deleteSession"
 getSessionPath : String
 getSessionPath = xrpcPath "com.atproto.server.getSession"
 
+getPreferencesPath : String
+getPreferencesPath = xrpcPath "app.bsky.actor.getPreferences"
+
+putPreferencesPath : String
+putPreferencesPath = xrpcPath "app.bsky.actor.putPreferences"
+
 uploadBlobPath : String
 uploadBlobPath = xrpcPath "com.atproto.repo.uploadBlob"
 
@@ -513,12 +519,38 @@ runChunked port token did collection rkey text =
     Err _ => ()
   ignoreResult (close conn)
 
+{- | The verdict every case that grades CORS shares: the status wanted, the
+   one header every response of this server carries, and the absence of the
+   credentialed form — `Access-Control-Allow-Credentials` and `origin: *` are
+   mutually exclusive in the CORS spec and this server never issues the
+   credentialed one, so a case that only checked for the allow-origin header
+   would pass a response carrying both. -}
+corsVerdict : String -> Int -> Int -> String -> <IO> Unit
+corsVerdict label want got headerText =
+  if got /= want then
+    report
+      label
+      False
+      "want status \{intToString want}, got \{intToString got}: \{headerText}"
+  else if not (contains "access-control-allow-origin: *" headerText) then
+    report label False "missing allow-origin header: \{headerText}"
+  else if contains "access-control-allow-credentials" headerText then
+    report label False "answered with allow-credentials: \{headerText}"
+  else
+    report label True "status=\{intToString got}"
+
+-- Graded on the allow-origin header as well as the status: this answer comes
+-- from `lib.server_core`'s `handleBytes` Err arm, which never reaches `handle`
+-- and so is not one of the exits that gets the header for free.
 runMalformed : Int -> <IO, Net "_"> Unit
 runMalformed port =
   let conn = mustConnect port
   let () = mustSend conn (toUtf8 "THIS IS NOT AN HTTP REQUEST\r\n\r\n")
-  let result = readResponse conn [||]
-  let () = expectStatus "MALFORMED" 400 result
+  let result = readHeaderResponse conn [||]
+  let () = match result
+    Err message => report "MALFORMED" False message
+    Ok (status, headerText, _, _) =>
+      corsVerdict "MALFORMED" 400 status headerText
   ignoreResult (close conn)
 
 overcapFillerBytes : Int
@@ -538,11 +570,13 @@ runOvercap port =
   -- already decided on can be read back. That closure IS the rejection, so it
   -- counts as one. What does not count: any status other than 413, or a server
   -- that accepted the whole over-cap body and then answered nothing.
+  --
+  -- When a 413 IS read back it is graded on the allow-origin header too: this
+  -- is the other `handleBytes` Err arm, and it reaches no `handle` exit either.
   let sent = sendAll conn request
-  let result = readResponse conn [||]
+  let result = readHeaderResponse conn [||]
   let () = match result
-    Ok (got, _, _) =>
-      report "OVERCAP" (got == 413) "status \{intToString got} (wanted 413)"
+    Ok (got, headerText, _, _) => corsVerdict "OVERCAP" 413 got headerText
     Err message => match sent
       Err sendMessage =>
         report
@@ -821,6 +855,102 @@ runGetSession port token did =
         ()
       else
         report "GETSESSION" False "body did not name the hosted DID"
+    Err _ => ()
+  ignoreResult (close conn)
+
+-- | The one preference item every `put-preferences`/`get-preferences` case
+-- in this gate shares, so the round trip through a restart is an exact
+-- string comparison rather than a structural one.
+preferencesItem : Json
+preferencesItem = jObject [
+  ("$type", JString "app.bsky.actor.defs#personalDetailsPref"),
+  ("birthDate", JString "2000-01-01"),
+]
+
+preferencesBodyJson : String
+preferencesBodyJson =
+  stringify (jObject [("preferences", jArray [preferencesItem])])
+
+missingTypePreferencesJson : String
+missingTypePreferencesJson =
+  stringify
+    (jObject [
+      ("preferences", jArray [jObject [("birthDate", JString "2000-01-01")]]),
+    ])
+
+wrongNamespacePreferencesJson : String
+wrongNamespacePreferencesJson =
+  stringify
+    (jObject [
+      (
+        "preferences",
+        jArray [
+          jObject [("$type", JString "com.atproto.server.describeServer")],
+        ],
+      ),
+    ])
+
+-- | `app.bsky.actor.putPreferences` with the one shared fixture item,
+-- required to answer `want`.
+runPutPreferences : Int -> String -> Int -> <IO, Net "_"> Unit
+runPutPreferences port token want =
+  let conn = mustConnect port
+  let () =
+    mustSend conn (postRequest token putPreferencesPath preferencesBodyJson)
+  let () =
+    expectStatus "PUTPREFS\{intToString want}" want (readResponse conn [||])
+  ignoreResult (close conn)
+
+-- | The same call, graded on the allow-origin header instead of the body —
+-- used for the persist-failure 500 path, the other response
+-- `lib.server_core`'s `handle` never sees.
+runPutPreferencesCors : Int -> String -> Int -> <IO, Net "_"> Unit
+runPutPreferencesCors port token want =
+  let conn = mustConnect port
+  let () =
+    mustSend conn (postRequest token putPreferencesPath preferencesBodyJson)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "PUTPREFSCORS" False message
+    Ok (status, headerText, _, _) =>
+      corsVerdict "PUTPREFSCORS" want status headerText
+
+{- | A `putPreferences` body this server must refuse 400: either an item with
+   no `$type` at all, or one whose `$type` names a namespace other than
+   `app.bsky`. -}
+runPutPreferencesInvalid : Int -> String -> String -> <IO, Net "_"> Unit
+runPutPreferencesInvalid port token kind =
+  let body =
+    if kind == "missing-type" then
+      missingTypePreferencesJson
+    else
+      wrongNamespacePreferencesJson
+  let conn = mustConnect port
+  let () = mustSend conn (postRequest token putPreferencesPath body)
+  let () = expectStatus "PUTPREFSINVALID" 400 (readResponse conn [||])
+  ignoreResult (close conn)
+
+-- | `app.bsky.actor.getPreferences`, required to answer with exactly the
+-- fixture item `runPutPreferences` last wrote — or, on a fresh account that
+-- never called `putPreferences`, an empty list.
+runGetPreferences : Int -> String -> Bool -> <IO, Net "_"> Unit
+runGetPreferences port token expectFixture =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token getPreferencesPath)
+  let result = readResponse conn [||]
+  let () = expectStatus "GETPREFS" 200 result
+  let wanted =
+    if expectFixture then
+      preferencesBodyJson
+    else
+      stringify (jObject [("preferences", jArray [])])
+  let () = match result
+    Ok (_, body, _) =>
+      if fromUtf8 body == wanted then
+        ()
+      else
+        report "GETPREFS" False "unexpected body: \{fromUtf8 body}"
     Err _ => ()
   ignoreResult (close conn)
 
@@ -1225,13 +1355,82 @@ runBodyStallFlood port sockets budgetSeconds =
    so a proxied read is an `AuthenticatedRoute` like any other and an anonymous
    one is refused 401 before the audience it named is looked at.
 
+   An empty `service` sends no `atproto-proxy` field at all, which is the
+   header-ABSENT call: a client that names no audience is forwarded to the one
+   this operator configured. It is not the same request as one naming the empty
+   string, which names no service DID and is refused for it.
+
    `xff` identifies the caller to the rate limiter exactly as in the limit cases,
    and an empty one sends no field at all — so the cases that are about proxying
    and the case that is about its ceiling build their requests the same way. -}
+proxyHeaderField : String -> String
+proxyHeaderField service =
+  if service == "" then "" else "atproto-proxy: \{service}\r\n"
+
 proxyRequest : String -> String -> String -> String -> Array Int
 proxyRequest xff token service path =
   toUtf8
-    "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}atproto-proxy: \{service}\r\n\r\n"
+    "GET \{path} HTTP/1.1\r\n\{hostHeader}\{xffHeader xff}\{authHeader token}\{proxyHeaderField service}\r\n"
+
+{- | The content negotiation a proxied write carries. Fixed here rather than
+   passed in: what the gate asserts is that this value reached the upstream,
+   and a value the gate also chose could be reported back to it by a PDS that
+   forwarded nothing. -}
+proxyWriteLanguage : String
+proxyWriteLanguage = "de-DE"
+
+{- | A POST asking to be proxied: a body, the two inbound fields a forward
+   relays for one, and the audience header.
+
+   The language and the body are the halves a GET cannot exercise. A forward
+   that dropped either would still answer this client with the upstream's own
+   reply, so neither is gradeable here — they are gradeable at the STUB, which
+   logs what it received; what this builder owes is to send them. -}
+proxyWriteRequest : String -> String -> String -> String -> Array Int
+proxyWriteRequest token service path body =
+  toUtf8
+    "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\{proxyHeaderField service}accept-language: \{proxyWriteLanguage}\r\ncontent-type: application/json\r\ncontent-length: \{intToString (stringLength body)}\r\n\r\n\{body}"
+
+{- | Drive one proxied write and grade what came back, response FIELDS
+   included.
+
+   `field` is text the response header block must contain. It is the only
+   assertion in this file that a proxied answer's own fields reached the
+   client: the upstream sets `atproto-repo-rev`, nothing on this side of the
+   PDS can invent it, and a relay that kept only the body would pass every
+   other proxy case here unchanged. -}
+runProxyWrite : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runProxyWrite port token service path body want marker field =
+  let conn = mustConnect port
+  let () = mustSend conn (proxyWriteRequest token service path body)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "PROXYWRITE" False message
+    Ok (status, headerText, responseBody, _) =>
+      let bodyText = fromUtf8 responseBody
+      if status /= want then
+        report
+          "PROXYWRITE"
+          False
+          "want status \{intToString want}, got \{intToString status}: \{bodyText}"
+      else if marker /= "" && not (contains marker bodyText) then
+        report "PROXYWRITE" False "body did not carry '\{marker}': \{bodyText}"
+      else if field /= "" && not (contains field headerText) then
+        report
+          "PROXYWRITE"
+          False
+          "response fields did not carry '\{field}': \{headerText}"
+      else
+        report "PROXYWRITE" True "status=\{intToString status}"
 
 {- | Drive one proxied read and grade what came back.
 
@@ -1270,6 +1469,196 @@ runProxyRead port token service path want marker =
       else
         report "PROXYREAD" True "status=\{intToString status}"
 
+-- | The same proxied read, graded on the allow-origin header instead of the
+-- body — the one response `lib.server_core`'s `handle` never sees, so it is
+-- the exit that most needs its own check that the header still reaches it.
+runProxyReadCors : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  <IO, Net "_"> Unit
+runProxyReadCors port token service path want =
+  let conn = mustConnect port
+  let () = mustSend conn (proxyRequest "" token service path)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "PROXYREADCORS" False message
+    Ok (status, headerText, _, _) =>
+      corsVerdict "PROXYREADCORS" want status headerText
+
+{- | The `Access-Control-Request-Headers` value a preflight case sends, named
+   rather than passed as text: two of the four shapes are a single byte the
+   inbound parser accepts and the outbound serializer refuses, and a raw TAB
+   or a raw high byte does not survive a trip through `sh` argv legibly.
+
+   `tab` is byte 9 and `high` is byte 195 — both admitted by `http`'s
+   `validFieldValue` (which takes TAB and everything above 127) and both
+   refused by `validResponseValue` (`32..126`), which is the exact gap that
+   used to panic `lib.cors` and take the whole server process with it. -}
+requestedHeadersBytes : String -> Array Int
+requestedHeadersBytes "none" = [||]
+requestedHeadersBytes "tab" = concat [|toUtf8 "a", [|9|], toUtf8 "b"|]
+requestedHeadersBytes "high" = concat [|toUtf8 "a", [|195|], toUtf8 "b"|]
+requestedHeadersBytes named = toUtf8 named
+
+-- | An `OPTIONS` preflight, with the named `Access-Control-Request-Headers`
+-- value or none at all when the name is `none`.
+preflightRequest : String -> String -> Array Int
+preflightRequest path named =
+  let value = requestedHeadersBytes named
+  if arrayLength value == 0 then
+    toUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}\r\n"
+  else
+    concat [|
+      toUtf8 "OPTIONS \{path} HTTP/1.1\r\n\{hostHeader}",
+      toUtf8 "Access-Control-Request-Headers: ",
+      value,
+      toUtf8 "\r\n\r\n",
+    |]
+
+-- | The five headers `cors@2.8.6`'s defaults produce, minus the one whose
+-- value this case is asserting itself.
+preflightHeaderFields : List String
+preflightHeaderFields = [
+  "access-control-allow-origin: *",
+  "access-control-allow-methods: GET,HEAD,PUT,PATCH,POST,DELETE",
+  "vary: Access-Control-Request-Headers",
+  "access-control-max-age: 86400",
+]
+
+-- | The `Access-Control-Allow-Headers` value a case expects, with `-` naming
+-- the empty one: `sh` argv can carry an empty word, but a case list reads far
+-- worse when the interesting value is invisible.
+wantedAllowHeaders : String -> String
+wantedAllowHeaders "-" = ""
+wantedAllowHeaders value = value
+
+missingField : String -> List String -> Option String
+missingField _ [] = None
+missingField headerText (field :: rest) =
+  if contains field headerText then missingField headerText rest else Some field
+
+{- | A CORS preflight over the real socket, graded on the status, the five
+   answer headers, and the exact `Access-Control-Allow-Headers` value.
+
+   `wantAllowed` is the value the answer must carry, with `-` standing for the
+   empty one — which is what a client that asked for nothing gets, and also
+   what a client that asked with bytes this server cannot repeat gets. The
+   value is asserted rather than merely present: a preflight that answered 204
+   while echoing an attacker's bytes back verbatim would pass a presence check
+   and is the shape that used to crash the process.
+
+   This runs against the LIVE shell, not `handleBytes`, because the ordering
+   under test is the shell's: `pds/shell/server.mdk`'s `respondAt` answers the
+   preflight before `upgradeDecision`/`proxyDecisionFor`/
+   `serviceAuthDecisionFor`, and an in-process cell calling `handleBytes`
+   directly sits below all three and cannot see that ordering at all. -}
+runPreflight : Int -> String -> String -> Int -> String -> <IO, Net "_"> Unit
+runPreflight port path named want wantAllowed =
+  let allowed = wantedAllowHeaders wantAllowed
+  let conn = mustConnect port
+  let () = mustSend conn (preflightRequest path named)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  let wantedField = "access-control-allow-headers: \{allowed}\r\n"
+  match result
+    Err message => report "PREFLIGHT" False message
+    Ok (status, headerText, _, _) =>
+      -- The read stops AT the blank line, so the last field carries no CRLF of
+      -- its own; the needle above ends in one, so restore it before searching.
+      let terminated = "\{headerText}\r\n"
+      if status /= want then
+        report
+          "PREFLIGHT"
+          False
+          "want status \{intToString want}, got \{intToString status}: \{headerText}"
+      else if contains "access-control-allow-credentials" headerText then
+        report
+          "PREFLIGHT"
+          False
+          "answered with allow-credentials: \{headerText}"
+      else if not (contains wantedField terminated) then
+        report
+          "PREFLIGHT"
+          False
+          "want allow-headers '\{allowed}': \{headerText}"
+      else match missingField headerText preflightHeaderFields
+        Some field =>
+          report "PREFLIGHT" False "missing '\{field}': \{headerText}"
+        None => report "PREFLIGHT" True "status=\{intToString status}"
+
+{- | Any GET, graded on the allow-origin header and the status alone — the
+   shape every shell response exit outside `lib.server_core`'s `handle` needs
+   asserted, since `handle` is the only thing that appends the header for
+   free.
+
+   The label is a parameter because this one shape serves several distinct
+   exits (a `getServiceAuth` success, a service-auth refusal, a proxy
+   refusal), and a shared label would make a failure name the wrong case. An
+   empty `token` sends no `Authorization` header, which is what a refusal case
+   needs. -}
+runCorsGet : String -> Int -> String -> String -> Int -> <IO, Net "_"> Unit
+runCorsGet label port token path want =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token path)
+  let result = readHeaderResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report label False message
+    Ok (status, headerText, _, _) => corsVerdict label want status headerText
+
+{- | Ask this server for a service credential, then SPEND it on the service it
+   was minted for.
+
+   Two connections and two claims. The first is that
+   `com.atproto.server.getServiceAuth` answers a token at all for an audience
+   this operator configured. The second is that what came back is a real
+   service-auth credential a PEER can read: the stub decodes the bearer it is
+   handed and echoes the `aud` and `lxm` it found, so those two values come from
+   the token's own bytes rather than from anything this client said about them.
+
+   The minted token is printed in the PASS line because the gate then greps the
+   SERVER's stderr for that exact text: a credential that reached a log is a
+   credential that leaked, and only the party that received it can say what text
+   to look for. -}
+runServiceAuth : Int -> String -> String -> String -> Int -> <IO, Net "_"> Unit
+runServiceAuth port token audience nsid stubPort =
+  let path =
+    xrpcPath "com.atproto.server.getServiceAuth?aud=\{audience}&lxm=\{nsid}"
+  let conn = mustConnect port
+  let () = mustSend conn (getRequestWith token path)
+  let result = readResponse conn [||]
+  let () = ignoreResult (close conn)
+  match result
+    Err message => report "SERVICEAUTH" False message
+    Ok (status, body, _) =>
+      if status /= 200 then
+        report
+          "SERVICEAUTH"
+          False
+          "want status 200, got \{intToString status}: \{fromUtf8 body}"
+      else
+        let minted = stringField "token" body
+        let stub = mustConnect stubPort
+        let () = mustSend stub (getRequestWith minted (xrpcPath nsid))
+        let echoed = readResponse stub [||]
+        let () = ignoreResult (close stub)
+        match echoed
+          Err message =>
+            report "SERVICEAUTH" False "the service did not answer: \{message}"
+          Ok (echoStatus, echoBody, _) =>
+            let echoText = fromUtf8 echoBody
+            if not (contains "\"aud\":\"\{audience}\"" echoText)
+              || not (contains "\"lxm\":\"\{nsid}\"" echoText) then
+              report
+                "SERVICEAUTH"
+                False
+                "the service read back \{echoText} (status \{intToString echoStatus})"
+            else
+              report "SERVICEAUTH" True "token=\{minted}"
+
 {- | The proxied-read class, driven over ONE connection.
 
    One connection for the reason the repo-export case uses one: the connections
@@ -1293,7 +1682,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1314,6 +1703,12 @@ main = match args ()
   ["refresh-refused", port, token] => runRefreshRefused (mustPort port) token
   ["logout", port, token] => runLogout (mustPort port) token
   ["get-session", port, token, did] => runGetSession (mustPort port) token did
+  ["put-preferences", port, token, want] =>
+    runPutPreferences (mustPort port) token (mustStatus want)
+  ["put-preferences-invalid", port, token, kind] =>
+    runPutPreferencesInvalid (mustPort port) token kind
+  ["get-preferences", port, token, expectFixture] =>
+    runGetPreferences (mustPort port) token (expectFixture == "fixture")
   ["write", port, token, did, collection, rkey, want] =>
     runWriteStatus (mustPort port) token did collection rkey (mustStatus want)
   ["malformed", port] => runMalformed (mustPort port)
@@ -1350,6 +1745,26 @@ main = match args ()
       rkeyPrefix
   ["proxy-read", port, token, service, path, want, marker] =>
     runProxyRead (mustPort port) token service path (mustStatus want) marker
+  ["proxy-read-cors", port, token, service, path, want] =>
+    runProxyReadCors (mustPort port) token service path (mustStatus want)
+  ["put-preferences-cors", port, token, want] =>
+    runPutPreferencesCors (mustPort port) token (mustStatus want)
+  ["preflight", port, path, named, want, wantAllowed] =>
+    runPreflight (mustPort port) path named (mustStatus want) wantAllowed
+  ["cors-get", label, port, token, path, want] =>
+    runCorsGet label (mustPort port) token path (mustStatus want)
+  ["service-auth", port, token, audience, nsid, stubPort] =>
+    runServiceAuth (mustPort port) token audience nsid (mustPort stubPort)
+  ["proxy-write", port, token, service, path, body, want, marker, field] =>
+    runProxyWrite
+      (mustPort port)
+      token
+      service
+      path
+      body
+      (mustStatus want)
+      marker
+      field
   ["rl-proxy", port, xff, token, service, path, count, want] =>
     runProxyFlood
       (mustPort port)

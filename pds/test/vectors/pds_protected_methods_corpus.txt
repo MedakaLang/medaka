@@ -1,0 +1,29 @@
+# Generated only by pds/tools/extract_pds_proxy_answer_key.mjs; see pds/README.md.
+# The pinned image's own PROTECTED_METHODS set (pipethrough.js), read out of the
+# module rather than transcribed: these are the account-management methods the
+# official PDS will neither proxy nor accept a service-auth lxm for. Its own comment:
+# "These endpoints are related to account management and must be used directly, not
+# proxied or service-authed. Service auth may be utilized between PDS and entryway
+# for these methods."
+#
+# Matching in the oracle is case-insensitive over the WHOLE lxm, authority and method
+# name alike (LxmSet lowercases its members and every probe); the rows below are the
+# set's own original spelling, which is what it iterates.
+#
+# Columns: nsid.
+com.atproto.admin.sendEmail
+com.atproto.identity.requestPlcOperationSignature
+com.atproto.identity.signPlcOperation
+com.atproto.identity.updateHandle
+com.atproto.server.activateAccount
+com.atproto.server.confirmEmail
+com.atproto.server.createAppPassword
+com.atproto.server.deactivateAccount
+com.atproto.server.getAccountInviteCodes
+com.atproto.server.getSession
+com.atproto.server.listAppPasswords
+com.atproto.server.requestAccountDelete
+com.atproto.server.requestEmailConfirmation
+com.atproto.server.requestEmailUpdate
+com.atproto.server.revokeAppPassword
+com.atproto.server.updateEmail

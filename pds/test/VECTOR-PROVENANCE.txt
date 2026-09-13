@@ -764,3 +764,14 @@ extraction:    same single command as the pds_route_registration_corpus.txt row 
 retrieved:     2026-09-11
 consumer:      S-proxy-answer-key (#2912 appview-proxying answer key), read by #2608 (appview-proxying leg)
 notes:         jti is fresh random per mint and the signature is computed over it, so neither can be pinned; this corpus therefore records jti's length/charset and the signature's encoding and length rather than values, which is what makes it byte-reproducible. The claim VALUES for iss/aud/lxm are placeholders chosen by the extractor; what the corpus asserts about them is the SHAPE stated in their rows, derived from pipethrough.js's call sites (proxyHandler passes credentials.did/bare aud/parseReqNsid lxm).
+
+[vector]
+file:          pds/test/vectors/pds_protected_methods_corpus.txt
+local-sha256:  2b921fe5099f980d59bcba5e22aed5a2de1562749d45665ddfc4c2800e134c1a
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/pipethrough.ts
+extraction:    same single command as the pds_route_registration_corpus.txt row above; this file is its third output. PROTECTED_METHODS is IMPORTED from the image's own dist/pipethrough.js and iterated, so the rows are that set's own members in its own spelling rather than a transcription that could go stale against the image with nothing noticing
+retrieved:     2026-09-12
+consumer:      S-proxy-catch-all (#2935 the app can use us, A1 method-axis inversion)
+notes:         the oracle checks this set BEFORE it resolves a proxy target, and answers InvalidToken "Bad token method" for a member — so these 16 com.atproto.* methods are refused a service-auth lxm regardless of which service the atproto-proxy header names. Every member is com.atproto.*, which is outside the two namespaces ruling R1 opens, so under R1 they are already refused by namespace; the corpus exists so a later slice that widens the namespace set cannot silently start forwarding an account-management method, and so the list is derived rather than hand-typed.

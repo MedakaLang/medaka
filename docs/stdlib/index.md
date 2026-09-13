@@ -399,6 +399,7 @@ Pure, bounded HTTP/1.1 request framing and response building.
 - [`responseStatus`](http.md#responsestatus)
 - [`responseHeaders`](http.md#responseheaders)
 - [`responseBody`](http.md#responsebody)
+- [`responseReason`](http.md#responsereason)
 - [`serializeResponse`](http.md#serializeresponse)
 - [`MediaType`](http.md#mediatype)
 - [`DecodedBody`](http.md#decodedbody)

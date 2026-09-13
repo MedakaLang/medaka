@@ -12,9 +12,10 @@
      node pds/tools/check_pds_service_jwt.mjs <node_modules> <manifest> <now>
 
    where `<manifest>` is this driver's stdout and `<now>` is an instant inside
-   the tokens' sixty-second window. `pds/README.md` § "Service-auth interop"
-   carries the full procedure, including the `npm ci` that materializes
-   `<node_modules>` from the pinned lockfile.
+   every row's own window — the narrowest is the sixty seconds a row that asked
+   for no expiry gets. `pds/README.md` § "Service-auth interop" carries the
+   full procedure, including the `npm ci` that materializes `<node_modules>`
+   from the pinned lockfile.
 
    The two signing scalars are 1 and 2, whose public keys are G and 2G. Their
    `did:key` spellings are rows 0 and 1 of
@@ -64,13 +65,23 @@ method = "app.bsky.feed.getTimeline"
 issuedAt : Int
 issuedAt = 1700000000
 
-request : String -> Option String -> String -> ServiceAuthRequest
-request audience lxm jti = ServiceAuthRequest {
+{- | The seconds a row that asks for its OWN window asks for.
+
+   Ten minutes: far enough outside `lib.jwt`'s sixty-second default that a mint
+   which ignored the request's `exp` would be refused for the lifetime rather
+   than passing by coincidence, and inside the hour
+   `com.atproto.server.getServiceAuth` will grant. -}
+explicitLifetime : Int
+explicitLifetime = 600
+
+request : String -> Option String -> String -> Option Int -> ServiceAuthRequest
+request audience lxm jti exp = ServiceAuthRequest {
   iss = issuer,
   aud = audience,
   lxm = lxm,
   jti = jti,
   iat = issuedAt,
+  exp = exp,
 }
 
 mint : SecretKey -> ServiceAuthRequest -> String
@@ -79,34 +90,68 @@ mint key claims = match mintServiceToken key claims
   Ok minted => minted
 
 -- `lxm` is the NSID the verifier must require, or `-` for a token minted
--- without the claim.
+-- without the claim. A row that states no expected lifetime is graded against
+-- the verifier's own default of sixty seconds, which is `lib.jwt`'s default
+-- lifetime — so the four rows below assert the default, unchanged, while
+-- `rowLasting` states its own figure and asserts that one instead.
 row : String -> String -> String -> String -> String -> String
 row name expectation didKey lxm minted =
   "case \{name} \{expectation} \{didKey} \{bareAudience} \{lxm} \{minted}"
+
+-- One row that asked for its OWN window, with the seconds it asked for. The
+-- expectation is stated per row rather than fixed in the grader so that a mint
+-- which ignored the request's `exp` is refused for the lifetime it produced
+-- instead of passing under a figure it happened to match.
+rowLasting : String -> String -> String -> String -> String -> Int -> String
+rowLasting name expectation didKey lxm minted lifetime =
+  "\{row name expectation didKey lxm minted} \{intToString lifetime}"
 
 main =
   let signer = signingKey signerScalarHex
   let other = signingKey otherScalarHex
   let signerDidKey = didKeyFromPublicKey (publicKeyForSecret signer)
   let otherDidKey = didKeyFromPublicKey (publicKeyForSecret other)
+  let askedExpiry = Some (issuedAt + explicitLifetime)
   let withLxm =
     mint
       signer
       (request
         audienceWithFragment
         (Some method)
-        "0123456789abcdef0123456789abcdef")
+        "0123456789abcdef0123456789abcdef"
+        None)
   let withoutLxm =
     mint
       signer
-      (request audienceWithFragment None "fedcba9876543210fedcba9876543210")
+      (request
+        audienceWithFragment
+        None
+        "fedcba9876543210fedcba9876543210"
+        None)
   let wrongAudience =
     mint
       signer
       (request
         "did:web:other.example"
         (Some method)
-        "00112233445566778899aabbccddeeff")
+        "00112233445566778899aabbccddeeff"
+        None)
+  let expiryWithLxm =
+    mint
+      signer
+      (request
+        audienceWithFragment
+        (Some method)
+        "aabbccddeeff00112233445566778899"
+        askedExpiry)
+  let expiryWithoutLxm =
+    mint
+      signer
+      (request
+        audienceWithFragment
+        None
+        "99887766554433221100ffeeddccbbaa"
+        askedExpiry)
   println
     (join
       "\n"
@@ -121,4 +166,23 @@ main =
         row "wrong-key" "reject" otherDidKey method withLxm,
         -- Correctly signed, wrong audience: only the `aud` check can refuse it.
         row "wrong-aud" "reject" signerDidKey method wrongAudience,
+        -- The caller's own window, which is the half of the claim set
+        -- `com.atproto.server.getServiceAuth` lets a client choose. Both
+        -- spellings are here because the route grades them differently — a
+        -- credential naming no method may only be asked for a minute — and the
+        -- reference verifier must accept either.
+        rowLasting
+          "exp-explicit-lxm-present"
+          "accept"
+          signerDidKey
+          method
+          expiryWithLxm
+          explicitLifetime,
+        rowLasting
+          "exp-explicit-lxm-absent"
+          "accept"
+          signerDidKey
+          "-"
+          expiryWithoutLxm
+          explicitLifetime,
       ])

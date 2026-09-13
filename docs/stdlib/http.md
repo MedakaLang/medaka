@@ -497,6 +497,14 @@ responseBody : Response -> Array Int
 
 The response body bytes.
 
+### `responseReason`
+
+```
+responseReason : Response -> String
+```
+
+The response reason phrase, exactly as constructed.
+
 ### `serializeResponse`
 
 ```

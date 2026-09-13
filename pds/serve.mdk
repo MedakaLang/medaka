@@ -62,6 +62,7 @@ import args.{
   ArgSpec,
   flag,
   flagValue,
+  flagValues,
   intValue,
   parseArgs,
   spec,
@@ -83,8 +84,8 @@ import lib.credential.{
 }
 import lib.jwt.{serverSecretBytes}
 import lib.ratelimit.{TrustedProxy(..)}
-import lib.handlers.{pdsServer}
-import lib.proxy.{AppviewPolicy, makeAppviewPolicy}
+import lib.handlers.{makeServerLinks, pdsServer}
+import lib.proxy.{AppviewRoute, makeAppviewRoute, makeAppviewTable}
 import lib.repo.{
   Repo,
   repoCommitCid,
@@ -102,6 +103,7 @@ import lib.store.{
   storePutBlob,
   storeFromRepo,
   storeWithCredential,
+  storeWithPreferences,
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidEncode}
@@ -116,10 +118,11 @@ import shell.persist.{
   persistCredential,
   persistHasHead,
   persistLoad,
+  persistLoadPreferences,
   persistSave,
 }
 import shell.server.{Serving, bindAddress, makeServing, runServer}
-import string.{lines, stripSuffix, toInt, trim}
+import string.{drop, indexOf, lines, stripSuffix, take, toInt, trim}
 import time.{now}
 
 serveSpec : ArgSpec
@@ -149,15 +152,31 @@ serveSpec = spec "serve" [
   value
     ["--appview-did"]
     "DID"
-    "the ONE appview service DID an atproto-proxy header may name; requires --egress-port, and without both no request is ever proxied",
+    "the DEFAULT appview service DID: the audience a request whose atproto-proxy header is absent is forwarded to, and one a header may name; requires --egress-port, and without both no request is ever proxied",
   intValue
     ["--egress-port"]
     "N"
     "loopback port of the local egress proxy that forwards to --appview-did; requires --appview-did",
+  value
+    ["--proxy-audience"]
+    "DID=PORT"
+    "an ADDITIONAL service DID an atproto-proxy header may name, and the loopback port of the egress proxy that forwards to it; repeatable, and requires --appview-did and --egress-port",
   intValue
     ["--relay-port"]
     "N"
     "loopback port of a local reverse proxy that forwards to a relay; announces this server's --hostname there once at startup, best-effort",
+  value
+    ["--privacy-policy-url"]
+    "URL"
+    "this server's privacy policy, reported in describeServer's links; omitted from the response when absent",
+  value
+    ["--terms-of-service-url"]
+    "URL"
+    "this server's terms of service, reported in describeServer's links; omitted from the response when absent",
+  value
+    ["--contact-email"]
+    "EMAIL"
+    "an operator contact address, reported in describeServer's contact; omitted from the response when absent",
 ]
 
 {- | `pds keygen`'s roster. Both flags name a file to CREATE, and both are
@@ -228,48 +247,86 @@ requireTrustedBind bind (TrustedProxy trusted) =
       "refusing to bind \{bind}: a non-loopback bind requires --trusted-proxy (see docs/ops/PDS-DEPLOY.md)"
 
 -- Port 0 is accepted for `--port` because the kernel picks a free one there.
--- An egress port is a port this process must REACH, so 0 names nothing.
-egressPortOf : String -> Result String Int
-egressPortOf text = match toInt text
-  None => Err "--egress-port is not an integer: \{text}"
-  Some port =>
-    if port < 1 || port > 65535 then
-      Err "--egress-port must be in 1..65535"
-    else
-      Ok port
+-- An egress port is a port this process must REACH, so 0 names nothing; the
+-- range itself is `makeAppviewRoute`'s, so a row cannot be built out of a port
+-- this process could not dial whatever spelled it.
+egressPortOf : String -> String -> Result String Int
+egressPortOf flag text = match toInt text
+  None => Err "\{flag} is not an integer: \{text}"
+  Some port => Ok port
 
-{- | Where a proxied read goes, and the audience a client's `atproto-proxy`
+{- | Where a proxied read goes, and the audiences a client's `atproto-proxy`
    header is allowed to name — or `None`, meaning this server proxies nothing.
 
-   All or none. `--appview-did` alone names an audience with no route to it and
-   `--egress-port` alone names a route with no audience allowed to claim it, so
-   either alone is a startup refusal rather than a silently inert proxy: an
-   operator who believes forwarding is configured and is wrong learns it here
-   rather than from a 400 on a route they expected to be forwarded.
+   All or none, PER ROW. `--appview-did` alone names an audience with no route
+   to it and `--egress-port` alone names a route with no audience allowed to
+   claim it, so either alone is a startup refusal rather than a silently inert
+   proxy: an operator who believes forwarding is configured and is wrong learns
+   it here rather than from a 400 on a route they expected to be forwarded.
+   `--proxy-audience` carries both halves of a row in one value for the same
+   reason — a DID and a port that could be given separately could be given
+   unevenly, and a row whose halves came from different flags could be paired
+   wrongly with nothing to notice.
 
-   With neither, every `atproto-proxy` header there is gets refused with
+   With no flag at all, every `atproto-proxy` header there is gets refused with
    nothing signed, which is the only safe default for a server whose operator
    has not said where its appview is — a proxy that defaults to somewhere is a
-   credential-bearing call to a destination nobody chose. -}
+   credential-bearing call to a destination nobody chose. `--proxy-audience`
+   without the default pair is refused rather than promoted to the default: a
+   header-absent read has to go somewhere, and choosing which of an operator's
+   additional audiences receives it is not this program's choice to make. -}
 configureEgress : Args -> SecretKey -> Result String (Option Egress)
 configureEgress parsed signingKey = match (
   flagValue "--appview-did" parsed,
   flagValue "--egress-port" parsed,
+  flagValues "--proxy-audience" parsed,
 )
-  (None, None) => Ok None
-  (Some _, None) =>
+  (None, None, []) => Ok None
+  (None, None, _ :: _) =>
+    Err
+      "--proxy-audience requires --appview-did and --egress-port (see docs/ops/PDS-DEPLOY.md)"
+  (Some _, None, _) =>
     Err "--appview-did requires --egress-port (see docs/ops/PDS-DEPLOY.md)"
-  (None, Some _) =>
+  (None, Some _, _) =>
     Err "--egress-port requires --appview-did (see docs/ops/PDS-DEPLOY.md)"
-  (Some did, Some portText) => do
-    policy <- appviewPolicyOf did
-    port <- egressPortOf portText
-    Ok (Some (makeEgress port policy signingKey))
+  (Some did, Some portText, extra) => do
+    port <- egressPortOf "--egress-port" portText
+    first <- appviewRouteOf "--appview-did" did port
+    rest <- extraAudiences extra
+    appviews <- makeAppviewTable first rest
+    Ok (Some (makeEgress appviews signingKey))
 
-appviewPolicyOf : String -> Result String AppviewPolicy
-appviewPolicyOf did = match makeAppviewPolicy did
-  Err message => Err "--appview-did \{did}: \{message}"
-  Ok policy => Ok policy
+appviewRouteOf : String -> String -> Int -> Result String AppviewRoute
+appviewRouteOf flag did port = match makeAppviewRoute did port
+  Err message => Err "\{flag} \{did}: \{message}"
+  Ok route => Ok route
+
+{- | One `--proxy-audience DID=PORT` value, as a row.
+
+   The split is on the FIRST `=`, which is unambiguous: a DID's grammar
+   (`lib.atsyntax`'s `validateDid`) admits no `=` at all, so the separator
+   cannot occur inside the half it separates. A value missing either half is
+   refused by name rather than left to the integer parse, so an operator who
+   typed a DID and forgot the port is told which half is missing. -}
+audienceRowOf : String -> Result String AppviewRoute
+audienceRowOf text = match indexOf "=" text
+  None => Err "--proxy-audience must be DID=PORT: \{text}"
+  Some at =>
+    let did = take at text
+    let portText = drop (at + 1) text
+    if did == "" || portText == "" then
+      Err
+        "--proxy-audience must name both a DID and a port, as DID=PORT: \{text}"
+    else do
+      port <- egressPortOf "--proxy-audience port" portText
+      appviewRouteOf "--proxy-audience" did port
+
+extraAudiences : List String -> Result String (List AppviewRoute)
+extraAudiences [] = Ok []
+extraAudiences (text :: rest) = do
+  route <- audienceRowOf text
+  tail <- extraAudiences rest
+  Ok (route :: tail)
 
 relayPortOf : String -> Result String Int
 relayPortOf text = match toInt text
@@ -644,7 +701,12 @@ configure parsed = do
   -- (#2659 item 4).
   () <- requireTrustedBind bind trustedProxy
   account <- makeAccount did handle hostname
-  server <- pdsServer account
+  let links =
+    makeServerLinks
+      (flagValue "--privacy-policy-url" parsed)
+      (flagValue "--terms-of-service-url" parsed)
+      (flagValue "--contact-email" parsed)
+  server <- pdsServer account links
   keyBytes <- readHexBytes "signing key" keyPath
   secret <- secretKeyFromBytes keyBytes
   -- Admitted here, beside the other flag-supplied configuration and ahead of
@@ -673,9 +735,11 @@ configure parsed = do
   credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
   withSecret <- storeWithServerSecret sessionSecret withBlobs
+  let withCredential = storeWithCredential credential withSecret
+  prefs <- persistLoadPreferences dir
   Ok (
     server,
-    storeWithCredential credential withSecret,
+    storeWithPreferences prefs withCredential,
     dir,
     port,
     bind,

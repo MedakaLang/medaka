@@ -14,11 +14,11 @@
    place a request at any instant, which is how the expiry cells below run
    without waiting two hours. -}
 
-import json.{Json(..), get, jObject, parse, stringify}
+import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
 import test.{expectEqual, expectTrue}
 import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
-import lib.handlers.{pdsServer}
+import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -46,7 +46,7 @@ account = match makeAccount accountDidText accountHandleText accountHostText
   Err message => panic "session_routes_test: account: \{message}"
 
 server : Server
-server = match pdsServer account
+server = match pdsServer account serverLinksEmpty
   Ok made => made
   Err message => panic "session_routes_test: server: \{message}"
 
@@ -162,6 +162,15 @@ field name bytes = match parse (bodyOf (fromUtf8 bytes))
     _ => ""
   Err _ => ""
 
+-- | One boolean field of a response body, or `None` if it is absent or not a
+-- `JBool` (mirrors `field`, whose `JString`-only match can't see this shape).
+fieldBool : String -> Array Int -> Option Bool
+fieldBool name bytes = match parse (bodyOf (fromUtf8 bytes))
+  Ok body => match get name body
+    Some value => asBool value
+    _ => None
+  Err _ => None
+
 -- # Driving
 
 -- | One request against `store` at `context`, giving the store it left behind
@@ -222,6 +231,10 @@ test "a login is answered with the account's DID and handle" =
   expectEqual
     (field "did" response ++ " " ++ field "handle" response)
     "\{accountDidText} \{accountHandleText}"
+
+test "a login is answered with an active session" =
+  let (_, response) = login testInstant 1 configuredStore
+  expectEqual (fieldBool "active" response) (Some True)
 
 test "a login issues two different tokens" =
   expectTrue
@@ -316,6 +329,14 @@ test "getSession names the account the token belongs to" =
       (getQuery accessToken getSessionNsid)
   expectEqual (field "did" response) accountDidText
 
+test "getSession reports the session as active" =
+  let (_, response) =
+    send
+      (contextAt testInstant 3)
+      sessionStore
+      (getQuery accessToken getSessionNsid)
+  expectEqual (fieldBool "active" response) (Some True)
+
 {- | An access token that was never issued by this server is refused even
    though it is syntactically a bearer token. This is the seam's job, and it
    is graded here as well as in `pds/test/auth_seam_test.mdk` because a
@@ -373,6 +394,9 @@ rotatedRefresh = match refreshed
 
 test "a refresh with the session's refresh token is 200" = match refreshed
   (_, response) => expectEqual (outcome response) "200 OK"
+
+test "a refresh reports the rotated session as active" = match refreshed
+  (_, response) => expectEqual (fieldBool "active" response) (Some True)
 
 test "a refresh issues a token pair that is not the one it replaced" =
   expectTrue (rotatedAccess /= accessToken && rotatedRefresh /= refreshToken)

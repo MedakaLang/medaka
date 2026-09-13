@@ -1,52 +1,48 @@
-{- | Pure appview-proxy disposition: which XRPC method this server forwards to
-   its configured appview, for which audience, and what a forwarded answer
-   becomes.
+{- | Pure appview-proxy disposition: which XRPC method this server forwards,
+   for which audience, and what a forwarded answer becomes.
 
    `atproto-proxy` is a CLIENT-SUPPLIED header and it names the audience a
    token would be minted for. Grading it is therefore not a formality: a server
-   that signs whatever audience and method the header names hands out
-   credentials bearing its own account's identity to whoever the client points
-   at. Both halves are graded — the audience against the ONE service this
-   server was configured to proxy to, the method against the table below — and
-   they are graded here, where no effect is available, so that no caller can
-   reach a signature along a path that skipped either.
+   that signs whatever audience the header names hands out credentials bearing
+   its own account's identity to whoever the client points at. The audience is
+   graded against the SET of services this server was configured to proxy to —
+   a set an operator enumerates and this module holds as a table — and it is
+   graded here, where no effect is available, so that no caller can reach a
+   signature along a path that skipped it.
 
-   THE TABLE is derived, not invented: every row of
-   `pds/test/vectors/pds_route_registration_corpus.txt` states which proxy
-   helper the official implementation's own route module imports, and that is
-   what says whether a route forwards. Four dispositions come straight off it,
-   and the fifth is this server's default:
+   THE TWO AXES ARE NOT SYMMETRIC, and that is the whole design (ruling R1,
+   `docs/design/ATPROTO-PDS-DESIGN.md` §4.5). The confused-deputy defense lives
+   on the AUDIENCE — who a token may be minted for, which stays an
+   operator-configured set and default-deny. The METHOD axis is default-ALLOW
+   inside two namespaces, because an appview's method list is the appview's to
+   grow and a PDS that enumerated it would refuse next season's reads on this
+   season's table:
 
-   - `ProxyForwardable` — the six `app.bsky.*` reads whose module imports
-     `pipethroughReadAfterWrite`. They have no local handler at all: the
-     appview is the only thing that can answer them.
-   - `ProxyForwardOnLocalMiss` — `repo.getRecord`, `feed.getFeed`,
-     `server.getServiceAuth`, `moderation.createReport`, whose modules import
-     `pipethrough` and decide per request. This server hosts exactly one
-     repository and is the authority for it, so every such request is a local
-     hit and the header is not acted on; the local route answers, including by
-     refusing a repository this server does not host.
-   - `ProxyPdsHosted` — `actor.getPreferences`/`actor.putPreferences`. The
-     corpus's own note is that these forward only when the header names a
-     service OTHER than the configured appview, and a header naming another
-     service is already refused above, so reaching here means the request is
-     answered as a LOCAL route rather than proxied — not that a local handler
-     for it exists yet. Neither route is registered in this tree (#2912), so
-     today that local path 404s; the classification only decides that a
-     proxy header does not override it, and is correct in advance of the
-     local preference store landing.
-   - `ProxyLocallyServed` — a route this server's own registry holds. Asking it
-     to be proxied is refused rather than quietly served: the set that must
-     never travel with a service token (`PROTECTED_METHODS`, which the corpus
-     does not enumerate and this module therefore does not either) is a subset
-     of it, and refusing the whole set needs no list.
-   - `ProxyNotForwardable` — everything else, which is the default. An nsid
-     this server neither serves nor forwards is refused with the same answer
-     the official implementation gives for one it has no service configured
-     for.
+   - `ProxyLocallyServed` — an nsid this server's own registry holds. It is
+     answered by the local route, header or no header: this server is the
+     authority for its own account, and a forward would ask another service to
+     answer a question about state only this one has. The 16 `PROTECTED_METHODS`
+     the official implementation refuses to proxy
+     (`pds/test/vectors/pds_protected_methods_corpus.txt`) are all
+     `com.atproto.*` and so are covered twice over — by the namespace bound
+     below, and, for the ones this server registers, by this arm.
+   - `ProxyForwardable` — an `app.bsky.*` or `chat.bsky.*` nsid the registry
+     does NOT hold. It carries the method's canonical spelling
+     (`lib.nsid`'s `canonicalNsid`), because that is the value the admission
+     was taken against and therefore the only one that may be signed; the
+     client's own bytes merely compared equal to it.
+   - `ProxyNotForwardable` — everything else: `com.atproto.*`, `tools.ozone.*`,
+     an nsid in no namespace this server forwards, and anything that is not a
+     syntactically valid NSID at all. Nothing outside the two namespaces is
+     ever sent anywhere, so no client-named method can reach an operator's
+     credential by being spelled like one.
 
-   Nothing here is reached unless the header is PRESENT: a request without it
-   is unchanged in every respect. -}
+   A request with NO header reaches this module too, and that is the change
+   R1 brought: the official implementation forwards a header-absent call to its
+   DEFAULT service (`parseProxyInfo`, `pipethrough.js:173-181`), so an app that
+   sends no header still gets its reads answered. What the absence changes is
+   the audience — the configured default rather than a named one — never the
+   method disposition, which is this module's business alone. -}
 
 import http.{
   Header,
@@ -56,12 +52,14 @@ import http.{
   makeResponse,
   Response,
 }
-import string.{fromUtf8, indexOf, take, toUtf8}
+import list.{filter}
+import string.{fromUtf8, indexOf, startsWith, take, toLower, toUtf8}
 import lib.atsyntax.{validateDid}
-import lib.nsid.{sameNsidIdentity}
+import lib.cors.{allowOriginHeader, printableAscii}
+import lib.nsid.{canonicalNsid, sameNsidIdentity, validateNsid}
 import lib.xrpc.{Registry, endpointNsid, registryEndpoints, xrpcErrorResponse}
 
-{- | The one service this server may proxy to, as `--appview-did` named it.
+{- | One service this server may proxy to, as an operator named it.
 
    Its constructor is private so every value has passed DID admission, and it
    is a type of its own rather than a bare `String` for the reason
@@ -88,10 +86,114 @@ makeAppviewPolicy did =
     Err message => Err "proxy: appview DID: \{message}"
     Ok () => Ok (AppviewPolicy did)
 
--- | The configured appview's bare DID.
+-- | This audience's bare DID.
 export
 appviewPolicyDid : AppviewPolicy -> String
 appviewPolicyDid (AppviewPolicy did) = did
+
+{- | One configured audience, and the loopback egress port a forward to it
+   leaves by.
+
+   The port is held beside the DID, and not anywhere a DID cannot be produced
+   with it, because the pair is what an operator configures and what routing
+   must consult as a unit: the only way to obtain a port is to have matched a
+   row, so a forward cannot leave for a destination the audience grading did
+   not admit. -}
+export data AppviewRoute = AppviewRoute AppviewPolicy Int
+
+{- | Admit one configured audience row.
+
+   The DID passes `makeAppviewPolicy`'s admission unchanged. The port is graded
+   here as well, rather than only where a flag is parsed, for the same reason
+   the DID is: a row is the value routing consults, and 0 — which the kernel
+   reads as "pick one" when binding and which names no listener when dialing —
+   must not be able to reach a connect. -}
+export
+makeAppviewRoute : String -> Int -> Result String AppviewRoute
+makeAppviewRoute did port =
+  if port < 1 || port > 65535 then
+    Err "proxy: appview egress port must be in 1..65535: \{intToString port}"
+  else
+    map (policy => AppviewRoute policy port) (makeAppviewPolicy did)
+
+-- | The bare DID this row's audience is.
+export
+appviewRouteDid : AppviewRoute -> String
+appviewRouteDid (AppviewRoute policy _) = appviewPolicyDid policy
+
+-- | The loopback port a forward to this row's audience leaves by.
+export
+appviewRoutePort : AppviewRoute -> Int
+appviewRoutePort (AppviewRoute _ port) = port
+
+{- | Every audience this server may mint for, and where each one's forwards
+   go.
+
+   Nonempty by construction, and the FIRST row is the DEFAULT: a request that
+   names no audience is forwarded there, which is the fall-through the official
+   implementation takes when `parseProxyInfo` finds no header. A server that
+   proxies at all therefore always has somewhere to send a header-absent call,
+   and a server that proxies nothing carries no table at all rather than an
+   empty one.
+
+   The set is the whole of the audience axis, and the axis stays DEFAULT-DENY
+   (`docs/design/ATPROTO-PDS-DESIGN.md` §4.5): a header naming a DID no row
+   holds is refused before the method is looked at. What a second row buys is
+   an audience an OPERATOR chose — a chat service alongside an appview — and
+   not a name this module knows. -}
+export data AppviewTable = AppviewTable AppviewRoute (List AppviewRoute)
+
+{- | The configured table, or a refusal when one DID is configured twice.
+
+   A repeated DID is refused rather than settled first-wins or last-wins: two
+   rows for one audience are two ports a token minted for that audience could
+   be sent to, and picking between them is picking which upstream an operator's
+   credential reaches on their behalf. -}
+export
+makeAppviewTable : AppviewRoute ->
+  List AppviewRoute ->
+  Result String AppviewTable
+makeAppviewTable first rest = match repeatedAudience (first :: rest)
+  Some did => Err "proxy: \{did} is configured as an audience twice"
+  None => Ok (AppviewTable first rest)
+
+repeatedAudience : List AppviewRoute -> Option String
+repeatedAudience [] = None
+repeatedAudience (route :: rest) =
+  if any (other => appviewRouteDid other == appviewRouteDid route) rest then
+    Some (appviewRouteDid route)
+  else
+    repeatedAudience rest
+
+-- | Where a request that named no audience is forwarded: the first configured
+-- row. See `AppviewTable` for why that is the default rather than a refusal.
+export
+defaultAppviewRoute : AppviewTable -> AppviewRoute
+defaultAppviewRoute (AppviewTable first _) = first
+
+{- | The row whose audience is exactly `did`, or `None` when no row holds it.
+
+   Exact equality, and no folding of any kind: a DID's method-specific
+   identifier is case-SENSITIVE, so `did:web:Api.Bsky.Chat` is a different
+   identifier from `did:web:api.bsky.chat` and admitting one for the other
+   would admit an audience no operator configured. The `#serviceId` fragment a
+   header may carry is stripped by `proxyServiceDid` before this is asked and
+   not here, so what this compares is already a bare DID.
+
+   This is the ONE lookup on the audience axis. `lib.server_core` asks it to
+   decide whether a header may be honored at all, and the shell asks it a
+   second time with the value that was ADMITTED, to find the port to dial.
+   Neither reads the client's header text to choose a destination — that is
+   what keeps a second audience from becoming a second way to be pointed
+   somewhere. -}
+export
+appviewRouteFor : AppviewTable -> String -> Option AppviewRoute
+appviewRouteFor (AppviewTable first rest) did = routeWithDid (first :: rest) did
+
+routeWithDid : List AppviewRoute -> String -> Option AppviewRoute
+routeWithDid [] _ = None
+routeWithDid (route :: rest) did =
+  if appviewRouteDid route == did then Some route else routeWithDid rest did
 
 {- | What the request's `atproto-proxy` header carried.
 
@@ -140,83 +242,48 @@ proxyServiceDid raw =
     Err _ => None
     Ok () => Some bare
 
-{- | How this server disposes of one nsid named by a present `atproto-proxy`
-   header. See the module header for what each arm is derived from. -}
+{- | How this server disposes of one XRPC nsid. See the module header for what
+   each arm means and why the two axes are not symmetric. -}
 public export data ProxyDisposition =
-  | ProxyForwardable
-  | ProxyForwardOnLocalMiss
-  | ProxyPdsHosted
+  | ProxyForwardable String
   | ProxyLocallyServed
   | ProxyNotForwardable
 
-{- | The six routes with NO local handler and an appview answer that is then
-   patched with the caller's own not-yet-indexed writes — the
-   `pipethroughReadAfterWrite` rows of the registration corpus, and the only
-   methods a token is ever minted for. -}
-forwardableMethods : List String
-forwardableMethods = [
-  "app.bsky.actor.getProfile",
-  "app.bsky.actor.getProfiles",
-  "app.bsky.feed.getActorLikes",
-  "app.bsky.feed.getAuthorFeed",
-  "app.bsky.feed.getPostThread",
-  "app.bsky.feed.getTimeline",
-]
+{- | The namespaces whose methods this server forwards rather than enumerates.
 
--- The `pipethrough` rows: a local answer for some requests, a forwarded one
--- for others, decided per request against state this server is the authority
--- for.
-forwardOnLocalMissMethods : List String
-forwardOnLocalMissMethods = [
-  "com.atproto.repo.getRecord",
-  "com.atproto.server.getServiceAuth",
-  "app.bsky.feed.getFeed",
-  "com.atproto.moderation.createReport",
-]
+   Both are an appview's own vocabulary: `app.bsky.*` is the social lexicon the
+   official appview serves and `chat.bsky.*` is the DM service's. Everything
+   else — `com.atproto.*`, which is the PDS's own protocol and holds all 16
+   `PROTECTED_METHODS`, and `tools.ozone.*`, which is moderation — is a
+   namespace no client may point this server's credential at. -}
+forwardableNamespaces : List String
+forwardableNamespaces = ["app.bsky.", "chat.bsky."]
 
--- The two routes a PDS hosts itself.
-pdsHostedMethods : List String
-pdsHostedMethods = [
-  "app.bsky.actor.getPreferences",
-  "app.bsky.actor.putPreferences",
-]
+inForwardableNamespace : String -> Bool
+inForwardableNamespace nsid =
+  any (prefix => startsWith prefix nsid) forwardableNamespaces
 
-{- | Which name of `names` this nsid IS, in the table's own spelling, or `None`
-   when it is none of them.
+{- | The canonical spelling of an nsid this server would forward on namespace
+   alone, or `None` when it would not.
 
-   "Does it match" and "which spelling did it match" are different questions
-   because `sameNsidIdentity` folds the case of an NSID's authority: a client
-   asking for `App.Bsky.Actor.getProfile` names the same method as the table's
-   `app.bsky.actor.getProfile` without sending the same bytes. Anything that
-   goes on to be SIGNED must carry the table's spelling — the value the
-   authorization decision was taken against — and not the client's, which is
-   attacker-influenced text that merely compared equal. -}
-canonicalMethodMatch : String -> List String -> Option String
-canonicalMethodMatch _ [] = None
-canonicalMethodMatch wanted (name :: rest) =
-  if sameNsidIdentity wanted name then
-    Some name
-  else
-    canonicalMethodMatch wanted rest
+   Validity is checked BEFORE the namespace, and both before anything is
+   returned, because the value returned here is the one that gets signed
+   (`lxm`). Today's table lookup bounded that value to six literals; with the
+   table retired, `lib.nsid`'s grammar is what bounds it, and an nsid that is
+   not a well-formed NSID is not forwardable at all rather than forwarded with
+   whatever the client put after `/xrpc/`.
 
-namesMethod : String -> List String -> Bool
-namesMethod wanted names = isSome (canonicalMethodMatch wanted names)
-
-{- | The canonical spelling of a forwardable method, for the one caller that
-   needs it: the claim set minted for an admitted forward (`lib.server_core`'s
-   `disposeProxy`). Every other disposition arm mints nothing, so the `Bool`
-   form below is all they need. -}
+   Exported on its own as well as through `proxyDisposition` because "would
+   this method be forwarded if this server did not serve it" is the question
+   the namespace bound turns on, and a test should be able to ask it without
+   constructing a registry. -}
 export
-canonicalForwardableMethod : String -> Option String
-canonicalForwardableMethod nsid = canonicalMethodMatch nsid forwardableMethods
-
-{- | Whether a token may ever be minted for this method. Exported on its own as
-   well as through `proxyDisposition`, because "is this nsid forward-eligible"
-   is the question the confused-deputy defense turns on and a test should be
-   able to ask it without constructing a registry. -}
-export
-forwardableProxyMethod : String -> Bool
-forwardableProxyMethod nsid = isSome (canonicalForwardableMethod nsid)
+forwardableProxyMethod : String -> Option String
+forwardableProxyMethod nsid = match validateNsid nsid
+  Err _ => None
+  Ok () =>
+    let canonical = canonicalNsid nsid
+    if inForwardableNamespace canonical then Some canonical else None
 
 registryHolds : Registry -> String -> Bool
 registryHolds registry nsid =
@@ -224,19 +291,148 @@ registryHolds registry nsid =
     (endpoint => sameNsidIdentity nsid (endpointNsid endpoint))
     (registryEndpoints registry)
 
+{- | The registry is asked FIRST. A method this server serves is served, and a
+   header asking for it to be proxied does not override that — the ordering is
+   what makes "registered" mean the same thing to a client whether or not it
+   sent a header. -}
 export
 proxyDisposition : Registry -> String -> ProxyDisposition
 proxyDisposition registry nsid =
-  if forwardableProxyMethod nsid then
-    ProxyForwardable
-  else if namesMethod nsid forwardOnLocalMissMethods then
-    ProxyForwardOnLocalMiss
-  else if namesMethod nsid pdsHostedMethods then
-    ProxyPdsHosted
-  else if registryHolds registry nsid then
+  if registryHolds registry nsid then
     ProxyLocallyServed
-  else
-    ProxyNotForwardable
+  else match forwardableProxyMethod nsid
+    Some canonical => ProxyForwardable canonical
+    None => ProxyNotForwardable
+
+-- ── the account-management methods no credential may name ───────────────────
+
+{- | The official implementation's own `PROTECTED_METHODS`, in its own
+   spelling: the account-management methods it will neither proxy nor mint a
+   service-auth credential for.
+
+   These sixteen are a TRANSCRIPTION of
+   `pds/test/vectors/pds_protected_methods_corpus.txt`, which was read out of
+   the pinned image's `pipethrough.js` rather than typed
+   (`pds/test/VECTOR-PROVENANCE.txt` records that file's extraction and its
+   `local-sha256`). The transcription exists because the set has to be
+   consultable where no effect is available — `com.atproto.server.getServiceAuth`
+   grades a client's `lxm` against it, in the pure core, and a `.txt` vector is
+   not readable from there. What keeps the two from drifting is a cell in
+   `pds/test/read_routes_all_engines_main.mdk`, which reads the corpus and
+   fails unless it names exactly this set.
+
+   The list is needed ON ITS OWN, and is not implied by the namespace bound
+   above: `proxyDisposition` answers `ProxyLocallyServed` for
+   `com.atproto.server.getSession` because this server registers it, and a
+   service-auth credential naming it must still be refused. -}
+export
+protectedMethods : List String
+protectedMethods = [
+  "com.atproto.admin.sendEmail",
+  "com.atproto.identity.requestPlcOperationSignature",
+  "com.atproto.identity.signPlcOperation",
+  "com.atproto.identity.updateHandle",
+  "com.atproto.server.activateAccount",
+  "com.atproto.server.confirmEmail",
+  "com.atproto.server.createAppPassword",
+  "com.atproto.server.deactivateAccount",
+  "com.atproto.server.getAccountInviteCodes",
+  "com.atproto.server.getSession",
+  "com.atproto.server.listAppPasswords",
+  "com.atproto.server.requestAccountDelete",
+  "com.atproto.server.requestEmailConfirmation",
+  "com.atproto.server.requestEmailUpdate",
+  "com.atproto.server.revokeAppPassword",
+  "com.atproto.server.updateEmail",
+]
+
+{- | Whether `lxm` names one of them, folding case over the WHOLE nsid.
+
+   The whole nsid and not just its authority, which is what
+   `lib.nsid`'s `sameNsidIdentity` folds: the oracle's own set lowercases both
+   its members and every value it tests (the corpus header records this), so
+   `com.atproto.server.GetSession` is a member there and must be one here. A
+   comparison that folded less would leave a spelling of every protected method
+   that this server mints for and the official refuses. -}
+export
+isProtectedMethod : String -> Bool
+isProtectedMethod lxm =
+  let folded = toLower lxm
+  any (member => toLower member == folded) protectedMethods
+
+{- | The inbound fields a forwarded call carries with it, and the only ones.
+
+   Derived, not chosen: these are exactly the request fields the official
+   implementation's `pipethrough` relays (`pipethrough.js:81-87`, `:130-132`).
+   They are content NEGOTIATION — which language, which labelers, which topics
+   — so a forward that dropped them would get a correct answer to a different
+   question than the client asked, and one that relayed more would let a client
+   speak to the appview in fields this server's own credential vouches for.
+
+   `content-length` is NOT among them even though the official relays it:
+   `lib.httpclient`'s serializer computes the one authoritative
+   `content-length` from the body it is actually sending and REFUSES a
+   caller-supplied one (`hasReservedRequestField`). Copying the client's would
+   either be redundant or be a second, disagreeing framing field, which is the
+   request-smuggling shape; the body's own length is the honest value and it is
+   the one that goes out. -}
+export
+relayedRequestFields : List String
+relayedRequestFields =
+  ["accept-language", "atproto-accept-labelers", "x-bsky-topics"]
+
+-- | The fields relayed only when there is a body to describe. `content-length`
+-- is the serializer's — see `relayedRequestFields`.
+export
+relayedBodyFields : List String
+relayedBodyFields = ["content-type", "content-encoding"]
+
+{- | The one field named `name`, or `None` when the request carried none or
+   carried more than one.
+
+   A repeated field is DROPPED rather than joined or first-wins, for the reason
+   a repeated `atproto-proxy` is refused: choosing among two values a client
+   sent is choosing on its behalf, and here the value travels under this
+   server's own credential. Dropping it degrades the answer's negotiation; the
+   alternatives forge an instruction. -}
+soleField : String -> List Header -> Option Header
+soleField name headers =
+  match filter (header => headerName header == name) headers
+    [only] => Some only
+    _ => None
+
+pickFields : List String -> List Header -> List (String, String)
+pickFields [] _ = []
+pickFields (name :: rest) headers = match soleField name headers
+  Some header =>
+    let value = headerValue header
+    if printableAscii value 0 then
+      (name, fromUtf8 value) :: pickFields rest headers
+    else
+      pickFields rest headers
+  None => pickFields rest headers
+
+{- | The fields of `headers` a forward relays, as name/value pairs in this
+   module's own order and not the client's. `withBody` adds the
+   body-describing fields.
+
+   Pairs and not a `Header`: the outbound serializer has a `Header` type of its
+   own (`lib.httpclient`) and this is the pure core, which knows neither of
+   them. The values are already graded printable ASCII, so `fromUtf8` here is
+   exact and the shell's `makeRequestHeader` can only agree with it.
+
+   A field that cannot be relayed safely is dropped and the call still goes:
+   a client that sent an odd `accept-language` is owed an answer in the default
+   language, not a 502. -}
+export
+relayedRequestHeaders : Bool -> List Header -> List (String, String)
+relayedRequestHeaders withBody headers =
+  let names =
+    if withBody then
+      relayedRequestFields ++ relayedBodyFields
+    else
+      relayedRequestFields
+  pickFields names headers
 
 {- | The refusal a request whose `atproto-proxy` header this server will not
    act on is owed. 400 `InvalidRequest` is what the official implementation
@@ -256,15 +452,16 @@ proxyNoServiceMessage nsid = "No service configured for \{nsid}"
 
 -- | The message a header naming some other service is refused with. This is
 -- the confused-deputy refusal: the audience a token would have carried is not
--- the one audience this server was configured to mint for.
+-- one of the audiences this server was configured to mint for.
 export
 proxyForeignAudienceMessage : String
 proxyForeignAudienceMessage =
   "atproto-proxy names a service this server does not proxy to"
 
-{- | The six forwardable routes are all XRPC queries, and this server forwards
-   no request body, so a non-GET asking to be proxied is refused rather than
-   forwarded with its body dropped. -}
+{- | XRPC has two verbs — a query is a GET and a procedure is a POST — and a
+   forward carries the client's own, body included. Anything else is refused
+   rather than forwarded: a verb this server cannot have received as a route of
+   its own is a verb it has no reason to spend an operator's credential on. -}
 export
 proxyMethodRefusalResponse : Response
 proxyMethodRefusalResponse =
@@ -272,7 +469,14 @@ proxyMethodRefusalResponse =
     405
     "Method Not Allowed"
     "MethodNotAllowed"
-    "a proxied XRPC method requires GET"
+    "a proxied XRPC method requires GET or POST"
+
+{- | Whether a forward carries this verb. GET and POST are the whole of XRPC's
+   own vocabulary; see `proxyMethodRefusalResponse` for why the list is not
+   simply the client's. -}
+export
+forwardableProxyVerb : String -> Bool
+forwardableProxyVerb verb = verb == "GET" || verb == "POST"
 
 {- | What a client is told when the appview could not be reached, or answered
    something this server's own HTTP client refuses to decode. 502
@@ -289,7 +493,9 @@ proxyUpstreamFailureResponse =
     "UpstreamFailure"
     "the upstream service did not answer"
 
-{- | The appview's answer, reduced to the parts this server will relay.
+{- | The appview's answer, reduced to the parts this server will relay: the
+   status, the reason phrase, the content type, the relayed fields
+   (`relayedResponseFields`, already selected), and the body.
 
    Everything else the appview sent is dropped rather than copied, which is the
    whole point of reducing it to this shape: a response from an off-box service
@@ -298,7 +504,20 @@ proxyUpstreamFailureResponse =
    own voice. The body is relayed whole — it is the answer — and is already
    bounded by `lib.httpclient`'s own response ceilings. -}
 public export data UpstreamAnswer =
-  | UpstreamAnswer Int String (Option (Array Int)) (Array Int)
+  | UpstreamAnswer Int String (Option (Array Int)) (List (String, Array Int)) (Array Int)
+
+{- | The answer fields a forward relays back, and the only ones.
+
+   Derived: the official implementation's `RES_HEADERS_TO_FORWARD`
+   (`pipethrough.js:345-349`). Each is something the client acts on and this
+   server cannot compute — how current the repo the answer was built from was,
+   which labelers shaped it, how long to wait before asking again. `content-*`
+   is not here because the content type has its own field on `UpstreamAnswer`
+   and the framing fields are `makeResponse`'s. -}
+export
+relayedResponseFields : List String
+relayedResponseFields =
+  ["atproto-repo-rev", "atproto-content-labelers", "retry-after"]
 
 jsonContentType : Header
 jsonContentType = match makeHeader "content-type" (toUtf8 "application/json")
@@ -311,6 +530,16 @@ relayedContentType (Some value) = match makeHeader "content-type" value
   Ok header => header
   Err _ => jsonContentType
 
+-- A field the upstream sent in a shape `makeHeader` will not build is dropped,
+-- not fatal: it is negotiation the client can do without, and refusing the
+-- whole answer over it would hand an upstream a way to fail this server's
+-- reads by sending one odd byte.
+relayedFields : List (String, Array Int) -> List Header
+relayedFields [] = []
+relayedFields ((name, value) :: rest) = match makeHeader name value
+  Ok header => header :: relayedFields rest
+  Err _ => relayedFields rest
+
 {- | Turn the appview's answer into this server's own response.
 
    The status code and the reason phrase are the appview's, because the client
@@ -319,11 +548,14 @@ relayedContentType (Some value) = match makeHeader "content-type" value
    reason phrase carrying a control or non-ASCII byte. A reason phrase that
    fails that grading is replaced rather than refusing the whole answer: it
    carries no information a client acts on, so dropping the response over it
-   would turn a cosmetic upstream defect into a failed read. -}
+   would turn a cosmetic upstream defect into a failed read. This response
+   never reaches `lib.server_core`'s `handle`, so the allow-origin header
+   every response carries is added here rather than inherited. -}
 export
 proxyUpstreamResponse : UpstreamAnswer -> Result String Response
-proxyUpstreamResponse (UpstreamAnswer status reason contentType body) =
-  let headers = [relayedContentType contentType]
+proxyUpstreamResponse (UpstreamAnswer status reason contentType relayed body) =
+  let headers =
+    allowOriginHeader :: relayedContentType contentType :: relayedFields relayed
   match makeResponse status reason headers body
     Ok response => Ok response
     Err _ => makeResponse status "Upstream Response" headers body

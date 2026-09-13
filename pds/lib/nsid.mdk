@@ -4,7 +4,7 @@
    may deliberately collapse details at a protocol boundary. -}
 
 import regex.{Regex, isFullMatchBytes, mustCompile}
-import string.{toUtf8}
+import string.{fromUtf8, toUtf8}
 
 public export data NsidError =
   | NsidTooLong
@@ -150,6 +150,29 @@ sameNsidIdentity left right =
     && leftDot == rightDot
     && leftDot >= 0
     && sameIdentityBytes leftBytes rightBytes leftDot 0
+
+{- | The one spelling of this NSID that stands for its identity: the authority
+   folded to lowercase, the method name left exactly as written.
+
+   `sameNsidIdentity` decides identity without producing a value, which is
+   enough for a comparison and not enough for a decision that has to be
+   RECORDED. A forwarded call signs the method it was admitted for, and the
+   value signed must be the one the admission was taken against rather than the
+   client's own bytes, which merely compared equal. Two NSIDs are
+   `sameNsidIdentity` exactly when their canonical spellings are equal.
+
+   The input is assumed to have passed `validateNsid`; a string with no dot is
+   returned unchanged rather than rejected, since nothing here decides
+   admission. -}
+export
+canonicalNsid : String -> String
+canonicalNsid nsid =
+  let bytes = toUtf8 nsid
+  let size = arrayLength bytes
+  let authorityEnd = lastDotBefore bytes 0 size (-1)
+  fromUtf8
+    (arrayMakeWith size (i =>
+      if i < authorityEnd then foldAuthorityByte bytes[i] else bytes[i]))
 
 -- | Stable repository-facing wording retained while the validation authority
 -- moves into this shared module.
