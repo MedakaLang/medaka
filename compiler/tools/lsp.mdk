@@ -556,7 +556,7 @@ data SymRow = SymRow String Int Int Int Bool (List Json) (Option Loc)
 symbolParts : List Decl -> List DeclPos -> List SymRow
 symbolParts (d :: ds) (p :: ps) =
   let sl = declPosLine p - 1
-  let el = declPosEndLine p - 1
+  let el = declPosEndLine p
   match symbolPartsOfDecl d (jRange sl 0 el 0) (declPosChildLocs p)
     None => symbolParts ds ps
     Some (name, kind, clauseLike, kids) =>
@@ -695,7 +695,7 @@ defZipDeclMatch d p name
 
 defZipLocOr : Option Loc -> DeclPos -> Json
 defZipLocOr (Some l) _ = jRangeOfLoc l
-defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p - 1) 0
+defZipLocOr None p = jRange (declPosLine p - 1) 0 (declPosEndLine p) 0
 
 -- ── typecheck-env build (hover / completion / inlayHint) ────────────────────
 -- The handlers run `checkProgram prog`
