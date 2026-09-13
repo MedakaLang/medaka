@@ -56,9 +56,7 @@ import lib.ratelimit.{
   directIdentity,
   identifyClient,
   initRateLimitState,
-  isCreateSessionNsid,
-  isRepoExportNsid,
-  isWriteNsid,
+  nsidRateLimitClasses,
   remainingInClass,
   step,
 }
@@ -540,10 +538,7 @@ nsidClasses : Result HttpParseFailure Request -> List RateLimitClass
 nsidClasses (Err _) = []
 nsidClasses (Ok request) = match requestNsid request
   None => []
-  Some name =>
-    (if isWriteNsid name then [WritesClass] else [])
-      ++ (if isCreateSessionNsid name then [CreateSessionClass] else [])
-      ++ (if isRepoExportNsid name then [RepoExportClass] else [])
+  Some name => nsidRateLimitClasses name
 
 {- | The classes one framed request is charged against, and — below — the
    identity it is charged to.

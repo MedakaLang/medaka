@@ -270,6 +270,21 @@ export
 isRepoExportNsid : String -> Bool
 isRepoExportNsid nsid = sameNsidIdentity nsid "com.atproto.sync.getRepo"
 
+{- | The extra classes a routed NSID is charged against, on top of the
+   per-request classes every framed request clears.
+
+   This lives here rather than at the charging site so that the route table
+   and the server read the same classification: a second fold over the three
+   predicates would let one of them drift while the other still reported the
+   old answer. The order is canonical — writes, createSession, repoExport —
+   so a rendered class set is comparable as text. -}
+export
+nsidRateLimitClasses : String -> List RateLimitClass
+nsidRateLimitClasses nsid =
+  (if isWriteNsid nsid then [WritesClass] else [])
+    ++ (if isCreateSessionNsid nsid then [CreateSessionClass] else [])
+    ++ (if isRepoExportNsid nsid then [RepoExportClass] else [])
+
 {- | The operator's assertion that this process's peer is a configured trusted
    proxy (`--trusted-proxy`), carried as its own type rather than as a `Bool`.
 
