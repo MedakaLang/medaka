@@ -627,8 +627,10 @@ operator never chose hands this account's identity to a stranger. The 16
 `com.atproto.*`, so the namespace bound refuses them without enumerating them — and the
 list is pinned as a DERIVED corpus
 (`pds/test/vectors/pds_protected_methods_corpus.txt`, read out of the image's own
-`pipethrough` module) precisely so that a later widening of the namespace set cannot
-begin forwarding an account-management method with nothing noticing.
+`pipethrough` module) so that this repository's own set stays traceable to the oracle
+it was derived from. The corpus is a self-consistency check against `PROTECTED_METHODS`
+today, not an admission gate — a later widening of the forwardable namespace set is not,
+on its own, checked against it.
 
 One narrowing of the official behavior survives the ruling: the forward-on-local-miss
 methods (`getRecord`, `getFeed`, `getServiceAuth`, `createReport`) are `com.atproto.*`
