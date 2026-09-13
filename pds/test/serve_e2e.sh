@@ -171,7 +171,7 @@ printf '%s\n' "$PASSWORD" > "$WORK/password"
 # secret before it binds (case 25 below proves the refusal), so every hex
 # secret this gate hands it is owner-only. `mktemp -d` already made $WORK 0700;
 # these are the files inside it the server actually grades.
-chmod 600 "$WORK/key.hex" "$WORK/token.hex"
+chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
 
 # Prints the readiness port once `pattern` (readiness line) appears in
 # `logfile`, or fails after ~10s. `pattern` is matched with grep -F.
@@ -900,6 +900,53 @@ if grep -F 'serve: listening on' "$WORK/serve25.out" >/dev/null 2>&1; then
 fi
 if grep -F "$SECRET_HEX" "$WORK/serve25.err" >/dev/null 2>&1; then
   fail 'case 25: the refusal printed the signing key itself'
+fi
+
+# 25a. a --password-file any other account on the box can read is refused
+#    BEFORE the listener binds, the same way case 25's signing key is.
+DATA25A="$WORK/data25a"
+mkdir -p "$DATA25A"
+cp "$WORK/password" "$WORK/password25a"
+chmod 644 "$WORK/password25a"
+run_until_exit "$WORK/serve25a.out" "$WORK/serve25a.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --password-file "$WORK/password25a" \
+  --data "$DATA25A" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 25a: a 0644 password file was accepted'
+grep -F "password file $WORK/password25a is mode 0644, readable by accounts other than its owner" \
+  "$WORK/serve25a.err" >/dev/null \
+  || fail 'case 25a: the refusal did not name the mode and the path'
+if grep -F 'serve: listening on' "$WORK/serve25a.out" >/dev/null 2>&1; then
+  fail 'case 25a: the listener bound before the password file was graded'
+fi
+[ ! -e "$DATA25A/credential" ] \
+  || fail 'case 25a: a refused password file still produced a credential'
+
+# 25b. a --data/credential any other account on the box can read is refused
+#    BEFORE the listener binds, on a RESUME (no --password-file): first
+#    bootstrap a real credential, then widen its mode and start again.
+DATA25B="$WORK/data25b"
+mkdir -p "$DATA25B"
+"$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --password-file "$WORK/password" \
+  --data "$DATA25B" --port 0 --init \
+  > "$WORK/serve25b_bootstrap.out" 2> "$WORK/serve25b_bootstrap.err" &
+SERVER_PID=$!
+wait_for_port "$WORK/serve25b_bootstrap.out" >/dev/null \
+  || fail 'case 25b: the bootstrap server did not report readiness'
+kill "$SERVER_PID" 2>/dev/null
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+chmod 644 "$DATA25B/credential"
+run_until_exit "$WORK/serve25b.out" "$WORK/serve25b.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --data "$DATA25B" --port 0
+[ "$RC" -ne 0 ] || fail 'case 25b: a 0644 credential file was accepted'
+grep -F "credential $DATA25B/credential is mode 0644, readable by accounts other than its owner" \
+  "$WORK/serve25b.err" >/dev/null \
+  || fail 'case 25b: the refusal did not name the mode and the path'
+if grep -F 'serve: listening on' "$WORK/serve25b.out" >/dev/null 2>&1; then
+  fail 'case 25b: the listener bound before the credential file was graded'
 fi
 
 # 26. a configuration rejected for a bad SUPPLIED secret leaves no GENERATED
