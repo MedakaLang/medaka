@@ -1,0 +1,33 @@
+-- The instance prerequisite and method qualifier occupy distinct dictionary slots.
+-- Their contributions are 40 and 1; the competing dictionaries return 99 and 8.
+data Box a = Box a
+
+interface Seed a where
+  seed : a
+
+impl Seed Int where
+  seed = 40
+
+impl Seed (Box Int) where
+  seed = Box 99
+
+interface Extra a where
+  extra : a -> Int
+
+impl Extra Bool where
+  extra _ = 1
+
+impl Extra Char where
+  extra _ = 8
+
+interface Produce a where
+  produce : Extra b => b -> Box a
+
+impl Produce Int requires Seed Int where
+  produce witness = Box (seed + extra witness)
+
+value : Box Int
+value = produce True
+
+main = match value
+  Box x => println x

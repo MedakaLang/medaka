@@ -1,0 +1,81 @@
+-- Structural regressions for the Core free-variable walk used by shared TRMC
+-- analysis and LLVM closure capture.
+
+import test.{expectAll, expectEqual}
+import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..)}
+import ir.core_ir.{CBind(..), CClause(..), CExpr(..)}
+import backend.trmc_analysis.{SelfRef(..), freeVars, trmcEligible}
+
+loc : Loc
+loc = Loc "" 1 0 1 0
+
+multiClauseGroup : CExpr
+multiClauseGroup =
+  CLetGroup
+    [
+      CBind "g" [
+        CClause
+          [PVar "p" loc]
+          (CTuple [
+            CVar "outer" AGlobal,
+            CVar "p" AGlobal,
+            CVar "g" AGlobal,
+            CMethod "add" 2 (RDict "$d0") [] [RDictFwd "$d1"],
+          ]),
+        CClause
+          [PVar "q" loc]
+          (CTuple [
+            CVar "q" AGlobal,
+            CVar "g" AGlobal,
+            CVar "p" AGlobal,
+            CVar "secondOuter" AGlobal,
+          ]),
+      ],
+    ]
+    (CApp (CVar "g" AGlobal) (CVar "after" AGlobal))
+
+test "freeVars visits every let-group clause with lexical subtraction" = expectAll
+  [
+    expectEqual
+      ["outer", "$d0", "$d1", "p", "secondOuter", "after"]
+      (freeVars [] multiClauseGroup),
+    expectEqual
+      ["$d1", "p", "secondOuter", "after"]
+      (freeVars ["outer", "$d0"] multiClauseGroup),
+  ]
+
+helperBind : CExpr -> CBind
+helperBind innerBody = CBind "helper" [
+  CClause
+    [PWild]
+    (CLetGroup
+      [CBind "inner" [CClause [PWild] innerBody]]
+      (CApp (CVar "inner" AGlobal) (CLit LUnit))),
+]
+
+trmcBody : CExpr -> CExpr
+trmcBody innerBody =
+  CLetGroup
+    [helperBind innerBody]
+    (CBinPrim
+      "::"
+      (CLit (LInt 1))
+      (CApp (CVar "loop" AGlobal) (CVar "xs" AGlobal))
+      "")
+
+trmcEligibleWith : CExpr -> Bool
+trmcEligibleWith innerBody =
+  trmcEligible
+    (_ => False)
+    (_ => 0)
+    (SelfByVar "loop")
+    1
+    [([PVar "xs" loc], trmcBody innerBody)]
+
+test "TRMC rejects a hidden self-call but keeps an ordinary capture eligible" = expectAll
+  [
+    expectEqual True (trmcEligibleWith (CVar "xs" AGlobal)),
+    expectEqual
+      False
+      (trmcEligibleWith (CApp (CVar "loop" AGlobal) (CVar "xs" AGlobal))),
+  ]

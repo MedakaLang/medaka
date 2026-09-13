@@ -1,0 +1,25 @@
+-- Produce Int requires Seed Int even though the method returns Box Int.
+-- The competing Seed (Box Int) makes a result-type substitution observable:
+-- the inner Int must be 41, never the boxed 99 from the other instance.
+data Box a = Box a
+
+interface Seed a where
+  seed : a
+
+impl Seed Int where
+  seed = 41
+
+impl Seed (Box Int) where
+  seed = Box 99
+
+interface Produce a where
+  produce : Unit -> Box a
+
+impl Produce a requires Seed a where
+  produce _ = Box seed
+
+value : Box Int
+value = produce ()
+
+main = match value
+  Box x => println x

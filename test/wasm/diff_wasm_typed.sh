@@ -788,9 +788,10 @@ for required in \
   'implSelfCtx : Ref ImplSelfCtx' \
   'implSelfCtx = Ref ImplSelfOff' \
   'let savedImplSelf = (progEmit prog).implSelfCtx.value' \
-  'let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag arity)' \
+  'let _ = setRef (progEmit prog).implSelfCtx (ImplSelfOn method headTag key fnName arity)' \
   'let _ = setRef (progEmit prog).implSelfCtx savedImplSelf' \
-  'implSelfReturnCall prog env name route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value' \
+  'implSelfReturnCall prog env name siteArity route methRoutes implRoutes app args = match (progEmit prog).implSelfCtx.value' \
+  'if implEntryCanonicalKeyW entry == key then' \
   'let i = !emit.nextStringSegmentId' \
   'setRef emit.nextStringSegmentId (i + 1)' \
   'setRef emit.stringSegments ((i, bytes) :: !emit.stringSegments)' \
@@ -2800,7 +2801,7 @@ for default_spec in "p1 PDefault 17" "u UDefault 29" "p2 PDefault 17"; do
   default_tag="${default_rest%% *}"
   default_constant="${default_rest#* }"
   default_wat="$WORK/default-$default_name.wat"
-  default_symbol="mdk_default_synthDefault_$default_tag"
+  default_symbol="mdk_default_synthDefault_${default_tag}_a1"
   [ "$(grep -F "(func \$$default_symbol" "$default_wat" | wc -l | tr -d '[:space:]')" -eq 1 ] || {
     echo "FAIL H2B4-DEFAULT-NAMES: $default_name must contain exactly one named synthesized default"
     exit 1

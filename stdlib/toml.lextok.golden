@@ -1,5 +1,11 @@
 NEWLINE
 IMPORT
+IDENT "list"
+DOT_LBRACE
+IDENT "reverse"
+RBRACE
+NEWLINE
+IMPORT
 IDENT "string"
 DOT_LBRACE
 IDENT "trim"
@@ -21,6 +27,18 @@ IMPORT
 IDENT "core"
 DOT_LBRACE
 UPPER "Display"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "regex"
+DOT_LBRACE
+UPPER "Regex"
+COMMA
+IDENT "mustCompile"
+COMMA
+IDENT "find"
+AS
+IDENT "reFind"
 RBRACE
 NEWLINE
 PUBLIC
@@ -64,56 +82,6 @@ COMMA
 UPPER "TomlValue"
 RPAREN
 RPAREN
-NEWLINE
-IDENT "listReverse"
-COLON
-UPPER "List"
-IDENT "a"
-ARROW
-UPPER "List"
-IDENT "a"
-NEWLINE
-IDENT "listReverse"
-IDENT "xs"
-EQUAL
-IDENT "listRevGo"
-LBRACKET
-RBRACKET
-IDENT "xs"
-NEWLINE
-IDENT "listRevGo"
-COLON
-UPPER "List"
-IDENT "a"
-ARROW
-UPPER "List"
-IDENT "a"
-ARROW
-UPPER "List"
-IDENT "a"
-NEWLINE
-IDENT "listRevGo"
-IDENT "acc"
-LBRACKET
-RBRACKET
-EQUAL
-IDENT "acc"
-NEWLINE
-IDENT "listRevGo"
-IDENT "acc"
-LPAREN
-IDENT "x"
-CONS
-IDENT "xs"
-RPAREN
-EQUAL
-IDENT "listRevGo"
-LPAREN
-IDENT "x"
-CONS
-IDENT "acc"
-RPAREN
-IDENT "xs"
 NEWLINE
 IDENT "stripComment"
 COLON
@@ -179,7 +147,7 @@ IDENT "stringFromChars"
 LPAREN
 IDENT "arrayFromList"
 LPAREN
-IDENT "listReverse"
+IDENT "reverse"
 IDENT "acc"
 RPAREN
 RPAREN
@@ -273,7 +241,7 @@ IDENT "stringFromChars"
 LPAREN
 IDENT "arrayFromList"
 LPAREN
-IDENT "listReverse"
+IDENT "reverse"
 IDENT "acc"
 RPAREN
 RPAREN
@@ -399,7 +367,7 @@ IDENT "stringFromChars"
 LPAREN
 IDENT "arrayFromList"
 LPAREN
-IDENT "listReverse"
+IDENT "reverse"
 IDENT "acc"
 RPAREN
 RPAREN
@@ -532,7 +500,7 @@ CHAR "]"
 EQUAL
 UPPER "Ok"
 LPAREN
-IDENT "listReverse"
+IDENT "reverse"
 IDENT "acc"
 COMMA
 IDENT "i"
@@ -763,7 +731,7 @@ CHAR "]"
 EQUAL
 UPPER "Ok"
 LPAREN
-IDENT "listReverse"
+IDENT "reverse"
 IDENT "acc"
 COMMA
 IDENT "i"
@@ -1450,6 +1418,24 @@ PIPE
 UPPER "HArrayTable"
 UPPER "String"
 NEWLINE
+IDENT "arrayTableRe"
+COLON
+UPPER "Regex"
+NEWLINE
+IDENT "arrayTableRe"
+EQUAL
+IDENT "mustCompile"
+STRING "^\\[\\[(.+)\\]\\]$"
+NEWLINE
+IDENT "tableRe"
+COLON
+UPPER "Regex"
+NEWLINE
+IDENT "tableRe"
+EQUAL
+IDENT "mustCompile"
+STRING "^\\[(.+)\\]$"
+NEWLINE
 IDENT "parseHeader"
 COLON
 UPPER "String"
@@ -1460,102 +1446,86 @@ NEWLINE
 IDENT "parseHeader"
 IDENT "s"
 EQUAL
+MATCH
+IDENT "reFind"
+IDENT "arrayTableRe"
+IDENT "s"
 INDENT
-LET
-IDENT "n"
-EQUAL
-IDENT "stringLength"
-IDENT "s"
-NEWLINE
-IF
-IDENT "n"
-GEQ
-INT 4
-AND
-IDENT "stringSlice"
-INT 0
-INT 2
-IDENT "s"
-EQ_EQ
-STRING "[["
-AND
-IDENT "stringSlice"
+UPPER "Some"
+IDENT "m"
+FAT_ARROW
+MATCH
+IDENT "m"
+DOT
+IDENT "groups"
+INDENT
 LPAREN
-IDENT "n"
-MINUS
-INT 2
+UPPER "Some"
+IDENT "g"
 RPAREN
-IDENT "n"
-IDENT "s"
-EQ_EQ
-STRING "]]"
-THEN
-INDENT
+CONS
+LBRACKET
+RBRACKET
+FAT_ARROW
 UPPER "Some"
 LPAREN
 UPPER "HArrayTable"
 LPAREN
 IDENT "trim"
-LPAREN
-IDENT "stringSlice"
-INT 2
-LPAREN
-IDENT "n"
-MINUS
-INT 2
-RPAREN
-IDENT "s"
-RPAREN
+IDENT "g"
+DOT
+IDENT "text"
 RPAREN
 RPAREN
 NEWLINE
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
 DEDENT
-ELSE
-IF
-IDENT "n"
-GEQ
-INT 2
-AND
-IDENT "stringSlice"
-INT 0
-INT 1
+NEWLINE
+UPPER "None"
+FAT_ARROW
+MATCH
+IDENT "reFind"
+IDENT "tableRe"
 IDENT "s"
-EQ_EQ
-STRING "["
-AND
-IDENT "stringSlice"
-LPAREN
-IDENT "n"
-MINUS
-INT 1
-RPAREN
-IDENT "n"
-IDENT "s"
-EQ_EQ
-STRING "]"
-THEN
 INDENT
+UPPER "Some"
+IDENT "m"
+FAT_ARROW
+MATCH
+IDENT "m"
+DOT
+IDENT "groups"
+INDENT
+LPAREN
+UPPER "Some"
+IDENT "g"
+RPAREN
+CONS
+LBRACKET
+RBRACKET
+FAT_ARROW
 UPPER "Some"
 LPAREN
 UPPER "HTable"
 LPAREN
 IDENT "trim"
-LPAREN
-IDENT "stringSlice"
-INT 1
-LPAREN
-IDENT "n"
-MINUS
-INT 1
-RPAREN
-IDENT "s"
-RPAREN
+IDENT "g"
+DOT
+IDENT "text"
 RPAREN
 RPAREN
 NEWLINE
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
 DEDENT
-ELSE
-INDENT
+NEWLINE
+UPPER "None"
+FAT_ARROW
 UPPER "None"
 NEWLINE
 DEDENT
@@ -1763,7 +1733,7 @@ IDENT "acc"
 EQUAL
 UPPER "Ok"
 LPAREN
-IDENT "listReverse"
+IDENT "reverse"
 IDENT "acc"
 RPAREN
 NEWLINE

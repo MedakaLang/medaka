@@ -243,7 +243,7 @@ refsE (CListSlice a lo hi _) = refsE a ++ refsE lo ++ refsE hi
 refsE (CBlock stmts) = flatMap refsStmt stmts
 -- a method occurrence names its METHOD KEY; its routes can additionally name a
 -- shadowing standalone (RLocal).
-refsE (CMethod name route implRoutes methRoutes) =
+refsE (CMethod name _ route implRoutes methRoutes) =
   name :: flatMap refsRoute (route :: implRoutes ++ methRoutes)
 refsE (CDict name routes) = name :: flatMap refsRoute routes
 
@@ -344,7 +344,7 @@ refsImplBody (CImplDefault _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
 (DFunDef false "refsE" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EVar "flatMap") (EVar "refsStmt")) (EVar "stmts")))
-(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
+(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EVar "flatMap") (EVar "refsRoute")) (EVar "routes"))))
 (DTypeSig false "refsRoute" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsRoute" ((PCon "RNone")) (EListLit))
@@ -432,7 +432,7 @@ refsImplBody (CImplDefault _ _ body) = refsE body
 (DFunDef false "refsE" ((PCon "CListIndex" (PVar "a") (PVar "i"))) (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "i"))))
 (DFunDef false "refsE" ((PCon "CListSlice" (PVar "a") (PVar "lo") (PVar "hi") PWild)) (EBinOp "++" (EBinOp "++" (EApp (EVar "refsE") (EVar "a")) (EApp (EVar "refsE") (EVar "lo"))) (EApp (EVar "refsE") (EVar "hi"))))
 (DFunDef false "refsE" ((PCon "CBlock" (PVar "stmts"))) (EApp (EApp (EDictApp "flatMap") (EVar "refsStmt")) (EVar "stmts")))
-(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
+(DFunDef false "refsE" ((PCon "CMethod" (PVar "name") PWild (PVar "route") (PVar "implRoutes") (PVar "methRoutes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EBinOp "::" (EVar "route") (EBinOp "++" (EVar "implRoutes") (EVar "methRoutes"))))))
 (DFunDef false "refsE" ((PCon "CDict" (PVar "name") (PVar "routes"))) (EBinOp "::" (EVar "name") (EApp (EApp (EDictApp "flatMap") (EVar "refsRoute")) (EVar "routes"))))
 (DTypeSig false "refsRoute" (TyFun (TyCon "Route") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "refsRoute" ((PCon "RNone")) (EListLit))

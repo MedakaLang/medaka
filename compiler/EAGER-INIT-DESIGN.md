@@ -124,8 +124,8 @@ main = println cell
 
 **But the issue's diagnosis of *why* is wrong, and the distinction is load-bearing.** The issue
 says the catch-all `eagerVars _ _ = []` (`:67`) means *"`CMethod`/`CDict` contribute no edges"*,
-implying a missed subterm. **Grep-proven false:** `CMethod String Route (List Route) (List Route)`
-and `CDict String (List Route)` (`core_ir.mdk:131-132`), and `Route` (`frontend/ast.mdk:80-86`) is
+implying a missed subterm. **Grep-proven false:** `CMethod String Int Route (List Route) (List Route)`
+and `CDict String (List Route)` (`compiler/ir/core_ir.mdk`), and `Route` (`compiler/frontend/ast.mdk`) is
 `RNone | RKey String (List Route) | RDict String | RDictFwd String | RLocal String (List Route) |
 RScalar String` — **`Route` carries no `CExpr`.** There is no subterm to descend. The catch-all
 is not dropping anything structural here.

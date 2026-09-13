@@ -1,0 +1,5 @@
+import ia.{IA}
+
+public export data A = A
+
+export impl IA A

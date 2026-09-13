@@ -173,7 +173,7 @@ ceval env (CRangeArray lo hi incl) =
 -- can fill one and miss the other (eval.mdk).  cevalProgram takes a CProgram and
 -- has no decls of its own, so it is served by lowerImpls installing at lowering
 -- time — the last point that still holds them.
-ceval env (CMethod name route implRoutes methRoutes) =
+ceval env (CMethod name _ route implRoutes methRoutes) =
   let (narrowed, fwdReqs) = methodAtNarrow env name (lookupEnv env name) route
   applyMethodDicts env name route narrowed fwdReqs implRoutes methRoutes
 ceval env (CDict name routes) = applyDicts env (lookupEnv env name) routes

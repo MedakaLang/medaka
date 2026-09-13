@@ -1,0 +1,6 @@
+import common.{T(..)}
+import viab.{viaB}
+import viaa.{viaA}
+
+-- IA returns 3 and IB returns 104, so the hand-derived result is 3,104.
+main = println (viaA T * 1000 + viaB T)

@@ -1,0 +1,19 @@
+issue: 2981
+what: The caller supplies Hidden Int Bool, but the nested return method loses the
+what: absent b parameter and its ambient dictionary. It selects the first declared
+what: Hidden Int Char implementation and prints 22 instead of the specified 12.
+cmd: run main.mdk
+exit: 0
+stdout: 22
+control: run control.mdk
+why-fixture: The original failing source is preserved. Both implementations remain:
+why-fixture: a sole implementation masks the lost dictionary. DICT section 5.1 M3
+why-fixture: permits this determined use through the wrapper's ambient assumption.
+why-fixture: Measured at 6496981577c73e0574e3ca9c421e01cda77d0a74 with a fresh
+why-fixture: binary and MEDAKA_STRICT=1. Module and Flat checks accept; eval prints 22.
+why-fixture: Native and Wasm builds reject the fallback route, so this pin grades
+why-fixture: eval's stable wrong value rather than an unrelated backend diagnostic.
+why-control: Both parameters appear in the method type and the wrapper passes its
+why-control: witness. The same two rows in the same order then produce 12 across
+why-control: eval, native and Wasm. The control asserts that value because the harness
+why-control: otherwise grades only its exit status.

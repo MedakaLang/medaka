@@ -1,0 +1,5 @@
+import iz.{IZ, szK}
+
+export
+viaZ : IZ a => a -> Int -> Int
+viaZ x n = szK x n

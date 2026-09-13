@@ -7,7 +7,7 @@
 -- column, and HAVING + ORDER BY + LIMIT were simply not representable.
 --
 -- Reads a real sqlite3-created DB and prints one line per row, prefixed by a
--- per-query label, for diffing against `sqlite3` in test/groupby_oracle.sh.
+-- per-query label, for diffing against `sqlite3` in sqlite/test/oracle_test.mdk.
 --
 -- Usage: medaka build sqlite/groupby_demo.mdk -o /tmp/gdem && /tmp/gdem <db>
 

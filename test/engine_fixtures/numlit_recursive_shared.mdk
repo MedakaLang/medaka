@@ -1,0 +1,37 @@
+value : Num a => Int -> a
+value n = if n == 0 then fromInt 7 else relay (n - 1)
+-- The unsigned SCC member is the regression trigger.
+-- lint-disable-next-line rule-missing-signature
+relay n = value n
+
+-- Reverse declaration order preserves the unsigned trigger.
+-- lint-disable-next-line rule-missing-signature
+back n = front n
+front : Num a => Int -> a
+front n = if n == 0 then fromInt 11 else back (n - 1)
+
+floating : Float
+floating = value 2
+floatingRelay : Float
+floatingRelay = relay 3
+integer : Int
+integer = value 2
+floatingReverse : Float
+floatingReverse = back 2
+
+pair : (Num a, Num b) => Int -> (a, b)
+pair n = if n == 0 then (fromInt 3, fromInt 5) else pairRelay (n - 1)
+-- Each independently quantified result needs its own dictionary slot.
+-- lint-disable-next-line rule-missing-signature
+pairRelay n = pair n
+
+pairResult : (Float, Int)
+pairResult = pairRelay 2
+
+main =
+  println (floating == 7.0)
+  println (floatingRelay == 7.0)
+  println (integer == 7)
+  println (floatingReverse == 11.0)
+  let (first, second) = pairResult
+  println (first == 3.0 && second == 5)

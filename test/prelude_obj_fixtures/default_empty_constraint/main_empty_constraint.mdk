@@ -1,0 +1,8 @@
+import ia.{IA}
+import iz.{IZ}
+import models.{Cat(..), Dog(..)}
+import viaa.{viaA}
+
+main =
+  println (viaA (Cat 111))
+  println (viaA Dog)

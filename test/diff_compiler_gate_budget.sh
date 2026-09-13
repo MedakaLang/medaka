@@ -245,14 +245,14 @@ else
     bad "clause (d) fixture refused, but not for the orphan reason"
     sed -e 's/^/        /' "$out_d_red"
   fi
-  # The remedy must stay the one that WORKS: test/gate_cost_ingest.sh has no
-  # prune mode and never reads the registry (#2770), so pointing the author at
-  # a re-ingest is a dead end. Pin the hand edit and the issue that explains it.
-  if grep -q 'delete the row from test/gate_cost_baseline.json BY HAND' "$out_d_red" \
+  # The remedy must stay the one that WORKS: #2770 gave test/gate_cost_ingest.sh
+  # a `--registry` prune mode, so the remedy now names that pass over a hand
+  # edit. Pin the pass-based command and the issue that explains it.
+  if grep -q 'sh test/gate_cost_ingest.sh --baseline test/gate_cost_baseline.json --registry test/gates.toml' "$out_d_red" \
      && grep -q '#2770' "$out_d_red"; then
     ok "clause (d) names a remedy that works today and cites #2770"
   else
-    bad "clause (d) remedy no longer names the by-hand edit or #2770"
+    bad "clause (d) remedy no longer names the registry-prune pass or #2770"
     sed -e 's/^/        /' "$out_d_red"
   fi
 fi

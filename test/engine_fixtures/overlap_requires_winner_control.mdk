@@ -1,0 +1,28 @@
+-- #1125 control. The overlapping heads are unchanged, while the more-specific
+-- winner has no `requires` predicate. Ordinary overlap still selects that winner.
+interface Tag a where
+  tagOf : a -> String
+
+impl Tag Int where
+  tagOf _ = "INT"
+
+interface Speak a where
+  speak : a -> String
+  speak _ = "DEFAULT"
+
+data Box a = Box a
+
+impl Speak (Box a) where
+  speak _ = "general"
+
+impl Speak (Box (List a)) where
+  speak (Box xs) = match xs
+    [] => "specific:empty"
+    y :: _ => "specific:norequires"
+
+use : Speak a => a -> String
+use x = speak x
+
+main =
+  println "START"
+  println (use (Box [1, 2]))

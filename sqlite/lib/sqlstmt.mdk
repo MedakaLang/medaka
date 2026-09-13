@@ -991,7 +991,7 @@ runCompoundQ db (Compound first rest ob lm off) rt = match rest
 --   `SSelect` to; `queryStringDistinct` is the same thing with the parse in front.
 --
 --   (No doctest: it needs a live `Db`.  Gated end-to-end by
---   `sqlite/test/sql_oracle.sh` and `sqlite/test/dml_oracle.sh`.)
+--   `sqlite/test/sql_oracle.sh` and `sqlite/test/dml_oracle_test.mdk`.)
 export
 runSelect : Eq a => Db -> Select -> RowType a -> Result String (List a)
 runSelect db sel rt =

@@ -2,30 +2,1727 @@
 -- Every scope id is projected while its request graph is still live.  Tests
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
-import test.{expectEqual}
-import frontend.ast.{Loc(..), TyConOrigin(..)}
+import test.{expectAll, expectEqual}
+import frontend.ast.{
+  Decl(..), EvId(..), EvVal(..), Expr(..), Loc(..), Route(..), TyConOrigin(..)
+}
 import frontend.desugar.{desugar}
 import frontend.parser.{parse, parseLocated}
+import eval.eval.{Value(..), evalOne, force}
+import ir.core_ir.{CBind(..), CClause(..), CExpr(..), CProgram(..), CStmt(..)}
+import ir.core_ir_lower.{
+  ifaceMethodArityKey, lowerProgram, methodConstraintIfaces
+}
+import ir.core_ir_sexp.{cprogramToSexp}
+import ir.core_ir_sexp_parse.{parseCProgram}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
+import types.repr.{Scheme(..), ppMono, ppScheme}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
   DefaultBodyRNoneKind(..),
   DefaultBodyRNoneTraceEntry(..),
+  MethodReturnTraceEntry(..),
+  MethodReturnTraceStage(..),
   ModDiags,
+  NumericPredicateTraceEntry(..),
+  NumericPredicateTraceStage(..),
   beginAssumptionTrace,
   beginDefaultBodyRNoneTrace,
+  beginMethodReturnTrace,
+  beginNumericPredicateTrace,
   checkModulesDiagsChain,
   checkOneDiags,
+  checkOneSchemeFullK,
   checkProgramDiags,
   elaborateDict,
+  elaborateOne,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
+  finishMethodReturnTrace,
+  finishNumericPredicateTrace,
   scopeFrameStats,
   scopeTraceContext,
+  tcCode,
   tcMsg,
 }
-import support.util.{joinNl, listLen}
+import support.util.{contains, joinNl, listLen, lookupAssoc}
+
+data NumericTraceView = NumericTraceView {
+  ntvStage : NumericPredicateTraceStage,
+  ntvInterface : String,
+  ntvArguments : List String,
+  ntvOwner : String,
+  ntvOrigin : (Int, Int, Int, Int),
+  ntvSelected : String,
+  ntvSelectedIdentity : String,
+  ntvRoute : String,
+  ntvGiven : Bool,
+  ntvForwarded : Bool,
+  ntvPrerequisites : List String,
+}
+  deriving (Eq, Debug)
+
+numericRouteView : Route -> String
+numericRouteView RNone = "none"
+numericRouteView (RKey key prerequisites) =
+  "\{key}[\{joinNl (map numericRouteView prerequisites)}]"
+numericRouteView (RDict name) = "dict:" ++ name
+numericRouteView (RDictFwd name) = "given:" ++ name
+numericRouteView (RLocal name _) = "local:" ++ name
+numericRouteView (RScalar name) = "scalar:" ++ name
+
+numericTraceView : NumericPredicateTraceEntry -> NumericTraceView
+numericTraceView entry =
+  let predicate = entry.nptPredicate
+  let iface = predicate.predicateInterface
+  let origin = match iface.irOrigin
+    OriginModule name => name
+    _ => "<non-module>"
+  let selected = match entry.nptSelectedInterface
+    Some identity => identity.irName
+    None => ""
+  let selectedIdentity = match entry.nptSelectedInterface
+    Some identity => match identity.irOrigin
+      OriginModule name => "\{name}::\{identity.irName}"
+      _ => "<non-module>::\{identity.irName}"
+    None => ""
+  let originSpan = match entry.nptOrigin
+    Some (Loc _ startLine startCol endLine endCol) =>
+      (startLine, startCol, endLine, endCol)
+    None => (0, 0, 0, 0)
+  let route = match entry.nptRoute
+    Some answer => numericRouteView answer
+    None => ""
+  NumericTraceView {
+    ntvStage = entry.nptStage,
+    ntvInterface = "\{origin}::\{iface.irName}",
+    ntvArguments = map ppMono predicate.predicateArguments,
+    ntvOwner = snd (scopeTraceContext entry.nptScope),
+    ntvOrigin = originSpan,
+    ntvSelected = selected,
+    ntvSelectedIdentity = selectedIdentity,
+    ntvRoute = route,
+    ntvGiven = match entry.nptRoute
+      Some (RDict _) => True
+      Some (RDictFwd _) => True
+      _ => False,
+    ntvForwarded = match entry.nptRoute
+      Some (RDictFwd _) => True
+      _ => False,
+    ntvPrerequisites = map numericRouteView entry.nptPrerequisites,
+  }
+
+numericPreludeSource : String
+numericPreludeSource = joinNl [
+  "interface Num a where",
+  "  fromInt : Int -> a",
+  "impl Num Int where",
+  "  fromInt n = n",
+]
+
+numericValueSource : Bool -> String
+numericValueSource collision = numericBodySource collision "N n"
+
+numericBodySource : Bool -> String -> String
+numericBodySource collision body =
+  joinNl
+    (["data N = N Int"]
+      ++ (if collision then
+        [
+          "interface Forge a where",
+          "  fromInt : Int -> a",
+          "impl Forge N where",
+          "  fromInt n = N n",
+        ]
+      else
+        [])
+      ++ [
+        "impl Num N where",
+        "  fromInt n = " ++ body,
+        "value : N",
+        "value = 1",
+      ])
+
+numericCheckObserved : String -> (List String, List NumericTraceView)
+numericCheckObserved source =
+  beginNumericPredicateTrace ()
+  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+    "numeric_predicate",
+    desugar (parseLocated source),
+  )
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  (map tcMsg errors, trace)
+
+numericStages : List NumericTraceView -> List NumericPredicateTraceStage
+numericStages views = map (view => view.ntvStage) views
+
+test "a fromInt collision cannot hide an invalid Num constructor argument" =
+  let collision = numericCheckObserved (numericBodySource True "N \"wrong\"")
+  let control = numericCheckObserved (numericBodySource False "N \"wrong\"")
+  expectEqual
+    (["Type mismatch: Int vs String"], ["Type mismatch: Int vs String"])
+    (fst collision, fst control)
+
+test "a fromInt collision cannot hide an invalid Num method result" =
+  let collision = numericCheckObserved (numericBodySource True "\"wrong\"")
+  let control = numericCheckObserved (numericBodySource False "\"wrong\"")
+  expectEqual
+    (["Type mismatch: N vs String"], ["Type mismatch: N vs String"])
+    (fst collision, fst control)
+
+numericNestedBodySource : String
+numericNestedBodySource = joinNl [
+  "data Box a = Box a",
+  "interface Forge a where",
+  "  fromInt : Int -> a",
+  "impl Num (Box a) requires Num a where",
+  "  fromInt _ = Box 1",
+  "value : Box Int",
+  "value = 1",
+]
+
+test "a nested numeric literal may use the declared impl prerequisite" =
+  let (errors, _) = numericCheckObserved numericNestedBodySource
+  expectEqual [] errors
+
+test "numeric return keeps the Num predicate through production checking and stamping" =
+  let (errors, trace) = numericCheckObserved (numericValueSource True)
+  expectAll [
+    expectEqual [] errors,
+    expectEqual [NPTProduced, NPTChecked, NPTReturn] (numericStages trace),
+    expectEqual
+      [
+        ("core::Num", ["N"], "binding:value"),
+        ("core::Num", ["N"], "binding:value"),
+        ("core::Num", ["N"], "binding:value"),
+      ]
+      (map
+        (view => (view.ntvInterface, view.ntvArguments, view.ntvOwner))
+        trace),
+    expectEqual
+      [("Num", "core::Num|N|[]", [])]
+      (map
+        (view => (view.ntvSelected, view.ntvRoute, view.ntvPrerequisites))
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+test "numeric return without a method collision preserves the short route ABI" =
+  let (errors, trace) = numericCheckObserved (numericValueSource False)
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      ["N[]"]
+      (map
+        (view => view.ntvRoute)
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+test "a Forge instance cannot discharge the numeric Num obligation" =
+  let source = joinNl [
+    "data N = N Int",
+    "interface Forge a where",
+    "  fromInt : Int -> a",
+    "impl Forge N where",
+    "  fromInt n = N n",
+    "value : N",
+    "value = 1",
+  ]
+  let (errors, trace) = numericCheckObserved source
+  expectAll [
+    expectEqual True (listLen errors > 0),
+    expectEqual
+      True
+      (any
+        (view =>
+          view.ntvStage == NPTChecked && view.ntvInterface == "core::Num")
+        trace),
+  ]
+
+test "numeric return forwards the in-scope Num dictionary" =
+  let source = joinNl [
+    "interface Forge a where",
+    "  fromInt : Int -> a",
+    "value : Num a => Unit -> a",
+    "value _ = 1",
+  ]
+  let (errors, trace) = numericCheckObserved source
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [("core::Num", "", True, [])]
+      (map
+        (view => (
+          view.ntvInterface,
+          view.ntvSelected,
+          view.ntvForwarded,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+test "numeric return selects prerequisites from the Num instance row" =
+  let source = joinNl [
+    "data Box a = Box Int",
+    "interface Forge a where",
+    "  fromInt : Int -> a",
+    "impl Forge (Box a) where",
+    "  fromInt n = Box n",
+    "impl Num (Box a) requires Num a where",
+    "  fromInt n = Box n",
+    "value : Box Int",
+    "value = 1",
+  ]
+  let (errors, trace) = numericCheckObserved source
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [("core::Num", ["Box Int"], "Num", ["Int[]"])]
+      (map
+        (view => (
+          view.ntvInterface,
+          view.ntvArguments,
+          view.ntvSelected,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTReturn) trace)),
+  ]
+
+numericSchemeObserved : Option (Int, Int) ->
+  String ->
+  (List String, List NumericTraceView)
+numericSchemeObserved key source =
+  beginNumericPredicateTrace ()
+  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+    (parse numericPreludeSource)) (
+    "numeric_scheme",
+    desugar (parseLocated source),
+  )
+  let values =
+    map
+      (entry => ppScheme (snd entry))
+      (filter (entry => fst entry == "value") schemes)
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  (values, trace)
+
+numericImportedObserved : Bool -> (Int, List NumericTraceView)
+numericImportedObserved reverseOrder =
+  let shape = ("numeric_shape", "public export data N = N Int")
+  let numeric = (
+    "numeric_impl",
+    joinNl [
+      "import numeric_shape.{N(..)}",
+      "impl Num N where",
+      "  fromInt n = N n",
+    ],
+  )
+  let forge = (
+    "numeric_forge",
+    joinNl [
+      "import numeric_shape.{N(..)}",
+      "export interface Forge a where",
+      "  fromInt : Int -> a",
+      "impl Forge N where",
+      "  fromInt n = N n",
+    ],
+  )
+  let imports =
+    if reverseOrder then
+      ["import numeric_forge.{Forge, fromInt}", "import numeric_impl"]
+    else
+      ["import numeric_impl", "import numeric_forge.{Forge, fromInt}"]
+  let entry = (
+    "numeric_entry",
+    joinNl
+      (["import numeric_shape.{N}"] ++ imports ++ ["value : N", "value = 1"]),
+  )
+  let sources =
+    if reverseOrder then
+      [shape, forge, numeric, entry]
+    else
+      [shape, numeric, forge, entry]
+  beginNumericPredicateTrace ()
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parse numericPreludeSource))
+      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  (modErrorCount results, trace)
+
+test "numeric predicates survive module and import order permutations" =
+  let forward = numericImportedObserved False
+  let backward = numericImportedObserved True
+  expectAll [
+    expectEqual 0 (fst forward),
+    expectEqual forward backward,
+    expectEqual
+      [NPTProduced, NPTChecked, NPTReturn]
+      (numericStages (snd forward)),
+    expectEqual
+      [("core::Num", "Num", "core::Num|N|[]")]
+      (map
+        (view => (view.ntvInterface, view.ntvSelected, view.ntvRoute))
+        (filter (view => view.ntvStage == NPTReturn) (snd forward))),
+  ]
+
+test "finalized scheme queries drain numeric predicates on cold and keyed calls" =
+  let source = numericValueSource True
+  let cold = numericSchemeObserved None source
+  let keyed = numericSchemeObserved (Some (977, 983)) source
+  let repeated = numericSchemeObserved (Some (977, 983)) source
+  let (failedErrors, _) =
+    numericCheckObserved "value : Int\nvalue = \"wrong\"\n"
+  let afterFailure = numericSchemeObserved (Some (977, 983)) source
+  expectAll [
+    expectEqual True (listLen failedErrors > 0),
+    expectEqual (["N"], ["N"], ["N"]) (fst cold, fst keyed, fst repeated),
+    expectEqual
+      [
+        [NPTProduced, NPTChecked, NPTReturn],
+        [NPTProduced, NPTChecked, NPTReturn],
+        [NPTProduced, NPTChecked, NPTReturn],
+      ]
+      [
+        numericStages (snd cold),
+        numericStages (snd keyed),
+        numericStages (snd repeated),
+      ],
+    expectEqual (snd cold) (snd keyed),
+    expectEqual (snd keyed) (snd repeated),
+    expectEqual repeated afterFailure,
+  ]
+
+arithmeticPreludeSource : String
+arithmeticPreludeSource = joinNl [
+  "interface Num a where",
+  "  add : a -> a -> a",
+  "  sub : a -> a -> a",
+  "  mul : a -> a -> a",
+  "  div : a -> a -> a",
+  "  negate : a -> a",
+  "  abs : a -> a",
+  "  signum : a -> a",
+  "  fromInt : Int -> a",
+  "  rem : a -> a -> a",
+  "impl Num Int where",
+  "  add x _ = x",
+  "  sub x _ = x",
+  "  mul x _ = x",
+  "  div x _ = x",
+  "  negate x = x",
+  "  abs x = x",
+  "  signum x = x",
+  "  fromInt n = n",
+  "  rem x _ = x",
+  "impl Num Float where",
+  "  add x _ = x",
+  "  sub x _ = x",
+  "  mul x _ = x",
+  "  div x _ = x",
+  "  negate x = x",
+  "  abs x = x",
+  "  signum x = x",
+  "  fromInt _ = 0.0",
+  "  rem x _ = x",
+]
+
+arithmeticFunctionsSource : String
+arithmeticFunctionsSource = joinNl [
+  "signedAdd : Num a => a -> a -> a",
+  "signedAdd x y = x + y",
+  "signedSub : Num a => a -> a -> a",
+  "signedSub x y = x - y",
+  "signedMul : Num a => a -> a -> a",
+  "signedMul x y = x * y",
+  "signedDiv : Num a => a -> a -> a",
+  "signedDiv x y = x / y",
+  "signedRem : Num a => a -> a -> a",
+  "signedRem x y = x % y",
+  "inferredAdd x y = x + y",
+  "inferredSub x y = x - y",
+  "inferredMul x y = x * y",
+  "inferredDiv x y = x / y",
+  "inferredRem x y = x % y",
+]
+
+isArithmeticFunction : String -> Bool
+isArithmeticFunction name = contains name [
+  "signedAdd",
+  "signedSub",
+  "signedMul",
+  "signedDiv",
+  "signedRem",
+  "inferredAdd",
+  "inferredSub",
+  "inferredMul",
+  "inferredDiv",
+  "inferredRem",
+]
+
+arithmeticSchemeObserved : Option (Int, Int) ->
+  String ->
+  (List (String, Int, String), List (String, String, Int))
+arithmeticSchemeObserved key source =
+  beginAssumptionTrace ()
+  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+    (parse arithmeticPreludeSource)) (
+    "arithmetic_scheme",
+    desugar (parseLocated source),
+  )
+  let values =
+    map
+      (entry => (
+        fst entry,
+        schemeVariableCount (snd entry),
+        ppScheme (snd entry),
+      ))
+      (filter (entry => isArithmeticFunction (fst entry)) schemes)
+  let assumptions =
+    map
+      (entry =>
+        let (EvidenceBinderId binderScope slot) = entry.atBinder
+        (
+          snd (scopeTraceContext entry.atGoalScope),
+          snd (scopeTraceContext binderScope),
+          slot,
+        ))
+      (finishAssumptionTrace ())
+  (values, assumptions)
+
+arithmeticErrorCodes : String -> List String
+arithmeticErrorCodes source =
+  let (errors, _) = checkOneDiags [] (desugar (parse arithmeticPreludeSource)) (
+    "arithmetic_errors",
+    desugar (parseLocated source),
+  )
+  map tcCode errors
+
+test "declared and inferred arithmetic retain one Num slot at finalized queries" =
+  let cold = arithmeticSchemeObserved None arithmeticFunctionsSource
+  let keyed =
+    arithmeticSchemeObserved (Some (1009, 1013)) arithmeticFunctionsSource
+  let repeated =
+    arithmeticSchemeObserved (Some (1009, 1013)) arithmeticFunctionsSource
+  let failed = arithmeticErrorCodes "bad : Int\nbad = \"wrong\"\n"
+  let afterFailure =
+    arithmeticSchemeObserved (Some (1009, 1013)) arithmeticFunctionsSource
+  expectAll [
+    expectEqual
+      [
+        ("signedAdd", 1, "a -> a -> a"),
+        ("signedSub", 1, "a -> a -> a"),
+        ("signedMul", 1, "a -> a -> a"),
+        ("signedDiv", 1, "a -> a -> a"),
+        ("signedRem", 1, "a -> a -> a"),
+        ("inferredAdd", 1, "a -> a -> a"),
+        ("inferredSub", 1, "a -> a -> a"),
+        ("inferredMul", 1, "a -> a -> a"),
+        ("inferredDiv", 1, "a -> a -> a"),
+        ("inferredRem", 1, "a -> a -> a"),
+      ]
+      (fst cold),
+    expectEqual cold keyed,
+    expectEqual keyed repeated,
+    expectEqual repeated afterFailure,
+    expectEqual True (listLen failed > 0),
+    expectEqual
+      [
+        ("binding:signedRem", "binding:signedRem", 0),
+        ("binding:signedDiv", "binding:signedDiv", 0),
+        ("binding:signedMul", "binding:signedMul", 0),
+        ("binding:signedSub", "binding:signedSub", 0),
+        ("binding:signedAdd", "binding:signedAdd", 0),
+      ]
+      (snd cold),
+  ]
+
+arithmeticTraceObserved : String ->
+  (List String, List NumericTraceView, List (String, String, Int))
+arithmeticTraceObserved source =
+  beginNumericPredicateTrace ()
+  beginAssumptionTrace ()
+  let (errors, _) = checkOneDiags [] (desugar (parse arithmeticPreludeSource)) (
+    "arithmetic_trace",
+    desugar (parseLocated source),
+  )
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let assumptions =
+    map
+      (entry =>
+        let (EvidenceBinderId binderScope slot) = entry.atBinder
+        (
+          snd (scopeTraceContext entry.atGoalScope),
+          snd (scopeTraceContext binderScope),
+          slot,
+        ))
+      (finishAssumptionTrace ())
+  (map tcMsg errors, trace, assumptions)
+
+test "operator events correlate by whole span scope and exact prelude Num predicate" =
+  let (errors, trace, assumptions) =
+    arithmeticTraceObserved "value : Num a => a -> a\nvalue x = x + 0\n"
+  let operator = filter (view => view.ntvOrigin == (2, 10, 2, 15)) trace
+  let literal = filter (view => view.ntvOrigin == (2, 14, 2, 15)) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [NPTProduced, NPTChecked, NPTArithmetic]
+      (numericStages operator),
+    expectEqual [NPTProduced, NPTChecked, NPTReturn] (numericStages literal),
+    expectEqual
+      [
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+      ]
+      (map
+        (view => (view.ntvInterface, view.ntvArguments, view.ntvOwner))
+        operator),
+    expectEqual
+      [("", True, [])]
+      (map
+        (view => (
+          view.ntvSelectedIdentity,
+          view.ntvGiven,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTArithmetic) operator)),
+    expectEqual
+      [
+        ("binding:value", "binding:value", 0),
+        ("binding:value", "binding:value", 0),
+      ]
+      assumptions,
+  ]
+
+test "generic remainder uses the same scoped Num evidence route" =
+  let (errors, trace, assumptions) =
+    arithmeticTraceObserved "value : Num a => a -> a -> a\nvalue x y = x % y\n"
+  let operator = filter (view => view.ntvOrigin == (2, 12, 2, 17)) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [NPTProduced, NPTChecked, NPTArithmetic]
+      (numericStages operator),
+    expectEqual
+      [
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+        ("core::Num", ["a"], "binding:value"),
+      ]
+      (map
+        (view => (view.ntvInterface, view.ntvArguments, view.ntvOwner))
+        operator),
+    expectEqual
+      [("", True, [])]
+      (map
+        (view => (
+          view.ntvSelectedIdentity,
+          view.ntvGiven,
+          view.ntvPrerequisites,
+        ))
+        (filter (view => view.ntvStage == NPTArithmetic) operator)),
+    expectEqual [("binding:value", "binding:value", 0)] assumptions,
+  ]
+
+arithmeticImportedObserved : Bool -> (Int, List NumericTraceView)
+arithmeticImportedObserved reverseOrder =
+  let shape = ("arithmetic_shape", "public export data Box a = Box a")
+  let numeric = (
+    "arithmetic_numeric",
+    joinNl [
+      "import arithmetic_shape.{Box(..)}",
+      "impl Num (Box a) requires Num a where",
+      "  add x _ = x",
+      "  sub x _ = x",
+      "  mul x _ = x",
+      "  div x _ = x",
+      "  negate x = x",
+      "  abs x = x",
+      "  signum x = x",
+      "  fromInt n = Box (fromInt n)",
+      "  rem x _ = x",
+    ],
+  )
+  let forge = (
+    "arithmetic_forge",
+    joinNl [
+      "import arithmetic_shape.{Box}",
+      "export interface Forge a where",
+      "  add : a -> a -> a",
+      "  rem : a -> a -> a",
+      "impl Forge (Box a) where",
+      "  add x _ = x",
+      "  rem x _ = x",
+    ],
+  )
+  let imports =
+    if reverseOrder then
+      [
+        "import arithmetic_forge.{Forge, add, rem}",
+        "import arithmetic_numeric",
+      ]
+    else
+      [
+        "import arithmetic_numeric",
+        "import arithmetic_forge.{Forge, add, rem}",
+      ]
+  let entry = (
+    "arithmetic_entry",
+    joinNl
+      (["import arithmetic_shape.{Box(..)}"]
+        ++ imports
+        ++ [
+          "left : Box Int",
+          "left = Box 12",
+          "right : Box Int",
+          "right = Box 3",
+          "addValue : Box Int",
+          "addValue = left + right",
+          "subValue : Box Int",
+          "subValue = left - right",
+          "mulValue : Box Int",
+          "mulValue = left * right",
+          "divValue : Box Int",
+          "divValue = left / right",
+          "remValue : Box Int",
+          "remValue = left % right",
+        ]),
+  )
+  let sources =
+    if reverseOrder then
+      [shape, forge, numeric, entry]
+    else
+      [shape, numeric, forge, entry]
+  beginNumericPredicateTrace ()
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parse arithmeticPreludeSource))
+      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let trace = map numericTraceView (finishNumericPredicateTrace ())
+  let arithmetic =
+    filter
+      (view =>
+        view.ntvStage == NPTArithmetic
+          && contains view.ntvOwner [
+            "binding:addValue",
+            "binding:subValue",
+            "binding:mulValue",
+            "binding:divValue",
+            "binding:remValue",
+          ])
+      trace
+  (modErrorCount results, arithmetic)
+
+test "arithmetic collision imports select the exact Num row and prerequisites" =
+  let forward = arithmeticImportedObserved False
+  let backward = arithmeticImportedObserved True
+  expectAll [
+    expectEqual 0 (fst forward),
+    expectEqual forward backward,
+    expectEqual
+      [
+        (
+          "binding:remValue",
+          "core::Num",
+          "core::Num",
+          "core::Num|(Box a)|[]",
+          ["Int[]"],
+        ),
+        ("binding:divValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
+        ("binding:mulValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
+        ("binding:subValue", "core::Num", "core::Num", "Box[]", ["Int[]"]),
+        (
+          "binding:addValue",
+          "core::Num",
+          "core::Num",
+          "core::Num|(Box a)|[]",
+          ["Int[]"],
+        ),
+      ]
+      (map
+        (view => (
+          view.ntvOwner,
+          view.ntvInterface,
+          view.ntvSelectedIdentity,
+          view.ntvRoute,
+          view.ntvPrerequisites,
+        ))
+        (snd forward)),
+  ]
+
+test "primitive arithmetic retains the Int and Float scalar routes" =
+  let (errors, trace, _) =
+    arithmeticTraceObserved
+      (joinNl [
+        "intValue : Int",
+        "intValue = 12 + 3",
+        "floatValue : Float",
+        "floatValue = 7.5 / 2.0",
+      ])
+  let arithmetic = filter (view => view.ntvStage == NPTArithmetic) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [
+        ("binding:floatValue", ["Float"], "scalar:Float", "", []),
+        ("binding:intValue", ["Int"], "none", "", []),
+      ]
+      (map
+        (view => (
+          view.ntvOwner,
+          view.ntvArguments,
+          view.ntvRoute,
+          view.ntvSelectedIdentity,
+          view.ntvPrerequisites,
+        ))
+        arithmetic),
+  ]
+
+test "arithmetic keeps missing Num and explicit result mismatches loud" = expectAll
+  [
+    expectEqual
+      ["T-MISSING-CONSTRAINT"]
+      (arithmeticErrorCodes "bad : a -> a -> a\nbad x y = x + y\n"),
+    expectEqual
+      ["T-NO-IMPL"]
+      (arithmeticErrorCodes
+        "bad : Num a => a -> a -> (a, Bool)\nbad x y = (x + y, x)\n"),
+  ]
+
+declaredNumHelperSource : String
+declaredNumHelperSource = "value : Num a => Int -> a\nvalue n = fromInt n\n"
+
+schemeVariableCount : Scheme -> Int
+schemeVariableCount (Forall variables _ _) = listLen variables
+
+declaredNumSchemeObserved : Option (Int, Int) ->
+  String ->
+  (List (Int, String), List (String, String, Int))
+declaredNumSchemeObserved key source =
+  declaredNumMemberSchemeObserved key "value" source
+
+declaredNumMemberSchemeObserved : Option (Int, Int) ->
+  String ->
+  String ->
+  (List (Int, String), List (String, String, Int))
+declaredNumMemberSchemeObserved key member source =
+  beginAssumptionTrace ()
+  let (_, schemes) = checkOneSchemeFullK key [] (desugar
+    (parse numericPreludeSource)) (
+    "declared_numeric_scheme",
+    desugar (parseLocated source),
+  )
+  let values =
+    map
+      (entry => (schemeVariableCount (snd entry), ppScheme (snd entry)))
+      (filter (entry => fst entry == member) schemes)
+  let assumptions =
+    map
+      (entry =>
+        let (EvidenceBinderId binderScope slot) = entry.atBinder
+        (
+          snd (scopeTraceContext entry.atGoalScope),
+          snd (scopeTraceContext binderScope),
+          slot,
+        ))
+      (finishAssumptionTrace ())
+  (values, assumptions)
+
+declaredNumErrorCodes : String -> List String
+declaredNumErrorCodes source =
+  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+    "declared_numeric_errors",
+    desugar (parseLocated source),
+  )
+  map tcCode errors
+
+test "declared numeric result retains its quantifier and given at finalized queries" =
+  let cold = declaredNumSchemeObserved None declaredNumHelperSource
+  let keyed =
+    declaredNumSchemeObserved (Some (991, 997)) declaredNumHelperSource
+  let repeated =
+    declaredNumSchemeObserved (Some (991, 997)) declaredNumHelperSource
+  let failed = declaredNumErrorCodes "value : Int\nvalue = \"wrong\"\n"
+  let afterFailure =
+    declaredNumSchemeObserved (Some (991, 997)) declaredNumHelperSource
+  expectAll [
+    expectEqual [(1, "Int -> a")] (fst cold),
+    expectEqual [("binding:value", "binding:value", 0)] (snd cold),
+    expectEqual cold keyed,
+    expectEqual keyed repeated,
+    expectEqual repeated afterFailure,
+    expectEqual True (listLen failed > 0),
+  ]
+
+test "declared numeric channels include nested results and independent quantifiers" =
+  let nested =
+    declaredNumSchemeObserved
+      None
+      (joinNl [
+        "value : Num a => b -> Int -> (b, a)",
+        "value b n = (b, fromInt n)",
+      ])
+  let returnedFunction =
+    declaredNumSchemeObserved
+      None
+      (joinNl [
+        "value : Num a => Int -> (Unit -> a)",
+        "value n = _ => fromInt n",
+      ])
+  let independent =
+    declaredNumSchemeObserved
+      None
+      (joinNl [
+        "value : (Num a, Num b) => Int -> (a, b)",
+        "value n = (fromInt n, fromInt n)",
+      ])
+  expectAll [
+    expectEqual [(2, "a -> Int -> (a, b)")] (fst nested),
+    expectEqual [(1, "Int -> Unit -> a")] (fst returnedFunction),
+    expectEqual [(2, "Int -> (a, b)")] (fst independent),
+  ]
+
+test "an unsigned recursive sibling cannot default a declared numeric root" =
+  let source = joinNl [
+    "value : Num a => Int -> a",
+    "value n = if n == 0 then fromInt n else relay (n - 1)",
+    "relay n = value n",
+  ]
+  expectAll [
+    expectEqual [(1, "Int -> a")] (fst (declaredNumSchemeObserved None source)),
+    expectEqual
+      [(1, "Int -> a")]
+      (fst (declaredNumMemberSchemeObserved None "relay" source)),
+  ]
+
+test "unsupported recursive evidence keeps erased and expansive siblings rejected" =
+  let floatInstance =
+    joinNl [
+        "impl Num Float where",
+        "  fromInt _ = 0.0",
+      ]
+      ++ "\n"
+  let erased =
+    floatInstance
+      ++ joinNl [
+        "consume : a -> Int",
+        "consume _ = 1",
+        "signed : Num a => Int -> a",
+        "signed n = if ping n == 0 then fromInt n else fromInt n",
+        "ping n = if n == 0 then 1 else consume (signed (n - 1))",
+        "floating : Float",
+        "floating = signed 2",
+      ]
+  let expansive =
+    floatInstance
+      ++ joinNl [
+        "signed : Num a => Int -> a",
+        "signed n = if n == 0 then ping else fromInt n",
+        "ping = signed 1",
+        "floating : Float",
+        "floating = signed 0",
+      ]
+  expectAll [
+    expectEqual
+      []
+      (declaredNumErrorCodes
+        (floatInstance
+          ++ joinNl [
+            "signed : Num a => Int -> a",
+            "signed n = fromInt n",
+            "floating : Float",
+            "floating = signed 2",
+          ])),
+    expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes erased),
+    expectEqual ["T-TYPE-MISMATCH"] (declaredNumErrorCodes expansive),
+  ]
+
+test "declared result protection preserves missing-context and value-restriction errors" = expectAll
+  [
+    expectEqual
+      ["T-MISSING-CONSTRAINT"]
+      (declaredNumErrorCodes "value : Int -> a\nvalue n = fromInt n\n"),
+    expectEqual
+      ["T-SIG-OVER-EXPANSIVE"]
+      (declaredNumErrorCodes "value : Num a => a\nvalue = 0\n"),
+  ]
+
+test "inferred numeric results still default without a declared caller channel" =
+  let literal = declaredNumSchemeObserved None "value = 1\n"
+  let helper = declaredNumSchemeObserved None "value n = fromInt n\n"
+  expectAll [
+    expectEqual [(0, "Int")] (fst literal),
+    expectEqual [(0, "Int -> Int")] (fst helper),
+  ]
+
+localNumBlockRecSource : String
+localNumBlockRecSource = joinNl [
+  "value : Num a => a -> a",
+  "value x =",
+  "  let local _ = x + 0",
+  "  local ()",
+]
+
+localNumBlockLetSource : String
+localNumBlockLetSource = joinNl [
+  "value : Num a => a -> a",
+  "value x =",
+  "  let local = x + 0",
+  "  local",
+]
+
+localNumInferRecSource : String
+localNumInferRecSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = let local _ = x + 0 in local ()",
+]
+
+localNumInferLetSource : String
+localNumInferLetSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = let local = x + 0 in local",
+]
+
+localNumGroupSource : String
+localNumGroupSource = joinNl [
+  "value : Num a => a -> a",
+  "value x = local ()",
+  "  where",
+  "    local _ = x + 0",
+]
+
+localNumFinalizedScheme : String -> List (Int, String)
+localNumFinalizedScheme source = fst (declaredNumSchemeObserved None source)
+
+test "block recursive let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumBlockRecSource)
+
+test "block let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumBlockLetSource)
+
+test "inline recursive let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumInferRecSource)
+
+test "inline let preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumInferLetSource)
+
+test "where group preserves an enclosing numeric root" =
+  expectEqual [(1, "a -> a")] (localNumFinalizedScheme localNumGroupSource)
+
+localNumInferredBlockRecSource : String
+localNumInferredBlockRecSource = joinNl [
+  "value x =",
+  "  let local _ = x + 0",
+  "  local ()",
+]
+
+localNumInferredBlockLetSource : String
+localNumInferredBlockLetSource = joinNl [
+  "value x =",
+  "  let local = x + 0",
+  "  local",
+]
+
+localNumInferredInferRecSource : String
+localNumInferredInferRecSource = "value x = let local _ = x + 0 in local ()\n"
+
+localNumInferredInferLetSource : String
+localNumInferredInferLetSource = "value x = let local = x + 0 in local\n"
+
+localNumInferredGroupSource : String
+localNumInferredGroupSource = joinNl [
+  "value x = local ()",
+  "  where",
+  "    local _ = x + 0",
+]
+
+test "each local boundary retains an inferred outer numeric root" =
+  expectEqual
+    [
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+      [(1, "a -> a")],
+    ]
+    [
+      localNumFinalizedScheme localNumInferredBlockRecSource,
+      localNumFinalizedScheme localNumInferredBlockLetSource,
+      localNumFinalizedScheme localNumInferredInferRecSource,
+      localNumFinalizedScheme localNumInferredInferLetSource,
+      localNumFinalizedScheme localNumInferredGroupSource,
+    ]
+
+blockRecEvalValue : Float
+blockRecEvalValue =
+  let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
+  let core = desugar (parse arithmeticPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("block_rec_eval", program)
+  let bindings = evalOne [] ("block_rec_eval", elaborated)
+  match lookupAssoc "main" bindings
+    Some value => match force value
+      VFloat result => result
+      _ => 0.0
+    _ => 0.0
+
+test "block recursive let executes with its captured Num dictionary" =
+  expectEqual 1.5 blockRecEvalValue
+
+test "block recursive arithmetic retains the outer predicate and route" =
+  let (errors, trace, assumptions) =
+    arithmeticTraceObserved localNumBlockRecSource
+  let arithmetic = filter (view => view.ntvStage == NPTArithmetic) trace
+  expectAll [
+    expectEqual [] errors,
+    expectEqual
+      [("core::Num", ["a"], "binding:value", True, [])]
+      (map
+        (view => (
+          view.ntvInterface,
+          view.ntvArguments,
+          view.ntvOwner,
+          view.ntvGiven,
+          view.ntvPrerequisites,
+        ))
+        arithmetic),
+    expectEqual
+      [
+        ("binding:value", "binding:value", 0),
+        ("binding:value", "binding:value", 0),
+      ]
+      assumptions,
+  ]
+
+wrappedReturnSource : Bool -> Bool -> String
+wrappedReturnSource hasInt hasBox =
+  joinNl
+    ([
+        "data Box a = Box a",
+        "interface Seed a where",
+        "  seed : a",
+      ]
+      ++ (if hasInt then ["impl Seed Int where", "  seed = 41"] else [])
+      ++ (if hasBox then
+        ["impl Seed (Box Int) where", "  seed = Box 99"]
+      else
+        [])
+      ++ [
+        "interface Produce a where",
+        "  produce : Unit -> Box a",
+        "impl Produce a requires Seed a where",
+        "  produce _ = Box seed",
+        "value : Box Int",
+        "value = produce ()",
+      ])
+
+returnMethodRoutes : CExpr -> Option (List String)
+returnMethodRoutes (CApp fn _) = returnMethodRoutes fn
+returnMethodRoutes (CMethod "produce" _ _ prerequisites _) =
+  Some (map numericRouteView prerequisites)
+returnMethodRoutes _ = None
+
+returnBindRoutes : List CBind -> Option (List String)
+returnBindRoutes [] = None
+returnBindRoutes ((CBind "value" [CClause _ body]) :: _) =
+  returnMethodRoutes body
+returnBindRoutes (_ :: rest) = returnBindRoutes rest
+
+wrappedReturnRoutes : String -> Option (List String)
+wrappedReturnRoutes source =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("wrapped_return", program)
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  returnBindRoutes binds
+
+wrappedReturnFlatRoutes : String -> Option (List String)
+wrappedReturnFlatRoutes source =
+  let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
+  let elaborated = elaborateDict [] [] ["value"] program
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  returnBindRoutes binds
+
+test "wrapped return prerequisites use the class parameter, not the result type" =
+  expectEqual
+    [Some ["Int[]"], Some ["Int[]"], Some ["Int[]"], Some ["Int[]"]]
+    [
+      wrappedReturnRoutes (wrappedReturnSource True True),
+      wrappedReturnRoutes (wrappedReturnSource True False),
+      wrappedReturnFlatRoutes (wrappedReturnSource True True),
+      wrappedReturnFlatRoutes (wrappedReturnSource True False),
+    ]
+
+test "wrapped return checking rejects an instance for only the result wrapper" =
+  let source = wrappedReturnSource False True
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
+  let (flatErrors, _) = checkProgramDiags [] core program
+  expectAll [
+    expectEqual
+      True
+      (contains "No impl of Seed for Int" (map tcMsg moduleErrors)),
+    expectEqual True (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
+  ]
+
+test "wrapped return routes use the specific instance's empty context" =
+  let source = joinNl [
+    wrappedReturnSource True True,
+    "impl Produce Int where",
+    "  produce _ = Box 73",
+  ]
+  expectEqual
+    [Some [], Some []]
+    [wrappedReturnRoutes source, wrappedReturnFlatRoutes source]
+
+test "wrapped return routes survive an intervening failed request" =
+  let before = wrappedReturnRoutes (wrappedReturnSource True True)
+  let core = desugar (parse numericPreludeSource)
+  let (errors, _) = checkOneDiags [] core (
+    "wrapped_return_failure",
+    desugar (parseLocated (wrappedReturnSource False True)),
+  )
+  let after = wrappedReturnRoutes (wrappedReturnSource True True)
+  expectAll [
+    expectEqual True (listLen errors > 0),
+    expectEqual (Some ["Int[]"]) before,
+    expectEqual before after,
+  ]
+
+returnIdentitySource : String
+returnIdentitySource = joinNl [
+  "data Pair a b = Pair a b",
+  "interface Choose a b where",
+  "  choose : Unit -> Pair b a",
+  "impl Choose Int Bool where",
+  "  choose _ = Pair True 41",
+  "value : Pair Bool Int",
+  "value = choose ()",
+]
+
+evIdText : EvId -> String
+evIdText (EvId moduleId ordinal) = "\{moduleId}:\{ordinal}"
+
+methodTraceGoalText : MethodReturnTraceEntry -> String
+methodTraceGoalText entry = match entry.mrtGoal
+  Some ev => evIdText ev
+  None => "none"
+
+methodTraceArgs : MethodReturnTraceEntry -> Option (List String)
+methodTraceArgs entry = map (map ppMono) entry.mrtArguments
+
+methodTracePublishedOne : MethodReturnTraceEntry -> Bool
+methodTracePublishedOne entry = match entry.mrtPublished
+  Some (EvOne _) => True
+  _ => False
+
+methodEvInExpr : String -> Expr -> Option EvId
+methodEvInExpr target (EMethodAt name _ ev)
+  | target == name = Some ev
+  | otherwise = None
+methodEvInExpr target (ELoc _ expr) = methodEvInExpr target expr
+methodEvInExpr target (EApp fn arg) = match methodEvInExpr target fn
+  Some ev => Some ev
+  None => methodEvInExpr target arg
+methodEvInExpr _ _ = None
+
+methodEvInDecls : String -> List Decl -> Option EvId
+methodEvInDecls _ [] = None
+methodEvInDecls target ((DFunDef _ _ _ body) :: rest) =
+  match methodEvInExpr target body
+    Some ev => Some ev
+    None => methodEvInDecls target rest
+methodEvInDecls target (_ :: rest) = methodEvInDecls target rest
+
+test "ordinary return shares declaration identity vector and goal destination" =
+  beginMethodReturnTrace ()
+  let typed = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    "identity_return",
+    desugar (parseLocated returnIdentitySource),
+  )
+  let trace =
+    filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ())
+  let goals = map methodTraceGoalText trace
+  let aggregate = map evIdText (methodEvInDecls "choose" typed)
+  expectAll [
+    expectEqual
+      [MRTProduced, MRTChecked, MRTStamped]
+      (map (entry => entry.mrtStage) trace),
+    expectEqual
+      ["identity_return", "identity_return", "identity_return"]
+      (map
+        (entry => match entry.mrtInterface.irOrigin
+          OriginModule moduleId => moduleId
+          _ => "<unresolved>")
+        trace),
+    expectEqual
+      [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
+      (map methodTraceArgs trace),
+    expectEqual True (match goals
+      first :: second :: third :: [] => first == second && second == third
+      _ => False),
+    expectEqual True (match (goals, aggregate)
+      (goal :: _, Some methodGoal) => goal /= methodGoal
+      _ => False),
+    expectEqual [True, True, True] (map methodTracePublishedOne trace),
+  ]
+
+methodTraceOrigin : MethodReturnTraceEntry -> String
+methodTraceOrigin entry = match entry.mrtInterface.irOrigin
+  OriginModule moduleId => moduleId
+  _ => "<unresolved>"
+
+methodTraceIdentityView : MethodReturnTraceEntry ->
+  (MethodReturnTraceStage, String, Option (List String))
+methodTraceIdentityView entry =
+  (entry.mrtStage, methodTraceOrigin entry, methodTraceArgs entry)
+
+importedReturnObserved : Bool ->
+  (Int, List (MethodReturnTraceStage, String, Option (List String)))
+importedReturnObserved reverseOrder =
+  let owner = (
+    "return_owner",
+    joinNl [
+      "export interface OwnerChoice a where",
+      "  choose : Unit -> a",
+      "impl OwnerChoice Int where",
+      "  choose _ = 41",
+    ],
+  )
+  let foreign = (
+    "return_foreign",
+    joinNl [
+      "export interface ForeignChoice a where",
+      "  choose : Unit -> a",
+      "impl ForeignChoice Bool where",
+      "  choose _ = True",
+    ],
+  )
+  let imports =
+    if reverseOrder then
+      ["import return_foreign.{choose}", "import return_owner as O"]
+    else
+      ["import return_owner as O", "import return_foreign.{choose}"]
+  let entry = (
+    "return_importer",
+    joinNl (imports ++ ["value : Int", "value = O.choose ()"]),
+  )
+  let sources =
+    if reverseOrder then [foreign, owner, entry] else [owner, foreign, entry]
+  beginMethodReturnTrace ()
+  let results =
+    checkModulesDiagsChain
+      None
+      ""
+      []
+      []
+      (desugar (parse numericPreludeSource))
+      (map (item => (fst item, desugar (parseLocated (snd item)))) sources)
+  let trace =
+    map
+      methodTraceIdentityView
+      (filter (item => item.mrtMethod == "choose") (finishMethodReturnTrace ()))
+  (modErrorCount results, trace)
+
+test "alias-qualified ordinary returns keep owner identity across import orders" =
+  let forward = importedReturnObserved False
+  let backward = importedReturnObserved True
+  expectAll [
+    expectEqual 0 (fst forward),
+    expectEqual forward backward,
+    expectEqual
+      [
+        (MRTProduced, "return_owner", Some ["Int"]),
+        (MRTChecked, "return_owner", Some ["Int"]),
+        (MRTStamped, "return_owner", Some ["Int"]),
+      ]
+      (snd forward),
+  ]
+
+flatMethodReturnStages : String -> List MethodReturnTraceStage
+flatMethodReturnStages source =
+  beginMethodReturnTrace ()
+  let _ =
+    elaborateDict
+      []
+      []
+      ["value"]
+      (desugar (parse "\{numericPreludeSource}\n\{source}"))
+  map
+    (entry => entry.mrtStage)
+    (filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ()))
+
+test "Flat unresolved returns keep complete missing and shadow cases legacy" =
+  let missing = joinNl [
+    "interface HiddenChoice a b where",
+    "  choose : Unit -> a",
+    "impl HiddenChoice Int Bool where",
+    "  choose _ = 7",
+    "value : Int",
+    "value = choose ()",
+  ]
+  let shadow = joinNl [
+    "interface ShadowChoice a where",
+    "  choose : Unit -> a",
+    "impl ShadowChoice Int where",
+    "  choose _ = 7",
+    "choose _ = 9",
+    "value : Int",
+    "value = choose ()",
+  ]
+  expectEqual
+    ([], [], [])
+    (
+      flatMethodReturnStages returnIdentitySource,
+      flatMethodReturnStages missing,
+      flatMethodReturnStages shadow,
+    )
+
+freshMethodReturnStages : String -> List MethodReturnTraceStage
+freshMethodReturnStages moduleId =
+  beginMethodReturnTrace ()
+  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    moduleId,
+    desugar (parseLocated returnIdentitySource),
+  )
+  map
+    (entry => entry.mrtStage)
+    (filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ()))
+
+cachedMethodReturnObserved : String -> (Int, List MethodReturnTraceStage)
+cachedMethodReturnObserved entrySource =
+  let prefix = joinNl [
+    "export interface CachedChoice a where",
+    "  cachedChoose : Unit -> a",
+    "impl CachedChoice Int where",
+    "  cachedChoose _ = 41",
+    "export cached : Int",
+    "cached = cachedChoose ()",
+  ]
+  beginMethodReturnTrace ()
+  let results =
+    checkModulesDiagsChain
+      (Some (991, 997))
+      "method-return-identity-cache"
+      [Some "stable-method-return-prefix-v1", None]
+      []
+      (desugar (parse numericPreludeSource))
+      [
+        ("return_cache_prefix", desugar (parseLocated prefix)),
+        ("return_cache_entry", desugar (parseLocated entrySource)),
+      ]
+  let stages =
+    map
+      (entry => entry.mrtStage)
+      (filter
+        (entry => entry.mrtMethod == "cachedChoose")
+        (finishMethodReturnTrace ()))
+  (modErrorCount results, stages)
+
+test "ordinary return traces are fresh while cache hits replay no events" =
+  let first = freshMethodReturnStages "return_fresh"
+  let (failedErrors, _) = checkOneDiags [] [] (
+    "return_failed",
+    desugar (parseLocated "value : Int\nvalue = \"wrong\"\n"),
+  )
+  let afterFailure = freshMethodReturnStages "return_fresh"
+  let success = "import return_cache_prefix.{cached}\nentry = cached\n"
+  let cold = cachedMethodReturnObserved success
+  let hit = cachedMethodReturnObserved success
+  let failedHit = cachedMethodReturnObserved "entry : Int\nentry = \"wrong\"\n"
+  let afterFailedHit = cachedMethodReturnObserved success
+  expectAll [
+    expectEqual [MRTProduced, MRTChecked, MRTStamped] first,
+    expectEqual first afterFailure,
+    expectEqual True (listLen failedErrors > 0),
+    expectEqual (0, [MRTProduced, MRTChecked, MRTStamped]) cold,
+    expectEqual (0, []) hit,
+    expectEqual True (fst failedHit > 0 && snd failedHit == []),
+    expectEqual (0, []) afterFailedHit,
+  ]
+
+data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
+
+methodHeadArity : String -> CExpr -> Option Int
+methodHeadArity target (CMethod name arity _ _ _)
+  | name == target = Some arity
+  | otherwise = None
+methodHeadArity target (CApp f _) = methodHeadArity target f
+methodHeadArity _ _ = None
+
+bindMethodArity : String -> String -> List CBind -> Option Int
+bindMethodArity _ _ [] = None
+bindMethodArity bindName method ((CBind name clauses) :: rest)
+  | name == bindName = match clauses
+    (CClause _ body) :: _ => methodHeadArity method body
+    [] => None
+  | otherwise = bindMethodArity bindName method rest
+
+loweredMethodArity : String -> String -> String -> Option Int
+loweredMethodArity source bindName method =
+  let core = desugar (parse numericPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("method_arity", program)
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  bindMethodArity bindName method binds
+
+test "method occurrence freezes declared arity before higher-order specialization" =
+  expectEqual
+    (Some 1)
+    (loweredMethodArity
+      (joinNl [
+        "interface ArityHo a where",
+        "  ho : a -> a",
+        "impl ArityHo (Int -> Int) where",
+        "  ho f = f",
+        "probe = ho (x => x)",
+      ])
+      "probe"
+      "ho")
+
+test "method occurrence arity stays distinct from tagged impl callable arity" =
+  expectEqual
+    (Some 2)
+    (loweredMethodArity
+      (joinNl [
+        "data ArityDog = ArityDog",
+        "interface ArityAct a where",
+        "  arityAct : a -> Unit -> Unit",
+        "impl ArityAct ArityDog where",
+        "  arityAct _ = _ => ()",
+        "observeArity : ArityAct a => a -> Unit -> Unit",
+        "observeArity x = arityAct x",
+      ])
+      "observeArity"
+      "arityAct")
+
+test "qualified method constraints preserve a selected empty row" =
+  let program =
+    desugar
+      (parseLocated
+        (joinNl [
+          "interface Plain a where",
+          "  collide : a -> Int",
+          "interface Rich a where",
+          "  collide : Num b => a -> b -> Int",
+        ]))
+  let rows = methodConstraintIfaces program
+  expectAll [
+    expectEqual
+      (Some [])
+      (lookupAssoc (ifaceMethodArityKey "Plain" "collide") rows),
+    expectEqual
+      (Some ["Num"])
+      (lookupAssoc (ifaceMethodArityKey "Rich" "collide") rows),
+    expectEqual (Some ["Num"]) (lookupAssoc "collide" rows),
+  ]
+
+test "definer-shadow application publishes its selected arity" =
+  expectEqual
+    (Some 1)
+    (loweredMethodArity
+      (joinNl [
+        "interface ArityShadow a where",
+        "  shadow : a -> Int",
+        "shadow : Int -> Int",
+        "shadow x = x",
+        "probe = shadow 1",
+      ])
+      "probe"
+      "shadow")
+
+test "value-position shadow publishes the selected standalone arity" =
+  expectEqual
+    (Some 2)
+    (loweredMethodArity
+      (joinNl [
+        "interface ArityValueShadow a where",
+        "  shadowValue : a -> Int",
+        "shadowValue : Int -> Int -> Int",
+        "shadowValue x _ = x",
+        "probe = shadowValue",
+      ])
+      "probe"
+      "shadowValue")
+
+test "Core IR round-trip preserves method occurrence arity" =
+  let original =
+    CProgram
+      [CBind "main" [CClause [] (CMethod "probe" 7 RNone [] [])]]
+      []
+      []
+      []
+  match parseCProgram (cprogramToSexp original)
+    CProgram [CBind "main" [CClause [] (CMethod "probe" arity RNone [] [])]] _ _ _ =>
+      expectEqual 7 arity
+    _ => expectEqual True False
+
+emptyLocalCoreFacts : LocalCoreFacts
+emptyLocalCoreFacts = LocalCoreFacts False [] [] 0
+
+mergeLocalCoreFacts : LocalCoreFacts -> LocalCoreFacts -> LocalCoreFacts
+mergeLocalCoreFacts (LocalCoreFacts shapeA addA fromIntA primA) (LocalCoreFacts shapeB addB fromIntB primB) =
+  LocalCoreFacts
+    (shapeA || shapeB)
+    (addA ++ addB)
+    (fromIntA ++ fromIntB)
+    (primA + primB)
+
+localCoreExprFacts : CExpr -> LocalCoreFacts
+localCoreExprFacts (CApp f x) =
+  mergeLocalCoreFacts (localCoreExprFacts f) (localCoreExprFacts x)
+localCoreExprFacts (CLam _ body) = localCoreExprFacts body
+localCoreExprFacts (CLet _ _ rhs body) =
+  mergeLocalCoreFacts (localCoreExprFacts rhs) (localCoreExprFacts body)
+localCoreExprFacts (CBinPrim op lhs rhs _) =
+  let nested =
+    mergeLocalCoreFacts (localCoreExprFacts lhs) (localCoreExprFacts rhs)
+  let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) = nested
+  LocalCoreFacts
+    shape
+    addRoutes
+    fromIntRoutes
+    (primCount + (if op == "+" then 1 else 0))
+localCoreExprFacts (CMethod "add" _ (RDict binder) _ _) =
+  LocalCoreFacts False [binder] [] 0
+localCoreExprFacts (CMethod "fromInt" _ route _ _) = match route
+  RDict binder => LocalCoreFacts False [] [binder] 0
+  RDictFwd binder => LocalCoreFacts False [] [binder] 0
+  _ => emptyLocalCoreFacts
+localCoreExprFacts _ = emptyLocalCoreFacts
+
+blockRecValueFacts : CBind -> LocalCoreFacts
+blockRecValueFacts (CBind "value" [CClause _ (CBlock [CSLet False _ (CLam _ localBody), CSExpr (CApp _ _)])]) =
+  let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
+    localCoreExprFacts localBody
+  LocalCoreFacts True addRoutes fromIntRoutes primCount
+blockRecValueFacts _ = emptyLocalCoreFacts
+
+blockRecCoreFacts : LocalCoreFacts
+blockRecCoreFacts =
+  let source = localNumBlockRecSource ++ "\nmain : Float\nmain = value 1.5\n"
+  let core = desugar (parse arithmeticPreludeSource)
+  let program = desugar (parseLocated source)
+  let elaborated = elaborateOne [] core ("block_rec_core", program)
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  fold
+    (facts bind => mergeLocalCoreFacts facts (blockRecValueFacts bind))
+    emptyLocalCoreFacts
+    binds
+
+test "block recursive Core keeps dictionary methods inside the captured closure" =
+  let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) =
+    blockRecCoreFacts
+  expectAll [
+    expectEqual True shape,
+    expectEqual 1 (listLen addRoutes),
+    expectEqual addRoutes fromIntRoutes,
+    expectEqual False (contains "" addRoutes),
+    expectEqual 0 primCount,
+  ]
+
+lamThenGroupSource : String
+lamThenGroupSource = joinNl [
+  "lamThenGroup : Num a => a -> a",
+  "lamThenGroup x = let f = _ => let rec g z = x + z in g x in f ()",
+]
+
+lamThenGroupBindFacts : CBind -> LocalCoreFacts
+lamThenGroupBindFacts (CBind "lamThenGroup" [CClause _ (CLet _ _ (CLam _ (CLetGroup [CBind "g" [CClause _ gBody]] (CApp _ _))) (CApp _ _))]) =
+  let (LocalCoreFacts _ addRoutes fromIntRoutes primCount) =
+    localCoreExprFacts gBody
+  LocalCoreFacts True addRoutes fromIntRoutes primCount
+lamThenGroupBindFacts _ = emptyLocalCoreFacts
+
+lamThenGroupCoreFacts : LocalCoreFacts
+lamThenGroupCoreFacts =
+  let core = desugar (parse arithmeticPreludeSource)
+  let program = desugar (parseLocated lamThenGroupSource)
+  let elaborated = elaborateOne [] core ("lam_then_group_core", program)
+  let (CProgram binds _ _ _) = lowerProgram elaborated
+  fold
+    (facts bind => mergeLocalCoreFacts facts (lamThenGroupBindFacts bind))
+    emptyLocalCoreFacts
+    binds
+
+test "nested lambda-group Core keeps dictionary dispatch in the group member" =
+  let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) =
+    lamThenGroupCoreFacts
+  expectAll [
+    expectEqual True shape,
+    expectEqual 1 (listLen addRoutes),
+    expectEqual False (contains "" addRoutes),
+    expectEqual [] fromIntRoutes,
+    expectEqual 0 primCount,
+  ]
+
+localNumOwnSource : String
+localNumOwnSource = joinNl [
+  "blockRec _ =",
+  "  let local _ = 1",
+  "  local ()",
+  "blockLet _ =",
+  "  let local = 1",
+  "  local",
+  "inferRec _ = let local _ = 1 in local ()",
+  "inferLet _ = let local = 1 in local",
+  "group _ = local ()",
+  "  where",
+  "    local _ = 1",
+]
+
+test "each local boundary defaults its own numeric root to Int" =
+  let (_, schemes) = checkOneSchemeFullK None [] (desugar
+    (parse numericPreludeSource)) (
+    "local_numeric_own",
+    desugar (parseLocated localNumOwnSource),
+  )
+  let observed = map (entry => (fst entry, ppScheme (snd entry))) schemes
+  expectEqual
+    [
+      ("blockRec", "a -> Int"),
+      ("blockLet", "a -> Int"),
+      ("inferRec", "a -> Int"),
+      ("inferLet", "a -> Int"),
+      ("group", "a -> Int"),
+    ]
+    observed
+
+localNumMismatchCodes : String -> List String
+localNumMismatchCodes body =
+  declaredNumErrorCodes
+    (joinNl [
+      "value : Num a => a -> (a, Bool)",
+      body,
+    ])
+
+test "local numeric ownership does not admit explicit result mismatches" =
+  expectEqual
+    [
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+      ["T-TYPE-MISMATCH"],
+    ]
+    [
+      localNumMismatchCodes "value x =\n  let local _ = x + 0\n  (local (), 1)",
+      localNumMismatchCodes "value x =\n  let local = x + 0\n  (local, 1)",
+      localNumMismatchCodes "value x = let local _ = x + 0 in (local (), 1)",
+      localNumMismatchCodes "value x = let local = x + 0 in (local, 1)",
+      localNumMismatchCodes
+        "value x = (local (), 1)\n  where\n    local _ = x + 0",
+    ]
 
 data TraceView = TraceView {
   tvKind : AssumptionTraceKind,
@@ -366,10 +2063,10 @@ flatMessages source =
   let (errors, _) = checkProgramDiags [] [] (desugar (parse source))
   map tcMsg errors
 
-test "legacy attributed-direct Num diagnostics keep their order-sensitive cross-pair" =
+test "attributed-direct Num declarations reject mismatches without cross-pairing rows" =
   expectEqual
     (
-      ["Type mismatch: String vs Int", "Type mismatch: Int literal vs Int"],
+      ["Type mismatch: String vs Int"],
       ["Type mismatch: String vs Int"],
     )
     (flatMessages mixedAttrFirstSource, flatMessages mixedDirectFirstSource)

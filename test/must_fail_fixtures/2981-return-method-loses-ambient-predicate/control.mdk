@@ -1,0 +1,18 @@
+interface Hidden a b where
+  hidden : b -> a
+
+impl Hidden Int Char where
+  hidden _ = 22
+
+impl Hidden Int Bool where
+  hidden _ = 12
+
+useHidden : Hidden a b => b -> a
+useHidden witness = hidden witness
+
+main =
+  let actual = useHidden True : Int
+  if actual == 12 then
+    println actual
+  else
+    panic "expected Hidden Int Bool to return 12"

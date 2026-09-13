@@ -2242,11 +2242,16 @@ module-qualified identity.
 
   | Surface | Synthesized predicate | Prelude method the elaboration uses |
   |---|---|---|
-  | `+` `-` `*` `/` `%`, unary `-` | `Num τ` | `add` / `sub` / `mul` / `div` / `negate` |
+  | `+` `-` `*` `/` `%`, unary `-` | `Num τ` | `add` / `sub` / `mul` / `div` / `rem` / `negate` |
   | `==` `/=` | `Eq τ` | `eq` |
   | `<` `>` `<=` `>=` | `Ord τ` | `compare` and its derived methods |
   | `++` | `Semigroup τ` | `append` |
   | integer literal `n` | `Num τ` | `fromInt` |
+
+  The `%` operator uses `rem`. For Int it is the remainder after division
+  truncating toward zero; a nonzero result has the dividend's sign. For Float
+  it retains the floating remainder behavior of `fmod`. Each custom Num
+  implementation supplies `rem`; it has no generic default.
 
   Four qualifications, each of which changes the rule rather than decorating it:
 

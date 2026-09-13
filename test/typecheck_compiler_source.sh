@@ -1134,6 +1134,7 @@ echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + 
 # (`activeDictPreds`, `implReqPredicateSlots`) are retired below: they were the SAME pair
 # in opposite orders, i.e. the split authority this ratchet exists to forbid.
 predicate_slot_src="$ROOT/compiler/types/typecheck.mdk"
+eval_src="$ROOT/compiler/eval/eval.mdk"
 predicate_slot_required='data PredicateSlotArgs = PSArgsUnknown | PSArgsKnown (List Mono)
 data PredicateRequest = PredicateRequest {
 data PredicateSlot = PredicateSlot {
@@ -1232,20 +1233,21 @@ fi
 method_row_required='data MethodSchemeRow = MethodSchemeRow {
   msrIface : IfaceRef,
   msrName : String,
+  msrTyparams : List String,
+  msrType : Ty,
   msrScheme : Scheme,
   msrMethodSlots : List MethodPredicateSlot,
-data LegacyNumLiteralAnchor = LegacyNumLiteralAnchor {
-  numLitFromIntAnchorRef : Ref (Option LegacyNumLiteralAnchor),
+  numLitFromIntAnchorRef : Ref (Option MethodSchemeRow),
 ifaceMethodSchemeRows : List Decl -> List MethodSchemeRow
 methodSchemeRows : List (String, List Kind) ->
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
-seedNumLitFromIntAnchor : List MethodSchemeRow -> List Decl -> Unit
+seedNumLitFromIntAnchor : List MethodSchemeRow -> Unit
 pickSchemesByDecl : List String ->
-admittedSchemeFor : String -> List MethodSchemeRow -> Option Scheme
+admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
   List MethodSchemeRow ->
   let currentMethodRows = ifaceMethodSchemeRows prog
-      let visibleMethodRows = ifaceMethodSchemeRows implDecls'
+    Module _ _ implDecls => ifaceMethodSchemeRows implDecls'
 
 printf '%s\n' "$method_row_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -1277,6 +1279,11 @@ numLitFromIntSchemeRef
 numLitFromIntParamsRef
 seedNumLitFromIntScheme
 seedNumLitFromIntParams
+LegacyNumLiteralAnchor
+numLitFromIntParamsOf
+numLitFromIntParamsDecl
+pickIfaceMethodParams
+pickNumLitScheme
 registerMethodConstraints :'
 
 printf '%s\n' "$method_row_retired" | while IFS= read -r retired; do
@@ -1285,6 +1292,247 @@ printf '%s\n' "$method_row_retired" | while IFS= read -r retired; do
     exit 1
   fi
 done || exit 1
+
+# Numeric literals retain their fixed Num predicate from the method-row producer
+# through checking and return stamping.  Each former OblProjection reader states
+# explicitly whether the unary numeric population participates.
+numeric_predicate_required='import types.solver_contract.{ClassPredicate(..)}
+  | SKNumReturn ClassPredicate Mono
+  | OpNumLit Mono
+  | EKNumReturn ClassPredicate Mono Bool (Option Loc)
+    _ => tagRef := numericReturnRoute route routes
+      let split = binopRouteSplit route
+recordMethodDictsFromSlots anchor.msrMethodSlots (Ref []) (snd inst)
+public export data NumericPredicateTraceEntry = NumericPredicateTraceEntry {
+beginNumericPredicateTrace : Unit -> Unit
+finishNumericPredicateTrace : Unit -> List NumericPredicateTraceEntry'
+
+printf '%s\n' "$numeric_predicate_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: numeric return predicate migration is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+# Ordinary and numeric returns share the matcher, so a match in the ordinary arm
+# cannot establish that the numeric arm still consumes its exact predicate.
+numeric_return_inst_body="$(sed -n '/^entailInst .*EKNumReturn/,/^entailInst .*EKNestedTop/p' "$predicate_slot_src")"
+numeric_return_inst_required='  let goals = predicate.predicateArguments
+  match ieSelectRowByIface env predicate.predicateInterface goals
+      let route = RKey (methodRouteKeyForRow name env row) []
+      let routes = implDictRoutesForRow encl useScope goals row'
+printf '%s\n' "$numeric_return_inst_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$numeric_return_inst_body" | grep -Fq "$required"; then
+    echo "FAIL: numeric return instance arm is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+# Check each projection consumer in its own function.  A global occurrence count
+# cannot prove that one arm was not duplicated while another reader silently lost it.
+require_typecheck_arm() {
+  reader_start="$1"
+  reader_end="$2"
+  reader_arm="$3"
+  reader_body="$(sed -n "/^$reader_start :/,/^$reader_end :/p" "$predicate_slot_src")"
+  if ! printf '%s\n' "$reader_body" | grep -Fq "$reader_arm"; then
+    echo "FAIL: typechecker reader $reader_start is missing: $reader_arm"
+    exit 1
+  fi
+}
+
+require_typecheck_arm uOblArgs callOblsWindow 'OpNumLit _ => o.pred.args'
+require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'OpNumLit _ => []'
+require_typecheck_arm numObligIds defaultAmbiguousNum 'OpNumLit occ => monoUnboundIds occ'
+require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
+require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
+require_typecheck_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
+require_typecheck_arm noteNumericObligationChecked checkOneCallObligation '(_, OpNumLit _) =>'
+require_typecheck_arm groundMultiParamObligations groundOneObligation 'OpNumLit _ => ()'
+require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpNumLit _ =>'
+require_typecheck_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
+require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
+
+# Ordinary return predicates retain their declaration through both consumers.
+# Scope the instance check to its own arm: the numeric arm uses the same matcher.
+ordinary_return_inst_body="$(sed -n '/^entailInst .*EKExactReturn/,/^entailInst .*EKNumReturn/p' "$predicate_slot_src")"
+ordinary_return_inst_required='  let goals = optionOr [] (methodReturnArgs request)
+  match ieSelectRowByIface env request.mrrIface goals
+      let routeKey = methodRouteKeyForRow request.mrrName env row
+      let routes = implDictRoutesForRow encl useScope goals row'
+printf '%s\n' "$ordinary_return_inst_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_inst_body" | grep -Fq "$required"; then
+    echo "FAIL: ordinary return instance arm is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+if printf '%s\n' "$ordinary_return_inst_body" | grep -Eq 'ifaceParamMonos|goalPredOf|ieSelectRowByMethod'; then
+  echo "FAIL: ordinary exact return instance arm reconstructs its predicate by spelling"
+  exit 1
+fi
+
+# #2982: a match inside the record field loses its bound local in Wasm's local collector.
+# Keep the complete/unknown projection outside construction until that emitter gap
+# is repaired; the playground compiler build exercises the actual emitted artifact.
+ordinary_return_goal_body="$(sed -n '/^goalRequestOfKind .*EKExactReturn/,/^goalRequestOfKind .*EKNumReturn/p' "$predicate_slot_src")"
+ordinary_return_goal_required='  let args = match methodReturnArgs request
+    Some args => PSArgsKnown args
+    None => PSArgsUnknown
+  Some PredicateRequest { prIface = request.mrrIface, prArgs = args }'
+printf '%s\n' "$ordinary_return_goal_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_goal_body" | grep -Fq "$required"; then
+    echo "FAIL: ordinary return goal projection is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'let published = match entry.mrtGoal'
+require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'mrtPublished = published'
+
+require_typecheck_arm pushExactReturnObl methodReturnRequest 'pred = Predicate { iface = request.mrrIface, args = [] }'
+require_typecheck_arm pushExactReturnObl methodReturnRequest 'oblProj = OpExactReturn request'
+require_typecheck_arm uOblArgs callOblsWindow 'OpExactReturn request => optionOr [] (methodReturnArgs request)'
+require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'let occs = uOblArgs o'
+require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'checkOneCallObligation deferNonGround univ iface occs loc o.uoScope'
+require_typecheck_arm recordSite recordNumLitSite 'Some request => SKExactReturn implRef request'
+require_typecheck_arm recordSite recordNumLitSite 'Some request => optionOr ev request.mrrGoalEv'
+require_typecheck_arm recordSite recordNumLitSite '      siteEv)'
+require_typecheck_arm recordSite recordNumLitSite 'recordMethodDictsFromSlots row.msrMethodSlots methodRef subst'
+require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelSlots 'instantiateMethodPredicateSlots row.msrMethodSlots subst'
+
+# The other projection readers retain their own policies; presence in one reader
+# cannot cover an omitted arm in another reader.
+require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'request.mrrTyparams'
+require_typecheck_arm numObligIds defaultAmbiguousNum 'monoUnboundIds request.mrrOccurrence'
+require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request =>'
+require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
+require_typecheck_arm liveNumVarGo takeFirst 'findTvarInMono request.mrrOccurrence id'
+require_typecheck_arm groundMultiParamObligations groundOneObligation 'request.mrrOccurrence'
+require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpExactReturn request =>'
+require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs request'
+require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
+
+# A queued descriptor may retain the existing occurrence Mono, but neither the
+# producer's live Scheme nor a solver result belongs in this compatibility payload.
+ordinary_return_request_body="$(sed -n '/^data MethodReturnRequest =/,/^}/p' "$predicate_slot_src")"
+if [ -z "$ordinary_return_request_body" ] || printf '%s\n' "$ordinary_return_request_body" | grep -Eq ':.*(Scheme|SolverOutcome|SolverEvidence|Ref )'; then
+  echo "FAIL: ordinary return request is absent or retains a scheme, result, or mutable destination"
+  exit 1
+fi
+
+# Arithmetic with a prelude Num declaration carries that exact predicate through
+# its single route goal. The scalar-only recorder remains only as the fallback
+# inside recordBinopGoals for prelude-free arithmetic.
+numeric_operator_required='  | SKPredicateOp Bool ClassPredicate
+  | EKPredicateOp Bool Bool ClassPredicate
+  | NPTArithmetic
+  let _ = recordBinopGoals op dref lt
+goalRequestOfKind _ (EKPredicateOp _ _ predicate) = Some PredicateRequest {
+entailAssumVar request m encl _ useScope (EKPredicateOp _ _ _) =
+entailInst name m encl useScope tag (EKPredicateOp _ _ predicate) =
+  (stampPredicateOpRouteVal encl useScope name m tag predicate, [])'
+printf '%s\n' "$numeric_operator_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: exact numeric operator predicate transport is missing: $required"
+    exit 1
+  fi
+done || exit 1
+
+if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
+  echo "FAIL: retired parallel arithmetic site recorder remains"
+  exit 1
+fi
+
+# Local numeric defaulting uses the just-exited level. Keep the producer census
+# separate from the unrestricted SCC and implementation-body policies.
+local_num_boundaries='blockRecLet blockLet defaultAmbiguousNumOwnedBy
+blockLet inferRecordCreate defaultAmbiguousNumOwnedBy
+inferRecLet registerLocalScheme defaultAmbiguousNumOwnedBy
+inferLetSimple inferLetBody defaultAmbiguousNumOwnedBy
+processLetGroup inferLetBinds defaultGroupNumOwnedBy'
+printf '%s\n' "$local_num_boundaries" | while read -r reader next helper; do
+  require_typecheck_arm "$reader" "$next" "$helper"
+  require_typecheck_arm "$reader" "$next" 'let _ = exitLevel ()'
+  require_typecheck_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
+done || exit 1
+
+local_num_expected="$(printf '%s\n' "$local_num_boundaries" | wc -l | tr -d ' ')"
+local_num_actual="$(grep -Ec '^[[:space:]]+default(Ambiguous|Group)NumOwnedBy([[:space:]]|$)' "$predicate_slot_src")"
+if [ "$local_num_actual" -ne "$local_num_expected" ]; then
+  echo "FAIL: local numeric owner call census changed: $local_num_actual calls, $local_num_expected checked boundaries"
+  exit 1
+fi
+
+require_typecheck_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows (Some level) m = match normalize m'
+require_typecheck_arm numDefaultOwnerAllows groundNumVars 'Unbound _ owner => owner == level'
+require_typecheck_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows None _ = True'
+require_typecheck_arm defaultAmbiguousNum defaultAmbiguousNumOwnedBy 'defaultAmbiguousNumWith None protectedIds obls t'
+require_typecheck_arm defaultGroupNum defaultGroupNumOwnedBy 'defaultGroupNumWith None protectedIds obls monos'
+require_typecheck_arm groundNumVars groundNumVarsWith 'groundNumVarsWith None obls ids'
+require_typecheck_arm defaultBodyLocalNum defaultEachMember 'groundNumVars obls'
+require_typecheck_arm defaultEachMember registerAmbiguousConstraints 'defaultAmbiguousNum protectedIds obls m'
+require_typecheck_arm processSCC isLetrecGroup 'defaultGroupNum protectedSigIds defaultObls'
+
+# Impl bodies read their method declaration and graded scope from one identity-keyed
+# ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.
+ce_method_required='inferUserImplBodies : TcEnv -> List Decl -> ClassEnv -> Int -> List Decl -> Unit
+inferImplBodies : TcEnv -> List String -> ClassEnv -> Int -> List Decl -> Unit
+match ceMethodTyAt iface mname cur ce
+ceMethodTyAt : IfaceRef ->
+  match ceLookupAt key cur ce
+    Some row => ceMethodTyIn (ceRowTyparams row) mname (ceRowMethods row)'
+printf '%s\n' "$ce_method_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$predicate_slot_src"; then
+    echo "FAIL: impl-body ClassEnv lookup is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+
+ce_method_retired='useFastIfaceMethodTy
+ifaceMethodTyResolved
+ifaceMethodTy : List Decl ->
+methodTyOf :'
+printf '%s\n' "$ce_method_retired" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$predicate_slot_src"; then
+    echo "FAIL: retired impl-body method lookup remains: $retired"
+    exit 1
+  fi
+done || exit 1
+
+# Eval sizes an elaborated impl definition from its leading dictionary patterns and
+# registers both route words.  Interface declaration arity was a second, colliding
+# authority and must not return.
+eval_req_count_required='buildMethodReqCounts prog = flatMap implMethodReqCounts prog
+DImpl { iface, tys, methods, implOrigin, ... }
+let key = implRouteKeyWord implOrigin iface tys None
+[((mname, tag), count), ((mname, key), count)]
+leadingImplDictPats : List Pat -> Int'
+printf '%s\n' "$eval_req_count_required" | while IFS= read -r required; do
+  if ! grep -Fq "$required" "$eval_src"; then
+    echo "FAIL: eval method requires-count authority is missing: $required"
+    exit 1
+  fi
+done || exit 1
+
+eval_req_count_retired='methodDeclArities
+ifaceMethodArity
+implMethodReqCountEntry arities'
+printf '%s\n' "$eval_req_count_retired" | while IFS= read -r retired; do
+  if grep -Fq "$retired" "$eval_src"; then
+    echo "FAIL: retired eval method requires-count authority remains: $retired"
+    exit 1
+  fi
+done || exit 1
+
+numeric_infer_block=$(sed -n '/^inferNumLitMethod :/,/^inferNumLitBare :/p' "$predicate_slot_src")
+if printf '%s\n' "$numeric_infer_block" | grep -Fq 'recordMethodDicts "fromInt"'; then
+  echo "FAIL: numeric literal method slots still use the spelling-keyed registry"
+  exit 1
+fi
+if printf '%s\n' "$numeric_infer_block" | grep -Fq 'recordSite "fromInt"'; then
+  echo "FAIL: numeric literal return routing still uses the spelling-derived site payload"
+  exit 1
+fi
 
 predicate_slot_old_consumers='setFunConstraintEntry : String -> List CSlot -> Option (List (List Mono)) -> Unit
 registerActiveDictVars : String -> Int -> List Int -> Unit

@@ -285,3 +285,46 @@ REF	parsec/test/check.sh	migrated to a `kind = "native"` gate module (parsec/tes
 REF	byteparser/test/check.sh	migrated to a `kind = "native"` gate module (byteparser/test/check_test.mdk); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
 REF	byteparser/lib/byteparser.mdk	archive/design/F1B-MODULE-IDENTITY-DESIGN.md's landed-2026-06-25 record names the planned byteparser/lib/ layout; the parser shipped as stdlib/byteparser.mdk
 REF	byteparser/lib/bytebuilder.mdk	archive/design/SQLITE-WRITE-DESIGN.md's IMPLEMENTED design record names the planned byteparser/lib/ layout; the builder shipped as stdlib/bytebuilder.mdk
+
+# ── REF: the READ-group sqlite oracles, one native runner (#2593) ──────────
+# Ten sqlite/test/*_oracle.sh scripts became ten rows of sqlite/test/oracle_test.mdk,
+# under the single registry row still named sqlite/test/oracle. The LIVING pointers
+# (the sqlite/*_demo.mdk headers each script diffed, sqlite/lib/aggregate.mdk,
+# sqlite/test/query_test.mdk, sqlite/test/select_typeerror.mdk) were repointed at the
+# runner in the same commit; what is excused here is the history that must keep
+# naming the scripts.
+REF	sqlite/test/oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/aggregate_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/distinct_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/groupby_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/join_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/left_join_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/multipage_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/projection_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+REF	sqlite/test/select_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history; compiler/tools/gate_cost.mdk's `baselineKey` doctest also spells this path out as its worked example of the sqlite/ prefix, where a live path would make the doctest depend on a file the key computation never reads
+REF	sqlite/test/typed_oracle.sh	migrated into the ten-row native READ oracle in #2593 (sqlite/test/oracle_test.mdk, one registry row still named sqlite/test/oracle); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot records the gate as it existed as a script — legitimate history
+
+# ── REF: the DML-path and STORAGE-path sqlite oracles, two native runners
+# (#2592 / #2593) ───────────────────────────────────────────────────────────
+# Five `sqlite/test/{delete,delete_negative,update,update_expr,dml}_oracle.sh`
+# scripts became sqlite/test/dml_oracle_test.mdk; five
+# `sqlite/test/{writer,writer_api,multipage_write,multitable_write,
+# rowid_roundtrip}_oracle.sh` scripts became sqlite/test/writer_oracle_test.mdk.
+# The LIVING pointers (demo headers, sqlite/dml_probe.mdk, sqlite/lib/{mutate,
+# sqlexec,sqlstmt}.mdk, sqlite/main.mdk, sqlite/test/sql_oracle.sh) were
+# repointed at the two runners in this same commit; what is excused here is
+# the provenance prose inside the runners themselves (each block still names
+# the script it replaced) plus the archive design docs, the dated
+# TESTING-INVENTORY.md survey row, the two CLOSED-RECORD findings, and
+# sqlite/test/index_write_oracle.sh's rationale comment for a retired
+# sibling's shell-pipe pitfall — all genuinely historical.
+REF	sqlite/test/delete_oracle.sh	migrated into sqlite/test/dml_oracle_test.mdk's `delete` block in #2592/#2593; the block's own provenance comment, docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot, and sqlite/findings/sql-dml-cli.md's CLOSED RECORD keep naming the script — legitimate history
+REF	sqlite/test/delete_negative_oracle.sh	migrated into sqlite/test/dml_oracle_test.mdk's `delete_negative` block in #2592/#2593; the block's own provenance comment and docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot keep naming the script — legitimate history
+REF	sqlite/test/update_oracle.sh	migrated into sqlite/test/dml_oracle_test.mdk's `update` block in #2592/#2593; the block's own provenance comment and docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot keep naming the script — legitimate history
+REF	sqlite/test/update_expr_oracle.sh	migrated into sqlite/test/dml_oracle_test.mdk's `update_expr` block in #2592/#2593; the block's own provenance comment, docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot, and sqlite/test/index_write_oracle.sh's #1447 here-string rationale (a shell-pipe pitfall this now-native block cannot exhibit) keep naming the script — legitimate history
+REF	sqlite/test/dml_oracle.sh	migrated into sqlite/test/dml_oracle_test.mdk's `dml` block in #2592/#2593; the block's own provenance comment, docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot, and sqlite/findings/{sql-dml-cli,sql-in-subquery}.md's CLOSED RECORDs keep naming the script — legitimate history
+REF	sqlite/test/writer_oracle.sh	migrated into sqlite/test/writer_oracle_test.mdk's `writer` block in #2592/#2593; the block's own provenance comment, docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot, and archive/design/SQLITE-WRITE-DESIGN.md's IMPLEMENTED design record keep naming the script — legitimate history
+REF	sqlite/test/writer_api_oracle.sh	migrated into sqlite/test/writer_oracle_test.mdk's `writer_api` block in #2592/#2593; the block's own provenance comment and docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot keep naming the script — legitimate history
+REF	sqlite/test/multipage_write_oracle.sh	migrated into sqlite/test/writer_oracle_test.mdk's `multipage_write` block in #2592/#2593; the block's own provenance comment, docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot, and archive/design/SQLITE-WRITE-DESIGN.md's IMPLEMENTED design record keep naming the script — legitimate history
+REF	sqlite/test/multitable_write_oracle.sh	migrated into sqlite/test/writer_oracle_test.mdk's `multitable_write` block in #2592/#2593; the block's own provenance comment, archive/design/SQLITE-MUTATION-DESIGN.md, and archive/design/SQLITE-WRITE-DESIGN.md's IMPLEMENTED design record keep naming the script — legitimate history
+REF	sqlite/test/rowid_roundtrip_oracle.sh	migrated into sqlite/test/writer_oracle_test.mdk's `rowid_roundtrip` block in #2592/#2593; the block's own provenance comment and docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot keep naming the script — legitimate history

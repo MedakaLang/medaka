@@ -1,0 +1,29 @@
+-- A user interface collides only on add. Generic Num arithmetic at Int must
+-- still use the prelude Num witness for both the colliding and noncolliding
+-- methods; the explicitly named Forge method remains independently callable.
+-- lint-disable-file rule-missing-signature
+
+interface Forge a where
+  add : a -> a -> a
+
+impl Forge Int where
+  add _ _ = 101
+
+signedAdd : Num a => a -> a -> a
+signedAdd x y = x + y
+
+signedSub : Num a => a -> a -> a
+signedSub x y = x - y
+
+inferredAdd x y = x + y
+
+inferredSub x y = x - y
+
+main =
+  println (signedAdd (12 : Int) 3 == 15)
+  println (signedSub (12 : Int) 3 == 9)
+  println (inferredAdd (12 : Int) 3 == 15)
+  println (inferredSub (12 : Int) 3 == 9)
+  println ((12 : Int) + 3 == 15)
+  println ((12 : Int) - 3 == 9)
+  println (add 12 3 == 101)

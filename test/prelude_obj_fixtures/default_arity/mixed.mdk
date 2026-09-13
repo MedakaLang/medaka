@@ -1,0 +1,9 @@
+import ia.{IA, szK}
+
+public export data Cat = Cat
+public export data Dog = Dog
+
+export impl IA Cat where
+  szK _ = 111
+
+export impl IA Dog

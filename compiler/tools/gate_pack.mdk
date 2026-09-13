@@ -2249,12 +2249,9 @@ budgetOrphanLines commitMessage (n :: ns) =
   stringConcat [
       n, ack,
       " — a cost baseline row for a gate the registry no longer declares",
-      " — remedy: delete the row from test/gate_cost_baseline.json BY HAND.",
-      " That file is GENERATED and this is the one edit its banner does not",
-      " cover: test/gate_cost_ingest.sh only ADDS samples — it never reads",
-      " the registry and has no prune mode, so re-running it carries the",
-      " orphan forward rather than dropping it (#2770 tracks giving it one;",
-      " until that lands, the hand edit is the only discharge that works).",
+      " — remedy: `sh test/gate_cost_ingest.sh --baseline test/gate_cost_baseline.json",
+      " --registry test/gates.toml` (#2770) drops every orphaned row and prints",
+      " what it dropped; re-run `medaka gate balance` and `make gen-ci` after.",
       " To accept the stale row on",
       " purpose, paste:\n    Gate-Budget-Override: ", tok, "\n"
     ]

@@ -1,0 +1,2 @@
+export interface IA a where
+  walk : a -> Int -> Int -> Int

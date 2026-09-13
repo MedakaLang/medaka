@@ -4,7 +4,7 @@
 -- calls that use `leftJoin`, decoding the right side via `tOption` since it may
 -- be null-padded.  Prints one line per typed (wide) row, prefixed by a
 -- per-query label, for diffing against `sqlite3` in
--- sqlite/test/left_join_oracle.sh.
+-- sqlite/test/oracle_test.mdk.
 --
 -- Combined-row column order = `from` columns, then each join table's columns in
 -- `joins` order (same convention as join_demo.mdk).  These demos ORDER BY

@@ -1,0 +1,13 @@
+interface Hidden a b where
+  hidden : Unit -> a
+
+impl Hidden Int Char where
+  hidden _ = 22
+
+impl Hidden Int Bool where
+  hidden _ = 12
+
+useHidden : Hidden a b => b -> a
+useHidden witness = hidden ()
+
+main = println (useHidden True : Int)

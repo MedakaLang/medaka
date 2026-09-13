@@ -140,8 +140,9 @@ LEGIT_SKIP_RE='no C compiler|libgc \(bdw-gc\)|not on PATH'
 
 # ── A gate is identified by its PATH, not its basename ────────────────────────
 #
-# Gates do not all live in test/. `sqlite/test/*_oracle.sh` (22 differential gates
-# against the real sqlite3 CLI) and test/native_fixtures/run.sh are gates too, and
+# Gates do not all live in test/. The three surviving `sqlite/test/*.sh` scripts
+# (differential gates against the real sqlite3 CLI) and test/native_fixtures/run.sh
+# are gates too, and
 # basenames COLLIDE across those roots (test/native_fixtures/run.sh vs
 # playground/e2e/run.sh both stem to "run"). A results dir keyed on the basename
 # would silently overwrite one gate's status with another's — "this didn't run"

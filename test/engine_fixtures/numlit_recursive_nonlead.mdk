@@ -1,0 +1,36 @@
+interface Ix a b where
+  ix : a -> b -> b
+
+impl Ix Int Float where
+  ix _ y = y + 100.0
+
+value : (Ix a b, Num b) => a -> Int -> b
+value x n = if n == 0 then fromInt 0 else ix x (relay x (n - 1))
+
+-- Num's lead is Ix's non-lead argument, and still needs a separate slot.
+-- lint-disable-next-line rule-missing-signature
+relay x n = value x n
+
+reversed : (Num b, Ix a b) => a -> Int -> b
+reversed x n = if n == 0 then fromInt 0 else ix x (reversedRelay x (n - 1))
+
+-- Changing declared predicate order must preserve both inferred slots.
+-- lint-disable-next-line rule-missing-signature
+reversedRelay x n = reversed x n
+
+signedValue : (Ix a b, Num b) => a -> Int -> b
+signedValue x n = if n == 0 then fromInt 0 else ix x (signedRelay x (n - 1))
+signedRelay : (Ix a b, Num b) => a -> Int -> b
+signedRelay x n = signedValue x n
+
+floating : Float
+floating = relay 1 2
+reversedFloat : Float
+reversedFloat = reversedRelay 1 2
+signedFloat : Float
+signedFloat = signedRelay 1 2
+
+main =
+  println (floating == 200.0)
+  println (reversedFloat == 200.0)
+  println (signedFloat == 200.0)

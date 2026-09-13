@@ -13,6 +13,7 @@ impl Num Vec2 where
   abs (Vec2 x y) = Vec2 x y
   signum (Vec2 x y) = Vec2 1 1
   fromInt n = Vec2 n n
+  rem (Vec2 x1 y1) (Vec2 x2 y2) = Vec2 (x1 % x2) (y1 % y2)
 
 unVec : Vec2 -> Int
 unVec (Vec2 x _) = x

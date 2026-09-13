@@ -1,0 +1,12 @@
+interface Forge a where
+  add : a -> a
+
+impl Forge Int where
+  add x = x + 100
+
+forge : Forge a => a -> a
+forge x =
+  let f = add
+  f x
+
+main = println (forge 23)

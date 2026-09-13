@@ -106,7 +106,7 @@ evalLetGroup : EvalEnv (Value a) -> List LetBind -> Expr -> Value a
 evalMain : List Decl -> String
 evalMatch : EvalEnv (Value a) -> Value a -> List Arm -> Value a
 evalMethodAt : EvalEnv (Value a) -> String -> Route -> List Route -> List Route -> Value a
-evalMethodAtEv : EvalEnv (Value a) -> String -> (Route, List Route, List Route) -> Value a
+evalMethodAtEv : EvalEnv (Value a) -> String -> (Int, Route, List Route, List Route) -> Value a
 evalModules : List Decl -> List (String, List Decl) -> List (String, Value a)
 evalModulesOutput : List Decl -> List (String, List Decl) -> String
 evalModulesOutputRun : List Decl -> List (String, List Decl) -> <IO> String
@@ -168,7 +168,6 @@ ifaceDispatchEntries : Decl -> List ((String, String, String), List Int)
 ifaceDispatchRef : Ref (List ((String, String, String), List Int))
 ifaceIdsAtTagE : String -> List String
 ifaceIdsAtTagEGo : String -> List (String, String, String) -> List String
-ifaceMethodArity : IfaceMethod -> (String, Int)
 ifaceMethodEntry : String -> String -> List String -> IfaceMethod -> ((String, String, String), List Int)
 ifaceMethodNmE : IfaceMethod -> String
 ifaceOfMethod : String -> String
@@ -179,8 +178,8 @@ implDictRoutes : Option Int -> List Route -> List Route -> List Route
 implMethodEntry : EvalEnv (Value a) -> List ((String, String, String), List Int) -> TyConOrigin -> String -> List Ty -> ImplMethod -> (String, (Int, Value a))
 implMethodName : ImplMethod -> String
 implMethodNames : List Decl -> List String
-implMethodReqCountEntry : List (String, Int) -> String -> ImplMethod -> List ((String, String), Int)
-implMethodReqCounts : List (String, Int) -> Decl -> List ((String, String), Int)
+implMethodReqCountEntries : String -> String -> ImplMethod -> List ((String, String), Int)
+implMethodReqCounts : Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
 importFrameOf : List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
@@ -202,6 +201,7 @@ joinSp : List String -> String
 keepCand : String -> Value a -> Bool
 keepOrAll : List (Value a) -> List (Value a) -> List (Value a)
 lastOfList : List String -> String
+leadingImplDictPats : List Pat -> Int
 letBindCell : LetBind -> (String, Ref (Value a))
 letGroupDefs : List LetBind -> List (String, (List Pat, Expr))
 listNthAt : List (Value a) -> Int -> Int -> Value a
@@ -218,7 +218,6 @@ lookupMethod : EvalEnv (Value a) -> String -> Value a
 lookupMethodFrames : List (List (String, Ref (Value a))) -> List (List (String, Ref (Value a))) -> String -> Value a
 lookupMethodReqCountOpt : String -> String -> Option Int
 lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
-lookupReqCount : String -> String -> List ((String, String), Int) -> Option Int
 makeCtor : String -> Int -> Value a
 makeCtorGo : String -> Int -> List (Value a) -> Value a
 mapResultOk : (a -> b) -> Result String a -> Result String b
@@ -237,8 +236,9 @@ mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
 methodAtNarrow : EvalEnv (Value a) -> String -> Value a -> Route -> (Value a, List (Value a))
 methodCell : List (String, Ref (Value a)) -> String -> List (String, Ref (Value a))
 methodCellsOf : List (String, Ref (Value a)) -> List Decl -> List (String, Ref (Value a))
-methodDeclArities : Decl -> List (String, Int)
-methodReqCountRef : Ref (List ((String, String), Int))
+methodReqCountIndex : List ((String, String), Int) -> Map String (Map String Int)
+methodReqCountIndexGo : List ((String, String), Int) -> Map String (Map String Int) -> Map String (Map String Int)
+methodReqCountRef : Ref (Map String (Map String Int))
 methodsOfIface : String -> List String
 methodsOfIfaceIn : String -> List ((String, String, String), List Int) -> List String
 mkGroup : List (String, (List Pat, Expr)) -> String -> (String, List (List Pat, Expr))

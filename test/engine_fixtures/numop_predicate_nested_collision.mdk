@@ -1,0 +1,46 @@
+-- A Box dictionary forwards its Num W prerequisite even when Forge.add for W
+-- is registered first. Generic and ground operators must keep the Num row.
+-- lint-disable-file rule-missing-signature
+
+data W = W Int deriving (Eq)
+data Box a = Box a deriving (Eq)
+
+interface Forge a where
+  add : a -> a -> a
+
+impl Forge W where
+  add _ _ = W 1000
+
+impl Num W where
+  add (W x) (W y) = W (x + y)
+  sub (W x) (W y) = W (x - y)
+  mul (W x) (W y) = W (x * y)
+  div (W x) (W y) = W (x / y)
+  negate (W x) = W (-x)
+  abs (W x) = W (abs x)
+  signum (W x) = W (signum x)
+  fromInt n = W n
+  rem (W x) (W y) = W (x % y)
+
+impl Num (Box a) requires Num a where
+  add (Box x) (Box y) = Box (x + y)
+  sub (Box x) (Box y) = Box (x - y)
+  mul (Box x) (Box y) = Box (x * y)
+  div (Box x) (Box y) = Box (x / y)
+  negate (Box x) = Box (-x)
+  abs (Box x) = Box (abs x)
+  signum (Box x) = Box (signum x)
+  fromInt n = Box (fromInt n)
+  rem (Box x) (Box y) = Box (x % y)
+
+signedAdd : Num a => a -> a -> a
+signedAdd x y = x + y
+
+inferredSub x y = x - y
+
+main =
+  println (Box (W 12) + Box (W 3) == Box (W 15))
+  println (signedAdd (Box (W 12)) (Box (W 3)) == Box (W 15))
+  println (inferredSub (Box (W 12)) (Box (W 3)) == Box (W 9))
+  println (Box (W 13) % Box (W 5) == Box (W 3))
+  println (add (W 0) (W 0) == W 1000)

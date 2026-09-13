@@ -11,7 +11,7 @@ what: the occurrence `zero` constrains nothing; `Zero` has two impls at DIFFEREN
 what: DIFFERENT bodies. ⇒ THERE IS NO CORRECT VALUE FOR THIS PROGRAM, and a compiler must
 what: refuse it — as it does refuse the plain-head sibling. A wrapper on one head cannot
 what: make an impl stop existing, so both must still count. ⇒ the acceptance is the defect.
-what: MEASURED FIRST-HAND on a cold `make medaka` of this branch (no borrowed emitter),
+what: HISTORICAL BASELINE measured first-hand on a cold `make medaka` of this branch (no borrowed emitter),
 what: 2026-08-15, MEDAKA_STRICT=1, env free of MEDAKA_ROOT/MEDAKA_EMITTER, every verb
 what: redirected to a file with $? read directly (never piped — `build`'s exit code does not
 what: survive a pipe, and this claim is entirely about a `build` exit code):
@@ -23,7 +23,11 @@ what:                                    `error: emitter failed compiling <path>
 what:                                    `runtime error [E-PANIC]: arg-tag dispatch for
 what:                                     method 'zero': discriminating arg position not
 what:                                     supplied (under-applied / unapplied method)`
-what:                                  and producing NO binary                    <- PINNED
+what:                                  and producing NO binary             <- FORMER PIN
+what: CURRENT REPRO at `9787d6b24`, independently built 2026-09-12: all five files retain
+what: the same check/run/build exits and values. Only the wrapped-undetermined build panic
+what: changed to `arg-tag dispatch on impl type that owns no constructors (primitive receiver
+what: carries no cell tag)`, still exit 1 with no binary. The acceptance defect remains.
 what:   plain-head-rejected.mdk        check EXIT 1, ``Ambiguous instance for `Zero`. Cannot
 what:   (`Int` head, one byte-level     determine which impl; add a type annotation``;
 what:    dimension flipped)             run 1 and build 1 with the same diagnostic
@@ -46,7 +50,7 @@ what: code or instrument the census; I am relaying the issue's citation. What IS
 what: every cell above, including the effect-wrapper equivalence.
 cmd: build main.mdk
 exit: 1
-stdout-line: runtime error [E-PANIC]: arg-tag dispatch for method 'zero': discriminating arg position not supplied (under-applied / unapplied method)
+stdout-line: runtime error [E-PANIC]: arg-tag dispatch on impl type that owns no constructors (primitive receiver carries no cell tag)
 control: build control.mdk
 why-verb: `build`, and NOT `build-run`: no binary is produced at all, so there is nothing to
 why-verb: execute — `build` is this suite's only verb that grades a build FAILURE (its exit
