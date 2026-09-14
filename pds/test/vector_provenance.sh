@@ -635,36 +635,31 @@ pds/test/later.txt"
     st_rc=1
   fi
 
-  # T9 — integration: every real vector gate must hand its ledger-selected
+  # T9 — integration: every SHELL vector gate must hand its ledger-selected
   # corpus to the engine. The fake engine rejects only an argument containing
   # `wrong-answer`; a hard-coded old gate never passes that path and therefore
   # goes green, making this cell fail for the pre-#1729 implementation.
+  #
+  # The roster below samples the gates that still roll their own `--files-for`
+  # plumbing in shell. The sha256 gate left the roster when it became the
+  # native row pds/test/sha256_vectors_test.mdk (#2592): that row reads the
+  # ledger through pds/test/vector_ledger.mdk, whose Err and zero-file paths
+  # fail the row outright on every run, so its ledger consumption is asserted
+  # structurally rather than sampled here. A cell copying a script that no
+  # longer exists would assert nothing at all.
   t9="$(mktemp -d "$VP_WORK/t9.XXXXXX")"
   mkdir -p "$t9/pds/test/vectors"
   cp "$ROOT/pds/test/vector_provenance.sh" "$t9/pds/test/vector_provenance.sh"
-  for gate in sha256_vectors.sh field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
+  for gate in field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
     cp "$ROOT/pds/test/$gate" "$t9/pds/test/$gate"
   done
-  for consumer in sha256 field scalar encodings; do
+  for consumer in field scalar encodings; do
     mk_vector "$t9" "pds/test/vectors/$consumer-wrong-answer.txt" "deliberately wrong answer for $consumer"
   done
-  sha_hash="$(sha256_of_file "$t9/pds/test/vectors/sha256-wrong-answer.txt")"
   field_hash="$(sha256_of_file "$t9/pds/test/vectors/field-wrong-answer.txt")"
   scalar_hash="$(sha256_of_file "$t9/pds/test/vectors/scalar-wrong-answer.txt")"
   encodings_hash="$(sha256_of_file "$t9/pds/test/vectors/encodings-wrong-answer.txt")"
   cat > "$t9/pds/test/VECTOR-PROVENANCE.txt" << EOF
-[vector]
-file: pds/test/vectors/sha256-wrong-answer.txt
-local-sha256: $sha_hash
-kind: published-artifact
-source: Synthetic SHA fixture
-source-url: https://example.invalid/t9-sha256
-source-sha256: UNAVAILABLE
-source-note: synthetic self-test fixture, no real artifact
-extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-sha256 (#1729)
-
 [vector]
 file: pds/test/vectors/field-wrong-answer.txt
 local-sha256: $field_hash
@@ -712,7 +707,6 @@ for arg in "$@"; do
 done
 
 case "$1:$2" in
-  run:*sha256*) echo "67 ok, 0 failed" ;;
   run:*field*)
     echo "counted: 135/135 rows ok, 0 skipped (stride 7)"
     echo "TOTAL: PASS" ;;
@@ -736,7 +730,6 @@ case "$1:$2" in
       shift
     done
     case "$driver" in
-      *sha256*) body='echo "132 ok, 0 failed"' ;;
       *field*) body='echo "counted: 944/944 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
       *scalar*) body='echo "counted: 1028/1028 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
       *) exit 1 ;;
@@ -749,7 +742,7 @@ EOF
   chmod +x "$t9/fake-medaka"
 
   t9_rc=0
-  for gate in sha256_vectors.sh field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
+  for gate in field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
     t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/$gate" 2>&1)"
     t9_gate_rc=$?
     if [ "$t9_gate_rc" -ne 0 ] \

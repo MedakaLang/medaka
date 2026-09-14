@@ -1,0 +1,62 @@
+{- | Exact native ECDSA signing and Wycheproof verification gate for #1700
+   step 3, migrated from `pds/test/ecdsa_vectors.sh` under #2592.
+
+   Two corpora, named outright rather than through a ledger consumer id: the
+   prehashed signing rows the driver must reproduce exactly, and the
+   Wycheproof accept/reject corpus it must agree with row for row. The
+   driver takes them in that order.
+
+   `sourceShapes` carries a precondition the value corpora cannot state. A
+   secret-dependent branch and an arithmetic select produce the SAME
+   signature for every input, so no corpus of values can tell them apart;
+   only the source can. S3-D closes the full transitive native graph — this
+   row keeps the one shape that would otherwise be lost fail-capable here,
+   and it is checked before anything is built, so a broken precondition
+   reports itself instead of a compile. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+-- The accepted low-S normalization: an arithmetic select over `scHighBit`,
+-- never an `if` on a secret.
+lowSShape : String
+lowSShape = "let lowS = scSelect (scHighBit rawS) rawS (scNegateCt rawS)"
+
+row : Row
+row = Row {
+  gate = "pds/test/ecdsa_vectors",
+  driver = "pds/test/ecdsa_vectors_main.mdk",
+  corpus = Explicit [
+    "pds/test/vectors/prehashed_signing_corpus.txt",
+    "pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt",
+  ],
+  corpusCount = Exactly 2,
+  sourceShapes = [("pds/lib/secp256k1.mdk", lowSShape)],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = [
+        "PROBE candidate-1-selection: PASS computations=2",
+        "PROBE two-candidate-exhaustion: PASS computations=2",
+        "WITNESS high-S ",
+        "WITNESS malformed ",
+        "signing: 80/80 exact rows ok",
+        "public signing: 80/80 exact rows; self-verify=80/80",
+        "PUBLIC compact-boundary: PASS len63=reject len65=reject zero=reject range=reject high-S=reject",
+        "PUBLIC malformed-digest: PASS sign=4/4 reject verify=4/4 false",
+        "Wycheproof: 94 accepts / 148 rejects; 242 unique tcIds",
+        "public verification: 242/242 Wycheproof rows",
+      ],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "ECDSA: 80/80 signing rows, 242 Wycheproof rows, low-S stays an arithmetic select" =
+  expectRow row

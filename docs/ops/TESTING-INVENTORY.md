@@ -57,9 +57,9 @@
 | `pds/test/constant_time_public_key.sh` | STRUCTURAL-IR | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, SECTION-SPLIT | 3586 | 221 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `pds/test/constant_time_reductions.sh` | STRUCTURAL-IR | native (some wasm required-checks) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, SECTION-SPLIT | 34263 | 989 | WRAP: spawns ./medaka + diffs, module does the same [clang,node] |
 | `pds/test/constant_time_signing.sh` | STRUCTURAL-IR | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL, SECTION-SPLIT | 66762 | 641 | WRAP: spawns ./medaka + diffs, module does the same [clang,python3] |
-| `pds/test/dagcbor_cid_vectors.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 5707 | 68 | WRAP: spawns ./medaka + diffs, module does the same [node] |
+| `pds/test/dagcbor_cid_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native/wasm) | N | YES | — | 5707 | 68 | DONE: was `dagcbor_cid_vectors.sh`, now one `vector_runner` row [node] |
 | `pds/test/did_key_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 232991 | 120 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
-| `pds/test/ecdsa_vectors.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 74788 | 82 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/ecdsa_vectors_test.mdk` | GOLDEN | native | N | YES | — | 74788 | 82 | DONE: was `ecdsa_vectors.sh`, now one `vector_runner` row |
 | `pds/test/field_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 49216 | 125 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/inlang_test_oracle.sh` | INLANG-WRAPPER | interpreter | N | NO | NATIVE-KIND-RUNNER | 418939 | 102 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/lexjson_vectors.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 3305 | 59 | WRAP: spawns ./medaka + diffs, module does the same |
@@ -69,11 +69,11 @@
 | `pds/test/protocol_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 23834 | 123 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
 | `pds/test/read_routes_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 35748 | 157 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
 | `pds/test/repo_vectors.sh` | DIFFERENTIAL | multiple (native/wasm only, no eval) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 18410 | 171 | WRAP: spawns ./medaka + diffs, module does the same [node] |
-| `pds/test/rfc6979_vectors.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 2234 | 80 | WRAP: spawns ./medaka + diffs, module does the same [python3] |
+| `pds/test/rfc6979_vectors_test.mdk` | DIFFERENTIAL | native | N | YES | — | 2234 | 80 | DONE: was `rfc6979_vectors.sh`, now one `vector_runner` row [python3] |
 | `pds/test/scalar_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 63804 | 143 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/secp256k1_point_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 200484 | 17 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/serve_e2e.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 44227 | 233 | WRAP: spawns ./medaka + diffs, module does the same |
-| `pds/test/sha256_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 16052 | 115 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/sha256_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native) | N | YES | — | 16052 | 115 | DONE: was `sha256_vectors.sh`, now one `vector_runner` row |
 | `pds/test/store_persistence.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 7958 | 102 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/trust_boundary_guards.sh` | OTHER | interpreter (eval only, deliberately) | N | NO | NATIVE-KIND-RUNNER | 3052 | 125 | WRAP: spawns ./medaka + diffs, module does the same |
 | `sqlite/test/aggregate_oracle.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 4491 | 71 | WRAP: spawns ./medaka + diffs, module does the same [sqlite3] |

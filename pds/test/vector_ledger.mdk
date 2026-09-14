@@ -20,7 +20,7 @@
 
    The digest MUST come from spawning the external `sha256sum`/`shasum`
    binary, never `stdlib/sha256.mdk`: this ledger governs the corpus that
-   grades `stdlib/sha256.mdk` itself (`pds/test/sha256_vectors.sh`).
+   grades `stdlib/sha256.mdk` itself (`pds/test/sha256_vectors_test.mdk`).
    Verifying the ledger with the implementation under test would make a
    broken SHA-256 self-certifying. -}
 
@@ -81,8 +81,8 @@ flushStanza kind fields acc =
 -- (a malformed ledger line; the caller treats it as a stanza with that key
 -- absent, same as the shell gate's own required-key check would fail it).
 --
--- > splitColon "file: pds/test/x.txt"
--- Some ("file", "pds/test/x.txt")
+-- > splitColon "file: pds/test/vectors/sha256_worked_examples.txt"
+-- Some ("file", "pds/test/vectors/sha256_worked_examples.txt")
 -- > splitColon "no colon here"
 -- None
 export

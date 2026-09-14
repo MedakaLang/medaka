@@ -1,0 +1,91 @@
+{- | Canonical DAG-CBOR/DRISL + CID foundation: external vectors, strict
+   hostile-rejection routes, and eval/native/Wasm normalized-output parity —
+   migrated from `pds/test/dagcbor_cid_vectors.sh` under #2592.
+
+   Three arms over one ledgered corpus (`P1-A-CBOR-CID`), with `parity`
+   requiring their stdout to be byte-identical. That is the assertion three
+   engines exist to make: each arm independently satisfies the same row
+   counts and the same 24 named rejection routes, and two engines can do
+   that while still disagreeing about a value no count or substring names.
+
+   The Wasm arm is the one that may be absent — it needs the Wasm emitter,
+   `node` and `wasm-tools`. It is skipped when they are missing and required
+   when `MEDAKA_REQUIRE_WASM=1`, which is how CI states that a host it
+   controls must have them. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+{- | The 24 malformed inputs the decoder must reject, each on a NAMED route.
+
+   The route name is part of the requirement, not decoration: a decoder that
+   rejected every one of these for the same generic reason would satisfy a
+   count of 24 while having lost the distinctions the routes exist to draw. -}
+malformedLabels : List String
+malformedLabels = [
+  "shortest-integer-positive",
+  "shortest-integer-negative",
+  "shortest-length-bytes",
+  "shortest-length-text",
+  "shortest-length-array",
+  "shortest-length-map",
+  "map-ordering",
+  "map-duplicate",
+  "map-non-string-key",
+  "tag42-only",
+  "tag42-shortest",
+  "tag42-identity",
+  "tag42-cid-codec-route",
+  "cid-codec",
+  "cid-hash",
+  "cid-length",
+  "base32-padding",
+  "base32-case",
+  "base32-alphabet",
+  "truncation",
+  "trailing-bytes",
+  "indefinite-length",
+  "float",
+  "invalid-utf8",
+]
+
+needs : List String
+needs =
+  [
+      "external: 17/17 IPLD rows",
+      "malformed: 24/24 rejected on named routes",
+    ]
+    ++ map routeNeed malformedLabels
+
+routeNeed : String -> String
+routeNeed label = "MALFORMED \{label} PASS route="
+
+-- Every arm is held to the whole list rather than only the first one, with
+-- parity then carrying the rest. The retired script graded the substrings on
+-- the eval arm alone and `cmp`ed the others against it; asserting them
+-- per-arm costs nothing and says which engine lost a route.
+arm : Engine -> Arm
+arm e = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = needs,
+  lastLine = Some "TOTAL: PASS",
+}
+
+row : Row
+row = Row {
+  gate = "pds/test/dagcbor_cid_vectors",
+  driver = "pds/test/dagcbor_cid_vectors_main.mdk",
+  corpus = Ledgered "P1-A-CBOR-CID",
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [arm EvalEngine, arm NativeEngine, arm WasmEngine],
+  parity = True,
+}
+
+test "DAG-CBOR/CID: eval, native and Wasm agree on the ledgered corpus" =
+  expectRow row

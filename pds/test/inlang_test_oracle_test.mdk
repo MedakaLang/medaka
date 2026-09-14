@@ -143,6 +143,22 @@ exempt = [
     "trust_boundary_guards_test",
     "a gate-test, not a suite: it spawns `guard_probes_main.mdk` one case per process, and `test/gates.toml` runs it as `pds/test/trust_boundary_guards`",
   ),
+  (
+    "sha256_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/sha256_vectors`",
+  ),
+  (
+    "dagcbor_cid_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/dagcbor_cid_vectors`",
+  ),
+  (
+    "rfc6979_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/rfc6979_vectors`",
+  ),
+  (
+    "ecdsa_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/ecdsa_vectors`",
+  ),
 ]
 
 exemptNames : List String

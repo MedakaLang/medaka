@@ -1,0 +1,662 @@
+{- | The vector-corpus gate family, as one runner over a table of rows
+   (S-vectors-are-one-runner, #2592, #2593).
+
+   A vector gate is always the same four steps: pick a corpus, spawn a
+   driver over it on one or more engines, check the driver said what it was
+   supposed to say, and check it said it about enough rows. The corpus, the
+   driver, the engines and the expected sayings are the data; the four steps
+   are not. A `Row` names the data; this module is the steps.
+
+   The axes the rows below span, each represented exactly once by the first
+   migrated batch:
+
+   | axis | row |
+   |---|---|
+   | ledger-driven, plain | `pds/test/sha256_vectors_test.mdk` |
+   | ledger-driven + a Wasm arm through `node` | `pds/test/dagcbor_cid_vectors_test.mdk` |
+   | a `python3` reference oracle | `pds/test/rfc6979_vectors_test.mdk` |
+   | no ledger, two corpora named outright | `pds/test/ecdsa_vectors_test.mdk` |
+
+   GRADING IS STRICTER THAN THE RETIRED SCRIPTS. Each of them redirected a
+   spawn's two streams into one file (`>"$OUT" 2>&1`) and then graded that
+   file, so a driver that printed its answer and also complained on stderr
+   was indistinguishable from one that did not complain. Here exit status,
+   stderr and stdout are three separate assertions (#2823, #2890): a spawn
+   must exit 0, must write nothing to stderr, and must satisfy its row's
+   floors and substrings. A spawn known to write to stderr today is a row in
+   `expectedStderr`, which fails once that spawn runs clean — a pin that
+   drains itself rather than a redirect that hides.
+
+   Runs under `medaka test --native`: every row spawns a subprocess, and the
+   interpreter binds no subprocess extern. -}
+
+import test.vector_ledger.{filesForConsumer}
+import io.{getEnvOr}
+import list.{last, somes}
+import path.{stem}
+import string.{
+  contains, indexOf, join, lines, take, toInt, trim, unlines, words
+}
+import test.{Expectation, fail, pass}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, scratchDir}
+
+-- # The row
+
+{- | Which engine an arm spawns the driver on.
+
+   `WasmEngine` is the only one that can be absent from a host: it needs the
+   Wasm emitter, `node` and `wasm-tools`, none of which a plain Medaka
+   checkout builds. It is therefore the only one an arm may skip, and only
+   when `MEDAKA_REQUIRE_WASM` is unset. -}
+public export data Engine = EvalEngine | NativeEngine | WasmEngine
+
+{- | How many files a row's corpus must hold.
+
+   `Exactly` is not a tighter `AtLeast`: a corpus the row reasons about
+   file-by-file (one ledgered artifact whose single path is passed on as
+   THE corpus) is wrong if it gains a second file, while a corpus the driver
+   sweeps is only wrong if it shrinks. -}
+-- Two Int-carrying constructors, but not a `Result`: neither arm is a
+-- failure, and a bound is compared against a count rather than propagated.
+-- lint-disable-next-line rule-clone-type
+public export data Bound = AtLeast Int | Exactly Int
+
+{- | Where a row's corpus comes from.
+
+   `Ledgered` names a consumer id in `pds/test/VECTOR-PROVENANCE.txt` and
+   gets the files through `test.vector_ledger`, which re-hashes each one
+   against its recorded digest — so a row cannot be graded against bytes the
+   ledger does not vouch for. `Explicit` names repo-relative paths outright,
+   for a corpus no ledger consumer id covers. -}
+-- Not a `Result`: both arms are a corpus, and neither is the error channel
+-- of the other — resolving either one can itself fail.
+-- lint-disable-next-line rule-clone-type
+public export data Corpus = Ledgered String | Explicit (List String)
+
+{- | One engine's run of the row's driver.
+
+   `driverArgs` precede the corpus paths, which is where a driver's own
+   bound flag goes (`--max-bytes 64`), so two arms of one row can sweep the
+   same corpus at different depths. `countFloor` grades the driver's own
+   `<n> ok,` totals, `needs` the substrings its output must contain, and
+   `lastLine` the exact final line — the three shapes the retired scripts
+   graded with `awk`, `grep -F -q` and `tail -1`. -}
+public export data Arm = Arm {
+  engine : Engine,
+  driverArgs : List String,
+  countFloor : Option Int,
+  needs : List String,
+  lastLine : Option String,
+}
+
+{- | An independent reference implementation, spawned to compute a value the
+   row then requires in the driver's output.
+
+   `source` is the program text, one line per element, written to a scratch
+   file and passed to `program` with the corpus paths as arguments. It is
+   carried as data here rather than as a committed script file because every
+   regular non-`.sh`/`.mdk` file under `pds/test/` owes a `[vector]` stanza
+   in the provenance ledger, and an oracle's own source is not a vector.
+
+   The requirement it produces is `needlePrefix` followed by the oracle's
+   trimmed stdout, and it is required of EVERY arm — an oracle that agreed
+   with one engine and not another would otherwise pass. -}
+public export data Oracle = Oracle {
+  program : String,
+  source : List String,
+  needlePrefix : String,
+}
+
+{- | One retired gate.
+
+   `sourceShapes` pairs a repo-relative implementation file with an exact
+   string that must appear in it. It grades the SOURCE, not the output, and
+   exists for a property a value corpus cannot see: `pds/lib/secp256k1.mdk`'s
+   low-S normalization has to be an arithmetic select rather than a secret
+   branch, and both spellings produce identical signatures. It runs before
+   anything is built, so a row whose precondition is broken says so instead
+   of reporting a compile.
+
+   `parity` requires every non-skipped arm's stdout to be byte-identical to
+   the first arm's — the eval/native/Wasm agreement three engines exist to
+   state. It is False for a row whose arms deliberately sweep different
+   depths, where identical output would mean the bound did nothing. -}
+public export data Row = Row {
+  gate : String,
+  driver : String,
+  corpus : Corpus,
+  corpusCount : Bound,
+  sourceShapes : List (String, String),
+  oracle : Option Oracle,
+  arms : List Arm,
+  parity : Bool,
+}
+
+-- # Pins
+
+{- | The (gate, engine) spawns known to write to stderr today, each with the
+   reason.
+
+   A pair listed here is REQUIRED to write something: one that runs clean
+   fails the row and is removed in the same commit that cleaned it, so this
+   roster drains itself. Empty, and kept empty-but-present, so the next
+   finding is a row rather than a new mechanism — and so that nobody
+   reintroduces the `2>&1` that made these invisible. -}
+expectedStderr : List (String, String)
+expectedStderr = []
+
+-- # Spawning
+
+-- How long one spawn may take. A build links a whole driver and its
+-- transitive library, so it gets its own ceiling rather than stretching the
+-- run ceiling to cover both.
+buildSeconds : Int
+buildSeconds = 900
+
+runSeconds : Int
+runSeconds = 600
+
+{- | `cmd` run with `envs` set, killed after `secs`.
+
+   `boundedVerbSeconds` already resolves its command through `env`, so a
+   second `env` carrying assignments is how a spawn gets an environment
+   without a shell — `MDK_ARGS` for the Wasm runner, `MEDAKA_ROOT` and
+   `MEDAKA_STRICT` for the compiler. -}
+spawn : Int ->
+  List String ->
+  String ->
+  List String ->
+  <Exec "_"> Result String (Int, String, String)
+spawn secs envs cmd args = boundedVerbSeconds secs "env" (envs ++ (cmd :: args))
+
+{- | The environment every `medaka` spawn carries.
+
+   `MEDAKA_STRICT=1` is what turns a stale binary from a stderr warning the
+   retired scripts discarded into a hard failure ([B-STALENESS]). Both arms
+   of a parity row share one compiler tree, so asserting freshness on each
+   of them is consistent rather than self-contradictory. -}
+medakaEnv : <IO> List String
+medakaEnv = [
+  "MEDAKA_ROOT=\{medakaRoot}",
+  "MEDAKA_EMITTER=\{medakaRoot}/medaka_emitter",
+  "MEDAKA_STRICT=1",
+]
+
+-- Whether `name` resolves to something runnable. A missing command makes
+-- `env` exit 127 without running anything, which is the one code that
+-- distinguishes "absent" from "ran and disagreed".
+commandPresent : String -> <Exec "_"> Bool
+commandPresent name = match spawn 60 [] name ["--version"]
+  Err _ => False
+  Ok (code, _, _) => code /= 127
+
+-- # Grading one spawn
+
+{- | The findings against one spawn's exit status and stderr, and the stdout
+   it produced.
+
+   All three are read. `label` names the gate and arm so a finding says
+   which spawn produced it, and keys the `expectedStderr` pin. -}
+spawnFindings : String ->
+  String ->
+  Result String (Int, String, String) ->
+  (String, List String)
+spawnFindings label what (Err e) =
+  ("", ["\{label}: could not spawn \{what}: \{e}"])
+spawnFindings label what (Ok (code, out, err)) =
+  let exit =
+    if code == 0 then
+      []
+    else
+      ["\{label}: \{what} exited \{intToString code}\{outputTail err out}"]
+  (out, exit ++ stderrFindings label what err)
+
+{- | The stderr half, against the `expectedStderr` pin.
+
+   A pinned spawn that writes nothing fails rather than passing quietly:
+   that is the whole difference between a pin and a suppression. -}
+stderrFindings : String -> String -> String -> List String
+stderrFindings label what err =
+  let pinned = elem (pinKey label) expectedStderr
+  if err == "" then
+    if pinned then
+      [
+        "\{label}: \{what} writes nothing to stderr now — drop it from `expectedStderr` in pds/test/vector_runner.mdk",
+      ]
+    else
+      []
+  else if pinned then
+    []
+  else
+    ["\{label}: \{what} wrote to stderr: \{debug (firstLine err)}"]
+
+-- A label is "<gate> (<engine>)"; the pin is keyed by the two halves so a
+-- reader of `expectedStderr` sees a gate and an engine, not a rendered
+-- string it would have to reproduce exactly.
+pinKey : String -> (String, String)
+pinKey label = match words label
+  [] => ("", "")
+  g :: rest => (g, join " " rest)
+
+firstLine : String -> String
+firstLine s = match lines s
+  [] => ""
+  l :: _ => l
+
+{- | What a failed spawn said, in one line: the FIRST and LAST non-empty
+   lines of its stderr, or of its stdout when stderr is empty.
+
+   Both ends, because neither dominates. A sweeping driver names the row it
+   disagreed about first and reaches its verdict last; a driver that read an
+   empty corpus says everything it has to say on its only line. Quoting one
+   end alone reported a PASS line as the failure on a row whose disagreement
+   was at the other end, which is worse than quoting nothing. -}
+outputTail : String -> String -> String
+outputTail err out =
+  let text = if err == "" then out else err
+  match filter (/= "") (lines text)
+    [] => ""
+    ls => ": \{debug (edges ls)}"
+
+edges : List String -> String
+edges [] = ""
+edges (l :: rest) = match last rest
+  None => l
+  Some z => if z == l then l else "\{l} … \{z}"
+
+-- # Grading stdout
+
+{- | The driver's own count of graded records: the `<n>` in every `<n> ok,`
+   it printed, summed.
+
+   This is `awk -F'[: ]+' '/ ok,/ { s += $2 }'`, which every retired
+   ledger-driven script ran over its driver's per-file summary lines. A line
+   whose count does not parse contributes nothing and so drops the total
+   below the floor, rather than making the comparison itself an error — the
+   failure mode RUN-PDS0-040 F20 was written for. -}
+countOk : String -> Int
+countOk out = sum (somes (map okCount (lines out)))
+
+okCount : String -> Option Int
+okCount l = match indexOf " ok," l
+  None => None
+  Some i => match last (words (take i l))
+    None => None
+    Some w => toInt w
+
+lastLineOf : String -> String
+lastLineOf out = match last (filter (/= "") (lines out))
+  None => ""
+  Some l => l
+
+-- The findings against one arm's stdout: its floor, its substrings, and its
+-- final line.
+outputFindings : String -> Arm -> List String -> String -> List String
+outputFindings label a extraNeeds out =
+  floorFindings label a.countFloor out
+    ++ somes (map (needFinding label out) (a.needs ++ extraNeeds))
+    ++ lastLineFindings label a.lastLine out
+
+floorFindings : String -> Option Int -> String -> List String
+floorFindings _ None _ = []
+floorFindings label (Some n) out =
+  let got = countOk out
+  if got >= n then
+    []
+  else
+    [
+      "\{label}: the driver graded \{intToString got} records, expected at least \{intToString n} — raise or lower this row's `countFloor` only when the corpus itself changed",
+    ]
+
+needFinding : String -> String -> String -> Option String
+needFinding label out needle =
+  if contains needle out then
+    None
+  else
+    Some "\{label}: output does not contain \{debug needle}"
+
+lastLineFindings : String -> Option String -> String -> List String
+lastLineFindings _ None _ = []
+lastLineFindings label (Some want) out =
+  let got = lastLineOf out
+  if got == want then
+    []
+  else
+    ["\{label}: last output line is \{debug got}, expected \{debug want}"]
+
+-- # Running one arm
+
+{- | One arm's outcome. A skipped arm carries no stdout and takes no part in
+   the parity comparison — comparing against the empty string would report
+   agreement nobody observed. -}
+data ArmResult = ArmResult {
+  label : String,
+  stdout : String,
+  skipped : Bool,
+  findings : List String,
+}
+
+engineLabel : Engine -> String
+engineLabel EvalEngine = "(eval)"
+engineLabel NativeEngine = "(native)"
+engineLabel WasmEngine = "(wasm)"
+
+skippedArm : String -> ArmResult
+skippedArm label =
+  ArmResult { label = label, stdout = "", skipped = True, findings = [] }
+
+failedArm : String -> List String -> ArmResult
+failedArm label fs =
+  ArmResult { label = label, stdout = "", skipped = False, findings = fs }
+
+runArm : Row ->
+  List String ->
+  String ->
+  List String ->
+  Arm ->
+  <Exec "_", FileRead "_", IO> ArmResult
+runArm r corpusPaths scratch extraNeeds a =
+  let label = "\{r.gate} \{engineLabel a.engine}"
+  let driver = "\{medakaRoot}/\{r.driver}"
+  match armStdout r a label driver corpusPaths scratch
+    (out, []) => ArmResult {
+      label = label,
+      stdout = out,
+      skipped = False,
+      findings = outputFindings label a extraNeeds out,
+    }
+    (_, fs) => failedArm label fs
+
+{- | The arm's stdout and the findings against the spawns that produced it.
+
+   A native or Wasm arm is two spawns, a build and a run, and the build's
+   own exit code is read before the run is attempted — a driver that failed
+   to compile otherwise reports as a driver that printed nothing. -}
+armStdout : Row ->
+  Arm ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  <Exec "_", IO> (String, List String)
+armStdout r a label driver corpusPaths scratch = match a.engine
+  EvalEngine => evalStdout a label driver corpusPaths
+  NativeEngine => nativeStdout r a label driver corpusPaths scratch
+  WasmEngine => wasmStdout r a label driver corpusPaths scratch
+
+evalStdout : Arm ->
+  String ->
+  String ->
+  List String ->
+  <Exec "_", IO> (String, List String)
+evalStdout a label driver corpusPaths =
+  let args = ["run", driver] ++ a.driverArgs ++ corpusPaths
+  spawnFindings label "medaka run" (spawn runSeconds medakaEnv medakaBin args)
+
+nativeStdout : Row ->
+  Arm ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  <Exec "_", IO> (String, List String)
+nativeStdout r a label driver corpusPaths scratch =
+  let bin = "\{scratch}/\{stem r.driver}"
+  let build =
+    spawn buildSeconds medakaEnv medakaBin ["build", driver, "-o", bin]
+  match spawnFindings label "medaka build" build
+    (_, []) =>
+      spawnFindings
+        label
+        "the built driver"
+        (spawn runSeconds [] bin (a.driverArgs ++ corpusPaths))
+    (_, fs) => ("", fs)
+
+wasmStdout : Row ->
+  Arm ->
+  String ->
+  String ->
+  List String ->
+  String ->
+  <Exec "_", IO> (String, List String)
+wasmStdout r a label driver corpusPaths scratch =
+  let wasm = "\{scratch}/\{stem r.driver}.wasm"
+  let envs = medakaEnv ++ ["MEDAKA_WASM_EMITTER=\{wasmEmitter}"]
+  let args = ["build", "--target", "wasm", driver, "-o", wasm]
+  let runJs = "\{medakaRoot}/test/wasm/run.js"
+  let built =
+    spawnFindings
+      label
+      "medaka build --target wasm"
+      (spawn buildSeconds envs medakaBin args)
+  match built
+    (_, []) =>
+      spawnFindings
+        label
+        "node test/wasm/run.js"
+        (spawn
+          runSeconds
+          [mdkArgs (a.driverArgs ++ corpusPaths)]
+          "node"
+          [runJs, wasm])
+    (_, fs) => ("", fs)
+
+-- The Wasm emitter this host would use. It is not built by `make medaka`, so
+-- `wasmUnavailable` grades its presence rather than assuming it.
+wasmEmitter : <IO> String
+wasmEmitter =
+  getEnvOr "MEDAKA_WASM_EMITTER" "\{medakaRoot}/test/bin/wasm_emit_modules_main"
+
+-- The Wasm runner takes the program's argument vector as one environment
+-- variable, space-separated. A corpus path holding a space would arrive as
+-- two arguments; no path in this tree does, and the ledger's own file
+-- grammar has no way to spell one.
+mdkArgs : List String -> String
+mdkArgs args = "MDK_ARGS=\{join spaceStr args}"
+
+spaceStr : String
+spaceStr = " "
+
+{- | Whether a Wasm arm can run here, or why it cannot.
+
+   The three prerequisites are the ones the retired script checked, in the
+   same order. `MEDAKA_REQUIRE_WASM=1` turns every absence into a finding,
+   which is how CI states that a host it controls must have them. -}
+wasmUnavailable : <Exec "_", FileRead "_", IO> Option String
+wasmUnavailable =
+  if not (fileExists wasmEmitter) then
+    Some "the Wasm emitter \{wasmEmitter} is not built"
+  else if not (commandPresent "node") then
+    Some "node is not installed"
+  else if not (commandPresent "wasm-tools") then
+    Some "wasm-tools is not installed"
+  else
+    None
+
+armResults : Row ->
+  List String ->
+  String ->
+  List String ->
+  <Exec "_", FileRead "_", IO> List ArmResult
+armResults r corpusPaths scratch extraNeeds =
+  map (oneArm r corpusPaths scratch extraNeeds) r.arms
+
+oneArm : Row ->
+  List String ->
+  String ->
+  List String ->
+  Arm ->
+  <Exec "_", FileRead "_", IO> ArmResult
+oneArm r corpusPaths scratch extraNeeds a =
+  let label = "\{r.gate} \{engineLabel a.engine}"
+  match a.engine
+    WasmEngine => match wasmUnavailable
+      None => runArm r corpusPaths scratch extraNeeds a
+      Some why =>
+        if getEnvOr "MEDAKA_REQUIRE_WASM" "0" == "1" then
+          failedArm label ["\{label}: Wasm is required here but \{why}"]
+        else
+          skippedArm label
+    _ => runArm r corpusPaths scratch extraNeeds a
+
+-- # Parity across arms
+
+{- | Every non-skipped arm's stdout compared against the first one's.
+
+   Byte-identical, not "both passed": two engines that each satisfy the same
+   floors and substrings can still disagree about a value neither assertion
+   names, and that disagreement is the entire reason a row has more than one
+   arm. -}
+parityFindings : Bool -> List ArmResult -> List String
+parityFindings False _ = []
+parityFindings True rs = match filter (a => not a.skipped) rs
+  [] => []
+  first :: rest => somes (map (differsFrom first) rest)
+
+differsFrom : ArmResult -> ArmResult -> Option String
+differsFrom first a =
+  if a.stdout == first.stdout then
+    None
+  else
+    Some
+      "\{a.label}: output differs from \{first.label} — the engines disagree about a value no floor or substring names"
+
+-- # The corpus
+
+corpusPathsOf : String ->
+  Corpus ->
+  <Exec "_", FileRead "_"> Result String (List String)
+corpusPathsOf root (Ledgered consumer) = filesForConsumer root consumer
+corpusPathsOf _ (Explicit rels) = Ok rels
+
+boundFinding : Bound -> Int -> Option String
+boundFinding (AtLeast n) got =
+  if got >= n then
+    None
+  else
+    Some
+      "corpus holds \{intToString got} files, expected at least \{intToString n}"
+boundFinding (Exactly n) got =
+  if got == n then
+    None
+  else
+    Some
+      "corpus holds \{intToString got} files, expected exactly \{intToString n}"
+
+-- # The source-shape precondition
+
+sourceShapeFindings : String ->
+  List (String, String) ->
+  <FileRead "_"> List String
+sourceShapeFindings root shapes = somes (map (sourceShapeFinding root) shapes)
+
+sourceShapeFinding : String -> (String, String) -> <FileRead "_"> Option String
+sourceShapeFinding root (rel, shape) = match readFile "\{root}/\{rel}"
+  Err e => Some "\{rel}: could not be read to check its accepted shape: \{e}"
+  Ok src =>
+    if contains shape src then
+      None
+    else
+      Some "\{rel}: does not contain the accepted shape \{debug shape}"
+
+-- # The reference oracle
+
+{- | The substring the oracle demands of every arm, or the finding that it
+   could not be computed.
+
+   The oracle's own spawn is graded exactly as a driver's is — exit status,
+   stderr and stdout — because an oracle that failed silently would hand the
+   row a needle assembled from an empty answer, which the driver's output
+   cannot contain and which would then be reported as the DRIVER's fault. -}
+oracleNeeds : Row ->
+  String ->
+  List String ->
+  <Exec "_", FileWrite "_", IO> (List String, List String)
+oracleNeeds r scratch corpusPaths = match r.oracle
+  None => ([], [])
+  Some o => runOracle r o scratch corpusPaths
+
+runOracle : Row ->
+  Oracle ->
+  String ->
+  List String ->
+  <Exec "_", FileWrite "_", IO> (List String, List String)
+runOracle r o scratch corpusPaths =
+  let label = "\{r.gate} (oracle)"
+  let path = "\{scratch}/oracle_source"
+  match writeFile path (unlines o.source)
+    Err e => ([], ["\{label}: could not write the oracle source: \{e}"])
+    Ok _ =>
+      let ran =
+        spawnFindings
+          label
+          o.program
+          (spawn runSeconds [] o.program (path :: corpusPaths))
+      match ran
+        (out, []) =>
+          if trim out == "" then
+            ([], ["\{label}: \{o.program} printed nothing"])
+          else
+            (["\{o.needlePrefix}\{trim out}"], [])
+        (_, fs) => ([], fs)
+
+-- # Grading a row
+
+{- | Every finding against one row, in the order the retired scripts
+   produced them: source shape, then corpus, then the arms, then parity.
+
+   The whole list, never the first: a red run should name every engine that
+   disagreed at once, which is what a single runner buys over one script per
+   engine pair. -}
+gradeRow : Row -> <Exec "_", FileRead "_", FileWrite "_", IO> List String
+gradeRow r =
+  let shapeFindings = sourceShapeFindings medakaRoot r.sourceShapes
+  match shapeFindings
+    _ :: _ => shapeFindings
+    [] => match corpusPathsOf medakaRoot r.corpus
+      Err e => ["\{r.gate}: \{e}"]
+      Ok rels => match boundFinding r.corpusCount (length rels)
+        Some m => ["\{r.gate}: \{m}"]
+        None => runRow r (map (p => "\{medakaRoot}/\{p}") rels)
+
+runRow : Row ->
+  List String ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> List String
+runRow r corpusPaths = match scratchDir
+  Err e => ["\{r.gate}: could not make a scratch directory: \{e}"]
+  Ok scratch => match oracleNeeds r scratch corpusPaths
+    (extraNeeds, []) =>
+      let rs = armResults r corpusPaths scratch extraNeeds
+      reap scratch (armFindings rs ++ parityFindings r.parity rs)
+    (_, oracleBad) => reap scratch oracleBad
+
+-- Every arm's findings in arm order, so a red row names the engines in the
+-- order its own table lists them.
+armFindings : List ArmResult -> List String
+armFindings [] = []
+armFindings (a :: rest) = a.findings ++ armFindings rest
+
+-- The scratch directory is the caller's to remove (`scratchDir`'s own
+-- contract). The spawn is wildcard-bound because a cleanup asserts nothing:
+-- a failure to reap is not a finding about the gate's subject.
+reap : String -> List String -> <Exec "_"> List String
+reap scratch findings =
+  let _ = spawn 60 [] "rm" ["-rf", scratch]
+  findings
+
+{- | The row's verdict, for a `test "…"` block in its own module.
+
+   One `Expectation` per row rather than one per assertion: the assertions
+   inside a row are not independent — a corpus that failed to resolve makes
+   every later one unanswerable — so reporting them as one failure with a
+   full finding list says more than a column of identically-caused reds. -}
+export
+expectRow : Row -> <Exec "_", FileRead "_", FileWrite "_", IO> Expectation
+expectRow r = match gradeRow r
+  [] => pass
+  fs =>
+    let body = unlines (map indent fs)
+    fail "\{r.gate}: \{intToString (length fs)} findings:\n\{body}"
+
+indent : String -> String
+indent f = "  \{f}"

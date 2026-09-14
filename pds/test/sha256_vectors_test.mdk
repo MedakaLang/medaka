@@ -1,0 +1,62 @@
+{- | Vector-corpus gate for `stdlib/sha256.mdk` (S-sha256, #1698), migrated
+   from `pds/test/sha256_vectors.sh` under #2592.
+
+   Grades the pure-Medaka SHA-256 against an externally sourced NIST/CAVS
+   corpus, never against a self-captured golden (G5,
+   `docs/design/ATPROTO-PDS-DESIGN.md` §5). The expected digests live in the
+   corpus files themselves; which files those are comes from
+   `pds/test/VECTOR-PROVENANCE.txt` via the `S-sha256` consumer id, so a
+   corpus the ledger does not vouch for cannot be graded here.
+
+   The two arms sweep DIFFERENT depths, which is why `parity` is False: the
+   eval arm is bounded (`--max-bytes 64`) so the interpreter does not spend
+   minutes on the ~210KB `SHA256LongMsg.rsp` records, and the native arm
+   takes the whole corpus. Identical output from the two would mean the
+   bound did nothing. Each arm therefore commits its own record floor
+   instead. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+{- | 65 (ShortMsg) + 64 (LongMsg) + 3 (worked examples). Raise it when
+   vectors are added; it is the count committed when this row was written,
+   never a recomputation from whatever the driver printed today. -}
+nativeFloor : Int
+nativeFloor = 132
+
+-- 65 (ShortMsg) + 2 (the worked examples short enough to survive the
+-- 64-byte bound). The LongMsg records are all skipped at this bound.
+evalFloor : Int
+evalFloor = 67
+
+row : Row
+row = Row {
+  gate = "pds/test/sha256_vectors",
+  driver = "pds/test/sha256_vector_driver.mdk",
+  corpus = Ledgered "S-sha256",
+  corpusCount = AtLeast 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = EvalEngine,
+      driverArgs = ["--max-bytes", "64"],
+      countFloor = Some evalFloor,
+      needs = [],
+      lastLine = None,
+    },
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = Some nativeFloor,
+      needs = [],
+      lastLine = None,
+    },
+  ],
+  parity = False,
+}
+
+test "sha256 vectors: eval (bounded) and native reproduce the ledgered corpus" =
+  expectRow row

@@ -870,7 +870,7 @@ eight public APIs, and roots the native P15 audit at `signDigest` and
 candidate-1/exhaustion and raw negative evidence.
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/ecdsa_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/ecdsa_vectors_test.mdk
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/opaque_field_scalar.sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
 ```
