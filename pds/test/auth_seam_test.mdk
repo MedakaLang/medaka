@@ -459,7 +459,7 @@ test "a public route is not closed by an unusable token" =
 -- ── the real registry ───────────────────────────────────────────────────────
 
 pdsServerValue : Server
-pdsServerValue = match pdsServer account serverLinksEmpty
+pdsServerValue = match pdsServer account serverLinksEmpty "test-driver"
   Ok server => server
   Err message => panic "auth_seam_test: pdsServer setup failed: \{message}"
 
