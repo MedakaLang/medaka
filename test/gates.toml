@@ -478,6 +478,14 @@ sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
+# Two unrelated sections (#2592, #2595). One is a three-engine value
+# differential over this project's own five-row reduction probe — the vector
+# family's shape exactly. The other sweeps two FULL reference corpora on Wasm
+# through pds/test/field_vectors_main.mdk and pds/test/scalar_vectors_main.mdk,
+# drivers and corpora that belong to the pds/test/field_vectors and
+# pds/test/scalar_vectors rows. Those two rows carry no Wasm arm, so the split
+# moves Wasm work onto rows whose shard declares `wasm_arm = false`; it is a
+# repack priced against test/gate_cost_baseline.json, not an edit.
 [[gate]]
 name = "pds/test/constant_time_parity"
 area = "engines"
@@ -486,7 +494,7 @@ project = "pds"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
-migration = "native-wrap"
+migration = "split-first"
 run = "pds/test/constant_time_parity.sh"
 oracles = []
 sources = ["pds/*"]
@@ -553,6 +561,16 @@ sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
+# Two unrelated sections (#2592, #2595). One is a three-engine value
+# differential over a ledgered corpus — the vector family's shape exactly. The
+# other is a MUTATION self-test: it copies the pds tree, replaces one anchor in
+# pds/lib/did_key.mdk or in the driver, and requires the rebuilt driver to FAIL
+# carrying a named witness. That section grades this gate's own assertions
+# rather than the implementation, and inverts both halves of the contract
+# pds/test/vector_runner.mdk is built on (a spawn exits 0 and writes nothing to
+# stderr): a mutation spawn must exit nonzero, and of the five witnesses one is
+# printed to stdout while four are panics on stderr, so it is graded against
+# the two streams together.
 [[gate]]
 name = "pds/test/did_key_all_engines"
 area = "engines"
@@ -561,7 +579,7 @@ project = "pds"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
-migration = "native-wrap"
+migration = "split-first"
 run = "pds/test/did_key_all_engines.sh"
 oracles = []
 sources = ["pds/*"]
@@ -673,6 +691,13 @@ sources = ["pds/*"]
 corpus = []
 toolchain = []
 
+# Two unrelated sections (#2592, #2595), the same pair as
+# pds/test/did_key_all_engines. One is a three-engine value differential over
+# 25 hand-authored cells. The other is a MUTATION self-test that rewrites one
+# assertion in pds/test/protocol_all_engines_main.mdk and requires the rebuilt
+# driver to panic with a named witness — this gate's own assertions as the
+# subject, and the inverse of the exit-0/clean-stderr contract
+# pds/test/vector_runner.mdk grades every arm against.
 [[gate]]
 name = "pds/test/protocol_all_engines"
 area = "engines"
@@ -681,7 +706,7 @@ project = "pds"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
-migration = "native-wrap"
+migration = "split-first"
 run = "pds/test/protocol_all_engines.sh"
 oracles = []
 sources = ["pds/*"]
