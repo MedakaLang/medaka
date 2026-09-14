@@ -186,7 +186,8 @@ erratumReports (l :: rest) = match split "\t" l
     -- still matches the corrected column it discloses, so disagreement
     -- aborts. Still NOT a graded PASS/FAIL cell: the driver's header
     -- contract that erratum rows are "not counted toward PASS or FAIL"
-    -- stays true, and encodings_vectors.sh's EVAL_FLOOR is unchanged.
+    -- stays true, so an erratum row never moves the count a caller checks
+    -- this driver's output against.
     let () =
       if correctedExpected /= encoded then
         panic

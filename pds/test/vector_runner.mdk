@@ -30,7 +30,7 @@
    Runs under `medaka test --native`: every row spawns a subprocess, and the
    interpreter binds no subprocess extern. -}
 
-import test.vector_ledger.{filesForConsumer}
+import test.vector_ledger.{filesForConsumer, validatePaths}
 import io.{getEnvOr}
 import list.{last, somes}
 import path.{stem}
@@ -67,7 +67,9 @@ public export data Bound = AtLeast Int | Exactly Int
    gets the files through `test.vector_ledger`, which re-hashes each one
    against its recorded digest — so a row cannot be graded against bytes the
    ledger does not vouch for. `Explicit` names repo-relative paths outright,
-   for a corpus no ledger consumer id covers. -}
+   for a corpus no ledger consumer id (or no consumer-id ordering) covers —
+   each path is still re-hashed against the ledger the same way, just
+   looked up by its `file:` field instead of by consumer id. -}
 -- Not a `Result`: both arms are a corpus, and neither is the error channel
 -- of the other — resolving either one can itself fail.
 -- lint-disable-next-line rule-clone-type
@@ -527,7 +529,7 @@ corpusPathsOf : String ->
   Corpus ->
   <Exec "_", FileRead "_"> Result String (List String)
 corpusPathsOf root (Ledgered consumer) = filesForConsumer root consumer
-corpusPathsOf _ (Explicit rels) = Ok rels
+corpusPathsOf root (Explicit rels) = validatePaths root rels
 
 boundFinding : Bound -> Int -> Option String
 boundFinding (AtLeast n) got =

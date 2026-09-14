@@ -38,14 +38,54 @@ export
 filesForConsumer : String ->
   String ->
   <FileRead "_", Exec "_"> Result String (List String)
-filesForConsumer root consumer =
+filesForConsumer root consumer = match loadStanzas root
+  Err e => Err e
+  Ok stanzas =>
+    let matching = filter (isVectorForConsumer consumer) stanzas
+    map sort (collectRows root matching)
+
+{- | Validate an explicit, caller-ordered list of repo-relative paths
+   against the ledger: each path must name a `[vector]` stanza, and that
+   stanza's `local-sha256` must match the file's current bytes. Returns the
+   input list unchanged (same order) on success — unlike `filesForConsumer`,
+   which is keyed by consumer id and returns its own sorted order. For a
+   row whose corpus is `Explicit` rather than `Ledgered` (the driver needs
+   an order or pairing no `Ledgered` id can express), this is what gives
+   that row the same digest-tamper detection a `Ledgered` row gets for
+   free. -}
+export
+validatePaths : String ->
+  List String ->
+  <FileRead "_", Exec "_"> Result String (List String)
+validatePaths root paths = match loadStanzas root
+  Err e => Err e
+  Ok stanzas => validateEach root stanzas paths
+
+validateEach : String ->
+  List Stanza ->
+  List String ->
+  <FileRead "_", Exec "_"> Result String (List String)
+validateEach _ _ [] = Ok []
+validateEach root stanzas (p :: rest) = match findStanzaForFile p stanzas
+  None => Err "vector_ledger: no [vector] stanza names file \"\{p}\""
+  Some s => match validateRow root s
+    Err e => Err e
+    Ok _ => map (p :: _) (validateEach root stanzas rest)
+
+findStanzaForFile : String -> List Stanza -> Option Stanza
+findStanzaForFile _ [] = None
+findStanzaForFile path (s :: rest) =
+  if s.kind == "vector" && fieldValue "file" s == Some path then
+    Some s
+  else
+    findStanzaForFile path rest
+
+loadStanzas : String -> <FileRead "_"> Result String (List Stanza)
+loadStanzas root =
   let ledgerPath = "\{root}/pds/test/VECTOR-PROVENANCE.txt"
   match readFile ledgerPath
     Err e => Err "vector_ledger: could not read \{ledgerPath}: \{e}"
-    Ok content =>
-      let matching =
-        filter (isVectorForConsumer consumer) (parseStanzas content)
-      map sort (collectRows root matching)
+    Ok content => Ok (parseStanzas content)
 
 -- ── Stanza parsing ───────────────────────────────────────────────────────
 

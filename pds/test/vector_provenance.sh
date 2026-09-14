@@ -635,20 +635,64 @@ pds/test/later.txt"
     st_rc=1
   fi
 
-  # T9 — integration: every SHELL vector gate must hand its ledger-selected
-  # corpus to the engine. The fake engine rejects only an argument containing
-  # `wrong-answer`; a hard-coded old gate never passes that path and therefore
-  # goes green, making this cell fail for the pre-#1729 implementation.
+  # T9 — integration: a SHELL vector gate that still does its own
+  # `--files-for` plumbing must hand the ledger-selected corpus to the
+  # engine, not some other path. The fake engine rejects any argument
+  # containing `wrong-answer`; a gate whose corpus wiring silently drifted
+  # away from the ledger would never pass that argument through and would
+  # therefore stay green, so this cell fails for a gate that stopped
+  # actually reading the ledger.
   #
-  # The roster this cell sampled was field_vectors.sh, scalar_vectors.sh and
-  # encodings_vectors.sh (sha256_vectors.sh left it earlier, under #2592).
-  # All three left it under #2593, the same way: each is now a native row
-  # (pds/test/field_vectors_test.mdk, pds/test/scalar_vectors_test.mdk,
-  # pds/test/encodings_vectors_test.mdk) that reads the ledger through
-  # pds/test/vector_ledger.mdk, whose Err and zero-file paths fail the row
-  # outright on every run — so their ledger consumption is asserted
-  # structurally rather than sampled here. A cell copying a script that no
-  # longer exists would assert nothing at all.
+  # pds/test/car_vectors.sh is the sampled consumer: it reads one ledger
+  # consumer id and hands the resulting path straight to the engine, the
+  # same shape pds/test/mst_vectors.sh and pds/test/repo_vectors.sh use.
+  # A native row (one that reads the ledger through
+  # pds/test/vector_ledger.mdk instead) needs no cell here: that module's
+  # Err and zero-file paths already fail the row outright on every run, so
+  # its ledger consumption is asserted structurally rather than sampled.
+  t9="$(mktemp -d "$VP_WORK/t9.XXXXXX")"
+  mkdir -p "$t9/pds/test/vectors"
+  cp "$ROOT/pds/test/vector_provenance.sh" "$t9/pds/test/vector_provenance.sh"
+  cp "$ROOT/pds/test/car_vectors.sh" "$t9/pds/test/car_vectors.sh"
+  mk_vector "$t9" "pds/test/vectors/car-wrong-answer.txt" "deliberately wrong answer for car"
+  car_hash="$(sha256_of_file "$t9/pds/test/vectors/car-wrong-answer.txt")"
+  cat > "$t9/pds/test/VECTOR-PROVENANCE.txt" << EOF
+[vector]
+file: pds/test/vectors/car-wrong-answer.txt
+local-sha256: $car_hash
+kind: published-artifact
+source: Synthetic CAR fixture
+source-url: https://example.invalid/t9-car
+source-sha256: UNAVAILABLE
+source-note: synthetic self-test fixture, no real artifact
+extraction: hand-written for self-test T9
+retrieved: 2026-09-14
+consumer: P1-C-CAR-STORE (self-test T9)
+EOF
+  cat > "$t9/fake-medaka" << 'FAKEEOF'
+#!/bin/sh
+for arg in "$@"; do
+  case "$arg" in
+    *wrong-answer*)
+      echo "FAKE-ENGINE: rejected ledgered wrong-answer corpus: $arg"
+      exit 1 ;;
+  esac
+done
+exit 1
+FAKEEOF
+  chmod +x "$t9/fake-medaka"
+
+  t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/car_vectors.sh" 2>&1)"
+  t9_rc=$?
+  rm -rf "$t9"
+  if [ "$t9_rc" -ne 0 ] \
+     && printf '%s' "$t9_out" | grep -q 'FAKE-ENGINE: rejected ledgered wrong-answer corpus'; then
+    echo "T9 car_vectors.sh consumes ledgered wrong answer: PASS"
+  else
+    echo "T9 car_vectors.sh consumes ledgered wrong answer: FAIL (rc=$t9_rc)"
+    printf '%s\n' "$t9_out"
+    st_rc=1
+  fi
 
   # T10/T11 exercise the optional secondary authority used by the point corpus.
   for case_name in missing same; do

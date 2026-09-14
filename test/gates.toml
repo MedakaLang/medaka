@@ -471,6 +471,8 @@ project = "pds"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
+# Stays shell: embeds a wall-clock scaling-ratio assertion (small-vs-large
+# corpus timing bound) that `Row`/`Arm` cannot express.
 migration = "native-wrap"
 run = "pds/test/car_vectors.sh"
 oracles = []
@@ -669,6 +671,8 @@ project = "pds"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
+# Stays shell: embeds a wall-clock scaling-ratio assertion (small-vs-large
+# corpus timing bound) that `Row`/`Arm` cannot express.
 migration = "native-wrap"
 run = "pds/test/mst_vectors.sh"
 oracles = []
@@ -744,6 +748,8 @@ tiers = ["merge"]
 # measures 14.9s. See that script's header for the profile.
 cost = "cheap"
 kind = "exec"
+# Stays shell: a composite of 8 drivers exercised against 5 distinct
+# ledger consumer ids, not one row's worth of work.
 migration = "native-wrap"
 run = "pds/test/repo_vectors.sh"
 oracles = []
@@ -789,6 +795,10 @@ project = "pds"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
+# Stays shell: the eval arm reads a hand-derived subsample of the corpus
+# while the native arm reads the full corpus, and `Row.corpus` is one value
+# shared by every arm — a `vector_runner` row cannot give two arms
+# different corpora.
 migration = "native-wrap"
 run = "pds/test/secp256k1_point_vectors.sh"
 oracles = []

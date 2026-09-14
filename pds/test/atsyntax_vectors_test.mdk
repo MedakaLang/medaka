@@ -7,8 +7,11 @@
    --files-for P4-A-IDENTIFIER-SYNTAX` makes no ordering promise. The
    retired script picked each of the fourteen files by name via `grep -F`;
    here the same fourteen repo-relative paths are named outright as an
-   `Explicit` corpus, in the order the driver expects them, which is a
-   corpus no `Ledgered` id can express and needs no runner change to state. -}
+   `Explicit` corpus, in the order the driver expects them — a pairing no
+   `Ledgered` id can express. Each path is still checked against
+   `pds/test/VECTOR-PROVENANCE.txt`'s recorded digest (`test.vector_runner`'s
+   `Explicit` arm of `corpusPathsOf`), so a corrupted ledger entry for any
+   of the fourteen fails this row the same way it would a `Ledgered` one. -}
 
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow

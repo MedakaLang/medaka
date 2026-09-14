@@ -13,32 +13,30 @@
 
 | destination | n |
 |---|---:|
-| native gate module (`N`) | 208 |
+| native gate module (`N`) | 209 |
 | stays shell (`SHELL`) | 43 |
 | not a check (`OUT`) | 31 |
 | undecided (`UNSURE`) | 4 |
-| `*_test.mdk` sibling (`T`) | 2 |
-| **total** | **288** |
+| `*_test.mdk` sibling (`T`) | 0 |
+| **total** | **287** |
 
 | today? | n |
 |---|---:|
-| NO | 209 |
+| NO | 198 |
 | n/a | 74 |
 | UNSURE | 4 |
-| YES | 1 |
+| YES | 11 |
 
 | blocker | gates carrying it |
 |---|---:|
-| `NATIVE-KIND-RUNNER` | 211 |
-| `EXTERNAL-TOOL` | 120 |
-| `GOLDEN-ASSERT` | 101 |
+| `NATIVE-KIND-RUNNER` | 201 |
+| `EXTERNAL-TOOL` | 118 |
+| `GOLDEN-ASSERT` | 99 |
 | `ORACLE-PROBE` | 68 |
 | `NOT-A-CHECK` | 32 |
 | `TRUST-ANCHOR` | 25 |
 | `SECTION-SPLIT` | 13 |
 | `INVERTED-POLARITY` | 8 |
-| `TEST-IO` | 1 |
-| `NONE` | 1 |
 
 ## The table
 
