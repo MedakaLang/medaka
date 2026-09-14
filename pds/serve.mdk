@@ -698,7 +698,7 @@ openRepo True dir did keyBytes secret =
    address to bind, and where (if anywhere) to announce this repository to a
    relay. -}
 configure : Args ->
-  <Clock, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget)
+  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -718,7 +718,10 @@ configure parsed = do
       (flagValue "--privacy-policy-url" parsed)
       (flagValue "--terms-of-service-url" parsed)
       (flagValue "--contact-email" parsed)
-  server <- pdsServer account links
+  -- Read once at startup, not per request: `_health`'s body is this build's
+  -- own provenance, which cannot change while the process is running.
+  let version = versionString ()
+  server <- pdsServer account links version
   keyBytes <- readHexBytes "signing key" keyPath
   secret <- secretKeyFromBytes keyBytes
   -- Admitted here, beside the other flag-supplied configuration and ahead of

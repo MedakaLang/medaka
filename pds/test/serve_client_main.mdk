@@ -28,6 +28,7 @@ import string.{
   fromUtf8,
   lines,
   split,
+  startsWith,
   toChars,
   toInt,
   toUtf8,
@@ -461,6 +462,9 @@ atprotoDidPath = "/.well-known/atproto-did"
 didJsonPath : String
 didJsonPath = "/.well-known/did.json"
 
+healthPath : String
+healthPath = "/xrpc/_health"
+
 -- | One string field of a JSON response body, or a panic naming what was
 -- missing. A session response the gate cannot read is a failed gate, not a
 -- case to carry on past.
@@ -513,6 +517,22 @@ runQuery port did =
           "QUERY"
           False
           "body '\{fromUtf8 body}' did not echo the hosted DID"
+    Err _ => ()
+  ignoreResult (close conn)
+
+-- | `GET /xrpc/_health` with no `Authorization` header: 200, and a
+-- `"version"` field carrying `pdsd`'s own version-string shape
+-- (`pds/serve.mdk`'s `versionString`).
+runHealth : Int -> <IO, Net "_"> Unit
+runHealth port =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest healthPath)
+  let result = readResponse conn [||]
+  let () = expectStatus "HEALTH" 200 result
+  let () = match result
+    Ok (_, body, _) =>
+      let version = stringField "version" body
+      report "HEALTH" (startsWith "pdsd " version) "version '\{version}'"
     Err _ => ()
   ignoreResult (close conn)
 
@@ -1775,11 +1795,12 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
   ["query", port, did] => runQuery (mustPort port) did
+  ["health", port] => runHealth (mustPort port)
   ["pipeline", port] => runPipeline (mustPort port)
   ["keepalive", port] => runKeepalive (mustPort port)
   ["chunked", port, token, did, collection, rkey, text] =>

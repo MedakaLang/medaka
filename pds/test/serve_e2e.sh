@@ -311,6 +311,13 @@ REFRESH=${LOGIN##* }
 # 1. a well-formed query gets a correct response
 client query "$PORT1" "$DID" || fail 'case 1: well-formed query'
 
+# 1b. GET /xrpc/_health with no Authorization header: 200, and a body
+#    carrying this build's own version-string shape (S-health-route, #2965).
+#    `_health` fails NSID syntax and is deliberately absent from the
+#    endpoint registry (see pds/test/route_policy_test.mdk), so it is proven
+#    here rather than by that registry-derived table.
+client health "$PORT1" || fail 'case 1b: GET /xrpc/_health'
+
 # 2. pipelined pair, both correct, in order
 client pipeline "$PORT1" || fail 'case 2: pipelined pair'
 

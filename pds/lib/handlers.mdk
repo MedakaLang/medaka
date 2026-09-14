@@ -893,8 +893,10 @@ recordHandler account _ _ store call = match recordHandled account store call
   None => (store, unhandledRoute call)
 
 {- | What a routed call names: the NSID for the five XRPC arms, and the request
-   path for the two non-XRPC well-knowns, which have no NSID
-   (`lib.xrpc`'s `wellKnownPath` is the single spelling of both). -}
+   path for the two non-XRPC well-knowns and the health probe, none of which
+   have an NSID (`lib.xrpc`'s `wellKnownPath` is the single spelling of the
+   well-knowns; the health probe's own path is a literal here since it has no
+   equivalent accessor — `lib.xrpc` keeps it private). -}
 callTarget : XrpcCall -> String
 callTarget (QueryCall nsid _) = nsid
 callTarget (ProcedureNoInputCall nsid _) = nsid
@@ -902,6 +904,7 @@ callTarget (ProcedureJsonCall nsid _ _) = nsid
 callTarget (ProcedureTextCall nsid _ _ _) = nsid
 callTarget (ProcedureRawCall nsid _ _ _) = nsid
 callTarget (WellKnownCall wellKnown) = wellKnownPath wellKnown
+callTarget HealthCall = "/xrpc/_health"
 
 unhandledRoute : XrpcCall -> Response
 unhandledRoute call =
@@ -1711,6 +1714,13 @@ wellKnownResponse account WellKnownDidDocument =
 wellKnownResponse account WellKnownAtprotoDid =
   bytesOkResponse "text/plain; charset=utf-8" (toUtf8 (accountDid account))
 
+-- | The health probe's body: the running build's own version stamp, in the
+-- same string `versionString` (`pds/serve.mdk`) renders for `--version` and
+-- the startup banner — read once at startup and threaded down rather than
+-- re-read per request.
+healthResponse : String -> Response
+healthResponse version = jsonOkResponse (jObject [("version", JString version)])
+
 -- ── sessions ────────────────────────────────────────────────────────────────
 
 {- | How long an access token is good for. Two hours is what a real PDS issues:
@@ -2028,13 +2038,19 @@ finishRead : Result Response Json -> Response
 finishRead (Err response) = response
 finishRead (Ok value) = jsonOkResponse value
 
-{- | The thirteen read/sync/identity queries and the two well-knowns, or `None` for
-   a call this half does not own. It returns a bare `Response` because no route
-   here can transition the `Store`. -}
-readHandled : Account -> ServerLinks -> Store -> XrpcCall -> Option Response
-readHandled account _ _ (WellKnownCall wellKnown) =
+{- | The thirteen read/sync/identity queries, the two well-knowns, and the
+   health probe, or `None` for a call this half does not own. It returns a
+   bare `Response` because no route here can transition the `Store`. -}
+readHandled : Account ->
+  ServerLinks ->
+  String ->
+  Store ->
+  XrpcCall ->
+  Option Response
+readHandled account _ _ _ (WellKnownCall wellKnown) =
   Some (wellKnownResponse account wellKnown)
-readHandled account links store (QueryCall nsid params)
+readHandled _ _ version _ HealthCall = Some (healthResponse version)
+readHandled account links _ store (QueryCall nsid params)
   | nsid == getRecordNsid =
     Some (finishRead (applyGetRecord account store params))
   | nsid == listRecordsNsid =
@@ -2062,7 +2078,7 @@ readHandled account links store (QueryCall nsid params)
   | nsid == resolveHandleNsid =
     Some (finishRead (applyResolveHandle account params))
   | otherwise = None
-readHandled _ _ _ _ = None
+readHandled _ _ _ _ _ = None
 
 -- ── app.bsky.actor.getPreferences / putPreferences ──────────────────────────
 
@@ -2148,20 +2164,21 @@ preferencesHandled _ _ _ = None
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
 {- | The complete handler: five record writes, five session routes, two
-   preference routes, thirteen reads, two well-knowns. The halves are disjoint by
-   construction — each owns a distinct set of NSIDs, and the read half
-   additionally owns the two well-knowns — so the order below is a formality
-   rather than a precedence. -}
+   preference routes, thirteen reads, two well-knowns, and the health probe.
+   The halves are disjoint by construction — each owns a distinct set of
+   NSIDs, and the read half additionally owns the two well-knowns and the
+   health probe — so the order below is a formality rather than a
+   precedence. -}
 export
-pdsHandler : Account -> ServerLinks -> Handler
-pdsHandler account links context outcome store call =
+pdsHandler : Account -> ServerLinks -> String -> Handler
+pdsHandler account links version context outcome store call =
   match recordHandled account store call
     Some result => result
     None => match sessionHandled account context outcome store call
       Some result => result
       None => match preferencesHandled outcome store call
         Some result => result
-        None => match readHandled account links store call
+        None => match readHandled account links version store call
           Some response => (store, response)
           None => (store, unhandledRoute call)
 
@@ -2241,9 +2258,9 @@ concatEndpoints [] rest = rest
 concatEndpoints (endpoint :: more) rest = endpoint :: concatEndpoints more rest
 
 -- | A configured full-API server for one account, with the operator's
--- `describeServer` links.
+-- `describeServer` links and its own version stamp for `_health`.
 export
-pdsServer : Account -> ServerLinks -> Result String Server
-pdsServer account links = do
+pdsServer : Account -> ServerLinks -> String -> Result String Server
+pdsServer account links version = do
   registry <- pdsRegistry
-  Ok (makeServer account registry (pdsHandler account links))
+  Ok (makeServer account registry (pdsHandler account links version))
