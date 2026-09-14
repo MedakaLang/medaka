@@ -1,4 +1,5 @@
-{- | The `#commit` body's own lexicon bounds (`pds/lib/sync_event.mdk`).
+{- | The `#commit` body's own lexicon bounds, and the shape of the three
+   activation frames (`pds/lib/sync_event.mdk`).
 
    `com.atproto.sync.subscribeRepos` def `commit` caps `ops` at 200 entries,
    and nothing at the repository layer caps a write batch, so a legal
@@ -8,16 +9,33 @@
    over-long commit is REPORTED (`tooBig` true, `ops` empty), never emitted
    over the cap.
 
-   The three cases below are the boundary and its two sides. A cap written
-   with the wrong comparison passes one of them and fails another, which is
-   why 200 and 201 are both here rather than a single "large" commit. -}
+   The first three cases are the `ops` cap's boundary and its two sides. A cap
+   written with the wrong comparison passes one of them and fails another,
+   which is why 200 and 201 are both here rather than a single "large" commit.
 
+   The last three are the activation frames' SHAPE, over inputs the pinned
+   corpus does not use: which message type the header announces, which keys
+   the body carries and which it does not. `pds/test/
+   activation_event_vectors_main.mdk` grades the same builders' BYTES against
+   the official ones, and does it for one fixture; what is stated here is the
+   shape as a property of any input, including the absence of the `status`
+   field an inactive account would carry. -}
+
+import array.{sliceClamped}
 import list.{lookup, range}
 import string.{toUtf8}
 import test.{expectEqual}
-import lib.cid.{Cid, cidForRaw}
-import lib.dagcbor.{DagCbor(..)}
-import lib.sync_event.{SyncCommitEvent(..), SyncRepoOp(..), syncCommitBody}
+import lib.car.{carBlocks, carDecode, carRoots}
+import lib.cid.{Cid, cidForRaw, cidToString}
+import lib.dagcbor.{DagCbor(..), dagCborDecode}
+import lib.sync_event.{
+  SyncCommitEvent(..),
+  SyncRepoOp(..),
+  syncAccountFrame,
+  syncCommitBody,
+  syncIdentityFrame,
+  syncSyncFrame,
+}
 import lib.tid.{Tid, tidEncode}
 
 recordCid : Cid
@@ -85,3 +103,96 @@ test "a commit exactly at the lexicon cap still carries every op" =
 
 test "a commit one op over the cap is reported as tooBig with no ops" =
   expectEqual (tooBigOf 201, opsLengthOf 201) (Some True, 0)
+
+-- # The activation frames
+
+-- A DID and a handle that are not the pinned corpus's, so a builder that
+-- ignored an argument and emitted a constant would not pass here.
+sampleDid : String
+sampleDid = "did:plc:medakaexamplerepo"
+
+sampleHandle : String
+sampleHandle = "gate.medaka.example.invalid"
+
+commitBytes : Array Int
+commitBytes = toUtf8 "commit"
+
+-- The position in the stream every frame below is stamped with. The builders
+-- take it rather than invent it, so these are the caller's values and the
+-- assertions read them back out of the encoded body.
+sampleSeq : Int
+sampleSeq = 4207
+
+sampleTime : String
+sampleTime = "2026-09-13T18:34:14.000Z"
+
+{- | A frame's two objects. `dagCborDecode` decodes exactly one canonical value
+   and refuses trailing bytes, so the boundary between them is the shortest
+   prefix that decodes and leaves a decodable remainder. -}
+frameParts : Result String (Array Int) -> (DagCbor, DagCbor)
+frameParts (Err message) = panic "sync_event: frame refused: \{message}"
+frameParts (Ok bytes) = partsAt bytes 1
+
+partsAt : Array Int -> Int -> (DagCbor, DagCbor)
+partsAt bytes cut =
+  if cut > arrayLength bytes then
+    panic "sync_event: frame carries no decodable header object"
+  else match dagCborDecode (sliceClamped 0 cut bytes)
+    Err _ => partsAt bytes (cut + 1)
+    Ok header =>
+      match dagCborDecode (sliceClamped cut (arrayLength bytes) bytes)
+        Err _ => partsAt bytes (cut + 1)
+        Ok body => (header, body)
+
+-- The body's keys in the order they were encoded, which DAG-CBOR fixes: by
+-- key length first, then bytewise. A key the builder must NOT emit is absent
+-- from this list, which is the whole point of comparing the set rather than
+-- reading one field.
+keysOf : DagCbor -> List String
+keysOf (DcMap fields) = map ((key, _) => key) fields
+keysOf _ = []
+
+textOf : DagCbor -> String -> String
+textOf value name = match bodyField name value
+  Some (DcString text) => text
+  _ => ""
+
+boolOf : DagCbor -> String -> Option Bool
+boolOf value name = asBool (bodyField name value)
+
+-- The `blocks` CAR's roots and its block set, each as CID text.
+carCids : DagCbor -> (List String, List String)
+carCids body = match bodyField "blocks" body
+  Some (DcBytes bytes) => match carDecode bytes
+    Ok car => (
+      map cidToString (carRoots car),
+      map ((cid, _) => cidToString cid) (carBlocks car),
+    )
+    Err message => panic "sync_event: undecodable #sync CAR: \{message}"
+  _ => panic "sync_event: #sync body carries no blocks"
+
+test "an #identity frame names the handle beside the DID and nothing else" =
+  let frame = syncIdentityFrame sampleSeq sampleTime sampleDid sampleHandle
+  let (header, body) = frameParts frame
+  expectEqual
+    (textOf header "t", keysOf body, textOf body "handle")
+    ("#identity", ["did", "seq", "time", "handle"], sampleHandle)
+
+test "an #account frame states active and carries no status" =
+  let (header, body) =
+    frameParts (syncAccountFrame sampleSeq sampleTime sampleDid)
+  expectEqual
+    (textOf header "t", keysOf body, boolOf body "active")
+    ("#account", ["did", "seq", "time", "active"], Some True)
+
+test "a #sync frame's CAR is rooted at and holds only the commit block" =
+  let frame =
+    syncSyncFrame sampleSeq sampleTime sampleDid sampleRev commitCid commitBytes
+  let (header, body) = frameParts frame
+  expectEqual
+    (textOf header "t", keysOf body, carCids body)
+    (
+      "#sync",
+      ["did", "rev", "seq", "time", "blocks"],
+      ([cidToString commitCid], [cidToString commitCid]),
+    )

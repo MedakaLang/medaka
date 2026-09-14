@@ -1,0 +1,283 @@
+{- | The `com.atproto.sync.subscribeRepos` `#identity`/`#account`/`#sync`
+   driver.
+
+   Grades `pds/test/vectors/pds_sync_event_bodies_corpus.txt` — bodies the
+   pinned official image's own `sequencer/events.js` builders produced — against
+   `lib.sync_event`'s three activation-event frame builders, byte for byte.
+
+   The corpus records BODIES, not frames, and bodies without `seq` or `time`:
+   the reference's sequencer splices those two in downstream of the builder,
+   so a row is the body as built and nothing more. Each event is therefore
+   graded twice. The BODY builder's bytes go against the row directly, which
+   is the byte-for-byte claim. The FRAME builder — which this server needs to
+   set `seq` and `time` itself, because its log stores finished bytes rather
+   than splicing on the way out — is graded for the header it carries and for
+   actually holding the position it was handed.
+
+   The header hexes are written here rather than taken from our own encoder —
+   a `{t, op}` map with the message type as the only variable, whose canonical
+   key order is read off the reference's own `#commit` header in
+   `commit_event_corpus.txt`. A field-name or key-order mistake in
+   `lib.sync_event` reaches a mismatch instead of being graded against
+   itself.
+
+   What the corpus supplies as INPUT is only the fixture: the DID, the handle,
+   the revision and the signed commit block, read back out of the rows so
+   nothing is hand-transcribed. Every answer — which keys exist, how they are
+   spelled and what the CAR looks like — comes from the builder under test.
+
+   `IDENTITY-NO-HANDLE` and `ACCOUNT-INACTIVE` are deliberately not graded:
+   neither shape is reachable from this server (`--handle` is required
+   configuration, and there is no route that can deactivate an account), so
+   there is no builder arm to grade them against. -}
+
+import array.{sliceClamped}
+import hex.{decode, encode}
+import io.{readLines}
+import list.{lookup}
+import string.{split, startsWith}
+import lib.car.{Car, carBlocks, carDecode, carRoots}
+import lib.cid.{Cid, cidToString}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.sync_event.{
+  syncAccountBody,
+  syncAccountFrame,
+  syncIdentityBody,
+  syncIdentityFrame,
+  syncSyncBody,
+  syncSyncFrame,
+}
+import lib.tid.{Tid, tidParse}
+
+{- | The frame header each activation event carries, as hex.
+
+   Two keys, `t` before `op`, because DAG-CBOR orders map keys by encoded
+   length first: `t` is one byte and `op` is two. The reference's own
+   `#commit` header (`a261746723636f6d6d6974626f7001`) is the worked example
+   that fixes both that order and the `op` value of 1. -}
+identityHeaderHex : String
+identityHeaderHex = "a2617469236964656e74697479626f7001"
+
+accountHeaderHex : String
+accountHeaderHex = "a2617468236163636f756e74626f7001"
+
+syncHeaderHex : String
+syncHeaderHex = "a26174652373796e63626f7001"
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "activation_event: malformed hex: \{message}"
+
+mustCbor : String -> DagCbor
+mustCbor text = mustCborBytes (mustHex text)
+
+mustCborBytes : Array Int -> DagCbor
+mustCborBytes bytes = match dagCborDecode bytes
+  Ok value => value
+  Err message => panic "activation_event: undecodable body: \{message}"
+
+mustCar : Array Int -> Car
+mustCar bytes = match carDecode bytes
+  Ok car => car
+  Err message => panic "activation_event: undecodable corpus CAR: \{message}"
+
+mustTid : String -> Tid
+mustTid text = match tidParse text
+  Ok tid => tid
+  Err message => panic "activation_event: malformed TID: \{message}"
+
+field : DagCbor -> String -> Option DagCbor
+field (DcMap fields) name = lookup name fields
+field _ _ = None
+
+textOf : DagCbor -> String -> String
+textOf body name = match field body name
+  Some (DcString text) => text
+  _ => panic "activation_event: corpus body has no text field '\{name}'"
+
+intOf : DagCbor -> String -> Option Int
+intOf body name = match field body name
+  Some (DcInt value) => Some value
+  _ => None
+
+bytesOf : DagCbor -> String -> Array Int
+bytesOf body name = match field body name
+  Some (DcBytes bytes) => bytes
+  _ => panic "activation_event: corpus body has no byte field '\{name}'"
+
+{- | The corpus as tag/value pairs. Every row is tab-separated and its first
+   column is the tag; the body rows carry a decoded-JSON third column that
+   nothing here reads, because a value read out of prose is not the value the
+   bytes state. -}
+parseRows : List String -> List (String, String) -> List (String, String)
+parseRows [] acc = acc
+parseRows (line :: rest) acc =
+  if line == "" || startsWith "#" line || line == "END" then
+    parseRows rest acc
+  else match split "\t" line
+    [tag, value] => parseRows rest ((tag, value) :: acc)
+    [tag, value, _] => parseRows rest ((tag, value) :: acc)
+    _ => panic "activation_event: unrecognized corpus row: \{line}"
+
+rowValue : List (String, String) -> String -> String
+rowValue rows tag = match lookup tag rows
+  Some value => value
+  None => panic "activation_event: corpus has no \{tag} row"
+
+gradeWord : Bool -> String
+gradeWord True = "PASS"
+gradeWord False = "FAIL"
+
+{- | One body against its corpus row: the bytes the builder emitted must be
+   exactly the row, with nothing added and nothing spelled differently. -}
+gradeBody : String -> String -> DagCbor -> <IO> Bool
+gradeBody tag bodyHex built = match dagCborEncode built
+  Err message =>
+    let () = println "\{tag}: FAIL body would not encode: \{message}"
+    False
+  Ok bytes =>
+    let ok = encode bytes == bodyHex
+    let () =
+      println "\{tag}: \{gradeWord ok} body byte-identical to the pinned body"
+    ok
+
+{- | The frame that body goes out in: the header this file names, then the
+   body with its position in the stream spliced in.
+
+   Two claims the body comparison cannot make. The HEADER is graded against a
+   hex written here rather than against our own encoder. And `seq`/`time` —
+   which the lexicon requires on every event and which no corpus row carries,
+   because the reference splices them downstream — must actually be there,
+   holding what the caller passed: a frame short either of them is one no
+   relay can order. -}
+gradeFrame : String -> String -> Result String (Array Int) -> <IO> Bool
+gradeFrame tag _ (Err message) =
+  let () = println "\{tag}-FRAME: FAIL builder refused: \{message}"
+  False
+gradeFrame tag headerHex (Ok bytes) =
+  let headerBytes = arrayLength (mustHex headerHex)
+  let headed = startsWith headerHex (encode bytes)
+  let body = mustCborBytes (sliceClamped headerBytes (arrayLength bytes) bytes)
+  let stamped =
+    intOf body "seq" == Some sampleSeq && textOf body "time" == sampleTime
+  let () =
+    println
+      "\{tag}-FRAME: \{gradeWord (headed && stamped)} header present: \{gradeWord headed}, seq/time spliced: \{gradeWord stamped}"
+  headed && stamped
+
+-- The sequence number and timestamp every frame check splices in. Neither is
+-- graded against the corpus — no row carries them — so they are this file's
+-- own values, and distinctive enough that a builder emitting a constant or
+-- reading the wrong argument would not match by accident.
+sampleSeq : Int
+sampleSeq = 4207
+
+sampleTime : String
+sampleTime = "2026-09-13T18:34:14.000Z"
+
+gradeIdentity : List (String, String) -> <IO> Bool
+gradeIdentity rows =
+  let bodyHex = rowValue rows "IDENTITY-WITH-HANDLE"
+  let body = mustCbor bodyHex
+  let did = textOf body "did"
+  let handle = textOf body "handle"
+  let shape =
+    gradeBody "IDENTITY-WITH-HANDLE" bodyHex (syncIdentityBody did handle)
+  let framed =
+    gradeFrame
+      "IDENTITY-WITH-HANDLE"
+      identityHeaderHex
+      (syncIdentityFrame sampleSeq sampleTime did handle)
+  shape && framed
+
+gradeAccount : List (String, String) -> <IO> Bool
+gradeAccount rows =
+  let bodyHex = rowValue rows "ACCOUNT-ACTIVE"
+  let did = textOf (mustCbor bodyHex) "did"
+  let shape = gradeBody "ACCOUNT-ACTIVE" bodyHex (syncAccountBody did)
+  let framed =
+    gradeFrame
+      "ACCOUNT-ACTIVE"
+      accountHeaderHex
+      (syncAccountFrame sampleSeq sampleTime did)
+  shape && framed
+
+{- | The `#sync` row, and the two rows that state its CAR's shape directly.
+
+   The commit block is lifted out of the corpus body's own CAR, so the builder
+   is handed a block and a CID and nothing else; that the CAR it wraps them in
+   is rooted at that commit and holds only that block is asserted against
+   `SYNC-CAR-ROOTS`/`SYNC-CAR-BLOCKS` rather than left implicit in the body
+   comparison, which a wrong-but-self-consistent CAR encoder could otherwise
+   pass by agreeing with itself. -}
+gradeSync : List (String, String) -> <IO> Bool
+gradeSync rows =
+  let bodyHex = rowValue rows "SYNC"
+  let body = mustCbor bodyHex
+  let car = mustCar (bytesOf body "blocks")
+  let commitCid = soleRoot (carRoots car)
+  let commitBytes = soleBlockBytes commitCid (carBlocks car)
+  let did = textOf body "did"
+  let rev = mustTid (textOf body "rev")
+  let shape = match syncSyncBody did rev commitCid commitBytes
+    Err message =>
+      let () = println "SYNC: FAIL builder refused: \{message}"
+      False
+    Ok built => gradeBody "SYNC" bodyHex built
+  let framed =
+    gradeFrame
+      "SYNC"
+      syncHeaderHex
+      (syncSyncFrame sampleSeq sampleTime did rev commitCid commitBytes)
+  let roots =
+    gradeCid "SYNC-CAR-ROOTS" (rowValue rows "SYNC-CAR-ROOTS") commitCid
+  let blocks =
+    gradeCid
+      "SYNC-CAR-BLOCKS"
+      (rowValue rows "SYNC-CAR-BLOCKS")
+      (soleCid (map ((cid, _) => cid) (carBlocks car)))
+  shape && framed && roots && blocks
+
+gradeCid : String -> String -> Cid -> <IO> Bool
+gradeCid tag expected actual =
+  let ok = cidToString actual == expected
+  let () = println "\{tag}: \{gradeWord ok} \{cidToString actual}"
+  ok
+
+soleRoot : List Cid -> Cid
+soleRoot [root] = root
+soleRoot roots =
+  panic
+    "activation_event: corpus CAR names \{intToString (length roots)} roots, expected 1"
+
+soleCid : List Cid -> Cid
+soleCid [cid] = cid
+soleCid cids =
+  panic
+    "activation_event: corpus CAR holds \{intToString (length cids)} blocks, expected 1"
+
+soleBlockBytes : Cid -> List (Cid, Array Int) -> Array Int
+soleBlockBytes root [(cid, bytes)] =
+  if cidToString cid == cidToString root then
+    bytes
+  else
+    panic "activation_event: corpus CAR's sole block is not its root"
+soleBlockBytes _ blocks =
+  panic
+    "activation_event: corpus CAR holds \{intToString (length blocks)} blocks, expected 1"
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [corpusPath] => match readLines corpusPath
+    Err message => panic "activation_event: cannot read corpus: \{message}"
+    Ok lines =>
+      let rows = parseRows lines []
+      let identity = gradeIdentity rows
+      let account = gradeAccount rows
+      let sync = gradeSync rows
+      println (if identity && account && sync then
+        "TOTAL: PASS"
+      else
+        "TOTAL: FAIL")
+  _ => panic "usage: activation_event_vectors_main <corpus>"

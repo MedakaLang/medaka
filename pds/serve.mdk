@@ -125,7 +125,13 @@ import shell.persist.{
   persistLoadPreferences,
   persistSave,
 }
-import shell.server.{Serving, bindAddress, makeServing, runServer}
+import shell.server.{
+  Serving,
+  bindAddress,
+  makeServing,
+  runServer,
+  stageGenesisEvents,
+}
 import string.{drop, indexOf, lines, stripSuffix, take, toInt, trim}
 import time.{now}
 
@@ -723,7 +729,12 @@ configure parsed = do
   let serving = makeServing trustedProxy egress (Ref 0)
   relay <- configureRelay parsed
   () <- requireDir dir
-  repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
+  -- `openRepo True` returns `Ok` only down its `initRepo` branch — every other
+  -- branch under `--init` refuses a directory that already holds a
+  -- repository — so reaching here with this flag set means THIS run created
+  -- the genesis repository, and is what the four genesis events below key on.
+  let created = flag "--init" parsed
+  repo <- openRepo created dir did keyBytes secret
   -- A previous process may have died between persisting a commit and
   -- appending the event announcing it. The staged entry anchors to the commit
   -- it announces, so the repository just loaded is what decides whether it is
@@ -748,12 +759,15 @@ configure parsed = do
   prefs <- persistLoadPreferences dir
   -- Last, after the final step that can still refuse: the log is now
   -- consistent with the head, and only a run that goes on to serve has
-  -- touched it.
-  () <- eventLogApplyRecovery
-    dir
-    recovery
-    eventLogRetentionSeconds
-    (floatToInt (now ()))
+  -- touched it. The genesis events are a durable log mutation with nothing
+  -- downstream of them that can refuse, so they belong at the same point and
+  -- not beside the `--init` repository write that provoked them.
+  let nowSeconds = floatToInt (now ())
+  () <- eventLogApplyRecovery dir recovery eventLogRetentionSeconds nowSeconds
+  () <- if created then
+    stageGenesisEvents dir did handle nowSeconds repo
+  else
+    Ok ()
   Ok (
     server,
     storeWithPreferences prefs withCredential,

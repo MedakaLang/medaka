@@ -20,6 +20,9 @@
    line and nothing else. -}
 
 import array.{concat, make, sliceClamped}
+import list.{reverse}
+import lib.car.{carBlocks, carDecode, carRoots}
+import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode}
 import lib.websocket.{
   DecodeResult(..),
@@ -34,7 +37,7 @@ import lib.websocket.{
 }
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
-import string.{contains, fromUtf8, lines, split, toInt, toUtf8, trim}
+import string.{contains, fromUtf8, join, lines, split, toInt, toUtf8, trim}
 import time.{Duration, elapsedSince, monotonic, seconds, sleep}
 
 -- # The handshake
@@ -410,6 +413,119 @@ commitSeq conn buffered = match nextEvent conn buffered
       else
         Ok (intField body "seq", rest)
 
+{- | A repository's creation announces itself: a subscriber attached at cursor
+   0 to a server whose data directory this run created receives exactly the
+   four events `com.atproto.sync.subscribeRepos` opens a repository with, in
+   the order it states them and numbered from one.
+
+   Three separate claims, because a stream that got any one of them right
+   alone would still be unusable: the four KINDS in the official ORDER, the
+   sequence numbers 1 through 4 with nothing between them, and the `#sync`
+   event's CAR rooted at and holding exactly the commit the `#commit` event
+   named — the head a relay verifies the repository against.
+
+   The silence afterwards is what makes "exactly four" mean atomicity rather
+   than arithmetic: nothing else has reached the log, and nothing could have,
+   because these are staged before the listener binds. -}
+runGenesis : Int -> <IO, Net "_"> Unit
+runGenesis port =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn "0"
+  let () = match readEvents conn rest (length genesisKinds) []
+    Err message => report "SUBGENESIS" False message
+    Ok (events, after) => match gradeGenesis events
+      Err message => report "SUBGENESIS" False message
+      Ok detail =>
+        let () = armRead conn silenceBudget
+        let quiet = match nextEvent conn after
+          Err _ => True
+          Ok None => False
+          Ok (Some _) => False
+        report
+          "SUBGENESIS"
+          quiet
+          "\{detail}; and nothing else on the stream: \{boolToString quiet}"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+-- | The events a repository's creation emits, in the order the lexicon states
+-- them.
+genesisKinds : List String
+genesisKinds = ["#identity", "#account", "#commit", "#sync"]
+
+readEvents : Connection ->
+  Array Int ->
+  Int ->
+  List (DagCbor, DagCbor) ->
+  <Net "_"> Result String (List (DagCbor, DagCbor), Array Int)
+readEvents conn buffered remaining acc =
+  if remaining == 0 then
+    Ok (reverse acc, buffered)
+  else match nextEvent conn buffered
+    Err message => Err message
+    Ok None =>
+      Err
+        "serve_subscribe: stream ended with \{intToString remaining} genesis events still owed"
+    Ok (Some (payload, rest)) => match splitEvent payload
+      Err message => Err message
+      Ok pair => readEvents conn rest (remaining - 1) (pair :: acc)
+
+gradeGenesis : List (DagCbor, DagCbor) -> Result String String
+gradeGenesis [(identity, identityBody), (account, accountBody), (commit, commitBody), (sync, syncBody)] =
+  let kinds = [
+    eventKind identity,
+    eventKind account,
+    eventKind commit,
+    eventKind sync,
+  ]
+  let seqs = [
+    intField identityBody "seq",
+    intField accountBody "seq",
+    intField commitBody "seq",
+    intField syncBody "seq",
+  ]
+  if kinds /= genesisKinds then
+    Err "serve_subscribe: genesis kinds \{join " " kinds}"
+  else if seqs /= [1, 2, 3, 4] then
+    Err "serve_subscribe: genesis sequence \{join " " (map intToString seqs)}"
+  else
+    map
+      (head => "\{join " " kinds} at seq 1..4, #sync rooted at \{head}")
+      (gradeSyncCar commitBody syncBody)
+gradeGenesis events =
+  Err
+    "serve_subscribe: read \{intToString (length events)} genesis events, expected \{intToString (length genesisKinds)}"
+
+{- | The `#sync` event's CAR against the `#commit` event's own head: one root,
+   one block, and both of them that commit. A `#sync` naming some other CID —
+   or shipping the whole tree — leaves a relay verifying the repository
+   against something this server never committed. -}
+gradeSyncCar : DagCbor -> DagCbor -> Result String String
+gradeSyncCar commitBody syncBody = match (
+  linkField commitBody "commit",
+  mapField syncBody "blocks",
+)
+  (Some head, Some (DcBytes carBytes)) => match carDecode carBytes
+    Err message => Err "serve_subscribe: #sync CAR: \{message}"
+    Ok car =>
+      let wanted = [cidToString head]
+      let roots = map cidToString (carRoots car)
+      let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+      if roots /= wanted then
+        Err "serve_subscribe: #sync CAR roots \{join " " roots}"
+      else if blocks /= wanted then
+        Err "serve_subscribe: #sync CAR blocks \{join " " blocks}"
+      else
+        Ok (cidToString head)
+  _ =>
+    Err "serve_subscribe: #commit named no commit, or #sync carried no blocks"
+
+linkField : DagCbor -> String -> Option Cid
+linkField value name = match mapField value name
+  Some (DcLink cid) => Some cid
+  _ => None
+
 {- | A cursor naming an event this server has never emitted is REFUSED, and
    refused with atproto's own name for it rather than by silence or by a
    replay of something else. -}
@@ -777,10 +893,11 @@ mustCount text = match toInt text
 
 usage : String
 usage =
-  "usage: serve_subscribe <live|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
+  "usage: serve_subscribe <genesis|live|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
+  ["genesis", port] => runGenesis (mustPort port)
   ["live", port, token, did, collection, rkeyPrefix] =>
     runLive (mustPort port) token did collection rkeyPrefix
   ["future-cursor", port, cursor] => runFutureCursor (mustPort port) cursor
