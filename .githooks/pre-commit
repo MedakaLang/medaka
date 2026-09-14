@@ -32,11 +32,13 @@
 #   5. LEXTOK:   `test/diff_compiler_lex_files.sh` — OPPORTUNISTIC: only runs if
 #      test/bin/lex_main already exists (this hook never builds an oracle). Scoped to
 #      staged files (from check 1's set) that already have a sibling .lextok.golden.
-#   6. EMOJI-SHOUT DIFF: rejects a commit that ADDS a new 🚨/⚠️/🔒 line to a staged
-#      .mdk (check 1's file set). Diff-scoped on ADDED lines only (`git diff --cached
-#      -U0`) — an existing shout that is merely touched but textually unchanged does
-#      not trigger, and it needs no built binary. CI twin:
-#      test/diff_compiler_comment_shout_diff.sh (#2621).
+#   6. SHOUT DIFF: rejects a commit that ADDS a new shout line to a staged .mdk
+#      (check 1's file set) — either a 🚨/⚠️/🔒 sigil line, or the sigil-free shout
+#      register (a run of 3+ consecutive ALL-CAPS words), the latter scoped to
+#      comment-scope added lines only. Diff-scoped on ADDED lines only (`git diff
+#      --cached -U0`) — an existing shout that is merely touched but textually
+#      unchanged does not trigger, and it needs no built binary. CI twin:
+#      test/diff_compiler_comment_shout_diff.sh (#2621, widened #3032).
 #   6b. COMMENT-REGISTER BASELINE: `test/comment_register_census.sh --check
 #      test/comment_register_baseline.toml <staged files>` — a per-file COUNT
 #      ratchet (not diff-scoped like 6) over the 8 baselined comment-register
@@ -47,7 +49,7 @@
 #      (`sh test/comment_register_census.sh --write
 #      test/comment_register_baseline.toml`), never by hand. CI twin:
 #      test/diff_compiler_comment_shout_diff.sh's second assertion
-#      (#S-register-baseline).
+#      (#3034).
 #
 # ── #491: this hook covers ONE of five golden families outright, plus one more
 # OPPORTUNISTICALLY (check 5, only when test/bin/lex_main happens to already be
@@ -427,7 +429,7 @@ fi
 # .mdk, test/** excluded) rather than recomputing the glob. Needs no built
 # binary — pure `git diff` + grep.
 #
-# Widened (#S-register-not-sigil) to also reject the sigil-free shout
+# Widened (#3032) to also reject the sigil-free shout
 # register (census class 10, test/comment_register_census.sh): a run of 3+
 # consecutive ALL-CAPS words survives a sigil strip with the shout sentence
 # intact. That regex is line-content-blind — it also matches ALL-CAPS code
@@ -528,7 +530,7 @@ fi
 # (#536) on why `test/diff_compiler_test.sh` cannot be scoped to staged files
 # from the outside — running it here would risk rejecting a commit over an
 # unrelated, stale fixture with no working per-file remediation.
-checked="fmt, lint, baselined-lint, emoji-shout-diff, comment-register-baseline"
+checked="fmt, lint, baselined-lint, shout-diff, comment-register-baseline"
 notchecked=""
 if [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then notchecked="$notchecked snapshots(deferred)"; else checked="$checked, snapshots"; fi
 if [ "$lex_checked" = 1 ]; then checked="$checked, lextok"; else notchecked="$notchecked lextok"; fi

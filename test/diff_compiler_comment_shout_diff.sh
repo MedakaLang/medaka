@@ -1,5 +1,5 @@
 #!/bin/sh
-# SHOUT DIFF CHECK (CI twin, #2621; widened #S-register-not-sigil).
+# SHOUT DIFF CHECK (CI twin, #2621; widened #3032).
 #
 # `.githooks/pre-commit` check 6 rejects a commit that ADDS a new shout
 # line to a staged .mdk. That is the fast feedback, and it is also
@@ -32,7 +32,7 @@
 # drains nothing; it only stops the count from growing further. `.md`
 # files are out of scope entirely (this only ever looks at `.mdk`).
 #
-# SECOND ASSERTION (#S-register-baseline): the comment-register count
+# SECOND ASSERTION (#3034): the comment-register count
 # baseline ratchet, tree-wide, over test/comment_register_baseline.toml --
 # the CI twin of .githooks/pre-commit check 6b (per staged file). Unlike the
 # diff check above, this is not scoped to the PR's added lines -- it reads

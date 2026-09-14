@@ -1,4 +1,4 @@
-# comment-register count baseline — GENERATED, never hand-edited (#S-register-baseline).
+# comment-register count baseline — GENERATED, never hand-edited (#3034).
 #
 # One [[entry]] per (file, class) with a nonzero count, over the 8
 # per-LINE-count comment-register classes test/comment_register_census.sh
@@ -14,7 +14,7 @@
 # class 5's (draft narration) hit list, needing human judgment, not a
 # regex count.
 #
-# Enforced by .githooks/pre-commit check 6 (per staged file) and by
+# Enforced by .githooks/pre-commit check 6b (per staged file) and by
 # test/diff_compiler_comment_shout_diff.sh (whole tree, so --no-verify
 # cannot smuggle a rise past the hook).
 #
@@ -217,11 +217,6 @@ count = 1
 [[entry]]
 file = "compiler/entries/fuzz_gen_main.mdk"
 class = "shout"
-count = 1
-
-[[entry]]
-file = "compiler/entries/lint_main.mdk"
-class = "emoji"
 count = 1
 
 [[entry]]

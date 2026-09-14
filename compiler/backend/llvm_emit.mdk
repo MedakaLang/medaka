@@ -5838,18 +5838,18 @@ emitMethod e env name _ (RLocal sym dicts) implRoutes methRoutes argOps =
 -- CAPTURES the dict word and rebinds it from `%clos` field 1 in the body, so the
 -- runtime impl switch still reads the caller's dict.  A nullary method (arity 0,
 -- e.g. `def`) is a plain value — keep the immediate `emitMethod .. []`.
--- S1-RESIDUAL-A (FIXED 2026-07-16, issue #410; SHADOW-SEMANTICS.md §6): a VALUE-position
--- standalone SHADOW (`map size [1,2,3]`) miscompiles here — the built binary
--- SEGFAULTs (wasm: `illegal cast`) while `check`/`run` are both green.  The lift builds
--- the closure at `methodArityOf name` — the interface METHOD's arity — for a body that
--- calls the STANDALONE, whose value arity need not match.  With the two arities EQUAL the
--- lie is invisible, which is why every pre-#410 probe (and the whole d4/d10 corpus) missed
--- it.  When they differ the closure advertises N args to the HOF but its body forwards
--- them to an M-arg function: N>M makes `emitKnownFnSat` take the `emitOverApp` path
--- (:3941), which calls the target, gets a SCALAR back, and hands that Int to
--- `emitApplyAny`, which reads an arity out of the "cell header" of an integer ⇒ SEGFAULT.
--- Fix: the arity is now ROUTE-derived (`methValArity`), not name-derived — the RLocal arm
--- below already knew the truth via `fnArity e target`.
+-- S1-RESIDUAL-A (fixed 2026-07-16, issue #410; SHADOW-SEMANTICS.md §6): a VALUE-position
+-- standalone SHADOW (`map size [1,2,3]`) must not miscompile here.  The arity below is
+-- ROUTE-derived (`methValArity`), never name-derived, and that is what keeps it correct:
+-- lifting at `methodArityOf name` — the interface METHOD's arity — for a body that calls
+-- the STANDALONE, whose value arity need not match, builds a closure that lies.  With the
+-- two arities EQUAL the lie is invisible, which is why every pre-#410 probe (and the whole
+-- d4/d10 corpus) missed it.  When they differ the closure advertises N args to the HOF but
+-- its body forwards them to an M-arg function: N>M makes `emitKnownFnSat` take the
+-- `emitOverApp` path (:3941), which calls the target, gets a SCALAR back, and hands that
+-- Int to `emitApplyAny`, which reads an arity out of the "cell header" of an integer ⇒ the
+-- built binary SEGFAULTs (wasm: `illegal cast`) while `check`/`run` both stay green.  The
+-- RLocal arm below already knew the truth via `fnArity e target`.
 emitMethodValue : Emit ->
   OrdMap (String, LTy) ->
   String ->

@@ -525,8 +525,8 @@ typesUserOf runtimeDecls coreDecls d =
   let _ = resetTypeErrorsSticky ()
   -- checkOneToLinesWithRuntime (Module arm) already renders ONLY the target
   -- module's own scheme lines (never coreDecls'), matching what the userNames
-  -- filter below has to strip out of the Flat arm's full coreProg++d
-  -- dump -- the opposite direction from lsp.mdk's completion gap (which wanted
+  -- filter below would otherwise have to strip out of the Flat arm's full
+  -- coreProg++d dump -- the opposite direction from lsp.mdk's completion gap (which wanted
   -- MORE than Module returns); here Module already gives what's wanted, so the
   -- filter is kept as a harmless belt-and-suspenders no-op rather than removed
   -- (S-migrate-tool-consumers-remainder).

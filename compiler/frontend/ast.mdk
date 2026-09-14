@@ -641,13 +641,13 @@ public export data Ty =
   -- Field names are a PROGRAM-GLOBAL namespace, and a record field whose name
   -- another module's record also uses AT A DIFFERENT INDEX makes the native
   -- emitter read the wrong slot — `medaka run` stays correct while the BUILT
-  -- binary aborts with `E-NONEXHAUSTIVE-MATCH`.  This is not hypothetical: naming
-  -- this record's fields `name`/`loc`/`origin` puts a
-  -- plain `loc` at index 1, colliding with `Finding`'s `loc` (`tools/lint.mdk`,
-  -- index 3).  Nothing in `compiler/` referenced `Ty`'s fields at
-  -- all, yet `medaka lint --cache` — whose `encFinding` reads `f.loc` in
-  -- `tools/lint_cache.mdk` — crashed at runtime, and ONLY
-  -- `diff_compiler_lint_cache` caught it.  So: prefix every field on a widely
+  -- binary aborts with `E-NONEXHAUSTIVE-MATCH`.  The collision is concrete, not
+  -- hypothetical: naming this record's fields `name`/`loc`/`origin` puts a plain
+  -- `loc` at index 1, while `Finding`'s `loc` (`tools/lint.mdk`) sits at index 3.
+  -- Nothing in `compiler/` reads `Ty`'s fields at all, yet `medaka lint --cache`
+  -- does read `f.loc` (`encFinding`, `tools/lint_cache.mdk`), so that is where the
+  -- mis-resolved slot surfaces — and `diff_compiler_lint_cache` is the only gate
+  -- covering it.  So: prefix every field on a widely
   -- imported AST node, and never add a bare `name`/`loc`/`kind`/`id` field here.
   --
   -- ⚠️ THIS FILE DOES NOT YET FOLLOW THAT RULE, and the exception is
@@ -945,10 +945,14 @@ public export data EvId = EvId String Int
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
 -- `EMethodAt` node's selected denotation pre-use arrow arity and three route
 -- answers (its dispatch route, the selected impl's `requires` dicts, and the
--- method's own `=>` dicts) in the order the node's three
--- cells hold them.  One node can be the destination of zero goals (the
+-- method's own `=>` dicts) in the order the solver's `EvCell` route refs hold
+-- them (`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).  The node
+-- itself carries no route: its three cells are the method name, the pre-pass seed
+-- and the `EvId` that addresses that cell, and a reader reaches the routes by
+-- looking the id up (`evMethodRoutes`, `compiler/types/route_key.mdk`).  One node
+-- can be the destination of zero goals (the
 -- unbound-method recovery arm writes a final route without pushing one) or three
--- (the return-site, arg-stamp and RLocal goals share its first cell), so the node,
+-- (the return-site, arg-stamp and RLocal goals all stamp `ecTag`), so the node,
 -- not the goal, is the unit the reader looks up.
 -- The arity distinction is the point, so `Result` cannot stand in for it: these
 -- are evidence SHAPES, not a success and a failure, and an empty `EvMany` (a

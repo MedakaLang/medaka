@@ -1,8 +1,12 @@
 #!/bin/sh
-# test/comment_register_census.sh — derived comment-register census. Not a
-# gate: this is a reporting tool, run via `make comment-census`. It asserts
-# nothing; exits 0 on a healthy run, and refuses (exit 1) only if the file
-# corpus comes back empty — see below.
+# test/comment_register_census.sh — derived comment-register census, plus the
+# baseline ratchet built on the same scanner. The DEFAULT (no-flag) mode is a
+# reporting tool, run via `make comment-census`: it asserts nothing, exits 0 on
+# a healthy run, and refuses (exit 1) only if the file corpus comes back empty
+# — see below. The `--write`/`--check` modes are the GATED path: `--check` is a
+# verdict (exit 1 on a baselined count that rose), consumed by
+# .githooks/pre-commit check 6b and by test/diff_compiler_comment_shout_diff.sh,
+# which is a merge-tier gate.
 #
 # WHY THIS EXISTS (#2281, leg 3 P of crusade #2276): source comments in this
 # tree drift into several registers that read fine the day they're written
@@ -30,14 +34,17 @@
 # script matches whole source lines with regex, not a `#`-comment extractor
 # — it does not parse Medaka syntax, so a hit can land inside a string
 # literal or a diagnostic-message text rather than an actual `#` comment.
-# Acceptable for an on-demand census, not for a gate (this is deliberately
-# not one) — a human still reads the per-file breakdown before acting on it.
+# Acceptable for the on-demand census — a human still reads the per-file
+# breakdown before acting on it — but too loose to carry a verdict, which is
+# why --write/--check narrow to comment-scope lines instead (see below).
 #
-# WHY ON-DEMAND, NOT A CI GATE: same rationale as test/fmt_clean_census.sh —
-# gating this tree-wide would surface whatever unrelated pre-existing
-# comment-register debt already lives in the tree as a sudden required-check
-# failure, unconnected to whatever PR happens to trip it. This is a
-# developer/agent convenience, not a merge gate.
+# WHY THE REPORT ITSELF IS ON-DEMAND: same rationale as
+# test/fmt_clean_census.sh — asserting a clean tree-wide count would surface
+# whatever unrelated pre-existing comment-register debt already lives in the
+# tree as a sudden required-check failure, unconnected to whatever PR happens
+# to trip it. The --check ratchet is what makes the register gateable anyway:
+# it pins today's debt per (file, class) and only ever lets a count fall, so a
+# PR fails on the debt it ADDS and never on the debt it inherited.
 #
 # Needs no built ./medaka — pure text/regex over tracked source files.
 # Portable POSIX sh (grep -E, no bash-only features).
@@ -50,7 +57,7 @@
 # Default (no args): per-file breakdown, then a per-class summary table.
 # Exits 0 on a healthy run; refuses (exit 1) only if the file corpus comes
 # back empty, which would otherwise misreport as a clean zero. Unchanged by
-# the modes below (#S-register-baseline).
+# the modes below (#3034).
 #
 # The default report reads WHOLE files; --write and --check read only the
 # comment-scope lines of each file (comment_scope_lines below). A baselined
@@ -144,7 +151,7 @@ re_measured='MEASURED'
 #     .ml/.mli/.mll/.mly.
 re_deadpath='lib/[A-Za-z0-9_./]*\.ml[a-z]*'
 
-# The 8 BASELINED classes (#S-register-baseline) — per-LINE-count classes
+# The 8 BASELINED classes (#3034) — per-LINE-count classes
 # only; class 9 (comment-block essays) counts RUNS, a different mechanism,
 # and class 7 has no independent regex (it IS class 5's hit list). Fixed
 # order, shared by --write and --check so both walk the same sequence.
@@ -234,7 +241,7 @@ if [ "${1:-}" = "--write" ]; then
   outpath="${2:-}"
   [ -n "$outpath" ] || { echo "comment_register_census: --write needs a <path>" >&2; exit 2; }
   {
-    echo "# comment-register count baseline — GENERATED, never hand-edited (#S-register-baseline)."
+    echo "# comment-register count baseline — GENERATED, never hand-edited (#3034)."
     echo "#"
     echo "# One [[entry]] per (file, class) with a nonzero count, over the 8"
     echo "# per-LINE-count comment-register classes test/comment_register_census.sh"
@@ -250,7 +257,7 @@ if [ "${1:-}" = "--write" ]; then
     echo "# class 5's (draft narration) hit list, needing human judgment, not a"
     echo "# regex count."
     echo "#"
-    echo "# Enforced by .githooks/pre-commit check 6 (per staged file) and by"
+    echo "# Enforced by .githooks/pre-commit check 6b (per staged file) and by"
     echo "# test/diff_compiler_comment_shout_diff.sh (whole tree, so --no-verify"
     echo "# cannot smuggle a rise past the hook)."
     echo "#"
