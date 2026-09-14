@@ -46,10 +46,14 @@
 #      or nightly.yml (-> nightly) that INVOKES the gate script, plus the steps
 #      of any local composite action those workflows `uses:` (#1961 — a
 #      composite action can be the only invocation site).
-#   3. ONE CLOSURE STEP through the gate scripts themselves: a gate script that
+#   3. ONE CLOSURE STEP through the gate RUN TARGETS themselves: a gate that
 #      runs at tier T and invokes another gate script gives that one tier T
 #      too. This is the whole reason registry_keying_ratchet was mis-tiered —
-#      its merge run is three files away from any workflow.
+#      its merge run is three files away from any workflow. A `kind = "native"`
+#      run module (`.mdk`) is walked here too, by the Medaka command-position
+#      rule below: test/diff_compiler_lsp_test.mdk spawns
+#      test/lsp_warm_session.sh, so skipping `.mdk` run targets derived
+#      `ondemand` for a gate the tree runs on every merge.
 #
 # A gate no source reaches derives `ondemand`, which is exactly what that token
 # claims.
@@ -234,6 +238,66 @@ def runs_in(text):
     return found
 
 
+# ── THE SAME RULE, FOR A `kind = "native"` RUN MODULE ────────────────────────
+#
+# A native gate's `run` is a `.mdk`, and one of them SPAWNS a gate script
+# (test/diff_compiler_lsp_test.mdk runs test/lsp_warm_session.sh), so the
+# closure below has to walk `.mdk` run modules too or that gate derives
+# `ondemand` while the tree runs it every merge.
+#
+# Command position, in Medaka: the shell is a string literal in PROGRAM
+# position and the script is the first element of the argument LIST handed to
+# the same call — `boundedInTree n "sh" ["\{medakaRoot}/test/x.sh"]`. That is
+# the same demand the shell rule makes, spelled in the other language, and it
+# is what separates a RUN from the two READS in the same corpus
+# (`readFile "…/test/lsp_bless.sh"`, `readFile "…/test/snapshot_bless.sh"`):
+# a read has no program literal in front of it.
+#
+# GUARANTEE, NARROWLY: the program literal and the path literal must reach the
+# scanner in ONE call, with only whitespace between them. Binding the argument
+# list to a name first (`let args = […]` then `… "sh" args`) hides it, as does
+# building the path anywhere but a string literal. Both make the gate derive
+# FEWER tiers than are declared, which reds here with the gate named — the same
+# failure direction the shell rule has, never a silent pass.
+MDK_BINDING_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_\']*)\s*=\s*"([^"\\\n]*)"[ \t]*$',
+                            re.M)
+MDK_INTERP_RE = re.compile(r'\\\{([A-Za-z_][A-Za-z0-9_\']*)\}')
+MDK_BLOCK_COMMENT_RE = re.compile(r'\{-.*?-\}', re.S)
+MDK_LINE_COMMENT_RE = re.compile(r'^[ \t]*--.*$', re.M)
+
+
+def strip_mdk_comments(text):
+    """Drop `{- … -}` blocks and whole-line `--` comments. Deliberately NOT
+    mid-line `--`: `"--json"` is an argument, not a comment introducer, and
+    truncating there would hide a real invocation."""
+    return MDK_LINE_COMMENT_RE.sub('', MDK_BLOCK_COMMENT_RE.sub('', text))
+
+
+def mdk_expand(text):
+    """One substitution pass of `\\{name}` -> the value of a top-level
+    `name = "literal"` binding in the same module. One pass, not a fixpoint:
+    a path assembled through two levels of indirection is out of scope, and
+    being out of scope means a red, not a silent miss."""
+    lits = dict(MDK_BINDING_RE.findall(text))
+    return MDK_INTERP_RE.sub(lambda m: lits.get(m.group(1), m.group(0)), text)
+
+
+def mdk_invocation_re(stem):
+    return re.compile(r'"(?:sh|bash|dash)"\s*\[\s*"[^"\n]*?'
+                      + re.escape(stem) + r'\.sh"')
+
+
+MDK_RES = {s: mdk_invocation_re(s) for s in by_stem if s not in native_stems}
+
+
+def mdk_runs_in(text):
+    """{stem: {}} for every gate script a native run module actually SPAWNS.
+    No env map: a Medaka spawn carries no `VAR=value` command prefix for a
+    mode to be read out of."""
+    expanded = mdk_expand(strip_mdk_comments(text))
+    return {s: {} for s, rx in MDK_RES.items() if rx.search(expanded)}
+
+
 def workflow_steps(path):
     """(job label, comment-stripped run body, effective env) for every `run:`
     step of a workflow, including the steps of local composite actions it
@@ -306,22 +370,25 @@ for _, tier in WORKFLOWS:
     seen = set(frontier)
     while frontier:
         stem = frontier.pop()
-        if stem in native_stems:
-            # No `.sh` script to open for its own invocations — a native
-            # gate's tier source is the matrix/`shard` field alone (source 1
-            # above), already captured before this closure walk runs.
-            continue
-        p = pathlib.Path(root) / f'{stem}.sh'
+        # A native gate's `run` is a `.mdk` and its stem carries that suffix;
+        # a shell gate's stem had `.sh` stripped. Either can spawn a gate
+        # script, so both are walked — each read with its own language's
+        # invocation rule.
+        native = stem in native_stems
+        rel = stem if native else f'{stem}.sh'
+        p = pathlib.Path(root) / rel
         if not p.exists():
-            print(f"FAIL: {by_stem[stem]['name']}'s `run` ({stem}.sh) does not exist on disk.")
+            print(f"FAIL: {by_stem[stem]['name']}'s `run` ({rel}) does not exist on disk.")
             print("      Refusing to certify tiers from a partial closure — a registry entry")
             print("      whose script is missing cannot be walked for its own invocations.")
             sys.exit(1)
-        for callee in runs_in(strip_comments(p.read_text())):
+        text = p.read_text()
+        callees = mdk_runs_in(text) if native else runs_in(strip_comments(text))
+        for callee in callees:
             if callee == stem:
                 continue
             derived[callee].add(tier)
-            why.setdefault((callee, tier), f'invoked by {stem}.sh')
+            why.setdefault((callee, tier), f'invoked by {rel}')
             if callee not in seen:
                 seen.add(callee)
                 frontier.append(callee)

@@ -26,7 +26,7 @@
 #   3. One hop through a helper the gate actually invokes (preflight's
 #      diff_compiler_tmc_parity / test/tmc_census.sh example) counts as consuming.
 #   4. If the exact leaf directory has no consumer, climb to the parent and retry
-#      (preflight's SNAPDIR case: diff_compiler_snapshot_frontend.sh never spells
+#      (preflight's SNAPDIR case: diff_compiler_snapshot_frontend_test.mdk never spells
 #      out "test/snapshots/diff_fixtures", it reads test/snapshots as a whole).
 #
 # ONE EXTENSION beyond preflight, found empirically while building this gate:

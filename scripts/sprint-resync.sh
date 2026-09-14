@@ -81,7 +81,7 @@ printf 'sprint-resync: re-deriving LEG A goldens\n'
 sh test/capture_goldens.sh --frozen selfproc_legA
 
 printf 'sprint-resync: snapshot check\n'
-make -C "$ROOT" snapshot-check || printf 'sprint-resync: snapshots moved — bless per file with test/diff_compiler_snapshot_frontend.sh --bless <path>\n' >&2
+make -C "$ROOT" snapshot-check || printf 'sprint-resync: snapshots moved — bless per file with test/snapshot_bless.sh --bless <path>\n' >&2
 
 # 6. Report what is owed. The bare-merge-without-goldens slip was exactly this
 #    state going unnoticed, so make it loud rather than exiting 0 silently.

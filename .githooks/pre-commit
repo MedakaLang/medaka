@@ -66,7 +66,7 @@
 # a rubber stamp with a progress bar. So it runs `--check` and stops; re-cutting is an
 # explicit, named, human act:
 #
-#     sh test/diff_compiler_snapshot_frontend.sh --bless <the file you changed>
+#     sh test/snapshot_bless.sh --bless <the file you changed>
 #
 # and the actual review gate is `git diff` on test/snapshots/ — which is what a reviewer
 # and every CI shard look at. (See compiler/tools/snapshot.mdk for the three locks on
@@ -342,19 +342,22 @@ if [ -n "$snapfiles" ] && [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then
 fi
 
 if [ -n "$snapfiles" ]; then
-  snapgate="$ROOT/test/diff_compiler_snapshot_frontend.sh"
+  # The snapshot suite's CHECK half is a `kind = "native"` gate module, invoked
+  # here exactly as `medaka gate run` invokes it, so this hook and CI cannot
+  # drift into two ways of running one check. MEDAKA_ROOT is named rather than
+  # left to the hook's cwd, since the module resolves every corpus through it.
+  snapgate="$ROOT/test/diff_compiler_snapshot_frontend_test.mdk"
   if [ -f "$snapgate" ]; then
-    snapout="$(MEDAKA="$MEDAKA" sh "$snapgate" 2>&1)"; snapst=$?
-    if [ "$snapst" -eq 2 ]; then
-      echo "pre-commit: snapshot suite could not run (compiler not built) — skipping check 4." >&2
-    elif [ "$snapst" -ne 0 ]; then
+    snapout="$(MEDAKA_ROOT="$ROOT" MEDAKA="$MEDAKA" \
+                 "$MEDAKA" test --native "$snapgate" 2>&1)"; snapst=$?
+    if [ "$snapst" -ne 0 ]; then
       echo "" >&2
       echo "✗ pre-commit: the snapshot suite is stale (make snapshot-check):" >&2
       echo "" >&2
-      printf '%s\n' "$snapout" | grep -E ': (FAIL|ERROR)' | sed 's/^/    /' >&2
+      printf '%s\n' "$snapout" | grep -E '(: (FAIL|ERROR)|families failed)' | sed 's/^/    /' >&2
       echo "" >&2
       echo "  Re-cut ONLY the fixtures you changed, by name:" >&2
-      echo "      sh test/diff_compiler_snapshot_frontend.sh --bless <file.mdk> ..." >&2
+      echo "      sh test/snapshot_bless.sh --bless <file.mdk> ..." >&2
       echo "  then re-stage test/snapshots/ and READ the diff — that diff is the review gate." >&2
       echo "  (There is no whole-suite bless. A diagnostic-bearing section will refuse to" >&2
       echo "   bless at all: read the new message, then rm the .md and re-cut it with --new.)" >&2

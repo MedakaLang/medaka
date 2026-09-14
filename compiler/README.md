@@ -85,7 +85,7 @@ diff with `lib/`:
 | `core_ir_modules_main.mdk` | Multi-module Core IR entry (the loader-driven Core-IR path — analog of `eval_modules_main`): `medaka run compiler/entries/core_ir_modules_main.mdk <core.mdk> <entry.mdk> [root ...]` loads entry + imports, desugars + annotates each, LOWERS them per-module to Core IR and evaluates them in per-module frames over the shared prelude (`core_ir_eval.cevalModules`), printing the root module's `main` stdout. Diffs against `medaka run <entry>` (the `core_ir_modules_main` oracle in `medaka gate run diff_compiler_eval`, 4 rows) — the SAME oracle `eval_modules_main` uses. |
 | `core_ir_sexp.mdk` | **Stage 2 §2.1 Core IR serializer** — `cprogramToSexp : CProgram -> String` (and all sub-serializers: `cexprSexp`, `cbindSexp`, `carmSexp`, `ctreeSexp`, `cheadSexp`, `cimplEntrySexp`, etc.). Lossless structural S-expression dump mirroring `sexp.mdk`'s style: every node tagged by constructor name, `CVar` carries its `Addr`, `CMethod`/`CDict` carry their `Route`s. The canonical frozen-IR serialization format — the LLVM contract input and future `medaka build` artifact cache basis. |
 | `core_ir_sexp_parse.mdk` | **Stage 2 §2.1 Core IR deserializer** — `parseCProgram : String -> CProgram`. Tokenizes the S-expression (quoted strings, parens, bare atoms), builds an `SExp` tree, then pattern-matches each tag back to the typed `CProgram`/`CExpr`/... ADTs. All 18 engine-corpus fixtures round-trip faithfully. |
-| `core_ir_dump_main.mdk` | Runnable entry for the Core IR serializer: `medaka run compiler/entries/core_ir_dump_main.mdk <src.mdk>` parses → desugars → `annotateProgram` → lowers → `cprogramToSexp`. The `# CORE_IR` section of `test/diff_compiler_snapshot_core_ir.sh` snapshots fresh dumps (catches accidental lowering/serializer drift). |
+| `core_ir_dump_main.mdk` | Runnable entry for the Core IR serializer: `medaka run compiler/entries/core_ir_dump_main.mdk <src.mdk>` parses → desugars → `annotateProgram` → lowers → `cprogramToSexp`. The `# CORE_IR` section of the `eval_fixtures` snapshot family (`test/diff_compiler_snapshot_frontend_test.mdk`) snapshots fresh dumps (catches accidental lowering/serializer drift). |
 | `core_ir_roundtrip_main.mdk` | Runnable entry for the round-trip gate: `medaka run compiler/entries/core_ir_roundtrip_main.mdk <src.mdk>` lowers → serializes → parses back → evaluates (`cevalMain`) → prints `pp_value`. Diffs against `dev/eval_probe.exe` (`test/diff_compiler_core_ir_roundtrip.sh`, all 18 engine fixtures). A passing result proves the serialization is semantics-faithful. |
 | ~~`bytecode.mdk`~~ | **REMOVED 2026-06-10** (commit `ef651fb`) — bytecode compiler + stack VM (§2.2, slices 1–6) was removed as confirmed off the canonical path after the LLVM backend self-hosted. Historical record in the §2.2 sections below and `STAGE2-DESIGN.md`. |
 | ~~`eval_bytecode_main.mdk`~~ | **REMOVED 2026-06-10** — bytecode VM runnable entries removed with `bytecode.mdk`. |
@@ -120,10 +120,13 @@ only the non-exhaustive-match warnings.
 > preflight` for a targeted subset — do not run the whole suite locally).
 
 ```sh
-sh test/diff_compiler_snapshot_frontend.sh    # lexer (# TOKENS) + parse/desugar/mark snapshots
+./medaka gate run diff_compiler_snapshot_frontend  # EVERY snapshot family — lexer (# TOKENS),
+                                              #   parse/printer/desugar/mark, positions, comments,
+                                              #   types, types_user, core_ir, eval and the eval
+                                              #   runtime-error # CRASH corpus, as one native runner
+                                              #   over 15 rows (test/diff_compiler_snapshot_frontend_test.mdk)
 sh test/diff_compiler_check_test.mdk         # parser/lexer rejection path (~0.4s)
 sh test/diff_compiler_check_test.mdk          # type-aware non-exhaustive-match warnings vs diagdump --check-match (11 fixtures)
-sh test/diff_compiler_snapshot_eval_errors.sh # eval runtime-error messages, in-process # CRASH snapshot (~1s)
 sh test/diff_compiler_typecheck_errors.sh     # typecheck TYPE ERROR accumulation (3 fixtures × 2 drivers, ~1s)
 sh test/diff_compiler_selfproc.sh             # the bootstrap (#3) self-processing gate (4 legs, ~18s)
 ./medaka gate run diff_compiler_eval          # Stage 2 §2.1 Core IR equivalence + the tree-walker value
@@ -132,7 +135,6 @@ sh test/diff_compiler_selfproc.sh             # the bootstrap (#3) self-processi
                                               #   typed return-position dispatch / CMethod, loader-driven
                                               #   per-module frames, true-execution stdout / === EVAL === goldens,
                                               #   and the batched variants (test/diff_compiler_eval_test.mdk)
-sh test/diff_compiler_snapshot_core_ir.sh         #   …serializer snapshot gate / cprogramToSexp goldens (18)
 # §2.2 bytecode VM gates REMOVED 2026-06-10 (bytecode.mdk removed — off canonical path):
 #   diff_compiler_eval_bytecode.sh, diff_compiler_eval_bytecode_modules.sh,
 #   diff_compiler_eval_bytecode_typed.sh, diff_compiler_eval_bytecode_run.sh,
@@ -177,7 +179,8 @@ the stage is done when all pass.
   depth so the closing `}` resumes the triple continuation (vs the single-string
   one). Covered by `test/diff_fixtures/triple_str.mdk`.
 - ✅ **Validated two ways**, both byte-for-byte against the OCaml reference:
-  - **curated fixtures** — the `# TOKENS` section of `sh test/diff_compiler_snapshot_frontend.sh`.
+  - **curated fixtures** — the `# TOKENS` section of the snapshot gate,
+  `test/diff_compiler_snapshot_frontend_test.mdk`.
   - **All real `.mdk` files** (every stdlib module + this lexer lexing itself)
     — `sh test/diff_compiler_lex_files.sh`, which diffs against
     `dev/lextok.exe` (the OCaml reference dumper). FLOAT literal *text* is
@@ -674,7 +677,7 @@ to the AST tree-walker:
 **Stage 2 §2.1 — Core IR serializer + round-trip (2026-06-05).** A canonical
 S-expression serializer (`core_ir_sexp.mdk` / `cprogramToSexp`) + deserializer
 (`core_ir_sexp_parse.mdk` / `parseCProgram`) + two new gates:
-- **snapshot** (`diff_compiler_snapshot_core_ir.sh`, 18) — dumps the Core IR for
+- **snapshot** (the `eval_fixtures` family of `diff_compiler_snapshot_frontend_test.mdk`, 24) — dumps the Core IR for
   each engine-corpus fixture and diffs against committed goldens in
   `test/snapshots/eval_fixtures/`; catches accidental lowering or serializer drift.
   Goldens are regenerable when an intentional IR change is made.
@@ -1343,7 +1346,7 @@ gap in fidelity. Concretely, by stage:
   index/slice OOB messages now include the index value / coordinate range;
   `"index: bad operands"` → `"index is not an Int"` / `"index on non-array/list/string"`;
   etc. — 15 sites fixed, 15 sites confirmed already matching. Validated by
-  `test/diff_compiler_snapshot_eval_errors.sh` (9 negative fixtures in
+  the `eval_error_fixtures` family of `test/diff_compiler_snapshot_frontend_test.mdk` (9 negative fixtures in
   `test/eval_error_fixtures/`; the in-process snapshot pins each fixture's coded
   runtime diagnostic in its `# CRASH` section — 8 real aborts plus no_main's static
   E-NO-MAIN — replacing the old probe's oracle/exit/message check).

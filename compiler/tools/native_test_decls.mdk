@@ -5,7 +5,7 @@
 -- TEST SIBLING by convention ([P-TEST-SIBLING]) and three computations subtract
 -- that suffix: both source fingerprints in `test/build_native_medaka.sh`, their
 -- mirror `liveSourceFingerprint` in `compiler/driver/medaka_cli.mdk`, and the
--- `compiler` family of `test/diff_compiler_snapshot_frontend.sh`.  Under the
+-- `compiler` family of `test/diff_compiler_snapshot_frontend_test.mdk`.  Under the
 -- shorter name this production module would neither trigger an emitter rebuild
 -- nor mark a binary stale when edited, and would owe no blessed snapshot —
 -- MEASURED: `find compiler -name '*.mdk' -not -name '*_test.mdk'` excludes it.

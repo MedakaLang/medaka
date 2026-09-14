@@ -1751,7 +1751,7 @@ routes land. Detail lives in the owning doc cited. **(D7/D8/foldMap reproduce-ve
   via TRUE path identity — a new `canonicalizePath : String -> <FileRead> String` extern (POSIX
   `realpath(3)`, `33972aa`: `runtime.mdk` decl + `medaka_rt.c` + `llvm_preamble`/`llvm_emit` + `compiler/eval/eval.mdk`
   parity) realpath-normalizes roots before the dep-name reverse-lookup, so the first-declared name wins
-  deterministically. Gates: new `test/cross_project_twonames.sh` 3/3 (red→green), `cross_project_deps`
+  deterministically. Gates: new `cross_project_twonames` 3/3 (red→green), `cross_project_deps`
   3/3, bootstrap suites at baseline, `diff_native_cli` no new failures, fixpoint C3a/C3b YES, cold
   `bootstrap_from_seed` PASS. **Residual:** none observed — the extern is unwired on the WasmGC leg (the
   loader never runs under wasm; stubbed/noted), and not added to `compiler/eval/eval.mdk` (that eval-probe

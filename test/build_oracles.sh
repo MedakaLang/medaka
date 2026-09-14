@@ -116,12 +116,14 @@ fi
 #   eval_dict_main        — fuzz_diff.sh (differential oracle) + capture_goldens.sh
 #                           (regenerates eval_dict_fixtures/*.eval.golden for the batch
 #                            gate). Its own single-file gate migrated to the snapshot
-#                            # EVAL section (diff_compiler_snapshot_eval.sh), #81 R6.
+#                            # EVAL section (the eval_dict_fixtures family of
+#                            diff_compiler_snapshot_frontend_test.mdk), #81 R6.
 #   eval_dict_batch       — diff_compiler_eval
 #   eval_typed_main       — capture_goldens.sh (regenerates eval_typed_fixtures/
 #                            *.eval.golden for the batch gate). Its own single-file gate
-#                            migrated to the snapshot # EVAL section
-#                            (diff_compiler_snapshot_eval.sh), #81 R6.
+#                            migrated to the snapshot # EVAL section (the
+#                            eval_typed_fixtures family of
+#                            diff_compiler_snapshot_frontend_test.mdk), #81 R6.
 #   eval_typed_batch      — diff_compiler_eval
 #   eval_typed_modules_main — diff_compiler_eval
 #   eval_modules_main     — diff_compiler_eval
@@ -153,13 +155,13 @@ fi
 #   ── Phase 2 §2b front-end gates, goldens captured from dev probes ──
 #   lex_main              — diff_compiler_lex_files.sh / bootstrap_lex.sh / selfcompile_lex.sh
 #                           (diff_compiler_lexer.sh MIGRATED to the # TOKENS section of
-#                           test/diff_compiler_snapshot_frontend.sh, #81 R4; lex_main
+#                           test/diff_compiler_snapshot_frontend_test.mdk, #81 R4; lex_main
 #                           survives because those three still drive it)
 #   parse_main            — diff_compiler_check (test/diff_compiler_check_test.mdk):
 #                           a sibling test, not a Row/Leg — the driver's pass condition
 #                           is a non-zero exit, the opposite of every Row's.
 #   parse_result_main     — diff_compiler_check, same file, same reason.
-#   (parse/desugar/mark:  MIGRATED to test/diff_compiler_snapshot_frontend.sh — the
+#   (parse/desugar/mark:  MIGRATED to test/diff_compiler_snapshot_frontend_test.mdk — the
 #                         snapshot runner calls the stages in-process, so those five
 #                         gates need no probe binary at all.  parse_main survives only
 #                         because diff_compiler_check still drives it.)
@@ -181,10 +183,11 @@ fi
 #   ── Phase 2 §2b typecheck/check/error gates ──
 #   typecheck_main          — diff_compiler_typecheck_errors.sh
 #                             (was also _typecheck.sh + _panic_errors.sh — migrated to the
-#                              TYPES snapshot family diff_compiler_snapshot_types.sh, #81 R5;
+#                              TYPES snapshot families of
+#                              diff_compiler_snapshot_frontend_test.mdk, #81 R5;
 #                              and _golden/_golden_batch — RETIRED #81 Stage B1: the
 #                              whole-prelude-inference invariant moved to the single
-#                              diff_compiler_snapshot_prelude.sh dump, per-fixture user
+#                              `prelude` snapshot family dump, per-fixture user
 #                              schemes to # TYPES_USER; typecheck_golden_batch had no other
 #                              consumer, so its oracle + entry source went with them)
 #   check_main              — diff_compiler_typecheck_errors.sh (driver B) / diff_compiler_check

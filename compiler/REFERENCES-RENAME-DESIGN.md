@@ -417,7 +417,7 @@ touching, shared-corpus trap). Docs: this file → `compiler/`, plus a row in
 ## 10. Snapshot / gate landmines specific to this work
 
 - The new `refindex.mdk` is compiler source ⇒ it is in the snapshot corpus ⇒ **bless its
-  golden in the same commit** via `sh test/diff_compiler_snapshot_frontend.sh --bless <path>`
+  golden in the same commit** via `sh test/snapshot_bless.sh --bless <path>`
   (the frontend suite's `run_family compiler` owns `compiler/tools/*.mdk`; there is no
   `snapshot_tools.sh`) — never the CLI. (`compiler/AGENTS.md`; memory
   `feedback_snapshot_new_writes_next_to_the_source`.)

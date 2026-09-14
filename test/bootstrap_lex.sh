@@ -22,7 +22,7 @@
 # golden is the raw reference token stream.
 #
 # This gate is now nearly redundant with the # TOKENS section of
-# diff_compiler_snapshot_frontend.sh (native lex stage == snapshot over the same
+# diff_compiler_snapshot_frontend_test.mdk (native lex stage == snapshot over the same
 # diff_fixtures corpus); kept distinct per REROOT-PLAN §2e (could fold later).
 #
 # Usage:  sh test/bootstrap_lex.sh

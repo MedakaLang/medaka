@@ -3556,7 +3556,7 @@ stays accepted, and A-3.7 (not A-3.4) is where it is at risk. Do not tidy it.
    `DeclEnvs`, so the bundle `IE` actually lives in is pinned at all.
 4. Zero program-output golden movement. Two compiler-source goldens move: the
    `typecheck.md` snapshot (bless via
-   `sh test/diff_compiler_snapshot_frontend.sh --bless compiler/types/typecheck.mdk`
+   `sh test/snapshot_bless.sh --bless compiler/types/typecheck.mdk`
    — the `_frontend` suite, not `_types`) and
    `test/selfproc_goldens/legA/types.typecheck.golden`, **additive-only**.
 5. `test/selfcompile_fixpoint.sh` C3a+C3b, `test/typecheck_compiler_source.sh`

@@ -1,0 +1,557 @@
+{- | The whole snapshot suite — every stage, every corpus — as one runner over
+   a table of families.
+
+   Seven shell gates used to do this, 972 lines between them, each a near-copy
+   of the same `run_family` loop: spawn `medaka snapshot --check` over a
+   corpus at a stage set, scrape the counts back out of its summary line, and
+   add them up. The (subdir, stages, corpus) triples are the data; the loop is
+   not. The rows here name them:
+
+   | subdir | stages | corpus | what it pins |
+   |---|---|---|---|
+   | `eval_fixtures` | core_ir | `test/eval_fixtures` | the Core IR s-expr dump |
+   | `eval_dict_fixtures` | eval | `test/eval_dict_fixtures` | dict-passed dispatch, interpreted |
+   | `eval_typed_fixtures` | eval | `test/eval_typed_fixtures` | typed-route dispatch, interpreted |
+   | `eval_error_fixtures` | eval | `test/eval_error_fixtures` | the coded runtime diagnostic of a fixture that aborts |
+   | `parse_fixtures` | parse,printer,desugar,mark | `test/parse_fixtures` | the grammar, and the printer's round trip |
+   | `parse_only_fixtures` | parse | `test/parse_only_fixtures` | constructs the parser accepts and no later stage handles yet |
+   | `positions_fixtures` | positions | `test/positions_fixtures` | every node's source span |
+   | `comment_fixtures` | comments | `test/comment_fixtures` | comment attachment |
+   | `diff_fixtures` | tokens,desugar,mark | `test/diff_fixtures` | the token stream, `FLOAT 1.0` and all |
+   | `diff_fixtures_types` | types_user | `test/diff_fixtures` | each fixture's OWN schemes, inferred prelude-aware |
+   | `typecheck_fixtures` | types | `test/typecheck_fixtures` | inference on the corpus written for it |
+   | `typecheck_panic_fixtures` | types | `test/typecheck_panic_fixtures` | inference on the inputs that used to kill it |
+   | `stdlib` | desugar,mark | `stdlib` | the shipped library still desugars and marks as committed |
+   | `prelude` | types | `stdlib/core.mdk` | the whole-prelude inference invariant, ~117 schemes in one dump |
+   | `compiler` | desugar,mark | the compiler's own sources | the compiler's own source, snapshotted |
+
+   A family is keyed by SUBDIRECTORY, not by corpus, because two corpora are
+   rendered twice at different stages: `stdlib/core.mdk` is both an ordinary
+   source file (`stdlib`, desugar,mark) and the prelude scheme table
+   (`prelude`, types), and `test/diff_fixtures` is both a token/desugar/mark
+   corpus and a per-fixture user-scheme corpus (`diff_fixtures_types`). Keying
+   on the corpus would collapse each pair and silently delete one of the two
+   properties.
+
+   No row renders the full stage set, and that is not a shortcut. Snapshotting
+   the compiler's own sources single-file, with no import resolution and no
+   core prelude, makes `# TYPES` a wall of bogus `Unbound variable` errors and
+   `# CORE_IR` a 180 KB single line — 725 KB for one file. A stage is
+   snapshotted where it carries signal, and `stages=` in each `# META` records
+   the choice where the next reader will see it.
+
+   # What this grades that the retired scripts did not
+
+   The scripts read `medaka snapshot`'s summary line with `sed` and summed the
+   numbers. This reads the EXIT CODE and STDERR as well, and holds each family
+   to its own counts rather than to a total:
+
+   - a family whose run compared NOTHING fails, instead of contributing a
+     zero to a total that still reads "all snapshots match" (the bug the
+     frontend script's summary carried, and then fixed, in prose);
+   - a family whose corpus has shrunk below the count it held when this row
+     was written fails, so a fixture directory that loses files reds rather
+     than passing over fewer of them. The floor is a floor and not an exact
+     count: `stdlib` and `compiler` grow with the tree, and a corpus that
+     grows is minted with `sh test/snapshot_bless.sh --new`, not by editing a
+     number here;
+   - a spawn that exits nonzero, or that prints `E-PANIC`, fails the row even
+     if its summary happened to parse.
+
+   # The other half
+
+   `--new` and `--bless` live in `test/snapshot_bless.sh`, which carries the
+   same table and is ledgered in `test/CI-COVERAGE-TOOLS.txt` as a tool rather
+   than enrolled as a gate. The last test in this file compares the two
+   tables, so the copies cannot drift apart in silence.
+
+   Runs under `medaka test --native`: it spawns `medaka` and reads the corpora
+   and the write tool, none of which the interpreter binds. -}
+
+import compiler_cli_test_support.{boundedInTree, sweepUnits}
+import fs.{fixtureFiles}
+import list.{somes, sort}
+import path.{dirname}
+import string.{
+  contains,
+  endsWith,
+  join,
+  lines,
+  split,
+  startsWith,
+  toInt,
+  trim,
+  trimRight,
+  unlines,
+  words,
+}
+import test.{Expectation, fail, pass}
+import test_process.{medakaBin, medakaRoot}
+
+-- # The table
+
+{- | What a family's corpus IS, and how its file list is found.
+
+   - `Dir d` — every `.mdk` directly under `d` (repo-relative, not recursive).
+   - `OneFile f` — exactly the one file `f`.
+   - `CompilerSources` — the compiler's own sources: `.mdk` under the eight
+     subdirectories of `compiler/`, with `*_test.mdk` subtracted. A test
+     sibling is not compiler source and owes no blessed snapshot
+     ([P-TEST-SIBLING] in AGENTS.md); `test/snapshot_bless.sh` refuses to
+     bless one, so a golden this check never compares cannot be minted. -}
+data Corpus = Dir String | OneFile String | CompilerSources
+
+{- | One family: where its snapshots live, what stages they hold, what corpus
+   they render, and the smallest corpus that is still the corpus.
+
+   `spec` is the same string `test/snapshot_bless.sh` spells the corpus with,
+   carried here so the two tables can be compared as text rather than through
+   a second mapping that could itself be wrong. -}
+data Family = Family {
+  sub : String,
+  stages : String,
+  spec : String,
+  corpus : Corpus,
+  floor : Int,
+}
+
+compilerDirs : List String
+compilerDirs = [
+  "frontend",
+  "types",
+  "ir",
+  "backend",
+  "eval",
+  "driver",
+  "tools",
+  "support",
+]
+
+families : List Family
+families = [
+  Family {
+    sub = "eval_fixtures",
+    stages = "core_ir",
+    spec = "dir:test/eval_fixtures",
+    corpus = Dir "test/eval_fixtures",
+    floor = 24,
+  },
+  Family {
+    sub = "eval_dict_fixtures",
+    stages = "eval",
+    spec = "dir:test/eval_dict_fixtures",
+    corpus = Dir "test/eval_dict_fixtures",
+    floor = 29,
+  },
+  Family {
+    sub = "eval_typed_fixtures",
+    stages = "eval",
+    spec = "dir:test/eval_typed_fixtures",
+    corpus = Dir "test/eval_typed_fixtures",
+    floor = 12,
+  },
+  Family {
+    sub = "eval_error_fixtures",
+    stages = "eval",
+    spec = "dir:test/eval_error_fixtures",
+    corpus = Dir "test/eval_error_fixtures",
+    floor = 9,
+  },
+  Family {
+    sub = "parse_fixtures",
+    stages = "parse,printer,desugar,mark",
+    spec = "dir:test/parse_fixtures",
+    corpus = Dir "test/parse_fixtures",
+    floor = 40,
+  },
+  Family {
+    sub = "parse_only_fixtures",
+    stages = "parse",
+    spec = "dir:test/parse_only_fixtures",
+    corpus = Dir "test/parse_only_fixtures",
+    floor = 1,
+  },
+  Family {
+    sub = "positions_fixtures",
+    stages = "positions",
+    spec = "dir:test/positions_fixtures",
+    corpus = Dir "test/positions_fixtures",
+    floor = 6,
+  },
+  Family {
+    sub = "comment_fixtures",
+    stages = "comments",
+    spec = "dir:test/comment_fixtures",
+    corpus = Dir "test/comment_fixtures",
+    floor = 8,
+  },
+  Family {
+    sub = "diff_fixtures",
+    stages = "tokens,desugar,mark",
+    spec = "dir:test/diff_fixtures",
+    corpus = Dir "test/diff_fixtures",
+    floor = 61,
+  },
+  Family {
+    sub = "diff_fixtures_types",
+    stages = "types_user",
+    spec = "dir:test/diff_fixtures",
+    corpus = Dir "test/diff_fixtures",
+    floor = 61,
+  },
+  Family {
+    sub = "typecheck_fixtures",
+    stages = "types",
+    spec = "dir:test/typecheck_fixtures",
+    corpus = Dir "test/typecheck_fixtures",
+    floor = 14,
+  },
+  Family {
+    sub = "typecheck_panic_fixtures",
+    stages = "types",
+    spec = "dir:test/typecheck_panic_fixtures",
+    corpus = Dir "test/typecheck_panic_fixtures",
+    floor = 7,
+  },
+  Family {
+    sub = "stdlib",
+    stages = "desugar,mark",
+    spec = "dir:stdlib",
+    corpus = Dir "stdlib",
+    floor = 36,
+  },
+  Family {
+    sub = "prelude",
+    stages = "types",
+    spec = "file:stdlib/core.mdk",
+    corpus = OneFile "stdlib/core.mdk",
+    floor = 1,
+  },
+  Family {
+    sub = "compiler",
+    stages = "desugar,mark",
+    spec = "compiler",
+    corpus = CompilerSources,
+    floor = 78,
+  },
+]
+
+-- # Finding a family's corpus
+
+{- | The absolute paths one family renders, sorted.
+
+   An `Err` here is a structural failure of the row, never a skip: a corpus
+   that cannot be read is the one outcome a snapshot suite must not report as
+   a pass. -}
+filesOf : Family -> <FileRead "_", IO> Result String (List String)
+filesOf f = match f.corpus
+  OneFile rel => Ok ["\{medakaRoot}/\{rel}"]
+  Dir rel => flatMdk "\{medakaRoot}/\{rel}"
+  CompilerSources => compilerFiles compilerDirs []
+
+{- | The `.mdk` files directly under `dir`.
+
+   `fixtureFiles` walks recursively and carries its own anti-vacuity floor, so
+   a directory that reads cleanly but holds nothing is an `Err` rather than a
+   green run over zero files; only the top level is corpus. -}
+flatMdk : String -> <FileRead "_"> Result String (List String)
+flatMdk dir = match fixtureFiles dir
+  Err e => Err e
+  Ok paths =>
+    let own = p => endsWith ".mdk" p && dirname p == dir
+    match sort (filter own paths)
+      [] => Err "no top-level .mdk files under \{dir}"
+      fs => Ok fs
+
+{- | The compiler's own sources, eight directories deep-first, `*_test.mdk`
+   subtracted — the same set `test/snapshot_bless.sh`'s `compiler_sources`
+   lists, and the same exclusion its `--bless` arm refuses on. -}
+compilerFiles : List String ->
+  List String ->
+  <FileRead "_", IO> Result String (List String)
+compilerFiles [] [] = Err "no compiler sources found"
+compilerFiles [] acc = Ok (sort acc)
+compilerFiles (d :: rest) acc = match flatMdk "\{medakaRoot}/compiler/\{d}"
+  Err e => Err e
+  Ok fs => compilerFiles rest (acc ++ filter (p => not (isTestSibling p)) fs)
+
+isTestSibling : String -> Bool
+isTestSibling p = endsWith "_test.mdk" p
+
+-- # Reading one run back
+
+{- | The counts `medaka snapshot` prints, in the order its summary names them.
+
+   The line is `snapshot: N fixtures — P pass, X new, B blessed, S skipped, F
+   failed, C crashed`, and each count is the word BEFORE its label, so this
+   reads the labels rather than fixed positions: a summary that gains a
+   seventh count still parses, and one whose wording moved reports `None`
+   instead of a number taken from the wrong place. -}
+data Counts = Counts {
+  fixtures : Int,
+  passed : Int,
+  skipped : Int,
+  failed : Int,
+}
+
+countsOf : String -> Option Counts
+countsOf out = match filter (startsWith "snapshot: ") (lines out)
+  [] => None
+  l :: _ =>
+    let ws = words (replaceCommas l)
+    do
+      n <- labelled "fixtures" ws
+      p <- labelled "pass" ws
+      s <- labelled "skipped" ws
+      f <- labelled "failed" ws
+      Some Counts { fixtures = n, passed = p, skipped = s, failed = f }
+
+-- | The summary separates its counts with commas, which `words` would leave
+-- glued to the number before the label.
+replaceCommas : String -> String
+replaceCommas s = join " " (split "," s)
+
+-- | The integer immediately before the word `label`, if the word before it is
+-- one.
+labelled : String -> List String -> Option Int
+labelled _ [] = None
+labelled _ (_ :: []) = None
+labelled label (a :: b :: rest) =
+  if b == label then toInt a else labelled label (b :: rest)
+
+-- | The `<fixture>: FAIL …` / `ERROR …` lines among the ones the runner
+-- printed — the only place the differing SECTION names are named.
+badLines : List String -> List String
+badLines ls = filter (l => contains ": FAIL" l || contains ": ERROR" l) ls
+
+-- # Is the binary stale?
+
+{- | The fixed prefix of the CLI's own staleness warning, read live out of
+   `compiler/driver/medaka_cli.mdk`, or `""` when that source no longer has
+   the shape this looks for.
+
+   Read rather than hand-copied, and anchored on the CODE (`++ compilerDir`,
+   the splice that makes the sentence variable) rather than on the prose. That
+   buys exactly one thing: REWORDING the warning does not rot this file, which
+   is the failure mode `test/lib_stale_warning.sh`'s shell twin has — it
+   anchors on `let msg = "…" ++ compilerDir` as ONE line, which the current
+   source spreads over three, so it reads `""` and its classification has been
+   inert.
+
+   It does NOT survive every reflow. `markerBefore` wants `++ compilerDir` at
+   the head of its own line and the quoted prefix on the line before, so a
+   `medaka fmt` that joins the two degrades this to the same `""`. That is a
+   lost hint on an already-failing row, never a wrong verdict: `staleNote`
+   appends nothing when the marker is `""`. -}
+staleMarker : <FileRead "_", IO> String
+staleMarker = match readFile "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
+  Err _ => ""
+  Ok src => markerBefore "" (lines src)
+
+markerBefore : String -> List String -> String
+markerBefore _ [] = ""
+markerBefore prev (l :: rest) =
+  if startsWith "++ compilerDir" (trim l) then
+    quotedIn prev
+  else
+    markerBefore l rest
+
+-- | The contents of the first double-quoted run in `s`, or `""`.
+quotedIn : String -> String
+quotedIn s = match split "\"" s
+  _ :: q :: _ => q
+  _ => ""
+
+{- | A note to append to a failure message when the spawn's own output says the
+   binary predates the tree — the single likeliest explanation for a whole
+   family diffing at once, and one the raw section diff never spells out.
+
+   `""` when the marker could not be derived: "cannot tell" is reported as
+   nothing, never as a guess either way. -}
+staleNote : String -> String -> String
+staleNote marker text =
+  if marker /= "" && contains marker text then
+    " [ALSO: this ./medaka reports itself stale — run 'make medaka' and retry]"
+  else
+    ""
+
+-- # Grading a family
+
+{- | One family's outcome. `failures` is the whole list rather than the first,
+   since a red run has to name every disagreeing family at once instead of
+   stopping at the one that sorted first. -}
+data Outcome = Outcome { sub : String, graded : Int, failures : List String }
+
+{- | The ceiling on one family's spawn.
+
+   The `compiler` family renders 78 sources through desugar and mark and takes
+   the better part of twenty seconds on an idle box; `test_process`'s
+   60-second default is sized for a single verb and is not a ceiling this can
+   borrow. -}
+familyTimeoutSeconds : Int
+familyTimeoutSeconds = 300
+
+{- | `None` when the spawn itself was clean.
+
+   `code == 0` with no `E-PANIC` in stderr is the shape every other native
+   gate asserts of a spawn: a process that printed a right-looking summary on
+   its way out of a panic has not passed. -}
+spawnFailure : Family -> Int -> String -> String -> Option String
+spawnFailure f code err note =
+  if code == 0 && not (contains "E-PANIC" err) then
+    None
+  else
+    Some "\{f.sub}: medaka snapshot exited \{intToString code}\{note}"
+
+{- | `None` when the counts say this family compared its whole corpus and
+   every comparison matched.
+
+   Three separate claims, because they fail differently and a single "did it
+   pass" would collapse them: nothing was skipped, nothing failed, and the
+   number compared is the number of fixtures AND is at least the floor this
+   row records. A `--check` run that skips is a run that did not look. -}
+countFailures : Family -> Counts -> String -> List String
+countFailures f c note = somes [
+  if c.failed /= 0 then
+    Some
+      "\{f.sub}: \{intToString c.failed} of \{intToString c.fixtures} snapshots differ\{note}"
+  else
+    None,
+  if c.skipped /= 0 then
+    Some
+      "\{f.sub}: \{intToString c.skipped} fixtures SKIPPED — a check that skips is a check that did not look"
+  else
+    None,
+  if c.passed /= c.fixtures then
+    Some
+      "\{f.sub}: \{intToString c.passed} compared of \{intToString c.fixtures} fixtures"
+  else
+    None,
+  if c.fixtures < f.floor then
+    Some
+      "\{f.sub}: corpus holds \{intToString c.fixtures} fixtures, below this row's floor of \{intToString f.floor} — see the `floor` field"
+  else
+    None,
+]
+
+gradeFamily : String -> Family -> <Exec "_", FileRead "_", IO> Outcome
+gradeFamily _ f = match filesOf f
+  Err e => Outcome { sub = f.sub, graded = 0, failures = ["\{f.sub}: \{e}"] }
+  Ok paths => runFamily f paths
+
+runFamily : Family -> List String -> <Exec "_", FileRead "_", IO> Outcome
+runFamily f paths =
+  match boundedInTree familyTimeoutSeconds medakaBin (checkArgs f paths)
+    Err e => Outcome {
+      sub = f.sub,
+      graded = 0,
+      failures = ["\{f.sub}: could not spawn medaka snapshot: \{e}"],
+    }
+    Ok (code, out, err) =>
+      let note = staleNote staleMarker (out ++ err)
+      let counted = match countsOf out
+        None => [
+          "\{f.sub}: could not read a summary line out of medaka snapshot's output\{note}",
+        ]
+        Some c => countFailures f c note
+      let spawned = somes [spawnFailure f code err note]
+      Outcome {
+        sub = f.sub,
+        graded = length paths,
+        failures = spawned ++ counted ++ map indent (badLines (lines out)),
+      }
+
+indent : String -> String
+indent l = "  \{l}"
+
+{- | The argument vector for one family's check.
+
+   `--root` is passed rather than left to `MEDAKA_ROOT` so the spawn renders
+   the tree under test even when the environment names another, and `--out`
+   names the family's own subdirectory, which is the whole of what
+   distinguishes two families sharing a corpus. -}
+checkArgs : Family -> List String -> <IO> List String
+checkArgs f paths =
+  [
+      "snapshot",
+      "--check",
+      "--root",
+      medakaRoot,
+      "--out",
+      "\{medakaRoot}/test/snapshots/\{f.sub}",
+      "--stages",
+      f.stages,
+    ]
+    ++ paths
+
+familyFailure : Outcome -> Option String
+familyFailure o = match o.failures
+  [] => None
+  fs =>
+    let body = unlines (map (l => "    \{l}") fs)
+    Some
+      "  \{o.sub} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{trimRight body}"
+
+summarize : Int -> List String -> Expectation
+summarize _ [] = pass
+summarize graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} snapshot families failed:\n\{unlines failures}"
+
+test "every snapshot family reproduces its committed snapshots" =
+  sweepUnits families gradeFamily familyFailure summarize
+
+-- # The write tool carries the same table
+
+{- | The family table as `test/snapshot_bless.sh` spells it: the lines between
+   its two sentinel comments, each `<subdir> <stages> <spec>`.
+
+   The write tool has to know the table too — `--new` renders every family and
+   `--bless` resolves a path to the families owning it — and a second copy of
+   a table is a second copy that can rot. Rather than generate one from the
+   other (which would make a shell script depend on a built compiler to do the
+   one job you reach for when the compiler's goldens are already wrong), the
+   copies stay independent and this test holds them to each other. -}
+toolTableStart : String
+toolTableStart = "# ── FAMILY TABLE BEGIN"
+
+toolTableEnd : String
+toolTableEnd = "# ── FAMILY TABLE END"
+
+toolRows : <FileRead "_", IO> Result String (List String)
+toolRows = match readFile "\{medakaRoot}/test/snapshot_bless.sh"
+  Err e => Err "cannot read test/snapshot_bless.sh: \{e}"
+  Ok src => match between toolTableStart toolTableEnd (lines src)
+    [] => Err "test/snapshot_bless.sh has no FAMILY TABLE block"
+    ls => Ok (filter isRow ls)
+
+-- | A table line, as opposed to the `cat <<'EOF'` scaffolding and the comments
+-- around it: three space-separated words, none of them shell punctuation.
+isRow : String -> Bool
+isRow l = length (words l) == 3 && not (startsWith "#" (trim l))
+
+between : String -> String -> List String -> List String
+between _ _ [] = []
+between from to (l :: rest) =
+  if startsWith from l then untilLine to rest else between from to rest
+
+untilLine : String -> List String -> List String
+untilLine _ [] = []
+untilLine to (l :: rest) =
+  if startsWith to l then [] else l :: untilLine to rest
+
+-- | One of this file's rows, in the spelling the tool's table uses.
+rowText : Family -> String
+rowText f = "\{f.sub} \{f.stages} \{f.spec}"
+
+ownRows : List String
+ownRows = map rowText families
+
+test "the write tool's family table is this file's" = match toolRows
+  Err e => fail e
+  Ok rows =>
+    if rows == ownRows then
+      pass
+    else
+      fail
+        "test/snapshot_bless.sh's family table has drifted from this file's rows.\n  tool:\n\{unlines (map indent rows)}  here:\n\{unlines (map indent ownRows)}"

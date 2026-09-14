@@ -35,7 +35,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="$ROOT/medaka"
-FAMILY="$ROOT/test/diff_compiler_snapshot_frontend.sh"
+WRITE_TOOL="$ROOT/test/snapshot_bless.sh"
 
 [ -x "$MEDAKA" ] || { echo "build the compiler first: make medaka (missing $MEDAKA)"; exit 2; }
 
@@ -80,9 +80,9 @@ expect_fail 'lock 1: bare --bless is refused (medaka)' \
 # ...and at the harness layer too, which is where a human actually types it.  Two
 # enforcement points on purpose: the CLI guard is the one a script can't route around,
 # the harness guard is the one that produces a message aimed at the person at the keyboard.
-expect_fail 'lock 1: bare --bless is refused (family gate)' \
+expect_fail 'lock 1: bare --bless is refused (write tool)' \
   'no whole-suite bless' -- \
-  sh "$FAMILY" --bless
+  sh "$WRITE_TOOL" --bless
 
 # ── LOCK 2: non-creating ─────────────────────────────────────────────────────
 expect_fail 'lock 2: --bless refuses to CREATE a missing snapshot' \
