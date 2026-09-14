@@ -215,6 +215,9 @@ blobFileRead dir =
 -- `readLeaves` skips a bytes file whose sidecar is missing or unreadable
 -- (see the module's "Residue" note), and this count must agree with that or
 -- `blobFileCount` reports blobs the server cannot actually serve.
+--
+-- > countLeaves ["a", "a.mime", "b", "b.mime", "c"] ["a", "a.mime", "b", "b.mime", "c"]
+-- 2
 countLeaves : List String -> List String -> Int
 countLeaves _ [] = 0
 countLeaves all (leaf :: rest) =
