@@ -12,14 +12,20 @@
 # WHAT IT PROVES: no ADDED line (a line the diff shows as `+`, excluding the
 # `+++` file-header line) in a .mdk file outside test/ introduces 🚨/⚠️/🔒,
 # nor the sigil-free shout register (census class 10: 3+ consecutive
-# ALL-CAPS words) on a comment-shaped line (`^[ \t]*--` after the leading
-# diff `+`). The sigil check is not comment-scoped -- a sigil is rare
-# enough outside comments that this was never an issue for it; the
-# sigil-free regex IS scoped, because it also matches ALL-CAPS code and
-# string literals (CLI help, error text) and would false-positive on those
-# unscoped. An existing shout line that is merely touched (context around
-# an edit) but textually unchanged does not trigger -- only genuinely new
-# shout text does.
+# ALL-CAPS words) on a comment-scope line. Comment scope is both of
+# Medaka's comment forms -- a `--` line comment and the interior of a
+# nestable `{- ... -}` block -- as
+# `test/comment_register_census.sh --comment-scope` classifies them, over
+# the post-image of the file; a shout written into a block comment is the
+# evasion the `^[ \t]*--` test alone let through. Membership is by exact
+# line text rather than by line number, which is enough at this check's
+# precision and far less code than correlating diff hunks. The sigil check
+# is not comment-scoped -- a sigil is rare enough outside comments that
+# this was never an issue for it; the sigil-free regex IS scoped, because
+# it also matches ALL-CAPS code and string literals (CLI help, error text)
+# and would false-positive on those unscoped. An existing shout line that
+# is merely touched (context around an edit) but textually unchanged does
+# not trigger -- only genuinely new shout text does.
 #
 # WHAT IT DOES NOT PROVE: that the existing census figures
 # (test/comment_register_census.sh) are right, wrong, or moving -- this gate
@@ -60,6 +66,22 @@ cd "$ROOT" || exit 2
 
 re_emoji='🚨|⚠️|🔒'
 re_shout='([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+'
+
+# Emits the comment-scope subset of the `+`-prefixed diff lines on stdin,
+# with the `+` stripped. $1 is the rev-spec of the file's post-image
+# (`<rev>:<path>`), whose comment scope the census script classifies. A `--`
+# line comment is matched directly, so a failure to read the post-image
+# degrades to the pre-widening behavior rather than to no check at all.
+# Output may repeat a line; callers dedupe.
+scoped_added_lines() {
+  sal_added="$(sed 's/^+//')"
+  sal_scope="$(mktemp)"
+  git show "$1" 2>/dev/null |
+    sh "$ROOT/test/comment_register_census.sh" --comment-scope - >"$sal_scope" 2>/dev/null
+  printf '%s\n' "$sal_added" | grep -E '^[ \t]*--'
+  printf '%s\n' "$sal_added" | grep -Fxf "$sal_scope"
+  rm -f "$sal_scope"
+}
 
 this_re_emoji="re_emoji='$re_emoji'"
 this_re_shout="re_shout='$re_shout'"
@@ -123,7 +145,7 @@ for f in $files; do
   added="$(git diff -U0 "$BASE" "$HEAD" -- "$f" | grep '^+' | grep -v '^+++')"
   [ -z "$added" ] && continue
   sigil_hit="$(printf '%s\n' "$added" | grep -E "$re_emoji")"
-  comment_added="$(printf '%s\n' "$added" | sed 's/^+//' | grep -E '^[ \t]*--')"
+  comment_added="$(printf '%s\n' "$added" | scoped_added_lines "$HEAD:$f" | sed '/^$/d' | sort -u)"
   shout_hit=""
   [ -n "$comment_added" ] && shout_hit="$(printf '%s\n' "$comment_added" | grep -E "$re_shout")"
   if [ -n "$sigil_hit" ] || [ -n "$shout_hit" ]; then

@@ -432,7 +432,12 @@ fi
 # consecutive ALL-CAPS words survives a sigil strip with the shout sentence
 # intact. That regex is line-content-blind — it also matches ALL-CAPS code
 # and string literals (CLI help, error text) — so it is scoped to
-# comment-shaped added lines only (`^[ \t]*--` after the leading diff `+`).
+# comment-scope added lines only: both of Medaka's comment forms, a `--`
+# line comment and the interior of a nestable `{- ... -}` block, as
+# `test/comment_register_census.sh --comment-scope` classifies them over the
+# STAGED post-image (not the working tree, which may differ from what is
+# being committed). A shout written into a block comment is the evasion the
+# `^[ \t]*--` test alone let through.
 # The sigil check is not comment-scoped: a sigil is deliberately rare enough
 # outside comments that scoping it was never needed, and narrowing it now
 # would be an unrelated behavior change.
@@ -444,13 +449,32 @@ fi
 # skipping this hook.
 re_emoji='🚨|⚠️|🔒'
 re_shout='([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+'
+
+# Emits the comment-scope subset of the `+`-prefixed diff lines on stdin,
+# with the `+` stripped. $1 is the rev-spec of the file's staged post-image
+# (`:<path>`), whose comment scope the census script classifies. A `--` line
+# comment is matched directly, so a failure to read the post-image degrades
+# to the pre-widening behavior rather than to no check at all. Block
+# membership is by exact line text rather than by line number — enough at
+# this check's precision, and far less code than correlating diff hunks.
+# Output may repeat a line; callers dedupe.
+scoped_added_lines() {
+  sal_added="$(sed 's/^+//')"
+  sal_scope="$(mktemp)"
+  git show "$1" 2>/dev/null |
+    sh "$ROOT/test/comment_register_census.sh" --comment-scope - >"$sal_scope" 2>/dev/null
+  printf '%s\n' "$sal_added" | grep -E '^[ \t]*--'
+  printf '%s\n' "$sal_added" | grep -Fxf "$sal_scope"
+  rm -f "$sal_scope"
+}
+
 badshout=""
 for f in $files; do
   [ -f "$f" ] || continue
   added="$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++')"
   [ -z "$added" ] && continue
   sigil_hit="$(printf '%s\n' "$added" | grep -E "$re_emoji")"
-  comment_added="$(printf '%s\n' "$added" | sed 's/^+//' | grep -E '^[ \t]*--')"
+  comment_added="$(printf '%s\n' "$added" | scoped_added_lines ":$f" | sed '/^$/d' | sort -u)"
   shout_hit=""
   [ -n "$comment_added" ] && shout_hit="$(printf '%s\n' "$comment_added" | grep -E "$re_shout")"
   if [ -n "$sigil_hit" ] || [ -n "$shout_hit" ]; then
@@ -464,7 +488,7 @@ if [ -n "$badshout" ]; then
   for f in $badshout; do
     added="$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++')"
     sigil_hit="$(printf '%s\n' "$added" | grep -E "$re_emoji")"
-    comment_added="$(printf '%s\n' "$added" | sed 's/^+//' | grep -E '^[ \t]*--')"
+    comment_added="$(printf '%s\n' "$added" | scoped_added_lines ":$f" | sed '/^$/d' | sort -u)"
     shout_hit=""
     [ -n "$comment_added" ] && shout_hit="$(printf '%s\n' "$comment_added" | grep -E "$re_shout")"
     echo "" >&2

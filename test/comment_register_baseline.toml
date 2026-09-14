@@ -101,18 +101,13 @@ count = 11
 
 [[entry]]
 file = "compiler/backend/wasm_preamble.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/backend/wasm_preamble.mdk"
 class = "emoji"
 count = 2
 
 [[entry]]
 file = "compiler/backend/wasm_preamble.mdk"
 class = "shout"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/backend/wasm_reach.mdk"
@@ -132,7 +127,7 @@ count = 11
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
 class = "history"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
@@ -252,12 +247,12 @@ count = 1
 [[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 class = "emoji"
-count = 25
+count = 24
 
 [[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 class = "shout"
-count = 20
+count = 19
 
 [[entry]]
 file = "compiler/entries/playground_main.mdk"
@@ -492,7 +487,7 @@ count = 8
 [[entry]]
 file = "compiler/tools/gate_cmd.mdk"
 class = "shout"
-count = 14
+count = 11
 
 [[entry]]
 file = "compiler/tools/gate_cost.mdk"
@@ -566,13 +561,8 @@ count = 4
 
 [[entry]]
 file = "compiler/tools/mcp.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/tools/mcp.mdk"
 class = "shout"
-count = 4
+count = 2
 
 [[entry]]
 file = "compiler/tools/native_doctest.mdk"
@@ -728,11 +718,6 @@ count = 1
 file = "stdlib/hash_map.mdk"
 class = "shout"
 count = 1
-
-[[entry]]
-file = "stdlib/http.mdk"
-class = "shout"
-count = 2
 
 [[entry]]
 file = "stdlib/regex.mdk"

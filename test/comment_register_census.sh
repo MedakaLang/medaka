@@ -45,11 +45,19 @@
 # Usage:  sh test/comment_register_census.sh
 #         sh test/comment_register_census.sh --write <path>
 #         sh test/comment_register_census.sh --check <baseline> [<file> ...]
+#         sh test/comment_register_census.sh --comment-scope <file>|-
 #
 # Default (no args): per-file breakdown, then a per-class summary table.
 # Exits 0 on a healthy run; refuses (exit 1) only if the file corpus comes
 # back empty, which would otherwise misreport as a clean zero. Unchanged by
-# the two modes below (#S-register-baseline).
+# the modes below (#S-register-baseline).
+#
+# The default report reads WHOLE files; --write and --check read only the
+# comment-scope lines of each file (comment_scope_lines below). A baselined
+# count is therefore not the same number the summary table prints for the
+# same class, and can only ever be lower: a gated count must not move on an
+# ALL-CAPS string literal or an identifier, which is what the summary's own
+# SCOPE note above says it cannot tell apart.
 #
 # --write <path>: regenerate the per-(file,class) count baseline (one
 # [[entry]] per file/class with a nonzero count) to <path>, over the 8
@@ -66,6 +74,11 @@
 # Used by .githooks/pre-commit (per staged file, cheap) and by
 # test/diff_compiler_comment_shout_diff.sh (whole tree, so --no-verify
 # cannot smuggle a rise past the hook).
+#
+# --comment-scope <file>|-: print the comment-scope lines of <file> (or of
+# stdin, for `-`) and exit. Exposed so .githooks/pre-commit and
+# test/diff_compiler_comment_shout_diff.sh can scope an added line the same
+# way the baseline does without a second copy of the scanner.
 
 set -u
 
@@ -146,19 +159,60 @@ deictic
 dead-path
 shout"
 
+# Emits the COMMENT-SCOPE lines of file $1 ("-" for stdin): a `--` line
+# comment, or a line inside a (possibly nested) `{- ... -}` block comment,
+# the opening and closing lines included. Blank lines are dropped — they
+# carry no class, and an empty line is a `grep -Fx` pattern that matches
+# every line, which would silently widen the consumers that test an added
+# line for membership in this set.
+#
+# Approximate, at the same precision as the class regexes: this does not
+# parse Medaka syntax, so a `{-` or `-}` inside a string literal opens or
+# closes a block that the lexer never sees, and the over-inclusion runs to
+# the end of the file. A `--` outside a block ends the line's delimiter
+# scan, which is the one refinement the tree cannot do without: line
+# comments that merely MENTION `{-` outnumber real block openers, and
+# without it a single such mention swallows every following line.
+comment_scope_lines() {
+  awk '
+    {
+      entry_depth = depth
+      n = length($0)
+      touched = 0
+      for (i = 1; i < n; i++) {
+        two = substr($0, i, 2)
+        if (two == "{-") { depth++; touched = 1; i++ }
+        else if (two == "-}") { if (depth > 0) depth--; touched = 1; i++ }
+        else if (two == "--" && depth == 0) { break }
+      }
+      if ($0 ~ /^[ \t]*$/) next
+      if (entry_depth > 0 || touched || $0 ~ /^[ \t]*--/) print
+    }
+  ' "$1"
+}
+
+if [ "${1:-}" = "--comment-scope" ]; then
+  src="${2:--}"
+  [ "$src" = "-" ] || [ -f "$src" ] || { echo "comment_register_census: no such file: $src" >&2; exit 2; }
+  comment_scope_lines "$src"
+  exit 0
+fi
+
 # Sets $bc_<slug> for every slug in $baselined_classes, for file $1. Shares
 # the class regexes above with the default summary loop below rather than
-# redefining them.
+# redefining them, but — unlike that loop — reads only the file's
+# comment-scope lines, so a gated count cannot move on a code line.
 compute_baselined_counts() {
   bc_file="$1"
-  bc_history=$(grep -E "$re_history" "$bc_file" 2>/dev/null | grep -Evc "$re_history_exclude")
-  bc_ruling=$(grep -Ec "$re_ruling" "$bc_file" 2>/dev/null)
-  bc_tombstone=$(grep -Ec "$re_tombstone" "$bc_file" 2>/dev/null)
-  bc_emoji=$(grep -Ec "$re_emoji" "$bc_file" 2>/dev/null)
-  bc_draft=$(grep -Ec "$re_draft" "$bc_file" 2>/dev/null)
-  bc_deictic=$(grep -Ec "$re_deictic" "$bc_file" 2>/dev/null)
-  bc_dead_path=$(grep -Ec "$re_deadpath" "$bc_file" 2>/dev/null)
-  bc_shout=$(grep -Ec "$re_shout" "$bc_file" 2>/dev/null)
+  bc_scope="$(comment_scope_lines "$bc_file")"
+  bc_history=$(printf '%s\n' "$bc_scope" | grep -E "$re_history" | grep -Evc "$re_history_exclude")
+  bc_ruling=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_ruling")
+  bc_tombstone=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_tombstone")
+  bc_emoji=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_emoji")
+  bc_draft=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_draft")
+  bc_deictic=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_deictic")
+  bc_dead_path=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_deadpath")
+  bc_shout=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_shout")
 }
 
 # Reads $bc_<slug> (as set by compute_baselined_counts) for the given class
