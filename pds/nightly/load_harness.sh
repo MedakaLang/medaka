@@ -56,6 +56,10 @@ INTERVAL_MS=${LOAD_INTERVAL_MS:-100}
 WARMUP_SECONDS=${LOAD_WARMUP_SECONDS:-2}
 # The scenario vocabulary lives in `pds/test/load_client_main.mdk`: a scenario
 # names a cycle of route labels, and each label has one path builder there.
+# `read-load` is the default load; `repo-export` (#2955) and `blob-burst`
+# (#2956) are the two structural hazards, each driven by setting
+# LOAD_LOAD_SCENARIO while the sampler stays on `read-mix` — so what a run
+# reports is the delay the hazard imposes on unrelated reads.
 SAMPLE_SCENARIO=${LOAD_SAMPLE_SCENARIO:-read-mix}
 LOAD_SCENARIO=${LOAD_LOAD_SCENARIO:-read-load}
 
@@ -248,7 +252,8 @@ grade_samples() {
 # alike, phase 2's difference could be the servers rather than the load.
 BASELINE_START=$(now_seconds)
 "$WORK/client" sample "$LOADED_PORT" "$CONTROL_PORT" "$SAMPLE_SCENARIO" \
-  "$COLLECTION" "$RECORDS" "$TICKS" "$INTERVAL_MS" > "$WORK/baseline.out" 2>&1 \
+  "$COLLECTION" "$RECORDS" "$BLOBS" "$TICKS" "$INTERVAL_MS" \
+  > "$WORK/baseline.out" 2>&1 \
   || {
     cat "$WORK/baseline.out" >&2
     fail 'baseline sampler failed'
@@ -263,7 +268,7 @@ LOAD_START=$(now_seconds)
 i=1
 while [ "$i" -le "$CLIENTS" ]; do
   "$WORK/client" load "$LOADED_PORT" "$LOAD_SCENARIO" "$COLLECTION" \
-    "$RECORDS" "$i" "$DURATION_MS" > "$WORK/load$i.out" 2>&1 &
+    "$RECORDS" "$BLOBS" "$i" "$DURATION_MS" > "$WORK/load$i.out" 2>&1 &
   LOAD_PIDS="$LOAD_PIDS $!"
   i=$((i + 1))
 done
@@ -272,7 +277,8 @@ done
 sleep "$WARMUP_SECONDS"
 
 "$WORK/client" sample "$LOADED_PORT" "$CONTROL_PORT" "$SAMPLE_SCENARIO" \
-  "$COLLECTION" "$RECORDS" "$TICKS" "$INTERVAL_MS" > "$WORK/loaded.sample" 2>&1 \
+  "$COLLECTION" "$RECORDS" "$BLOBS" "$TICKS" "$INTERVAL_MS" \
+  > "$WORK/loaded.sample" 2>&1 \
   || {
     cat "$WORK/loaded.sample" >&2
     fail 'under-load sampler failed'

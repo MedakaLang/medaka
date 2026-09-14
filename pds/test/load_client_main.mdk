@@ -26,6 +26,8 @@
    naming route labels that already have builders. -}
 
 import array.{concat, fromList, sliceClamped, sortInPlace}
+import lib.blob.{blobCid}
+import lib.cid.{cidToString}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
   fromUtf8,
@@ -70,6 +72,29 @@ recordKey recordCount i =
     let idx = reservedIndices + (i * keyStride) % span
     "r\{padLeft 7 '0' (intToString idx)}"
 
+-- The seed `pds/nightly/load_harness.sh` builds its corpus under. Repeated
+-- here for the same reason `corpusDid` is: the builder is a `main` module.
+corpusSeed : Int
+corpusSeed = 1
+
+-- `synth_repo_main`'s blob payload, byte for byte, so a blob's CID is
+-- re-derived rather than discovered. A `listBlobs` round trip before each
+-- burst would put that route's cost inside the window this measures.
+blobBytesFor : Int -> Array Int
+blobBytesFor j =
+  toUtf8
+    "synth blob seed=\{intToString corpusSeed} idx=\{intToString j} payload 0123456789"
+
+blobCidText : Int -> String
+blobCidText j = cidToString (blobCid (blobBytesFor j))
+
+blobIndex : Int -> Int -> Int
+blobIndex blobCount i =
+  if blobCount < 1 then
+    panic "load_client: blobCount \{intToString blobCount} holds no blobs"
+  else
+    i % blobCount
+
 -- # Scenario vocabulary
 
 {- | The route labels a scenario cycles, in the order it cycles them.
@@ -77,25 +102,44 @@ recordKey recordCount i =
    `read-mix` is what the sampler measures: the four cheap public reads.
    `read-load` is what the load generators issue: the two that do real work
    per request, so the load is repository reads rather than constant
-   responses. -}
+   responses.
+
+   `repo-export` and `blob-burst` are the two structural hazards (#2955,
+   #2956): a whole-repository CAR, and a burst of blob bodies. Each is a load
+   scenario only — the sampler stays on `read-mix`, so what a run reports is
+   the delay the hazard imposes on unrelated reads. -}
 scenarioRoutes : String -> Array String
 scenarioRoutes "read-mix" =
   [|"getRecord", "listRecords", "describeRepo", "getLatestCommit"|]
 scenarioRoutes "read-load" = [|"getRecord", "listRecords"|]
+scenarioRoutes "repo-export" = [|"getRepo"|]
+scenarioRoutes "blob-burst" = [|"getBlob"|]
 scenarioRoutes name =
-  panic "load_client: unknown scenario \{name} (want read-mix | read-load)"
+  panic
+    "load_client: unknown scenario \{name} (want read-mix | read-load | repo-export | blob-burst)"
 
 -- | The request path one route label reads, for request ordinal `i`.
-pathFor : String -> String -> Int -> Int -> String
-pathFor "getRecord" collection recordCount i =
+pathFor : String -> String -> Int -> Int -> Int -> String
+pathFor "getRecord" collection recordCount _ i =
   "/xrpc/com.atproto.repo.getRecord?repo=\{corpusDid}&collection=\{collection}&rkey=\{recordKey recordCount i}"
-pathFor "listRecords" collection _ _ =
+pathFor "listRecords" collection _ _ _ =
   "/xrpc/com.atproto.repo.listRecords?repo=\{corpusDid}&collection=\{collection}&limit=50"
-pathFor "describeRepo" _ _ _ =
+pathFor "describeRepo" _ _ _ _ =
   "/xrpc/com.atproto.repo.describeRepo?repo=\{corpusDid}"
-pathFor "getLatestCommit" _ _ _ =
+pathFor "getLatestCommit" _ _ _ _ =
   "/xrpc/com.atproto.sync.getLatestCommit?did=\{corpusDid}"
-pathFor label _ _ _ = panic "load_client: no path builder for route \{label}"
+pathFor "getRepo" _ _ _ _ = "/xrpc/com.atproto.sync.getRepo?did=\{corpusDid}"
+pathFor "getBlob" _ _ blobCount i =
+  "/xrpc/com.atproto.sync.getBlob?did=\{corpusDid}&cid=\{blobCidText (blobIndex blobCount i)}"
+pathFor label _ _ _ _ = panic "load_client: no path builder for route \{label}"
+
+{- | The route labels charged `maxRepoExportsPerWindow` on top of the shared
+   request allowance (`pds/lib/ratelimit.mdk`'s `isRepoExportNsid`). A
+   scenario naming one exhausts an identity thirty times sooner than the
+   shared count would, which is what `identityBlockOf` below reads. -}
+isExportRoute : String -> Bool
+isExportRoute "getRepo" = True
+isExportRoute _ = False
 
 -- # Rate-limit identity
 
@@ -112,9 +156,31 @@ pathFor label _ _ _ = panic "load_client: no path builder for route \{label}"
 identityBlockSize : Int
 identityBlockSize = 1000
 
-identityFor : Int -> Int -> String
-identityFor clientId i =
-  let block = (i / identityBlockSize) % 256
+{- | The block an export-bearing scenario rotates on instead.
+
+   `maxRepoExportsPerWindow` is 100 per identity per 60-second window
+   (`pds/lib/resource_limits.mdk`), a thirtieth of the shared request
+   allowance the block above is sized for, so a `repo-export` generator would
+   be refused inside one window on the wider block — and a 429 is answered
+   without exporting anything, so the run would report the limiter's cost
+   instead of the export's. -}
+exportBlockSize : Int
+exportBlockSize = 50
+
+-- | The rotation block a scenario's routes call for: the tighter one as soon
+-- as any route in the cycle is charged the export allowance.
+identityBlockOf : Array String -> Int -> Int
+identityBlockOf routes i =
+  if i >= arrayLength routes then
+    identityBlockSize
+  else if isExportRoute routes[i] then
+    exportBlockSize
+  else
+    identityBlockOf routes (i + 1)
+
+identityFor : Int -> Int -> Int -> String
+identityFor blockSize clientId i =
+  let block = (i / blockSize) % 256
   "10.\{intToString (clientId % 256)}.\{intToString block}.1"
 
 -- The sampler's own client id, fixed because exactly one sampler runs. It
@@ -125,19 +191,20 @@ samplerClientId = 250
 
 -- # A scenario bound to the corpus it reads
 
-data Plan = Plan String String Int
+data Plan = Plan String String Int Int
 
 planRoutes : Plan -> Array String
-planRoutes (Plan scenario _ _) = scenarioRoutes scenario
+planRoutes (Plan scenario _ _ _) = scenarioRoutes scenario
 
 -- | The route label and the request bytes for ordinal `i`, charged to
 -- `clientId`'s rate-limit identity.
 planRequest : Plan -> Int -> Int -> (String, Array Int)
-planRequest (Plan scenario collection recordCount) clientId i =
+planRequest (Plan scenario collection recordCount blobCount) clientId i =
   let routes = scenarioRoutes scenario
   let route = routes[i % arrayLength routes]
-  let path = pathFor route collection recordCount i
-  (route, getRequest (identityFor clientId i) path)
+  let path = pathFor route collection recordCount blobCount i
+  let xff = identityFor (identityBlockOf routes 0) clientId i
+  (route, getRequest xff path)
 
 -- # HTTP
 
@@ -466,21 +533,21 @@ mustInt text = match toInt text
 
 usage : String
 usage =
-  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <requests> <intervalMs>"
+  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>"
 
 main : <Clock, Env, IO, Net "_"> Unit
 main = match args ()
-  ["load", port, scenario, collection, recordCount, clientId, durationMs] =>
+  ["load", port, scenario, collection, recordCount, blobCount, clientId, durationMs] =>
     runLoad
       (mustInt port)
-      (Plan scenario collection (mustInt recordCount))
+      (Plan scenario collection (mustInt recordCount) (mustInt blobCount))
       (mustInt clientId)
       (mustInt durationMs)
-  ["sample", port, controlPort, scenario, collection, recordCount, requests, intervalMs] =>
+  ["sample", port, controlPort, scenario, collection, recordCount, blobCount, requests, intervalMs] =>
     runSample
       (mustInt port)
       (mustInt controlPort)
-      (Plan scenario collection (mustInt recordCount))
+      (Plan scenario collection (mustInt recordCount) (mustInt blobCount))
       (mustInt requests)
       (mustInt intervalMs)
   _ => panic usage
