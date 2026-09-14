@@ -1767,6 +1767,7 @@ openGoalCommitWarnCode : String
 openRow : Unit -> EffRow
 openRowHint : List Atom -> String
 openScope : ScopeId -> Unit
+optLocEq : Option Loc -> Option Loc -> Bool
 ordCompareOp : Mono -> Mono -> Mono
 ordinalIsSentinel : Int -> Bool
 ordinalSentinelGuard : Int -> Unit
@@ -2372,6 +2373,7 @@ takeUntilInclusiveS : String -> List String -> List String
 tcClauseDef : String -> FunClause -> (String, (List Pat, Expr))
 tcCode : TcDiag -> String
 tcDiagGoalKey : (String, TcDiag) -> String
+tcLoc : TcDiag -> Option Loc
 tcMsg : TcDiag -> String
 tconBuiltin : String -> Mono
 tconFrom : TyConOrigin -> String -> Mono

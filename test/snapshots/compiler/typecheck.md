@@ -1,5 +1,5 @@
 # META
-source_lines=46999
+source_lines=47012
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -8914,6 +8914,10 @@ tcCode (TcDiag c _ _ _ _ _) = c
 export
 tcMsg : TcDiag -> String
 tcMsg (TcDiag _ _ _ m _ _) = m
+
+export
+tcLoc : TcDiag -> Option Loc
+tcLoc (TcDiag _ _ l _ _ _) = l
 
 -- ── type-error accumulator ─────────────────────────────────────────────────
 -- Unification failures record diagnostics here instead of panicking, so
@@ -24079,21 +24083,30 @@ pushCoherenceWarning loc msg =
     warning :: driverState.value.matchWarnings.value
 
 -- The warning-channel analogue of `pushTypeErrorOnceAt`: same channel discipline as
--- `pushCoherenceWarning` above, plus message dedup.  Dedup is by MESSAGE rather than
--- by code, because one code may legitimately report several distinct sites in one
--- module while a single site can be visited many times — `pickMostSpecificEntry` runs
--- per goal occurrence, so an undeduped push would report one expression once per
--- constraint it poses.  The channel is scanned linearly; that is affordable only
--- because it holds warnings, which are rare by construction, and a code that ever
--- makes it long owes a keyed set the way `typeErrorMsgSetRef` is one.
+-- `pushCoherenceWarning` above, plus dedup.  Dedup is by `(code, loc, msg)` rather
+-- than by message alone, so the collapse still absorbs one expression being visited
+-- once per constraint it poses — `pickMostSpecificEntry` runs per goal occurrence,
+-- and a repeat visit reproduces the SAME code/loc/msg triple — while no longer
+-- collapsing two distinct sites whose message text happens to coincide.  The channel
+-- is scanned linearly; that is affordable only because it holds warnings, which are
+-- rare by construction, and a code that ever makes it long owes a keyed set the way
+-- `typeErrorMsgSetRef` is one.
 pushMatchWarningOnceAt : String -> Option Loc -> String -> Option String -> Unit
 pushMatchWarningOnceAt code loc msg help =
-  if anyList (w => tcMsg w == msg) driverState.value.matchWarnings.value then
+  let thisLoc = orElseLoc loc !currentLoc
+  if anyList
+    (w => tcCode w == code && optLocEq (tcLoc w) thisLoc && tcMsg w == msg)
+    driverState.value.matchWarnings.value then
     ()
   else
     driverState.value.matchWarnings :=
-      TcDiag code 2 (orElseLoc loc !currentLoc) msg help None
+      TcDiag code 2 thisLoc msg help None
         :: driverState.value.matchWarnings.value
+
+optLocEq : Option Loc -> Option Loc -> Bool
+optLocEq (Some a) (Some b) = locEq a b
+optLocEq None None = True
+optLocEq _ _ = False
 
 -- run coherence over USER decls; push at most one HARD conflict into typeErrors and
 -- at most one SOFT one onto the warning channel.  The impls are scanned in REVERSE
@@ -48260,6 +48273,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tcCode" ((PCon "TcDiag" (PVar "c") PWild PWild PWild PWild PWild)) (EVar "c"))
 (DTypeSig true "tcMsg" (TyFun (TyCon "TcDiag") (TyCon "String")))
 (DFunDef false "tcMsg" ((PCon "TcDiag" PWild PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
+(DTypeSig true "tcLoc" (TyFun (TyCon "TcDiag") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tcLoc" ((PCon "TcDiag" PWild PWild (PVar "l") PWild PWild PWild)) (EVar "l"))
 (DTypeSig false "typeErrorsSticky" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "typeErrorsSticky" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "typeErrorsStickyDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
@@ -50894,7 +50909,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "pushMatchWarningOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))
+(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
+(DTypeSig false "optLocEq" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "optLocEq" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EApp (EVar "locEq") (EVar "a")) (EVar "b")))
+(DFunDef false "optLocEq" ((PCon "None") (PCon "None")) (EVar "True"))
+(DFunDef false "optLocEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))
 (DFunDef false "checkCoherence" ((PVar "env") (PVar "cur") (PVar "hasPrelude")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "hasPrelude")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
 (DTypeSig false "cohPushHard" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))
@@ -55239,6 +55258,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tcCode" ((PCon "TcDiag" (PVar "c") PWild PWild PWild PWild PWild)) (EVar "c"))
 (DTypeSig true "tcMsg" (TyFun (TyCon "TcDiag") (TyCon "String")))
 (DFunDef false "tcMsg" ((PCon "TcDiag" PWild PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
+(DTypeSig true "tcLoc" (TyFun (TyCon "TcDiag") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tcLoc" ((PCon "TcDiag" PWild PWild (PVar "l") PWild PWild PWild)) (EVar "l"))
 (DTypeSig false "typeErrorsSticky" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "typeErrorsSticky" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "typeErrorsStickyDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
@@ -57873,7 +57894,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "pushMatchWarningOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))
+(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
+(DTypeSig false "optLocEq" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "optLocEq" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EApp (EVar "locEq") (EVar "a")) (EVar "b")))
+(DFunDef false "optLocEq" ((PCon "None") (PCon "None")) (EVar "True"))
+(DFunDef false "optLocEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))
 (DFunDef false "checkCoherence" ((PVar "env") (PVar "cur") (PVar "hasPrelude")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "hasPrelude")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
 (DTypeSig false "cohPushHard" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))

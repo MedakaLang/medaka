@@ -1,0 +1,21 @@
+-- `--json`-vs-human divergence fixture for `test/t4_census.sh` (#3027, #2665
+-- item 1, F6). Carries BOTH a genuine type error (`badAdd`, a `String` bound
+-- where `Int` is declared) and an open-goal commitment (the `sh` call, same
+-- shape as `two_sites_same_goal.mdk`). The human `medaka check` arm prints
+-- only `filter isDiagError diags` on an error-bearing file, so it drops the
+-- `W-OPEN-GOAL-COMMITTED` warning; `medaka check --json` keeps both.
+data Q a b c = Q a b c
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Q Int y z) where
+  sh _ = 1
+
+impl Sh (Q x Bool z) where
+  sh _ = 2
+
+badAdd : Int
+badAdd = "not an int"
+
+main = println (sh (Q 1 True []) + badAdd)

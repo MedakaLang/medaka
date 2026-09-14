@@ -8911,6 +8911,10 @@ export
 tcMsg : TcDiag -> String
 tcMsg (TcDiag _ _ _ m _ _) = m
 
+export
+tcLoc : TcDiag -> Option Loc
+tcLoc (TcDiag _ _ l _ _ _) = l
+
 -- ── type-error accumulator ─────────────────────────────────────────────────
 -- Unification failures record diagnostics here instead of panicking, so
 -- ill-typed programs emit matching `TYPE ERROR: …` lines.  occursCheckFailed
@@ -24075,21 +24079,30 @@ pushCoherenceWarning loc msg =
     warning :: driverState.value.matchWarnings.value
 
 -- The warning-channel analogue of `pushTypeErrorOnceAt`: same channel discipline as
--- `pushCoherenceWarning` above, plus message dedup.  Dedup is by MESSAGE rather than
--- by code, because one code may legitimately report several distinct sites in one
--- module while a single site can be visited many times — `pickMostSpecificEntry` runs
--- per goal occurrence, so an undeduped push would report one expression once per
--- constraint it poses.  The channel is scanned linearly; that is affordable only
--- because it holds warnings, which are rare by construction, and a code that ever
--- makes it long owes a keyed set the way `typeErrorMsgSetRef` is one.
+-- `pushCoherenceWarning` above, plus dedup.  Dedup is by `(code, loc, msg)` rather
+-- than by message alone, so the collapse still absorbs one expression being visited
+-- once per constraint it poses — `pickMostSpecificEntry` runs per goal occurrence,
+-- and a repeat visit reproduces the SAME code/loc/msg triple — while no longer
+-- collapsing two distinct sites whose message text happens to coincide.  The channel
+-- is scanned linearly; that is affordable only because it holds warnings, which are
+-- rare by construction, and a code that ever makes it long owes a keyed set the way
+-- `typeErrorMsgSetRef` is one.
 pushMatchWarningOnceAt : String -> Option Loc -> String -> Option String -> Unit
 pushMatchWarningOnceAt code loc msg help =
-  if anyList (w => tcMsg w == msg) driverState.value.matchWarnings.value then
+  let thisLoc = orElseLoc loc !currentLoc
+  if anyList
+    (w => tcCode w == code && optLocEq (tcLoc w) thisLoc && tcMsg w == msg)
+    driverState.value.matchWarnings.value then
     ()
   else
     driverState.value.matchWarnings :=
-      TcDiag code 2 (orElseLoc loc !currentLoc) msg help None
+      TcDiag code 2 thisLoc msg help None
         :: driverState.value.matchWarnings.value
+
+optLocEq : Option Loc -> Option Loc -> Bool
+optLocEq (Some a) (Some b) = locEq a b
+optLocEq None None = True
+optLocEq _ _ = False
 
 -- run coherence over USER decls; push at most one HARD conflict into typeErrors and
 -- at most one SOFT one onto the warning channel.  The impls are scanned in REVERSE

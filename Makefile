@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census t4-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -364,6 +364,15 @@ o2-survivor-census: medaka
 ##           test/dup_suppression_census.sh's header.
 dup-census: medaka
 	sh test/dup_suppression_census.sh
+
+## t4-census — per-site W-OPEN-GOAL-COMMITTED (T4) census (#2665 item 1,
+##           #3027): every commitment SITE across test/ + stdlib/, read
+##           through `check --json` so an error-bearing file's warnings are
+##           not dropped the way the human arm drops them. Needs a built
+##           ./medaka and jq. Always exits 0: a census, not a gate -- see
+##           test/t4_census.sh's header.
+t4-census: medaka
+	sh test/t4_census.sh
 
 ## slop-census — the ONE composing entry point over the slop-burndown
 ##           crusade's (#2276) member censuses (#2304). Registry is data IN
