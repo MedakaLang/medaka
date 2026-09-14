@@ -6,7 +6,7 @@
 # repository under `<data>/blobs` — plus a fourth, that a blob the pure layer
 # refuses never reaches a file at all.
 #
-# Cases 7-10 grade the HALF-WRITTEN directories a process crash can leave: each
+# Cases 7-11 grade the HALF-WRITTEN directories a process crash can leave: each
 # of the three write paths promotes with `rename` after writing what the
 # promotion points at, so the reachable interrupted states are a finite set and
 # each is built directly rather than raced. They cover process-crash
@@ -298,7 +298,7 @@ require_empty "$WORK/bytesonly.err" blob-survey
 sed -n 's/^BLOB-SURVEY: /bytes without sidecar: /p' "$WORK/bytesonly.out"
 
 # ── 10. the event log's two crash points, against a REAL persisted head ────
-# `pds/test/event_log_test.mdk` already grades `eventLogRecover` over CID
+# `pds/test/event_log_test.mdk` already grades the recovery rule over CID
 # strings it supplies itself. What it cannot reach is the discriminator the
 # server actually hands it — `persistLoad`'s head — so these two cases stage an
 # entry over a genuinely persisted repository and let the file on disk decide.
@@ -327,4 +327,29 @@ grep -q '^EVENTAFTER staged none entries 0$' "$WORK/eventorphan.out" || {
 }
 echo 'staged event finished when the head is on disk, discarded when it is not'
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; key absent'
+# ── 11. an event that announces no repository mutation, same crash point ───
+# The arm case 10's two cannot reach: an entry anchored to NOTHING, left
+# pending by the same stage-then-die. No head can contradict it, so it is owed
+# whatever `persistLoad` answers — and the head this case hands recovery is a
+# real one that the entry does not name, which under the old commit-CID rule
+# was precisely a discard. The survey line between the two halves is the #2906
+# claim on the same run: PLANNING leaves the pending entry and the promoted
+# count exactly where the stage left them, so `configure` can take the decision
+# before its refusals and perform it after the last of them.
+EVENTFREE="$WORK/event-unanchored"
+"$WORK/driver" event-recover-unanchored "$EVENTFREE" > "$WORK/eventfree.out" \
+  2> "$WORK/eventfree.err"
+require_empty "$WORK/eventfree.err" event-recover-unanchored
+grep -q '^EVENTBEFORE staged unanchored entries 0$' "$WORK/eventfree.out" \
+  || fail 'the unanchored case did not stage an entry to recover'
+grep -q '^EVENTPLANNED staged unanchored entries 0$' "$WORK/eventfree.out" || {
+  cat "$WORK/eventfree.out" >&2
+  fail 'planning recovery wrote to the log instead of only deciding'
+}
+grep -q '^EVENTAFTER staged none entries 1$' "$WORK/eventfree.out" || {
+  cat "$WORK/eventfree.out" >&2
+  fail 'an entry anchored to no commit was not finished'
+}
+echo 'staged event anchored to no commit finished, and planning wrote nothing'
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; key absent'

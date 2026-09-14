@@ -243,9 +243,84 @@ grep -F -q "prevData: 7/7 steps named the prior commit's data root" "$WORK/event
 grep -F -q 'untouched-nodes: 3/7 steps shipped an MST node the write did not change' "$WORK/event.out" || fail 'commit-event blocks stopped carrying unchanged MST nodes'
 [ "$(tail -1 "$WORK/event.out")" = 'TOTAL: PASS' ] || fail 'commit-event driver did not end in TOTAL: PASS'
 
+# ── the #identity/#account/#sync events, byte for byte against the official
+#    bodies ──────────────────────────────────────────────────────────────────
+# The three events a repository's CREATION emits, from their own corpus: the
+# pinned image's own sequencer/events.js builders, called directly. They ride
+# in this gate rather than in one of their own because they grade the same
+# module against the same kind of answer key as the #commit block above, and a
+# corpus with no gate is a corpus nothing checks.
+#
+# Its rows are BODIES — `seq` and `time` are spliced in downstream and neither
+# builder sets them — so the driver names each header itself and compares the
+# whole frame against header-plus-row.
+ACTIVATION_DRIVER="$ROOT/pds/test/activation_event_vectors_main.mdk"
+sh "$ROOT/pds/test/vector_provenance.sh" --files-for S-oracle-answer-keys > "$WORK/activation-files"
+ACTIVATION_ROW=$(grep -c 'pds_sync_event_bodies_corpus.txt' "$WORK/activation-files" || true)
+[ "$ACTIVATION_ROW" = 1 ] || fail 'expected exactly one ledger-owned activation-event corpus'
+ACTIVATION_CORPUS="$ROOT/$(grep 'pds_sync_event_bodies_corpus.txt' "$WORK/activation-files")"
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$ACTIVATION_DRIVER" -o "$WORK/activation" > "$WORK/activation-build.log" 2>&1; then
+  cat "$WORK/activation-build.log" >&2
+  fail 'activation-event driver build failed'
+fi
+
+"$WORK/activation" "$ACTIVATION_CORPUS" > "$WORK/activation.out" 2> "$WORK/activation.err"
+require_empty "$WORK/activation.err" 'activation event'
+
+grep -F -q 'IDENTITY-WITH-HANDLE: PASS' "$WORK/activation.out" || fail 'the #identity frame is not byte-identical to the official body'
+grep -F -q 'ACCOUNT-ACTIVE: PASS' "$WORK/activation.out" || fail 'the #account frame is not byte-identical to the official body'
+grep -F -q 'SYNC: PASS' "$WORK/activation.out" || fail 'the #sync frame is not byte-identical to the official body'
+# The CAR shape asserted directly rather than left implicit in the frame hex:
+# a wrong-but-self-consistent CAR encoder passes the frame comparison only by
+# agreeing with itself.
+grep -F -q 'SYNC-CAR-ROOTS: PASS' "$WORK/activation.out" || fail "the #sync CAR's root is not the pinned commit"
+grep -F -q 'SYNC-CAR-BLOCKS: PASS' "$WORK/activation.out" || fail "the #sync CAR's block set is not the pinned commit alone"
+# The genesis #commit's own CAR, whose block set is NOT the commit alone: a
+# brand-new repository ships the empty MST root node beside it, or the relay
+# it just announced itself to has no block for the data root the commit names.
+grep -F -q 'GENESIS-COMMIT-CAR-ROOTS: PASS' "$WORK/activation.out" || fail "the genesis #commit's CAR is not rooted at the pinned genesis commit"
+grep -F -q 'GENESIS-COMMIT-CAR-BLOCKS: PASS' "$WORK/activation.out" || fail "the genesis #commit's CAR does not carry the empty MST root beside the commit"
+[ "$(tail -1 "$WORK/activation.out")" = 'TOTAL: PASS' ] || fail 'activation-event driver did not end in TOTAL: PASS'
+
+# ── the two sync READS, byte for byte against the official CARs ─────────────
+# `com.atproto.sync.getRecord` and `com.atproto.sync.getBlocks`, driven through
+# the real protocol seam against a repository this driver REBUILDS from the
+# corpus's own signing key, record and revision — the `FIXTURE` line is that
+# rebuild's commit CID checked against the pinned one, and everything after it
+# is meaningless if it fails, so it is asserted first and separately.
+#
+# The absent case is the discriminator this gate exists for: a missing record
+# is answered 200 with a covering proof of NON-membership, not refused, and its
+# CAR is the present answer's blocks minus the record's. A route that refused
+# instead would satisfy every "record not found" intuition and break backfill.
+SYNC_READS_DRIVER="$ROOT/pds/test/sync_car_shapes_main.mdk"
+SYNC_READS_ROW=$(grep -c 'pds_sync_car_shapes_corpus.txt' "$WORK/activation-files" || true)
+[ "$SYNC_READS_ROW" = 1 ] || fail 'expected exactly one ledger-owned sync-read CAR corpus'
+SYNC_READS_CORPUS="$ROOT/$(grep 'pds_sync_car_shapes_corpus.txt' "$WORK/activation-files")"
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SYNC_READS_DRIVER" -o "$WORK/syncreads" > "$WORK/syncreads-build.log" 2>&1; then
+  cat "$WORK/syncreads-build.log" >&2
+  fail 'sync-read CAR driver build failed'
+fi
+
+"$WORK/syncreads" "$SYNC_READS_CORPUS" > "$WORK/syncreads.out" 2> "$WORK/syncreads.err"
+require_empty "$WORK/syncreads.err" 'sync reads'
+
+grep -F -q 'FIXTURE: PASS' "$WORK/syncreads.out" || fail 'the rebuilt sync-read fixture is not the pinned repository'
+grep -F -q 'GETRECORD-PRESENT: PASS' "$WORK/syncreads.out" || fail 'sync.getRecord on a present key is not byte-identical to the official CAR'
+grep -F -q 'GETRECORD-ABSENT: PASS' "$WORK/syncreads.out" || fail 'sync.getRecord on an absent key is not the official covering proof'
+grep -F -q 'GETRECORD-ABSENT-BLOCKS: PASS' "$WORK/syncreads.out" || fail "the absent answer's block set is not the pinned one"
+grep -F -q 'GETBLOCKS-PRESENT: PASS' "$WORK/syncreads.out" || fail 'sync.getBlocks is not byte-identical to the official CAR'
+# The empty roots list, read out of the header this server EMITTED: `lib.car`'s
+# decoder refuses a rootless CAR, so no round trip can make this claim.
+grep -F -q 'GETBLOCKS-PRESENT-ROOTS: PASS' "$WORK/syncreads.out" || fail 'sync.getBlocks named a CAR root'
+grep -F -q 'GETBLOCKS-PARTLY-MISSING: PASS' "$WORK/syncreads.out" || fail 'sync.getBlocks did not refuse a partly-missing request with the pinned message'
+[ "$(tail -1 "$WORK/syncreads.out")" = 'TOTAL: PASS' ] || fail 'sync-read CAR driver did not end in TOTAL: PASS'
+
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
   [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
-  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch, the three blob routes and the seven #commit firehose events on native; Wasm unavailable'
+  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch, the three blob routes , the seven #commit firehose events, the three activation-event frames and the four sync-read CAR shapes on native; Wasm unavailable'
   exit 0
 fi
 
@@ -264,4 +339,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders; the #identity, #account and #sync activation frames byte-identical to the official bodies; sync.getRecord present/absent and sync.getBlocks present/partly-missing byte-identical to the official CAR shapes'

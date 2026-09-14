@@ -20,6 +20,9 @@
    line and nothing else. -}
 
 import array.{concat, make, sliceClamped}
+import list.{reverse}
+import lib.car.{Car, carBlocks, carDecode, carRoots}
+import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode}
 import lib.websocket.{
   DecodeResult(..),
@@ -34,7 +37,7 @@ import lib.websocket.{
 }
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
-import string.{contains, fromUtf8, lines, split, toInt, toUtf8, trim}
+import string.{contains, fromUtf8, join, lines, split, toInt, toUtf8, trim}
 import time.{Duration, elapsedSince, monotonic, seconds, sleep}
 
 -- # The handshake
@@ -134,6 +137,35 @@ headerValueOf wanted (line :: rest) = match find wanted line
   Some m => match m.groups
     [Some g] => trim g.text
     _ => ""
+
+contentLengthRe : Regex
+contentLengthRe = mustCompile "(?i)^content-length:(.*)$"
+
+{- | The body of a response whose handshake was REFUSED, as text.
+
+   Framed by `content-length`, which every refusal this server writes carries:
+   the 101 path has no body to read and `readHead` hands back whatever followed
+   the header section, so the two readers cannot be one. -}
+readRefusalBody : Connection ->
+  String ->
+  Array Int ->
+  <Net "_"> Result String String
+readRefusalBody conn headerText pending =
+  match toInt (headerValueOf contentLengthRe (lines headerText))
+    None => Err "serve_subscribe: refusal carried no content-length"
+    Some want => readBodyBytes conn want pending
+
+readBodyBytes : Connection -> Int -> Array Int -> <Net "_"> Result String String
+readBodyBytes conn want have =
+  if arrayLength have >= want then
+    Ok (fromUtf8 (sliceClamped 0 want have))
+  else match recv conn 4096
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "serve_subscribe: refusal body ended before its content-length"
+      else
+        readBodyBytes conn want (appendBytes have chunk)
 
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
@@ -381,6 +413,179 @@ commitSeq conn buffered = match nextEvent conn buffered
       else
         Ok (intField body "seq", rest)
 
+{- | A repository's creation announces itself: a subscriber attached at cursor
+   0 to a server whose data directory this run created receives exactly the
+   four events `com.atproto.sync.subscribeRepos` opens a repository with, in
+   the order it states them and numbered from one.
+
+   Four separate claims, because a stream that got any one of them right
+   alone would still be unusable: the four KINDS in the official ORDER, the
+   sequence numbers 1 through 4 with nothing between them, the `#commit`
+   event's own `blocks` CAR carrying the MST node its commit names as well as
+   the commit, and the `#sync` event's CAR rooted at and holding exactly the
+   commit the `#commit` event named — the head a relay verifies the
+   repository against.
+
+   The silence afterwards is what makes "exactly four" mean atomicity rather
+   than arithmetic: nothing else has reached the log, and nothing could have,
+   because these are staged before the listener binds. -}
+runGenesis : Int -> <IO, Net "_"> Unit
+runGenesis port =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let rest = mustUpgrade conn "0"
+  let () = match readEvents conn rest (length genesisKinds) []
+    Err message => report "SUBGENESIS" False message
+    Ok (events, after) => match gradeGenesis events
+      Err message => report "SUBGENESIS" False message
+      Ok detail =>
+        let () = armRead conn silenceBudget
+        let quiet = match nextEvent conn after
+          Err _ => True
+          Ok None => False
+          Ok (Some _) => False
+        report
+          "SUBGENESIS"
+          quiet
+          "\{detail}; and nothing else on the stream: \{boolToString quiet}"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
+-- | The events a repository's creation emits, in the order the lexicon states
+-- them.
+genesisKinds : List String
+genesisKinds = ["#identity", "#account", "#commit", "#sync"]
+
+readEvents : Connection ->
+  Array Int ->
+  Int ->
+  List (DagCbor, DagCbor) ->
+  <Net "_"> Result String (List (DagCbor, DagCbor), Array Int)
+readEvents conn buffered remaining acc =
+  if remaining == 0 then
+    Ok (reverse acc, buffered)
+  else match nextEvent conn buffered
+    Err message => Err message
+    Ok None =>
+      Err
+        "serve_subscribe: stream ended with \{intToString remaining} genesis events still owed"
+    Ok (Some (payload, rest)) => match splitEvent payload
+      Err message => Err message
+      Ok pair => readEvents conn rest (remaining - 1) (pair :: acc)
+
+gradeGenesis : List (DagCbor, DagCbor) -> Result String String
+gradeGenesis [(identity, identityBody), (account, accountBody), (commit, commitBody), (sync, syncBody)] =
+  let kinds = [
+    eventKind identity,
+    eventKind account,
+    eventKind commit,
+    eventKind sync,
+  ]
+  let seqs = [
+    intField identityBody "seq",
+    intField accountBody "seq",
+    intField commitBody "seq",
+    intField syncBody "seq",
+  ]
+  if kinds /= genesisKinds then
+    Err "serve_subscribe: genesis kinds \{join " " kinds}"
+  else if seqs /= [1, 2, 3, 4] then
+    Err "serve_subscribe: genesis sequence \{join " " (map intToString seqs)}"
+  else match gradeCommitCar commitBody
+    Err message => Err message
+    Ok dataCid =>
+      map
+        (head =>
+          "\{join " " kinds} at seq 1..4, #commit CAR = commit + data root \{dataCid}, #sync rooted at \{head}")
+        (gradeSyncCar commitBody syncBody)
+gradeGenesis events =
+  Err
+    "serve_subscribe: read \{intToString (length events)} genesis events, expected \{intToString (length genesisKinds)}"
+
+{- | The genesis `#commit`'s own `blocks` CAR: rooted at the commit, and
+   carrying that commit AND a block for the MST node the commit itself names
+   as its data root.
+
+   Graded against the commit block's own claim rather than against this tree's
+   MST code, so it states the property a reader actually needs: whatever CID
+   the commit says its data root is, the CAR has to contain it. A genesis CAR
+   of the commit alone — what a `created = after − before` rule emits when
+   both trees are the empty one — names a data root the reader was never sent,
+   and the reference's own `verifyRepo` refuses it.
+
+   Block ORDER is not asserted; the lexicon fixes none. The two CIDs are
+   checked for presence and the count for exactness, which together say the
+   set. -}
+gradeCommitCar : DagCbor -> Result String String
+gradeCommitCar commitBody = match (
+  linkField commitBody "commit",
+  mapField commitBody "blocks",
+)
+  (Some head, Some (DcBytes carBytes)) => match carDecode carBytes
+    Err message => Err "serve_subscribe: #commit CAR: \{message}"
+    Ok car => match commitDataCid car head
+      Err message => Err message
+      Ok dataCid =>
+        let roots = map cidToString (carRoots car)
+        let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+        if roots /= [cidToString head] then
+          Err "serve_subscribe: #commit CAR roots \{join " " roots}"
+        else if length blocks /= 2
+          || not (elem (cidToString head) blocks)
+          || not (elem dataCid blocks) then
+          Err
+            "serve_subscribe: #commit CAR blocks \{join " " blocks}, expected the commit and its data root \{dataCid}"
+        else
+          Ok dataCid
+  _ => Err "serve_subscribe: #commit named no commit, or carried no blocks"
+
+-- | The `data` link inside the commit block the CAR is rooted at.
+commitDataCid : Car -> Cid -> Result String String
+commitDataCid car head = match blockBytes (carBlocks car) head
+  None => Err "serve_subscribe: #commit CAR holds no block for its own root"
+  Some bytes => match dagCborDecode bytes
+    Err message => Err "serve_subscribe: undecodable commit block: \{message}"
+    Ok value => match linkField value "data"
+      None => Err "serve_subscribe: the commit block names no data root"
+      Some cid => Ok (cidToString cid)
+
+blockBytes : List (Cid, Array Int) -> Cid -> Option (Array Int)
+blockBytes [] _ = None
+blockBytes ((cid, bytes) :: rest) want =
+  if cidToString cid == cidToString want then
+    Some bytes
+  else
+    blockBytes rest want
+
+{- | The `#sync` event's CAR against the `#commit` event's own head: one root,
+   one block, and both of them that commit. A `#sync` naming some other CID —
+   or shipping the whole tree — leaves a relay verifying the repository
+   against something this server never committed. -}
+gradeSyncCar : DagCbor -> DagCbor -> Result String String
+gradeSyncCar commitBody syncBody = match (
+  linkField commitBody "commit",
+  mapField syncBody "blocks",
+)
+  (Some head, Some (DcBytes carBytes)) => match carDecode carBytes
+    Err message => Err "serve_subscribe: #sync CAR: \{message}"
+    Ok car =>
+      let wanted = [cidToString head]
+      let roots = map cidToString (carRoots car)
+      let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+      if roots /= wanted then
+        Err "serve_subscribe: #sync CAR roots \{join " " roots}"
+      else if blocks /= wanted then
+        Err "serve_subscribe: #sync CAR blocks \{join " " blocks}"
+      else
+        Ok (cidToString head)
+  _ =>
+    Err "serve_subscribe: #commit named no commit, or #sync carried no blocks"
+
+linkField : DagCbor -> String -> Option Cid
+linkField value name = match mapField value name
+  Some (DcLink cid) => Some cid
+  _ => None
+
 {- | A cursor naming an event this server has never emitted is REFUSED, and
    refused with atproto's own name for it rather than by silence or by a
    replay of something else. -}
@@ -401,6 +606,30 @@ runFutureCursor port cursor =
           "SUBFUTURE"
           (kind == "!error" && name == "FutureCursor")
           "kind '\{kind}', error '\{name}'"
+  ignoreResult (close conn)
+
+{- | A cursor the handshake itself will not admit is answered an ordinary HTTP
+   refusal and never upgraded, and the refusal SAYS WHICH cursor it refused.
+
+   `expected` is the wording this case demands, because the point is not that
+   an unusable cursor is refused — two different unusable cursors already are —
+   but that they are told apart: a client whose own arithmetic went below zero
+   and a client that sent something that is not a number at all have different
+   bugs, and one message for both would name neither. -}
+runRefusedCursor : Int -> String -> String -> <IO, Net "_"> Unit
+runRefusedCursor port cursor expected =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let () = mustSend conn (handshakeRequest cursor)
+  let () = match readHead conn [||]
+    Err message => report "SUBREFUSED" False message
+    Ok (status, headerText, rest) => match readRefusalBody conn headerText rest
+      Err message => report "SUBREFUSED" False message
+      Ok body =>
+        report
+          "SUBREFUSED"
+          (status == 400 && contains expected body)
+          "cursor '\{cursor}' answered \{intToString status} '\{body}'"
   ignoreResult (close conn)
 
 {- | A cursor whose next events have left the retention window is answered
@@ -724,13 +953,16 @@ mustCount text = match toInt text
 
 usage : String
 usage =
-  "usage: serve_subscribe <live|future-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
+  "usage: serve_subscribe <genesis|live|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
+  ["genesis", port] => runGenesis (mustPort port)
   ["live", port, token, did, collection, rkeyPrefix] =>
     runLive (mustPort port) token did collection rkeyPrefix
   ["future-cursor", port, cursor] => runFutureCursor (mustPort port) cursor
+  ["refused-cursor", port, cursor, expected] =>
+    runRefusedCursor (mustPort port) cursor expected
   ["outdated-cursor", port, cursor] => runOutdatedCursor (mustPort port) cursor
   ["exact-cursor", port, cursor, token, did, collection, rkey] =>
     runExactCursor (mustPort port) cursor token did collection rkey

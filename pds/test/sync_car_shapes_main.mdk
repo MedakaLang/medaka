@@ -1,0 +1,424 @@
+{- | The `com.atproto.sync.getRecord` / `com.atproto.sync.getBlocks` CAR-shape
+   driver.
+
+   Grades `pds/test/vectors/pds_sync_car_shapes_corpus.txt` — CARs the pinned
+   official image's own `@atproto/repo` produced through the exact primitives
+   `getRecord.js`/`getBlocks.js` call — against what this server's two routes
+   answer, byte for byte, through the real protocol seam (`handleBytes`).
+
+   ── WHAT THE CORPUS SUPPLIES, AND WHAT IT DOES NOT ──────────────────────────
+
+   The corpus rows are ANSWERS. The repository they were computed over is the
+   fixture, and it is rebuilt here rather than lifted out of them: a signing
+   key, a record and a revision go into `repoInitFromKeyBytes`/`repoCreate`,
+   and the commit CID that falls out is asserted against the corpus's own
+   `GETRECORD-PRESENT-ROOT` before anything else is graded. That assertion is
+   what makes the key, the record path and the revision self-validating —
+   every one of them is wrong if the commit CID is — and it is the reason the
+   secret and the path below can be named here without being hand-derived
+   claims.
+
+   Rebuilding also makes the answers discriminating. The reconstructed
+   repository's block store holds the genesis commit and the empty tree's node
+   as well, which no row here names, so a route that answered with its whole
+   store instead of the blocks the question asks for would fail every shape
+   rather than passing three of them.
+
+   ── THE FOUR SHAPES ─────────────────────────────────────────────────────────
+
+   `GETRECORD-PRESENT` and `GETRECORD-ABSENT` are the same question asked of a
+   key the repository holds and one it never held. BOTH are 200: the absent
+   answer is a covering proof of non-membership, and the row set states that
+   directly — it is the present answer's blocks minus the record's.
+
+   `GETBLOCKS-PRESENT`'s CAR names NO root, which is the one shape in this
+   file `lib.car`'s repository profile does not admit on the way back in, so
+   its roots list is decoded out of the emitted header here rather than
+   asserted by a round trip.
+
+   `GETBLOCKS-PARTLY-MISSING` is a refusal, not a CAR: one CID this repository
+   does not hold refuses the whole request and names it. Its status, error
+   name and message were read off a real `InvalidRequestError`, so the message
+   is graded as text and not merely as a substring. -}
+
+import array.{sliceClamped}
+import hex.{decode, encode}
+import io.{readLines}
+import list.{lookup}
+import string.{contains, fromUtf8, join, split, startsWith, toLower, toUtf8}
+import lib.car.{carBlocks, carDecode, carRoots}
+import lib.cid.{Cid, cidToString}
+import lib.dagcbor.{DagCbor(..), dagCborDecode}
+import lib.handlers.{pdsServer, serverLinksEmpty}
+import lib.repo.{
+  Repo,
+  repoCommitCid,
+  repoCreate,
+  repoInitFromKeyBytes,
+  repoLatestCommit,
+  repoMutationState,
+}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
+import lib.store.{Store, storeFromRepo}
+import lib.tid.{Tid, tidClockId, tidEncode, tidMicros, tidParse}
+
+{- | The fixture the corpus was computed over, from
+   `pds/tools/gen_sync_event_corpus.mjs`: an exportable secp256k1 secret of
+   one, a record written at `presentPath`, and a key at `absentPath` that was
+   never written.
+
+   None of the three is taken on trust. A wrong secret signs a different
+   commit, a wrong present path builds a different MST, and either shows up as
+   the `FIXTURE` row below failing before a single shape is graded. -}
+fixtureSecretHex : String
+fixtureSecretHex =
+  "0000000000000000000000000000000000000000000000000000000000000001"
+
+fixtureCollection : String
+fixtureCollection = "app.bsky.feed.post"
+
+presentRkey : String
+presentRkey = "medaka-present"
+
+absentRkey : String
+absentRkey = "medaka-absent"
+
+presentPath : String
+presentPath = "\{fixtureCollection}/\{presentRkey}"
+
+accountHandleText : String
+accountHandleText = "medaka.example"
+
+accountHostText : String
+accountHostText = "pds.example"
+
+-- Nothing this file drives mints a token or reads a clock: every route here
+-- is a public query. The context only has to be fixed.
+testContext : RequestContext
+testContext = RequestContext { nowSeconds = 1700000000, nonce = [||] }
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "sync_car_shapes: malformed hex: \{message}"
+
+mustCbor : Array Int -> DagCbor
+mustCbor bytes = match dagCborDecode bytes
+  Ok value => value
+  Err message => panic "sync_car_shapes: undecodable block: \{message}"
+
+mustTid : String -> Tid
+mustTid text = match tidParse text
+  Ok tid => tid
+  Err message => panic "sync_car_shapes: malformed TID: \{message}"
+
+textOf : DagCbor -> String -> String
+textOf (DcMap fields) name = match lookup name fields
+  Some (DcString text) => text
+  _ => panic "sync_car_shapes: block has no text field '\{name}'"
+textOf _ name = panic "sync_car_shapes: expected a map holding '\{name}'"
+
+{- | The corpus as tag/value pairs. `GETBLOCKS-PRESENT-ROOTS` is an EMPTY
+   value — the row that states `getBlocks` names no root — so a one-column
+   line is a row with an empty value, not a malformed line. -}
+parseRows : List String -> List (String, String) -> List (String, String)
+parseRows [] acc = acc
+parseRows (line :: rest) acc =
+  if line == "" || startsWith "#" line || line == "END" then
+    parseRows rest acc
+  else match split "\t" line
+    [tag] => parseRows rest ((tag, "") :: acc)
+    [tag, value] => parseRows rest ((tag, value) :: acc)
+    _ => panic "sync_car_shapes: unrecognized corpus row: \{line}"
+
+rowValue : List (String, String) -> String -> String
+rowValue rows tag = match lookup tag rows
+  Some value => value
+  None => panic "sync_car_shapes: corpus has no \{tag} row"
+
+-- A CID-list row, which is empty for the one row that names no CID at all.
+rowCids : List (String, String) -> String -> List String
+rowCids rows tag = match rowValue rows tag
+  "" => []
+  text => split "," text
+
+gradeWord : Bool -> String
+gradeWord True = "PASS"
+gradeWord False = "FAIL"
+
+-- ── the fixture repository ──────────────────────────────────────────────────
+
+mustAccount : String -> Account
+mustAccount did = match makeAccount did accountHandleText accountHostText
+  Ok account => account
+  Err message => panic "sync_car_shapes: account setup failed: \{message}"
+
+mustServer : Account -> Server
+mustServer account = match pdsServer account serverLinksEmpty
+  Ok server => server
+  Err message => panic "sync_car_shapes: server setup failed: \{message}"
+
+{- | The repository the corpus was computed over: one record, written at the
+   corpus's own revision.
+
+   The genesis revision is one microsecond before it, on the same clock id,
+   because `repoCreate` requires a strictly greater revision and the corpus
+   pins the one the record's commit carries. The genesis commit and the empty
+   tree's node stay in the block store afterwards, which is what makes a route
+   that over-answers visible here. -}
+fixtureRepo : String -> DagCbor -> Tid -> Repo
+fixtureRepo did record rev =
+  let genesis = match tidEncode (tidMicros rev - 1) (tidClockId rev)
+    Ok tid => tid
+    Err message => panic "sync_car_shapes: genesis TID: \{message}"
+  let empty = match repoInitFromKeyBytes did (mustHex fixtureSecretHex) genesis
+    Ok repo => repo
+    Err message => panic "sync_car_shapes: repository init failed: \{message}"
+  match repoCreate (toUtf8 presentPath) record rev empty
+    Ok mutation => repoMutationState mutation
+    Err message => panic "sync_car_shapes: fixture write failed: \{message}"
+
+-- ── the seam ────────────────────────────────────────────────────────────────
+
+queryRequest : String -> Array Int
+queryRequest target =
+  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
+
+headerEnd : Array Int -> Int -> Int
+headerEnd bytes i =
+  if i + 3 >= arrayLength bytes then
+    panic "sync_car_shapes: response has no header terminator"
+  else if bytes[i] == 13
+    && bytes[i + 1] == 10
+    && bytes[i + 2] == 13
+    && bytes[i + 3] == 10 then
+    i
+  else
+    headerEnd bytes (i + 1)
+
+responseBody : Array Int -> Array Int
+responseBody bytes =
+  sliceClamped (headerEnd bytes 0 + 4) (arrayLength bytes) bytes
+
+responseHead : Array Int -> String
+responseHead bytes = fromUtf8 (sliceClamped 0 (headerEnd bytes 0) bytes)
+
+-- | The status line's three-digit code, as text, so a wrong status reports
+-- what it actually was.
+responseStatus : Array Int -> String
+responseStatus bytes = match split " " (responseHead bytes)
+  _ :: status :: _ => status
+  _ => panic "sync_car_shapes: response has no status line"
+
+-- | One route call against the fixture store. No route here can transition
+-- it, so the successor store is discarded rather than threaded.
+call : Server -> Store -> String -> Array Int
+call server store target =
+  let (_, bytes) = handleBytes server testContext store (queryRequest target)
+  bytes
+
+hasCarMediaType : Array Int -> Bool
+hasCarMediaType bytes =
+  contains
+    "content-type: application/vnd.ipld.car"
+    (toLower (responseHead bytes))
+
+-- ── the emitted CAR's own header ────────────────────────────────────────────
+
+{- | How many roots the CAR this server emitted names, read out of its own
+   header rather than out of the corpus.
+
+   `lib.car`'s decoder refuses a rootless CAR by design — the repository
+   profile it enforces requires a root — so the one shape that needs this
+   answer cannot get it by round-tripping. The section framing is a
+   single-byte unsigned LEB128 length here (the header is 17 bytes for an
+   empty roots list and 55 for a one-CID one, both under 128), and a
+   multi-byte length would be a header this file's fixtures cannot produce. -}
+emittedRootCount : Array Int -> Int
+emittedRootCount bytes =
+  if arrayLength bytes < 1 || bytes[0] >= 128 then
+    panic "sync_car_shapes: CAR header length is not a single-byte varint"
+  else
+    let header = arrayMakeWith bytes[0] (i => bytes[1 + i])
+    match mustCbor header
+      DcMap fields => match lookup "roots" fields
+        Some (DcArray roots) => length roots
+        _ => panic "sync_car_shapes: CAR header has no roots array"
+      _ => panic "sync_car_shapes: CAR header is not a map"
+
+-- ── grading ─────────────────────────────────────────────────────────────────
+
+{- | One `getRecord` shape: the response is a 200 CAR whose bytes are the
+   pinned bytes, and — asserted separately, so an encoder that merely agrees
+   with itself cannot pass — whose root and block CIDs are the pinned lists.
+   The block CIDs come from re-decoding what this server emitted. -}
+gradeRecordShape : Server ->
+  Store ->
+  String ->
+  List (String, String) ->
+  String ->
+  String ->
+  <IO> Bool
+gradeRecordShape server store did rows tag rkey =
+  let target =
+    "com.atproto.sync.getRecord?did=\{did}&collection=\{fixtureCollection}&rkey=\{rkey}"
+  let response = call server store target
+  let status = responseStatus response
+  let body = responseBody response
+  let bytesOk = encode body == rowValue rows "\{tag}-CAR"
+  let framed = status == "200" && hasCarMediaType response
+  let () =
+    println
+      "\{tag}: \{gradeWord (framed && bytesOk)} status=\{status} car bytes byte-identical to the pinned CAR: \{gradeWord bytesOk}"
+  let shaped = gradeDecoded rows tag body
+  framed && bytesOk && shaped
+
+-- | The emitted CAR's own root and block lists against the corpus's two
+-- CID rows for this tag.
+gradeDecoded : List (String, String) -> String -> Array Int -> <IO> Bool
+gradeDecoded rows tag body = match carDecode body
+  Err message =>
+    let () =
+      println "\{tag}-BLOCKS: FAIL emitted CAR does not decode: \{message}"
+    False
+  Ok car =>
+    let roots = map cidToString (carRoots car)
+    let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+    let rootOk = roots == [rowValue rows "\{tag}-ROOT"]
+    let blockOk = blocks == rowCids rows "\{tag}-BLOCKS"
+    let () = println "\{tag}-ROOT: \{gradeWord rootOk} \{join "," roots}"
+    let () = println "\{tag}-BLOCKS: \{gradeWord blockOk} \{join "," blocks}"
+    rootOk && blockOk
+
+blocksTarget : String -> List String -> String
+blocksTarget did cids =
+  join
+    "&"
+    ("com.atproto.sync.getBlocks?did=\{did}" :: map (cid => "cids=\{cid}") cids)
+
+{- | The present block set: exactly the CIDs the corpus names, requested in
+   the corpus's own order, answered in a CAR that names no root. -}
+gradeBlocksPresent : Server ->
+  Store ->
+  String ->
+  List (String, String) ->
+  <IO> Bool
+gradeBlocksPresent server store did rows =
+  let wanted = rowCids rows "GETBLOCKS-PRESENT-BLOCKS"
+  let response = call server store (blocksTarget did wanted)
+  let status = responseStatus response
+  let body = responseBody response
+  let bytesOk = encode body == rowValue rows "GETBLOCKS-PRESENT-CAR"
+  let framed = status == "200" && hasCarMediaType response
+  let rootsOk =
+    emittedRootCount body == length (rowCids rows "GETBLOCKS-PRESENT-ROOTS")
+  let () =
+    println
+      "GETBLOCKS-PRESENT: \{gradeWord (framed && bytesOk)} status=\{status} car bytes byte-identical to the pinned CAR: \{gradeWord bytesOk}"
+  let () =
+    println
+      "GETBLOCKS-PRESENT-ROOTS: \{gradeWord rootsOk} emitted header names \{intToString (emittedRootCount body)} roots"
+  framed && bytesOk && rootsOk
+
+{- | The partly-missing refusal: one CID this repository does not hold refuses
+   the WHOLE request, at the pinned status, under the pinned error name, with
+   the pinned message naming every missing CID. A partial CAR would be the
+   silent wrong answer here, so the body is graded as text rather than
+   searched for a substring. -}
+gradeBlocksMissing : Server ->
+  Store ->
+  String ->
+  List (String, String) ->
+  <IO> Bool
+gradeBlocksMissing server store did rows =
+  let requested = rowCids rows "GETBLOCKS-PARTLY-MISSING-REQUESTED"
+  let response = call server store (blocksTarget did requested)
+  let status = responseStatus response
+  let body = fromUtf8 (responseBody response)
+  let expected =
+    "{\"error\":\"\{rowValue rows "GETBLOCKS-PARTLY-MISSING-ERROR"}\",\"message\":\"\{rowValue rows "GETBLOCKS-PARTLY-MISSING-MESSAGE"}\"}"
+  let statusOk = status == rowValue rows "GETBLOCKS-PARTLY-MISSING-STATUS"
+  let bodyOk = body == expected
+  let () =
+    println
+      "GETBLOCKS-PARTLY-MISSING: \{gradeWord (statusOk && bodyOk)} status=\{status} body=\{body}"
+  statusOk && bodyOk
+
+{- | The corpus's own repository, rebuilt, with its DID and revision read off
+   the commit block the `GETRECORD-PRESENT` CAR is rooted at and its record
+   read off the one block the ABSENT answer does not carry. -}
+fixtureFromCorpus : List (String, String) -> (String, Repo, String)
+fixtureFromCorpus rows =
+  let car = match carDecode (mustHex (rowValue rows "GETRECORD-PRESENT-CAR"))
+    Ok value => value
+    Err message => panic "sync_car_shapes: corpus CAR: \{message}"
+  let commitCid = match carRoots car
+    [root] => root
+    _ => panic "sync_car_shapes: corpus CAR does not name exactly one root"
+  let blocks = carBlocks car
+  let commit = mustCbor (blockBytes commitCid blocks)
+  let recordCid =
+    soleAddition
+      (rowCids rows "GETRECORD-PRESENT-BLOCKS")
+      (rowCids rows "GETRECORD-ABSENT-BLOCKS")
+  let record = mustCbor (namedBlockBytes recordCid blocks)
+  let did = textOf commit "did"
+  (
+    did,
+    fixtureRepo did record (mustTid (textOf commit "rev")),
+    cidToString commitCid,
+  )
+
+blockBytes : Cid -> List (Cid, Array Int) -> Array Int
+blockBytes wanted blocks = namedBlockBytes (cidToString wanted) blocks
+
+namedBlockBytes : String -> List (Cid, Array Int) -> Array Int
+namedBlockBytes wanted [] =
+  panic "sync_car_shapes: corpus CAR does not carry block \{wanted}"
+namedBlockBytes wanted ((cid, bytes) :: rest) =
+  if cidToString cid == wanted then bytes else namedBlockBytes wanted rest
+
+-- | The one CID the present answer carries and the absent answer does not:
+-- the record block, named by the difference rather than by its position.
+soleAddition : List String -> List String -> String
+soleAddition present absent =
+  match filter (cid => not (elem cid absent)) present
+    [cid] => cid
+    extra =>
+      panic
+        "sync_car_shapes: present minus absent is \{intToString (length extra)} blocks, expected 1"
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [corpusPath] => match readLines corpusPath
+    Err message => panic "sync_car_shapes: cannot read corpus: \{message}"
+    Ok lines =>
+      let rows = parseRows lines []
+      let (did, repo, pinnedCommit) = fixtureFromCorpus rows
+      let built = cidToString (repoCommitCid (repoLatestCommit repo))
+      let fixtureOk = built == pinnedCommit
+      let () =
+        println
+          "FIXTURE: \{gradeWord fixtureOk} rebuilt commit \{built} against the pinned \{pinnedCommit}"
+      if not fixtureOk then
+        println "TOTAL: FAIL"
+      else
+        let store = storeFromRepo repo
+        let server = mustServer (mustAccount did)
+        let present =
+          gradeRecordShape server store did rows "GETRECORD-PRESENT" presentRkey
+        let absent =
+          gradeRecordShape server store did rows "GETRECORD-ABSENT" absentRkey
+        let blocks = gradeBlocksPresent server store did rows
+        let missing = gradeBlocksMissing server store did rows
+        println (if present && absent && blocks && missing then
+          "TOTAL: PASS"
+        else
+          "TOTAL: FAIL")
+  _ => panic "usage: sync_car_shapes_main <corpus>"

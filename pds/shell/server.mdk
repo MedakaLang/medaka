@@ -62,8 +62,21 @@ import lib.ratelimit.{
 }
 import hex.{encode}
 import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
-import lib.repo.{Repo, repoCommitCid, repoExportBlocks, repoLatestCommit}
-import lib.sync_event.{syncCommitEventFor, syncCommitFrame}
+import lib.repo.{
+  Repo,
+  repoCommitCid,
+  repoCommitSignedBytes,
+  repoCommitTid,
+  repoExportBlocks,
+  repoLatestCommit,
+}
+import lib.sync_event.{
+  syncAccountFrame,
+  syncCommitEventFor,
+  syncCommitFrame,
+  syncIdentityFrame,
+  syncSyncFrame,
+}
 import lib.resource_limits.{rateLimitWindowSeconds}
 import lib.proxy.{
   UpstreamAnswer,
@@ -464,9 +477,84 @@ stageCommitEvent dir did nowSeconds before after = do
   eventLogStage dir EventLogEntry {
     seq = seq,
     timeSeconds = nowSeconds,
-    commitCid = headText after,
+    anchorCommitCid = Some (headText after),
     frameHex = encode frame,
   }
+
+{- | The four events a repository's creation emits, in the order
+   `com.atproto.sync.subscribeRepos` states them: `#identity`, `#account`,
+   `#commit`, `#sync`.
+
+   A relay subscribing from cursor 0 learns the DID, the handle it answers to,
+   that the account is active, and the repository's head before it sees the
+   first ordinary write — which is what makes an empty repository indexable at
+   all. Without them the stream begins mid-story: a `#commit` whose `since` is
+   null for a DID the reader has never been told about.
+
+   The `#commit` here is the GENESIS commit and needs no builder of its own.
+   `stageCommitEvent` with no prior repository is exactly it: `since` goes
+   null and `prevData` is omitted, which is what `optionalCommit None`
+   (`lib.sync_event`) already means.
+
+   Only that one anchors. The other three announce no repository mutation, so
+   `eventLogEntryOwed` always owes them and there is no head that could
+   contradict one — and the commit they describe is already on disk before the
+   first of them is staged, so none of them can publish state a reader cannot
+   fetch.
+
+   Nothing can interleave: this runs inside `configure`, before the listener
+   is bound, so there is no connection through which a write could reach the
+   log until all four are promoted. -}
+export
+stageGenesisEvents : String ->
+  String ->
+  String ->
+  Int ->
+  Repo ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+stageGenesisEvents dir did handle nowSeconds repo = do
+  let identityFrame = seq time => syncIdentityFrame seq time did handle
+  let accountFrame = seq time => syncAccountFrame seq time did
+  () <- emitUnanchored dir nowSeconds identityFrame
+  () <- emitUnanchored dir nowSeconds accountFrame
+  () <- stageCommitEvent dir did nowSeconds None repo
+  () <- eventLogPromote dir eventLogRetentionSeconds nowSeconds
+  emitUnanchored dir nowSeconds (headSyncFrame did repo)
+
+-- The `#sync` frame for a repository's current head: the one event that
+-- states where the repository stands without describing how it got there.
+headSyncFrame : String -> Repo -> Int -> String -> Result String (Array Int)
+headSyncFrame did repo seq time =
+  let commit = repoLatestCommit repo
+  syncSyncFrame
+    seq
+    time
+    did
+    (repoCommitTid commit)
+    (repoCommitCid commit)
+    (repoCommitSignedBytes commit)
+
+{- | One event that announces no repository mutation: staged and promoted with
+   nothing in between, because the state it describes is already durable.
+
+   The frame is built from the sequence number rather than before it, because
+   the lexicon requires `seq` and `time` inside every event body and this log
+   stores the finished bytes. The number comes off disk for the reason
+   `stageCommitEvent` gives: a relay's cursor has to survive this process. -}
+emitUnanchored : String ->
+  Int ->
+  (Int -> String -> Result String (Array Int)) ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+emitUnanchored dir nowSeconds build = do
+  seq <- eventLogNextSequence dir
+  frame <- build seq (formatIso (fromEpochSeconds nowSeconds))
+  () <- eventLogStage dir EventLogEntry {
+    seq = seq,
+    timeSeconds = nowSeconds,
+    anchorCommitCid = None,
+    frameHex = encode frame,
+  }
+  eventLogPromote dir eventLogRetentionSeconds nowSeconds
 
 {- | Whether the blob half of the transition differs.
 

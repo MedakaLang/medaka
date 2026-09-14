@@ -150,9 +150,9 @@ runSubscription dir budget conn accept cursor pending = defer
 -- The newest sequence number the log has ever promoted, which is what a
 -- cursor is graded against. A log that has promoted nothing answers 0, the
 -- value `lib.event_log_record` reserves for "before everything".
-newestSeq : Option (Int, String) -> Int
+newestSeq : Option Int -> Int
 newestSeq None = 0
-newestSeq (Some (seq, _)) = seq
+newestSeq (Some seq) = seq
 
 openStream : String ->
   Duration ->

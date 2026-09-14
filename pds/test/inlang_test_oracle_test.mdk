@@ -63,7 +63,7 @@ engineLabel NativeSpeed = "native (speed)"
    `scalar_test`, which cost this gate several minutes of interpreter time
    per run.
 
-   `NativeCapability` (4 files): the eval arm REFUSES the file outright
+   `NativeCapability` (5 files): the eval arm REFUSES the file outright
    ("reaches the extern `buildCommit` … No test was run"), so it is not a
    timing question — every one of these reaches `buildCommit` through
    `lib.repo`'s call graph, which the interpreter's capability policy does
@@ -102,7 +102,7 @@ suites = [
   ("read_buffer_test", (12, Eval)),
   ("websocket_test", (43, NativeSpeed)),
   ("event_log_test", (22, NativeCapability)),
-  ("sync_event_test", (3, Eval)),
+  ("sync_event_test", (7, NativeCapability)),
   ("route_policy_test", (4, Eval)),
 ]
 

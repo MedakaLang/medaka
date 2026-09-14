@@ -775,3 +775,49 @@ extraction:    same single command as the pds_route_registration_corpus.txt row 
 retrieved:     2026-09-12
 consumer:      S-proxy-catch-all (#2935 the app can use us, A1 method-axis inversion)
 notes:         the oracle checks this set BEFORE it resolves a proxy target, and answers InvalidToken "Bad token method" for a member — so these 16 com.atproto.* methods are refused a service-auth lxm regardless of which service the atproto-proxy header names. Every member is com.atproto.*, which is outside the two namespaces ruling R1 opens, so under R1 they are already refused by namespace; the corpus exists so a later slice that widens the namespace set cannot silently start forwarding an account-management method, and so the list is derived rather than hand-typed.
+
+[vector]
+file:          pds/test/vectors/com_atproto_sync_getRecord.json
+local-sha256:  1d5a50caf428c87b87922e0adf021956c719af589cb89c7a3dc513875df13cdb
+kind:          published-artifact
+source:        atproto lexicon com.atproto.sync.getRecord, lexicons/com/atproto/sync/getRecord.json at bluesky-social/atproto commit 1f2604f0546754aef1cf93b7ac3855cf31751b1c (the same commit already pinned by com_atproto_sync_subscribeRepos.json's row above; the peeled commit of the annotated tag @atproto/api@0.20.44; tag object 85484cf1072bb050734f021b93b0c42415eaf4d1)
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/1f2604f0546754aef1cf93b7ac3855cf31751b1c/lexicons/com/atproto/sync/getRecord.json
+source-sha256: 1d5a50caf428c87b87922e0adf021956c719af589cb89c7a3dc513875df13cdb
+extraction:    fetched verbatim, byte for byte; nothing was reformatted, so local-sha256 and source-sha256 are the same digest by construction.
+retrieved:     2026-09-13
+consumer:      S-oracle-answer-keys (#3002 G-QUIET, #2937 first half)
+notes:         the lexicon's own `errors` list names RecordNotFound, but the pinned image's getRecord.js handler never throws it for a missing record -- it answers a covering proof (200 CAR) instead, per F7 and pds_sync_car_shapes_corpus.txt's GETRECORD-ABSENT rows below. RecordNotFound is reachable only through some other caller-side path this corpus does not exercise; a later slice reading this lexicon for its error list should not assume the declared error is what a missing record actually produces.
+
+[vector]
+file:          pds/test/vectors/com_atproto_sync_getBlocks.json
+local-sha256:  7186125e93d5342bfafe5d8086811e9b14e9f119d750222a02f2d03b292f8fee
+kind:          published-artifact
+source:        atproto lexicon com.atproto.sync.getBlocks, lexicons/com/atproto/sync/getBlocks.json at bluesky-social/atproto commit 1f2604f0546754aef1cf93b7ac3855cf31751b1c (same commit as the getRecord.json row above)
+source-url:    https://raw.githubusercontent.com/bluesky-social/atproto/1f2604f0546754aef1cf93b7ac3855cf31751b1c/lexicons/com/atproto/sync/getBlocks.json
+source-sha256: 7186125e93d5342bfafe5d8086811e9b14e9f119d750222a02f2d03b292f8fee
+extraction:    fetched verbatim, byte for byte; nothing was reformatted, so local-sha256 and source-sha256 are the same digest by construction.
+retrieved:     2026-09-13
+consumer:      S-oracle-answer-keys (#3002 G-QUIET, #2937 first half)
+notes:         the lexicon declares `cids` required with no minimum length, matching getBlocks.js's all-or-nothing refusal shape recorded in pds_sync_car_shapes_corpus.txt's GETBLOCKS-PARTLY-MISSING rows: any single missing cid refuses the WHOLE request rather than answering a partial CAR.
+
+[vector]
+file:          pds/test/vectors/pds_sync_event_bodies_corpus.txt
+local-sha256:  f0d4739f083cb097c5f2988fc682188d22aef1fad5b7241a391d42aa8ca423b8
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/sequencer/events.js
+extraction:    docker run --rm --entrypoint node -v "$PWD/pds/tools:/medaka-tools:ro" -v <scratch>:/medaka-out ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12 /medaka-tools/gen_sync_event_corpus.mjs /medaka-out — pds/tools/gen_sync_event_corpus.sh wraps this; re-running must reproduce this file byte-for-byte
+retrieved:     2026-09-13
+consumer:      S-oracle-answer-keys (#3002 G-QUIET, #2937 first half)
+notes:         every body is produced by CALLING the pinned image's own sequencer/events.js builders (formatSeqIdentityEvt, formatSeqAccountEvt, formatSeqSyncEvt) -- no field set is hand-assembled against a schema. Confirms F1/F2/F1b field-set claims directly: IDENTITY-NO-HANDLE omits the `handle` key entirely rather than writing it null; ACCOUNT-ACTIVE omits `status` entirely while ACCOUNT-INACTIVE always carries both `active:false` and `status`; SYNC's `blocks` CAR (SYNC-CAR-ROOTS/SYNC-CAR-BLOCKS) is rooted at and contains ONLY the one signed commit block, matching syncEvtDataFromCommit's own `relevantBlocks.getMany([commitData.cid])`. `seq`/`time` are absent from every row by construction (F1: neither builder sets them). The signing key, DID, and one MST record are this project's own fixture (a fixed exportable secp256k1 key, same technique as pds_did_key_corpus.txt), built with the pinned image's own MST/signCommit/lex-cbor -- assembly of the FIXTURE is this project's choice, but every VALUE the corpus records (the event bytes, the CAR bytes, the CIDs) comes back from the pinned image's own code, so no G5 caveat applies. The GENESIS-COMMIT-* rows are a SECOND fixture on the same key: a brand-new EMPTY repository through the image's own Repo.formatInitCommit, whose relevantBlocks is what a genesis #commit's `blocks` field carries. For an empty repo that is TWO blocks -- the empty MST root node and the signed commit -- which is the distinction the SYNC fixture above cannot state, its repository already holding a record.
+
+[vector]
+file:          pds/test/vectors/pds_sync_car_shapes_corpus.txt
+local-sha256:  8bd08efc5620f1b185c35f9e1b7f86ab0bbfc1dfbadbf518c5cf5b93a4bd1277
+kind:          reference-impl
+impl:          official-pds
+source-url:    https://github.com/bluesky-social/atproto/blob/main/packages/pds/src/api/com/atproto/sync/getRecord.ts
+extraction:    same single command as the pds_sync_event_bodies_corpus.txt row above; this file is its second output
+retrieved:     2026-09-13
+consumer:      S-oracle-answer-keys (#3002 G-QUIET, #2937 first half)
+notes:         drives the exact @atproto/repo primitives getRecord.js/getBlocks.js call (repo.getRecords, repo.blocksToCarStream) over the same one-record repo fixture as pds_sync_event_bodies_corpus.txt, plus a real @atproto/xrpc-server InvalidRequestError instance for the refusal shape -- STATUS/ERROR/MESSAGE are read off that instance, not transcribed from source. Confirms F7 directly: GETRECORD-ABSENT succeeds (a covering proof, not an error) for a path never written; GETBLOCKS-PRESENT-ROOTS is the literal empty list (getBlocks never sets a CAR root, unlike getRecord's single commit root); GETBLOCKS-PARTLY-MISSING is all-or-nothing -- one missing cid among three requested refuses the whole call (400 InvalidRequest) rather than answering a partial CAR, naming every missing cid. This corpus does not exercise getRecord.js's separate no-root-at-all repo error, which is out of scope for the four required cases.

@@ -454,13 +454,26 @@ wrongVersionResponse =
     "UnsupportedWebSocketVersion"
     "This server speaks WebSocket version \{webSocketVersion}"
 
+{- | The `cursor` a subscription asked to resume from, or the refusal that
+   names why it could not be read.
+
+   A NEGATIVE cursor is refused rather than carried: `toInt` accepts `-5`
+   happily, and every rule downstream is written over a cursor that names the
+   last event already delivered, where zero is "before everything" and nothing
+   is below it. The refusal says "negative" rather than reusing the
+   unparsable-value wording, so an operator reading a 400 can tell a client
+   that sent nonsense from one whose own arithmetic went below zero. -}
 cursorOf : List QueryParam ->
   Int ->
   Option String ->
   Result Response (Option Int)
 cursorOf [] 0 _ = Ok None
 cursorOf [] 1 (Some text) = match toInt (trim text)
-  Some seq => Ok (Some seq)
+  Some seq =>
+    if seq < 0 then
+      Err (badHandshakeResponse "Query parameter 'cursor' must not be negative")
+    else
+      Ok (Some seq)
   None =>
     Err
       (badHandshakeResponse "Query parameter 'cursor' is not a sequence number")

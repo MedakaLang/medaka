@@ -267,13 +267,21 @@ isCreateSessionNsid nsid =
    allowance: one call's output is bounded by `maxCarBytes` alone, so a count
    of requests cannot bound what the route emits.
 
-   `com.atproto.sync.getRepo` is the only such procedure today. A route that
-   serializes the whole block graph belongs here; one that serializes a single
-   record or blob does not, since each of those is already bounded per call by
-   its own body ceiling. -}
+   A route that serializes the whole block graph belongs here; one that
+   serializes a single record or blob does not, since each of those is already
+   bounded per call by its own body ceiling. `com.atproto.sync.getRepo` is the
+   route that names the whole graph itself. `com.atproto.sync.getBlocks` is
+   here because the CALLER names the set: it may ask for every CID it has ever
+   seen in this repository, which is the same egress under a different
+   spelling, and nothing but `maxCarBytes` stands between the request and it.
+   `com.atproto.sync.getRecord` is NOT here — it answers one record and its
+   covering proof, which is bounded by the repository's depth, not by what the
+   caller asks for. -}
 export
 isRepoExportNsid : String -> Bool
-isRepoExportNsid nsid = sameNsidIdentity nsid "com.atproto.sync.getRepo"
+isRepoExportNsid nsid =
+  sameNsidIdentity nsid "com.atproto.sync.getRepo"
+    || sameNsidIdentity nsid "com.atproto.sync.getBlocks"
 
 {- | The extra classes a routed NSID is charged against, on top of the
    per-request classes every framed request clears.

@@ -46,14 +46,21 @@ import lib.xrpc.{
 data RoutePolicy = RoutePolicy AuthPolicy (List RateLimitClass) (Option Int)
 
 {- | The committed table, in registration order: five record writes, five
-   session routes, two preference routes, eleven reads and one subscription.
+   session routes, two preference routes, thirteen reads and one subscription.
 
    `app.bsky.actor.putPreferences` is deliberately spelled with no
    rate-limit class of its own. It is an authenticated JSON procedure that
    writes to the store, but `isWriteNsid` names only the five
    `com.atproto.repo` write procedures, so it clears the shared request
    allowance alone. That is what the code does today; this row records it
-   rather than hiding it. -}
+   rather than hiding it.
+
+   The two `com.atproto.sync` reads differ from each other in the same column,
+   and the difference is the point: `getBlocks` is `RepoExportClass` because
+   the CALLER names the block set and may name the whole graph, so only
+   `maxCarBytes` bounds one response; `getRecord` is not, because it answers
+   one record and its covering proof whatever the caller asks. Reversing
+   either reds this table. -}
 committedPolicies : List (String, RoutePolicy)
 committedPolicies = [
   (
@@ -105,6 +112,11 @@ committedPolicies = [
   ("com.atproto.sync.listBlobs", RoutePolicy PublicRoute [] None),
   ("com.atproto.sync.listRepos", RoutePolicy PublicRoute [] None),
   ("com.atproto.sync.getRepoStatus", RoutePolicy PublicRoute [] None),
+  ("com.atproto.sync.getRecord", RoutePolicy PublicRoute [] None),
+  (
+    "com.atproto.sync.getBlocks",
+    RoutePolicy PublicRoute [RepoExportClass] None,
+  ),
   ("com.atproto.identity.resolveHandle", RoutePolicy PublicRoute [] None),
   ("com.atproto.sync.subscribeRepos", RoutePolicy PublicRoute [] None),
 ]
@@ -113,7 +125,7 @@ committedPolicies = [
 -- that dropping a route AND its row together still shows up here, which the
 -- pair of closure checks alone cannot see.
 registeredRouteCount : Int
-registeredRouteCount = 24
+registeredRouteCount = 26
 
 authName : AuthPolicy -> String
 authName PublicRoute = "public"

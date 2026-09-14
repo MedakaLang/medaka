@@ -417,6 +417,44 @@ getBlobPath : String -> String -> String
 getBlobPath did cid =
   "\{xrpcPath "com.atproto.sync.getBlob"}?did=\{did}&cid=\{cid}"
 
+getLatestCommitPath : String -> String
+getLatestCommitPath did =
+  "\{xrpcPath "com.atproto.sync.getLatestCommit"}?did=\{did}"
+
+syncGetRecordPath : String -> String -> String -> String
+syncGetRecordPath did collection rkey =
+  "\{xrpcPath "com.atproto.sync.getRecord"}?did=\{did}&collection=\{collection}&rkey=\{rkey}"
+
+-- | One `&cids=` parameter per requested block, in the order the caller
+-- named them: `com.atproto.sync.getBlocks` takes a repeated array parameter,
+-- not a comma-joined one.
+cidsQuery : List String -> String
+cidsQuery [] = ""
+cidsQuery (cid :: rest) = "&cids=\{cid}\{cidsQuery rest}"
+
+syncGetBlocksPath : String -> List String -> String
+syncGetBlocksPath did cids =
+  "\{xrpcPath "com.atproto.sync.getBlocks"}?did=\{did}\{cidsQuery cids}"
+
+-- | The media type every CAR answer carries.
+carMediaType : String
+carMediaType = "application/vnd.ipld.car"
+
+{- | The whole header of a CAR whose `roots` list is EMPTY, in hex: a
+   single-byte length prefix of 17 followed by the canonical DAG-CBOR of
+   `{"roots": [], "version": 1}`.
+
+   It is a CONSTANT because nothing in it varies — which is exactly why the
+   `getBlocks` cases can grade the roots list by comparing the first 18 bytes
+   instead of decoding anything. A rooted CAR names a 36-byte CID in that
+   same position, so the comparison separates the two shapes on the first
+   byte. -}
+rootlessCarHeaderHex : String
+rootlessCarHeaderHex = "11a265726f6f7473806776657273696f6e01"
+
+carHeaderHex : Array Int -> String
+carHeaderHex body = Hex.encode (sliceClamped 0 18 body)
+
 atprotoDidPath : String
 atprotoDidPath = "/.well-known/atproto-did"
 
@@ -1788,6 +1826,14 @@ main = match args ()
   ["repo-digest", port, did] => runRepoDigest (mustPort port) did
   ["get-blob-missing", port, did, cid] =>
     runGetBlobMissing (mustPort port) did cid
+  ["sync-get-record", port, did, collection, rkey, text] =>
+    runSyncGetRecord (mustPort port) did collection rkey text
+  ["sync-get-record-absent", port, did, collection, rkey, text] =>
+    runSyncGetRecordAbsent (mustPort port) did collection rkey text
+  ["sync-get-blocks", port, did, text] =>
+    runSyncGetBlocks (mustPort port) did text
+  ["sync-get-blocks-missing", port, did, first, second] =>
+    runSyncGetBlocksMissing (mustPort port) did first second
   ["rl-conn", port, xff, count, want] =>
     runRateLimitConn (mustPort port) xff (mustCount count) (mustStatus want)
   ["rl-req", port, xff, count, want] =>
@@ -2053,6 +2099,147 @@ runGetBlobMissing port did cid =
           False
           "refusal body is not BlobNotFound: \{bodyText}"
     Err _ => ()
+  ignoreResult (close conn)
+
+{- | The commit this server currently names as the head of the account's
+   repository, read through `com.atproto.sync.getLatestCommit`.
+
+   The two `sync.getBlocks` cases need a CID the block store really holds,
+   and this is the only one a client can learn without decoding a CAR. -}
+latestCommitCid : Int -> String -> <IO, Net "_"> String
+latestCommitCid port did =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (getLatestCommitPath did))
+  let out = match readResponse conn [||]
+    Err message => panic "serve_client: getLatestCommit failed: \{message}"
+    Ok (200, body, _) => stringField "cid" body
+    Ok (status, body, _) =>
+      panic
+        "serve_client: getLatestCommit answered \{intToString status}: \{fromUtf8 body}"
+  let () = ignoreResult (close conn)
+  out
+
+{- | `com.atproto.sync.getRecord` for a key this repository HOLDS: a CAR
+   rooted at the commit, carrying the record block itself.
+
+   The record is graded by looking for its own text in the response bytes,
+   hex-encoded so the search stays binary-safe over a CAR. That is what
+   separates this case from the one below it: the same request for a key the
+   repository does NOT hold answers the same 200 and the same media type,
+   with a CAR the text is absent from.
+
+   The header is graded too, in the opposite direction from `getBlocks`: this
+   CAR must NAME a root, so its first 18 bytes must not be the rootless
+   header. -}
+runSyncGetRecord : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runSyncGetRecord port did collection rkey text =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (syncGetRecordPath did collection rkey))
+  let () = match readTypedResponse conn [||]
+    Err message => report "SYNCGETRECORD" False message
+    Ok (status, mediaType, body, _) =>
+      let bodyHex = Hex.encode body
+      report
+        "SYNCGETRECORD"
+        (status == 200
+          && contains carMediaType mediaType
+          && carHeaderHex body /= rootlessCarHeaderHex
+          && contains (Hex.encode (toUtf8 text)) bodyHex)
+        "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s)"
+  ignoreResult (close conn)
+
+{- | `com.atproto.sync.getRecord` for a key this repository does NOT hold.
+
+   The answer is a proof of ABSENCE, not an error: 200, a CAR rooted at the
+   same commit carrying the covering proof, and no record block — which is
+   why `text` here is the text of the record that IS present, and must be
+   absent from these bytes. A server that answered `RecordNotFound` fails on
+   the status; one that shipped the whole repository fails on the text. -}
+runSyncGetRecordAbsent : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runSyncGetRecordAbsent port did collection rkey text =
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (syncGetRecordPath did collection rkey))
+  let () = match readTypedResponse conn [||]
+    Err message => report "SYNCGETRECORDABSENT" False message
+    Ok (status, mediaType, body, _) =>
+      let bodyHex = Hex.encode body
+      report
+        "SYNCGETRECORDABSENT"
+        (status == 200
+          && contains carMediaType mediaType
+          && carHeaderHex body /= rootlessCarHeaderHex
+          && not (contains (Hex.encode (toUtf8 text)) bodyHex))
+        "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s)"
+  ignoreResult (close conn)
+
+{- | `com.atproto.sync.getBlocks` for one block the store holds — the commit
+   itself, whose CID the client just read off `getLatestCommit`.
+
+   Three things are graded: the CAR's roots list is empty (the header is the
+   constant above), the body carries more than that header (the block asked
+   for did arrive), and the record's text is ABSENT. The last one is the
+   claim that the route answers exactly what was asked for: the commit block
+   alone, not the repository it heads. -}
+runSyncGetBlocks : Int -> String -> String -> <IO, Net "_"> Unit
+runSyncGetBlocks port did text =
+  let cid = latestCommitCid port did
+  let conn = mustConnect port
+  let () = mustSend conn (getRequest (syncGetBlocksPath did [cid]))
+  let () = match readTypedResponse conn [||]
+    Err message => report "SYNCGETBLOCKS" False message
+    Ok (status, mediaType, body, _) =>
+      let bodyHex = Hex.encode body
+      report
+        "SYNCGETBLOCKS"
+        (status == 200
+          && contains carMediaType mediaType
+          && carHeaderHex body == rootlessCarHeaderHex
+          && arrayLength body > 18
+          && not (contains (Hex.encode (toUtf8 text)) bodyHex))
+        "status \{intToString status}, type '\{mediaType}', \{intToString (arrayLength body)} byte(s), roots=[]"
+  ignoreResult (close conn)
+
+{- | `com.atproto.sync.getBlocks` for a set the store holds only part of: the
+   live commit plus two CIDs it does not hold.
+
+   The whole request is refused rather than partly answered, and the refusal
+   must name BOTH missing CIDs — a message that named only the first would
+   leave a caller believing the second had arrived. The two absent CIDs the
+   gate passes are real blob CIDs: a blob is content-addressed but is not a
+   block of the signed graph, so the store genuinely does not hold them. -}
+runSyncGetBlocksMissing : Int ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_"> Unit
+runSyncGetBlocksMissing port did firstMissing secondMissing =
+  let cid = latestCommitCid port did
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (getRequest (syncGetBlocksPath did [cid, firstMissing, secondMissing]))
+  let () = match readResponse conn [||]
+    Err message => report "SYNCGETBLOCKSMISSING" False message
+    Ok (status, body, _) =>
+      let bodyText = fromUtf8 body
+      report
+        "SYNCGETBLOCKSMISSING"
+        (status == 400
+          && contains "\"InvalidRequest\"" bodyText
+          && contains firstMissing bodyText
+          && contains secondMissing bodyText)
+        "status \{intToString status}, body \{bodyText}"
   ignoreResult (close conn)
 
 -- | An expected HTTP status, as the shell gate spells it on the command line.

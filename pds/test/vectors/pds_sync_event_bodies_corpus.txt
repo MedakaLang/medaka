@@ -1,0 +1,32 @@
+# Generated only by pds/tools/gen_sync_event_corpus.mjs; see pds/tools/gen_sync_event_corpus.sh.
+# Bodies from the pinned image's own sequencer/events.js builders (formatSeqIdentityEvt,
+# formatSeqAccountEvt, formatSeqSyncEvt); exact package routes are in VECTOR-PROVENANCE.txt.
+# Columns: TAG<TAB>event-cbor-hex<TAB>decoded-json.
+#
+# IDENTITY-WITH-HANDLE / IDENTITY-NO-HANDLE: formatSeqIdentityEvt(did, handle|undefined).
+#   No `handle` KEY at all when absent (not present-with-null) -- see the decoded JSON.
+# ACCOUNT-ACTIVE / ACCOUNT-INACTIVE: formatSeqAccountEvt(did, status). Active carries no
+#   `status` key; inactive always carries both `active:false` and `status`.
+# SYNC: formatSeqSyncEvt(did, syncEvtDataFromCommit(commitData)) over one signed commit;
+#   `blocks` is a CAR rooted at and containing ONLY that commit block -- SYNC-CAR-ROOTS and
+#   SYNC-CAR-BLOCKS record that shape directly rather than leaving it implicit in the hex.
+# GENESIS-COMMIT-*: Repo.formatInitCommit(new MemoryBlockstore(), did, keypair, [], rev) --
+#   a repository's FIRST commit over a brand-new EMPTY repo (zero records, zero ops). Its
+#   relevantBlocks is what the #commit frame's `blocks` field carries, and for an empty repo
+#   that is TWO blocks: the empty MST root node and the signed commit. A genesis CAR of the
+#   commit alone does not verify -- the reader has no node for the data root it names. Not
+#   the same case as the SYNC fixture above, whose repo already holds one record.
+#
+# `seq`/`time` are NOT part of any row: neither builder sets them (F1); they are spliced in
+# only by subscribeRepos.js, a shape fact already pinned and not re-derived by this tool.
+IDENTITY-WITH-HANDLE	a26364696478396469643a6b65793a7a51337368566332556b41664a436463315452384536364a383568343850343372393371386a47506b50706a46394566396668616e646c65766d6564616b612e6578616d706c652e696e76616c6964	{"did":"did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9","handle":"medaka.example.invalid"}
+IDENTITY-NO-HANDLE	a16364696478396469643a6b65793a7a51337368566332556b41664a436463315452384536364a383568343850343372393371386a47506b50706a4639456639	{"did":"did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"}
+ACCOUNT-ACTIVE	a26364696478396469643a6b65793a7a51337368566332556b41664a436463315452384536364a383568343850343372393371386a47506b50706a463945663966616374697665f5	{"did":"did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9","active":true}
+ACCOUNT-INACTIVE	a36364696478396469643a6b65793a7a51337368566332556b41664a436463315452384536364a383568343850343372393371386a47506b50706a463945663966616374697665f4667374617475736974616b656e646f776e	{"did":"did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9","active":false,"status":"takendown"}
+SYNC	a36364696478396469643a6b65793a7a51337368566332556b41664a436463315452384536364a383568343850343372393371386a47506b50706a4639456639637265766d336c687a36783668366836323366626c6f636b735901363aa265726f6f747381d82a58250001711220f4fed053ea9b1379c221b7f446fa265df88767a3a06c5160dfcfaaa68e0e8e406776657273696f6e01f90101711220f4fed053ea9b1379c221b7f446fa265df88767a3a06c5160dfcfaaa68e0e8e40a66364696478396469643a6b65793a7a51337368566332556b41664a436463315452384536364a383568343850343372393371386a47506b50706a4639456639637265766d336c687a36783668366836323363736967584021fe6f81d6384bcedaac18406f210d4ead3d84236267b88279313402e18f5834127a1f9ba02ff4e58731f4682a75944ed94b8fc1e1af2296c634dd6c99603c706464617461d82a582500017112204e4a43a89f5d9e9e9dac7252c08dd37c7c84eac1f1244c6577e6d9bdc15c40276470726576f66776657273696f6e03	{"did":"did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9","rev":"3lhz6x6h6h623","blocks":"<310 bytes, sha256:b5f04ff865ad8b001d3fe6aa2c632770e64830a8f7289077f904ca5ab2080053>"}
+SYNC-CAR-ROOTS	bafyreihu73ifh2u3cn44einx6rdpujs57cdwpi5anriwbx6pvkti4duoia
+SYNC-CAR-BLOCKS	bafyreihu73ifh2u3cn44einx6rdpujs57cdwpi5anriwbx6pvkti4duoia
+GENESIS-COMMIT-REV	3lhz6x6h6h622
+GENESIS-COMMIT-CAR-ROOTS	bafyreia2kcwsgsyupbgpypjhzptxefs6sspts4qxjf4g2zomp2eggb2rcy
+GENESIS-COMMIT-CAR-BLOCKS	bafyreie5737gdxlw5i64vzichcalba3z2v5n6icifvx5xytvske7mr3hpm,bafyreia2kcwsgsyupbgpypjhzptxefs6sspts4qxjf4g2zomp2eggb2rcy
+END

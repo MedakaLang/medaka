@@ -1197,6 +1197,22 @@ runCells corpus =
       (getRequest (xrpc "com.atproto.sync.getRepoStatus?did=\{accountDidText}"))
       "400"
       "RepoNotFound"
+  let syncGetRecordPath =
+    "com.atproto.sync.getRecord?did=\{accountDidText}&collection=app.bsky.feed.post&rkey=medaka"
+  let syncGetRecord =
+    failCell
+      "sync-get-record-unconfigured"
+      (getRequest (xrpc syncGetRecordPath))
+      "400"
+      "RepoNotFound"
+  let syncGetBlocksPath =
+    "com.atproto.sync.getBlocks?did=\{accountDidText}&cids=bafyreihu73ifh2u3cn44einx6rdpujs57cdwpi5anriwbx6pvkti4duoia"
+  let syncGetBlocks =
+    failCell
+      "sync-get-blocks-unconfigured"
+      (getRequest (xrpc syncGetBlocksPath))
+      "400"
+      "RepoNotFound"
   let readNeedsGet =
     failCell
       "read-route-requires-get"
@@ -1259,6 +1275,8 @@ runCells corpus =
       + latestCommit
       + listRepos
       + getRepoStatus
+      + syncGetRecord
+      + syncGetBlocks
       + readNeedsGet
       + unregistered
       + preflightTimeline
@@ -1270,8 +1288,8 @@ runCells corpus =
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/58 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 58 then
+      "cells: \{intToString cells}/60 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 60 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

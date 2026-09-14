@@ -1,5 +1,6 @@
-{- | The `com.atproto.sync.subscribeRepos` `#commit` event, as bytes a relay
-   can read.
+{- | The `com.atproto.sync.subscribeRepos` events, as bytes a relay can read:
+   `#commit`, `#identity`, `#account`, `#sync`, and the `#info` and error
+   frames the stream itself speaks.
 
    An event-stream frame is two concatenated DAG-CBOR objects: a header
    `{op, t}` and a body. The body here is scoped against the SYNC lexicon
@@ -21,7 +22,7 @@ import lib.blockstore.{BlockStore, blockStoreGet}
 import lib.car.{carEncode}
 import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
-import lib.mst.{Mst, mstCoveringProofBlocks, mstEmpty, mstNodeBlocks}
+import lib.mst.{Mst, mstCoveringProofBlocks, mstNodeBlocks}
 import lib.repo.{
   Repo,
   RepoCommit,
@@ -134,9 +135,15 @@ sortBlocks blocks =
    The created-node term is kept even though it is a subset of the covering
    proofs for every single-key write measured so far, because it is the
    reference's own formula and nothing here proves the containment holds for
-   an arbitrary batch. -}
+   an arbitrary batch.
+
+   `before` is `None` only for the genesis commit, and the distinction is not
+   cosmetic: at genesis the post-write tree is the EMPTY tree, whose root node
+   a `Some mstEmpty` prior would subtract as already-seen, leaving a `blocks`
+   CAR of the commit alone. A relay verifying that CAR then asks for a data
+   root it was never sent. -}
 export
-syncCommitBlocks : Mst ->
+syncCommitBlocks : Option Mst ->
   Mst ->
   List (Array Int) ->
   List (Cid, Array Int) ->
@@ -145,10 +152,24 @@ syncCommitBlocks : Mst ->
   Result String (List (Cid, Array Int))
 syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
   proof <- mstCoveringProofBlocks keys after
-  let created =
-    missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
-  let union = created ++ proof ++ addedRecords ++ [(commitCid, commitBytes)]
+  let union =
+    createdNodes before after
+      ++ proof
+      ++ addedRecords
+      ++ [(commitCid, commitBytes)]
   Ok (sortBlocks (dedupe union Tip []))
+
+{- | The MST nodes this write brought into existence.
+
+   With a prior tree, that is the post-write nodes it does not already hold.
+   Without one — the genesis commit, the only case a caller has no prior tree
+   for — nothing existed to hold anything, so every post-write node is new.
+   An empty tree that merely HAPPENS to equal the post-write one is still a
+   prior tree and still subtracts. -}
+createdNodes : Option Mst -> Mst -> List (Cid, Array Int)
+createdNodes None after = mstNodeBlocks after
+createdNodes (Some before) after =
+  missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
 
 {- | Wrap a block set as the CAR file the `blocks` field carries. The commit
    CID is the sole root, which is the one ordering constraint the lexicon
@@ -222,19 +243,116 @@ syncCommitBody event =
       ]
       ++ optionalLink "prevData" event.prevData)
 
--- | The frame header every `#commit` message carries.
-syncCommitHeader : DagCbor
-syncCommitHeader = DcMap [("op", DcInt 1), ("t", DcString "#commit")]
+-- | The frame header an ordinary message carries: `op` of 1 and the message
+-- type. An error frame's header is a different shape and `syncErrorFrame`
+-- builds its own.
+messageHeader : String -> DagCbor
+messageHeader messageType = DcMap [("op", DcInt 1), ("t", DcString messageType)]
 
 {- | The complete frame: the header object followed by the body object, with
    no length prefix or separator between them — a reader decodes two CBOR
    items from the stream. -}
+frameBytes : String -> DagCbor -> Result String (Array Int)
+frameBytes messageType bodyValue = do
+  header <- dagCborEncode (messageHeader messageType)
+  body <- dagCborEncode bodyValue
+  Ok (header ++ body)
+
 export
 syncCommitFrame : SyncCommitEvent -> Result String (Array Int)
-syncCommitFrame event = do
-  header <- dagCborEncode syncCommitHeader
-  body <- dagCborEncode (syncCommitBody event)
-  Ok (header ++ body)
+syncCommitFrame event = frameBytes "#commit" (syncCommitBody event)
+
+{- | An event body plus its position in the stream.
+
+   `com.atproto.sync.subscribeRepos` requires `seq` and `time` on every event
+   it defines, and the three bodies below carry neither: the reference's
+   sequencer assigns the number when it inserts the event and splices both
+   fields into the frame on the way out, so a BODY is the event minus where in
+   the stream it sits. The split is kept here for the same reason — it is what
+   lets a body be compared against the reference's own, which is also seq-free
+   — and this is the one place the two halves are put back together.
+
+   `seq` is the caller's, as it is for `#commit`: this module performs no I/O
+   and cannot know what the durable counter stands at. Key order is
+   irrelevant; DAG-CBOR sorts map keys canonically at encode time. -}
+sequenced : Int -> String -> DagCbor -> DagCbor
+sequenced seq time (DcMap fields) =
+  DcMap (fields ++ [("seq", DcInt seq), ("time", DcString time)])
+sequenced _ _ _ =
+  panic
+    "sync_event: sequenced expects a map-shaped body to splice seq/time into"
+
+{- | The `#identity` body: the DID, and the handle it resolves to.
+
+   The lexicon types `handle` optional, and an absent one is the key OMITTED
+   rather than written null — a relay reads a present-but-null handle as a
+   claim that the DID resolves to no handle at all. Nothing here can produce
+   that shape: `--handle` is required configuration, so the server always has
+   one to state, and the omitting arm is left unwritten rather than wired to a
+   value no caller can supply. -}
+export
+syncIdentityBody : String -> String -> DagCbor
+syncIdentityBody did handle =
+  DcMap [("did", DcString did), ("handle", DcString handle)]
+
+export
+syncIdentityFrame : Int ->
+  String ->
+  String ->
+  String ->
+  Result String (Array Int)
+syncIdentityFrame seq time did handle =
+  frameBytes "#identity" (sequenced seq time (syncIdentityBody did handle))
+
+{- | The `#account` body: whether the DID's repository is available from this
+   server at all.
+
+   `active` true is the only value this server can reach. The lexicon pairs a
+   false `active` with a `status` naming which kind of unavailability it is
+   (`takendown`, `suspended`, `deactivated`, `deleted`), and this server has
+   no moderation state, no deactivation route and no delete route to reach any
+   of them from — so the inactive shape is not built. A route that could
+   suspend an account would have to add both halves at once: a false `active`
+   with no `status` is a shape the lexicon does not describe. -}
+export
+syncAccountBody : String -> DagCbor
+syncAccountBody did = DcMap [("did", DcString did), ("active", DcBool True)]
+
+export
+syncAccountFrame : Int -> String -> String -> Result String (Array Int)
+syncAccountFrame seq time did =
+  frameBytes "#account" (sequenced seq time (syncAccountBody did))
+
+{- | The `#sync` body: the repository's current head, stated on its own rather
+   than as the consequence of a write.
+
+   `blocks` is a CAR rooted at and containing ONLY the signed commit block —
+   not the block set a `#commit` carries. That is what the event is for: a
+   subscriber that has fallen behind, or has never seen this repository, gets
+   the head to verify against and fetches the tree separately, so the frame's
+   size is independent of how large the repository is. -}
+export
+syncSyncBody : String -> Tid -> Cid -> Array Int -> Result String DagCbor
+syncSyncBody did rev commitCid commitBytes = do
+  car <- carEncode [commitCid] [(commitCid, commitBytes)]
+  Ok
+    (DcMap [
+      ("did", DcString did),
+      ("rev", DcString (tidToString rev)),
+      ("blocks", DcBytes car),
+    ])
+
+export
+syncSyncFrame : Int ->
+  String ->
+  String ->
+  Tid ->
+  Cid ->
+  Array Int ->
+  Result String (Array Int)
+syncSyncFrame seq time did rev commitCid commitBytes = do
+  bodyValue <- syncSyncBody did rev commitCid commitBytes
+  frameBytes "#sync" (sequenced seq time bodyValue)
 
 {- | An `#info` frame: the same two-object shape as `#commit`, carrying an
    advisory the subscriber acts on rather than an event it mirrors.
@@ -248,11 +366,9 @@ syncCommitFrame event = do
 export
 syncInfoFrame : String -> String -> Result String (Array Int)
 syncInfoFrame name message =
-  let bodyValue = DcMap [("name", DcString name), ("message", DcString message)]
-  do
-    header <- dagCborEncode (DcMap [("op", DcInt 1), ("t", DcString "#info")])
-    body <- dagCborEncode bodyValue
-    Ok (header ++ body)
+  frameBytes
+    "#info"
+    (DcMap [("name", DcString name), ("message", DcString message)])
 
 {- | An error frame: header `op` of -1 and no `t`, then a body naming the
    error. It is the last frame a stream sends — the connection closes behind
@@ -341,7 +457,7 @@ commitData : Option RepoCommit -> Option Cid
 commitData None = None
 commitData (Some commit) = Some (repoCommitDataCid commit)
 
-commitBlocksFor : Mst ->
+commitBlocksFor : Option Mst ->
   Mst ->
   List SyncRepoOp ->
   List (Cid, Array Int) ->
@@ -387,9 +503,7 @@ syncCommitEventFor seq time did before after = do
   let ops =
     writesAgainst nextEntries (indexEntries priorEntries Tip) []
       ++ deletesAgainst priorEntries (indexEntries nextEntries Tip) []
-  let priorTree = match before
-    None => mstEmpty
-    Some repo => repoTree repo
+  let priorTree = map repoTree before
   let commit = repoLatestCommit after
   let commitCid = repoCommitCid commit
   added <- addedRecordBlocks ops (repoStore after) []

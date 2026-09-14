@@ -1,5 +1,5 @@
-{- | The durable firehose event log: one file per sequenced `#commit` event,
-   beneath `<dir>/events` (`docs/design/ATPROTO-PDS-DESIGN.md` row P12).
+{- | The durable firehose event log: one file per sequenced event, beneath
+   `<dir>/events` (`docs/design/ATPROTO-PDS-DESIGN.md` row P12).
 
    On disk rather than in memory so a process restart does not invalidate a
    connected relay's cursor, and one file per entry rather than one growing
@@ -20,27 +20,41 @@
    what survives:
 
    - before the stage lands: no commit, no event.
-   - after the stage, before the commit: the staged entry names a head the
-     repository does not have, and `eventLogRecover` discards it.
-   - after the commit, before or during the promote: the staged entry names
-     the head on disk, and `eventLogRecover` finishes the promotion.
+   - after the stage, before the commit: the staged entry anchors to a head
+     the repository does not have, and recovery drops it.
+   - after the commit, before or during the promote: the staged entry anchors
+     to the head on disk, and recovery finishes the promotion.
+
+   An entry that anchors to nothing is always finished; `eventLogEntryOwed`
+   (`lib.event_log_record`) carries that rule and the obligation it puts on
+   whoever stages one.
 
    Promotion is idempotent, which is what makes that last case safe to
    re-run: an entry's file name is a function of the entry, so writing it
    twice writes the same bytes to the same path.
+
+   RECOVERY IS ITSELF TWO PHASES, for a reason that is `pds/serve.mdk`'s and
+   not this module's: deciding what is owed can REFUSE a startup, and
+   discharging it MUTATES the log. A refusal must reach the operator before
+   any generated secret touches disk (#2659), and a mutation must not happen
+   on a run that goes on to refuse (#2906) — two demands one call cannot
+   satisfy. `eventLogPlanRecovery` answers the first and writes nothing;
+   `eventLogApplyRecovery` performs the second and decides nothing. The pair
+   is `planCredential`/`establishCredential`'s shape, for the same reason.
 
    This module is an effectful shell (P14): it holds no protocol state, and
    its signatures carry no `Repo` and no `SecretKey`. -}
 
 import fs.{mkdirAll}
 import list.{reverse}
-import string.{split, toInt}
+import string.{toInt}
 import lib.event_log_record.{
   EventLogEntry(..),
   eventLogAfterCursor,
   eventLogDecodeEntry,
   eventLogEncodeEntry,
   eventLogEntryName,
+  eventLogEntryOwed,
   eventLogFirstSeq,
   eventLogNextSeq,
   eventLogParseEntryName,
@@ -89,25 +103,27 @@ promoteText dir name text = do
   () <- writeFile staged text
   rename staged "\{eventLogDir dir}/\{name}"
 
-{- | The sequence number and commit CID of the last PROMOTED entry, or `None`
-   when this repository has emitted no event yet.
+{- | The sequence number of the last PROMOTED entry, or `None` when this
+   repository has emitted no event yet.
 
    Read from its own small pointer file rather than by inspecting the entry
    directory, so assigning the next sequence number costs one file read
-   however many entries the log holds. -}
+   however many entries the log holds.
+
+   The number alone: the pointer used to carry the promoted entry's commit CID
+   beside it, which no reader ever consulted and which an entry announcing no
+   commit has nothing to put there. -}
 export
-eventLogLast : String -> <FileRead "_"> Result String (Option (Int, String))
+eventLogLast : String -> <FileRead "_"> Result String (Option Int)
 eventLogLast dir =
   if not (fileExists (lastPath dir)) then
     Ok None
   else match readFile (lastPath dir)
     Err message => Err "eventlog: unreadable last-entry pointer: \{message}"
-    Ok text => match split "\t" text
-      [seqText, commitCid] => match toInt seqText
-        Some seq => Ok (Some (seq, commitCid))
-        None =>
-          Err "eventlog: last-entry pointer is not a sequence number: \{text}"
-      _ => Err "eventlog: last-entry pointer is not a seq/CID pair: \{text}"
+    Ok text => match toInt text
+      Some seq => Ok (Some seq)
+      None =>
+        Err "eventlog: last-entry pointer is not a sequence number: \{text}"
 
 {- | The sequence number the next emitted event takes.
 
@@ -118,7 +134,7 @@ eventLogNextSequence : String -> <FileRead "_"> Result String Int
 eventLogNextSequence dir = match eventLogLast dir
   Err message => Err message
   Ok None => Ok eventLogFirstSeq
-  Ok (Some (seq, _)) => Ok (eventLogNextSeq seq)
+  Ok (Some seq) => Ok (eventLogNextSeq seq)
 
 {- | Record an entry as pending, before the commit it announces is persisted.
 
@@ -189,7 +205,7 @@ promoteEntry : String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 promoteEntry dir retentionSeconds nowSeconds entry = do
   () <- writeEntry dir entry
-  () <- promoteText dir lastName "\{intToString entry.seq}\t\{entry.commitCid}"
+  () <- promoteText dir lastName (intToString entry.seq)
   () <- removeFile (stagedPath dir)
   sweepIfDue dir retentionSeconds nowSeconds entry.seq
 
@@ -204,28 +220,46 @@ sweepIfDue dir retentionSeconds nowSeconds seq =
   else
     map (_ => ()) (eventLogSweep dir retentionSeconds nowSeconds)
 
-{- | Finish or abandon a pending entry left by a previous process, against the
-   head that repository actually persisted.
+-- | What a previous process left the log owing: nothing, a promotion to
+-- finish, or a pending entry to drop.
+public export data EventLogRecovery =
+  | EventLogSettled
+  | EventLogOwed
+  | EventLogOrphaned
 
-   The staged entry names the commit it announces, and that is the whole
-   discriminator: it is promoted when it names the persisted head and
-   discarded when it does not. `headCommitCid` is `None` for a data directory
-   with no repository yet, where nothing can be owed. -}
+{- | What a pending entry left by a previous process still owes, against the
+   head that repository actually persisted — decided, and nothing written.
+
+   `headCommitCid` is `None` for a data directory with no repository yet,
+   where no anchored entry can be owed. The rule itself is
+   `eventLogEntryOwed`'s, in `lib.event_log_record`, so that what recovery
+   DECIDES is gradeable without a data directory and separately from what it
+   PERFORMS. -}
 export
-eventLogRecover : String ->
+eventLogPlanRecovery : String ->
   Option String ->
+  <FileRead "_"> Result String EventLogRecovery
+eventLogPlanRecovery dir headCommitCid = match eventLogStaged dir
+  Err message => Err message
+  Ok None => Ok EventLogSettled
+  Ok (Some entry) =>
+    if eventLogEntryOwed headCommitCid entry then
+      Ok EventLogOwed
+    else
+      Ok EventLogOrphaned
+
+-- | Discharge what `eventLogPlanRecovery` decided. Every arm is idempotent, so
+-- a crash inside this one leaves the next start the same plan.
+export
+eventLogApplyRecovery : String ->
+  EventLogRecovery ->
   Int ->
   Int ->
   <FileRead "_", FileWrite "_"> Result String Unit
-eventLogRecover dir headCommitCid retentionSeconds nowSeconds =
-  match eventLogStaged dir
-    Err message => Err message
-    Ok None => Ok ()
-    Ok (Some entry) =>
-      if headCommitCid == Some entry.commitCid then
-        eventLogPromote dir retentionSeconds nowSeconds
-      else
-        eventLogDiscardStaged dir
+eventLogApplyRecovery _ EventLogSettled _ _ = Ok ()
+eventLogApplyRecovery dir EventLogOwed retentionSeconds nowSeconds =
+  eventLogPromote dir retentionSeconds nowSeconds
+eventLogApplyRecovery dir EventLogOrphaned _ _ = eventLogDiscardStaged dir
 
 entryRows : String ->
   List String ->
