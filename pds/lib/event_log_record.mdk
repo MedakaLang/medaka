@@ -9,13 +9,16 @@
    and how an entry's identity is spelled in the name of the file that holds
    it.
 
-   The stored payload is the `#commit` frame `lib.sync_event` produced, as
-   hex. Hex rather than raw bytes because the only text-free write primitive
-   this tree has writes a whole file (`stdlib/runtime.mdk` declares
-   `appendFile` over `String` and no `appendFileBytes`), so an entry has to
-   survive a round trip through text. Doubling the stored size costs retention
-   nothing: the bound is a time window, not an entry count or a byte
-   ceiling. -}
+   The stored payload is the frame `lib.sync_event` produced, as hex. Hex
+   rather than raw bytes because the only text-free write primitive this tree
+   has writes a whole file (`stdlib/runtime.mdk` declares `appendFile` over
+   `String` and no `appendFileBytes`), so an entry has to survive a round trip
+   through text. Doubling the stored size costs retention nothing: the bound
+   is a time window, not an entry count or a byte ceiling.
+
+   Nothing here reads the payload. An entry is opaque bytes plus the
+   arithmetic above, which is what lets the log carry a `#commit`, an
+   `#identity`, an `#account` or a `#sync` without a case for each. -}
 
 import list.{sortBy}
 import string.{padLeft, split, toInt}
@@ -25,15 +28,47 @@ import string.{padLeft, split, toInt}
    `seq` and `timeSeconds` are repeated in the name of the file that carries
    the entry, and a reader compares the two rather than trusting either
    (`pds/shell/blockfile.mdk`'s discipline: nothing on disk is assumed valid).
-   `commitCid` is the head this event announces, which is what lets a restart
-   decide whether a half-finished append belongs to the repository actually on
-   disk. -}
+
+   `anchorCommitCid` is the repository head this entry's own truth depends on,
+   and it is what a restart grades a half-finished append against
+   (`eventLogEntryOwed`). A `#commit` event anchors to the head it announces.
+   An event that announces no repository mutation anchors to nothing and
+   carries `None`. -}
 public export data EventLogEntry = EventLogEntry {
   seq : Int,
   timeSeconds : Int,
-  commitCid : String,
+  anchorCommitCid : Option String,
   frameHex : String,
 }
+
+{- | Whether a pending entry left behind by a dead process is still owed, given
+   the head that repository actually persisted — the whole recovery
+   discriminator, taken over plain values so it is gradeable without a data
+   directory.
+
+   An ANCHORED entry is owed exactly when the persisted head is its anchor. A
+   caller stages before it persists the commit, so an anchor the head does not
+   name is an event whose commit never landed: it is owed to nobody and
+   announcing it would publish a mutation no reader can fetch.
+
+   An UNANCHORED entry is ALWAYS owed, and the asymmetry is not a shrug. There
+   is no fact on disk that could make such an entry false, and finishing is the
+   only rule that converges: a promotion writes the entry's own file before it
+   moves the pointer, so a crash inside one leaves an entry file that
+   discarding the pending copy could not take back — a sequence number the log
+   holds and the pointer denies. Finishing is idempotent and reaches the same
+   state however many times it runs. Discarding is safe for an anchored entry
+   only because a mismatched anchor proves the promotion never began.
+
+   That makes UNANCHORED an OBLIGATION on whoever stages, not a free choice: an
+   event announcing durable state this log does not itself hold must anchor to
+   the commit that state lands with, or a crash between the stage and that
+   state reaching disk publishes an event nothing corroborates. -}
+export
+eventLogEntryOwed : Option String -> EventLogEntry -> Bool
+eventLogEntryOwed headCommitCid entry = match entry.anchorCommitCid
+  None => True
+  Some anchor => headCommitCid == Some anchor
 
 {- | The sequence number of a repository's first emitted event.
 
@@ -140,24 +175,37 @@ eventLogParseEntryName name = match split "-" name
 
 {- | One entry as the contents of its file: four tab-separated fields and no
    trailing newline. Tab because no field can hold one — two decimal integers,
-   a base32 CID and a hex string. -}
+   an anchor and a hex string.
+
+   An absent anchor is the EMPTY third field, which is unambiguous because the
+   present one is a base32 CID and a CID is never empty. That keeps the field
+   count fixed at four, so a file with any other number of fields is malformed
+   whether or not it names an anchor. -}
 export
 eventLogEncodeEntry : EventLogEntry -> String
 eventLogEncodeEntry entry =
-  "\{intToString entry.seq}\t\{intToString entry.timeSeconds}\t\{entry.commitCid}\t\{entry.frameHex}"
+  "\{intToString entry.seq}\t\{intToString entry.timeSeconds}\t\{anchorText entry.anchorCommitCid}\t\{entry.frameHex}"
+
+anchorText : Option String -> String
+anchorText None = ""
+anchorText (Some cid) = cid
+
+anchorOf : String -> Option String
+anchorOf "" = None
+anchorOf cid = Some cid
 
 -- | An entry read back from its file, or an error naming what was there.
 export
 eventLogDecodeEntry : String -> Result String EventLogEntry
 eventLogDecodeEntry text = match split "\t" text
-  [seqText, timeText, commitCid, frameHex] => match (
+  [seqText, timeText, anchor, frameHex] => match (
     toInt seqText,
     toInt timeText,
   )
     (Some seq, Some timeSeconds) => Ok EventLogEntry {
       seq = seq,
       timeSeconds = timeSeconds,
-      commitCid = commitCid,
+      anchorCommitCid = anchorOf anchor,
       frameHex = frameHex,
     }
     _ => Err "eventlog: entry header is not two numbers: \{text}"

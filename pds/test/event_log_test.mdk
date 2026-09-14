@@ -17,7 +17,10 @@
    - a commit and its event land together or neither does. The two torn states
      are driven directly: an entry staged for a commit that did not persist,
      and an entry staged for one that did, each resolved against the head the
-     repository actually holds.
+     repository actually holds — and each also for an entry whose payload is
+     not a commit event, since what decides is an entry's anchor and never its
+     bytes. The third state a commit-only rule had no answer for, an entry
+     anchored to nothing, is driven here too.
    - an append does not rewrite the log. The entries already present are read
      back byte for byte after an append, which is the property #2692's
      whole-set rewrite would fail. -}
@@ -37,6 +40,7 @@ import lib.event_log_record.{
   eventLogDecodeEntry,
   eventLogEncodeEntry,
   eventLogEntryName,
+  eventLogEntryOwed,
   eventLogExpired,
   eventLogFirstSeq,
   eventLogNextSeq,
@@ -56,11 +60,13 @@ import lib.repo.{
 import lib.sync_event.{syncCommitEventFor, syncCommitFrame}
 import lib.tid.{Tid, tidEncode}
 import shell.eventlog.{
+  EventLogRecovery(..),
+  eventLogApplyRecovery,
   eventLogLast,
   eventLogNextSequence,
+  eventLogPlanRecovery,
   eventLogPromote,
   eventLogRead,
-  eventLogRecover,
   eventLogStage,
   eventLogStaged,
   eventLogSweep,
@@ -72,9 +78,22 @@ entryAt : Int -> Int -> EventLogEntry
 entryAt seq timeSeconds = EventLogEntry {
   seq = seq,
   timeSeconds = timeSeconds,
-  commitCid = "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  frameHex = "a1626f7001",
+  anchorCommitCid = Some someHead,
+  frameHex = commitFrameHex,
 }
+
+someHead : String
+someHead = "bafyreiaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+{- | Two stand-in payloads. The log never decodes a payload — it is opaque hex
+   (`lib.event_log_record`) — so what makes one of these a commit event and the
+   other not is nothing the log can see, which is exactly the claim the
+   unanchored cases below rest on. -}
+commitFrameHex : String
+commitFrameHex = "a1626f7001"
+
+identityFrameHex : String
+identityFrameHex = "a2626f7001617469236964656e74697479"
 
 test "an entry survives encode and decode unchanged" =
   let entry = entryAt 7 1700000000
@@ -84,8 +103,59 @@ test "an entry survives encode and decode unchanged" =
       expectTrue
         (back.seq == entry.seq
           && back.timeSeconds == entry.timeSeconds
-          && back.commitCid == entry.commitCid
+          && back.anchorCommitCid == entry.anchorCommitCid
           && back.frameHex == entry.frameHex)
+
+{- | An entry that anchors to nothing round-trips as anchoring to nothing. The
+   absent anchor is the empty third field, so this is also what shows an empty
+   field is not read back as an anchor spelled "". -}
+test "an unanchored entry survives encode and decode as unanchored" =
+  let entry = EventLogEntry {
+    seq = 8,
+    timeSeconds = 1700000000,
+    anchorCommitCid = None,
+    frameHex = identityFrameHex,
+  }
+  match eventLogDecodeEntry (eventLogEncodeEntry entry)
+    Err message => Fail message "the same entry" message
+    Ok back =>
+      expectTrue
+        (back.seq == 8
+          && back.anchorCommitCid == None
+          && back.frameHex == identityFrameHex)
+
+test "an unanchored entry still writes four fields, with the third empty" =
+  expectEqual
+    (eventLogEncodeEntry EventLogEntry {
+      seq = 8,
+      timeSeconds = 9,
+      anchorCommitCid = None,
+      frameHex = "ab",
+    })
+    "8\t9\t\tab"
+
+-- # The recovery discriminator, over plain values
+
+test "an anchored entry is owed exactly when the head on disk is its anchor" =
+  expectTrue
+    (eventLogEntryOwed (Some someHead) (entryAt 1 1000)
+      && not (eventLogEntryOwed (Some "bafyreiotherhead") (entryAt 1 1000))
+      && not (eventLogEntryOwed None (entryAt 1 1000)))
+
+{- | The arm the commit-only rule had no answer for: an entry announcing no
+   repository mutation is owed whatever the head is, INCLUDING a data directory
+   that holds no repository at all. -}
+test "an unanchored entry is owed against every head, and against none" =
+  let entry = EventLogEntry {
+    seq = 1,
+    timeSeconds = 1000,
+    anchorCommitCid = None,
+    frameHex = identityFrameHex,
+  }
+  expectTrue
+    (eventLogEntryOwed (Some someHead) entry
+      && eventLogEntryOwed (Some "bafyreiotherhead") entry
+      && eventLogEntryOwed None entry)
 
 test "a truncated entry is rejected rather than half-read" =
   match eventLogDecodeEntry "7\t1700000000"
@@ -179,13 +249,13 @@ appendAt : String ->
   Int ->
   String ->
   <FileRead "_", FileWrite "_"> Result String Int
-appendAt dir timeSeconds commitCid = do
+appendAt dir timeSeconds anchor = do
   seq <- eventLogNextSequence dir
   let entry = EventLogEntry {
     seq = seq,
     timeSeconds = timeSeconds,
-    commitCid = commitCid,
-    frameHex = "a1626f7001",
+    anchorCommitCid = Some anchor,
+    frameHex = commitFrameHex,
   }
   () <- eventLogStage dir entry
   () <- eventLogPromote dir eventLogRetentionSeconds timeSeconds
@@ -220,24 +290,57 @@ test "the next sequence number is read back off disk, not held in memory" =
 
 test "the last-entry pointer names the sequence number it promoted" =
   match eventLogLast sequencedDir
-    Ok (Some (seq, _)) => expectEqual seq 3
+    Ok (Some seq) => expectEqual seq 3
     Ok None => Fail "no last-entry pointer after three appends" "3" "none"
     Err message => Fail message "3" "an error"
 
 -- # A commit and its event land together or neither does
 
-stagedButNotCommitted : <Exec "_", FileRead "_", FileWrite "_", IO> String
-stagedButNotCommitted =
-  let dir = caseDir "torn-before-commit"
+-- Recovery as `pds/serve.mdk` runs it: decide, then discharge. Spelled as the
+-- two calls rather than as one helper the server does not have, so a case here
+-- cannot pass over a sequence production never performs.
+recoverAgainst : String ->
+  Option String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+recoverAgainst dir head = do
+  plan <- eventLogPlanRecovery dir head
+  eventLogApplyRecovery dir plan eventLogRetentionSeconds 1700000000
+
+-- One staged entry, in a directory of its own, with the anchor and the payload
+-- the case is about.
+stagedIn : String ->
+  Option String ->
+  String ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> String
+stagedIn name anchor frameHex =
+  let dir = caseDir name
   let entry = EventLogEntry {
     seq = 1,
     timeSeconds = 1700000000,
-    commitCid = "bafyreinewhead",
-    frameHex = "a1626f7001",
+    anchorCommitCid = anchor,
+    frameHex = frameHex,
   }
   match eventLogStage dir entry
     Err message => panic "event_log_test: stage failed: \{message}"
     Ok () => dir
+
+planArm : Result String EventLogRecovery -> String
+planArm (Ok EventLogSettled) = "settled"
+planArm (Ok EventLogOwed) = "owed"
+planArm (Ok EventLogOrphaned) = "orphaned"
+planArm (Err message) = "error: \{message}"
+
+{- | #2906's property at the unit level: DECIDING must write nothing. That is
+   what lets `configure` take the decision early, where its refusal still
+   precedes every generated secret, and discharge it last, after the final step
+   that can still refuse. -}
+test "planning recovery leaves the pending entry and the log where they were" =
+  let dir = stagedIn "plan-only" (Some "bafyreinewhead") commitFrameHex
+  let arm = planArm (eventLogPlanRecovery dir (Some "bafyreinewhead"))
+  expectTrue
+    (arm == "owed"
+      && not (stagedIsEmpty (eventLogStaged dir))
+      && mustSeqs (eventLogRead dir 0) == [])
 
 {- | The injected failure: the entry for a commit is staged, and the commit's
    own persist then fails, so the head on disk is still the OLD one. Recovery
@@ -245,63 +348,113 @@ stagedButNotCommitted =
    start — and must drop the entry rather than announce a commit no reader can
    fetch. -}
 test "an event staged for a commit that did not persist is dropped" =
-  let dir = stagedButNotCommitted
-  match (eventLogRecover
-    dir
-    (Some "bafyreioldhead")
-    eventLogRetentionSeconds
-    1700000000)
+  let dir = stagedIn "torn-before-commit" (Some "bafyreinewhead") commitFrameHex
+  match recoverAgainst dir (Some "bafyreioldhead")
     Err message => Fail message "an empty log" "an error"
     Ok () =>
       expectTrue
         (mustSeqs (eventLogRead dir 0) == []
           && stagedIsEmpty (eventLogStaged dir))
 
-stagedAndCommitted : <Exec "_", FileRead "_", FileWrite "_", IO> String
-stagedAndCommitted =
-  let dir = caseDir "torn-after-commit"
-  let entry = EventLogEntry {
-    seq = 1,
-    timeSeconds = 1700000000,
-    commitCid = "bafyreinewhead",
-    frameHex = "a1626f7001",
-  }
-  match eventLogStage dir entry
-    Err message => panic "event_log_test: stage failed: \{message}"
-    Ok () => dir
+{- | The same drop, for an entry whose payload is NOT a commit event. An
+   `#identity` emitted beside a commit anchors to that commit, so a commit that
+   never persisted takes the announcement of it down too: the payload's kind
+   does not enter the decision, and an entry that anchors is graded by its
+   anchor whatever it carries. -}
+test "a non-commit event anchored to a commit that did not persist is dropped" =
+  let dir =
+    stagedIn
+      "torn-identity-before-commit"
+      (Some "bafyreinewhead")
+      identityFrameHex
+  match recoverAgainst dir (Some "bafyreioldhead")
+    Err message => Fail message "an empty log" "an error"
+    Ok () =>
+      expectTrue
+        (mustSeqs (eventLogRead dir 0) == []
+          && stagedIsEmpty (eventLogStaged dir))
 
 {- | The mirror injected failure: the commit persisted and the process died
    before the promote, so the head on disk IS the staged entry's. Recovery must
    finish the promotion rather than leave a persisted commit unannounced. -}
 test "an event staged for a commit that did persist is finished" =
-  let dir = stagedAndCommitted
-  match (eventLogRecover
-    dir
-    (Some "bafyreinewhead")
-    eventLogRetentionSeconds
-    1700000000)
+  let dir = stagedIn "torn-after-commit" (Some "bafyreinewhead") commitFrameHex
+  match recoverAgainst dir (Some "bafyreinewhead")
     Err message => Fail message "the event promoted" "an error"
     Ok () =>
       expectTrue
         (mustSeqs (eventLogRead dir 0) == [1]
           && stagedIsEmpty (eventLogStaged dir))
 
+-- The same finish for a non-commit payload anchored to the head that did land.
+test "a non-commit event anchored to the persisted head is finished" =
+  let dir =
+    stagedIn
+      "torn-identity-after-commit"
+      (Some "bafyreinewhead")
+      identityFrameHex
+  match recoverAgainst dir (Some "bafyreinewhead")
+    Err message => Fail message "the event promoted" "an error"
+    Ok () =>
+      expectTrue
+        (mustSeqs (eventLogRead dir 0) == [1]
+          && stagedIsEmpty (eventLogStaged dir))
+
+{- | The arm that did not exist before: an entry announcing no repository
+   mutation is finished against a head that names something else entirely, and
+   against a data directory holding no repository at all. Under the old rule
+   both of these were discards, which would have dropped an event nothing on
+   disk could contradict. -}
+test "an unanchored event is finished whatever head the repository holds" =
+  let mismatched = stagedIn "unanchored-mismatched-head" None identityFrameHex
+  let headless = stagedIn "unanchored-no-head" None identityFrameHex
+  match (
+    recoverAgainst mismatched (Some "bafyreisomethingelse"),
+    recoverAgainst headless None,
+  )
+    (Ok (), Ok ()) =>
+      expectTrue
+        (mustSeqs (eventLogRead mismatched 0) == [1]
+          && stagedIsEmpty (eventLogStaged mismatched)
+          && mustSeqs (eventLogRead headless 0) == [1]
+          && stagedIsEmpty (eventLogStaged headless))
+    _ => Fail "recovery failed" "two promoted logs" "an error"
+
+-- An unanchored entry reads back out of the log unanchored: the arm that would
+-- otherwise be invisible, since the record on disk is what a restart re-grades.
+test "an unanchored event keeps its absent anchor through the log" =
+  let dir = stagedIn "unanchored-readback" None identityFrameHex
+  match recoverAgainst dir None
+    Err message => Fail message "one unanchored entry" "an error"
+    Ok () => match eventLogRead dir 0
+      Ok [stored] =>
+        expectTrue
+          (stored.anchorCommitCid == None
+            && stored.frameHex == identityFrameHex)
+      Ok entries =>
+        Fail
+          "expected exactly one stored entry"
+          "1 entry"
+          "\{intToString (length entries)} entries"
+      Err message => Fail message "one unanchored entry" "an error"
+
 {- | Recovery re-running over an entry it already promoted — the crash between
    the entry file and the pointer — must not double it. An entry's file name is
    a function of the entry, so the second promotion overwrites the first. -}
 test "promoting the same entry twice leaves one entry, not two" =
-  let dir = stagedAndCommitted
-  let entry = EventLogEntry {
-    seq = 1,
-    timeSeconds = 1700000000,
-    commitCid = "bafyreinewhead",
-    frameHex = "a1626f7001",
-  }
-  match eventLogStage dir entry
+  let dir = stagedIn "promote-twice" (Some "bafyreinewhead") commitFrameHex
+  match recoverAgainst dir (Some "bafyreinewhead")
     Err message => Fail message "one entry" "an error"
-    Ok () => match eventLogPromote dir eventLogRetentionSeconds 1700000000
+    Ok () => match eventLogStage dir EventLogEntry {
+      seq = 1,
+      timeSeconds = 1700000000,
+      anchorCommitCid = Some "bafyreinewhead",
+      frameHex = commitFrameHex,
+    }
       Err message => Fail message "one entry" "an error"
-      Ok () => expectEqual (mustSeqs (eventLogRead dir 0)) [1]
+      Ok () => match eventLogPromote dir eventLogRetentionSeconds 1700000000
+        Err message => Fail message "one entry" "an error"
+        Ok () => expectEqual (mustSeqs (eventLogRead dir 0)) [1]
 
 -- # Truncation
 
@@ -342,7 +495,7 @@ sameEntry : EventLogEntry -> EventLogEntry -> Bool
 sameEntry left right =
   left.seq == right.seq
     && left.timeSeconds == right.timeSeconds
-    && left.commitCid == right.commitCid
+    && left.anchorCommitCid == right.anchorCommitCid
     && left.frameHex == right.frameHex
 
 sameEntries : List EventLogEntry -> List EventLogEntry -> Bool
@@ -453,7 +606,7 @@ endToEndDir =
   let entry = EventLogEntry {
     seq = 1,
     timeSeconds = 1700000000,
-    commitCid = writtenHead,
+    anchorCommitCid = Some writtenHead,
     frameHex = liveFrameHex,
   }
   match eventLogStage dir entry
@@ -472,11 +625,7 @@ endToEndDir =
    only storage fidelity, never frame correctness. -}
 test "a real commit's frame is stored and read back byte for byte" =
   let dir = endToEndDir
-  match (eventLogRecover
-    dir
-    (Some writtenHead)
-    eventLogRetentionSeconds
-    1700000000)
+  match recoverAgainst dir (Some writtenHead)
     Err message => Fail message "the frame" "an error"
     Ok () => match eventLogRead dir 0
       Err message => Fail message "the frame" "an error"
@@ -493,7 +642,7 @@ test "a real commit's frame is stored and read back byte for byte" =
               (Some 1, [op], Some bodyCommitCid) => match opShape op
                 Some ("create", "app.bsky.feed.post/self") =>
                   expectTrue
-                    (stored.commitCid == writtenHead
+                    (stored.anchorCommitCid == Some writtenHead
                       && bodyCommitCid == writtenHead)
                 _ =>
                   Fail

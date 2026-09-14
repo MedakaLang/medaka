@@ -464,7 +464,7 @@ stageCommitEvent dir did nowSeconds before after = do
   eventLogStage dir EventLogEntry {
     seq = seq,
     timeSeconds = nowSeconds,
-    commitCid = headText after,
+    anchorCommitCid = Some (headText after),
     frameHex = encode frame,
   }
 

@@ -135,6 +135,35 @@ headerValueOf wanted (line :: rest) = match find wanted line
     [Some g] => trim g.text
     _ => ""
 
+contentLengthRe : Regex
+contentLengthRe = mustCompile "(?i)^content-length:(.*)$"
+
+{- | The body of a response whose handshake was REFUSED, as text.
+
+   Framed by `content-length`, which every refusal this server writes carries:
+   the 101 path has no body to read and `readHead` hands back whatever followed
+   the header section, so the two readers cannot be one. -}
+readRefusalBody : Connection ->
+  String ->
+  Array Int ->
+  <Net "_"> Result String String
+readRefusalBody conn headerText pending =
+  match toInt (headerValueOf contentLengthRe (lines headerText))
+    None => Err "serve_subscribe: refusal carried no content-length"
+    Some want => readBodyBytes conn want pending
+
+readBodyBytes : Connection -> Int -> Array Int -> <Net "_"> Result String String
+readBodyBytes conn want have =
+  if arrayLength have >= want then
+    Ok (fromUtf8 (sliceClamped 0 want have))
+  else match recv conn 4096
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "serve_subscribe: refusal body ended before its content-length"
+      else
+        readBodyBytes conn want (appendBytes have chunk)
+
 {- | Complete a handshake and answer the bytes that arrived past the 101.
 
    The accept value is checked, not merely read: a server that answered 101
@@ -401,6 +430,30 @@ runFutureCursor port cursor =
           "SUBFUTURE"
           (kind == "!error" && name == "FutureCursor")
           "kind '\{kind}', error '\{name}'"
+  ignoreResult (close conn)
+
+{- | A cursor the handshake itself will not admit is answered an ordinary HTTP
+   refusal and never upgraded, and the refusal SAYS WHICH cursor it refused.
+
+   `expected` is the wording this case demands, because the point is not that
+   an unusable cursor is refused — two different unusable cursors already are —
+   but that they are told apart: a client whose own arithmetic went below zero
+   and a client that sent something that is not a number at all have different
+   bugs, and one message for both would name neither. -}
+runRefusedCursor : Int -> String -> String -> <IO, Net "_"> Unit
+runRefusedCursor port cursor expected =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let () = mustSend conn (handshakeRequest cursor)
+  let () = match readHead conn [||]
+    Err message => report "SUBREFUSED" False message
+    Ok (status, headerText, rest) => match readRefusalBody conn headerText rest
+      Err message => report "SUBREFUSED" False message
+      Ok body =>
+        report
+          "SUBREFUSED"
+          (status == 400 && contains expected body)
+          "cursor '\{cursor}' answered \{intToString status} '\{body}'"
   ignoreResult (close conn)
 
 {- | A cursor whose next events have left the retention window is answered
@@ -724,13 +777,15 @@ mustCount text = match toInt text
 
 usage : String
 usage =
-  "usage: serve_subscribe <live|future-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
+  "usage: serve_subscribe <live|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
   ["live", port, token, did, collection, rkeyPrefix] =>
     runLive (mustPort port) token did collection rkeyPrefix
   ["future-cursor", port, cursor] => runFutureCursor (mustPort port) cursor
+  ["refused-cursor", port, cursor, expected] =>
+    runRefusedCursor (mustPort port) cursor expected
   ["outdated-cursor", port, cursor] => runOutdatedCursor (mustPort port) cursor
   ["exact-cursor", port, cursor, token, did, collection, rkey] =>
     runExactCursor (mustPort port) cursor token did collection rkey

@@ -55,7 +55,11 @@
    A failed configuration leaves nothing behind either: every secret the flags
    SUPPLY is read and admitted before any secret this program GENERATES is
    written, so a run rejected for a bad password file leaves no session secret
-   on disk for the next run to adopt. -}
+   on disk for the next run to adopt. That invariant covers the durable EVENT
+   LOG as well as the secrets: recovering a half-finished append is decided
+   with the rest of the admissions and performed only after the last step that
+   can still refuse, so a refused run mutates the log no more than it mutates
+   the secrets. -}
 
 import args.{
   Args,
@@ -111,7 +115,7 @@ import net.{Listener, listenPort}
 import shell.blobfile.{blobFileRead}
 import shell.crawl.{RelayTarget, makeRelayTarget, requestCrawl}
 import shell.egress.{Egress, makeEgress}
-import shell.eventlog.{eventLogRecover}
+import shell.eventlog.{eventLogApplyRecovery, eventLogPlanRecovery}
 import shell.keygen.{keygenRefusePath, keygenSigningKey, keygenTokenSecret}
 import shell.persist.{
   credentialPath,
@@ -721,12 +725,15 @@ configure parsed = do
   () <- requireDir dir
   repo <- openRepo (flag "--init" parsed) dir did keyBytes secret
   -- A previous process may have died between persisting a commit and
-  -- appending the event announcing it. The staged entry names the commit it
-  -- announces, so the repository just loaded is what decides whether it is
-  -- finished or dropped; either way the log is consistent with the head
-  -- before the first connection is accepted.
+  -- appending the event announcing it. The staged entry anchors to the commit
+  -- it announces, so the repository just loaded is what decides whether it is
+  -- finished or dropped. DECIDED here and PERFORMED below, which is the whole
+  -- of #2906: an unreadable staged entry must refuse this run before a
+  -- generated secret reaches the disk (#2659 item 4), and the log must not be
+  -- mutated by a run that then refuses for an unrelated reason. Neither
+  -- half can move to where the other one is.
   let head = Some (cidToString (repoCommitCid (repoLatestCommit repo)))
-  () <- eventLogRecover dir head eventLogRetentionSeconds (floatToInt (now ()))
+  recovery <- eventLogPlanRecovery dir head
   -- Every SUPPLIED secret is read and admitted first, and only then may a
   -- GENERATED one reach the disk: a run rejected for a bad password file or a
   -- world-readable --token-secret must leave no session secret behind for the
@@ -739,6 +746,14 @@ configure parsed = do
   withSecret <- storeWithServerSecret sessionSecret withBlobs
   let withCredential = storeWithCredential credential withSecret
   prefs <- persistLoadPreferences dir
+  -- Last, after the final step that can still refuse: the log is now
+  -- consistent with the head, and only a run that goes on to serve has
+  -- touched it.
+  () <- eventLogApplyRecovery
+    dir
+    recovery
+    eventLogRetentionSeconds
+    (floatToInt (now ()))
   Ok (
     server,
     storeWithPreferences prefs withCredential,

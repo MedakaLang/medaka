@@ -25,8 +25,9 @@
    crash can leave are a finite set that can be built directly and graded
    deterministically. `crash-save-old` persists an earlier generation the gate
    rewinds the head file to; `blob-survey` reports what the blob reader makes
-   of a blob whose two files did not both land; `event-recover-*` stages an
-   entry against a persisted head and runs `eventLogRecover` over it. -}
+   of a blob whose two files did not both land;    `event-recover-*` stages an
+   entry against a persisted head and recovers over it, the way `configure`
+   does: plan, then apply. -}
 
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -56,8 +57,9 @@ import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}
 import shell.blobfile.{blobFileRead, blobFileWrite}
 import shell.eventlog.{
+  eventLogApplyRecovery,
+  eventLogPlanRecovery,
   eventLogRead,
-  eventLogRecover,
   eventLogStage,
   eventLogStaged,
 }
@@ -374,13 +376,20 @@ runPrefsLoad dir = match persistLoadPreferences dir
 eventFixtureTime : Int
 eventFixtureTime = 1756771200
 
-eventFixture : String -> EventLogEntry
-eventFixture commitCid = EventLogEntry {
+eventFixture : Option String -> String -> EventLogEntry
+eventFixture anchor frameHex = EventLogEntry {
   seq = 1,
   timeSeconds = eventFixtureTime,
-  commitCid = commitCid,
-  frameHex = "a1",
+  anchorCommitCid = anchor,
+  frameHex = frameHex,
 }
+
+-- An entry's anchor as the gate greps for it. An entry that anchors to
+-- nothing prints `unanchored` rather than an empty word, so a survey line the
+-- gate matches cannot lose a field.
+anchorLabel : Option String -> String
+anchorLabel None = "unanchored"
+anchorLabel (Some cid) = cid
 
 -- What the log holds right now: the pending entry, if any, and how many
 -- entries have been promoted.
@@ -389,23 +398,32 @@ eventSurvey label dir =
   let staged = match eventLogStaged dir
     Err message => "staged-unreadable(\{message})"
     Ok None => "staged none"
-    Ok (Some entry) => "staged \{entry.commitCid}"
+    Ok (Some entry) => "staged \{anchorLabel entry.anchorCommitCid}"
   let promoted = match eventLogRead dir 0
     Err message => "entries-unreadable(\{message})"
     Ok entries => "entries \{intToString (length entries)}"
   println "\{label} \{staged} \{promoted}"
 
 {- | Persist a repository, leave a staged entry behind it as a crash between
-   the stage and the promote would, and run `eventLogRecover` against the head
-   that is actually on disk.
+   the stage and the promote would, and recover against the head that is
+   actually on disk — planning and applying as `configure` does, so what this
+   grades is the sequence the server runs and not a shorter one.
 
-   `announceHead` picks which of the header comment's crash points is staged:
-   `True` announces the persisted head (crashed AFTER the commit — the entry is
-   owed and must be finished), `False` announces the MST root instead, which is
-   a real CID this repository has but never a commit CID (crashed BEFORE the
-   commit — the entry is owed to nobody and must be dropped). -}
-runEventRecover : String -> Bool -> <IO, FileRead "_", FileWrite "_"> Unit
-runEventRecover dir announceHead =
+   `anchorFor` picks which crash point is staged, over the head `persistLoad`
+   actually answers:
+
+   - `Some head` — crashed AFTER the commit: the entry is owed and must be
+     finished.
+   - the MST root, a real CID this repository has but never a commit CID —
+     crashed BEFORE the commit: owed to nobody, and must be dropped.
+   - `None` — an entry announcing no repository mutation at all, which no head
+     can contradict and which must be finished whatever is on disk. Its
+     payload is a stand-in for a non-commit frame; the log never decodes
+     one. -}
+runEventRecover : String ->
+  (Repo -> String -> Option String) ->
+  <IO, FileRead "_", FileWrite "_"> Unit
+runEventRecover dir anchorFor =
   let repo = fixtureRepo
   let () =
     match (persistSave
@@ -419,21 +437,31 @@ runEventRecover dir announceHead =
     Err message =>
       panic "store_persistence: event-log head unreadable: \{message}"
     Ok (head, _) => cidToString head
-  let announced =
-    if announceHead then onDisk else cidToString (repoRootCid repo)
-  match eventLogStage dir (eventFixture announced)
+  let anchor = anchorFor repo onDisk
+  match eventLogStage dir (eventFixture anchor (frameFor anchor))
     Err message => panic "store_persistence: event stage failed: \{message}"
     Ok () =>
       let () = eventSurvey "EVENTBEFORE" dir
-      match (eventLogRecover
-        dir
-        (Some onDisk)
-        eventLogRetentionSeconds
-        eventFixtureTime)
+      match eventLogPlanRecovery dir (Some onDisk)
         Err message => println "EVENT-RECOVER: ERR \{message}"
-        Ok () =>
-          let () = eventSurvey "EVENTAFTER" dir
-          println "EVENT-RECOVER: OK"
+        Ok plan =>
+          let () = eventSurvey "EVENTPLANNED" dir
+          match (eventLogApplyRecovery
+            dir
+            plan
+            eventLogRetentionSeconds
+            eventFixtureTime)
+            Err message => println "EVENT-RECOVER: ERR \{message}"
+            Ok () =>
+              let () = eventSurvey "EVENTAFTER" dir
+              println "EVENT-RECOVER: OK"
+
+-- A commit event and a non-commit one are two different payloads to the gate
+-- and the same opaque hex to the log, which is the point: only the anchor
+-- decides.
+frameFor : Option String -> String
+frameFor None = "a2626f7001617469236964656e74697479"
+frameFor (Some _) = "a1"
 
 main : <IO, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()
@@ -448,8 +476,10 @@ main = match args ()
   ["blob-oversize", dir] => runBlobOversize dir
   ["prefs-save", dir] => runPrefsSave dir
   ["prefs-load", dir] => runPrefsLoad dir
-  ["event-recover-owed", dir] => runEventRecover dir True
-  ["event-recover-orphan", dir] => runEventRecover dir False
+  ["event-recover-owed", dir] => runEventRecover dir (_ head => Some head)
+  ["event-recover-orphan", dir] =>
+    runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
+  ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan|event-recover-unanchored> <dir>"
