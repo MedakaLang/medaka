@@ -338,6 +338,7 @@ atprotoDidPath = "/.well-known/atproto-did"
    classified by this literal check BEFORE the `/xrpc/` prefix is treated as
    naming a method — never registered in the endpoint registry, and never
    reachable as `XrpcPath "_health"`. -}
+export
 healthPath : String
 healthPath = "/xrpc/_health"
 

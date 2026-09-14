@@ -47,8 +47,11 @@ public export data AccessEvent = AccessEvent {
 printableLow : Int
 printableLow = 33
 
+-- One below '~' (126): '~' is reserved exclusively for the truncation
+-- marker `logField` appends below, so a sanitized value can never end in
+-- one on its own.
 printableHigh : Int
-printableHigh = 126
+printableHigh = 125
 
 -- '.' — what an unprintable byte becomes. A fixed substitute rather than an
 -- escape sequence, so that the rendered length stays the byte count and the

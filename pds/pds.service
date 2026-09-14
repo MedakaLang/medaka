@@ -28,6 +28,9 @@
 Description=Medaka atproto PDS
 After=network-online.target
 Wants=network-online.target
+RequiresMountsFor=/opt/pds
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -44,8 +47,6 @@ ExecStart=/opt/pds/pdsd \
 	--trusted-proxy
 Restart=on-failure
 RestartSec=5
-StartLimitBurst=5
-RequiresMountsFor=/opt/pds
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

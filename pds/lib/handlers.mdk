@@ -166,6 +166,7 @@ import lib.xrpc.{
   Registry,
   WellKnown(..),
   XrpcCall(..),
+  healthPath,
   makeRegistry,
   procedureEndpoint,
   queryEndpoint,
@@ -881,7 +882,11 @@ recordHandled _ store (ProcedureRawCall nsid _ media bytes)
   | nsid == uploadBlobNsid =
     Some (finishUploadBlob store (applyUploadBlob store media bytes))
   | otherwise = None
-recordHandled _ _ _ = None
+recordHandled _ _ (QueryCall _ _) = None
+recordHandled _ _ (ProcedureNoInputCall _ _) = None
+recordHandled _ _ (ProcedureTextCall _ _ _ _) = None
+recordHandled _ _ (WellKnownCall _) = None
+recordHandled _ _ HealthCall = None
 
 {- | The record-write handler for one configured account. Any routed call that
    is not one of the five record-write procedures is answered 501 with the
@@ -904,7 +909,7 @@ callTarget (ProcedureJsonCall nsid _ _) = nsid
 callTarget (ProcedureTextCall nsid _ _ _) = nsid
 callTarget (ProcedureRawCall nsid _ _ _) = nsid
 callTarget (WellKnownCall wellKnown) = wellKnownPath wellKnown
-callTarget HealthCall = "/xrpc/_health"
+callTarget HealthCall = healthPath
 
 unhandledRoute : XrpcCall -> Response
 unhandledRoute call =

@@ -11,10 +11,11 @@
 # --hostname` is given) before use, and see docs/ops/PDS-DEPLOY.md for the
 # rest of the procedure — the port here must match `pds serve --port`.
 #
-# `request_body`'s `max_size` is set to the PDS's own largest body ceiling
-# (`maxBlobBytes` / `maxHttpClientBodyBytes`, both 5242880 bytes,
-# pds/lib/resource_limits.mdk) rounded up to whole megabytes — never below
-# it, or a legitimate PDS-accepted request would be rejected here first.
+# `request_body`'s `max_size` is set to the exact byte count of the PDS's
+# own largest body ceiling (`maxBlobBytes` / `maxHttpClientBodyBytes`, both
+# 5242880 bytes, pds/lib/resource_limits.mdk) — a unit suffix like `5MB` is
+# ambiguous (5,000,000 or 5,242,880 depending on the parser) and the smaller
+# reading would reject a legitimate PDS-accepted request here first.
 
 pds.example.com {
 	header {
@@ -22,7 +23,7 @@ pds.example.com {
 	}
 
 	request_body {
-		max_size 5MB
+		max_size 5242880
 	}
 
 	log {
