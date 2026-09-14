@@ -778,6 +778,40 @@ configure parsed = do
     relay,
   )
 
+{- | This server's own version, as `pds/medaka.toml` declares it. -}
+pdsVersion : String
+pdsVersion = "0.1.0"
+
+{- | How this server names the build it is running, from the provenance
+   `medaka build --stamp-build` bakes into the binary. The shape and all three
+   degradations are `medaka --version`'s, verbatim:
+
+       pdsd 0.1.0 (a1b2c3d4e-dirty, built 2026-09-14)
+
+   so an operator reads a PDS's provenance exactly as they read the compiler's,
+   and a binary built WITHOUT the flag reports the bare `pdsd 0.1.0` rather than
+   a line with empty parentheses in it. The compiler fingerprint the same flag
+   stamps is deliberately absent from this line: it is a 64-character digest,
+   `buildFingerprint ()` still returns it for anything that wants to match a
+   binary to a compiler, and `medaka --version` omits it for the same reason. -}
+versionString : Unit -> <Env> String
+versionString _ =
+  let commit = buildCommit ()
+  let date = buildDate ()
+  if commit == "" && date == "" then
+    "pdsd \{pdsVersion}"
+  else if commit == "" then
+    "pdsd \{pdsVersion} (built \{date})"
+  else if date == "" then
+    "pdsd \{pdsVersion} (\{commit})"
+  else
+    "pdsd \{pdsVersion} (\{commit}, built \{date})"
+
+{- | The first line of every successful start, printed before the readiness
+   line so a log begins by saying which build produced everything under it. -}
+banner : Unit -> <Env, Stdout> Unit
+banner _ = putStrLn "serve: \{versionString ()}"
+
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
 -- a pipe or a file, and a supervisor that waits for this line before connecting
 -- would otherwise wait for a process that never exits.
@@ -818,8 +852,9 @@ announce : String ->
   Server ->
   Serving ->
   Option RelayTarget ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 announce bind port lis store dir server serving relay = defer
+  _ <- liftIO (u => banner ())
   _ <- liftIO (u => ready bind port)
   _ <- match relay
     None => deferPure ()
@@ -836,7 +871,7 @@ bound : String ->
   Serving ->
   Option RelayTarget ->
   Result String Listener ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 bound _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
 bound bind server store dir serving relay (Ok lis) = defer
@@ -847,7 +882,7 @@ bound bind server store dir serving relay (Ok lis) = defer
     Ok given => announce bind given lis store dir server serving relay
 
 start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget) ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
+  Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
 start (Ok (server, store, dir, port, bind, serving, relay)) = defer
   listener <- liftIO (u => bindAddress bind port)
@@ -868,6 +903,10 @@ main = defer
   argv <- liftIO (u => args ())
   match argv
     "keygen" :: rest => liftIO (u => keygen rest)
+    -- Read off raw argv, like `keygen`: `--version` is not a `serve` flag, so
+    -- routing it through `parseArgs` would answer a version request with an
+    -- unknown-flag rejection.
+    "--version" :: _ => liftIO (u => putStrLn (versionString ()))
     _ => defer
       match parseArgs serveSpec argv
         Err message => liftIO (u => abort message)

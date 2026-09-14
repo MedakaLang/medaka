@@ -225,6 +225,7 @@ buildAndRun target entryPath outPath tmpDir tests nonce =
     False
     extraRoots
     True
+    False
     False)
     Err rep =>
       Err

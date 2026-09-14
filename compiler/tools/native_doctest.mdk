@@ -300,6 +300,7 @@ buildAndRun target entryPath outPath tmpDir examples synthResults nonce =
     False
     extraRoots
     True
+    False
     False)
     Err rep =>
       Err
