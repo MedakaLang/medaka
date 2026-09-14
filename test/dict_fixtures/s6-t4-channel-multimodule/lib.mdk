@@ -1,0 +1,39 @@
+-- The NON-ENTRY module, and the only thing in the tree that puts a §6.2 T4 open-goal
+-- commitment anywhere other than an entry file. Everything the warning needs lives
+-- here: the two ⊑-incomparable heads, and the goal that matches both while still
+-- carrying an unbound element type.
+--
+-- `libPick`'s goal is `Sh (Q Int Bool (List a))` with `a` determined by nothing --
+-- the signature is `Int`, so no scheme quantifies it and no later use grounds it.
+-- Both heads match (each carries a bare variable at argument 2) and neither is more
+-- specific, so `pickMostSpecificEntry` reaches its no-unique-minimum arm and commits
+-- to the first-declared head: `1`. That commitment is the measurement
+-- `W-OPEN-GOAL-COMMITTED` reports; swapping the two `impl` blocks makes it `2`.
+
+public export data Q a b c = Q a b c
+
+export interface Sh a where
+  sh : a -> Int
+
+impl Sh (Q Int y z) where
+  sh _ = 1
+
+impl Sh (Q x Bool z) where
+  sh _ = 2
+
+export
+libPick : Int
+libPick = sh (Q 1 True [])
+
+-- DELIBERATELY NON-EXHAUSTIVE, and an ASSERTION rather than sloppiness -- the same
+-- device `s6-1c-multimodule-overlap/lib.mdk` uses. An imported module's NON-allowlisted
+-- warning is what lets the `run`/`build` rows fail: without it those rows could not
+-- tell "the allowlisted code is surfaced" from "the whole `matchWarnings` channel is
+-- surfaced". Never called from main, so it changes no value.
+export
+libHue : Colour -> Int
+libHue c = match c
+  LibRed => 1
+  LibGreen => 2
+
+public export data Colour = LibRed | LibGreen | LibBlue

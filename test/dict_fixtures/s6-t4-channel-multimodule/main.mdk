@@ -1,0 +1,27 @@
+-- THE ONLY IN-TREE COVERAGE OF `W-OPEN-GOAL-COMMITTED` IN A NON-ENTRY MODULE, and
+-- therefore the only thing that grades the allowlist entry `runBuildWarnCodes` gained
+-- for it (#3027 / D3, `compiler/driver/diagnostics.mdk`).
+--
+-- Why a new fixture rather than a row on an existing one: both wild members of the
+-- class (`make t4-census`) are single-file programs, and single-file `run`/`build`
+-- widen past `runBuildWarnCodes` entirely -- they emit the FULL warning channel. So no
+-- single-file fixture can tell an allowlisted code from an unlisted one, and deleting
+-- `openGoalCommitWarnCode` from the list reddened nothing until this fixture existed.
+-- The multi-module arm is where the allowlist is the only thing consulted.
+--
+-- SPEC ANSWER (hand-derived, not captured). `libPick`'s goal is
+-- `Sh (Q Int Bool (List a))`, `a` unbound: §6.2 T4 says a goal not closed at the point
+-- `inst` is applied is DEFERRED, so `T-AMBIGUOUS-INSTANCE`'s reject must NOT fire --
+-- this program is ACCEPTED on every verb. What the implementation actually does is
+-- commit to the first-declared of the two ⊑-incomparable heads (`impl Sh (Q Int y z)`,
+-- value 1) -- the #1183 residue, which `W-OPEN-GOAL-COMMITTED` makes audible instead of
+-- silent. Declaration order therefore decides the printed value; do not read `1` as a
+-- correct answer, read it as the measurement.
+--
+-- The declarations are ALSO an §6.1 condition (a) overlap, so `W-INCOMPARABLE-IMPLS`
+-- rides alongside on every verb. That is a second, already-allowlisted code at a
+-- different site (the `impl`, not the goal); the section-5 rows name the open-goal code
+-- by its own text so one cannot stand in for the other.
+import lib.{libPick}
+
+main = println libPick
