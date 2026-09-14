@@ -1,0 +1,486 @@
+{- | The load-harness client `pds/nightly/load_harness.sh` drives: the
+   processes that put a running `pdsd` under load, and the one process that
+   measures it.
+
+   Two modes in one binary and never in one process. `stdlib/async.mdk` is a
+   single-threaded cooperative scheduler, so N client tasks multiplexed in
+   one process queue behind each other and that queuing delay is reported as
+   the server's. Every mode here is therefore a plain synchronous loop over
+   `stdlib/net` with one request in flight, and concurrency comes from the
+   shell starting several OS processes — the same choice
+   `pds/test/serve_client_main.mdk` makes, for the same reason.
+
+   `load` saturates and is never measured: it issues its scenario's requests
+   back to back on one keep-alive connection for a wall-clock duration and
+   prints only a throughput summary, which is not a latency. `sample`
+   measures: it issues one request every `intervalMs` and prints p50/p90/p99
+   per route. Exactly one sampler runs per harness run, so no percentile is
+   ever aggregated across processes.
+
+   # Scenario vocabulary
+
+   A SCENARIO is a named cycle of ROUTE LABELS (`scenarioRoutes`); each route
+   label has exactly one path builder (`pathFor`). Both modes take a scenario
+   name, so load and measurement are described in the same words. Adding a
+   route is one `pathFor` arm; adding a scenario is one `scenarioRoutes` arm
+   naming route labels that already have builders. -}
+
+import array.{concat, fromList, sliceClamped, sortInPlace}
+import net.{Connection, close, connect, recv, sendAll, setTimeout}
+import string.{
+  fromUtf8,
+  lines,
+  padLeft,
+  split,
+  startsWith,
+  toInt,
+  toUtf8,
+  trim,
+}
+import time.{Duration, elapsedSince, millis, monotonic, seconds, sleep}
+
+-- # The corpus this client reads
+
+-- The account `pds/test/synth_repo_main.mdk` signs its corpus for. Repeated
+-- here rather than imported because that builder is a `main` module: a driver
+-- cannot import another driver's entry point.
+corpusDid : String
+corpusDid = "did:plc:synthrepocorpus000000000"
+
+-- `synth_repo_main`'s `one-collection` shape puts its first six records in
+-- two auxiliary collections, so a bulk-collection record key must start at
+-- index six. Reading a key the corpus does not hold would measure the 404
+-- path instead of the read path.
+reservedIndices : Int
+reservedIndices = 6
+
+-- Consecutive requests land far apart in the key space rather than walking it
+-- in order, so a run measures lookups spread over the whole repository. Any
+-- value coprime with the span would do; this one is prime.
+keyStride : Int
+keyStride = 7919
+
+recordKey : Int -> Int -> String
+recordKey recordCount i =
+  let span = recordCount - reservedIndices
+  if span < 1 then
+    panic
+      "load_client: recordCount \{intToString recordCount} leaves no bulk-collection records"
+  else
+    let idx = reservedIndices + (i * keyStride) % span
+    "r\{padLeft 7 '0' (intToString idx)}"
+
+-- # Scenario vocabulary
+
+{- | The route labels a scenario cycles, in the order it cycles them.
+
+   `read-mix` is what the sampler measures: the four cheap public reads.
+   `read-load` is what the load generators issue: the two that do real work
+   per request, so the load is repository reads rather than constant
+   responses. -}
+scenarioRoutes : String -> Array String
+scenarioRoutes "read-mix" =
+  [|"getRecord", "listRecords", "describeRepo", "getLatestCommit"|]
+scenarioRoutes "read-load" = [|"getRecord", "listRecords"|]
+scenarioRoutes name =
+  panic "load_client: unknown scenario \{name} (want read-mix | read-load)"
+
+-- | The request path one route label reads, for request ordinal `i`.
+pathFor : String -> String -> Int -> Int -> String
+pathFor "getRecord" collection recordCount i =
+  "/xrpc/com.atproto.repo.getRecord?repo=\{corpusDid}&collection=\{collection}&rkey=\{recordKey recordCount i}"
+pathFor "listRecords" collection _ _ =
+  "/xrpc/com.atproto.repo.listRecords?repo=\{corpusDid}&collection=\{collection}&limit=50"
+pathFor "describeRepo" _ _ _ =
+  "/xrpc/com.atproto.repo.describeRepo?repo=\{corpusDid}"
+pathFor "getLatestCommit" _ _ _ =
+  "/xrpc/com.atproto.sync.getLatestCommit?did=\{corpusDid}"
+pathFor label _ _ _ = panic "load_client: no path builder for route \{label}"
+
+-- # Rate-limit identity
+
+{- | Every client process presents its own `X-Forwarded-For` identity, and
+   rotates it every `identityBlockSize` requests.
+
+   `pds/lib/resource_limits.mdk` allows 3000 requests per identity per
+   60-second window; without `--trusted-proxy` on the server every client
+   here would share the one `direct` bucket and be refused within seconds.
+   The refusals would not merely cost requests — a 429 is answered without
+   touching the repository, so a rate-limited run measures the limiter
+   instead of the read path. Rotating keeps every identity's charge under
+   the allowance for any run this harness is configured for. -}
+identityBlockSize : Int
+identityBlockSize = 1000
+
+identityFor : Int -> Int -> String
+identityFor clientId i =
+  let block = (i / identityBlockSize) % 256
+  "10.\{intToString (clientId % 256)}.\{intToString block}.1"
+
+-- The sampler's own client id, fixed because exactly one sampler runs. It
+-- sits above any `clientId` the shell gives a load generator, so no load
+-- generator ever shares the sampler's rate-limit identity.
+samplerClientId : Int
+samplerClientId = 250
+
+-- # A scenario bound to the corpus it reads
+
+data Plan = Plan String String Int
+
+planRoutes : Plan -> Array String
+planRoutes (Plan scenario _ _) = scenarioRoutes scenario
+
+-- | The route label and the request bytes for ordinal `i`, charged to
+-- `clientId`'s rate-limit identity.
+planRequest : Plan -> Int -> Int -> (String, Array Int)
+planRequest (Plan scenario collection recordCount) clientId i =
+  let routes = scenarioRoutes scenario
+  let route = routes[i % arrayLength routes]
+  let path = pathFor route collection recordCount i
+  (route, getRequest (identityFor clientId i) path)
+
+-- # HTTP
+
+{- | A keep-alive GET. No `Connection:` header, so the HTTP/1.1 default
+   applies and one connection carries a whole run's requests: at 120
+   connections per identity per window, a connection per request would be
+   refused long before the request allowance was reached. -}
+getRequest : String -> String -> Array Int
+getRequest xff path =
+  toUtf8
+    "GET \{path} HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Forwarded-For: \{xff}\r\n\r\n"
+
+appendBytes : Array Int -> Array Int -> Array Int
+appendBytes left right = concat [|left, right|]
+
+-- | Byte offset of the first `\r\n\r\n` at or after `i`, if any.
+findHeaderEnd : Array Int -> Int -> Option Int
+findHeaderEnd buf i =
+  if i + 4 > arrayLength buf then
+    None
+  else if buf[i] == 13
+    && buf[i + 1] == 10
+    && buf[i + 2] == 13
+    && buf[i + 3] == 10 then
+    Some i
+  else
+    findHeaderEnd buf (i + 1)
+
+statusOf : String -> Result String Int
+statusOf statusLine = match split " " statusLine
+  _ :: code :: _ => match toInt code
+    Some n => Ok n
+    None => Err "load_client: unparsable status code in '\{statusLine}'"
+  _ => Err "load_client: unparsable status line '\{statusLine}'"
+
+-- Response header names are always lowercase — `stdlib/http.mdk`'s
+-- `serializeResponse` emits them that way — so this match is case-sensitive.
+contentLengthOf : List String -> Result String Int
+contentLengthOf [] = Err "load_client: response has no content-length header"
+contentLengthOf (line :: rest) =
+  if startsWith "content-length:" line then match split ":" line
+    _ :: text :: _ => match toInt (trim text)
+      Some n => Ok n
+      None => Err "load_client: unparsable content-length in '\{line}'"
+    _ => Err "load_client: unparsable content-length in '\{line}'"
+  else
+    contentLengthOf rest
+
+parseHeaderBlock : Array Int -> Result String (Int, Int)
+parseHeaderBlock headerBytes = match lines (fromUtf8 headerBytes)
+  [] => Err "load_client: empty response header block"
+  statusLine :: rest => do
+    status <- statusOf statusLine
+    len <- contentLengthOf rest
+    Ok (status, len)
+
+recvAtLeast : Connection ->
+  Array Int ->
+  Int ->
+  <Net "_"> Result String (Array Int)
+recvAtLeast conn buf need =
+  if arrayLength buf >= need then
+    Ok buf
+  else match recv conn 65536
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "load_client: connection closed mid-response"
+      else
+        recvAtLeast conn (appendBytes buf chunk) need
+
+{- | Reads one complete response and reports its status and whatever bytes
+   were buffered past it.
+
+   The body is never copied out. `pds/lib/httpclient.mdk`'s `parseResponse`
+   would decode one, but it refuses input carrying bytes after the framed
+   response, so it cannot frame a keep-alive stream — and a client that
+   copied every body would spend its own time on work the server is not
+   being measured for. -}
+readOneResponse : Connection ->
+  Array Int ->
+  <Net "_"> Result String (Int, Array Int)
+readOneResponse conn pending = match findHeaderEnd pending 0
+  Some headerEnd => do
+    let bodyStart = headerEnd + 4
+    (status, len) <- parseHeaderBlock (sliceClamped 0 headerEnd pending)
+    let need = bodyStart + len
+    full <- recvAtLeast conn pending need
+    Ok (status, sliceClamped need (arrayLength full) full)
+  None => match recv conn 65536
+    Err message => Err message
+    Ok chunk =>
+      if arrayLength chunk == 0 then
+        Err "load_client: connection closed before response headers"
+      else
+        readOneResponse conn (appendBytes pending chunk)
+
+-- A request that has not answered within this is a failed request, not a slow
+-- one: the harness reports it as an error rather than letting a run hang.
+requestCeiling : Duration
+requestCeiling = seconds 30
+
+mustConnect : Int -> <Net "_"> Connection
+mustConnect port = match connect "127.0.0.1" port
+  Ok conn =>
+    let _ = setTimeout conn requestCeiling
+    conn
+  Err message =>
+    panic
+      "load_client: connect to 127.0.0.1:\{intToString port} failed: \{message}"
+
+ignoreResult : Result a b -> Unit
+ignoreResult _ = ()
+
+microsSince : Float -> <Clock> Int
+microsSince start = floatToInt (elapsedSince start * 1000000.0)
+
+{- | One request, timed from the first byte sent to the last byte of its
+   response. Returns the status, the bytes buffered past this response, and
+   the elapsed microseconds. -}
+timedRequest : Connection ->
+  Array Int ->
+  Array Int ->
+  <Clock, Net "_"> Result String (Int, Array Int, Int)
+timedRequest conn pending request =
+  let t0 = monotonic ()
+  match sendAll conn request
+    Err message => Err message
+    Ok () =>
+      map
+        ((status, rest) => (status, rest, microsSince t0))
+        (readOneResponse conn pending)
+
+-- # Percentiles
+
+-- One measured request. `status` is 0 when the request never answered.
+data Sample = Sample String String Int Int
+
+-- The microseconds of every answered sample for one target and route.
+microsFor : String -> String -> List Sample -> List Int -> List Int
+microsFor _ _ [] acc = acc
+microsFor target route ((Sample t r micros status) :: rest) acc =
+  if t == target && r == route && status == 200 then
+    microsFor target route rest (micros :: acc)
+  else
+    microsFor target route rest acc
+
+errorsFor : String -> String -> List Sample -> Int -> Int
+errorsFor _ _ [] acc = acc
+errorsFor target route ((Sample t r _ status) :: rest) acc =
+  if t == target && r == route && status /= 200 then
+    errorsFor target route rest (acc + 1)
+  else
+    errorsFor target route rest acc
+
+{- | The nearest-rank percentile: the smallest sample at or above `p` percent
+   of the sorted run. `p = 100` is the maximum. -}
+percentileAt : Array Int -> Int -> Int
+percentileAt sorted p =
+  let n = arrayLength sorted
+  if n == 0 then
+    0
+  else
+    let rank = (n * p + 99) / 100 - 1
+    let idx = if rank < 0 then 0 else if rank >= n then n - 1 else rank
+    sorted[idx]
+
+-- | Microseconds as milliseconds to three decimals, without going through a
+-- float: the value is already an exact integer count of microseconds.
+msText : Int -> String
+msText micros =
+  "\{intToString (micros / 1000)}.\{padLeft 3 '0' (intToString (micros % 1000))}"
+
+reportRoute : String -> String -> List Sample -> <IO> Unit
+reportRoute target route samples =
+  let sorted = fromList (microsFor target route samples [])
+  let () = sortInPlace sorted
+  let n = arrayLength sorted
+  let errors = errorsFor target route samples 0
+  println
+    "sample target=\{target} route=\{route} n=\{intToString n} errors=\{intToString errors} p50_ms=\{msText (percentileAt sorted 50)} p90_ms=\{msText (percentileAt sorted 90)} p99_ms=\{msText (percentileAt sorted 99)} max_ms=\{msText (percentileAt sorted 100)}"
+
+reportRoutes : String -> Array String -> Int -> List Sample -> <IO> Unit
+reportRoutes target routes i samples =
+  if i >= arrayLength routes then
+    ()
+  else
+    let route = routes[i]
+    let () = reportRoute target route samples
+    reportRoutes target routes (i + 1) samples
+
+-- # `load`
+
+{- | Issues a scenario back to back on one connection until `budget` seconds
+   have passed.
+
+   Nothing this returns is a latency: a saturated generator's per-request
+   time is its share of a contended server, which is exactly the quantity the
+   sampler exists to measure without. A transport error ends the loop rather
+   than reconnecting — the harness grades a non-zero error count as a failed
+   run, and a generator that quietly reconnected would take load off the
+   server for the rest of the run without saying so. -}
+loadLoop : Connection ->
+  Array Int ->
+  Plan ->
+  Int ->
+  Float ->
+  Float ->
+  Int ->
+  Int ->
+  Int ->
+  <Clock, Net "_"> (Int, Int, Int)
+loadLoop conn pending plan clientId t0 budget i non200 errors =
+  if elapsedSince t0 >= budget then
+    (i, non200, errors)
+  else
+    let (_, request) = planRequest plan clientId i
+    match timedRequest conn pending request
+      Err _ => (i + 1, non200, errors + 1)
+      Ok (status, rest, _) =>
+        loadLoop
+          conn
+          rest
+          plan
+          clientId
+          t0
+          budget
+          (i + 1)
+          (if status == 200 then non200 else non200 + 1)
+          errors
+
+runLoad : Int -> Plan -> Int -> Int -> <Clock, IO, Net "_"> Unit
+runLoad port plan clientId durationMs =
+  let conn = mustConnect port
+  let t0 = monotonic ()
+  let (issued, non200, errors) =
+    loadLoop conn [||] plan clientId t0 (intToFloat durationMs / 1000.0) 0 0 0
+  let elapsed = elapsedSince t0
+  let () = ignoreResult (close conn)
+  println
+    "load client=\{intToString clientId} requests=\{intToString issued} non200=\{intToString non200} errors=\{intToString errors} seconds=\{floatToString elapsed}"
+
+-- # `sample`
+
+{- | One request against one target, recorded.
+
+   The loaded target and the idle control target are read from this one
+   process microseconds apart, so any delay this process itself suffers —
+   scheduler pressure from the load generators sharing the box, GC in this
+   client, anything that is not the server — lands on both. A rise the loaded
+   target shows and the control does not is therefore the loaded server's own
+   queuing. -}
+sampleOne : Connection ->
+  Array Int ->
+  String ->
+  Plan ->
+  Int ->
+  List Sample ->
+  <Clock, Net "_"> (Array Int, List Sample)
+sampleOne conn pending target plan i acc =
+  let (route, request) = planRequest plan samplerClientId i
+  let result = timedRequest conn pending request
+  match result
+    Err _ => ([||], Sample target route 0 0 :: acc)
+    Ok (status, rest, micros) =>
+      (rest, Sample target route micros status :: acc)
+
+sampleLoop : Connection ->
+  Option Connection ->
+  Array Int ->
+  Array Int ->
+  Plan ->
+  Int ->
+  Int ->
+  Int ->
+  List Sample ->
+  <Clock, Net "_"> List Sample
+sampleLoop loaded control loadedPending controlPending plan i remaining intervalMs acc =
+  if remaining < 1 then
+    acc
+  else
+    let (loadedRest, afterLoaded) =
+      sampleOne loaded loadedPending "loaded" plan i acc
+    let (controlRest, afterControl) = match control
+      None => ([||], afterLoaded)
+      Some conn => sampleOne conn controlPending "control" plan i afterLoaded
+    let () = sleep (millis intervalMs)
+    sampleLoop
+      loaded
+      control
+      loadedRest
+      controlRest
+      plan
+      (i + 1)
+      (remaining - 1)
+      intervalMs
+      afterControl
+
+runSample : Int -> Int -> Plan -> Int -> Int -> <Clock, IO, Net "_"> Unit
+runSample port controlPort plan requests intervalMs =
+  let loaded = mustConnect port
+  let control =
+    if controlPort == 0 then None else Some (mustConnect controlPort)
+  let t0 = monotonic ()
+  let samples =
+    sampleLoop loaded control [||] [||] plan 0 requests intervalMs []
+  let elapsed = elapsedSince t0
+  let () = ignoreResult (close loaded)
+  let () = match control
+    None => ()
+    Some conn => ignoreResult (close conn)
+  let routes = planRoutes plan
+  let () = reportRoutes "loaded" routes 0 samples
+  let () = match control
+    None => ()
+    Some _ => reportRoutes "control" routes 0 samples
+  println
+    "sampler ticks=\{intToString requests} interval_ms=\{intToString intervalMs} seconds=\{floatToString elapsed}"
+
+-- # Driver
+
+mustInt : String -> Int
+mustInt text = match toInt text
+  Some value => value
+  None => panic "load_client: malformed integer: \{text}"
+
+usage : String
+usage =
+  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <requests> <intervalMs>"
+
+main : <Clock, Env, IO, Net "_"> Unit
+main = match args ()
+  ["load", port, scenario, collection, recordCount, clientId, durationMs] =>
+    runLoad
+      (mustInt port)
+      (Plan scenario collection (mustInt recordCount))
+      (mustInt clientId)
+      (mustInt durationMs)
+  ["sample", port, controlPort, scenario, collection, recordCount, requests, intervalMs] =>
+    runSample
+      (mustInt port)
+      (mustInt controlPort)
+      (Plan scenario collection (mustInt recordCount))
+      (mustInt requests)
+      (mustInt intervalMs)
+  _ => panic usage

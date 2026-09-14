@@ -414,6 +414,28 @@ corpus = []
 toolchain = []
 
 [[gate]]
+name = "pds/nightly/load_harness"
+area = "engines"
+shard = "other-job"
+project = "pds"
+tiers = ["nightly"]
+# 238s measured end to end on the 12-core box (build, a 5000-record corpus,
+# two servers, a 67s idle baseline phase and a 120s loaded phase) — inside the
+# 900s "medium" bound, and irreducible: both sampling phases are wall-clock
+# bounded by construction, not by how fast the box is. Reachability is the
+# `pds-load-harness` job in .github/workflows/nightly.yml, named by literal
+# path, which is what clause (a) of diff_compiler_ci_shard_coverage.sh checks
+# for an `other-job` entry.
+cost = "medium"
+kind = "exec"
+migration = "native-wrap"
+run = "pds/nightly/load_harness.sh"
+oracles = []
+sources = []
+corpus = []
+toolchain = []
+
+[[gate]]
 name = "pds/nightly/repo_vectors_eval_engine"
 area = "engines"
 shard = "other-job"

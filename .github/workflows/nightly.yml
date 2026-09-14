@@ -460,6 +460,53 @@ jobs:
           job-name: "playground_e2e (Playwright vs the built CM6 playground — #72 pt.4)"
           gate-label: "playground_e2e"
 
+  # Charter clause: N1 (docs/ops/CI-ARCHITECTURE.md §3.6 — cost above threshold — irreducible wall-clock cost would pole a merge-tier shard).
+  pds-load-harness:
+    name: "pds/nightly/load_harness.sh (concurrency cost: p50/p99 per route under N clients — #2954)"
+    runs-on: ubuntu-latest
+    # 238s measured on the 12-core dev box; a 2-core runner is slower at every
+    # phase but the two sampling phases are wall-clock bounded, so the ceiling
+    # moves with the build and corpus phases only. 40 matches the two pds jobs
+    # below.
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      issues: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+
+      # No `wasm: true` — every binary this harness runs is native, because the
+      # eval interpreter binds a canned `monotonicSec` and cannot time
+      # anything.
+      - name: Setup medaka (toolchain + build)
+        uses: ./.github/actions/setup-medaka
+        with:
+          binary: build
+
+      # NIGHTLY BY CONSTRUCTION, not by demotion: this gate has never been on
+      # the PR path. It is minutes of saturated loopback traffic from eight
+      # client processes against two servers, and a latency figure read off a
+      # shared runner is not something a merge should be gated on. Invoked by
+      # its literal repo-relative path so diff_compiler_ci_shard_coverage.sh's
+      # "named" mechanism counts it covered. PLAIN pass/fail, and the verdict
+      # is narrower than the numbers: the run fails when the instrument itself
+      # was not clean (a request refused, dropped, or answered non-200; a load
+      # generator that stopped before the sampler did). The percentiles it
+      # prints are read by a human, and the idle control server it samples
+      # alongside the loaded one is what makes them readable.
+      - name: Concurrency cost — p50/p99 per route under N concurrent clients
+        env:
+          MEDAKA_ROOT: ${{ github.workspace }}
+        run: sh pds/nightly/load_harness.sh
+
+      - name: File or update the known-red issue on failure
+        if: failure() || cancelled()
+        uses: ./.github/actions/file-nightly-red
+        with:
+          job-name: "pds/nightly/load_harness.sh (concurrency cost: p50/p99 per route under N clients — #2954)"
+          gate-label: "pds load_harness"
+
   # Charter clause: N2 (docs/ops/CI-ARCHITECTURE.md §3.6 — breadth beyond queue needs — a third axis of agreement the merge tier does not require).
   pds-repo-vectors-eval-engine:
     name: "pds/nightly/repo_vectors_eval_engine.sh (eval interp == native on the repo transcript — #2208)"
