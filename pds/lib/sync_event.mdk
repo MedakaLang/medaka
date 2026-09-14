@@ -22,7 +22,7 @@ import lib.blockstore.{BlockStore, blockStoreGet}
 import lib.car.{carEncode}
 import lib.cid.{Cid, cidEqual, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
-import lib.mst.{Mst, mstCoveringProofBlocks, mstEmpty, mstNodeBlocks}
+import lib.mst.{Mst, mstCoveringProofBlocks, mstNodeBlocks}
 import lib.repo.{
   Repo,
   RepoCommit,
@@ -135,9 +135,15 @@ sortBlocks blocks =
    The created-node term is kept even though it is a subset of the covering
    proofs for every single-key write measured so far, because it is the
    reference's own formula and nothing here proves the containment holds for
-   an arbitrary batch. -}
+   an arbitrary batch.
+
+   `before` is `None` only for the genesis commit, and the distinction is not
+   cosmetic: at genesis the post-write tree is the EMPTY tree, whose root node
+   a `Some mstEmpty` prior would subtract as already-seen, leaving a `blocks`
+   CAR of the commit alone. A relay verifying that CAR then asks for a data
+   root it was never sent. -}
 export
-syncCommitBlocks : Mst ->
+syncCommitBlocks : Option Mst ->
   Mst ->
   List (Array Int) ->
   List (Cid, Array Int) ->
@@ -146,10 +152,24 @@ syncCommitBlocks : Mst ->
   Result String (List (Cid, Array Int))
 syncCommitBlocks before after keys addedRecords commitCid commitBytes = do
   proof <- mstCoveringProofBlocks keys after
-  let created =
-    missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
-  let union = created ++ proof ++ addedRecords ++ [(commitCid, commitBytes)]
+  let union =
+    createdNodes before after
+      ++ proof
+      ++ addedRecords
+      ++ [(commitCid, commitBytes)]
   Ok (sortBlocks (dedupe union Tip []))
+
+{- | The MST nodes this write brought into existence.
+
+   With a prior tree, that is the post-write nodes it does not already hold.
+   Without one — the genesis commit, the only case a caller has no prior tree
+   for — nothing existed to hold anything, so every post-write node is new.
+   An empty tree that merely HAPPENS to equal the post-write one is still a
+   prior tree and still subtracts. -}
+createdNodes : Option Mst -> Mst -> List (Cid, Array Int)
+createdNodes None after = mstNodeBlocks after
+createdNodes (Some before) after =
+  missingFrom (mstNodeBlocks after) (seenCids (mstNodeBlocks before) Tip) []
 
 {- | Wrap a block set as the CAR file the `blocks` field carries. The commit
    CID is the sole root, which is the one ordering constraint the lexicon
@@ -437,7 +457,7 @@ commitData : Option RepoCommit -> Option Cid
 commitData None = None
 commitData (Some commit) = Some (repoCommitDataCid commit)
 
-commitBlocksFor : Mst ->
+commitBlocksFor : Option Mst ->
   Mst ->
   List SyncRepoOp ->
   List (Cid, Array Int) ->
@@ -483,9 +503,7 @@ syncCommitEventFor seq time did before after = do
   let ops =
     writesAgainst nextEntries (indexEntries priorEntries Tip) []
       ++ deletesAgainst priorEntries (indexEntries nextEntries Tip) []
-  let priorTree = match before
-    None => mstEmpty
-    Some repo => repoTree repo
+  let priorTree = map repoTree before
   let commit = repoLatestCommit after
   let commitCid = repoCommitCid commit
   added <- addedRecordBlocks ops (repoStore after) []

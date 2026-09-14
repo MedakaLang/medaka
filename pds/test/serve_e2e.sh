@@ -1270,6 +1270,13 @@ require_empty "$WORK/servesub.err" 'subscription server startup'
 #    mid-story: a #commit whose `since` is null, for a DID it was never told
 #    about.
 #
+#    The genesis #commit's OWN blocks CAR is opened as well, and has to hold
+#    two blocks: the commit and the MST node the commit names as its data
+#    root. A CAR of the commit alone announces a repository whose data root
+#    the subscriber has no block for, which the reference's own verifyRepo
+#    refuses — the #sync CAR passing is no evidence either way, because that
+#    one is the commit alone by design.
+#
 #    This runs before case 34's login, which is the atomicity claim and not
 #    just tidiness: the four are staged inside `configure`, before the
 #    listener binds, so the first connection this server can possibly accept

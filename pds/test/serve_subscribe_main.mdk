@@ -21,7 +21,7 @@
 
 import array.{concat, make, sliceClamped}
 import list.{reverse}
-import lib.car.{carBlocks, carDecode, carRoots}
+import lib.car.{Car, carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode}
 import lib.websocket.{
@@ -418,11 +418,13 @@ commitSeq conn buffered = match nextEvent conn buffered
    four events `com.atproto.sync.subscribeRepos` opens a repository with, in
    the order it states them and numbered from one.
 
-   Three separate claims, because a stream that got any one of them right
+   Four separate claims, because a stream that got any one of them right
    alone would still be unusable: the four KINDS in the official ORDER, the
-   sequence numbers 1 through 4 with nothing between them, and the `#sync`
-   event's CAR rooted at and holding exactly the commit the `#commit` event
-   named — the head a relay verifies the repository against.
+   sequence numbers 1 through 4 with nothing between them, the `#commit`
+   event's own `blocks` CAR carrying the MST node its commit names as well as
+   the commit, and the `#sync` event's CAR rooted at and holding exactly the
+   commit the `#commit` event named — the head a relay verifies the
+   repository against.
 
    The silence afterwards is what makes "exactly four" mean atomicity rather
    than arithmetic: nothing else has reached the log, and nothing could have,
@@ -489,13 +491,71 @@ gradeGenesis [(identity, identityBody), (account, accountBody), (commit, commitB
     Err "serve_subscribe: genesis kinds \{join " " kinds}"
   else if seqs /= [1, 2, 3, 4] then
     Err "serve_subscribe: genesis sequence \{join " " (map intToString seqs)}"
-  else
-    map
-      (head => "\{join " " kinds} at seq 1..4, #sync rooted at \{head}")
-      (gradeSyncCar commitBody syncBody)
+  else match gradeCommitCar commitBody
+    Err message => Err message
+    Ok dataCid =>
+      map
+        (head =>
+          "\{join " " kinds} at seq 1..4, #commit CAR = commit + data root \{dataCid}, #sync rooted at \{head}")
+        (gradeSyncCar commitBody syncBody)
 gradeGenesis events =
   Err
     "serve_subscribe: read \{intToString (length events)} genesis events, expected \{intToString (length genesisKinds)}"
+
+{- | The genesis `#commit`'s own `blocks` CAR: rooted at the commit, and
+   carrying that commit AND a block for the MST node the commit itself names
+   as its data root.
+
+   Graded against the commit block's own claim rather than against this tree's
+   MST code, so it states the property a reader actually needs: whatever CID
+   the commit says its data root is, the CAR has to contain it. A genesis CAR
+   of the commit alone — what a `created = after − before` rule emits when
+   both trees are the empty one — names a data root the reader was never sent,
+   and the reference's own `verifyRepo` refuses it.
+
+   Block ORDER is not asserted; the lexicon fixes none. The two CIDs are
+   checked for presence and the count for exactness, which together say the
+   set. -}
+gradeCommitCar : DagCbor -> Result String String
+gradeCommitCar commitBody = match (
+  linkField commitBody "commit",
+  mapField commitBody "blocks",
+)
+  (Some head, Some (DcBytes carBytes)) => match carDecode carBytes
+    Err message => Err "serve_subscribe: #commit CAR: \{message}"
+    Ok car => match commitDataCid car head
+      Err message => Err message
+      Ok dataCid =>
+        let roots = map cidToString (carRoots car)
+        let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+        if roots /= [cidToString head] then
+          Err "serve_subscribe: #commit CAR roots \{join " " roots}"
+        else if length blocks /= 2
+          || not (elem (cidToString head) blocks)
+          || not (elem dataCid blocks) then
+          Err
+            "serve_subscribe: #commit CAR blocks \{join " " blocks}, expected the commit and its data root \{dataCid}"
+        else
+          Ok dataCid
+  _ => Err "serve_subscribe: #commit named no commit, or carried no blocks"
+
+-- | The `data` link inside the commit block the CAR is rooted at.
+commitDataCid : Car -> Cid -> Result String String
+commitDataCid car head = match blockBytes (carBlocks car) head
+  None => Err "serve_subscribe: #commit CAR holds no block for its own root"
+  Some bytes => match dagCborDecode bytes
+    Err message => Err "serve_subscribe: undecodable commit block: \{message}"
+    Ok value => match linkField value "data"
+      None => Err "serve_subscribe: the commit block names no data root"
+      Some cid => Ok (cidToString cid)
+
+blockBytes : List (Cid, Array Int) -> Cid -> Option (Array Int)
+blockBytes [] _ = None
+blockBytes ((cid, bytes) :: rest) want =
+  if cidToString cid == cidToString want then
+    Some bytes
+  else
+    blockBytes rest want
 
 {- | The `#sync` event's CAR against the `#commit` event's own head: one root,
    one block, and both of them that commit. A `#sync` naming some other CID —
