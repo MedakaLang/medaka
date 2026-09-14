@@ -43884,7 +43884,7 @@ data GraphOut = GOutDiags | GOutTrees
 -- (`run`, `build`) do not report it, because `emitElaborationGate` gates on
 -- `hadTypeErrors` and the residual does not arm it.
 --
--- WHAT THE POPULATION ACTUALLY IS: every member is #3031 — `routeUndeterminedTop`'s
+-- What the population actually is: every member is #3031 — `routeUndeterminedTop`'s
 -- `_ => reportAmbiguousImpl` arm firing on a receiver some scheme QUANTIFIES,
 -- because the drain replays the goal without the `deferrableVarIds`/`goalsClosed`
 -- test the sibling T4-warning arm (`reportOverlapForIface`) already applies, and
