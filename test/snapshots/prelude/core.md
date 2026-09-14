@@ -1,5 +1,5 @@
 # META
-source_lines=2028
+source_lines=2058
 stages=TYPES
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1562,6 +1562,20 @@ optionOr : a -> Option a -> a
 optionOr _ (Some a) = a
 optionOr d None = d
 
+{- | The value inside a `Some`, or a panic carrying `context` for `None`.
+
+   For an invariant the caller believes cannot fail, where `context` says why
+   it cannot. There is no form that omits `context`: a panic a reader cannot
+   place is worse than the failure it reports. `optionOr` is the form that
+   recovers instead.
+
+   > optionOrPanic "the table is installed before any read" (Some 42)
+   42 -}
+export
+optionOrPanic : String -> Option a -> a
+optionOrPanic _ (Some a) = a
+optionOrPanic context None = panic context
+
 {- | Applies `f` to the value inside a `Some`, or returns the default for
    `None`.
 
@@ -1620,6 +1634,22 @@ export
 resultOr : a -> Result e a -> a
 resultOr _ (Ok a) = a
 resultOr d (Err _) = d
+
+{- | The value inside an `Ok`, or a panic carrying `context` and the error
+   for `Err`.
+
+   For an invariant the caller believes cannot fail. The message is
+   `context`, a colon, and the error, so `context` says why the `Err` cannot
+   happen and the error says what did. There is no form that omits
+   `context`: a panic a reader cannot place is worse than the failure it
+   reports. `resultOr` is the form that recovers instead.
+
+   > resultOrPanic "this name and value are literals" (Ok 42)
+   42 -}
+export
+resultOrPanic : Display e => String -> Result e a -> a
+resultOrPanic _ (Ok a) = a
+resultOrPanic context (Err e) = panic "\{context}: \{e}"
 
 {- | Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
    `Ok`.
@@ -2145,12 +2175,14 @@ xor : Bool -> Bool -> Bool
 isSome : Option a -> Bool
 isNone : Option a -> Bool
 optionOr : a -> Option a -> a
+optionOrPanic : String -> Option a -> a
 option : a -> (b -> a) -> Option b -> a
 toResult : a -> Option b -> Result a b
 fromResult : Result a b -> Option b
 isOk : Result a b -> Bool
 isErr : Result a b -> Bool
 resultOr : a -> Result b a -> a
+resultOrPanic : Display a => String -> Result a b -> b
 result : (a -> b) -> (c -> b) -> Result a c -> b
 mapErr : (a -> b) -> Result a c -> Result b c
 fst : (a, b) -> a
