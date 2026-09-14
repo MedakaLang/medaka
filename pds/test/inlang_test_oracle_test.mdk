@@ -159,6 +159,30 @@ exempt = [
     "ecdsa_vectors_test",
     "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/ecdsa_vectors`",
   ),
+  (
+    "field_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/field_vectors`",
+  ),
+  (
+    "scalar_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/scalar_vectors`",
+  ),
+  (
+    "encodings_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/encodings_vectors`",
+  ),
+  (
+    "atsyntax_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/atsyntax_vectors`",
+  ),
+  (
+    "lexjson_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/lexjson_vectors`",
+  ),
+  (
+    "secp256k1_public_key_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/secp256k1_public_key`",
+  ),
 ]
 
 exemptNames : List String

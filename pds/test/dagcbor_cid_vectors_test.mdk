@@ -1,6 +1,6 @@
 {- | Canonical DAG-CBOR/DRISL + CID foundation: external vectors, strict
    hostile-rejection routes, and eval/native/Wasm normalized-output parity —
-   migrated from `pds/test/dagcbor_cid_vectors.sh` under #2592.
+   migrated from the retired `dagcbor_cid_vectors.sh` under #2592.
 
    Three arms over one ledgered corpus (`P1-A-CBOR-CID`), with `parity`
    requiring their stdout to be byte-identical. That is the assertion three

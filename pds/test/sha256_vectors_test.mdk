@@ -1,5 +1,5 @@
 {- | Vector-corpus gate for `stdlib/sha256.mdk` (S-sha256, #1698), migrated
-   from `pds/test/sha256_vectors.sh` under #2592.
+   from the retired `sha256_vectors.sh` under #2592.
 
    Grades the pure-Medaka SHA-256 against an externally sourced NIST/CAVS
    corpus, never against a self-captured golden (G5,

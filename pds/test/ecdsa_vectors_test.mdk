@@ -1,5 +1,5 @@
 {- | Exact native ECDSA signing and Wycheproof verification gate for #1700
-   step 3, migrated from `pds/test/ecdsa_vectors.sh` under #2592.
+   step 3, migrated from the retired `ecdsa_vectors.sh` under #2592.
 
    Two corpora, named outright rather than through a ledger consumer id: the
    prehashed signing rows the driver must reproduce exactly, and the

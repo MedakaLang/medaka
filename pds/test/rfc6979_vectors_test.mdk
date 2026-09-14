@@ -1,5 +1,5 @@
 {- | Exact RFC 6979 candidate gate for #1700 signing step 3, migrated from
-   `pds/test/rfc6979_vectors.sh` under #2592.
+   the retired `rfc6979_vectors.sh` under #2592.
 
    The committed candidate-0 answers are dual-oracle S3-A rows, so the
    corpus grades them. Row 0's POST-REJECTION candidate 1 has no committed

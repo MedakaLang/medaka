@@ -1,0 +1,37 @@
+{- | Vector-corpus gate for S-encodings (#1701 encodings base58btc +
+   multiformats), migrated from the retired `encodings_vectors.sh` under
+   #2593.
+
+   Eval-only: the retired script never built or ran a native arm here. The
+   driver's own `counted: <n>/<total> PASS lines` summary is pinned as an
+   exact `needs` substring — same reasoning as `field_vectors_test.mdk`:
+   the corpus is fixed, so the count is deterministic, and a corpus that
+   silently shrank or grew would change this exact line. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+row : Row
+row = Row {
+  gate = "pds/test/encodings_vectors",
+  driver = "pds/test/encodings_vectors_main.mdk",
+  corpus = Ledgered "S-encodings",
+  corpusCount = AtLeast 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = EvalEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = ["counted: 29/29 PASS lines"],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "encodings vectors: base58btc and multiformats reproduce the ledgered corpus" =
+  expectRow row

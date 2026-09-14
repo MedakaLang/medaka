@@ -7,7 +7,7 @@
 -- pds/lib/multiformats.mdk against them, and prints one line per checked
 -- cell: "<PASS|FAIL>\t<arm>\t<expected>\t<actual>". The LAST stdout line is
 -- exactly "TOTAL: PASS" or "TOTAL: FAIL" — that is what the gate
--- (pds/test/encodings_vectors.sh) reads. An "ERRATUM" line is printed for
+-- (pds/test/encodings_vectors_test.mdk) reads. An "ERRATUM" line is printed for
 -- the one documented, non-graded cell (see the base58 spec vectors arm
 -- below) and is not counted toward PASS or FAIL.
 

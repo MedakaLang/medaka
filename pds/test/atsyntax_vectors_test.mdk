@@ -1,0 +1,64 @@
+{- | Vector-corpus gate for the P4-A identifier and URI syntax validators,
+   migrated from the retired `atsyntax_vectors.sh` under #2593.
+
+   Native-only: the driver's positional arguments are nine PAIRS (valid
+   file, invalid file), and the pairing is by FILE NAME, not by whatever
+   order the ledger happens to return them in — `pds/test/vector_provenance.sh
+   --files-for P4-A-IDENTIFIER-SYNTAX` makes no ordering promise. The
+   retired script picked each of the fourteen files by name via `grep -F`;
+   here the same fourteen repo-relative paths are named outright as an
+   `Explicit` corpus, in the order the driver expects them, which is a
+   corpus no `Ledgered` id can express and needs no runner change to state. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+row : Row
+row = Row {
+  gate = "pds/test/atsyntax_vectors",
+  driver = "pds/test/atsyntax_vectors_main.mdk",
+  corpus = Explicit [
+    "pds/test/vectors/interop_aturi_valid.txt",
+    "pds/test/vectors/interop_aturi_invalid.txt",
+    "pds/test/vectors/interop_atidentifier_valid.txt",
+    "pds/test/vectors/interop_atidentifier_invalid.txt",
+    "pds/test/vectors/interop_did_valid.txt",
+    "pds/test/vectors/interop_did_invalid.txt",
+    "pds/test/vectors/interop_handle_valid.txt",
+    "pds/test/vectors/interop_handle_invalid.txt",
+    "pds/test/vectors/interop_nsid_valid.txt",
+    "pds/test/vectors/interop_nsid_invalid.txt",
+    "pds/test/vectors/interop_recordkey_valid.txt",
+    "pds/test/vectors/interop_recordkey_invalid.txt",
+    "pds/test/vectors/interop_tid_valid.txt",
+    "pds/test/vectors/interop_tid_invalid.txt",
+  ],
+  corpusCount = Exactly 14,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = [
+        "aturi: 23/23 valid accepted, 72/72 invalid rejected",
+        "atidentifier: 11/11 valid accepted, 22/22 invalid rejected",
+        "did: 24/24 valid accepted, 18/18 invalid rejected",
+        "handle: 71/71 valid accepted, 48/48 invalid rejected",
+        "nsid: 25/25 valid accepted, 27/27 invalid rejected",
+        "recordkey: 16/16 valid accepted, 11/11 invalid rejected",
+        "tid: 5/6 valid accepted, 7/7 invalid rejected",
+        "repo-validateRkey: 16/16 valid accepted, 11/11 invalid rejected",
+        "repo-validateCollection: 25/25 valid accepted, 27/27 invalid rejected",
+      ],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "atsyntax vectors: 7 official atproto interop syntax corpora plus lib.repo's validateRkey/validateCollection" =
+  expectRow row

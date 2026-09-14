@@ -1,0 +1,54 @@
+{- | Native assertion gate for the fixed-ladder public-key boundary and for
+   `pds keygen`'s derivation on top of it, migrated from the retired
+   `secp256k1_public_key.sh` under #2593.
+
+   The assertions take twenty-odd full 256-round ladders, so this stays
+   native-only, same as the retired script. The two corpora are named
+   outright as an `Explicit` corpus rather than resolved through a ledger
+   consumer id: keygen is graded against official external values, never
+   against this tree's own output. Each of the ten cells is pinned by name
+   in `needs`, mirroring the retired script's own `for cell in …; do grep`
+   loop — a driver that silently stopped emitting one is a `needs` miss
+   rather than a smaller total that still clears a floor. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+row : Row
+row = Row {
+  gate = "pds/test/secp256k1_public_key",
+  driver = "pds/test/secp256k1_public_key_main.mdk",
+  corpus = Explicit [
+    "pds/test/vectors/point_public_key_corpus.txt",
+    "pds/test/vectors/pds_did_key_corpus.txt",
+  ],
+  corpusCount = Exactly 2,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = [
+        "PASS\tcompressed-G-2G-3G",
+        "PASS\tderived-G-2G-3G",
+        "PASS\tderived-leading-zero-scalar",
+        "PASS\tboth-parity-prefixes",
+        "PASS\treject-length-prefix-infinity",
+        "PASS\treject-x-at-or-above-p",
+        "PASS\treject-known-nonsquare-rhs",
+        "PASS\tkeygen-derivation-vs-official-corpora",
+        "PASS\tkeygen-admits-d-only-in-1-to-n-minus-1",
+        "PASS\tkeygen-fresh-key-round-trips",
+      ],
+      lastLine = Some "ASSERTIONS: 10/10",
+    },
+  ],
+  parity = False,
+}
+
+test "secp256k1 public-key: 10/10 native assertions, keygen graded against both official corpora" =
+  expectRow row

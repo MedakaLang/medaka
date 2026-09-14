@@ -640,122 +640,15 @@ pds/test/later.txt"
   # `wrong-answer`; a hard-coded old gate never passes that path and therefore
   # goes green, making this cell fail for the pre-#1729 implementation.
   #
-  # The roster below samples the gates that still roll their own `--files-for`
-  # plumbing in shell. The sha256 gate left the roster when it became the
-  # native row pds/test/sha256_vectors_test.mdk (#2592): that row reads the
-  # ledger through pds/test/vector_ledger.mdk, whose Err and zero-file paths
-  # fail the row outright on every run, so its ledger consumption is asserted
+  # The roster this cell sampled was field_vectors.sh, scalar_vectors.sh and
+  # encodings_vectors.sh (sha256_vectors.sh left it earlier, under #2592).
+  # All three left it under #2593, the same way: each is now a native row
+  # (pds/test/field_vectors_test.mdk, pds/test/scalar_vectors_test.mdk,
+  # pds/test/encodings_vectors_test.mdk) that reads the ledger through
+  # pds/test/vector_ledger.mdk, whose Err and zero-file paths fail the row
+  # outright on every run — so their ledger consumption is asserted
   # structurally rather than sampled here. A cell copying a script that no
   # longer exists would assert nothing at all.
-  t9="$(mktemp -d "$VP_WORK/t9.XXXXXX")"
-  mkdir -p "$t9/pds/test/vectors"
-  cp "$ROOT/pds/test/vector_provenance.sh" "$t9/pds/test/vector_provenance.sh"
-  for gate in field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
-    cp "$ROOT/pds/test/$gate" "$t9/pds/test/$gate"
-  done
-  for consumer in field scalar encodings; do
-    mk_vector "$t9" "pds/test/vectors/$consumer-wrong-answer.txt" "deliberately wrong answer for $consumer"
-  done
-  field_hash="$(sha256_of_file "$t9/pds/test/vectors/field-wrong-answer.txt")"
-  scalar_hash="$(sha256_of_file "$t9/pds/test/vectors/scalar-wrong-answer.txt")"
-  encodings_hash="$(sha256_of_file "$t9/pds/test/vectors/encodings-wrong-answer.txt")"
-  cat > "$t9/pds/test/VECTOR-PROVENANCE.txt" << EOF
-[vector]
-file: pds/test/vectors/field-wrong-answer.txt
-local-sha256: $field_hash
-kind: published-artifact
-source: Synthetic field fixture
-source-url: https://example.invalid/t9-field
-source-sha256: UNAVAILABLE
-source-note: synthetic self-test fixture, no real artifact
-extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-field (#1729)
-
-[vector]
-file: pds/test/vectors/scalar-wrong-answer.txt
-local-sha256: $scalar_hash
-kind: published-artifact
-source: Synthetic scalar fixture
-source-url: https://example.invalid/t9-scalar
-source-sha256: UNAVAILABLE
-source-note: synthetic self-test fixture, no real artifact
-extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-scalar (#1729)
-
-[vector]
-file: pds/test/vectors/encodings-wrong-answer.txt
-local-sha256: $encodings_hash
-kind: published-artifact
-source: Synthetic encodings fixture
-source-url: https://example.invalid/t9-encodings
-source-sha256: UNAVAILABLE
-source-note: synthetic self-test fixture, no real artifact
-extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-encodings (#1729)
-EOF
-  cat > "$t9/fake-medaka" << 'EOF'
-#!/bin/sh
-for arg in "$@"; do
-  case "$arg" in
-    *wrong-answer*)
-      echo "FAKE-ENGINE: rejected ledgered wrong-answer corpus: $arg"
-      exit 1 ;;
-  esac
-done
-
-case "$1:$2" in
-  run:*field*)
-    echo "counted: 135/135 rows ok, 0 skipped (stride 7)"
-    echo "TOTAL: PASS" ;;
-  run:*scalar*)
-    echo "op red: 1 ok"
-    echo "counted: 40/40 rows ok, 0 skipped (stride 26)"
-    echo "TOTAL: PASS" ;;
-  run:*encodings*)
-    i=0
-    while [ "$i" -lt 29 ]; do
-      printf 'PASS\tfixture-%s\n' "$i"
-      i=$((i + 1))
-    done
-    echo "TOTAL: PASS" ;;
-  build:*)
-    driver="$2"
-    shift 2
-    out=""
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "-o" ]; then out="$2"; break; fi
-      shift
-    done
-    case "$driver" in
-      *field*) body='echo "counted: 944/944 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
-      *scalar*) body='echo "counted: 1028/1028 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
-      *) exit 1 ;;
-    esac
-    printf '#!/bin/sh\n%s\n' "$body" > "$out"
-    chmod +x "$out" ;;
-  *) exit 1 ;;
-esac
-EOF
-  chmod +x "$t9/fake-medaka"
-
-  t9_rc=0
-  for gate in field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
-    t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/$gate" 2>&1)"
-    t9_gate_rc=$?
-    if [ "$t9_gate_rc" -ne 0 ] \
-       && printf '%s' "$t9_out" | grep -q 'FAKE-ENGINE: rejected ledgered wrong-answer corpus'; then
-      echo "T9 $gate consumes ledgered wrong answer: PASS"
-    else
-      echo "T9 $gate consumes ledgered wrong answer: FAIL (rc=$t9_gate_rc)"
-      printf '%s\n' "$t9_out"
-      t9_rc=1
-    fi
-  done
-  rm -rf "$t9"
-  if [ "$t9_rc" -ne 0 ]; then st_rc=1; fi
 
   # T10/T11 exercise the optional secondary authority used by the point corpus.
   for case_name in missing same; do
