@@ -236,8 +236,9 @@ else
 fi
 
 # 0-checked must fail: a gate that iterated no fixtures proves nothing and must
-# never report green (see e.g. diff_compiler_snapshot_frontend.sh's "NOTHING
-# COMPARED" branch for the same house rule).
+# never report green (the snapshot gate,
+# test/diff_compiler_snapshot_frontend_test.mdk, states the same house rule as
+# "a check that skips is a check that did not look").
 if [ "$((pass + fail))" -eq 0 ]; then
   printf '\nNO FIXTURES FOUND under %s — 0 checked, refusing to pass\n' "$FIXDIR"
   exit 1

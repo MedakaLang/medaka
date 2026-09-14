@@ -38,9 +38,9 @@
 -- ⚠️ COUPLED TO #1240 (`data Holder = Holder { slot : q }` — an unbound type
 -- variable in a constructor field type is accepted with NO diagnostic).  The
 -- `data Holder` line below is verbatim #1240's repro.  When #1240 is fixed this
--- file becomes a compile error and reds FIVE gates: bootstrap_eval,
--- diff_compiler_eval, diff_compiler_core_ir, diff_compiler_core_ir_roundtrip and
--- diff_compiler_snapshot_core_ir.  Whoever fixes #1240 meets that red here first:
+-- file becomes a compile error and reds the three gates whose corpus holds
+-- test/eval_fixtures: bootstrap_eval, diff_compiler_eval and
+-- diff_compiler_snapshot_frontend.  Whoever fixes #1240 meets that red first:
 -- either drop the `Holder` declaration (the rest of the fixture stands alone) or
 -- retire this file — the two fixtures named above carry the `Mono` coverage.
 --

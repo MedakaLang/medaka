@@ -257,7 +257,7 @@ a claim shipping its own derivation is only honest if someone ran it.
 
 ## Tips
 
-- For LSP-surfaced errors, run `bash test/diff_compiler_lsp.sh` and
+- For LSP-surfaced errors, run `./medaka gate run diff_compiler_lsp` and
   `test/lsp_harness.sh`.
 - For multi-module bugs, run `bash test/diff_compiler_check_test.mdk` and
   `./medaka gate run diff_compiler_eval` (the `eval_modules_main` rows) to isolate

@@ -53,7 +53,7 @@ literal `useModId path` spelling.
   `:2127`); `exportsMap` keyed by `mid` (`:2136-2142`); imports resolved by literal spelling
   (`:2220`,`:2231`).
 - **Frozen OCaml `lib/`** — NO `[dependencies]`/cross-project support. Cross-project deps are
-  NATIVE-ONLY. Gate `test/cross_project_deps.sh` is native-only (no oracle leg). **→ no `lib/`
+  NATIVE-ONLY. Gate `cross_project_deps` is native-only (no oracle leg). **→ no `lib/`
   mirror required, no differential-vs-oracle gate.**
 
 ## 3. Why load-only dedup is UNSOUND
@@ -131,12 +131,12 @@ seed re-mint at checkpoint.
 ### Staging plan
 1. **Failing fixture first (red).** Add a trivial `interface`+`export impl` to
    `test/cross_project_fixtures/minilib/lib/minilib.mdk` + reference its method from `consumer/main.mdk`.
-   Gate `sh test/cross_project_deps.sh` → expect FAIL `conflicting impl …: minilib.lib.minilib and
+   Gate `cross_project_deps` → expect FAIL `conflicting impl …: minilib.lib.minilib and
    lib.minilib`.
 2. **Implement in `loader.mdk`.** `owningRoot→depName` reverse lookup + `canonicalizeImport` per-import
    (resolve, prefix only under-`owningRoot`); apply in `visitMod`/`visitMods` to BOTH the recursion key
    (`directImports`) and the stored `prog`'s `DUse` decls; mirror in `visitModF` (LSP twin).
-   Gate `sh test/cross_project_deps.sh` → PASS 3/3 (check+run+build); re-capture its 3 goldens.
+   Gate `cross_project_deps` → PASS 3/3 (check+run+build); re-capture its 3 goldens.
 3. **Regression-guard single-root path.** `FORCE=1 bash test/build_oracles.sh` then
    `sh test/bootstrap_{resolve,eval,typecheck}.sh` unchanged; `sh test/diff_native_cli.sh` unchanged.
 4. **Fixpoint + seed.** `FORCE_EMITTER_REBUILD=1 make medaka` then `sh test/selfcompile_build_fixpoint.sh`
@@ -154,7 +154,7 @@ seed re-mint at checkpoint.
    memo only rewrites modules reached under a declared dep root).
 
 ## 7. FIXTURE PLAN
-Extend native-only `test/cross_project_fixtures/` (`test/cross_project_deps.sh`) — already has the
+Extend native-only `test/cross_project_fixtures/` (`cross_project_deps`) — already has the
 double-load topology. Add a minimal typeclass `interface`+`export impl` to `minilib/lib/minilib.mdk`,
 reference its method from `consumer/main.mdk`. Asserts: `check` succeeds (no `conflicting impl`); `run`/
 `build` produce expected output using the method (proves import frames intact). One fixture exercises

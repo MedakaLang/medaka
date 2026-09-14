@@ -121,6 +121,26 @@
 # 207 of 207 instead of 206. The row stays: if that classifier arm is ever reworded, the
 # only thing keeping this gate classified would vanish with it, and the ledger is what
 # makes that visible instead of silent.
+# ── #2593 the LSP warm session — invoked BY another gate, not named in a workflow ──
+#
+# test/lsp_warm_session.sh GRADES (it exits nonzero when a warm publish disagrees with a
+# cold `medaka check --json`), so it does not belong in CI-COVERAGE-TOOLS.txt, whose
+# entries claim "running me proves nothing about the compiler". It is not a gate of its
+# own either: it exists because Medaka has no interactive-subprocess extern — `runCommand`
+# runs a command to completion with no stdin handle — and this one property needs two disk
+# edits to land BETWEEN messages of a single `medaka lsp` session. So the native gate
+# test/diff_compiler_lsp_test.mdk spawns it and grades its exit code and transcript, and
+# its verdict reaches CI through THAT registry row.
+#
+# Same shape as the registry_keying_ratchet row above, one language over: the "named" test
+# is a text search over workflow YAML, and this script is invoked from a `.mdk`, so it can
+# no more self-classify than a nested `sh "$ROOT/test/foo.sh"` can. ci.yml does contain the
+# path — it is in diff_compiler_lsp's `sources`, so `detect` runs the shard for a PR that
+# edits only this script — but that is a pattern match on a changed file, not a `run:`.
+# Retire this row by giving Medaka an interactive-process extern (then the property folds
+# into the native table and the script goes away).
+test/lsp_warm_session          run every time via test/diff_compiler_lsp_test.mdk (the gates_2 shard); no workflow step INVOKES it — the gate spawns it and grades its exit code and transcript.
+
 test/registry_keying_ratchet   run every time via test/typecheck_compiler_source.sh (the `compiler-soundness` job since the #1932 split); no workflow step INVOKES it — see the #1932 caveat above for why ci.yml nonetheless contains its path.
 
 #   sqlite/test/*_oracle.sh (22)  Differential gates diffing the pure-Medaka SQLite library

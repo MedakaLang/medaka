@@ -109,8 +109,7 @@
 | `test/check_removed_constructs.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | — | 273 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/check_spec_clause_labels.sh` | DOC-ROT | none | N | NO | NATIVE-KIND-RUNNER | — | 372 | REWRITE: probe/static text becomes library calls |
 | `test/check_syntax_examples.sh` | GOLDEN | native (check + run, interpreter path) | N | NO | NATIVE-KIND-RUNNER, SECTION-SPLIT | 23273 | 662 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/cross_project_deps.sh` | GOLDEN | native (check/run/build+exec) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 1703 | 82 | WRAP: spawns ./medaka + diffs, module does the same |
-| `test/cross_project_twonames.sh` | GOLDEN | native (check/run/build+exec) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 1330 | 78 | WRAP: spawns ./medaka + diffs, module does the same |
+| `test/cross_project_deps_test.mdk` | GOLDEN | native (check/run/build+exec) | N | YES | — | 1703 | 82 | DONE: was `cross_project_deps.sh` + `cross_project_twonames.sh`, folded into one native gate |
 | `test/diff_async.sh` | GOLDEN | native (async I/O bound only in LLVM backend, per header) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT | 7379 | 68 | WRAP: spawns ./medaka + diffs, module does the same |
 | `test/diff_compiler_analyze_project.sh` | GOLDEN | native (compiled test/bin probe) | N | NO | NATIVE-KIND-RUNNER, ORACLE-PROBE, EXTERNAL-TOOL | 4697 | 154 | REWRITE: probe/static text becomes library calls [python3] |
 | `test/diff_compiler_anf_identity.sh` | GOLDEN | native (compiled test/bin probe) | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE, EXTERNAL-TOOL, SECTION-SPLIT | 35 | 57 | REWRITE: probe/static text becomes library calls [node] |

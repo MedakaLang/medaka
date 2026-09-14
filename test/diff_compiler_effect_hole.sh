@@ -75,7 +75,7 @@ fi
 # 3. Native single-file host TYPES ⊇ the `# TYPES_USER` snapshot (#81 Stage C2).
 #    The frozen golden's === TYPES === section (prelude + user) was EMPTIED by C2
 #    as confirmed-redundant: the prelude table is pinned once by
-#    diff_compiler_snapshot_prelude.sh, and the user schemes — including the
+#    the `prelude` snapshot family, and the user schemes — including the
 #    inferred-hole row netGet : String -> <Net> String and the wildcard fetch row —
 #    by the `# TYPES_USER` snapshot. Assert every committed user scheme line appears
 #    verbatim in the host's TYPES output (subset membership, order-independent).
