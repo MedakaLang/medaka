@@ -1,5 +1,5 @@
 # META
-source_lines=2798
+source_lines=2828
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -59,7 +59,9 @@ import types.typecheck.{
   setStdlibOwnership, TcDiag(..), tcMsg, mainTypeIsUnit, mainTypeIsAsync,
   -- #2738: the importer peer of `preludeStandaloneShadows`.  It lives in the
   -- typechecker because S1's `nameable in M` operand does; see its own comment.
-  importedStandaloneShadows
+  importedStandaloneShadows,
+  -- #3027 / D3: T4's own warning code, defined beside `reportOverlapForIface`.
+  openGoalCommitWarnCode
 }
 -- #2738: the two colliding signatures are SURFACE types, and this is the one
 -- surface-type renderer in the tree (`tools/doc.mdk`'s `ppTyP` is private to the
@@ -2283,10 +2285,38 @@ coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 -- switched to `map.{entries}`):
 --
 --     ./medaka check compiler/driver/medaka_cli.mdk 2>&1 | grep -c 'is shadowed in module'
+--
+-- #3027 / D3.  The fourth member owes the same three measurements, and they answer
+-- the same way as the second's (`W-PRELUDE-METHOD-SHADOW`), not the third's: like
+-- that one, it fires on NOTHING in `compiler/` or `stdlib/` today, so its count is a
+-- census of `test/`-only fixtures, not a worklist. (1) It is not a demotion of
+-- anything loud: `openGoalCommitWarnCode` (`types/typecheck.mdk`) was silent on
+-- EVERY verb before ruling 1 gave it a code at all, so `run`/`build` catching up to
+-- `check` here is a repair, exactly `W-IMPORT-METHOD-SHADOW`'s shape. (2) Its oracle
+-- is `pickMostSpecificEntry`'s no-unique-minimum arm — a COMMITMENT point reached at
+-- most once per open, ⊑-incomparable goal, not the #1185 phantom's graph-wide
+-- constructor-universe oracle — so a false positive is not representable the way
+-- #1185 is; see `openGoalCommitWarnCode`'s own comment for the "ungated it fires
+-- twice in the whole tree" measurement this reconfirms. Re-derive, do not quote:
+--
+--     make t4-census
+--
+-- which at this writing finds 3 WILD sites total, all under `test/` (0 under
+-- `stdlib/`) -- the two pre-existing #1183-class fixtures plus this member's
+-- own multi-module regression pin. The census's own positive-control corpus
+-- (`test/t4_census_fixtures/`, 3 sites) is reported separately, not folded
+-- into the wild total, so an empty wild census stays a reachable answer.
+-- (3) The render cost is therefore bounded by the (small, test-only) site
+-- count, not by the module graph, exactly as for the second and third
+-- members.
 export
 runBuildWarnCodes : List String
-runBuildWarnCodes =
-  [coherenceWarnCode, "W-PRELUDE-METHOD-SHADOW", "W-IMPORT-METHOD-SHADOW"]
+runBuildWarnCodes = [
+  coherenceWarnCode,
+  "W-PRELUDE-METHOD-SHADOW",
+  "W-IMPORT-METHOD-SHADOW",
+  openGoalCommitWarnCode,
+]
 
 export
 isCoherenceWarn : Diag -> Bool
@@ -2812,7 +2842,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "importedStandaloneShadows" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "importedStandaloneShadows" false) (mem "openGoalCommitWarnCode" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
@@ -3100,7 +3130,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "coherenceWarnCode" (TyCon "String"))
 (DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
 (DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW"))))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW")) (EVar "openGoalCommitWarnCode")))
 (DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))
@@ -3179,7 +3209,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DUse false (UseGroup ("frontend" "exhaust") ((mem "checkGuardExhaustivenessWith" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "preludeStandaloneShadows" false) (mem "preludeStandaloneSet" false) (mem "preludeStandaloneShadowsWith" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "importedStandaloneShadows" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneDiagsK" false) (mem "checkModulesDiagsChain" false) (mem "chainFullKey" false) (mem "checkModulesK" false) (mem "entryOwnSchemes" false) (mem "dropModSchemes" false) (mem "ModDiags" false) (mem "setCoherenceUserDecls" false) (mem "setStdlibOwnership" false) (mem "TcDiag" true) (mem "tcMsg" false) (mem "mainTypeIsUnit" false) (mem "mainTypeIsAsync" false) (mem "importedStandaloneShadows" false) (mem "openGoalCommitWarnCode" false))))
 (DUse false (UseGroup ("tools" "printer") ((mem "ppTy" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedCached" false) (mem "loadProgramFilesLocatedCachedE" false) (mem "loadedSourceOf" false) (mem "loadProgramE" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "entrySearchRoots" false) (mem "findImportLoc" false) (mem "unknownModuleIdOf" false) (mem "availableModulesText" false) (mem "availableModulesHint" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false))))
@@ -3467,7 +3497,7 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DTypeSig true "coherenceWarnCode" (TyCon "String"))
 (DFunDef false "coherenceWarnCode" () (ELit (LString "W-INCOMPARABLE-IMPLS")))
 (DTypeSig true "runBuildWarnCodes" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW"))))
+(DFunDef false "runBuildWarnCodes" () (EListLit (EVar "coherenceWarnCode") (ELit (LString "W-PRELUDE-METHOD-SHADOW")) (ELit (LString "W-IMPORT-METHOD-SHADOW")) (EVar "openGoalCommitWarnCode")))
 (DTypeSig true "isCoherenceWarn" (TyFun (TyCon "Diag") (TyCon "Bool")))
 (DFunDef false "isCoherenceWarn" ((PCon "Diag" (PCon "SevWarning") (PVar "c") PWild PWild PWild PWild)) (EApp (EApp (EVar "contains") (EVar "c")) (EVar "runBuildWarnCodes")))
 (DFunDef false "isCoherenceWarn" (PWild) (EVar "False"))

@@ -219,6 +219,17 @@ test/dup_suppression_census    derived rule-duplicate-body suppression census (#
                                 test/diff_compiler_lint_baseline.sh assertion 3 and
                                 .githooks/pre-commit check 3. See the script header.
 
+test/t4_census                 per-site W-OPEN-GOAL-COMMITTED (T4) census (#2665 item 1, arc
+                                #1122 ruling 2, tracking #3027, `make t4-census`): runs
+                                `check --json` over every tracked .mdk under test/ + stdlib/
+                                and tables every open-goal-commitment diagnostic by SITE
+                                (file:line:col), not by message text — read through --json
+                                so an error-bearing file's warnings are not dropped the way
+                                the human `check` arm drops them. Needs a built ./medaka and
+                                jq. Always exits 0 and asserts nothing; no test/gates.toml
+                                row by design (a brand-new gate needs a cost-baseline row
+                                this slice does not carry). See the script header.
+
 test/slop_census               composing entry point over the slop-burndown crusade's (#2276)
                                 member censuses (#2304, S-slop-census, `make slop-census`): a
                                 registry, encoded as data in the script, of every member census

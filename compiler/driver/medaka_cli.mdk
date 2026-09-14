@@ -208,6 +208,7 @@ import types.typecheck.{
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
+  openGoalCommitWarnCode,
 }
 import driver.main_autoprint.{
   shouldAsyncWrapMain,
@@ -972,11 +973,13 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
 -- pass did not, so there is no located diagnostic to report instead.
 --
 -- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
--- two reviewers failed to construct one, and the two files the drain's T4 census
--- names as its whole population (see `DrainDiags` in `compiler/types/typecheck.mdk`)
--- both take `run`'s ACCEPT path.  It exists so the empty-residual case cannot exit
--- 1 with an empty envelope, which is a shape the code must handle whether or not an
--- input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
+-- two reviewers failed to construct one, and none of the three files
+-- `DrainDiags`'s own population comprises (see `DrainDiags` in
+-- `compiler/types/typecheck.mdk`) arms the gate that would route here — one of
+-- them runs to completion, and the other two have no `main`, so `run` rejects
+-- them at `E-NO-MAIN` AFTER elaboration has already let them through.  It exists so
+-- the empty-residual case cannot exit 1 with an empty envelope, which is a shape the
+-- code must handle whether or not an input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
 -- `test/diag_census.sh` cannot see it, since that census enumerates codes that FIRE.
 genericResidualDiag : String -> Diag
 genericResidualDiag target =
@@ -1698,8 +1701,19 @@ trimEntryTriple [(p, s, ds)] =
   [(p, s, filter (d => not (onTypecheckWarnChannel d)) ds)]
 trimEntryTriple (t :: rest) = t :: trimEntryTriple rest
 
+-- #3027 / D3: `openGoalCommitWarnCode` is pushed the same way `coherenceWarnCode`
+-- is (`pushMatchWarningOnceAt`, off the entry module's own diags), so the entry
+-- report already prints it loc-free exactly as it does the coherence warning —
+-- measured on a multi-module fixture with the T4 commitment in the entry module
+-- itself. Added here for the same reason `coherenceWarnCode` is: without it,
+-- `trimEntryTriple` would leave the code in the entry triple and `check` would
+-- print it twice. `W-PRELUDE-METHOD-SHADOW` and `W-IMPORT-METHOD-SHADOW` are NOT
+-- added — they are `analyzeProject`-side `Diag`s the entry report does not print
+-- (see `trimEntryTriple`'s own comment), so this stays a two-literal test, not a
+-- membership test over `runBuildWarnCodes`.
 onTypecheckWarnChannel : Diag -> Bool
-onTypecheckWarnChannel (Diag _ c _ _ _ _) = c == coherenceWarnCode
+onTypecheckWarnChannel (Diag _ c _ _ _ _) =
+  c == coherenceWarnCode || c == openGoalCommitWarnCode
 
 tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False

@@ -1,0 +1,23 @@
+-- Positive control for `test/t4_census.sh` (#3027, #2665 item 1). Two DISTINCT
+-- call sites commit the SAME open goal, so they carry the SAME
+-- `W-OPEN-GOAL-COMMITTED` message text but different source locations. Before
+-- `pushMatchWarningOnceAt`'s dedup key became `(code, loc, msg)` this collapsed
+-- to one warning; the census must show two.
+--
+-- Shape borrowed from `test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk`: the
+-- two impls are ⊑-incomparable, `Q Int Bool (List ?e)` never closes, and
+-- `pickMostSpecificEntry` commits to the first-declared impl at each call.
+data Q a b c = Q a b c
+
+interface Sh a where
+  sh : a -> Int
+
+impl Sh (Q Int y z) where
+  sh _ = 1
+
+impl Sh (Q x Bool z) where
+  sh _ = 2
+
+main =
+  let a = sh (Q 1 True [])
+  println (a + sh (Q 1 True []))
