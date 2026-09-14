@@ -166,3 +166,32 @@ export
 accessLogLine : AccessEvent -> String
 accessLogLine event =
   "serve: access method=\{logField methodLimit event.method} path=\{logField pathLimit (accessLogPath event.path)} status=\{intToString event.status} bytes=\{intToString event.responseBytes} ms=\{intToString event.durationMillis} client=\{logField clientLimit event.client}"
+
+{- | One periodic sample of process-wide counters, taken on an interval by
+   `pds/shell/server.mdk`'s `statsLoop` rather than per request: active and
+   un-framed connections, open subscriptions, the configured account repo's
+   current revision, and blocks and blobs already on disk. `#2957`'s soak
+   reads this line to watch `#2572`'s disk growth over a run.
+
+   None of the six fields is attacker-supplied — they are this server's own
+   counters and store state, never anything off the wire — so unlike
+   `AccessEvent` none of them goes through `logField`. `rev` is `"-"` when no
+   account repo is configured yet. -}
+public export data StatsEvent = StatsEvent {
+  active : Int,
+  unframed : Int,
+  subscriptions : Int,
+  rev : String,
+  blocks : Int,
+  blobs : Int,
+}
+
+{- | The line itself, in the same `key=value` shape and `serve: ` prefix as
+   `accessLogLine`.
+
+   > statsLogLine StatsEvent { active = 3, unframed = 1, subscriptions = 0, rev = "3jzfcijpj2z2a", blocks = 42, blobs = 5 }
+   "serve: stats active=3 unframed=1 subscriptions=0 rev=3jzfcijpj2z2a blocks=42 blobs=5" -}
+export
+statsLogLine : StatsEvent -> String
+statsLogLine event =
+  "serve: stats active=\{intToString event.active} unframed=\{intToString event.unframed} subscriptions=\{intToString event.subscriptions} rev=\{event.rev} blocks=\{intToString event.blocks} blobs=\{intToString event.blobs}"

@@ -206,3 +206,39 @@ blobFileRead dir =
     Err message =>
       Err "blobfile: \{blobDir dir}: unreadable blob directory: \{message}"
     Ok shards => readShards dir shards []
+
+-- Bytes files among one shard's leaves, i.e. every leaf but the mime
+-- sidecars: a blob's shard holds exactly one of each per CID, so counting
+-- leaves that are not a sidecar counts blobs without reading any of them.
+countLeaves : List String -> Int
+countLeaves [] = 0
+countLeaves (leaf :: rest) =
+  if endsWith mimeSuffix leaf then countLeaves rest else 1 + countLeaves rest
+
+countShards : String -> List String -> <FileRead "_"> Result String Int
+countShards _ [] = Ok 0
+countShards dir (shard :: rest) =
+  if shard == stagingName then
+    countShards dir rest
+  else match isDir "\{blobDir dir}/\{shard}"
+    Ok False => countShards dir rest
+    _ => match listDir "\{blobDir dir}/\{shard}"
+      Err message =>
+        Err
+          "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
+      Ok leaves => map (countLeaves leaves + _) (countShards dir rest)
+
+{- | How many blobs are persisted beneath `<dir>/blobs`, without reading any
+   of their bytes: `pds/shell/server.mdk`'s periodic stats line wants a count
+   on an interval, and `blobFileRead`'s full verify-by-read pass is too much
+   work to repeat that often. A data directory that has never held a blob
+   counts as zero, the same convention `blobFileRead` uses. -}
+export
+blobFileCount : String -> <FileRead "_"> Result String Int
+blobFileCount dir =
+  if not (fileExists (blobDir dir)) then
+    Ok 0
+  else match listDir (blobDir dir)
+    Err message =>
+      Err "blobfile: \{blobDir dir}: unreadable blob directory: \{message}"
+    Ok shards => countShards dir shards

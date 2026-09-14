@@ -39,8 +39,14 @@ import http.{
   serializeResponse,
 }
 import array.{sliceClamped}
-import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
-import lib.accesslog.{AccessEvent(..), accessLogLine, responseStatusCode}
+import async.{Async, Wait, deadlineAfter, expired, liftIO, sleep, spawn}
+import lib.accesslog.{
+  AccessEvent(..),
+  StatsEvent(..),
+  accessLogLine,
+  responseStatusCode,
+  statsLogLine,
+}
 import lib.cid.{Cid, cidToString}
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.credential.{
@@ -66,6 +72,7 @@ import lib.ratelimit.{
 }
 import hex.{encode}
 import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
+import lib.blockstore.{blockStoreSize}
 import lib.repo.{
   Repo,
   repoCommitCid,
@@ -73,7 +80,9 @@ import lib.repo.{
   repoCommitTid,
   repoExportBlocks,
   repoLatestCommit,
+  repoStore,
 }
+import lib.tid.{tidToString}
 import lib.sync_event.{
   syncAccountFrame,
   syncCommitEventFor,
@@ -123,7 +132,7 @@ import lib.xrpc.{
 }
 import net.{Connection, Listener, listen}
 import net_async as A
-import shell.blobfile.{blobFileWrite}
+import shell.blobfile.{blobFileCount, blobFileWrite}
 import shell.egress.{Egress, egressAppviews, egressCall, egressMintToken}
 import shell.eventlog.{
   eventLogDiscardStaged,
@@ -167,6 +176,13 @@ bodyProgressTimeout = seconds 5
 -- takes. Reset for each request on a kept-alive connection.
 requestTimeout : Duration
 requestTimeout = seconds 60
+
+-- | Default for how often `statsLoop` samples and emits the process-wide
+-- stats line, when `pds/serve.mdk`'s `--stats-interval-ms` is not given.
+-- Exported so `serve.mdk`'s flag default and this default cannot drift apart.
+export
+defaultStatsInterval : Duration
+defaultStatsInterval = seconds 60
 
 -- | How long writing one response may take before the connection is closed.
 writeTimeout : Duration
@@ -957,20 +973,84 @@ servingEgress (Serving _ egress _) = egress
 servingProxyCensus : Serving -> ProxyCensus
 servingProxyCensus (Serving _ _ census) = census
 
+-- | One sample of the process-wide stats line, read off whatever the
+-- refs/store hold at the moment it runs and written to stdout. `dir`'s blob
+-- count is the one field that costs a directory walk; a failed walk (an
+-- unreadable shard, mid-write residue) drops this ONE line rather than the
+-- server, since `statsLoop` tries again at the next interval regardless.
+emitStats : String ->
+  Ref Store ->
+  Ref Int ->
+  Ref Int ->
+  Ref Int ->
+  <FileRead "_", Stdout> Unit
+emitStats dir storeRef active unframed subs =
+  let store = !storeRef
+  let (rev, blocks) = match storeRepo store
+    -- `storeSize`/the blob half's `BlockStore` counts BLOBS loaded into
+    -- memory, not this repository's commit/MST blocks — those live in the
+    -- `Repo`'s OWN `BlockStore` (`repoStore`), a distinct value despite the
+    -- shared type. Measured directly: a freshly `--init`ed repo reads
+    -- `storeSize store == 0` (no blob uploaded yet) while its genesis commit
+    -- already holds blocks, which `blockStoreSize (repoStore repo)` reports.
+    None => ("-", 0)
+    Some repo => (
+      tidToString (repoCommitTid (repoLatestCommit repo)),
+      blockStoreSize (repoStore repo),
+    )
+  match blobFileCount dir
+    Err _ => ()
+    Ok blobs =>
+      let () =
+        putStrLn
+          (statsLogLine StatsEvent {
+            active = !active,
+            unframed = !unframed,
+            subscriptions = !subs,
+            rev = rev,
+            blocks = blocks,
+            blobs = blobs,
+          })
+      flushStdout ()
+
+-- | Emit one stats line, then sleep `interval` and do it again, forever.
+-- Spawned alongside `acceptLoop` (the same shape `pds/serve.mdk`'s `announce`
+-- spawns `announceToRelay` in) so the periodic sample runs concurrently with
+-- connection handling instead of blocking it — which is why the sleep is
+-- `async.sleep`, which parks this ONE task and lets the scheduler run every
+-- other one meanwhile, and not `time.sleep`/`sleepMs`, which blocks the
+-- single thread the whole scheduler — `acceptLoop` included — runs on.
+statsLoop : String ->
+  Ref Store ->
+  Ref Int ->
+  Ref Int ->
+  Ref Int ->
+  Duration ->
+  Async <Clock, FileRead "_", Stdout | e> Unit
+statsLoop dir storeRef active unframed subs interval = defer
+  () <- liftIO (u => emitStats dir storeRef active unframed subs)
+  () <- sleep interval
+  statsLoop dir storeRef active unframed subs interval
+
 -- | Accept connections until the listener fails or is closed, running each on
 -- its own task, never more than `maxConcurrentConnections` at a time.
+-- `statsInterval` is `pds/serve.mdk`'s `--stats-interval-ms`, or
+-- `defaultStatsInterval` when the flag is absent.
 export
 runServer : Server ->
   String ->
   Ref Store ->
   Listener ->
   Serving ->
+  Duration ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
-runServer server dir storeRef lis serving = defer
+runServer server dir storeRef lis serving statsInterval = defer
   active <- liftIO (u => Ref 0)
   unframed <- liftIO (u => Ref 0)
   subscriptions <- liftIO (u => Ref 0)
   limiterRef <- liftIO (u => Ref initRateLimitState)
+  _ <- spawn
+    (statsLoop dir storeRef active unframed subscriptions statsInterval)
   acceptLoop
     server
     dir
