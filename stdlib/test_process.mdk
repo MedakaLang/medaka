@@ -97,15 +97,24 @@ boundedVerb cmd args = boundedVerbSeconds spawnTimeoutSeconds cmd args
    for the sweeps that spawn a single verb, so the ceiling is a parameter
    rather than one constant stretched to cover both.
 
+   `cmd` is resolved through `env` rather than execed directly, so a `cmd`
+   that does not exist reports `env`'s own nonzero exit and stderr instead
+   of `perl`'s `exec` failing silently and this returning `Ok (0, "", "")`
+   for a command that never ran.
+
    > boundedVerbSeconds 5 "sh" ["-c", "printf hi; exit 3"]
-   Ok (3, "hi", "") -}
+   Ok (3, "hi", "")
+   > boundedVerbSeconds 5 "medaka-test-process-doctest-no-such-command" []
+   Ok (127, "", "env: ‘medaka-test-process-doctest-no-such-command’: No such file or directory\n") -}
 export
 boundedVerbSeconds : Int ->
   String ->
   List String ->
   <Exec "_"> Result String (Int, String, String)
 boundedVerbSeconds secs cmd args =
-  runVerb "perl" (["-e", "alarm \{intToString secs}; exec @ARGV", cmd] ++ args)
+  runVerb
+    "perl"
+    (["-e", "alarm \{intToString secs}; exec @ARGV", "env", cmd] ++ args)
 
 {- | A fresh, empty directory of the host's choosing, for a test that has to
    write files.

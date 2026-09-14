@@ -1,5 +1,5 @@
 # META
-source_lines=331
+source_lines=340
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -101,15 +101,24 @@ boundedVerb cmd args = boundedVerbSeconds spawnTimeoutSeconds cmd args
    for the sweeps that spawn a single verb, so the ceiling is a parameter
    rather than one constant stretched to cover both.
 
+   `cmd` is resolved through `env` rather than execed directly, so a `cmd`
+   that does not exist reports `env`'s own nonzero exit and stderr instead
+   of `perl`'s `exec` failing silently and this returning `Ok (0, "", "")`
+   for a command that never ran.
+
    > boundedVerbSeconds 5 "sh" ["-c", "printf hi; exit 3"]
-   Ok (3, "hi", "") -}
+   Ok (3, "hi", "")
+   > boundedVerbSeconds 5 "medaka-test-process-doctest-no-such-command" []
+   Ok (127, "", "env: ‘medaka-test-process-doctest-no-such-command’: No such file or directory\n") -}
 export
 boundedVerbSeconds : Int ->
   String ->
   List String ->
   <Exec "_"> Result String (Int, String, String)
 boundedVerbSeconds secs cmd args =
-  runVerb "perl" (["-e", "alarm \{intToString secs}; exec @ARGV", cmd] ++ args)
+  runVerb
+    "perl"
+    (["-e", "alarm \{intToString secs}; exec @ARGV", "env", cmd] ++ args)
 
 {- | A fresh, empty directory of the host's choosing, for a test that has to
    write files.
@@ -350,7 +359,7 @@ missingTestFiles dir wanted = match listDir dir
 (DTypeSig true "boundedVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "boundedVerb" ((PVar "cmd") (PVar "args")) (EApp (EApp (EApp (EVar "boundedVerbSeconds") (EVar "spawnTimeoutSeconds")) (EVar "cmd")) (EVar "args")))
 (DTypeSig true "boundedVerbSeconds" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (EVar "cmd")) (EVar "args"))))
+(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
 (DTypeSig true "scratchDir" (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "expectSpawnOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyCon "Expectation")))))
@@ -388,7 +397,7 @@ missingTestFiles dir wanted = match listDir dir
 (DTypeSig true "boundedVerb" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String")))))))
 (DFunDef false "boundedVerb" ((PVar "cmd") (PVar "args")) (EApp (EApp (EApp (EVar "boundedVerbSeconds") (EVar "spawnTimeoutSeconds")) (EVar "cmd")) (EVar "args")))
 (DTypeSig true "boundedVerbSeconds" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "String") (TyCon "String"))))))))
-(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (EVar "cmd")) (EVar "args"))))
+(DFunDef false "boundedVerbSeconds" ((PVar "secs") (PVar "cmd") (PVar "args")) (EApp (EApp (EVar "runVerb") (ELit (LString "perl"))) (EBinOp "++" (EListLit (ELit (LString "-e")) (EBinOp "++" (EBinOp "++" (ELit (LString "alarm ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "secs")))) (ELit (LString "; exec @ARGV"))) (ELit (LString "env")) (EVar "cmd")) (EVar "args"))))
 (DTypeSig true "scratchDir" (TyEffect ((hole "Exec")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "scratchDir" () (EMatch (EApp (EApp (EVar "runVerb") (ELit (LString "mktemp"))) (EListLit (ELit (LString "-d")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))) (arm (PCon "Ok" (PTuple (PLit (LInt 0)) (PVar "out") PWild)) () (EApp (EVar "Ok") (EApp (EVar "trim") (EVar "out")))) (arm (PCon "Ok" (PTuple (PVar "code") PWild (PVar "err"))) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "mktemp -d exited ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))))))
 (DTypeSig true "expectSpawnOk" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ((hole "Exec")) None (TyCon "Expectation")))))
