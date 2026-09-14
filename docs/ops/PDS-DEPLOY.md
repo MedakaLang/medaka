@@ -2,7 +2,12 @@
 
 **Status:** IMPLEMENTED, not yet DEPLOYED. The bind, the refusal, and the
 artifacts below are landed (`#2606`, `#2757`, sprint `pds-leaves-loopback`),
-but no live deploy has happened — pointing a real domain at a real key is a
+and sprint `pds-it-runs-on-the-box` (#2960, #2965, #2964, #2958, #2959, #2970)
+landed build provenance (`--stamp-build`, `--version`), a health probe
+(`GET /xrpc/_health`), one access-log line per request, and a hardened
+`pds.service`/`Caddyfile` linted by their own gate — see "Versioned releases
+and rollback" and "Observability: version, health, and the access log" below.
+But no live deploy has happened — pointing a real domain at a real key is a
 manual, deliberate act for whoever runs this procedure, and this document
 describes how, not a completed deployment.
 
@@ -37,7 +42,9 @@ never sets it against anything but Caddy on the same box.
    accounts that way.) Do this once, before the first `systemctl enable
    --now pds`.
 
-2. **Build the binary.**
+2. **Build the binary.** For a one-off run, a plain build is enough; for a
+   running deployment, use the versioned-path layout in "Versioned releases
+   and rollback" below instead so a bad build is one command from reverting.
 
    ```sh
    ./medaka build pds/serve.mdk -o pdsd
@@ -106,6 +113,65 @@ never sets it against anything but Caddy on the same box.
    curl -sS https://<hostname>/.well-known/atproto-did
    curl -sS https://<hostname>/xrpc/com.atproto.server.describeServer
    ```
+
+## Versioned releases and rollback
+
+Step 2 above (`./medaka build pds/serve.mdk -o pdsd`) produces one binary.
+For a running deployment, keep each build under its own stamped path instead
+of overwriting the previous one in place, so a bad release is one command
+away from reverting:
+
+```sh
+STAMP=$(git rev-parse --short=9 HEAD)
+./medaka build pds/serve.mdk -o /opt/pds/releases/$STAMP/pdsd --stamp-build
+ln -sfn /opt/pds/releases/$STAMP /opt/pds/current
+```
+
+Point `pds.service`'s `ExecStart` at `/opt/pds/current/pdsd` rather than at a
+stamp-specific path, so promoting or rolling back a release never edits the
+unit file. `--stamp-build` bakes the commit into the binary
+(`compiler/driver/build_cmd.mdk`, #2960), so `pdsd --version` on the running
+binary and `readlink /opt/pds/current` should always name the same commit —
+a mismatch means the symlink was moved without a restart.
+
+**Rollback**, once a known-good stamp exists under `/opt/pds/releases/`:
+
+```sh
+ln -sfn /opt/pds/releases/<previous-stamp> /opt/pds/current
+systemctl restart pds
+```
+
+One command repoints the symlink; the restart is what makes systemd re-exec
+against it. Nothing under `/opt/pds/releases/` needs deleting to roll back —
+old stamps stay on disk as the rollback targets until an operator prunes them.
+
+## Observability: version, health, and the access log
+
+Three things this server now reports on its own, none of them requiring a
+live deploy to exercise:
+
+- **`pdsd --version`** prints `pdsd 0.1.0 (<commit>, built <date>)` when built
+  with `--stamp-build` as above, degrading field-by-field (bare `pdsd 0.1.0`)
+  when the flag was omitted. The same startup line the process logs on boot
+  (`serve: config did=… …`) is followed by `serve: event log recovery: …`,
+  naming what recovery did to the on-disk firehose log at startup.
+- **`GET /xrpc/_health`** is a public, unauthenticated, cheaply-rate-limited
+  route outside the NSID registry (`healthPath`, `pds/lib/xrpc.mdk`) that
+  answers with the same version stamp `--version` reports. Use it as the
+  systemd/Caddy liveness check:
+
+  ```sh
+  curl -sS http://127.0.0.1:8080/xrpc/_health
+  ```
+- **The access log** is one `serve: access …` line per request — successes
+  and refusals alike — naming method, path (query string dropped), status,
+  response size, duration, and client, all field-length-capped
+  (`accessLogLine`, `pds/lib/accesslog.mdk`). It goes to the same stream as
+  the startup banner, so under the systemd unit both land in the journal:
+
+  ```sh
+  journalctl -u pds -f
+  ```
 
 ## Sharing the box
 
@@ -313,8 +379,10 @@ world-readable is a leaked secret, not merely a permission bug.
   `<data>/blobs` is skipped rather than fatal (`pds/test/serve_e2e.sh` cases
   15-18); the block half still refuses.
 - **`#2773`/`#2774` (perf)** — open, tracked separately.
-- **`#2608` (firehose, Phase 5)** — out of scope; this PDS does not publish
-  `com.atproto.sync.subscribeRepos`.
+- **`#2608` (firehose, Phase 5)** — landed (sprint `pds-a-relay-can-index-us`):
+  `com.atproto.sync.subscribeRepos` is a real event stream, backed by the
+  bounded on-disk event log (P12). Nothing further for this procedure to do
+  beyond what "Discovery: announcing to a relay" above already covers.
 - **`#1962` (signing-parity oracle is nightly-only)** — confirm that nightly
   job is green immediately before a real deploy; this procedure does not
   re-run it.
