@@ -330,13 +330,19 @@ badLines ls = filter (l => contains ": FAIL" l || contains ": ERROR" l) ls
    `compiler/driver/medaka_cli.mdk`, or `""` when that source no longer has
    the shape this looks for.
 
-   Read rather than hand-copied so a reworded warning does not rot this file,
-   and anchored on the CODE (`++ compilerDir`, the splice that makes the
-   sentence variable) rather than on the prose, so a `medaka fmt` reflow of
-   the message does not silently switch the check off. `test/
-   lib_stale_warning.sh`'s shell twin anchors on `let msg = "…" ++
-   compilerDir` on ONE line, which the current source spreads over three — so
-   it reads `""` and its classification has been inert. -}
+   Read rather than hand-copied, and anchored on the CODE (`++ compilerDir`,
+   the splice that makes the sentence variable) rather than on the prose. That
+   buys exactly one thing: REWORDING the warning does not rot this file, which
+   is the failure mode `test/lib_stale_warning.sh`'s shell twin has — it
+   anchors on `let msg = "…" ++ compilerDir` as ONE line, which the current
+   source spreads over three, so it reads `""` and its classification has been
+   inert.
+
+   It does NOT survive every reflow. `markerBefore` wants `++ compilerDir` at
+   the head of its own line and the quoted prefix on the line before, so a
+   `medaka fmt` that joins the two degrades this to the same `""`. That is a
+   lost hint on an already-failing row, never a wrong verdict: `staleNote`
+   appends nothing when the marker is `""`. -}
 staleMarker : <FileRead "_", IO> String
 staleMarker = match readFile "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
   Err _ => ""

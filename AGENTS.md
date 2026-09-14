@@ -765,7 +765,8 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   `test/wasm/*.sh` gates live under `test/wasm/`.
 - ⚠️ **[T-SNAPSHOT-SELF]** Compiler source is in the snapshot corpus — a source change moves its
   own golden. Land it same PR, or a terminal commit (`PRECOMMIT_SNAPSHOT_DEFER=1`, #1179). Bless
-  via the **gate**, never the CLI: `sh test/diff_compiler_snapshot_<suite>.sh --bless <path>`.
+  via the **write tool**, never the `medaka snapshot` CLI:
+  `sh test/snapshot_bless.sh --bless <path>`.
 - ⚠️ **[T-LEGA-GOLDEN]** A top-level-binding change also moves
   `test/selfproc_goldens/legA/<module>.golden` — red only in the `gates` matrix, on whichever
   executor row currently holds `diff_compiler_selfproc` ([W-SHARD-NEUTRAL] — derive it, don't

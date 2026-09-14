@@ -123,9 +123,27 @@ PY
 # $TMP/out.ndjson as one canonical JSON object per line -- sorted keys,
 # `file://` uris reduced to a basename, so a golden carries no build path and no
 # dictionary order.
+#
+# The spawn's exit status and stderr are both GRADED, not discarded. This tool
+# only writes, so a failed or complaining server has nothing downstream to
+# catch it: a session that died after two frames still decodes to a non-empty
+# dump, and a stale-binary warning on stderr ([B-STDERR]) is exactly the
+# condition under which a golden must not be minted at all.
 drive() {
   python3 "$TMP/frame.py" > "$TMP/in.bin"
-  MEDAKA_ROOT="$ROOT" bounded "$MEDAKA" lsp < "$TMP/in.bin" > "$TMP/out.bin" 2>/dev/null
+  rc=0
+  MEDAKA_ROOT="$ROOT" bounded "$MEDAKA" lsp \
+    < "$TMP/in.bin" > "$TMP/out.bin" 2> "$TMP/lsp.err" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "medaka lsp exited $rc — refusing to mint a golden from that session" >&2
+    sed 's/^/    /' "$TMP/lsp.err" >&2
+    exit 1
+  fi
+  if [ -s "$TMP/lsp.err" ]; then
+    echo "medaka lsp wrote to stderr — refusing to mint a golden from that session" >&2
+    sed 's/^/    /' "$TMP/lsp.err" >&2
+    exit 1
+  fi
   python3 "$TMP/decode.py" "$TMP/out.bin" > "$TMP/out.ndjson"
   # An empty dump is never a golden: the session produced no response frames.
   [ -s "$TMP/out.ndjson" ] || { echo "the session produced no response frames" >&2; exit 1; }

@@ -216,8 +216,13 @@ gates: medaka
 ##             sh test/snapshot_bless.sh --bless compiler/frontend/lexer.mdk
 ##           There is no whole-suite bless, and a diagnostic-bearing section will refuse
 ##           to bless at all (see compiler/tools/snapshot.mdk's header for the 3 locks).
+##           MEDAKA_ROOT must be ABSOLUTE here: `medaka snapshot` strips the root
+##           prefix out of every payload by plain string substitution, so a relative
+##           root of `.` also rewrites every literal `.` in the payload (a fixture
+##           printing `[0..9]` snapshots as `[0<ROOT><ROOT>9]`). test/run_gates.sh and
+##           .githooks/pre-commit each pass an absolute root for the same reason.
 snapshot-check: medaka
-	./medaka test --native test/diff_compiler_snapshot_frontend_test.mdk
+	MEDAKA_ROOT="$(CURDIR)" ./medaka test --native test/diff_compiler_snapshot_frontend_test.mdk
 
 ## ci      — everything CI runs, locally. Slow. Prefer `make preflight`.
 ci: medaka

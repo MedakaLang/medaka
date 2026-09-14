@@ -1,5 +1,5 @@
 # META
-source_lines=340
+source_lines=342
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for a test that runs a program.
@@ -60,8 +60,8 @@ underRoot rel = "\{medakaRoot}/\{rel}"
 
    The default is a path, never the bare name `medaka`, so an unset
    `MEDAKA` cannot resolve to some other build on `PATH`, or to nothing at
-   all, which still spawns and exits 127 with no output, an outcome any
-   assertion phrased over the output would accept. -}
+   all — which runs no verb and exits 127, an outcome an assertion phrased
+   over stdout alone would accept. -}
 export
 medakaBin : <IO> String
 medakaBin = getEnvOr "MEDAKA" "\{medakaRoot}/medaka"
@@ -104,12 +104,14 @@ boundedVerb cmd args = boundedVerbSeconds spawnTimeoutSeconds cmd args
    `cmd` is resolved through `env` rather than execed directly, so a `cmd`
    that does not exist reports `env`'s own nonzero exit and stderr instead
    of `perl`'s `exec` failing silently and this returning `Ok (0, "", "")`
-   for a command that never ran.
+   for a command that never ran. The example below asserts the code and that
+   stderr is non-empty, never the wording: that sentence is `env`'s, and it
+   is neither the same across implementations nor stable under `LC_ALL`.
 
    > boundedVerbSeconds 5 "sh" ["-c", "printf hi; exit 3"]
    Ok (3, "hi", "")
-   > boundedVerbSeconds 5 "medaka-test-process-doctest-no-such-command" []
-   Ok (127, "", "env: ‘medaka-test-process-doctest-no-such-command’: No such file or directory\n") -}
+   > map ((c, o, e) => (c, o, e /= "")) (boundedVerbSeconds 5 "medaka-no-such-verb" [])
+   Ok (127, "", True) -}
 export
 boundedVerbSeconds : Int ->
   String ->

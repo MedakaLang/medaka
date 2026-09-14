@@ -62,8 +62,8 @@ The Medaka binary to spawn, from `MEDAKA`, defaulting to the one in
 
 The default is a path, never the bare name `medaka`, so an unset
 `MEDAKA` cannot resolve to some other build on `PATH`, or to nothing at
-all, which still spawns and exits 127 with no output, an outcome any
-assertion phrased over the output would accept.
+all — which runs no verb and exits 127, an outcome an assertion phrased
+over stdout alone would accept.
 
 ## Spawning
 
@@ -112,9 +112,18 @@ ceiling sized to that pipeline, and one sized to it would be far too loose
 for the sweeps that spawn a single verb, so the ceiling is a parameter
 rather than one constant stretched to cover both.
 
+`cmd` is resolved through `env` rather than execed directly, so a `cmd`
+that does not exist reports `env`'s own nonzero exit and stderr instead
+of `perl`'s `exec` failing silently and this returning `Ok (0, "", "")`
+for a command that never ran. The example below asserts the code and that
+stderr is non-empty, never the wording: that sentence is `env`'s, and it
+is neither the same across implementations nor stable under `LC_ALL`.
+
 ```medaka
 > boundedVerbSeconds 5 "sh" ["-c", "printf hi; exit 3"]
 Ok (3, "hi", "")
+> map ((c, o, e) => (c, o, e /= "")) (boundedVerbSeconds 5 "medaka-no-such-verb" [])
+Ok (127, "", True)
 ```
 
 ### `scratchDir`

@@ -1,9 +1,12 @@
 #!/bin/sh
 # test/lsp_warm_session.sh — the LSP property that needs a LIVE session.
 #
-# A TOOL, not a gate: `test/diff_compiler_lsp_test.mdk` spawns this and grades
-# its exit code and transcript, and `test/CI-COVERAGE-TOOLS.txt` ledgers it so
-# the shard-coverage gate does not look for a registry row of its own.
+# Invoked BY another gate, never by a workflow: `test/diff_compiler_lsp_test.mdk`
+# spawns this and grades its exit code and transcript, so its verdict reaches CI
+# through THAT registry row. It GRADES, so it is not a CI-COVERAGE-TOOLS.txt
+# entry (those claim "running me proves nothing about the compiler"); it is
+# ledgered in `test/CI-COVERAGE-EXCEPTIONS.txt`, which records why no workflow
+# step names it.
 #
 # Every other LSP property is one framed request stream in and one framed
 # response stream out, which the native gate drives directly. This one is not:

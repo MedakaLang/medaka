@@ -74,12 +74,12 @@ spawnEnv = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{emitterBin}"]
    failure rather than a skip: the registry declares `toolchain = ["sqlite3"]`
    and there is no skip marker to reach for (#2599 item 8).
 
-   `env` carries the two variables, and carries them for a second reason:
-   `boundedVerbSeconds` execs through `perl`, whose failed `exec` RETURNS
-   instead of exiting, so a missing `cmd` spawned through it directly reports
-   exit 0 with no output — indistinguishable from a program that ran and
-   printed nothing. `env` is always present, so the 127 that comes back is the
-   host's own. -}
+   `env` carries the two variables, which is the whole reason it is here:
+   Medaka has no `setEnv`. It ends up being `env` twice, harmlessly —
+   `boundedVerbSeconds` resolves `cmd` through an `env` of its own, which is
+   what makes a missing `cmd` report the host's 127 and its stderr rather
+   than `perl`'s failed `exec` returning as if the program had run and
+   printed nothing. -}
 spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
 spawnOut secs cmd args =
   let line = unwords (cmd :: args)

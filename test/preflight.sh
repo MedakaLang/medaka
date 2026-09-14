@@ -814,8 +814,8 @@ while IFS= read -r f; do
     # is the whole point of that block.
 
     # ── eval: also the in-language suite and the capability matrix ──
-    # diff_compiler_snapshot* covers diff_compiler_snapshot_eval, whose `# EVAL`
-    # section is produced by the eval pipeline — an eval.mdk change moves it.
+    # diff_compiler_snapshot* covers diff_compiler_snapshot_frontend, whose eval
+    # families carry an `# EVAL` section the eval pipeline produces — eval.mdk moves it.
     # #1131: eval/eval.mdk is a cited site in BOTH semantics tables.
     compiler/eval/*|compiler/ir/core_ir_eval.mdk)
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'

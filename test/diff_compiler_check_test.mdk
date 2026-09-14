@@ -49,8 +49,9 @@
    What the subset leg pins is MEMBERSHIP: each scheme the
    `# TYPES_USER` snapshot commits must be a line the driver printed. What it
    does not pin is anything the driver prints beyond them — the prelude's own
-   ~117 schemes, which `diff_compiler_snapshot_prelude` pins once from a
-   single `core.mdk` dump rather than re-stating per clean fixture. Narrowing
+   ~117 schemes, which `diff_compiler_snapshot_frontend`'s `prelude` family
+   pins once from a single `core.mdk` dump rather than re-stating per clean
+   fixture. Narrowing
    the other legs to that rule would stop them seeing a diagnostic the driver
    emitted and the golden does not contain, which is the whole of what a
    broken fixture asserts.
@@ -123,7 +124,7 @@ data Grade = SubsetOfOutput | SortedEqual
    - `SiblingExpected` — `<stem>.expected` beside the fixture.
    - `TypesUserSnapshot dir` — the `# TYPES_USER` section of
      `<dir>/<stem>.md` under the repository root, the same snapshot
-     `diff_compiler_snapshot_types_user` writes.
+     `diff_compiler_snapshot_frontend`'s `diff_fixtures_types` family writes.
    - `InFixtureDir name` — a file of that fixed name inside the fixture's own
      directory, unrelated to the entry's stem. -}
 data Golden = SiblingExpected | TypesUserSnapshot String | InFixtureDir String

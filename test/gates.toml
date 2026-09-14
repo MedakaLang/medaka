@@ -1256,7 +1256,7 @@ kind = "native"
 migration = "done"
 run = "test/cross_project_deps_test.mdk"
 oracles = []
-sources = ["test/compiler_cli_test_support.mdk"]
+sources = ["compiler/driver/loader.mdk", "test/compiler_cli_test_support.mdk", "test/cross_project_deps_test.mdk"]
 corpus = ["test/cross_project_fixtures"]
 toolchain = []
 

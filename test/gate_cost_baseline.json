@@ -1,7 +1,7 @@
 {
   "schema": "gate-cost-baseline/1",
   "note": "Per-gate wall-clock cost, measured by test/run_gates.sh on UNNARROWED CI runs and folded in by test/gate_cost_ingest.sh. medianMs is the LOWER median of the retained raw ms samples; a balancer packs shards from it. GENERATED — do not hand-edit; re-derive from the artifacts instead.",
-  "generated": "2026-09-14T06:52:38Z",
+  "generated": "2026-09-14T08:14:41Z",
   "maxSamples": 9,
   "runs": [
     {"key": "34734371876:1:gates_1", "runId": "34734371876", "runAttempt": "1", "shard": "gates_1", "event": "merge_group", "sha": "59cb8c9a5fef4748a96434527563943cf6e3179c", "ref": "refs/heads/gh-readonly-queue/main/pr-2980-ecad818582153f8451320eea9d3386dc8bfe047c", "date": "2026-09-13T03:09:40Z", "jobs": 2, "parallel": true, "rowElapsedMs": 368639, "gates": 4, "gatesDigest": 383144671},
@@ -40,7 +40,6 @@
     {"name": "check_build_oracles_for_consistency", "medianMs": 2154, "samples": 9, "ms": [2319, 2334, 2189, 2197, 1714, 2137, 2154, 2129, 2010], "sampleRuns": ["34688988150", "34689926764", "34684537191", "34687243306", "34735095186", "34745910321", "34734371876", "34749162963", "34733108561"]},
     {"name": "check_syntax_examples", "medianMs": 32657, "samples": 9, "ms": [32340, 30594, 32657, 20548, 33658, 26432, 33845, 33306, 34715], "sampleRuns": ["34688988150", "34689926764", "34684537191", "34687243306", "34735095186", "34745910321", "34734371876", "34749162963", "34733108561"]},
     {"name": "cross_project_deps", "medianMs": 4603, "samples": 9, "ms": [4715, 4632, 4436, 4674, 4224, 4608, 4520, 4603, 4380], "sampleRuns": ["34688988150", "34689926764", "34684537191", "34687243306", "34735095186", "34745910321", "34734371876", "34749162963", "34733108561"]},
-    {"name": "cross_project_twonames", "medianMs": 1312, "samples": 9, "ms": [1242, 1375, 1379, 1288, 1150, 1338, 1333, 1312, 1241], "sampleRuns": ["34688988150", "34689926764", "34684537191", "34687243306", "34735095186", "34745910321", "34734371876", "34749162963", "34733108561"]},
     {"name": "diff_async", "medianMs": 6780, "samples": 9, "ms": [6295, 5098, 5944, 5406, 7158, 7042, 7064, 7261, 6780], "sampleRuns": ["34688988150", "34689926764", "34684537191", "34687243306", "34735095186", "34745910321", "34734371876", "34749162963", "34733108561"]},
     {"name": "diff_compiler_analyze_project", "medianMs": 5831, "samples": 9, "ms": [5791, 5877, 5831, 4427, 6795, 6014, 4553, 4889, 6096], "sampleRuns": ["34688988150", "34689926764", "34684537191", "34687243306", "34735095186", "34745910321", "34734371876", "34749162963", "34733108561"]},
     {"name": "diff_compiler_anf_identity", "medianMs": 32, "samples": 9, "ms": [35, 32, 30, 31, 23, 36, 30, 32, 35], "sampleRuns": ["34688988150", "34689926764", "34684537191", "34687243306", "34735095186", "34745910321", "34734371876", "34749162963", "34733108561"]},

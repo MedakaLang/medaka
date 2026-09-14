@@ -776,6 +776,9 @@ checkOneDiag [d] [o] = somes [
   unless
     (strField "source" d == "medaka")
     "the diagnostic's source is not \"medaka\"",
+  unless
+    (strField "source" o == "medaka")
+    "check --json's diagnostic is not sourced \"medaka\" either, so the twin proves nothing",
   unless (get "message" d /= None) "the diagnostic carries no message",
   unless
     (endpoint "start" d == endpoint "start" o)
@@ -947,12 +950,23 @@ hoverKind idn objs = match replyTo idn objs
     Some (JString k) => k
     _ => ""
 
+{- | The WHOLE `contents` object of the reply to `id`, not one member of it.
+
+   The golden comparison is phrased over this rather than over `.value`
+   because a member ADDED to `contents` is invisible to a per-member
+   comparison — the reply would grow a field the golden never recorded and
+   every assertion would still hold. -}
+hoverContents : Int -> List Json -> Option Json
+hoverContents idn objs = match replyTo idn objs
+  None => None
+  Some o => dig ["result", "contents"] o
+
 gradeHover : Seen -> List String
 gradeHover s = somes [
   unless (hoverKind 2 s.objs == "markdown") "the hover body is not Markdown",
   unless
-    (hoverValue 2 s.objs == hoverValue 2 s.gold)
-    "the hover body differs from the golden: got \{debug (hoverValue 2 s.objs)}, want \{debug (hoverValue 2 s.gold)}",
+    (hoverContents 2 s.objs == hoverContents 2 s.gold)
+    "the hover contents differ from the golden: got \{debug (hoverContents 2 s.objs)}, want \{debug (hoverContents 2 s.gold)}",
   unless
     (contains "double" (hoverValue 2 s.objs))
     "the hover body does not name `double`, so it is not this identifier's type",
@@ -1211,10 +1225,17 @@ test "every LSP request set answers as its golden and its source say" =
 warmSessionScript : String
 warmSessionScript = "test/lsp_warm_session.sh"
 
+{- | Spawns the script with the shell in program position and the path as the
+   first argument of the same call.
+
+   Spelled inline rather than through a `let`-bound argument list because
+   `test/diff_compiler_tier_drift.sh` reads this call to derive when
+   `lsp_warm_session` runs — this module IS that gate's only invocation site,
+   and a name in front of the list hides it. -}
 runWarmSession : <Exec "_", IO> Result String (Int, String, String)
-runWarmSession =
-  let args = ["\{medakaRoot}/\{warmSessionScript}"]
-  boundedInTree sessionTimeoutSeconds "sh" args
+runWarmSession = boundedInTree sessionTimeoutSeconds "sh" [
+  "\{medakaRoot}/\{warmSessionScript}",
+]
 
 test "a warm multi-module session publishes what a cold check --json reports" =
   match runWarmSession

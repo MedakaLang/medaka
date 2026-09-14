@@ -124,6 +124,13 @@ buildAndRunGolden binName entry goldenPath = match scratchDir
             if contains "E-PANIC" binErr then
               fail
                 "built binary panicked (exit \{intToString binCode}): \{debug (chompNewlines stripped)}"
+            else if binCode /= 0 then
+              -- The two conjuncts `binaryRanClean` grades, on a row that has
+              -- no `Agreement` to hand it: a binary that prints the golden
+              -- and then exits nonzero is a failure the output comparison
+              -- alone accepts.
+              fail
+                "built binary exited \{intToString binCode}: \{debug (chompNewlines stripped)}"
             else
               compareGolden goldenPath stripped
 

@@ -145,6 +145,14 @@ family_files() {
 # True when the absolute path $2 is inside (or is) the corpus named by spec $1.
 # A DIRECTORY argument matches a family whose corpus lies under it, which is
 # what makes `--bless compiler/frontend` and `--bless stdlib` work.
+#
+# The upward half is deliberately ONE level and `file:`-only. A `dir:` or
+# compiler corpus is already reached by its own root going down, so the only
+# case it has to serve is a single-file family whose file sits directly in the
+# directory named — `--bless stdlib` reaching `prelude` (corpus
+# `stdlib/core.mdk`). Matching any ANCESTOR instead made `--bless $ROOT` and
+# `--bless $ROOT/test` own a dozen families apiece: a whole-suite bless by
+# another spelling, which this tool's header says does not exist.
 spec_owns() {
   case "$1" in
     dir:*)  _root="$ROOT/${1#dir:}" ;;
@@ -155,8 +163,9 @@ spec_owns() {
     "$_root") return 0 ;;
     "$_root"/*) return 0 ;;
   esac
-  # $2 is a directory the corpus sits under (e.g. $2=stdlib, corpus=core.mdk).
-  case "$_root" in "$2"/*) return 0 ;; esac
+  case "$1" in
+    file:*) [ "$2" = "$(dirname "$_root")" ] && return 0 ;;
+  esac
   return 1
 }
 
