@@ -1,7 +1,7 @@
 #!/bin/sh
-# EMOJI-SHOUT DIFF CHECK (CI twin, #2621).
+# SHOUT DIFF CHECK (CI twin, #2621; widened #S-register-not-sigil).
 #
-# `.githooks/pre-commit` check 6 rejects a commit that ADDS a new 🚨/⚠️/🔒
+# `.githooks/pre-commit` check 6 rejects a commit that ADDS a new shout
 # line to a staged .mdk. That is the fast feedback, and it is also
 # bypassable: `git commit --no-verify` skips every hook, and a hook is not
 # installed at all in a fresh clone. This gate makes the same assertion
@@ -10,13 +10,19 @@
 # around the hook.
 #
 # WHAT IT PROVES: no ADDED line (a line the diff shows as `+`, excluding the
-# `+++` file-header line) in a .mdk file outside test/ introduces 🚨, ⚠️, or
-# 🔒. An existing shout line that is merely touched (context around an
-# edit) but textually unchanged does not trigger -- only genuinely new
+# `+++` file-header line) in a .mdk file outside test/ introduces 🚨/⚠️/🔒,
+# nor the sigil-free shout register (census class 10: 3+ consecutive
+# ALL-CAPS words) on a comment-shaped line (`^[ \t]*--` after the leading
+# diff `+`). The sigil check is not comment-scoped -- a sigil is rare
+# enough outside comments that this was never an issue for it; the
+# sigil-free regex IS scoped, because it also matches ALL-CAPS code and
+# string literals (CLI help, error text) and would false-positive on those
+# unscoped. An existing shout line that is merely touched (context around
+# an edit) but textually unchanged does not trigger -- only genuinely new
 # shout text does.
 #
-# WHAT IT DOES NOT PROVE: that the existing 1,469-line census figure
-# (test/comment_register_census.sh) is right, wrong, or moving -- this gate
+# WHAT IT DOES NOT PROVE: that the existing census figures
+# (test/comment_register_census.sh) are right, wrong, or moving -- this gate
 # drains nothing; it only stops the count from growing further. `.md`
 # files are out of scope entirely (this only ever looks at `.mdk`).
 #
@@ -24,6 +30,12 @@
 # .mdk, test/** excluded, diff-filter ACM) -- re-derived independently here
 # rather than shared code, so `--no-verify` cannot bypass this by skipping
 # the hook: the CI arm does not read anything the hook computed.
+#
+# re_emoji/re_shout must stay byte-identical to the same-named literals in
+# .githooks/pre-commit and test/comment_register_census.sh. Rather than
+# sharing code (which would reintroduce the coupling the paragraph above
+# avoids), this script asserts the three copies agree, on every run, by
+# comparing the literal `name='...'` source lines textually.
 #
 # Needs no built ./medaka -- pure git diff + grep, like the hook's check 6.
 #
@@ -36,6 +48,22 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT" || exit 2
 
 re_emoji='🚨|⚠️|🔒'
+re_shout='([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+'
+
+this_re_emoji="re_emoji='$re_emoji'"
+this_re_shout="re_shout='$re_shout'"
+for pair in "$ROOT/.githooks/pre-commit" "$ROOT/test/comment_register_census.sh"; do
+  other_re_emoji="$(grep -m1 "^re_emoji=" "$pair")"
+  other_re_shout="$(grep -m1 "^re_shout=" "$pair")"
+  if [ "$other_re_emoji" != "$this_re_emoji" ]; then
+    echo "FAIL: re_emoji diverges between $pair ($other_re_emoji) and this script ($this_re_emoji)"
+    exit 1
+  fi
+  if [ "$other_re_shout" != "$this_re_shout" ]; then
+    echo "FAIL: re_shout diverges between $pair ($other_re_shout) and this script ($this_re_shout)"
+    exit 1
+  fi
+done
 
 HEAD="${2:-HEAD}"
 BASE="${1:-}"
@@ -65,19 +93,25 @@ fi
 
 bad=""
 for f in $files; do
-  hit="$(git diff -U0 "$BASE" "$HEAD" -- "$f" | grep '^+' | grep -v '^+++' | grep -E "$re_emoji")"
-  if [ -n "$hit" ]; then
+  added="$(git diff -U0 "$BASE" "$HEAD" -- "$f" | grep '^+' | grep -v '^+++')"
+  [ -z "$added" ] && continue
+  sigil_hit="$(printf '%s\n' "$added" | grep -E "$re_emoji")"
+  comment_added="$(printf '%s\n' "$added" | sed 's/^+//' | grep -E '^[ \t]*--')"
+  shout_hit=""
+  [ -n "$comment_added" ] && shout_hit="$(printf '%s\n' "$comment_added" | grep -E "$re_shout")"
+  if [ -n "$sigil_hit" ] || [ -n "$shout_hit" ]; then
     bad="$bad $f"
     echo ""
     echo "  $f:"
-    printf '%s\n' "$hit" | sed 's/^/      /'
+    [ -n "$sigil_hit" ] && printf '%s\n' "$sigil_hit" | sed 's/^/      /'
+    [ -n "$shout_hit" ] && printf '%s\n' "$shout_hit" | sed 's/^/      /'
   fi
 done
 
 if [ -n "$bad" ]; then
   echo ""
-  echo "FAIL: new emoji-shout comment line(s) added ($re_emoji) in:$bad"
-  echo "  See AGENTS.md [T-COMMENT-REGISTER] -- no new 🚨/⚠️/🔒 shout comments."
+  echo "FAIL: new shout comment line(s) added (🚨/⚠️/🔒 or sigil-free ALL-CAPS) in:$bad"
+  echo "  See AGENTS.md [T-COMMENT-REGISTER] -- no new shout comments."
   exit 1
 fi
 
