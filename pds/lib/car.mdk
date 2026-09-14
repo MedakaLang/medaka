@@ -217,10 +217,17 @@ encodedSectionsSize ((cid, block) :: rest) total =
         Ok () => encodedSectionsSize rest next
 
 {- | Canonically encode the header and preserve the caller's explicit block
-   order. Every row is verified before any bytes are returned. -}
-export
-carEncode : List Cid -> List (Cid, Array Int) -> Result String (Array Int)
-carEncode roots blocks = match checkCarBlocks (length blocks)
+   order, once `verified` says the rows are admissible.
+
+   `verified` is what the two encoders below differ in, and it is inspected
+   LAST so that a malformed input reports the same refusal from both: the
+   block count, the header encoding and the section sizes are all decided
+   before the row verification's answer is read. -}
+carEncodeChecked : List Cid ->
+  List (Cid, Array Int) ->
+  Result String Unit ->
+  Result String (Array Int)
+carEncodeChecked roots blocks verified = match checkCarBlocks (length blocks)
   Err message => Err message
   Ok () => match dagCborEncode (headerValue roots 1)
     Err message => Err "car: header encoding failed: \{message}"
@@ -229,14 +236,42 @@ carEncode roots blocks = match checkCarBlocks (length blocks)
       let headerSize = arrayLength headerPrefix + arrayLength header
       match encodedSectionsSize blocks headerSize
         Err message => Err message
-        Ok _ => match makeCar roots blocks
+        Ok _ => match verified
           Err message => Err message
-          Ok _ =>
+          Ok () =>
             let out = newBuilder ()
             let () = emitArray headerPrefix 0 out
             let () = emitArray header 0 out
             let () = emitSections blocks out
             Ok (buildArray out)
+
+{- | Canonically encode the header and preserve the caller's explicit block
+   order. Every row is verified before any bytes are returned. -}
+export
+carEncode : List Cid -> List (Cid, Array Int) -> Result String (Array Int)
+carEncode roots blocks =
+  carEncodeChecked roots blocks (map (_ => ()) (makeCar roots blocks))
+
+rowsVerified : List (Cid, Array Int) -> Result String Unit
+rowsVerified blocks = match blockStoreFromBlocks blocks
+  Err message => Err "car: \{message}"
+  Ok _ => Ok ()
+
+{- | A CAR whose `roots` list is EMPTY, carrying the caller's blocks in the
+   caller's order.
+
+   The atproto profile this module otherwise enforces — at least one root,
+   whose block is present — is a property of the repository CARs: `getRepo`'s
+   export, a `#commit` event's `blocks`, a `#sync` event's. It is not a
+   property of the format, and one official route contradicts it:
+   `com.atproto.sync.getBlocks` answers a bare bag of blocks, whose header
+   names no root at all, because the blocks it returns are the ones the caller
+   asked for by CID and nothing relates them to each other. So this encoder
+   exists beside `carEncode` rather than as a relaxation of it, and DECODING
+   still refuses a rootless CAR: nothing this server reads is one. -}
+export
+carEncodeRootless : List (Cid, Array Int) -> Result String (Array Int)
+carEncodeRootless blocks = carEncodeChecked [] blocks (rowsVerified blocks)
 
 -- | Strictly decode one complete CARv1 byte array.
 export

@@ -110,6 +110,8 @@ CELL get-repo-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL get-latest-commit-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL list-repos-empty PASS status=200 media=application/json body={"repos":[]} state=unchanged
 CELL get-repo-status-unconfigured PASS status=400 error=RepoNotFound state=unchanged
+CELL sync-get-record-unconfigured PASS status=400 error=RepoNotFound state=unchanged
+CELL sync-get-blocks-unconfigured PASS status=400 error=RepoNotFound state=unchanged
 CELL read-route-requires-get PASS status=405 error=MethodNotAllowed state=unchanged
 CELL unregistered-xrpc-still-404 PASS status=404 error=NotFound state=unchanged
 CELL preflight-timeline PASS status=204
@@ -149,7 +151,7 @@ CELL service-auth-foreign-audience PASS decision=refused status=400 error=Invali
 CELL service-auth-protected-lxm PASS decision=refused status=400 error=InvalidRequest message=cannot request a service auth token for the following method: com.atproto.server.getSession signed=none
 CELL service-auth-exp-beyond-an-hour PASS decision=refused status=400 error=BadExpiration message=cannot request a token with an expiration more than an hour in the future signed=none
 CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set
-cells: 57/57 repository-free routes, proxy dispositions and service-auth mints
+cells: 59/59 repository-free routes, proxy dispositions and service-auth mints
 TOTAL: PASS
 EOF
 
@@ -226,7 +228,7 @@ check_cells() {
     || fail "$label missed the refusal of a window beyond an hour"
   grep -F -q 'CELL service-auth-protected-methods-corpus PASS corpus=16 transcribed=16 same-set' "$output" \
     || fail "$label missed the transcribed protected-methods list being compared to the corpus"
-  grep -F -q 'cells: 57/57 repository-free routes, proxy dispositions and service-auth mints' "$output" || fail "$label cell count is incomplete"
+  grep -F -q 'cells: 59/59 repository-free routes, proxy dispositions and service-auth mints' "$output" || fail "$label cell count is incomplete"
   cmp "$WORK/expected.out" "$output" || fail "$label output differs from the hand-authored cells"
 }
 
@@ -416,4 +418,4 @@ echo 'MUTATION did-web-hostname PASS direct-red'
 echo 'MUTATION proxy-foreign-audience PASS direct-red'
 echo 'MUTATION proxy-no-credential PASS direct-red'
 echo 'MUTATION proxy-audience-routing PASS direct-red'
-echo 'PASS: PDS repository-free read routes, appview-proxy dispositions and service-auth mints — 57/57 named cells; eval == native == Wasm; four direct-red mutations; bytes restored'
+echo 'PASS: PDS repository-free read routes, appview-proxy dispositions and service-auth mints — 59/59 named cells; eval == native == Wasm; four direct-red mutations; bytes restored'

@@ -4,11 +4,12 @@
    applyWrites, uploadBlob}`) are the five that transition the `Store` — the
    first four the repository half under one signed commit apiece (`applyWrites`
    batches the other three), `uploadBlob` the blob half. **Reads** are the
-   eleven that cannot:
+   thirteen that cannot:
    `com.atproto.repo.{getRecord, listRecords, describeRepo}`,
    `com.atproto.server.describeServer`,
    `com.atproto.sync.{getRepo, getLatestCommit, getBlob, listBlobs, listRepos,
-   getRepoStatus}`, and `com.atproto.identity.resolveHandle`. **Sessions** are
+   getRepoStatus, getRecord, getBlocks}`, and
+   `com.atproto.identity.resolveHandle`. **Sessions** are
    the four
    `com.atproto.server.{createSession, refreshSession, deleteSession,
    getSession}` routes, which transition the `Store`'s auth half rather than
@@ -28,7 +29,7 @@
 
    Every registration carries its own `AuthPolicy`: the five writes,
    `getSession`, `getServiceAuth`, and both preference routes are
-   `AuthenticatedRoute`, the eleven reads are `PublicRoute`,
+   `AuthenticatedRoute`, the thirteen reads are `PublicRoute`,
    `refreshSession`/`deleteSession` are `RefreshRoute`,
    `createSession` is `PublicRoute` (it is the login that issues the tokens the
    other session routes require), and the two well-knowns are public by
@@ -78,18 +79,22 @@ import http.{
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
 import list.{filter, last, sort, take}
-import string.{fromUtf8, split, startsWith, toInt, toLower, toUtf8}
+import string.{fromUtf8, join, split, startsWith, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
+import lib.blockstore.{blockStoreGet}
+import lib.car.{carEncode, carEncodeRootless}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.did_key.{didKeyMultibase}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
+import lib.mst.{mstCoveringProofBlocks}
 import lib.repo.{
   Repo,
   RepoCommit,
   RepoMutation,
   repoCommitCid,
+  repoCommitSignedBytes,
   repoCommitTid,
   repoCreate,
   repoDelete,
@@ -101,6 +106,9 @@ import lib.repo.{
   repoPublicKey,
   repoMutationCommit,
   repoMutationState,
+  repoRecordCid,
+  repoStore,
+  repoTree,
   repoUpdate,
   RepoWrite(..),
   repoApplyWrites,
@@ -216,6 +224,16 @@ listReposNsid = "com.atproto.sync.listRepos"
 
 getRepoStatusNsid : String
 getRepoStatusNsid = "com.atproto.sync.getRepoStatus"
+
+-- `com.atproto.repo.getRecord` already owns the unqualified name here, and
+-- the two routes answer different questions about the same record: one the
+-- decoded value, one the blocks that prove it. The `sync` prefix is which
+-- lexicon namespace this constant names.
+syncGetRecordNsid : String
+syncGetRecordNsid = "com.atproto.sync.getRecord"
+
+syncGetBlocksNsid : String
+syncGetBlocksNsid = "com.atproto.sync.getBlocks"
 
 subscribeReposNsid : String
 subscribeReposNsid = "com.atproto.sync.subscribeRepos"
@@ -935,6 +953,16 @@ paramFirst _ [] = None
 paramFirst name ((QueryParam key value) :: rest) =
   if key == name then Some value else paramFirst name rest
 
+{- | Every copy of a parameter the lexicon declares as an ARRAY, in the order
+   the query string listed them. `com.atproto.sync.getBlocks`' `cids` is the
+   only one this server serves, and for it a repeat is the encoding rather
+   than the ambiguity `optionalParam` refuses — which is why it needs its own
+   reader instead of a flag on that one. -}
+paramAll : String -> List QueryParam -> List String
+paramAll _ [] = []
+paramAll name ((QueryParam key value) :: rest) =
+  if key == name then value :: paramAll name rest else paramAll name rest
+
 {- | None of these six endpoints takes a repeated parameter, so a repeat is a
    request whose meaning is ambiguous — rejected rather than silently resolved
    to whichever copy happens to come first. -}
@@ -1446,6 +1474,147 @@ applyGetRepoStatus account store params = do
       ("rev", JString (tidToString (repoCommitTid commit))),
     ])
 
+-- ── com.atproto.sync.getRecord ──────────────────────────────────────────────
+
+{- | The blocks that prove what this repository says about ONE record key,
+   rooted at the commit that says it.
+
+   Three parts, in this order, which is the reference implementation's:
+   the signed commit block, the MST covering proof for the key, then the
+   record block — IF the key is present.
+
+   A key the repository does not hold is answered, not refused. The covering
+   proof for an absent key is the same set of nodes as for a present one
+   (`mstCoveringProofBlocks` admits either), and it proves ABSENCE against the
+   same root: a relay verifying a delete needs exactly that, and a 404 would
+   leave it unable to tell "this server does not have it" from "this server
+   will not say". The lexicon declares a `RecordNotFound` error and the
+   reference handler never throws it for a missing record; the answer is the
+   proof.
+
+   The two `getRecord`s differ in what they answer with, not in what they look
+   up: `com.atproto.repo.getRecord` returns the decoded value and refuses when
+   there is none, because its caller wants the record. This one returns blocks
+   a caller verifies for itself, so it has an answer either way. -}
+applySyncGetRecord : Account ->
+  Store ->
+  List QueryParam ->
+  Result Response Response
+applySyncGetRecord account store params = do
+  repo <- requireConfiguredRepo store
+  target <- requiredParam "did" params
+  () <- requireHostedDid account target
+  collection <- requiredParam "collection" params
+  rkey <- requiredParam "rkey" params
+  let path = recordPath collection rkey
+  proof <- match mstCoveringProofBlocks [path] (repoTree repo)
+    Err message =>
+      Err (invalidRequest "Record key is not admissible: \{message}")
+    Ok blocks => Ok blocks
+  found <- match repoRecordCid path repo
+    Err message => Err (internalError "Repository lookup failed: \{message}")
+    Ok value => Ok value
+  record <- recordProofBlock found repo
+  let commit = repoLatestCommit repo
+  let commitCid = repoCommitCid commit
+  let blocks = (commitCid, repoCommitSignedBytes commit) :: proof ++ record
+  match carEncode [commitCid] blocks
+    Err message => Err (invalidRequest "Record proof rejected: \{message}")
+    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" bytes)
+
+{- | The record block itself, as the zero-or-one-element tail of the proof.
+   Absent is `[]` rather than a refusal; a key the MST names whose block is
+   gone is a corrupt repository, not a proof of absence. -}
+recordProofBlock : Option Cid -> Repo -> Result Response (List (Cid, Array Int))
+recordProofBlock None _ = Ok []
+recordProofBlock (Some cid) repo = match blockStoreGet cid (repoStore repo)
+  None =>
+    Err
+      (internalError
+        "Repository names record block '\{cidToString cid}' but does not hold it")
+  Some bytes => Ok [(cid, bytes)]
+
+-- ── com.atproto.sync.getBlocks ──────────────────────────────────────────────
+
+{- | The `cids` array, admitted in the order the query string listed it, with
+   a repeated CID kept once: the caller names a SET of blocks, and answering
+   a duplicate twice would put the same section in the CAR twice. -}
+requireCidParams : List QueryParam -> Result Response (List Cid)
+requireCidParams params = match paramAll "cids" params
+  [] => Err (invalidRequest "Query parameter 'cids' is required")
+  texts => admitCids texts []
+
+{- | The linear scan over the CIDs already admitted is what keeps the answer
+   in request order while dropping a repeat. It is quadratic in the number of
+   requested CIDs, which `stdlib/http`'s `maxHttpRequestLineBytes` of 8192
+   bounds at about 125: a CID and its `&cids=` cost some 65 bytes of query
+   string apiece, and the whole request line has to fit. -}
+admitCids : List String -> List Cid -> Result Response (List Cid)
+admitCids [] seen = Ok (reverseOnto seen [])
+admitCids (text :: rest) seen = match cidFromString text
+  Err message =>
+    Err
+      (invalidRequest
+        "Query parameter 'cids' holds a value that is not a valid CID: \{message}")
+  Ok cid =>
+    if anyCidEqual cid seen then
+      admitCids rest seen
+    else
+      admitCids rest (cid :: seen)
+
+anyCidEqual : Cid -> List Cid -> Bool
+anyCidEqual _ [] = False
+anyCidEqual cid (candidate :: rest) =
+  cidEqual cid candidate || anyCidEqual cid rest
+
+-- | Requested CIDs split into the blocks this repository holds and the CIDs
+-- it does not, each accumulated reversed for `partitionBlocks` to restore.
+partitionGo : List Cid ->
+  Repo ->
+  (List (Cid, Array Int), List Cid) ->
+  (List (Cid, Array Int), List Cid)
+partitionGo [] _ found = found
+partitionGo (cid :: rest) repo (blocks, missing) =
+  match blockStoreGet cid (repoStore repo)
+    None => partitionGo rest repo (blocks, cid :: missing)
+    Some bytes => partitionGo rest repo ((cid, bytes) :: blocks, missing)
+
+-- | The same split, both halves back in request order.
+partitionBlocks : List Cid -> Repo -> (List (Cid, Array Int), List Cid)
+partitionBlocks cids repo =
+  let (blocks, missing) = partitionGo cids repo ([], [])
+  (reverseOnto blocks [], reverseOnto missing [])
+
+{- | Exactly the blocks the caller named, in a CAR whose `roots` list is
+   EMPTY: the requested CIDs are unrelated to each other, so no one of them
+   is the graph's root and naming one would assert a relationship the request
+   never claimed.
+
+   ALL OR NOTHING. One CID this repository does not hold refuses the whole
+   request and names every missing CID, rather than answering the rest: a
+   caller that asked for n blocks and silently received n-1 would conclude
+   the absent one is absent from the REPOSITORY, when a partial answer cannot
+   distinguish that from a partial answer. -}
+applySyncGetBlocks : Account ->
+  Store ->
+  List QueryParam ->
+  Result Response Response
+applySyncGetBlocks account store params = do
+  repo <- requireConfiguredRepo store
+  target <- requiredParam "did" params
+  () <- requireHostedDid account target
+  cids <- requireCidParams params
+  let (blocks, missing) = partitionBlocks cids repo
+  () <- match missing
+    [] => Ok ()
+    absent =>
+      Err
+        (invalidRequest
+          "Could not find cids: \{join "," (map cidToString absent)}")
+  match carEncodeRootless blocks
+    Err message => Err (invalidRequest "Block export rejected: \{message}")
+    Ok bytes => Ok (bytesOkResponse "application/vnd.ipld.car" bytes)
+
 -- ── com.atproto.identity.resolveHandle ──────────────────────────────────────
 
 {- | This server resolves exactly the one handle it hosts. It needs no
@@ -1859,7 +2028,7 @@ finishRead : Result Response Json -> Response
 finishRead (Err response) = response
 finishRead (Ok value) = jsonOkResponse value
 
-{- | The six read/sync/identity queries and the two well-knowns, or `None` for
+{- | The thirteen read/sync/identity queries and the two well-knowns, or `None` for
    a call this half does not own. It returns a bare `Response` because no route
    here can transition the `Store`. -}
 readHandled : Account -> ServerLinks -> Store -> XrpcCall -> Option Response
@@ -1886,6 +2055,10 @@ readHandled account links store (QueryCall nsid params)
     Some (finishRead (applyListRepos account store params))
   | nsid == getRepoStatusNsid =
     Some (finishRead (applyGetRepoStatus account store params))
+  | nsid == syncGetRecordNsid =
+    Some (collapseResponse (applySyncGetRecord account store params))
+  | nsid == syncGetBlocksNsid =
+    Some (collapseResponse (applySyncGetBlocks account store params))
   | nsid == resolveHandleNsid =
     Some (finishRead (applyResolveHandle account params))
   | otherwise = None
@@ -1975,7 +2148,7 @@ preferencesHandled _ _ _ = None
 -- ── the whole Phase-4 API ───────────────────────────────────────────────────
 
 {- | The complete handler: five record writes, five session routes, two
-   preference routes, nine reads, two well-knowns. The halves are disjoint by
+   preference routes, thirteen reads, two well-knowns. The halves are disjoint by
    construction — each owns a distinct set of NSIDs, and the read half
    additionally owns the two well-knowns — so the order below is a formality
    rather than a precedence. -}
@@ -1992,7 +2165,7 @@ pdsHandler account links context outcome store call =
           Some response => (store, response)
           None => (store, unhandledRoute call)
 
--- | The registry of all twenty-four XRPC endpoints. The two well-known paths
+-- | The registry of all twenty-six XRPC endpoints. The two well-known paths
 -- are NOT here: they have no NSID, and `lib.xrpc` routes them by path.
 export
 pdsRegistry : Result String Registry
@@ -2006,13 +2179,16 @@ pdsRegistry = do
       writes
       (concatEndpoints sessions (concatEndpoints preferences reads)))
 
-{- | The eleven read queries and the one event-stream subscription, every one
+{- | The thirteen read queries and the one event-stream subscription, every one
    of them public.
 
    A repository is public data on atproto: `com.atproto.repo.getRecord`,
    `listRecords` and `describeRepo`, and the `com.atproto.sync.*` reads
    (including `listRepos`/`getRepoStatus`, the discovery pair a relay calls to
-   find and then check on a repository it hosts no opinion about yet) another
+   find and then check on a repository it hosts no opinion about yet, and
+   `sync.getRecord`/`sync.getBlocks`, the verification pair it calls to check
+   one record or one block set without re-fetching the whole repository)
+   another
    server's relay reads to mirror this repo, are all reachable on a real PDS
    with no credential — and so is `com.atproto.identity.resolveHandle`, which
    is how a client finds this account before it could have a token at all, and
@@ -2039,6 +2215,8 @@ readEndpoints = do
   listBlobs <- queryEndpoint listBlobsNsid PublicRoute
   listRepos <- queryEndpoint listReposNsid PublicRoute
   getRepoStatus <- queryEndpoint getRepoStatusNsid PublicRoute
+  syncGetRecord <- queryEndpoint syncGetRecordNsid PublicRoute
+  syncGetBlocks <- queryEndpoint syncGetBlocksNsid PublicRoute
   resolveHandle <- queryEndpoint resolveHandleNsid PublicRoute
   subscribeRepos <- subscriptionEndpoint subscribeReposNsid PublicRoute
   Ok [
@@ -2052,6 +2230,8 @@ readEndpoints = do
     listBlobs,
     listRepos,
     getRepoStatus,
+    syncGetRecord,
+    syncGetBlocks,
     resolveHandle,
     subscribeRepos,
   ]

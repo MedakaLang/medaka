@@ -278,9 +278,44 @@ grep -F -q 'SYNC-CAR-ROOTS: PASS' "$WORK/activation.out" || fail "the #sync CAR'
 grep -F -q 'SYNC-CAR-BLOCKS: PASS' "$WORK/activation.out" || fail "the #sync CAR's block set is not the pinned commit alone"
 [ "$(tail -1 "$WORK/activation.out")" = 'TOTAL: PASS' ] || fail 'activation-event driver did not end in TOTAL: PASS'
 
+# ── the two sync READS, byte for byte against the official CARs ─────────────
+# `com.atproto.sync.getRecord` and `com.atproto.sync.getBlocks`, driven through
+# the real protocol seam against a repository this driver REBUILDS from the
+# corpus's own signing key, record and revision — the `FIXTURE` line is that
+# rebuild's commit CID checked against the pinned one, and everything after it
+# is meaningless if it fails, so it is asserted first and separately.
+#
+# The absent case is the discriminator this gate exists for: a missing record
+# is answered 200 with a covering proof of NON-membership, not refused, and its
+# CAR is the present answer's blocks minus the record's. A route that refused
+# instead would satisfy every "record not found" intuition and break backfill.
+SYNC_READS_DRIVER="$ROOT/pds/test/sync_car_shapes_main.mdk"
+SYNC_READS_ROW=$(grep -c 'pds_sync_car_shapes_corpus.txt' "$WORK/activation-files" || true)
+[ "$SYNC_READS_ROW" = 1 ] || fail 'expected exactly one ledger-owned sync-read CAR corpus'
+SYNC_READS_CORPUS="$ROOT/$(grep 'pds_sync_car_shapes_corpus.txt' "$WORK/activation-files")"
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SYNC_READS_DRIVER" -o "$WORK/syncreads" > "$WORK/syncreads-build.log" 2>&1; then
+  cat "$WORK/syncreads-build.log" >&2
+  fail 'sync-read CAR driver build failed'
+fi
+
+"$WORK/syncreads" "$SYNC_READS_CORPUS" > "$WORK/syncreads.out" 2> "$WORK/syncreads.err"
+require_empty "$WORK/syncreads.err" 'sync reads'
+
+grep -F -q 'FIXTURE: PASS' "$WORK/syncreads.out" || fail 'the rebuilt sync-read fixture is not the pinned repository'
+grep -F -q 'GETRECORD-PRESENT: PASS' "$WORK/syncreads.out" || fail 'sync.getRecord on a present key is not byte-identical to the official CAR'
+grep -F -q 'GETRECORD-ABSENT: PASS' "$WORK/syncreads.out" || fail 'sync.getRecord on an absent key is not the official covering proof'
+grep -F -q 'GETRECORD-ABSENT-BLOCKS: PASS' "$WORK/syncreads.out" || fail "the absent answer's block set is not the pinned one"
+grep -F -q 'GETBLOCKS-PRESENT: PASS' "$WORK/syncreads.out" || fail 'sync.getBlocks is not byte-identical to the official CAR'
+# The empty roots list, read out of the header this server EMITTED: `lib.car`'s
+# decoder refuses a rootless CAR, so no round trip can make this claim.
+grep -F -q 'GETBLOCKS-PRESENT-ROOTS: PASS' "$WORK/syncreads.out" || fail 'sync.getBlocks named a CAR root'
+grep -F -q 'GETBLOCKS-PARTLY-MISSING: PASS' "$WORK/syncreads.out" || fail 'sync.getBlocks did not refuse a partly-missing request with the pinned message'
+[ "$(tail -1 "$WORK/syncreads.out")" = 'TOTAL: PASS' ] || fail 'sync-read CAR driver did not end in TOTAL: PASS'
+
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
   [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
-  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch, the three blob routes , the seven #commit firehose events and the three activation-event frames on native; Wasm unavailable'
+  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch, the three blob routes , the seven #commit firehose events, the three activation-event frames and the four sync-read CAR shapes on native; Wasm unavailable'
   exit 0
 fi
 
@@ -299,4 +334,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders; the #identity, #account and #sync activation frames byte-identical to the official bodies'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders; the #identity, #account and #sync activation frames byte-identical to the official bodies; sync.getRecord present/absent and sync.getBlocks present/partly-missing byte-identical to the official CAR shapes'

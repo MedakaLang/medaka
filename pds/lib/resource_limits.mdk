@@ -160,7 +160,9 @@ export
 maxCreateSessionPerWindow : Int
 maxCreateSessionPerWindow = 30
 
-{- | The whole-repository export ceiling (`com.atproto.sync.getRepo`), which
+{- | The whole-repository export ceiling (`com.atproto.sync.getRepo` and
+   `com.atproto.sync.getBlocks` — `pds/lib/ratelimit.mdk`'s `isRepoExportNsid`
+   is the list), which
    `maxRequestsPerWindow` cannot express: one export's response is bounded
    only by `maxCarBytes`, so the request count and the bytes it authorizes are
    different quantities and the larger one has to be named separately.
