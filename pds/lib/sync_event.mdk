@@ -258,7 +258,9 @@ syncCommitFrame event = frameBytes "#commit" (syncCommitBody event)
 sequenced : Int -> String -> DagCbor -> DagCbor
 sequenced seq time (DcMap fields) =
   DcMap (fields ++ [("seq", DcInt seq), ("time", DcString time)])
-sequenced _ _ value = value
+sequenced _ _ _ =
+  panic
+    "sync_event: sequenced expects a map-shaped body to splice seq/time into"
 
 {- | The `#identity` body: the DID, and the handle it resolves to.
 
