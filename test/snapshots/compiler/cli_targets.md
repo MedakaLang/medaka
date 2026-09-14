@@ -23,10 +23,10 @@ stages=DESUGAR,MARK
 import support.util.{endsWith, sortUniqS, startsWith}
 
 -- #1173: a lint target that is neither a listable directory nor a readable
--- file used to fall through `expandLintTarget`'s `Err _ => [target]` arm as a
+-- file would otherwise fall through `expandLintTarget`'s `Err _ => [target]` arm as a
 -- literal path, which `lintFileDiagTriple` then reads via `readFileSafe` — the
--- same "" -on-error helper `checkJsonFile` uses — so a nonexistent path parsed
--- as EMPTY SOURCE and reported a clean 0-diagnostic result at exit 0. Fail
+-- same "" -on-error helper `checkJsonFile` uses — so a nonexistent path parses
+-- as EMPTY SOURCE and reports a clean 0-diagnostic result at exit 0. Fail
 -- loudly up front instead (mirrors `assertSnapshotTargetsExist` in
 -- `compiler/driver/medaka_cli.mdk`).
 export

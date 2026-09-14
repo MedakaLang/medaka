@@ -3,8 +3,8 @@
    `medaka.toml`'s field layout is the COMPILER's business, not the standard
    library's (I-1): a user reading `docs/stdlib/toml.md` should find a general
    TOML reader, not four functions about a file format they may never write.
-   These four accessors used to be exported from `stdlib/toml.mdk`; they live
-   here now.
+   These four accessors live here rather than in `stdlib/toml.mdk`, and must
+   not move back.
 
    The ruling that put them here is "manifest-schema accessors do not live in
    a general TOML module", so this file stays correct whichever general module

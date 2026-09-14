@@ -369,7 +369,7 @@ locFileOf None = ""
 -- recovery in the cross-file report path.  Unreadable files are skipped.
 -- Projections off the threaded (path, src, Positions, decls) quad (#394): the
 -- cross-file rule tier wants (path, Positions, decls), and the inline-directive
--- suppression pass wants (path, src).  Both used to be re-derived from disk by
+-- suppression pass wants (path, src).  Both are otherwise re-derived from disk by
 -- `parseLintFiles` / `readLintSrcs`, which this replaces.
 parsedToTriple : (String, String, Positions, List Decl) ->
   (String, Positions, List Decl)
@@ -473,9 +473,9 @@ lintFilesGo idx fixMode multiFile disableNames onlyNames denyNames baseCtx cache
 -- file's (path, src, Positions, decls) for the cross-file tier to REUSE — empty
 -- when the file could not be read (mirroring the old parseLintFiles/readLintSrcs
 -- skip-unreadable behavior).  Handing the parse out rather than letting the
--- cross-file tier redo it is issue #394: the tier used to `parseLintFiles` (a full
+-- cross-file tier redo it is issue #394: the tier would otherwise `parseLintFiles` (a full
 -- re-read + re-parse of every target, 11.4% of a whole-tree lint's runtime) AND
--- `readLintSrcs` (a THIRD read of the same bytes) after this pass had already read
+-- `readLintSrcs` (a THIRD read of the same bytes) after this pass has already read
 -- and parsed each file. Memory-neutral: runCrossFileReport already materialised
 -- every triple at once.
 lintOneFileReport : StdlibIndex ->

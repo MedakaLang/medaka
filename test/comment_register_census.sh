@@ -1,8 +1,12 @@
 #!/bin/sh
-# test/comment_register_census.sh — derived comment-register census. Not a
-# gate: this is a reporting tool, run via `make comment-census`. It asserts
-# nothing; exits 0 on a healthy run, and refuses (exit 1) only if the file
-# corpus comes back empty — see below.
+# test/comment_register_census.sh — derived comment-register census, plus the
+# baseline ratchet built on the same scanner. The DEFAULT (no-flag) mode is a
+# reporting tool, run via `make comment-census`: it asserts nothing, exits 0 on
+# a healthy run, and refuses (exit 1) only if the file corpus comes back empty
+# — see below. The `--write`/`--check` modes are the GATED path: `--check` is a
+# verdict (exit 1 on a baselined count that rose), consumed by
+# .githooks/pre-commit check 6b and by test/diff_compiler_comment_shout_diff.sh,
+# which is a merge-tier gate.
 #
 # WHY THIS EXISTS (#2281, leg 3 P of crusade #2276): source comments in this
 # tree drift into several registers that read fine the day they're written
@@ -30,22 +34,58 @@
 # script matches whole source lines with regex, not a `#`-comment extractor
 # — it does not parse Medaka syntax, so a hit can land inside a string
 # literal or a diagnostic-message text rather than an actual `#` comment.
-# Acceptable for an on-demand census, not for a gate (this is deliberately
-# not one) — a human still reads the per-file breakdown before acting on it.
+# Acceptable for the on-demand census — a human still reads the per-file
+# breakdown before acting on it — but too loose to carry a verdict, which is
+# why --write/--check narrow to comment-scope lines instead (see below).
 #
-# WHY ON-DEMAND, NOT A CI GATE: same rationale as test/fmt_clean_census.sh —
-# gating this tree-wide would surface whatever unrelated pre-existing
-# comment-register debt already lives in the tree as a sudden required-check
-# failure, unconnected to whatever PR happens to trip it. This is a
-# developer/agent convenience, not a merge gate.
+# WHY THE REPORT ITSELF IS ON-DEMAND: same rationale as
+# test/fmt_clean_census.sh — asserting a clean tree-wide count would surface
+# whatever unrelated pre-existing comment-register debt already lives in the
+# tree as a sudden required-check failure, unconnected to whatever PR happens
+# to trip it. The --check ratchet is what makes the register gateable anyway:
+# it pins today's debt per (file, class) and only ever lets a count fall, so a
+# PR fails on the debt it ADDS and never on the debt it inherited.
 #
 # Needs no built ./medaka — pure text/regex over tracked source files.
 # Portable POSIX sh (grep -E, no bash-only features).
 #
 # Usage:  sh test/comment_register_census.sh
-# Output: per-file breakdown, then a per-class summary table. Exits 0 on a
-#         healthy run; refuses (exit 1) only if the file corpus comes back
-#         empty, which would otherwise misreport as a clean zero.
+#         sh test/comment_register_census.sh --write <path>
+#         sh test/comment_register_census.sh --check <baseline> [<file> ...]
+#         sh test/comment_register_census.sh --comment-scope <file>|-
+#
+# Default (no args): per-file breakdown, then a per-class summary table.
+# Exits 0 on a healthy run; refuses (exit 1) only if the file corpus comes
+# back empty, which would otherwise misreport as a clean zero. Unchanged by
+# the modes below (#3034).
+#
+# The default report reads WHOLE files; --write and --check read only the
+# comment-scope lines of each file (comment_scope_lines below). A baselined
+# count is therefore not the same number the summary table prints for the
+# same class, and can only ever be lower: a gated count must not move on an
+# ALL-CAPS string literal or an identifier, which is what the summary's own
+# SCOPE note above says it cannot tell apart.
+#
+# --write <path>: regenerate the per-(file,class) count baseline (one
+# [[entry]] per file/class with a nonzero count) to <path>, over the 8
+# baselined classes only (1/2/3/4/5/6/8/10 — see test/comment_register_baseline.toml's
+# own header for which two classes are excluded and why). Sanctioned way to
+# move a baselined count; never hand-edit the generated file.
+#
+# --check <baseline> [<file> ...]: the ratchet — for each of the 8 baselined
+# classes, over the given files (default: every tracked compiler/*.mdk and
+# stdlib/*.mdk file, i.e. the same corpus the default mode scans), fail if
+# the CURRENT count exceeds the count pinned for that (file, class) in
+# <baseline> (a missing row reads as 0, so a brand-new nonzero count fails
+# closed). A count that fell is fine. Prints the regen command on failure.
+# Used by .githooks/pre-commit (per staged file, cheap) and by
+# test/diff_compiler_comment_shout_diff.sh (whole tree, so --no-verify
+# cannot smuggle a rise past the hook).
+#
+# --comment-scope <file>|-: print the comment-scope lines of <file> (or of
+# stdin, for `-`) and exit. Exposed so .githooks/pre-commit and
+# test/diff_compiler_comment_shout_diff.sh can scope an added line the same
+# way the baseline does without a second copy of the scanner.
 
 set -u
 
@@ -110,6 +150,202 @@ re_measured='MEASURED'
 #     reference compiler removed 2026-06-26, `oracle-frozen`). Matches
 #     .ml/.mli/.mll/.mly.
 re_deadpath='lib/[A-Za-z0-9_./]*\.ml[a-z]*'
+
+# The 8 BASELINED classes (#3034) — per-LINE-count classes
+# only; class 9 (comment-block essays) counts RUNS, a different mechanism,
+# and class 7 has no independent regex (it IS class 5's hit list). Fixed
+# order, shared by --write and --check so both walk the same sequence.
+# Newline-separated, matching the file-global IFS set above (a space-joined
+# list would not split under it).
+baselined_classes="history
+ruling
+tombstone
+emoji
+draft
+deictic
+dead-path
+shout"
+
+# Emits the COMMENT-SCOPE lines of file $1 ("-" for stdin): a `--` line
+# comment, or a line inside a (possibly nested) `{- ... -}` block comment,
+# the opening and closing lines included. Blank lines are dropped — they
+# carry no class, and an empty line is a `grep -Fx` pattern that matches
+# every line, which would silently widen the consumers that test an added
+# line for membership in this set.
+#
+# Approximate, at the same precision as the class regexes: this does not
+# parse Medaka syntax, so a `{-` or `-}` inside a string literal opens or
+# closes a block that the lexer never sees, and the over-inclusion runs to
+# the end of the file. A `--` outside a block ends the line's delimiter
+# scan, which is the one refinement the tree cannot do without: line
+# comments that merely MENTION `{-` outnumber real block openers, and
+# without it a single such mention swallows every following line.
+comment_scope_lines() {
+  awk '
+    {
+      entry_depth = depth
+      n = length($0)
+      touched = 0
+      for (i = 1; i < n; i++) {
+        two = substr($0, i, 2)
+        if (two == "{-") { depth++; touched = 1; i++ }
+        else if (two == "-}") { if (depth > 0) depth--; touched = 1; i++ }
+        else if (two == "--" && depth == 0) { break }
+      }
+      if ($0 ~ /^[ \t]*$/) next
+      if (entry_depth > 0 || touched || $0 ~ /^[ \t]*--/) print
+    }
+  ' "$1"
+}
+
+if [ "${1:-}" = "--comment-scope" ]; then
+  src="${2:--}"
+  [ "$src" = "-" ] || [ -f "$src" ] || { echo "comment_register_census: no such file: $src" >&2; exit 2; }
+  comment_scope_lines "$src"
+  exit 0
+fi
+
+# Sets $bc_<slug> for every slug in $baselined_classes, for file $1. Shares
+# the class regexes above with the default summary loop below rather than
+# redefining them, but — unlike that loop — reads only the file's
+# comment-scope lines, so a gated count cannot move on a code line.
+compute_baselined_counts() {
+  bc_file="$1"
+  bc_scope="$(comment_scope_lines "$bc_file")"
+  bc_history=$(printf '%s\n' "$bc_scope" | grep -E "$re_history" | grep -Evc "$re_history_exclude")
+  bc_ruling=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_ruling")
+  bc_tombstone=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_tombstone")
+  bc_emoji=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_emoji")
+  bc_draft=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_draft")
+  bc_deictic=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_deictic")
+  bc_dead_path=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_deadpath")
+  bc_shout=$(printf '%s\n' "$bc_scope" | grep -Ec "$re_shout")
+}
+
+# Reads $bc_<slug> (as set by compute_baselined_counts) for the given class
+# slug ($1), printing the count. Indirection because POSIX sh has no arrays.
+baselined_count_for() {
+  case "$1" in
+    history) printf '%s' "$bc_history" ;;
+    ruling) printf '%s' "$bc_ruling" ;;
+    tombstone) printf '%s' "$bc_tombstone" ;;
+    emoji) printf '%s' "$bc_emoji" ;;
+    draft) printf '%s' "$bc_draft" ;;
+    deictic) printf '%s' "$bc_deictic" ;;
+    dead-path) printf '%s' "$bc_dead_path" ;;
+    shout) printf '%s' "$bc_shout" ;;
+  esac
+}
+
+if [ "${1:-}" = "--write" ]; then
+  outpath="${2:-}"
+  [ -n "$outpath" ] || { echo "comment_register_census: --write needs a <path>" >&2; exit 2; }
+  {
+    echo "# comment-register count baseline — GENERATED, never hand-edited (#3034)."
+    echo "#"
+    echo "# One [[entry]] per (file, class) with a nonzero count, over the 8"
+    echo "# per-LINE-count comment-register classes test/comment_register_census.sh"
+    echo "# computes: history, ruling, tombstone, emoji, draft, deictic, dead-path,"
+    echo "# shout. A file may drop below its count freely; exceeding it is an"
+    echo "# error, and so is having a nonzero count for a class with no row here"
+    echo "# at all."
+    echo "#"
+    echo "# OUT OF SCOPE (not baselined here): class 9 (comment-block essays) counts"
+    echo "# RUNS of consecutive comment lines, not individual lines — a different"
+    echo "# counting mechanism from every class above; class 7 (falsified-by-"
+    echo "# refactor candidates) is not independently greppable — its hits ARE"
+    echo "# class 5's (draft narration) hit list, needing human judgment, not a"
+    echo "# regex count."
+    echo "#"
+    echo "# Enforced by .githooks/pre-commit check 6b (per staged file) and by"
+    echo "# test/diff_compiler_comment_shout_diff.sh (whole tree, so --no-verify"
+    echo "# cannot smuggle a rise past the hook)."
+    echo "#"
+    echo "# Regenerate from the repo root, never by hand:"
+    echo "#"
+    echo "#   sh test/comment_register_census.sh --write test/comment_register_baseline.toml"
+    echo "#"
+    echo "# Paths are relative to the repo root, matching every consumer above."
+    for f in $files; do
+      [ -f "$f" ] || continue
+      compute_baselined_counts "$f"
+      for cls in $baselined_classes; do
+        n="$(baselined_count_for "$cls")"
+        if [ "$n" -gt 0 ]; then
+          echo ""
+          echo "[[entry]]"
+          echo "file = \"$f\""
+          echo "class = \"$cls\""
+          echo "count = $n"
+        fi
+      done
+    done
+  } >"$outpath"
+  exit 0
+fi
+
+if [ "${1:-}" = "--check" ]; then
+  shift
+  baseline="${1:-}"
+  [ -n "$baseline" ] || { echo "comment_register_census: --check needs a <baseline> path" >&2; exit 2; }
+  [ -f "$baseline" ] || { echo "FAIL: missing baseline $baseline" >&2; exit 1; }
+  shift
+  if [ "$#" -gt 0 ]; then
+    targets=""
+    for f in "$@"; do
+      case "$f" in
+        compiler/*.mdk | stdlib/*.mdk)
+          if [ -z "$targets" ]; then
+            targets="$f"
+          else
+            targets="$targets
+$f"
+          fi
+          ;;
+      esac
+    done
+  else
+    targets="$files"
+  fi
+
+  # Parse the baseline's [[entry]] blocks into file\tclass\tcount rows —
+  # awk, not the shell, so a hand-edited or malformed row still parses
+  # deterministically rather than however field-splitting happens to fall.
+  parsed="$(mktemp)"
+  awk '
+    /^\[\[entry\]\]/ { if (f != "") print f "\t" c "\t" n; f = ""; c = ""; n = ""; next }
+    /^file[ \t]*=/ { s = $0; sub(/^file[ \t]*=[ \t]*"/, "", s); sub(/"[ \t]*$/, "", s); f = s; next }
+    /^class[ \t]*=/ { s = $0; sub(/^class[ \t]*=[ \t]*"/, "", s); sub(/"[ \t]*$/, "", s); c = s; next }
+    /^count[ \t]*=/ { s = $0; sub(/^count[ \t]*=[ \t]*/, "", s); n = s; next }
+    END { if (f != "") print f "\t" c "\t" n }
+  ' "$baseline" >"$parsed"
+
+  fail=0
+  for f in $targets; do
+    [ -f "$f" ] || continue
+    compute_baselined_counts "$f"
+    for cls in $baselined_classes; do
+      cur="$(baselined_count_for "$cls")"
+      base="$(awk -F'\t' -v f="$f" -v c="$cls" '$1 == f && $2 == c { print $3 }' "$parsed")"
+      [ -n "$base" ] || base=0
+      if [ "$cur" -gt "$base" ]; then
+        fail=1
+        echo "FAIL: $f: class '$cls' count rose to $cur (baseline: $base)"
+      fi
+    done
+  done
+  rm -f "$parsed"
+
+  if [ "$fail" -ne 0 ]; then
+    echo ""
+    echo "  A baselined comment-register class's per-file count may only FALL."
+    echo "  Regenerate the baseline after fixing (or deliberately re-pinning):"
+    echo "    sh test/comment_register_census.sh --write test/comment_register_baseline.toml"
+    exit 1
+  fi
+  echo "-- comment register baseline: ok"
+  exit 0
+fi
 
 n_files=0
 sum_history=0

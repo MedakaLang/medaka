@@ -32,11 +32,24 @@
 #   5. LEXTOK:   `test/diff_compiler_lex_files.sh` — OPPORTUNISTIC: only runs if
 #      test/bin/lex_main already exists (this hook never builds an oracle). Scoped to
 #      staged files (from check 1's set) that already have a sibling .lextok.golden.
-#   6. EMOJI-SHOUT DIFF: rejects a commit that ADDS a new 🚨/⚠️/🔒 line to a staged
-#      .mdk (check 1's file set). Diff-scoped on ADDED lines only (`git diff --cached
-#      -U0`) — an existing shout that is merely touched but textually unchanged does
-#      not trigger, and it needs no built binary. CI twin:
-#      test/diff_compiler_comment_shout_diff.sh (#2621).
+#   6. SHOUT DIFF: rejects a commit that ADDS a new shout line to a staged .mdk
+#      (check 1's file set) — either a 🚨/⚠️/🔒 sigil line, or the sigil-free shout
+#      register (a run of 3+ consecutive ALL-CAPS words), the latter scoped to
+#      comment-scope added lines only. Diff-scoped on ADDED lines only (`git diff
+#      --cached -U0`) — an existing shout that is merely touched but textually
+#      unchanged does not trigger, and it needs no built binary. CI twin:
+#      test/diff_compiler_comment_shout_diff.sh (#2621, widened #3032).
+#   6b. COMMENT-REGISTER BASELINE: `test/comment_register_census.sh --check
+#      test/comment_register_baseline.toml <staged files>` — a per-file COUNT
+#      ratchet (not diff-scoped like 6) over the 8 baselined comment-register
+#      classes, so a MOVED/duplicated existing line that raises a staged
+#      file's class total still fails even when check 6's added-line diff
+#      wouldn't catch it on its own. A file with a nonzero class count and no
+#      row in the baseline fails closed. Counts move only by regenerating
+#      (`sh test/comment_register_census.sh --write
+#      test/comment_register_baseline.toml`), never by hand. CI twin:
+#      test/diff_compiler_comment_shout_diff.sh's second assertion
+#      (#3034).
 #
 # ── #491: this hook covers ONE of five golden families outright, plus one more
 # OPPORTUNISTICALLY (check 5, only when test/bin/lex_main happens to already be
@@ -408,31 +421,102 @@ if [ -n "$lex_relevant" ]; then
   fi
 fi
 
-# ── 6. emoji-shout diff check (added lines only, staged .mdk, test/ excluded) ─
+# ── 6. shout diff check (added lines only, staged .mdk, test/ excluded) ──────
 # New comment-register class (#2621): rejects a commit that ADDS a new
 # 🚨/⚠️/🔒 line to a staged .mdk. Diff-scoped, not baseline-scoped — an
 # existing shout line that is merely touched (context around an edit) but
 # textually unchanged does not trigger. Reuses $files from check 1 (staged
 # .mdk, test/** excluded) rather than recomputing the glob. Needs no built
 # binary — pure `git diff` + grep.
+#
+# Widened (#3032) to also reject the sigil-free shout
+# register (census class 10, test/comment_register_census.sh): a run of 3+
+# consecutive ALL-CAPS words survives a sigil strip with the shout sentence
+# intact. That regex is line-content-blind — it also matches ALL-CAPS code
+# and string literals (CLI help, error text) — so it is scoped to
+# comment-scope added lines only: both of Medaka's comment forms, a `--`
+# line comment and the interior of a nestable `{- ... -}` block, as
+# `test/comment_register_census.sh --comment-scope` classifies them over the
+# STAGED post-image (not the working tree, which may differ from what is
+# being committed). A shout written into a block comment is the evasion the
+# `^[ \t]*--` test alone let through.
+# The sigil check is not comment-scoped: a sigil is deliberately rare enough
+# outside comments that scoping it was never needed, and narrowing it now
+# would be an unrelated behavior change.
+#
+# re_emoji/re_shout must stay byte-identical to the same-named literals in
+# test/comment_register_census.sh and test/diff_compiler_comment_shout_diff.sh
+# — the CI gate asserts this on every run (see that script) rather than the
+# three copies sharing code, so `--no-verify` cannot bypass the gate by
+# skipping this hook.
 re_emoji='🚨|⚠️|🔒'
+re_shout='([A-Z][A-Z]+[,.:;)]? ){2,}[A-Z][A-Z]+'
+
+# Emits the comment-scope subset of the `+`-prefixed diff lines on stdin,
+# with the `+` stripped. $1 is the rev-spec of the file's staged post-image
+# (`:<path>`), whose comment scope the census script classifies. A `--` line
+# comment is matched directly, so a failure to read the post-image degrades
+# to the pre-widening behavior rather than to no check at all. Block
+# membership is by exact line text rather than by line number — enough at
+# this check's precision, and far less code than correlating diff hunks.
+# Output may repeat a line; callers dedupe.
+scoped_added_lines() {
+  sal_added="$(sed 's/^+//')"
+  sal_scope="$(mktemp)"
+  git show "$1" 2>/dev/null |
+    sh "$ROOT/test/comment_register_census.sh" --comment-scope - >"$sal_scope" 2>/dev/null
+  printf '%s\n' "$sal_added" | grep -E '^[ \t]*--'
+  printf '%s\n' "$sal_added" | grep -Fxf "$sal_scope"
+  rm -f "$sal_scope"
+}
+
 badshout=""
 for f in $files; do
   [ -f "$f" ] || continue
-  hit="$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' | grep -E "$re_emoji")"
-  [ -n "$hit" ] && badshout="$badshout $f"
+  added="$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++')"
+  [ -z "$added" ] && continue
+  sigil_hit="$(printf '%s\n' "$added" | grep -E "$re_emoji")"
+  comment_added="$(printf '%s\n' "$added" | scoped_added_lines ":$f" | sed '/^$/d' | sort -u)"
+  shout_hit=""
+  [ -n "$comment_added" ] && shout_hit="$(printf '%s\n' "$comment_added" | grep -E "$re_shout")"
+  if [ -n "$sigil_hit" ] || [ -n "$shout_hit" ]; then
+    badshout="$badshout $f"
+  fi
 done
 
 if [ -n "$badshout" ]; then
   echo "" >&2
-  echo "✗ pre-commit: new emoji-shout comment line(s) added ($re_emoji):" >&2
+  echo "✗ pre-commit: new shout comment line(s) added:" >&2
   for f in $badshout; do
+    added="$(git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++')"
+    sigil_hit="$(printf '%s\n' "$added" | grep -E "$re_emoji")"
+    comment_added="$(printf '%s\n' "$added" | scoped_added_lines ":$f" | sed '/^$/d' | sort -u)"
+    shout_hit=""
+    [ -n "$comment_added" ] && shout_hit="$(printf '%s\n' "$comment_added" | grep -E "$re_shout")"
     echo "" >&2
     echo "  $f:" >&2
-    git diff --cached -U0 -- "$f" | grep '^+' | grep -v '^+++' | grep -E "$re_emoji" | sed 's/^/      /' >&2
+    [ -n "$sigil_hit" ] && printf '%s\n' "$sigil_hit" | sed 's/^/      /' >&2
+    [ -n "$shout_hit" ] && printf '%s\n' "$shout_hit" | sed 's/^/      /' >&2
   done
   echo "" >&2
-  echo "  No new shout comments — see AGENTS.md [T-COMMENT-REGISTER]." >&2
+  echo "  No new shout comments (🚨/⚠️/🔒 or sigil-free ALL-CAPS) — see AGENTS.md [T-COMMENT-REGISTER]." >&2
+  echo "  Bypass once:  git commit --no-verify" >&2
+  echo "" >&2
+  exit 1
+fi
+
+# ── 6b. comment-register count baseline (staged .mdk, per-file) ─────────────
+# Unlike check 6, not diff-scoped -- catches a moved/duplicated existing line
+# that raises a staged file's class total without any individually new-
+# looking added line. Reuses $files from check 1. Needs no built binary.
+baseline_out="$(sh "$ROOT/test/comment_register_census.sh" --check "$ROOT/test/comment_register_baseline.toml" $files 2>&1)"
+baseline_status=$?
+if [ "$baseline_status" -ne 0 ]; then
+  echo "" >&2
+  echo "✗ pre-commit: comment-register baseline ratchet violated:" >&2
+  echo "" >&2
+  printf '%s\n' "$baseline_out" | sed 's/^/  /' >&2
+  echo "" >&2
   echo "  Bypass once:  git commit --no-verify" >&2
   echo "" >&2
   exit 1
@@ -446,7 +530,7 @@ fi
 # (#536) on why `test/diff_compiler_test.sh` cannot be scoped to staged files
 # from the outside — running it here would risk rejecting a commit over an
 # unrelated, stale fixture with no working per-file remediation.
-checked="fmt, lint, baselined-lint, emoji-shout-diff"
+checked="fmt, lint, baselined-lint, shout-diff, comment-register-baseline"
 notchecked=""
 if [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then notchecked="$notchecked snapshots(deferred)"; else checked="$checked, snapshots"; fi
 if [ "$lex_checked" = 1 ]; then checked="$checked, lextok"; else notchecked="$notchecked lextok"; fi

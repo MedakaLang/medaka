@@ -173,8 +173,8 @@ buildOracle prog = Oracle {
   ctorFields = oracleMap (flatMap dataCtorFields prog),
 }
 
--- PERF: the oracle's four tables used to be plain association LISTS, so every
--- ctor→arity / type→ctors lookup was an O(#ctors) scan.  `usefulCovered` does one
+-- PERF: plain association LISTS for the oracle's four tables make every
+-- ctor→arity / type→ctors lookup an O(#ctors) scan.  `usefulCovered` does one
 -- per signature constructor, which makes it O(#ctors²) on a wide ADT.  An OrdMap
 -- makes each lookup O(log n).
 --
@@ -323,7 +323,7 @@ findRecField fn ((RecPatField f _ mPat) :: rest)
   | otherwise = findRecField fn rest
 
 -- ── matrix operations ─────────────────────────────────────────────────────
--- PERF: these three used to share one higher-order `filterMapRows f pmat`, with
+-- PERF: these three must not share one higher-order `filterMapRows f pmat`, with
 -- `f` a partial application (`specConRow c arity`).  A call to an OPAQUE function
 -- value goes through the runtime's generic apply path, which allocates per call —
 -- and these are the innermost loop of the Maranget recursion, run once per matrix
@@ -449,13 +449,13 @@ usefulWildCtors oracle None pmat restQ =
 usefulWildCtors oracle (Some ctors) pmat restQ =
   usefulCovered oracle ctors pmat restQ
 
--- PERF: this is the hot spot of the whole checker.  It used to
+-- PERF: this is the hot spot of the whole checker.  A naive shape would
 --   (a) decide coverage with `allCovered ctors (headCtors pmat)` — an O(#ctors ×
 --       #rows) list-membership scan; and
 --   (b) call `specializeCon` once per signature constructor, each call re-scanning
 --       the ENTIRE matrix.
 -- Both are O(N²) for an N-constructor `data` matched by N arms, and together they
--- were the dominant cost of exhaustiveness checking.
+-- are the dominant cost of exhaustiveness checking.
 --
 -- Instead, bucket the matrix's rows by head constructor in ONE pass.  The bucket
 -- KEYS are exactly the head-constructor set, so coverage becomes an O(log N) lookup

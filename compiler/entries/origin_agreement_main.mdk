@@ -475,7 +475,7 @@ headClaim arm slot (n, o) = Claim arm slot n (originKey o)
 -- name, so the three namespaces cannot collide.
 --
 -- ⚠️ The layers still disagree today, by design, and the golden shows it — but
--- narrower than it used to be (#1227, fixed): the FLAT driver's
+-- narrower since #1227: the FLAT driver's
 -- `checkProgramSeededSplit` (`types/typecheck.mdk`) now calls `stampDeclOrigins
 -- "core"` on its PRELUDE half, alongside `stampFlatTyOrigins`'s occurrence stamp,
 -- so `flat core decl:*` rows AGREE with the graph arm.  It still never stamps the
@@ -734,7 +734,7 @@ sameRow slot name c = claimSlot c == slot && claimName c == name
 --     attribute them to), it does not walk `usePathsOf prog` so it stamps nothing
 --     the buffer IMPORTS either.  The decl layer (`stampDeclOrigins`) is called on
 --     the flat arm's PRELUDE half only (`checkProgramSeededSplit`, #1227, fixed),
---     so `flat core decl:*` no longer shows up here — it moved to AGREE in the
+--     so `flat core decl:*` does not show up here — it is AGREE in the
 --     table above.  `decl:` rows are still silent here for the user program's own
 --     declarations, and for any flat driver with no separate prelude boundary
 --     (`coreProg0 = []`, e.g. `checkProgramSeeded`) — those have no module id to

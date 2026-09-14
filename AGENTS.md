@@ -555,11 +555,12 @@ BLESS A WRONG GOLDEN, permanently. **After ANY merge/rebase, rebuild oracles BEF
 then route through `run_gates.sh`. The same applies to `--bless` — see **[WT-GOLDEN-ENSHRINES]**
 under *Writing tests*.
 
-### Pre-commit hook (ACTIVE) — fmt + lint + baselined-lint + snapshot + lextok + emoji-shout
+### Pre-commit hook (ACTIVE) — fmt + lint + baselined-lint + snapshot + lextok + shout + register-baseline
 
 *Incident narrative, where an item below has any: `.claude/dossier/tooling.md`.*
 
-`.githooks/pre-commit`: fmt+lint+baselined-lint+emoji-shout always, snapshot+lextok if staged,
+`.githooks/pre-commit`: fmt+lint+baselined-lint+shout-diff+comment-register-baseline always,
+snapshot+lextok if staged,
 over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-commit
 "$(git rev-parse --git-common-dir)/hooks/pre-commit"`.
 
@@ -591,9 +592,18 @@ over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-co
   clean of yet (`rule-stdlib-reimpl`), scoped to `$LINT_ROOTS` (`compiler stdlib sqlite`).
   A count may only fall; regenerate via `sh test/diff_compiler_lint_baseline.sh --write`,
   never by hand. See `.githooks/pre-commit` check 2b.
-- **[H-EMOJI-SHOUT] Emoji-shout diff** — rejects a commit that ADDS a new 🚨/⚠️/🔒 line to a
-  staged `.mdk` (diff-scoped, added lines only). See `.githooks/pre-commit` check 6 and
-  `[T-COMMENT-REGISTER]`.
+- **[H-EMOJI-SHOUT] Shout diff** — rejects a commit that ADDS a new shout line to a staged
+  `.mdk` (diff-scoped, added lines only): a 🚨/⚠️/🔒 sigil line anywhere, or the sigil-free
+  shout register (3+ consecutive ALL-CAPS words) on a comment-scope line, so stripping the
+  sigil off a shout is not a drain. ⚠️ Rewriting an existing sigil-bearing line makes it an
+  ADDED line — drop the sigil in the same edit or the check reds. See `.githooks/pre-commit`
+  check 6 and `[T-COMMENT-REGISTER]`.
+- **[H-COMMENT-REGISTER] Comment-register baseline** — a per-(file, class) COUNT ratchet over
+  the 8 baselined comment-register classes, scoped to tracked `compiler/`/`stdlib/` `.mdk`.
+  A count may only fall; a nonzero count with no row fails closed. Regenerate via `sh
+  test/comment_register_census.sh --write test/comment_register_baseline.toml`, never by
+  hand. See `.githooks/pre-commit` check 6b; CI twin is
+  `test/diff_compiler_comment_shout_diff.sh`'s second assertion.
 
 Bypass: `git commit --no-verify`. Unbuilt `medaka`: hook warns and allows.
 
@@ -758,7 +768,12 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   is caught by neither gate. A stale-but-live-path relocation pointer is
   caught only by a human, enforced by review, not by a gate.
   `make comment-census` (`test/comment_register_census.sh`, #2281) derives a
-  current on-demand report of these registers; it is not a gate.
+  current on-demand report of these registers. The report itself asserts
+  nothing, but the same script's `--check` mode IS gated: eight of the classes
+  carry a per-(file, class) count baseline that may only fall
+  (`test/comment_register_baseline.toml`, `[H-COMMENT-REGISTER]`), enforced by
+  `.githooks/pre-commit` check 6b and by
+  `test/diff_compiler_comment_shout_diff.sh` in CI.
 - ⚠️ **[T-SHARED-CORPUS]** A fixture directory is a SHARED CORPUS — add/move/delete enrolls you
   in gates you never named. ENUMERATE every consumer, run all of them. Never trust a count —
   derive it, word-bound the grep both sides (`grep -n 'Word-boundaries' test/preflight.sh`).

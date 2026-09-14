@@ -238,10 +238,10 @@ runTest engines runtimeP coreP target roots cases filterOpt =
               exempt
 
 -- ── typecheck gate (issues #260, #1229) ──────────────────────────────────────
--- `medaka test` used to GREEN-LIGHT a module whose DOCTESTS `medaka check`
+-- `medaka test` must not GREEN-LIGHT a module whose DOCTESTS `medaka check`
 -- REJECTS: the doctest driver ELABORATES the module (dict-passing) but never
 -- surfaces the accumulated type errors, so a module with type errors — even ones
--- in functions no doctest exercises — passed `test` while `check` failed
+-- in functions no doctest exercises — passes `test` while `check` fails
 -- (test-green / check-dies, the repo's #1 bug class INVERTED, reproduced building
 -- stdlib/bits64).  So type-check the whole module FIRST — exactly the way `medaka
 -- check` does — and fail the run (before running any example) if it doesn't check.
@@ -255,9 +255,9 @@ runTest engines runtimeP coreP target roots cases filterOpt =
 -- those would break a suite whose entire point is eval-vs-check divergence.
 --
 -- ── issue #1229: the zero-doctest hole ──────────────────────────────────────
--- The exemption used to be keyed on doctests ALONE (`[] => None`), so a module
+-- The exemption must not be keyed on doctests ALONE (`[] => None`): a module
 -- with NO test-facing construct of any kind — no doctest, no `test "…"`, no
--- `prop "…"` — skipped the gate too, printed `(no doctests found)` and exited 0
+-- `prop "…"` — skips the gate too, prints `(no doctests found)` and exits 0
 -- WITHOUT EVER BEING TYPE-CHECKED: `medaka test broken.mdk` reported success on
 -- source `medaka check` rejects.  That shape has no eval-vs-check-divergence
 -- rationale to preserve (there is nothing for eval to run), so it is gated now.
@@ -523,8 +523,8 @@ skipReasonDecls userDecls
   | otherwise = "`prop \"…\"` decls"
 
 -- #2340: `--filter <sub>` matching NOTHING across all three phases (doctests,
--- props, `test "…"`) used to report `0/0 passed` and exit 0 — a filter typo
--- looked identical to a genuinely clean run. A module that declares zero
+-- props, `test "…"`) would otherwise report `0/0 passed` and exit 0 — a filter typo
+-- would look identical to a genuinely clean run. A module that declares zero
 -- doctests/props/tests to begin with (no `--filter` involved, or `--filter`
 -- given but every phase was already empty) stays the existing vacuous pass
 -- (P0-212, `test_cmd.mdk`'s zero-doctest note above) — this only fires when a
@@ -701,7 +701,7 @@ uncurryPair (core, mods) = TestPair core mods
 -- The single-file prop/`test "…"` arm's elaboration: the degenerate 1-module
 -- list over the shadow-dropped prelude (`programIsCore` ⇒ [], so `medaka test
 -- stdlib/core.mdk` does not double-prepend it).  Built once and shared by the
--- two phases, which used to elaborate it once each.
+-- two phases, rather than elaborated once in each.
 prepareSingle : List Decl ->
   List Decl ->
   String ->
@@ -1076,8 +1076,8 @@ injectIntoLast synthDecls (x :: rest) = x :: injectIntoLast synthDecls rest
 
 -- ── doctest reporting ─────────────────────────────────────────────────────
 
--- The per-example lines and the `(F failed, E errors)` suffix moved to
--- `tools/doctest.mdk` (#81 Stage 2), beside `RunResult`: a native engine must
+-- The per-example lines and the `(F failed, E errors)` suffix live in
+-- `compiler/tools/doctest.mdk` (#81 Stage 2), beside `RunResult`: a native engine must
 -- report a `RunResult` identically to this one, and three copies of the printer
 -- is how that silently stops being true.
 reportDoctests : String -> RunResult -> <IO> Bool
@@ -1098,9 +1098,9 @@ reportDoctests target result =
 -- #2293/#2295 (a): raw-parse line lookup for `prop "…"` decls — same
 -- rationale as `testLineTests` below (the elaborated body loses its ELoc, so
 -- recover each prop's line from a POSITION-preserving reparse). Matched by
--- name (not position, unlike (b)'s `test "…"` fix): the packet scopes props
--- to the same name-matched mechanism `test "…"` used to use, not to (b)'s
--- duplicate-name repair — a duplicate prop name is not this slice's problem.
+-- name (not position, unlike (b)'s `test "…"` fix): props are scoped to a name
+-- match, not to (b)'s duplicate-name repair — a duplicate prop name is not
+-- this slice's problem.
 propLineTests : String -> List (String, Int)
 propLineTests tsrc = collectPropLines (desugar (parseLocated tsrc))
 
@@ -1331,9 +1331,9 @@ fst3 (a, _, _) = a
 -- the leftmost method EVar into a dict node), so take each test's line from the
 -- RAW parsed decls.
 --
--- #2295 (b): matched by POSITION, not by test NAME. The old name match
--- collapsed two same-named `test "…"` decls onto one line and reported line 0
--- for any name it failed to find (which could also happen silently on a
+-- #2295 (b): matched by POSITION, not by test NAME. A name match
+-- collapses two same-named `test "…"` decls onto one line and reports line 0
+-- for any name it fails to find (which can also happen silently on a
 -- rename mismatch between the two decl lists). `raw` and the elaborated
 -- `DTest` list both come from the SAME source (`testLineTests tsrc` and
 -- `collectTests rootTests` respectively) via the same desugar pipeline that
@@ -1355,9 +1355,9 @@ attachRawLines ((_, l, _) :: rawRest) ((name, _, body) :: rest) =
 -- `medaka test` evaluates `test "…"` bodies under a capability policy
 -- (eval.testCapableExterns) that binds the clock, the GC counter and stderr and
 -- nothing else.  A body reaching past it — directly, or through a stdlib
--- wrapper like `runCommandOk` — used to die mid-run with eval's own `unbound
+-- wrapper like `runCommandOk` — would otherwise die mid-run with eval's own `unbound
 -- identifier runCommand`, a message about the interpreter's internals that
--- named no test and arrived after earlier tests had already reported.
+-- names no test and arrives after earlier tests have already reported.
 --
 -- The gate answers the same question by name, before anything runs, and refuses
 -- the WHOLE FILE rather than the individual test: the tests that would still
@@ -1491,7 +1491,7 @@ testFailSuffix failed errors
 -- structured results (`testDeclsReport`, above) — §4 of this slice's packet
 -- licenses extending this shape (not reverting it) — plus a 5th, whether the
 -- module was exempted from typechecking (`typecheckExempt`, F7: #1680/#1443's
--- skip marker used to be human-arm-stderr-only, invisible to `--json`/MCP).
+-- skip marker would otherwise be human-arm-stderr-only, invisible to `--json`/MCP).
 --
 -- `cases`/`filterOpt` (F1) and `includeTestDecls` (F3) are per-caller: `medaka
 -- mcp`'s `medaka_test` (#252/#1443) passes `(100, None, False)` — unchanged
@@ -1903,7 +1903,7 @@ testHelpText = stringConcat [
 -- `parseEngineNames`'s own hand-written ones, and this slice keeps every one
 -- of them verbatim (convergence onto `args.mdk`'s `invalidValueMessage` is a
 -- later decision, not this slice's).
--- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
 -- through as a target path (AS-FILENAME); now C2-rejected like `--x`.
 export
 testArgSpec : ArgSpec
@@ -2265,8 +2265,8 @@ testChildArgs engines cases filterOpt f =
 -- Fold over an expanded file list, aggregating whether ANY file failed
 -- (tests failed, the file itself couldn't be read/parsed, or the child
 -- process died). Each file runs `runTest` in its OWN child process — a
--- panic in file 3 of 20 used to abort the whole in-process loop, so files
--- 4-20 never printed anything (#2589 item 1). Spawning per file means a
+-- panic in file 3 of 20 would abort the whole in-process loop, so files
+-- 4-20 print nothing (#2589 item 1). Spawning per file means a
 -- dead file is contained to its own `runCommand` result: its stdout up to
 -- the crash still prints, it is named DEAD in the aggregate, and the walk
 -- continues. `envOr "MEDAKA" (executablePath ())` mirrors

@@ -1,5 +1,5 @@
 # META
-source_lines=2097
+source_lines=2101
 stages=DESUGAR,MARK
 # SOURCE
 -- Medaka AST — the surface (pre-desugar) nodes,
@@ -73,7 +73,7 @@ public export data Loc = Loc String Int Int Int Int
 -- `tyConSurface`'s own comment records.  Every renderer therefore STRIPS this
 -- field exactly the way `ELoc` is stripped.
 --
--- ── ALSO the DECLARATION-layer carrier (#1110, this PR) ─────────────────────
+-- ── ALSO the DECLARATION-layer carrier (#1110) ──────────────────────────────
 -- The same three inhabitants carry the identity of a type DECLARATION
 -- (`DData`/`DNewtype`/`DTypeAlias`/`DInterface`, below), not just of an
 -- occurrence.  ONE type rather than a parallel `DeclOrigin` on purpose: the two
@@ -251,12 +251,12 @@ public export data Ns =
 -- ⚠️ BOTH HALVES ARE ENFORCED BY THE TYPE, and the second half is why this
 -- declaration is `export data` and NOT `public export data`.  Dropping the
 -- "unresolved" inhabitant was always a fact about the type: no `IdentOrigin`
--- exists for it, full stop.  Non-emptiness used to be weaker — the
--- constructors were `public`, so `IdentModule ""` was spellable by hand, two
--- such origins minted in UNRELATED modules compared `Eq`-equal and rendered
--- to ONE key, and only a doctest in `types/registry.mdk` stood between that
+-- exists for it, full stop.  Non-emptiness is weaker with `public`
+-- constructors: `IdentModule ""` is then spellable by hand, two
+-- such origins minted in UNRELATED modules compare `Eq`-equal and render
+-- to ONE key, and only a doctest in `types/registry.mdk` stands between that
 -- and a silent cross-module collision.  A doctest is not an invariant.  So
--- the constructors are now MODULE-PRIVATE and `identOriginOf` below is the
+-- the constructors are MODULE-PRIVATE and `identOriginOf` below is the
 -- only way to obtain an `IdentOrigin` at all: it rejects `""`, therefore no
 -- `IdentOrigin` in the program has an empty module component, therefore no
 -- `Ident` does either.  §8 I6.3's "make the absent case unrepresentable" now
@@ -645,13 +645,13 @@ public export data Ty =
   -- Field names are a PROGRAM-GLOBAL namespace, and a record field whose name
   -- another module's record also uses AT A DIFFERENT INDEX makes the native
   -- emitter read the wrong slot — `medaka run` stays correct while the BUILT
-  -- binary aborts with `E-NONEXHAUSTIVE-MATCH`.  This is not hypothetical: the
-  -- first cut of this record named the fields `name`/`loc`/`origin`, and the
-  -- plain `loc` collided with `Finding`'s `loc` (`tools/lint.mdk`, index 3 vs
-  -- this record's index 1).  Nothing in `compiler/` referenced `Ty`'s fields at
-  -- all, yet `medaka lint --cache` — whose `encFinding` reads `f.loc` in
-  -- `tools/lint_cache.mdk` — crashed at runtime, and ONLY
-  -- `diff_compiler_lint_cache` caught it.  So: prefix every field on a widely
+  -- binary aborts with `E-NONEXHAUSTIVE-MATCH`.  The collision is concrete, not
+  -- hypothetical: naming this record's fields `name`/`loc`/`origin` puts a plain
+  -- `loc` at index 1, while `Finding`'s `loc` (`tools/lint.mdk`) sits at index 3.
+  -- Nothing in `compiler/` reads `Ty`'s fields at all, yet `medaka lint --cache`
+  -- does read `f.loc` (`encFinding`, `tools/lint_cache.mdk`), so that is where the
+  -- mis-resolved slot surfaces — and `diff_compiler_lint_cache` is the only gate
+  -- covering it.  So: prefix every field on a widely
   -- imported AST node, and never add a bare `name`/`loc`/`kind`/`id` field here.
   --
   -- ⚠️ THIS FILE DOES NOT YET FOLLOW THAT RULE, and the exception is
@@ -820,9 +820,9 @@ tyParamSources (p :: ps) [] = p :: tyParamSources ps []
 -- These live HERE, beside `Loc`/`Ty`, because they are diagnostic-quality
 -- infrastructure every stage needs: `resolve` locates a duplicate signature,
 -- `typecheck` locates an effect/kind/coherence error, all from the same
--- judgment.  They used to be THREE module-private forks of the `Ty` walk
--- (`firstTyLoc` in resolve, `firstTyConLoc` and `tyFirstLoc` in typecheck) and
--- TWO of the combinator (`orElseLoc`/`orElseLocL`), which is exactly how the
+-- judgment.  They must not fork into module-private copies of the `Ty` walk
+-- (`firstTyLoc` in resolve, `firstTyConLoc` and `tyFirstLoc` in typecheck) or
+-- of the combinator (`orElseLoc`/`orElseLocL`), which is exactly how the
 -- next one gets written slightly differently.  `rule-duplicate-body` cannot
 -- see that class: its floor is 10 nodes and these bodies are smaller.
 --
@@ -949,10 +949,14 @@ public export data EvId = EvId String Int
 -- list.  `EvMethod` is published PER METHOD OCCURRENCE, not per goal: an
 -- `EMethodAt` node's selected denotation pre-use arrow arity and three route
 -- answers (its dispatch route, the selected impl's `requires` dicts, and the
--- method's own `=>` dicts) in the order the node's three
--- cells used to hold them.  One node can be the destination of zero goals (the
+-- method's own `=>` dicts) in the order the solver's `EvCell` route refs hold
+-- them (`ecTag`/`ecImpl`/`ecMeth`, `compiler/types/typecheck.mdk`).  The node
+-- itself carries no route: its three cells are the method name, the pre-pass seed
+-- and the `EvId` that addresses that cell, and a reader reaches the routes by
+-- looking the id up (`evMethodRoutes`, `compiler/types/route_key.mdk`).  One node
+-- can be the destination of zero goals (the
 -- unbound-method recovery arm writes a final route without pushing one) or three
--- (the return-site, arg-stamp and RLocal goals share its first cell), so the node,
+-- (the return-site, arg-stamp and RLocal goals all stamp `ecTag`), so the node,
 -- not the goal, is the unit the reader looks up.
 -- The arity distinction is the point, so `Result` cannot stand in for it: these
 -- are evidence SHAPES, not a success and a failure, and an empty `EvMany` (a
@@ -1402,7 +1406,7 @@ public export data Decl =
   -- and the two halves are not separable: a positional widening re-churns every
   -- one of the ~130 pattern sites again at the next field, whereas a PARTIAL
   -- record pattern (`DData { dataName = n }`) already tolerates fields added
-  -- later.  `DInterface` was a record before this PR and shows the payoff — it
+  -- later.  `DInterface` was already a record and shows the payoff — it
   -- needed edits at exactly its two TOTAL construction sites and nowhere else.
   --
   -- 🚨 FIELD NAMES ARE PREFIXED BECAUSE THEY ARE A PROGRAM-GLOBAL NAMESPACE.
@@ -1430,7 +1434,7 @@ public export data Decl =
   -- to a later arm as expected, and `run`/native agree at exit 0 (previously `run`
   -- picked the first arm sharing any label while the built binary picked the
   -- right constructor — see the fix's report, §6.3, for the measured divergence
-  -- table this comment used to reproduce).
+  -- table).
   --
   -- ⚠️ THE OLD RULE — "name at least one label no sibling constructor has" — is
   -- still good DEFENSIVE STYLE, not because matching is unsound without it, but
@@ -1768,7 +1772,7 @@ mapTyInDecl f (DTest pub n body) =
 -- label no sibling has in order to reach the right value.  The `Decl` comment
 -- above has the mechanism.
 -- ⚠️ `ifaceOrigin = _` is kept as defensive style, but the reason this comment
--- used to give for it is dead.  `methods` is a label `DImpl` also has, with its arm
+-- gives for it is dead.  `methods` is a label `DImpl` also has, with its arm
 -- BELOW — yet a `DImpl` value can no longer take this arm, because the match
 -- compares the constructor.  Pre-existing (it arrived with the move from
 -- `tools/codemod.mdk`); harmless to keep, not a requirement to replicate.

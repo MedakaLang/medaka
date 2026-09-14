@@ -109,8 +109,8 @@ public export data Mono =
   -- rule of thumb — `_`-shaped or numeric.
   --
   -- AND NOTHING REBUILDS ONE FROM ITS NAME.  `substMono`/`substMonoP` (reached
-  -- from `instantiate`, i.e. every use of every imported binding) used to answer
-  -- `TCon n => TCon n`; they now return the MATCHED NODE, so preservation is
+  -- from `instantiate`, i.e. every use of every imported binding) return the
+  -- MATCHED NODE, never a rebuilt `TCon n => TCon n`, so preservation is
   -- structural rather than a per-site promise — and one allocation per head per
   -- instantiation goes away with it.  `unifyN`'s mismatch arms likewise hand
   -- `typeMismatch` the node they matched.

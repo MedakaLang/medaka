@@ -648,8 +648,8 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 -- Both were mirrors of `types/typecheck.mdk`'s `implKeyTc`/`ppTyAtom` — the P0-9
 -- shape — and the mint now lives once, in `types/route_key.mdk`, which BOTH sides
 -- of the dict-word seam call (`implRouteKeyWord`).  Their callers in this file are
--- `declImplIfaceIdRow` and `implMethodEntry`; `ir/core_ir_lower.mdk` used to import
--- `implKeyOf` from here and now imports the mint directly.
+-- `declImplIfaceIdRow` and `implMethodEntry`; `ir/core_ir_lower.mdk` imports the
+-- mint directly rather than any `implKeyOf` from here.
 --
 -- ⚠️ THE FOLD IS NOT COSMETIC ON THIS SIDE — the deleted printer was the LESS
 -- complete of the two: `ppTyK` stripped `TyEffect` (`<Stdout> Int` → `Int`) and
@@ -1276,14 +1276,14 @@ reportIfUndecidable tag cands
   | otherwise = ()
 
 -- ⚠️ TWO IMPLS COLLIDE ONLY WITHIN ONE INTERFACE (#2445 fix round, F-2).  The
--- first cut of this predicate asked "are there two distinct canonical keys?" and
+-- predicate must not ask "are there two distinct canonical keys?" and
 -- nothing else, which is not the undecidability question: a canonical key is
 -- `<iface word>|<type args>|<method>` (`types/route_key.implRouteKeyWord`), and
 -- `coalesceImpls` merges every impl of every interface that happens to SPELL a
 -- method the same way into ONE `VMulti`.  Two modules each declaring their OWN
 -- interface (`Fa`/`Fb`, distinct `ifaceIdentity`) with ONE impl each at a head
--- both spell `H` therefore produced two distinct keys — and a hard panic on a
--- program with no collision at all, where the answer `(1, 2)` was already
+-- both spell `H` therefore produce two distinct keys — and a hard panic on a
+-- program with no collision at all, where the answer `(1, 2)` is already
 -- correct.  Measured: keys `x1277_a::Fa|H|` and `x1277_b::Fb|H|`, graded by
 -- `test/diff_compiler_check_cli_modules.sh` case `A-2.10/1277-xmod-head-spelling-run`
 -- (stage A-3's E1 tripwire for #1112 — nothing else in the tree names that role).
@@ -1353,8 +1353,8 @@ narrowMethod _ _ v _ = v
 -- ── #1062: the read-back side of `specializeDefault`'s key cell ────────────
 -- The `RNone` arm above is where a sibling call inside a generic interface DEFAULT
 -- body lands: the body belongs to the interface, not to any impl, so typecheck has
--- no route to stamp and eval used to hand the whole `VMulti` to arg-tag, which sees
--- only the head tycon.  When the frame `specializeDefault` prepended names the
+-- no route to stamp, and handing the whole `VMulti` to arg-tag gets only the
+-- head tycon.  When the frame `specializeDefault` prepended names the
 -- canonical impl key this body is running for, that key is the same fact native's
 -- `restampIfaceDicts` writes into the lifted copy's routes — so use it.
 --
@@ -4258,7 +4258,7 @@ modExportCells (ModExports cells _) = cells
 --
 -- 🚨 THE QUESTION IS "WHAT DOES THE FRONT END PUT IN SCOPE?", NOT "WHAT CELLS
 -- EXIST?", AND MATCHING THE WRONG PEER ALREADY SHIPPED A REGRESSION HERE.  The
--- first cut of this index was built arm-for-arm against `collectCtors`, on the
+-- index must not be built arm-for-arm against `collectCtors`, on the
 -- reasoning that an entry naming a cell `collectCtors` never allocated would name a
 -- cell that does not exist.  True, and NOT SUFFICIENT: `collectCtors` is
 -- deliberately unfiltered, because every constructor a module declares needs a cell

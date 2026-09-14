@@ -668,9 +668,9 @@ appendRuntimeLines = [
 -- ── layer-9 runtime-shape-dispatched value comparison (`==`/`/=`/`<`/`>`/…) ──────
 -- Core IR is type-erased: a ref-mode `CBinPrim "=="` carries no operand type, so the
 -- emitter cannot statically tell a `String == String` (boxed `$str` struct) from an
--- `Int == Int` (i31 immediate).  The old emitter unconditionally lowered `==` as an
--- i31 compare (`ref.cast (ref i31)` + `i31.get_s`), so a String operand trapped
--- `illegal cast` at `ref.cast (ref i31)` (e.g. parser's `coalesceStep`'s `n == name`).
+-- `Int == Int` (i31 immediate).  Lowering `==` unconditionally as an
+-- i31 compare (`ref.cast (ref i31)` + `i31.get_s`) traps `illegal cast` on a String
+-- operand at `ref.cast (ref i31)` (e.g. parser's `coalesceStep`'s `n == name`).
 -- Mirrors the LLVM backend's @mdk_value_eq / @mdk_value_cmp_raw (and the W13
 -- $mdk_append precedent): discriminate on the operand's RUNTIME shape.
 --   $mdk_value_eq(a,b)  : both $str → byte-equal; else `ref.eq` (i31/struct identity,
@@ -777,8 +777,8 @@ valueEqRuntimeLines = [
 -- (`useValueArithRef`); `$mdk_unbox_int`/`$mdk_box_int` are always in scope (ioRuntimeLines).
 --
 -- ── #371: poly-`Num` int `/`/`%` divisor-zero guard ──────────────────────────
--- $mdk_value_div/$mdk_value_mod's int arms used to be bare i64.div_s/rem_s — no
--- guard — so a poly-`Num` `/`/`%` by zero died with a raw engine trap ("divide by
+-- $mdk_value_div/$mdk_value_mod's int arms must not be bare i64.div_s/rem_s — no
+-- guard — or a poly-`Num` `/`/`%` by zero dies with a raw engine trap ("divide by
 -- zero") instead of the coded [E-DIV-ZERO]/[E-MOD-ZERO] line every other engine
 -- (native mdk_num_div/mdk_num_mod, runtime/medaka_rt.c; the concrete-Int wasm path
 -- via emitDivZeroGuard, wasm_emit.mdk) produces. This file is pure static data with

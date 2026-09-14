@@ -48,7 +48,7 @@ import driver.diagnostics.{
 -- ("built <in> -> <out>", or the error); everything else the build learned
 -- along the way rides BESIDE it as data rather than concatenated onto it, so a
 -- consumer that never renders `status` still sees it — `medaka build --json`
--- used to drop a keep-IR failure on the floor for exactly that reason (#2243).
+-- would otherwise drop a keep-IR failure on the floor for that reason (#2243).
 --
 --   keptIr        = where --keep-ir copied the IR, when the copy succeeded
 --   emitterStderr = the emitter subprocess's own stderr, verbatim ("" = none)
@@ -173,12 +173,12 @@ defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 -- but a MISS gave the user nothing to act on.  Prelude reads only — a missing
 -- USER file should keep reporting its own bare "No such file or directory:
 -- <path>", which is already unambiguous.
--- A parse error in the prelude (stdlib/core.mdk or stdlib/runtime.mdk) used to
--- surface as a bare unlocated `runtime error [E-PANIC]: parse error`: every
+-- A parse error in the prelude (stdlib/core.mdk or stdlib/runtime.mdk) would
+-- otherwise surface as a bare unlocated `runtime error [E-PANIC]: parse error`: every
 -- caller here parses the returned source with the PANICKING `parse`, so a syntax
--- error anywhere in the implicit prelude made EVERY command die identically with
--- no file, no line, no mention of the prelude — the compiler looked "globally,
--- inexplicably broken" to whoever was editing core.mdk (#510).  Since every
+-- error anywhere in the implicit prelude makes EVERY command die identically with
+-- no file, no line, no mention of the prelude — the compiler looks "globally,
+-- inexplicably broken" to whoever is editing core.mdk (#510).  Since every
 -- command reads the prelude through THIS one function and already renders the
 -- `Err` and exits nonzero, validate the parse HERE (via the non-panicking
 -- `parseResult`) and, on failure, return the SAME located `file:L:C:` diagnostic
@@ -186,10 +186,10 @@ defaultMedakaEmitter = joinPath exeDir "medaka_emitter"
 -- `parseErrDiag`/`ppDiagCliSrc` machinery — plus a context line naming it as the
 -- prelude.  Same shape as the #892 fix for `medaka test`.
 --
--- #2234: that validating parse is no longer EXTRA.  Its decls used to be
--- discarded (`Ok _ => Ok src`) and the source re-parsed three more times
--- downstream — 54.15% of a hello-world `medaka check` went on parsing the two
--- prelude files four times each.  The `Ok` payload is now published to the
+-- #2234: that validating parse is no longer EXTRA.  Discarding its decls
+-- (`Ok _ => Ok src`) and re-parsing the source three more times
+-- downstream costs 54.15% of a hello-world `medaka check`, parsing the two
+-- prelude files four times each.  The `Ok` payload is published to the
 -- prelude parse memo (`frontend/parse_cache.mdk`), so this validation IS the one
 -- parse and every downstream `parsePrelude` hits it.  Keep the return type as the
 -- SOURCE text: eleven call-site pairs and the whole `analyzeFrom` surface consume
@@ -404,7 +404,7 @@ detectGCBrew cc tmpDir = match runCommand "brew" ["--prefix", "bdw-gc"]
 
 -- Bare -lgc probe: compile a trivial gc.h program from a temp source.  Both the
 -- probe source and its output binary go in the per-invocation scratch dir — they
--- used to be fixed /tmp paths, which two concurrent builds raced on.
+-- must not be fixed /tmp paths, which two concurrent builds race on.
 detectGCBare : String -> String -> <IO> Option (List String, List String)
 detectGCBare cc tmpDir =
   let probe = joinPath tmpDir "gcprobe.c"
@@ -417,8 +417,8 @@ detectGCBare cc tmpDir =
     _ => None
 
 -- Single platform-aware message for every detectGC failure (issue #2514) —
--- called from all three `None => buildErr …` sites so the three copies (that
--- used to be identical, macOS-only-advice literal strings even on Linux)
+-- called from all three `None => buildErr …` sites so the three copies —
+-- otherwise identical, macOS-only-advice literal strings even on Linux —
 -- can't drift again. Same `uname -s` idiom as gcSectionsLinkFlag/
 -- clangMissingError above.
 libgcMissingError : Unit -> <IO> String
@@ -720,14 +720,14 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- sibling import next to the entry, e.g. `src/main.mdk` importing
   -- `src/helper.mdk`'s `helper`) and the project root found by walking up from
   -- there (resolves a dotted cross-package import rooted at the project dir) —
-  -- see the loader.mdk doc comment. A single `findProjectRoot` root here used to
-  -- swallow the sibling-import case whenever a `medaka.toml` sat above the
+  -- see the loader.mdk doc comment. A single `findProjectRoot` root here would
+  -- swallow the sibling-import case whenever a `medaka.toml` sits above the
   -- entry's own directory.
   let inputRoots = entrySearchRoots (dirOf inputAbs) ++ extraRoots
   -- Stage the IR inside THIS invocation's private scratch dir (makeTempDir).  It
-  -- used to be /tmp/medaka_build_<output basename>.ll, which is only
+  -- must not be /tmp/medaka_build_<output basename>.ll, which is only
   -- basename-unique in a GLOBAL directory — concurrent builds writing the same
-  -- output basename (very common: `-o <tmpdir>/out`) overwrote each other's IR.
+  -- output basename (very common: `-o <tmpdir>/out`) overwrite each other's IR.
   let llPath = joinPath tmpDir "program.ll"
   let emitArgsBase =
     [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
@@ -1265,7 +1265,7 @@ stampDate _ = match runCommand "date" ["-u", "+%Y-%m-%d"]
 -- + gcSectionsCflags + detectGC's cflags), and the CONTENTS of medaka_rt.c.
 --
 -- ⚠️ KNOWN GAPS in that key — it is NOT a complete function of everything the
--- object depends on, and this comment used to read as though it were.  Inputs
+-- object depends on.  Inputs
 -- that can change the emitted object WITHOUT changing the key:
 --   * the include search path from the environment (CPATH, C_INCLUDE_PATH) — a
 --     different gc.h found for the same cc/flags;
@@ -1632,7 +1632,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLi
       -- Bound to a `let` (not matched directly) purely so the stopwatch can be read
       -- ONCE, after the clang child exits, without duplicating the row across three
       -- result arms.  Medaka is strict, so this runs clang exactly where the
-      -- `match` used to.
+      -- `match` would.
       let ccRes = runCommandOk cc clangArgs
       let tClang = now ()
       let _ = emitPhase perfOn "clang" (tClang - tRtObj) inputAbs

@@ -210,7 +210,7 @@ extern sliceError : Int -> Int -> a
 -- Internal `medaka run` plumbing ("run drops stdout on panic" fix). `run`'s
 -- tree-walking interpreter buffers a program's stdout in an in-language
 -- Ref<String> (eval.mdk's outputRef) and writes it out only after `main`
--- returns normally, so a panicking program's buffered stdout used to be
+-- returns normally, so a panicking program's buffered stdout would otherwise be
 -- silently discarded (Medaka panics are not catchable; there is no unwind
 -- path back to that final write). These two internal-only externs let
 -- eval.mdk register the buffer with the native runtime so every abort path

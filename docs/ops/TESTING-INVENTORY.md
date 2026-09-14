@@ -258,7 +258,7 @@
 | `test/check_self.sh` | OTHER | native | OUT | n/a | NOT-A-CHECK | — | 71 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/cli_conformance_census.sh` | CLI-CONTRACT | native | OUT | n/a | NOT-A-CHECK | — | 297 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/cli_conformance_lib.sh` | OTHER | native | OUT | n/a | NOT-A-CHECK | — | 252 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
-| `test/comment_register_census.sh` | RATCHET/LEDGER | none | OUT | n/a | NOT-A-CHECK | — | 220 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
+| `test/comment_register_census.sh` | RATCHET/LEDGER | none | OUT | n/a | NOT-A-CHECK | — | 220 | ledgered in CI-COVERAGE-TOOLS.txt. As surveyed: generator/harness/report, no verdict. Since #3034 its `--check` mode IS verdict-bearing (exit 1 on a risen baselined count) and is consumed by `.githooks/pre-commit` check 6b and by `test/diff_compiler_comment_shout_diff.sh`; the default no-flag report still asserts nothing |
 | `test/diag_census.sh` | RATCHET/LEDGER | native | OUT | n/a | NOT-A-CHECK | — | 148 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/doctest_shape_census.sh` | RATCHET/LEDGER | none | OUT | n/a | NOT-A-CHECK | — | 197 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |
 | `test/error_quality_fixtures/capture.sh` | GOLDEN | multiple (check/run/build) | OUT | n/a | NOT-A-CHECK | — | 107 | ledgered in CI-COVERAGE-TOOLS.txt: generator/harness/report, no verdict |

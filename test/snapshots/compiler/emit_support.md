@@ -335,7 +335,7 @@ bindEagerReach : OrdMap (List String) -> CBind -> List String
 bindEagerReach rm (CBind name [CClause [] _]) = optionOr [] (omLookup name rm)
 bindEagerReach _ _ = []
 
--- #623: the value-init topo sort used to carry the SAME binding list twice — as
+-- #623: the value-init topo sort must not carry the SAME binding list twice — as
 -- `all : List CBind` (scanned linearly by a `findBind` per dep) and as
 -- `names : List String` (scanned by `contains` per dep).  Both collapse into ONE
 -- name→bind map, shared by both emitters.

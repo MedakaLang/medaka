@@ -918,10 +918,10 @@ fieldDef ctx mid uri loc pub (Field fn _) =
 
 -- An interface method's DECLARATION def site is its OWN name token (#1013).
 --
--- It used to be the decl's `loc` — the INTERFACE's name-token span — so
--- `interface Weighed a where weigh : …` recorded `weigh`'s def at `Weighed`.
+-- It must not be the decl's `loc` — the INTERFACE's name-token span — which
+-- records `weigh`'s def at `Weighed` for `interface Weighed a where weigh : …`.
 -- Against `references` that is a misleading highlight; against `rename` it is
--- source corruption, because renaming `weigh` would have overwritten the
+-- source corruption, because renaming `weigh` would overwrite the
 -- interface's own type name (`interface newName a`) — the #964 / #1002 class.
 --
 -- Zipped with `declPosChildLocs` POSITIONALLY, which is exact here: the parser
@@ -998,10 +998,10 @@ mapChildLoc _ None = None
 mapChildLoc uri (Some l) = Some (withUri uri l)
 
 -- ── impl-method clause heads (#1002) ────────────────────────────────────────
--- An `impl`'s method heads used to be recorded as NEITHER a def nor a use — the
+-- An `impl`'s method heads are recorded as NEITHER a def nor a use by default — the
 -- def pass returns `[]` for `DImpl` and the body walk discards the method NAME —
--- so `impl Sized Box where sizeOf Small = 1 / sizeOf Big = 100` put nothing at
--- all in the index.  `references` on `sizeOf` therefore returned the interface
+-- so `impl Sized Box where sizeOf Small = 1 / sizeOf Big = 100` would put nothing at
+-- all in the index.  `references` on `sizeOf` would then return the interface
 -- declaration and the call sites but NOT the impls, and a rename off that set
 -- would rename the interface method while leaving every `impl` defining the OLD
 -- name — the #964 failure mode, one namespace over.
@@ -1559,7 +1559,7 @@ midPathsOf root =
 -- re-exports (`defs.mdk`) SILENTLY drops the re-export (a no-op lookup miss,
 -- not an error), which then makes every USE reached only through that
 -- re-export land under an `?ext` (unresolved) key instead of joining the real
--- BinderKey — a real regression a first cut of this feature reproduced and
+-- BinderKey — a real regression, reproduced and
 -- caught right here. Fix: a standard multi-root, dependency-first DFS over
 -- the WHOLE enumerated set (not just one entry), same shape as the loader's
 -- own `visitModF` — visited-set is a `HashMap String Unit` (O(1) membership,

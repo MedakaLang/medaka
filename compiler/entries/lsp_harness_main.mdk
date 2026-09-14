@@ -114,8 +114,8 @@ fixtureTypeError medaka fixDir =
               (diagCountFor uri frames >= 1)
 
 -- Fixture 4: documentSymbol on an UNPARSEABLE file must not crash the server.
--- parseWithPositions used to panic on a parse failure (files are unparseable
--- constantly mid-edit); the handler now uses the non-panicking variant.  Assert
+-- parseWithPositions panics on a parse failure (files are unparseable
+-- constantly mid-edit), so the handler uses the non-panicking variant.  Assert
 -- the documentSymbol request (id 2) still gets a response (server survived).
 fixtureUnparseableNoCrash : String -> String -> <IO> Unit
 fixtureUnparseableNoCrash medaka fixDir =
