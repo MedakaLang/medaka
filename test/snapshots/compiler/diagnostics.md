@@ -233,7 +233,7 @@ fixOfLocRepl (l, r) = Fix l r
 -- equal: `medaka run` passed only its own main-shape warnings to
 -- `emitLocatedWarnings` and `medaka build` had no warning surface at all, so a
 -- diagnostic demoted onto this channel became INVISIBLE on both — turning a
--- formerly-loud reject into a silent accept on exactly the two verbs that execute
+-- loud reject into a silent accept on exactly the two verbs that execute
 -- code.  F-3d threads them (`finishRunEval`'s `tcWarns`, the typecheck-gate
 -- `Ok` payload, `compiler/driver/medaka_cli.mdk`).  A future demotion should re-check that all
 -- three verbs still surface it rather than assume this stays fixed.
@@ -346,13 +346,13 @@ oldNewFixOf f sl sc (old, new) =
 -- messages map to `L-*`, specifically recognized parse errors to their own `P-*`,
 -- and everything else to the umbrella `P-PARSE`).
 --
--- The guard clauses below ARE the list — do not restate their number here. This
--- comment used to count them ("the four lexer messages", "the two special parse
--- cases"); both counts had silently rotted, in the one file whose whole job is
--- mapping messages to codes. A count encodes a fact with no derivation and no
--- expiry (.claude/ORCHESTRATING.md, "DERIVE, don't encode"), so it goes stale the
--- next time anyone adds a clause and nothing notices — which is exactly how it
--- rotted, unremarked, twice. Read the clauses; they cannot lie.
+-- The guard clauses below ARE the list — do not restate their number here. Counts
+-- like "the four lexer messages" or "the two special parse cases" rot silently, in
+-- the one file whose whole job is mapping messages to codes. A count encodes a
+-- fact with no derivation and no expiry (.claude/ORCHESTRATING.md, "DERIVE, don't
+-- encode"), so it goes stale the next time anyone adds a clause and nothing
+-- notices — which is exactly how it rotted, unremarked, twice. Read the clauses;
+-- they cannot lie.
 export
 parseErrCode : String -> String
 parseErrCode msg
@@ -572,7 +572,7 @@ ppDiagCliLines _ _ (Diag sev _ msg None _ _) =
   "\{ppSeverity sev}: <unknown location>: \{msg}"
 
 -- #2544 (M4): render the residual an elaboration returned — the `run`/`build`
--- verbs and the emit driver's #2089 gate print these where they used to print a
+-- verbs and the emit driver's #2089 gate print these where they would otherwise print a
 -- deflection or nothing.  Same face `check` renders through (`ppDiagCliLines`).  A
 -- `Loc` carries no file on the elaborate path, so each entry arrives tagged with its
 -- MODULE id and `pathMap` (the loader's modId → path map) names the file; a module
@@ -613,10 +613,10 @@ srcLinesCached file cache = match lookupAssoc file cache
 
 -- ── ONE FACE for the module-graph resolve channel (#2400 F2) ────────────────
 --
--- `frontend.resolve` used to render its own multi-module human output by hand
--- (`ppResErrorLocatedF`, now deleted): `file:L:C: msg`, no `error: ` prefix, no
--- caret — so the SAME resolve error printed one way single-file and another way
--- through an import.  Every located resolve error now lands here and goes
+-- `frontend.resolve` must not render its own multi-module human output by hand
+-- (`ppResErrorLocatedF`, deleted): `file:L:C: msg`, no `error: ` prefix, no
+-- caret — that makes the SAME resolve error print one way single-file and another
+-- way through an import.  Every located resolve error lands here and goes
 -- through `ppDiagCliLines`, the renderer the single-file arm has always used.
 --
 -- Rendering could not stay in `resolve.mdk`: a caret block needs the module's
@@ -1291,7 +1291,7 @@ analyzeProjectFull allowInternal trustedMods cacheRef parseCacheRef read entry r
   match loadProgramFilesLocatedCachedE parseCacheRef wread entry roots
     -- #100: a parse/lex error in a dependency is attributed to THAT module's file
     -- with its own located `P-*`/`L-*` diag — this is the LSP's most common input
-    -- (a half-typed buffer), and it used to reach here as a panic that took the
+    -- (a half-typed buffer), and it must not reach here as a panic that would take the
     -- whole didChange response with it.
     Err (LoadParseFailed mpath _ pe) =>
       ([], appendStale staleRef [(mpath, [parseErrDiag mpath pe])])
@@ -1701,9 +1701,9 @@ resolvedBuckets allowInternal trustedMods preludeKey chainKey runtimeP coreP mod
       finalBuckets
 
 -- (modId, path, DESUGARED decls), pairing each module with the tree
--- `desugarModule` already memoized for the typecheck half.  `resolvePass` used to
+-- `desugarModule` already memoized for the typecheck half.  `resolvePass` must not
 -- run its own raw `desugar prog` over the whole graph and throw the trees away,
--- so every analyze desugared it twice; resolve reads no route cell, so sharing
+-- which desugars twice per analyze; resolve reads no route cell, so sharing
 -- the one tree is byte-identical.
 desugaredTriples : List (String, String, List Decl) ->
   List (String, List Decl) ->
@@ -2186,8 +2186,8 @@ renderTripleWarnings (path, src, diags) =
 -- #1813: the None arm must NOT send the user to `medaka check`.  It fires EXACTLY
 -- when the per-module diagnostics this elaboration produced were empty while the
 -- same elaboration armed `hadTypeErrors` — i.e. precisely the #1812 divergence,
--- where `medaka check` on this program exits 0 and reports success.  The old text
--- read "Run `medaka check` for details" and so named the one command guaranteed to
+-- where `medaka check` on this program exits 0 and reports success.  Text reading
+-- "Run `medaka check` for details" names the one command guaranteed to
 -- confirm the wrong thing.  #2544 (M4): the residual IS reachable — `elaborateModules`
 -- returns every diagnostic the elaboration left standing, each with its own `Loc` —
 -- so this renders it located, through the same face `check` uses.
@@ -2515,7 +2515,7 @@ mainNonUnitWarning decls = match findMainFunDef decls
 --   * `typecheckGateRoute` single-module (medaka_cli, the build/run gate) —
 --     `analyzeLocatedG` alone.  This is the caller the deletion nearly broke: see
 --     `checkOneDiagsSynthetic` (types/typecheck.mdk) for the auto-print-wrap residue
---     that used to be masked by the elaborate this comment replaces.
+--     that an elaborate on this path would mask.
 --   * `checkJsonSingle` (below) — `analyzeLocatedG` → `analyzeFrom`.
 --   * `checkJsonFile` multi-module (below) — `analyzeProject` → `typecheckPassFull` →
 --     `checkModulesDiags`.  ⚠️ This bullet used to name `analyzeProject` flatly and

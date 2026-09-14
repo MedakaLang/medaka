@@ -17,9 +17,9 @@
 -- extern signatures; core.mdk is the prelude prepended for resolve + typecheck.
 
 -- LOGIC-ONLY module (Phase C Slice 0): the `main` + `withFiles`/`withCore`/
--- `withTarget` driver moved to compiler/entries/check_main.mdk so two private `main`s
+-- `withTarget` driver lives in `compiler/entries/check_main.mdk` so two private `main`s
 -- (this driver's + the native CLI dispatcher's) don't collide under
--- private_mangle.  This module now exposes only `runCheck` + its helpers, so it
+-- private_mangle.  This module exposes only `runCheck` + its helpers, so it
 -- composes cleanly into compiler/medaka_cli.mdk and the batch/modules harnesses.
 
 import frontend.ast.{Decl}

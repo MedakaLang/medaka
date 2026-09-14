@@ -961,8 +961,8 @@ fillImplDefaults prog = map (fillImplDecl prog) prog
 fillImplDecl : List Decl -> Decl -> Decl
 fillImplDecl prog (d@(DImpl { iface, methods, ... }))
   -- UNIVERSAL: every interface's missing defaults are specialized per impl, with no
-  -- exclusions.  Ord and Foldable were formerly held back because their specialized
-  -- defaults tripped two emitter dict-threading gaps, both now CLOSED (see
+  -- exclusions.  Ord and Foldable are not held back: the two emitter
+  -- dict-threading gaps their specialized defaults tripped are both CLOSED (see
   -- TRAVERSABLE-DEFAULT-METHOD-DESIGN.md §9):
   --   * Ord — registerImplRequires keys EVERY method of an impl under the same impl
   --     tyvar id, so specializing lt/gt/min/max alongside compare made the global

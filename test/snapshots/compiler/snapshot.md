@@ -529,7 +529,7 @@ typesUserOf runtimeDecls coreDecls d =
   let _ = resetTypeErrorsSticky ()
   -- checkOneToLinesWithRuntime (Module arm) already renders ONLY the target
   -- module's own scheme lines (never coreDecls'), matching what the userNames
-  -- filter below used to have to strip out of the Flat arm's full coreProg++d
+  -- filter below has to strip out of the Flat arm's full coreProg++d
   -- dump -- the opposite direction from lsp.mdk's completion gap (which wanted
   -- MORE than Module returns); here Module already gives what's wanted, so the
   -- filter is kept as a harmless belt-and-suspenders no-op rather than removed
@@ -1412,7 +1412,7 @@ compareSnap prev secs = match diffSections (parseSnapshot prev) (secPairs secs)
   ds => "FAIL differing sections: \{joinWith ", " ds}"
 
 -- Compare only the sections the run actually produced, plus flag any the snapshot has
--- and the run does not (a stage that used to render and now does not is a regression).
+-- and the run does not (a stage that stops rendering is a regression).
 diffSections : List (String, String) -> List (String, String) -> List String
 diffSections want got =
   let names = filterList (/= "META") snapSections

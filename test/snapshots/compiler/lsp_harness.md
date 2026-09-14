@@ -131,7 +131,7 @@ exitMsg : Json
 exitMsg = jObject [("jsonrpc", JString "2.0"), ("method", JString "exit")]
 
 -- ── framing (byte-counted Content-Length) ──────────────────────────────────
--- utf8Len / utf8CharWidth moved to support/util.mdk (imported above).
+-- utf8Len / utf8CharWidth live in `compiler/support/util.mdk` (imported above).
 
 -- One Content-Length-framed packet.
 export

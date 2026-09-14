@@ -8,7 +8,7 @@
 --   reference index builds empty), it does not error.
 --
 -- ⚠️ `medaka run compiler/entries/lint_main.mdk <source.mdk>` — the form this
--- header used to advertise — no longer works.  This entry now builds the stdlib
+-- header suggests — does not work.  This entry builds the stdlib
 -- reference index (`tools.lint.buildStdlibIndex`, needed so the gate oracle and
 -- the `medaka lint` CLI feed their rules the SAME inputs), and lexing all 29
 -- stdlib files under the tree-walking interpreter exceeds its 25000-frame depth

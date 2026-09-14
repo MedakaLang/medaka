@@ -41,8 +41,8 @@ addrSexp (ALocal frame slot) =
 addrSexp AGlobal = "AGlobal"
 
 -- ── SexpMode — which projection this serialization is (#686, #1954) ──────────
--- The choice used to be a module-scope `Ref Bool` a debug entry flipped before
--- calling `cprogramToSexp`; it is now a value the caller passes, so the projection
+-- The choice is a value the caller passes, never a module-scope `Ref Bool` a
+-- debug entry flips before calling `cprogramToSexp`, so the projection
 -- a dump is in is visible at its call site and two dumps cannot fight over it.
 -- Every serializer that can reach `routeSexp` takes one.
 --
@@ -285,7 +285,7 @@ cprogramToSexp : CProgram -> String
 cprogramToSexp prog = cprogramToSexpWith defaultSexpMode prog
 
 -- The mode-explicit seam.  `faithfulSexpMode` here is the debug projection that
--- used to be reached by flipping an ambient flag first.
+-- would otherwise be reached by flipping an ambient flag first.
 export
 cprogramToSexpWith : SexpMode -> CProgram -> String
 cprogramToSexpWith m (CProgram binds ctorArities ctorToType impls) = node

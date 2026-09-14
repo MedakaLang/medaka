@@ -485,17 +485,17 @@ genField ge env subst depth (Field fname fty) =
 -- `allEqualInts` fast path below and draws the SAME `randIntRange 0 (n - 1)`
 -- it always did, so its value stream is byte-identical.  Only a genuinely
 -- recursive ADT, at depth ≥ 1, sees a different distribution — and it still
--- reaches every shape it used to at the shallow depths, just not depth 1000.
+-- reaches every shape at the shallow depths, just not depth 1000.
 --
 -- ⚠️ "Can reach the ADT itself" is a REACHABILITY question over the type
--- graph, not a one-hop "mentions some user ADT" question.  The first cut of
--- this fix asked the latter, which flagged `F1` in
+-- graph, not a one-hop "mentions some user ADT" question.  Asking the latter
+-- instead flags `F1` in
 --
 --   data Leaf = L0 | L1 ; data Fin = F0 | F1 Leaf
 --
 -- as recursive purely because `Leaf` is user-declared, even though `Leaf` can
 -- never lead back to `Fin`.  Nested inside five non-recursive wrappers that
--- put `Fin` at depth 5, it drove P(F1) from the correct 0.5 down to 1/7 —
+-- put `Fin` at depth 5, that drives P(F1) from the correct 0.5 down to 1/7 —
 -- exactly the silent distribution narrowing this comment claims not to
 -- happen.  `variantRecursive` therefore takes the OWNING ADT's name and asks
 -- `adtReaches`, which walks the whole mention graph.

@@ -422,8 +422,8 @@ regLookup ident r = regLookupK (regKeyOf ident) r
 -- ⚠️ `regKeyRender k` is bound ONCE. Medaka is strict, so the two-call form
 -- evaluates the projection TWICE, and this projection BUILDS a string —
 -- `support/util.mdk`'s `dedupBy` carries the same warning verbatim for the
--- same reason, and `check` is GC-bound. The first cut of this file called
--- `identKey ident` twice here.
+-- same reason, and `check` is GC-bound. Do not call `identKey ident` twice
+-- here.
 export
 regInsertCheckedK : RegKey -> v -> Registry v -> (Registry v, Bool)
 regInsertCheckedK k v (Registry m) =
@@ -598,8 +598,8 @@ export
 mregLookup : Ident -> MultiRegistry v -> List v
 mregLookup ident mr = mregLookupK (regKeyOf ident) mr
 
--- `MultiRegistry` had NO enumeration at all in this file's first cut, so a
--- conversion could write a table it could never walk. Same order caveat as
+-- `MultiRegistry` needs an enumeration: without one, a
+-- conversion can write a table it can never walk. Same order caveat as
 -- `regEntries`.
 export
 mregEntries : MultiRegistry v -> List (RegKey, List v)
@@ -1119,10 +1119,10 @@ keyIxPresentOnly = regKeyN [identIfaceIxM, identTypeIntM]
 regIxUndet : Registry Int
 regIxUndet = regInsertK keyIxUndetInt 2 (regInsertK keyIxIntUndet 1 regEmpty)
 
--- The rigid-position and head-bucket fixtures that used to sit here
--- (`keyIxNoDecl`, `identTypeLowerAM`, `keyIxDeclAOnly`, `keyIxBareAOnly`,
--- `headDeclFoo`, `headBareFoo`, `headRigidA`) moved with the assertions that
--- were their only consumers, to `compiler/types/registry_test.mdk`.
+-- The rigid-position and head-bucket fixtures (`keyIxNoDecl`,
+-- `identTypeLowerAM`, `keyIxDeclAOnly`, `keyIxBareAOnly`, `headDeclFoo`,
+-- `headBareFoo`, `headRigidA`) live with the assertions that are their only
+-- consumers, in `compiler/types/registry_test.mdk`.
 
 -- One entry per namespace, all under origin `m` and name `size`: any two
 -- namespace tags collapsing into one makes this registry SMALLER than six.
@@ -1207,13 +1207,13 @@ mregOrderB = mregAdd identTypeFooM 1 (mregAdd identTypeFooM 2 mregEmpty)
 -- ANY two tags rendering alike makes one entry overwrite the other and the
 -- count drops. The six lookups then pin WHICH value each namespace holds.
 --
--- The first cut of this file exercised only `NsType`/`NsIface`, and this is
--- MEASURED against it (`git show <that commit>:compiler/types/registry.mdk`,
+-- A version of this file exercising only `NsType`/`NsIface` is what this is
+-- MEASURED against (`git show <that commit>:compiler/types/registry.mdk`,
 -- run 2026-08-03), not relayed: `nsTag NsMethod = NsCtor = NsField = NsValue
 -- = "type"` gave **23/23 passed, exit 0**, and so did `nsTag NsField =
 -- "method"` — the exact field-vs-method collision `Ns`'s doc-comment gives as
 -- the REASON six namespaces exist. Against this file's doctests AS THEY STOOD
--- BEFORE the unit-test-shaped half moved to `registry_test.mdk` the same two
+-- BEFORE the unit-test-shaped half was split into `registry_test.mdk` the same two
 -- mutations give 73/80 and 76/80, both exit 1; the counts are the measurement
 -- as taken, not a claim about the current corpus.
 -- > regSize regAllNs

@@ -26,11 +26,6 @@
 
 [[entry]]
 file = "compiler/backend/emit_support.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/backend/emit_support.mdk"
 class = "emoji"
 count = 8
 
@@ -42,7 +37,7 @@ count = 6
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
 class = "history"
-count = 26
+count = 6
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
@@ -51,28 +46,18 @@ count = 3
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
-class = "tombstone"
-count = 2
-
-[[entry]]
-file = "compiler/backend/llvm_emit.mdk"
 class = "emoji"
 count = 30
 
 [[entry]]
 file = "compiler/backend/llvm_emit.mdk"
-class = "draft"
-count = 1
-
-[[entry]]
-file = "compiler/backend/llvm_emit.mdk"
 class = "shout"
-count = 35
+count = 34
 
 [[entry]]
 file = "compiler/backend/private_mangle.mdk"
 class = "history"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/backend/private_mangle.mdk"
@@ -87,7 +72,7 @@ count = 13
 [[entry]]
 file = "compiler/backend/trmc_analysis.mdk"
 class = "history"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/backend/trmc_analysis.mdk"
@@ -102,7 +87,7 @@ count = 1
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
 class = "history"
-count = 18
+count = 3
 
 [[entry]]
 file = "compiler/backend/wasm_emit.mdk"
@@ -117,7 +102,7 @@ count = 11
 [[entry]]
 file = "compiler/backend/wasm_preamble.mdk"
 class = "history"
-count = 3
+count = 1
 
 [[entry]]
 file = "compiler/backend/wasm_preamble.mdk"
@@ -136,11 +121,6 @@ count = 4
 
 [[entry]]
 file = "compiler/driver/build_cmd.mdk"
-class = "history"
-count = 9
-
-[[entry]]
-file = "compiler/driver/build_cmd.mdk"
 class = "emoji"
 count = 7
 
@@ -152,7 +132,7 @@ count = 11
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
 class = "history"
-count = 11
+count = 3
 
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
@@ -167,7 +147,7 @@ count = 10
 [[entry]]
 file = "compiler/driver/loader.mdk"
 class = "history"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/driver/loader.mdk"
@@ -178,11 +158,6 @@ count = 12
 file = "compiler/driver/loader.mdk"
 class = "shout"
 count = 8
-
-[[entry]]
-file = "compiler/driver/main_autoprint.mdk"
-class = "history"
-count = 1
 
 [[entry]]
 file = "compiler/driver/main_autoprint.mdk"
@@ -197,7 +172,7 @@ count = 5
 [[entry]]
 file = "compiler/driver/medaka_cli.mdk"
 class = "history"
-count = 37
+count = 1
 
 [[entry]]
 file = "compiler/driver/medaka_cli.mdk"
@@ -206,18 +181,8 @@ count = 2
 
 [[entry]]
 file = "compiler/driver/medaka_cli.mdk"
-class = "tombstone"
-count = 2
-
-[[entry]]
-file = "compiler/driver/medaka_cli.mdk"
 class = "emoji"
 count = 16
-
-[[entry]]
-file = "compiler/driver/medaka_cli.mdk"
-class = "draft"
-count = 1
 
 [[entry]]
 file = "compiler/driver/medaka_cli.mdk"
@@ -251,11 +216,6 @@ count = 1
 
 [[entry]]
 file = "compiler/entries/entry_support.mdk"
-class = "tombstone"
-count = 1
-
-[[entry]]
-file = "compiler/entries/entry_support.mdk"
 class = "shout"
 count = 1
 
@@ -266,22 +226,12 @@ count = 1
 
 [[entry]]
 file = "compiler/entries/lint_main.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/entries/lint_main.mdk"
 class = "emoji"
 count = 1
 
 [[entry]]
 file = "compiler/entries/lint_main.mdk"
 class = "shout"
-count = 1
-
-[[entry]]
-file = "compiler/entries/llvm_emit_modules_main.mdk"
-class = "tombstone"
 count = 1
 
 [[entry]]
@@ -295,23 +245,8 @@ class = "shout"
 count = 2
 
 [[entry]]
-file = "compiler/entries/lsp_harness_main.mdk"
-class = "history"
-count = 1
-
-[[entry]]
 file = "compiler/entries/native_doctest_probe_main.mdk"
 class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/entries/origin_agreement_main.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/entries/origin_agreement_main.mdk"
-class = "tombstone"
 count = 1
 
 [[entry]]
@@ -327,7 +262,7 @@ count = 20
 [[entry]]
 file = "compiler/entries/playground_main.mdk"
 class = "history"
-count = 2
+count = 1
 
 [[entry]]
 file = "compiler/entries/playground_main.mdk"
@@ -360,24 +295,14 @@ class = "shout"
 count = 8
 
 [[entry]]
-file = "compiler/entries/resolve_modules_main.mdk"
-class = "tombstone"
-count = 1
-
-[[entry]]
 file = "compiler/eval/eval.mdk"
 class = "history"
-count = 3
+count = 1
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "emoji"
 count = 33
-
-[[entry]]
-file = "compiler/eval/eval.mdk"
-class = "draft"
-count = 2
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
@@ -387,7 +312,7 @@ count = 45
 [[entry]]
 file = "compiler/frontend/ast.mdk"
 class = "history"
-count = 6
+count = 1
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"
@@ -396,28 +321,13 @@ count = 51
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"
-class = "draft"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/ast.mdk"
 class = "deictic"
-count = 3
+count = 1
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"
 class = "shout"
 count = 38
-
-[[entry]]
-file = "compiler/frontend/desugar.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/frontend/exhaust.mdk"
-class = "history"
-count = 3
 
 [[entry]]
 file = "compiler/frontend/exhaust.mdk"
@@ -432,7 +342,7 @@ count = 1
 [[entry]]
 file = "compiler/frontend/lexer.mdk"
 class = "history"
-count = 3
+count = 1
 
 [[entry]]
 file = "compiler/frontend/lexer.mdk"
@@ -457,7 +367,7 @@ count = 1
 [[entry]]
 file = "compiler/frontend/parser.mdk"
 class = "history"
-count = 6
+count = 2
 
 [[entry]]
 file = "compiler/frontend/parser.mdk"
@@ -477,7 +387,7 @@ count = 4
 [[entry]]
 file = "compiler/frontend/resolve.mdk"
 class = "history"
-count = 9
+count = 2
 
 [[entry]]
 file = "compiler/frontend/resolve.mdk"
@@ -488,16 +398,6 @@ count = 1
 file = "compiler/frontend/resolve.mdk"
 class = "emoji"
 count = 71
-
-[[entry]]
-file = "compiler/frontend/resolve.mdk"
-class = "draft"
-count = 2
-
-[[entry]]
-file = "compiler/frontend/resolve.mdk"
-class = "deictic"
-count = 1
 
 [[entry]]
 file = "compiler/frontend/resolve.mdk"
@@ -521,18 +421,8 @@ count = 1
 
 [[entry]]
 file = "compiler/ir/core_ir_eval.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/ir/core_ir_eval.mdk"
 class = "shout"
 count = 1
-
-[[entry]]
-file = "compiler/ir/core_ir_lower.mdk"
-class = "history"
-count = 7
 
 [[entry]]
 file = "compiler/ir/core_ir_lower.mdk"
@@ -546,38 +436,8 @@ count = 16
 
 [[entry]]
 file = "compiler/ir/core_ir_lower.mdk"
-class = "draft"
-count = 1
-
-[[entry]]
-file = "compiler/ir/core_ir_lower.mdk"
 class = "shout"
 count = 16
-
-[[entry]]
-file = "compiler/ir/core_ir_sexp.mdk"
-class = "history"
-count = 2
-
-[[entry]]
-file = "compiler/ir/dce.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/ir/sexp.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/support/cli_targets.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/support/manifest.mdk"
-class = "history"
-count = 1
 
 [[entry]]
 file = "compiler/support/opcount.mdk"
@@ -606,11 +466,6 @@ count = 2
 
 [[entry]]
 file = "compiler/support/util.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/support/util.mdk"
 class = "emoji"
 count = 3
 
@@ -620,39 +475,14 @@ class = "shout"
 count = 2
 
 [[entry]]
-file = "compiler/tools/check.mdk"
-class = "tombstone"
-count = 1
-
-[[entry]]
-file = "compiler/tools/check_policy.mdk"
-class = "history"
-count = 1
-
-[[entry]]
 file = "compiler/tools/codemod.mdk"
 class = "emoji"
 count = 2
 
 [[entry]]
 file = "compiler/tools/doc.mdk"
-class = "history"
-count = 6
-
-[[entry]]
-file = "compiler/tools/doc.mdk"
 class = "shout"
 count = 1
-
-[[entry]]
-file = "compiler/tools/doctest.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/tools/gate_cmd.mdk"
-class = "history"
-count = 4
 
 [[entry]]
 file = "compiler/tools/gate_cmd.mdk"
@@ -676,11 +506,6 @@ count = 7
 
 [[entry]]
 file = "compiler/tools/gate_pack.mdk"
-class = "history"
-count = 2
-
-[[entry]]
-file = "compiler/tools/gate_pack.mdk"
 class = "shout"
 count = 42
 
@@ -692,7 +517,7 @@ count = 2
 [[entry]]
 file = "compiler/tools/lint.mdk"
 class = "history"
-count = 7
+count = 3
 
 [[entry]]
 file = "compiler/tools/lint.mdk"
@@ -726,23 +551,8 @@ count = 3
 
 [[entry]]
 file = "compiler/tools/lint_cmd.mdk"
-class = "history"
-count = 2
-
-[[entry]]
-file = "compiler/tools/lint_cmd.mdk"
 class = "shout"
 count = 3
-
-[[entry]]
-file = "compiler/tools/lsp.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/tools/lsp.mdk"
-class = "tombstone"
-count = 1
 
 [[entry]]
 file = "compiler/tools/lsp.mdk"
@@ -753,11 +563,6 @@ count = 4
 file = "compiler/tools/lsp.mdk"
 class = "shout"
 count = 4
-
-[[entry]]
-file = "compiler/tools/lsp_harness.mdk"
-class = "tombstone"
-count = 1
 
 [[entry]]
 file = "compiler/tools/mcp.mdk"
@@ -796,23 +601,8 @@ count = 3
 
 [[entry]]
 file = "compiler/tools/prop_runner.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/tools/prop_runner.mdk"
 class = "emoji"
 count = 4
-
-[[entry]]
-file = "compiler/tools/prop_runner.mdk"
-class = "draft"
-count = 1
-
-[[entry]]
-file = "compiler/tools/refindex.mdk"
-class = "history"
-count = 2
 
 [[entry]]
 file = "compiler/tools/refindex.mdk"
@@ -821,23 +611,8 @@ count = 3
 
 [[entry]]
 file = "compiler/tools/refindex.mdk"
-class = "draft"
-count = 1
-
-[[entry]]
-file = "compiler/tools/refindex.mdk"
 class = "shout"
 count = 5
-
-[[entry]]
-file = "compiler/tools/repl.mdk"
-class = "tombstone"
-count = 1
-
-[[entry]]
-file = "compiler/tools/snapshot.mdk"
-class = "history"
-count = 2
 
 [[entry]]
 file = "compiler/tools/snapshot.mdk"
@@ -851,16 +626,6 @@ count = 4
 
 [[entry]]
 file = "compiler/tools/test_cmd.mdk"
-class = "history"
-count = 10
-
-[[entry]]
-file = "compiler/tools/test_cmd.mdk"
-class = "tombstone"
-count = 1
-
-[[entry]]
-file = "compiler/tools/test_cmd.mdk"
 class = "emoji"
 count = 5
 
@@ -871,32 +636,12 @@ count = 4
 
 [[entry]]
 file = "compiler/tools/test_runner.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/tools/test_runner.mdk"
 class = "emoji"
 count = 1
 
 [[entry]]
 file = "compiler/types/annotate.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/types/annotate.mdk"
 class = "emoji"
-count = 1
-
-[[entry]]
-file = "compiler/types/registry.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/types/registry.mdk"
-class = "tombstone"
 count = 1
 
 [[entry]]
@@ -907,7 +652,7 @@ count = 43
 [[entry]]
 file = "compiler/types/registry.mdk"
 class = "draft"
-count = 4
+count = 1
 
 [[entry]]
 file = "compiler/types/registry.mdk"
@@ -926,18 +671,8 @@ count = 4
 
 [[entry]]
 file = "compiler/types/repr.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/types/repr.mdk"
 class = "shout"
 count = 19
-
-[[entry]]
-file = "compiler/types/route_key.mdk"
-class = "history"
-count = 1
 
 [[entry]]
 file = "compiler/types/route_key.mdk"
@@ -1001,15 +736,5 @@ count = 2
 
 [[entry]]
 file = "stdlib/regex.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "stdlib/runtime.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "stdlib/set.mdk"
 class = "history"
 count = 1

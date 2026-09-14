@@ -1398,7 +1398,7 @@ dispGrow cf isFn fa bindIx fnSet claimed root (m :: rest) back accRev accSet par
 -- check is `anyList (m => omHasKey m claimed) members ⇒ None`, so a group that reaches a
 -- claimed fn was ALREADY rejected.  Deciding it here instead of after growing the whole
 -- family is what removes the outer factor of the near-cubic (#1029): a long chain of
--- candidate roots used to re-grow the entire remaining family once per root only to
+-- candidate roots would otherwise re-grow the entire remaining family once per root only to
 -- have `dispValidate` throw it away on v7.
 dispAddNew : List String ->
   OrdMap Unit ->

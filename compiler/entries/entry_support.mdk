@@ -175,7 +175,7 @@ driveModulesLocated runEmit = match args ()
   _ => failWith usageModules
 
 -- Kept as a local one-liner in each of its three call sites (here,
--- tools/test_cmd.mdk, driver/medaka_cli.mdk) rather than moved to
+-- tools/test_cmd.mdk, driver/medaka_cli.mdk) rather than lifted into
 -- support/util.mdk: it composes `desugar`, and support/util.mdk is imported
 -- BY frontend/desugar.mdk, so importing desugar back into support/util would
 -- be a module cycle.

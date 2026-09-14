@@ -613,9 +613,9 @@ allCrossFileRules : List CrossFileRule
 allCrossFileRules = [duplicateBodyRule]
 
 -- Every registered rule name, per-file and cross-file, as plain Strings.
--- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` used to be accepted
--- silently — a typo'd rule name filtered EVERY finding away and the run exited
--- 0 looking clean.  The CLI validates `--only=`/`--disable=`/`--deny=` against
+-- CLI-CONFORMANCE.md §5f: `medaka lint --only=nosuchrule` would otherwise be
+-- accepted silently — a typo'd rule name filters EVERY finding away and the run
+-- exits 0 looking clean.  The CLI validates `--only=`/`--disable=`/`--deny=` against
 -- this list; ALL Rule-record access stays inside this module (the header's
 -- field-scanner rule), so the CLI receives only these Strings.
 export
@@ -768,10 +768,10 @@ export
 stdlibSigTextIn : StdlibIndex -> String -> String -> Option String
 stdlibSigTextIn idx modName name = map ppTy (stdlibSigIn idx modName name)
 
--- Every name the index knows, sorted.  The derived successor to the curated
--- 15-name `stdlibNames` list this file used to carry: `rule-stdlib-reimpl` now
--- generates its candidate names from THIS, so the rule cannot drift from the
--- stdlib the way a hand-written list did (#2248 Miss 2).
+-- Every name the index knows, sorted.  `rule-stdlib-reimpl` generates its
+-- candidate names from THIS rather than from a curated 15-name list, so the
+-- rule cannot drift from the
+-- stdlib the way a hand-written list does (#2248 Miss 2).
 export
 stdlibIndexNames : StdlibIndex -> List String
 stdlibIndexNames (StdlibIndex m) = sortUniqS (keys m)
@@ -1809,9 +1809,9 @@ tyHeadName _ = None
 -- both are load-bearing (#2248 Miss 2, plus the measurements this rule was cut
 -- from):
 --
---   RECALL comes from NAME RELAXATION.  The rule used to match a hand-curated
---   15-name list EXACTLY, so `listReverse` / `takeN` / `reverseList` — the shapes
---   people actually write — were invisible to it.  A candidate is now any
+--   RECALL comes from NAME RELAXATION.  Matching a hand-curated
+--   15-name list EXACTLY makes `listReverse` / `takeN` / `reverseList` — the shapes
+--   people actually write — invisible.  A candidate is any
 --   top-level def whose lowercased name has some exported stdlib name (length
 --   >= 4, lowercased) as a PREFIX or a SUFFIX.  An exact name match is just the
 --   empty-remainder case, so nothing the old curated list caught is lost.
@@ -6162,7 +6162,7 @@ dupAggregateOcc path (c :: cs)
 -- anchor silently un-suppresses a duplicate someone has already adjudicated —
 -- and this tree carries over a hundred such directives.  So the anchor is the
 -- first clause that clears the floor ON ITS OWN, which is exactly the clause the
--- per-clause rule used to report and therefore exactly the clause every existing
+-- per-clause rule reports and therefore exactly the clause every existing
 -- directive was placed above.  Aggregation then only ADDS findings; it moves
 -- none.  A function that fires only in aggregate has no such clause and no
 -- directive to preserve, so it anchors at its first clause, where a reader looks

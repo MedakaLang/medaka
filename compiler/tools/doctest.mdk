@@ -350,7 +350,7 @@ concatOkDecls ((Ok ds) :: rest) = ds ++ concatOkDecls rest
 concatOkDecls ((Err _) :: rest) = concatOkDecls rest
 
 -- ── Compare rendered results against expected ────────────────────────────────
--- Stage 1 (make `medaka test` run natively): this seam used to take the raw
+-- Stage 1 (make `medaka test` run natively): this seam must not take the raw
 -- interpreter env (Result String (List (String, Value e))) — a shape only the
 -- tree-walking evaluator can produce. It is raised one level: an execution
 -- engine's whole obligation is now "one rendered actual per example, or one

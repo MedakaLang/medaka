@@ -429,9 +429,9 @@ isSubsetOf a b = size a <= size b && subsetGo a b
 {- The size test above is an O(1) reject that settles the commonest `False`.
    Past it, `subsetGo` splits `b` around `a`'s root and recurses -- so a missing
    element aborts the whole walk through `&&` instead of being folded over the
-   rest of `a`.  (The old `foldrSet (x acc => acc && has x b) True a`
-   short-circuited each individual `has`, but the fold still visited every
-   element of `a` after the answer was already known.)  Splitting also shrinks
+   rest of `a`.  (A `foldrSet (x acc => acc && has x b) True a`
+   short-circuits each individual `has`, but the fold still visits every
+   element of `a` after the answer is already known.)  Splitting also shrinks
    `b` on the way down, giving O(|a|·log(|b|/|a| + 1)) rather than a fixed
    O(|a|·log|b|). -}
 subsetGo : Ord a => Set a -> Set a -> Bool

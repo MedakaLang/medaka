@@ -78,7 +78,7 @@ runOneTest evalEnv body =
 -- (eval.testCapableExterns): the clock, the GC counter and stderr, and nothing
 -- that touches the filesystem, the environment, stdin, the network, or another
 -- process.  An extern outside that policy is simply ABSENT from the evaluation
--- environment, so reaching one used to surface as `unbound identifier
+-- environment, so reaching one would otherwise surface as `unbound identifier
 -- runCommand` from inside eval — a message about the interpreter's internals,
 -- attributed to no test, raised after some tests had already run.
 --

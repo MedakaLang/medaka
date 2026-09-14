@@ -892,9 +892,9 @@ scanStr src len p startQ depth id acc
 -- The escape letters shared by string AND character literals: the decoded
 -- content of `\<e>`, or `None` if `<e>` is not one of them. This ONE table is
 -- what keeps the string lexer and the char lexer (`charEscDecode`, below) in
--- agreement — the char path used to accept any backslash-letter as the bare
--- letter (`'\v'` → `v`) precisely because it did NOT consult a shared table
--- (#668). `\{` (interpolation open) and `\u{…}` are handled by their callers
+-- agreement — a char path that does NOT consult this table accepts any
+-- backslash-letter as the bare letter (`'\v'` → `v`, #668).  `\{` (interpolation
+-- open) and `\u{…}` are handled by their callers
 -- before this point, and `\'` is char-only, so none of those appear here.
 commonEscDecode : Char -> Option String
 commonEscDecode e
@@ -1555,7 +1555,7 @@ uniIsSurrogate cp = cp >= 55296 && cp <= 57343
 -- is also at most 6 digits — separators exist to group long runs, and Unicode's own
 -- notation (U+10FFFF) is unbroken. See docs/spec/SYNTAX.md, which states this grammar.
 -- WHY the run is ill-formed. `s` is the first digit position, `he` the char that
--- stopped the run — the one `uniEscEnd` used to step blindly past.
+-- stopped the run — the one `uniEscEnd` must not step blindly past.
 uniEscTermErr : Array Char -> Int -> Int -> Int -> String
 uniEscTermErr src len s he
   | he >= len =

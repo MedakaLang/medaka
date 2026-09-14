@@ -1282,10 +1282,10 @@ hexNibble n = stringSlice n (n + 1) "0123456789abcdef"
 -- "NYone" == 210683374574`.  Before #348's guard that was a live S0: two impls at
 -- head tycons `Mzone`/`NYone` compiled to one `icmp eq i64 %headTag, 210683374574`
 -- in the shared dispatcher, so `build` answered `mzone|mzone` where the
--- interpreter answered `mzone|nyone`, at exit 0 with no diagnostic.  The comment
--- that used to stand at `wasm_emit.dictTag` calling this shape "astronomically
--- unlikely" was wrong about the mechanism: the hash's non-injectivity has nothing
--- to do with the tag alphabet being small, and nothing to do with the mask width.
+-- interpreter answered `mzone|nyone`, at exit 0 with no diagnostic.  Calling this
+-- shape "astronomically unlikely" is wrong about the mechanism: the hash's
+-- non-injectivity has nothing to do with the tag alphabet being small, and
+-- nothing to do with the mask width.
 -- `core_ir_lower.dictWitnessTagGuard` is what makes it loud; keep the two together.
 export
 hashName : String -> Int

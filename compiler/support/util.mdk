@@ -138,8 +138,8 @@ dropAssoc k ((k2, v) :: rest)
   | otherwise = (k2, v) :: dropAssoc k rest
 
 -- Join string pieces with a separator.  Delegates to stdlib `string.join`
--- (`stringConcat (intersperse sep parts)` — the same O(total length) one-pass
--- build util used to hand-roll via intersperseStr).  Kept as a named export so
+-- (`stringConcat (intersperse sep parts)` — one pass, O(total length)).  Kept
+-- as a named export so
 -- the compiler consumers stay unedited.  Importing `string` is near-free here:
 -- String's instances live in `core` (always-present prelude), so the import adds
 -- no new instance surface — only `join` itself (2026-06-30 util migration note).
