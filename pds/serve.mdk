@@ -115,7 +115,11 @@ import net.{Listener, listenPort}
 import shell.blobfile.{blobFileRead}
 import shell.crawl.{RelayTarget, makeRelayTarget, requestCrawl}
 import shell.egress.{Egress, makeEgress}
-import shell.eventlog.{eventLogApplyRecovery, eventLogPlanRecovery}
+import shell.eventlog.{
+  EventLogRecovery(..),
+  eventLogApplyRecovery,
+  eventLogPlanRecovery,
+}
 import shell.keygen.{keygenRefusePath, keygenSigningKey, keygenTokenSecret}
 import shell.persist.{
   credentialPath,
@@ -695,10 +699,15 @@ openRepo True dir did keyBytes secret =
 
 {- | Everything the server needs, or the first reason it may not run: the
    configured server, its initial store, the data directory, the port, the
-   address to bind, and where (if anywhere) to announce this repository to a
-   relay. -}
+   address to bind, where (if anywhere) to announce this repository to a
+   relay, and the startup lines `start` prints under the banner.
+
+   The startup lines are a VALUE and not a print: this function decides and
+   refuses, and a run it refuses must narrate nothing. `start` prints them,
+   after the banner, so that a log still begins by saying which build produced
+   everything under it. -}
 configure : Args ->
-  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget)
+  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -779,7 +788,26 @@ configure parsed = do
     bind,
     serving,
     relay,
+    [
+      "serve: config did=\{did} handle=\{handle} hostname=\{hostname} data=\{dir} bind=\{bind} trusted-proxy=\{yesNo (flag "--trusted-proxy" parsed)} appview=\{yesNo (isSome egress)} relay=\{yesNo (isSome relay)}",
+      "serve: event log recovery: \{recoveryOutcome recovery}",
+    ],
   )
+
+yesNo : Bool -> String
+yesNo True = "yes"
+yesNo False = "no"
+
+{- | What recovery did to the event log, for the startup line.
+
+   The names are what HAPPENED and not what was decided, which is why the line
+   is rendered at the end of `configure` rather than beside
+   `eventLogPlanRecovery`: `eventLogApplyRecovery` runs between the two, and a
+   run that failed to promote never reaches here to claim it did. -}
+recoveryOutcome : EventLogRecovery -> String
+recoveryOutcome EventLogSettled = "settled"
+recoveryOutcome EventLogOwed = "promoted"
+recoveryOutcome EventLogOrphaned = "discarded"
 
 {- | This server's own version, as `pds/medaka.toml` declares it. -}
 pdsVersion : String
@@ -810,10 +838,21 @@ versionString _ =
   else
     "pdsd \{pdsVersion} (\{commit}, built \{date})"
 
-{- | The first line of every successful start, printed before the readiness
-   line so a log begins by saying which build produced everything under it. -}
+{- | The first line of every start that got past `configure`, printed before
+   the readiness line so a log begins by saying which build produced
+   everything under it — a bind failure's diagnostic included, which is why it
+   is written before the bind rather than after it. -}
 banner : Unit -> <Env, Stdout> Unit
 banner _ = putStrLn "serve: \{versionString ()}"
+
+-- The configuration summary and the event-log recovery outcome, under the
+-- banner and above the readiness line. `configure` rendered them; this only
+-- writes them.
+startupLines : List String -> <Stdout> Unit
+startupLines [] = ()
+startupLines (line :: rest) =
+  let () = putStrLn line
+  startupLines rest
 
 -- The readiness line is flushed explicitly: stdout is block-buffered when it is
 -- a pipe or a file, and a supervisor that waits for this line before connecting
@@ -857,7 +896,6 @@ announce : String ->
   Option RelayTarget ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 announce bind port lis store dir server serving relay = defer
-  _ <- liftIO (u => banner ())
   _ <- liftIO (u => ready bind port)
   _ <- match relay
     None => deferPure ()
@@ -884,10 +922,12 @@ bound bind server store dir serving relay (Ok lis) = defer
       liftIO (u => abort "serve: listener port unavailable: \{message}")
     Ok given => announce bind given lis store dir server serving relay
 
-start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget) ->
+start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, List String) ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
-start (Ok (server, store, dir, port, bind, serving, relay)) = defer
+start (Ok (server, store, dir, port, bind, serving, relay, lines)) = defer
+  _ <- liftIO (u => banner ())
+  _ <- liftIO (u => startupLines lines)
   listener <- liftIO (u => bindAddress bind port)
   bound bind server store dir serving relay listener
 

@@ -19,10 +19,19 @@
 # Its scope is wider than the other three: pds/lib, pds/shell and
 # pds/serve.mdk, because the entry point is where the secrets are read.
 #
+# A FIFTH check is check 4's other half, for the one containment hole the
+# interpolation scan cannot see: the per-request ACCESS LOG (#2964). Its
+# formatter interpolates its own fields (`event.method`, `event.client`), so a
+# secret reaching a line does so as an ARGUMENT at a call site — `logAccess`,
+# `logAccessBytes`, `accessLogLine`, a `RequestTrace`, or a field of an
+# `AccessEvent` record literal — and never as a secret-named interpolation the
+# fourth check would match. The record literal spans lines, so this check
+# tracks the block rather than grading one line at a time.
+#
 # A mutation control proves each check can actually fail: a throwaway
-# violation is injected into a scratch copy of one pds/lib file, shown to
-# red, then the real tree is checked again to prove it is untouched and
-# green.
+# violation is injected into a scratch copy of one pds/lib file — or, for the
+# fifth check, of pds/shell, where its call sites actually are — shown to red,
+# then the real tree is checked again to prove it is untouched and green.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -143,6 +152,78 @@ check_no_secret_interpolation() {
   done
 }
 
+# Prints one violation line per access-log site that names a secret; exit 0
+# with no output when clean.
+#
+# The names below are the whole access-log surface: the two emitters
+# (`logAccess`, `logAccessBytes`), the pure formatter (`accessLogLine`), the
+# shell trace it is built from (`RequestTrace`), and the `AccessEvent` record
+# literal, whose fields are on their own lines and are therefore tracked as a
+# block. A secret reaching any of them reaches a line that whoever reads the
+# journal reads — a wider audience than whoever holds the account.
+#
+# The identifier list is the fourth check's, plus `token` and `bearer`: an
+# access log is the one place a request's own Authorization material would
+# plausibly be put "for debugging", and unlike a diagnostic it is written on
+# EVERY request rather than on a failure.
+#
+# Matched case-insensitively and as a SUBSTRING, which is stricter than the
+# fourth check's whole-word rule and deliberately so: the identifiers actually
+# holding these values in this tree are camelCase (`sessionSecret`,
+# `credentialDigest`, `tokenSecret`), and a whole-word lowercase scan sees
+# none of them. The width costs nothing here, because the allow-list of six
+# `AccessEvent` fields is narrow enough that no legitimate argument to any
+# site below is named after a secret — a hit is a leak or a misnamed value,
+# and both want a human.
+#
+# Unlike the fourth check, this one grades CODE and not source text: comments
+# are stripped before matching. A doc comment that explains which values may
+# NOT reach a log line necessarily names both an access-log symbol and a
+# secret, so a text-level scan reds on the very prose that documents the rule
+# — and the first thing an author would do about that is delete the
+# explanation. Strings are tracked so that `"--did"` and friends do not read as
+# a line comment.
+ACCESS_LOG_SECRETS='(password|passphrase|secret|salt|digest|credential|jwt|token|bearer)'
+
+check_no_secret_in_access_log() {
+  dir=$1
+  entry=$2
+  for f in "$dir"/*.mdk "$entry"; do
+    [ -f "$f" ] || continue
+    awk -v file="$f" -v words="$ACCESS_LOG_SECRETS" '
+      function strip(line,   out, i, c, c2, inq) {
+        out = ""
+        inq = 0
+        i = 1
+        while (i <= length(line)) {
+          c = substr(line, i, 1)
+          c2 = substr(line, i, 2)
+          if (inq && c == "\\") { i += 2; continue }
+          if (inq) { if (c == "\"") inq = 0; if (depth == 0) out = out c; i++; continue }
+          if (depth == 0 && c == "\"") { inq = 1; out = out c; i++; continue }
+          if (depth == 0 && c2 == "--") break
+          if (c2 == "{-") { depth++; i += 2; continue }
+          if (c2 == "-}") { if (depth > 0) depth--; i += 2; continue }
+          if (depth == 0) out = out c
+          i++
+        }
+        return out
+      }
+      BEGIN {
+        depth = 0
+        site = "(^|[^A-Za-z0-9_])(logAccess|logAccessBytes|accessLogLine|traceFor|RequestTrace|AccessEvent)([^A-Za-z0-9_]|$)"
+      }
+      {
+        code = strip($0)
+        if (code ~ /AccessEvent[ \t]*\{/) inrecord = 1
+        if ((inrecord || code ~ site) && tolower(code) ~ words)
+          print file ":" FNR ": a secret reaches the access log: " code
+        if (inrecord && code ~ /\}/) inrecord = 0
+      }
+    ' "$f"
+  done
+}
+
 # ── the real tree ────────────────────────────────────────────────────────────
 
 run_checks() {
@@ -153,6 +234,7 @@ run_checks() {
   effect_hits=$(check_no_effect_export "$dir")
   unsigned_hits=$(check_export_has_signature "$dir")
   secret_hits=$(check_no_secret_interpolation "$dir" "$entry")
+  access_hits=$(check_no_secret_in_access_log "$dir" "$entry")
   if [ -n "$shell_hits" ]; then
     echo "$shell_hits" >&2
     fail "$label: pds/lib imports pds/shell"
@@ -169,6 +251,10 @@ run_checks() {
     echo "$secret_hits" >&2
     fail "$label: a secret is interpolated into a string"
   fi
+  if [ -n "$access_hits" ]; then
+    echo "$access_hits" >&2
+    fail "$label: a secret reaches the access log"
+  fi
 }
 
 # The shell half of the secret scan, run once against the real tree: the
@@ -180,8 +266,18 @@ if [ -n "$shell_secret_hits" ]; then
   fail 'real tree: a secret is interpolated into a string in pds/shell'
 fi
 
+# The shell half of the access-log scan. It matters MORE here than in pds/lib:
+# every `logAccess` call site in this tree is in pds/shell/server.mdk, which is
+# also where the request's own headers are still in scope.
+shell_access_hits=$(check_no_secret_in_access_log "$ROOT/pds/shell" \
+  "$ROOT/pds/serve.mdk")
+if [ -n "$shell_access_hits" ]; then
+  echo "$shell_access_hits" >&2
+  fail 'real tree: a secret reaches the access log in pds/shell'
+fi
+
 run_checks "$LIB_DIR" 'real tree'
-echo 'boundary clean: no pds/lib -> pds/shell import, every pds/lib export signed, none effect-bearing, no secret interpolated into a string'
+echo 'boundary clean: no pds/lib -> pds/shell import, every pds/lib export signed, none effect-bearing, no secret interpolated into a string, no secret reaching the access log'
 
 # ── mutation control: prove each check can fail ─────────────────────────────
 
@@ -251,7 +347,62 @@ fi
 echo 'mutation control: the ledger is per-file, not a blanket exemption'
 rm -rf "$SCRATCH"
 
+# Violation 6: a secret handed to the access log as an ARGUMENT. This is the
+# shape the interpolation check above cannot see — there is no secret-named
+# `\{...}` anywhere, because the formatter interpolates its own field names —
+# so both halves are asserted, exactly as violation 3 asserts both halves of
+# the signature/effect pair.
+cp -R "$LIB_DIR" "$SCRATCH"
+VICTIM6="$SCRATCH/repo.mdk"
+printf '\naccessLogProbeForTest : String -> String\naccessLogProbeForTest password = accessLogLine password\n' \
+  >>"$VICTIM6"
+if secret_hits=$(check_no_secret_interpolation "$SCRATCH" "$VICTIM6") \
+  && [ -n "$secret_hits" ]; then
+  fail 'mutation control: the interpolation check was expected to MISS a secret passed as an argument'
+fi
+if access_hits=$(check_no_secret_in_access_log "$SCRATCH" "$VICTIM6") \
+  && [ -z "$access_hits" ]; then
+  fail 'mutation control: a secret passed to the access log was not caught'
+fi
+echo 'mutation control: a secret passed to the access log correctly caught'
+rm -rf "$SCRATCH"
+
+# Violation 7: the same leak inside an `AccessEvent` record literal, where the
+# offending field is on a DIFFERENT line from the constructor. A line-at-a-time
+# scan would report this clean, which is why the check tracks the block.
+cp -R "$LIB_DIR" "$SCRATCH"
+VICTIM7="$SCRATCH/repo.mdk"
+printf '\naccessRecordProbeForTest : String -> AccessEvent\naccessRecordProbeForTest sessionSecret =\n  AccessEvent {\n    method = "GET",\n    path = "/xrpc/probe",\n    status = 200,\n    responseBytes = 0,\n    durationMillis = 0,\n    client = sessionSecret,\n  }\n' \
+  >>"$VICTIM7"
+if access_hits=$(check_no_secret_in_access_log "$SCRATCH" "$VICTIM7") \
+  && [ -z "$access_hits" ]; then
+  fail 'mutation control: a secret in an AccessEvent field was not caught'
+fi
+echo 'mutation control: a secret in an AccessEvent record field correctly caught'
+rm -rf "$SCRATCH"
+
+# Violation 8: the same leak at a REAL call site, in a copy of pds/shell. The
+# two controls above grade the function over a pds/lib directory; this one
+# grades it over the directory that actually holds every `logAccess` call, so
+# a scan that silently stopped reaching pds/shell — the one arm no other
+# control covers — reds here instead of going quiet.
+SHELL_SCRATCH="$WORK/shell"
+cp -R "$ROOT/pds/shell" "$SHELL_SCRATCH"
+VICTIM8="$SHELL_SCRATCH/server.mdk"
+sed 's/logAccessBytes trace responseBytes/logAccessBytes trace sessionSecret/' \
+  "$VICTIM8" >"$VICTIM8.new"
+mv "$VICTIM8.new" "$VICTIM8"
+if ! grep -q 'logAccessBytes trace sessionSecret' "$VICTIM8"; then
+  fail 'mutation control: the pds/shell call site this control mutates has moved — repoint it'
+fi
+if access_hits=$(check_no_secret_in_access_log "$SHELL_SCRATCH" \
+  "$ROOT/pds/serve.mdk") && [ -z "$access_hits" ]; then
+  fail 'mutation control: a secret at a real pds/shell access-log call site was not caught'
+fi
+echo 'mutation control: a secret at a real pds/shell call site correctly caught'
+rm -rf "$SHELL_SCRATCH"
+
 # The real tree is untouched (checks ran against copies only) and still green.
 run_checks "$LIB_DIR" 'real tree, post-mutation-control'
 
-echo 'PASS: lib_boundary — no shell import, every export signed, no effect export, no secret interpolated into a string, mutation control caught all five'
+echo 'PASS: lib_boundary — no shell import, every export signed, no effect export, no secret interpolated into a string, no secret reaching the access log, mutation control caught all eight'

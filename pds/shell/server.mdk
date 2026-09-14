@@ -32,12 +32,15 @@ import http.{
   Request,
   requestHeaders,
   requestKeepAlive,
+  requestMethod,
+  requestTarget,
   Response,
   scanRequestBoundaryWithin,
   serializeResponse,
 }
 import array.{sliceClamped}
 import async.{Async, Wait, deadlineAfter, expired, liftIO, spawn}
+import lib.accesslog.{AccessEvent(..), accessLogLine, responseStatusCode}
 import lib.cid.{Cid, cidToString}
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.credential.{
@@ -55,6 +58,7 @@ import lib.ratelimit.{
   classAllowance,
   directIdentity,
   identifyClient,
+  identityLabel,
   initRateLimitState,
   nsidRateLimitClasses,
   remainingInClass,
@@ -129,8 +133,9 @@ import shell.eventlog.{
 }
 import shell.persist.{persistCredential, persistPreferences, persistSave}
 import shell.subscribe.{runSubscription}
+import lib.websocket.{handshakeResponseBytes}
 import string.{toUtf8}
-import time.{Duration, formatIso, fromEpochSeconds, now, seconds}
+import time.{Duration, formatIso, fromEpochSeconds, monotonic, now, seconds}
 import vector.{Vector(..)}
 import vector as V
 
@@ -960,7 +965,7 @@ runServer : Server ->
   Ref Store ->
   Listener ->
   Serving ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 runServer server dir storeRef lis serving = defer
   active <- liftIO (u => Ref 0)
   unframed <- liftIO (u => Ref 0)
@@ -986,7 +991,7 @@ acceptLoop : Server ->
   Ref RateLimitState ->
   SubscriptionCensus ->
   Serving ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 acceptLoop server dir storeRef lis active unframed limiterRef census serving =
   defer
     accepted <- A.accept lis
@@ -1012,7 +1017,7 @@ acceptStep : Server ->
   SubscriptionCensus ->
   Serving ->
   Result String Connection ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 acceptStep _ _ _ _ _ _ _ _ _ (Err message) = deferPure (Err message)
 acceptStep server dir storeRef lis active unframed limiterRef census serving (Ok conn) =
   -- Both ceilings close the connection the same way, without a read:
@@ -1063,7 +1068,7 @@ serveConnection : Server ->
   Connection ->
   Ref Int ->
   Ref Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> Unit
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 serveConnection server dir storeRef limiterRef census serving conn active unframed =
   defer
     held <- liftIO (u => Ref True)
@@ -1101,7 +1106,7 @@ connectionLoop : Server ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 connectionLoop server dir storeRef limiterRef census serving conn slot pending firstRequest =
   defer
     deadline <- deadlineAfter requestTimeout
@@ -1138,7 +1143,7 @@ frameLoop : Server ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 frameLoop server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   let scanned =
     scanRequestBoundaryWithin (readBufferBacking buf) (readBufferLen buf) 0 scan
@@ -1193,7 +1198,7 @@ framePending : Server ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 framePending server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   match deadlines
     Deadlines headerDeadline deadline => defer
@@ -1230,7 +1235,7 @@ readMore : Server ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
     received <- A.recvWithin (silenceBudget scan) conn readChunkBytes
@@ -1287,6 +1292,60 @@ preflightAnswer (Err _) = None
 preflightAnswer (Ok request) =
   if isPreflight request then Some (preflightResponse request) else None
 
+{- | What the access log needs to know about a request, gathered where the
+   request is still structured and carried to the point its response bytes
+   leave.
+
+   A SHELL type rather than one of `lib.accesslog`'s: `startedAt` is a
+   monotonic clock reading, which is something this module measures and the
+   pure formatter must not be able to. The three strings are the request's
+   own and are NOT sanitized here — `accessLogLine` is what makes them safe
+   to print, so one place decides that rather than one place per field. -}
+data RequestTrace = RequestTrace String String String Float
+
+{- | The trace for a request that reached the framer.
+
+   A buffer that did not parse still gets one, with empty strings for the
+   method and target it never supplied (`logToken` renders those as `-`): a
+   buffer this server answers 400 is a request, and leaving it out of the log
+   is the silence this instrumentation exists to remove. -}
+traceFor : Result HttpParseFailure Request -> String -> Float -> RequestTrace
+traceFor (Err _) client startedAt = RequestTrace "" "" client startedAt
+traceFor (Ok request) client startedAt =
+  RequestTrace (requestMethod request) (requestTarget request) client startedAt
+
+{- | Write the one line this request gets.
+
+   On STDOUT and not stderr, beside the banner and the readiness line: an
+   answered request is not a fault, and reporting every one of them through
+   `ePutStrLn` would put ordinary traffic in the same stream as a persist
+   failure. Flushed per line for the reason `ready` flushes (`pds/serve.mdk`):
+   stdout is block-buffered when it is a file or a pipe, and a log whose last
+   lines are lost whenever the process is killed is not one an operator can
+   read after an incident. -}
+logAccess : RequestTrace -> Int -> Int -> <Clock, Stdout> Unit
+logAccess (RequestTrace method target client startedAt) status responseBytes =
+  let () =
+    putStrLn
+      (accessLogLine AccessEvent {
+        method = method,
+        path = target,
+        status = status,
+        responseBytes = responseBytes,
+        durationMillis = floatToInt ((monotonic () - startedAt) * 1000.0),
+        client = client,
+      })
+  flushStdout ()
+
+-- | The same line for a response this module holds the serialized bytes of,
+-- which is every exit but the admitted subscription upgrade. Reading the
+-- status back off the bytes is what makes the funnel exhaustive rather than
+-- sampled: an exit added later carries its own status to the log by
+-- construction, having nothing else to pass.
+logAccessBytes : RequestTrace -> Array Int -> <Clock, Stdout> Unit
+logAccessBytes trace responseBytes =
+  logAccess trace (responseStatusCode responseBytes) (arrayLength responseBytes)
+
 -- The rate-limit decision is taken here, once per framed request, because
 -- this is the one place that holds both the parsed `Request` (headers, for
 -- `identifyClient`, and target, for the routed NSID) and the point of
@@ -1303,10 +1362,13 @@ respond : Server ->
   ReadBuffer ->
   Int ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 respond server dir storeRef limiterRef census serving conn slot buf boundary firstRequest =
   defer
     nowSeconds <- liftIO (u => floatToInt (now ()))
+    -- The monotonic reading and not the wall-clock one above: a duration
+    -- measured across a wall-clock adjustment is not a duration.
+    startedAt <- liftIO (u => monotonic ())
     respondAt
       server
       dir
@@ -1320,6 +1382,7 @@ respond server dir storeRef limiterRef census serving conn slot buf boundary fir
       boundary
       firstRequest
       nowSeconds
+      startedAt
 
 respondAt : Server ->
   String ->
@@ -1333,14 +1396,21 @@ respondAt : Server ->
   Int ->
   Bool ->
   Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-respondAt server dir storeRef limiterRef census serving conn slot buf boundary firstRequest nowSeconds =
+  Float ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+respondAt server dir storeRef limiterRef census serving conn slot buf boundary firstRequest nowSeconds startedAt =
   let parsed = parseRequestAt (readBufferBacking buf) 0 boundary
   let keepAlive = match parsed
     Ok request => requestKeepAlive request
     Err _ => False
   let rest = readBufferFrom boundary buf
   let identified = admissionIdentity (servingTrustedProxy serving) parsed
+  -- Built once, here, and carried down every branch below: the log's identity
+  -- is the one the request was CHARGED under, so a refused `X-Forwarded-For`
+  -- is logged as the shared `direct` bucket it actually counted against
+  -- rather than as the value it claimed.
+  let trace =
+    traceFor parsed (identityLabel (chargedIdentity identified)) startedAt
   let charged =
     applyRateLimit
       limiterRef
@@ -1377,6 +1447,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
         slot
         rest
         keepAlive
+        trace
         (serializeResponse response)
     None => defer
       decision <- liftIO (u =>
@@ -1393,6 +1464,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
             conn
             slot
             rest
+            trace
             admission
         UpgradeRefused refusal =>
           sendAndContinue
@@ -1406,6 +1478,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
             slot
             rest
             False
+            trace
             (serializeResponse (withAllowOrigin refusal))
         NotAnUpgrade => defer
           proxy <- liftIO (u =>
@@ -1425,6 +1498,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 keepAlive
                 nowSeconds
                 (chargedIdentity identified)
+                trace
                 admission
             ProxyRefused refusal =>
               sendAndContinue
@@ -1438,6 +1512,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                 slot
                 rest
                 keepAlive
+                trace
                 (serializeResponse (withAllowOrigin refusal))
             NotProxied => defer
               credential <- liftIO (u =>
@@ -1460,6 +1535,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                     slot
                     rest
                     keepAlive
+                    trace
                     (mintedTokenBytes serving claims)
                 ServiceAuthRefused refusal =>
                   sendAndContinue
@@ -1473,6 +1549,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                     slot
                     rest
                     keepAlive
+                    trace
                     (serializeResponse (withAllowOrigin refusal))
                 NotServiceAuth => defer
                   response <- liftIO (u =>
@@ -1492,6 +1569,7 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                     slot
                     rest
                     keepAlive
+                    trace
                     response
 
 {- | Whether this request asked to be proxied, asked of the pure core
@@ -1640,9 +1718,10 @@ forwardProxied : Server ->
   Bool ->
   Int ->
   ClientIdentity ->
+  RequestTrace ->
   ProxyAdmission ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-forwardProxied server dir storeRef limiterRef census serving conn slot rest keepAlive nowSeconds identity admission =
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+forwardProxied server dir storeRef limiterRef census serving conn slot rest keepAlive nowSeconds identity trace admission =
   match applyRateLimit limiterRef identity [ProxyClass] nowSeconds
     Some refusal =>
       sendAndContinue
@@ -1656,6 +1735,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
         slot
         rest
         keepAlive
+        trace
         (serializeResponse (withAllowOrigin refusal))
     None => match servingEgress serving
       None =>
@@ -1670,6 +1750,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
           slot
           rest
           keepAlive
+          trace
           (serializeResponse (withAllowOrigin proxyUpstreamFailureResponse))
       Some egress =>
         if not (claimProxiedCall (servingProxyCensus serving)) then
@@ -1684,6 +1765,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             slot
             rest
             keepAlive
+            trace
             (serializeResponse (withAllowOrigin proxyCeilingResponse))
         else defer
           answered <- egressCall egress admission
@@ -1699,6 +1781,7 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             slot
             rest
             keepAlive
+            trace
             (proxyAnswerBytes answered)
 
 {- | The bytes a proxied read answers with.
@@ -1789,9 +1872,10 @@ admitSubscription : Server ->
   Connection ->
   UnframedSlot ->
   ReadBuffer ->
+  RequestTrace ->
   UpgradeAdmission ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-admitSubscription server dir storeRef limiterRef census serving conn slot rest admission =
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+admitSubscription server dir storeRef limiterRef census serving conn slot rest trace admission =
   if not (claimSubscription census) then
     sendAndContinue
       server
@@ -1804,8 +1888,23 @@ admitSubscription server dir storeRef limiterRef census serving conn slot rest a
       slot
       rest
       False
+      trace
       (serializeResponse (withAllowOrigin subscriptionCeilingResponse))
   else defer
+    -- The one exit that does not hand `sendAndContinue` a response: the
+    -- handshake is written inside `runSubscription`, and what follows it is a
+    -- stream with no request/response shape at all. The line is written HERE,
+    -- at admission, rather than when the stream ends — a subscription held
+    -- open for hours would otherwise leave the request that opened it
+    -- unlogged for the whole of that, which is exactly the silence a firehose
+    -- deployment most needs not to have. The handshake is rebuilt from the
+    -- same pure function `runSubscription` sends, so the byte count is the
+    -- one the peer receives.
+    _ <- liftIO (u =>
+      logAccess
+        trace
+        upgradeStatus
+        (arrayLength (handshakeResponseBytes admission.accept)))
     outcome <- runSubscription
       dir
       writeTimeout
@@ -1815,6 +1914,12 @@ admitSubscription server dir storeRef limiterRef census serving conn slot rest a
       (readBufferLive rest)
     _ <- liftIO (u => releaseSubscription census)
     deferPure outcome
+
+-- The status `lib.websocket`'s `handshakeResponseBytes` writes. Named here
+-- rather than parsed back off those bytes because this is the one exit whose
+-- status is fixed by the protocol rather than chosen per request.
+upgradeStatus : Int
+upgradeStatus = 101
 
 -- | What a subscriber past `maxConcurrentSubscriptions` is told, over ordinary
 -- HTTP: the upgrade is never completed, so the refusal costs one response and
@@ -1837,11 +1942,17 @@ sendAndContinue : Server ->
   UnframedSlot ->
   ReadBuffer ->
   Bool ->
+  RequestTrace ->
   Array Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive responseBytes =
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive trace responseBytes =
   defer
     sent <- A.sendAllWithin writeTimeout conn responseBytes
+    -- Logged after the write and whatever it returned: a response this server
+    -- produced and then failed to deliver is exactly what an operator is
+    -- looking for, and a line only the successful writes reach would report a
+    -- healthier server than the one that is running.
+    _ <- liftIO (u => logAccessBytes trace responseBytes)
     match sent
       Err message => deferPure (Err message)
       Ok () =>
@@ -1875,10 +1986,20 @@ rejectBuffer : Server ->
   Connection ->
   ReadBuffer ->
   Bool ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 rejectBuffer server dir storeRef limiterRef conn buf firstRequest = defer
   nowSeconds <- liftIO (u => floatToInt (now ()))
-  rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds
+  startedAt <- liftIO (u => monotonic ())
+  rejectBufferAt
+    server
+    dir
+    storeRef
+    limiterRef
+    conn
+    buf
+    firstRequest
+    nowSeconds
+    startedAt
 
 rejectBufferAt : Server ->
   String ->
@@ -1888,21 +2009,31 @@ rejectBufferAt : Server ->
   ReadBuffer ->
   Bool ->
   Int ->
-  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr | e> (Result String Unit)
-rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds =
+  Float ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+rejectBufferAt server dir storeRef limiterRef conn buf firstRequest nowSeconds startedAt =
   let charged =
     applyRateLimit
       limiterRef
       directIdentity
       (baseClasses firstRequest)
       nowSeconds
+  -- Built directly rather than through `traceFor`, because there is no
+  -- request to derive it from: a buffer no framer can complete has neither a
+  -- method nor a target, and the identity is the shared `direct` bucket it
+  -- was charged under above. The line is still written — an unframeable flood
+  -- is precisely the traffic an operator needs to see.
+  let trace = RequestTrace "" "" (identityLabel directIdentity) startedAt
   match charged
     Some refusal =>
-      A.sendAllWithin
-        writeTimeout
-        conn
-        (serializeResponse (withAllowOrigin refusal))
+      let bytes = serializeResponse (withAllowOrigin refusal)
+      defer
+        sent <- A.sendAllWithin writeTimeout conn bytes
+        _ <- liftIO (u => logAccessBytes trace bytes)
+        deferPure sent
     None => defer
       response <- liftIO (u =>
         applyRequest server dir storeRef (readBufferLive buf))
-      A.sendAllWithin writeTimeout conn response
+      sent <- A.sendAllWithin writeTimeout conn response
+      _ <- liftIO (u => logAccessBytes trace response)
+      deferPure sent
