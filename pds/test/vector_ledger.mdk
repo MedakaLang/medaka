@@ -1,0 +1,174 @@
+{- | The `--files-for <consumer>` half of `pds/test/vector_provenance.sh`,
+   as a Medaka module a native (slice 2-4) test runner can call directly
+   instead of shelling out to `sh vector_provenance.sh --files-for <id>`
+   (S-the-ledger-is-a-library, #2595, #2593).
+
+   `filesForConsumer` reads `pds/test/VECTOR-PROVENANCE.txt`, and for every
+   `[vector]` stanza whose `consumer:` value's first token matches the
+   requested id: confirms the stanza names a `file:` and a well-formed
+   `local-sha256:`, confirms that file exists under the given root, and
+   confirms its CURRENT bytes still hash to the recorded digest. It returns
+   the matching repo-relative paths, sorted.
+
+   This validates only the rows the requested consumer names — not the
+   full-corpus checks `vector_provenance.sh`'s `check_corpus` also performs
+   (every file under `pds/test/` has exactly one row, no orphan/missing
+   rows, `[impl]` pin agreement, symlink rejection). That gate — unchanged,
+   still the registered CI check — remains the authority for the ledger as
+   a whole; a caller here gets a guarantee scoped to its own files, not a
+   substitute for the gate.
+
+   The digest MUST come from spawning the external `sha256sum`/`shasum`
+   binary, never `stdlib/sha256.mdk`: this ledger governs the corpus that
+   grades `stdlib/sha256.mdk` itself (`pds/test/sha256_vectors.sh`).
+   Verifying the ledger with the implementation under test would make a
+   broken SHA-256 self-certifying. -}
+
+import array.{foldWithIndex}
+import io.{runCommandOk}
+import list.{reverse, sort}
+import string.{endsWith, isDigit, lines, startsWith, toChars, trim, words}
+
+-- One `[impl]` or `[vector]` stanza: its header word and its `key: value`
+-- pairs in ledger order. `[impl]` stanzas are parsed and then ignored —
+-- reference-impl pin agreement is out of this module's scope (see header).
+data Stanza = Stanza { kind : String, fields : List (String, String) }
+
+export
+filesForConsumer : String ->
+  String ->
+  <FileRead "_", Exec "_"> Result String (List String)
+filesForConsumer root consumer =
+  let ledgerPath = "\{root}/pds/test/VECTOR-PROVENANCE.txt"
+  match readFile ledgerPath
+    Err e => Err "vector_ledger: could not read \{ledgerPath}: \{e}"
+    Ok content =>
+      let matching =
+        filter (isVectorForConsumer consumer) (parseStanzas content)
+      map sort (collectRows root matching)
+
+-- ── Stanza parsing ───────────────────────────────────────────────────────
+
+parseStanzas : String -> List Stanza
+parseStanzas content = reverse (goLines (lines content) "" [] [])
+
+goLines : List String ->
+  String ->
+  List (String, String) ->
+  List Stanza ->
+  List Stanza
+goLines [] curKind curFields acc = flushStanza curKind curFields acc
+goLines (raw :: rest) curKind curFields acc =
+  let t = trim raw
+  if t == "" || startsWith "#" t then
+    goLines rest curKind curFields acc
+  else if startsWith "[" t && endsWith "]" t then
+    let acc' = flushStanza curKind curFields acc
+    let newKind = trim (stringSlice 1 (stringLength t - 1) t)
+    goLines rest newKind [] acc'
+  else match splitColon raw
+    None => goLines rest curKind curFields acc
+    Some (k, v) => goLines rest curKind ((k, v) :: curFields) acc
+
+flushStanza : String -> List (String, String) -> List Stanza -> List Stanza
+flushStanza kind fields acc =
+  if kind == "" then
+    acc
+  else
+    Stanza { kind = kind, fields = reverse fields } :: acc
+
+-- `key: value`, split on the FIRST `:` — `None` when the line has none
+-- (a malformed ledger line; the caller treats it as a stanza with that key
+-- absent, same as the shell gate's own required-key check would fail it).
+--
+-- > splitColon "file: pds/test/x.txt"
+-- Some ("file", "pds/test/x.txt")
+-- > splitColon "no colon here"
+-- None
+export
+splitColon : String -> Option (String, String)
+splitColon line =
+  map
+    (i => (
+      trim (stringSlice 0 i line),
+      trim (stringSlice (i + 1) (stringLength line) line),
+    ))
+    (stringIndexOf ":" line)
+
+fieldValue : String -> Stanza -> Option String
+fieldValue key stanza = findValue key stanza.fields
+
+findValue : String -> List (String, String) -> Option String
+findValue _ [] = None
+findValue key ((k, v) :: rest) = if k == key then Some v else findValue key rest
+
+-- A `[vector]` stanza whose `consumer:` value's FIRST whitespace-delimited
+-- token equals `consumer` — mirrors vector_provenance.sh's `list_consumer_
+-- files` awk query (`split(consumer, parts, /[ \t]+/); parts[1] == WANT`).
+isVectorForConsumer : String -> Stanza -> Bool
+isVectorForConsumer consumer stanza =
+  stanza.kind == "vector"
+    && (match fieldValue "consumer" stanza
+      None => False
+      Some value => match words value
+        first :: _ => first == consumer
+        [] => False)
+
+-- ── Per-row validation ───────────────────────────────────────────────────
+
+collectRows : String ->
+  List Stanza ->
+  <FileRead "_", Exec "_"> Result String (List String)
+collectRows _ [] = Ok []
+collectRows root (s :: rest) = match validateRow root s
+  Err e => Err e
+  Ok file => map (file :: _) (collectRows root rest)
+
+validateRow : String -> Stanza -> <FileRead "_", Exec "_"> Result String String
+validateRow root stanza = match fieldValue "file" stanza
+  None => Err "vector_ledger: [vector] stanza missing required key \"file\""
+  Some file => match fieldValue "local-sha256" stanza
+    None =>
+      Err
+        "vector_ledger: [vector] stanza for \{file} missing required key \"local-sha256\""
+    Some expected =>
+      if not (isHex64 expected) then
+        Err
+          "vector_ledger: [vector] stanza for \{file}: local-sha256 is not 64 lowercase hex: \"\{expected}\""
+      else
+        let path = "\{root}/\{file}"
+        if not (fileExists path) then
+          Err
+            "vector_ledger: [vector] stanza names file \"\{file}\" which does not exist under \{root}"
+        else match sha256OfFile path
+          Err e => Err "vector_ledger: could not hash \{file}: \{e}"
+          Ok actual =>
+            if actual == expected then
+              Ok file
+            else
+              Err
+                "vector_ledger: DIGEST MISMATCH \{file}: expected local-sha256=\{expected} actual=\{actual}"
+
+isHex64 : String -> Bool
+isHex64 s =
+  stringLength s == 64
+    && foldWithIndex (acc _ c => acc && isHexChar c) True (toChars s)
+
+isHexChar : Char -> Bool
+isHexChar c = isDigit c || c >= 'a' && c <= 'f'
+
+-- ── sha256, spawned — never stdlib/sha256.mdk (see module header) ───────
+
+sha256OfFile : String -> <Exec "_"> Result String String
+sha256OfFile path = match runCommandOk "sha256sum" [path]
+  Ok (out, _) => firstWord path out
+  Err e1 => match runCommandOk "shasum" ["-a", "256", path]
+    Ok (out, _) => firstWord path out
+    Err e2 =>
+      Err
+        "sha256sum/shasum both unavailable or failed for \{path}: \{e1}; \{e2}"
+
+firstWord : String -> String -> Result String String
+firstWord path out = match words out
+  h :: _ => Ok h
+  [] => Err "sha256 helper produced no output for \{path}"
