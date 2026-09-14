@@ -30,34 +30,37 @@ import http.{
   responseReason,
   responseStatus,
 }
+import list.{filter}
 import string.{toUtf8}
+
+{- | A response field built from a name and a value this file spells out
+   itself.
+
+   `makeHeader` cannot reject either: every name below is a token and every
+   value is printable ASCII, so `resultOrPanic` asserts that this file's own
+   literals are well-formed rather than handling anything a request can
+   reach. The one field built from client bytes does not come through here —
+   `preflightResponse` answers an unusable one with the empty allowance. -}
+constantHeader : String -> String -> Header
+constantHeader name value =
+  resultOrPanic
+    "lib.cors: constant header '\{name}'"
+    (makeHeader name (toUtf8 value))
 
 -- | `Access-Control-Allow-Origin: *`, the one header every response carries.
 export
 allowOriginHeader : Header
-allowOriginHeader = match makeHeader "access-control-allow-origin" (toUtf8 "*")
-  Ok header => header
-  Err message =>
-    panic "lib.cors: internal allow-origin header error: \{message}"
+allowOriginHeader = constantHeader "access-control-allow-origin" "*"
 
 allowMethodsHeader : Header
 allowMethodsHeader =
-  match (makeHeader
-    "access-control-allow-methods"
-    (toUtf8 "GET,HEAD,PUT,PATCH,POST,DELETE"))
-    Ok header => header
-    Err message =>
-      panic "lib.cors: internal allow-methods header error: \{message}"
+  constantHeader "access-control-allow-methods" "GET,HEAD,PUT,PATCH,POST,DELETE"
 
 maxAgeHeader : Header
-maxAgeHeader = match makeHeader "access-control-max-age" (toUtf8 "86400")
-  Ok header => header
-  Err message => panic "lib.cors: internal max-age header error: \{message}"
+maxAgeHeader = constantHeader "access-control-max-age" "86400"
 
 varyHeader : Header
-varyHeader = match makeHeader "vary" (toUtf8 "Access-Control-Request-Headers")
-  Ok header => header
-  Err message => panic "lib.cors: internal vary header error: \{message}"
+varyHeader = constantHeader "vary" "Access-Control-Request-Headers"
 
 {- | True iff every byte of `value` from `i` on is printable ASCII, `32..126`
    — the range `stdlib/http`'s `makeHeader` accepts in an outbound response
@@ -77,33 +80,38 @@ printableAscii value i =
     value[i] >= 32 && value[i] <= 126 && printableAscii value (i + 1)
 
 {- | What the client's `Access-Control-Request-Headers` asked for, or an empty
-   value when it asked for nothing — and also when it asked with bytes the
-   outbound serializer will not take.
+   value when it asked for nothing, when it asked more than once, and when it
+   asked with bytes the outbound serializer will not take.
 
    That value is entirely client-controlled and arrives through the inbound
    parser, which accepts bytes `makeHeader` rejects, so an unusable value is
    DROPPED WHOLE rather than repeated or stripped byte by byte. Dropping
    answers "no extra request headers are allowed", which makes the browser
    refuse the real request; stripping would answer with a header list no
-   client asked for, the same forgery `lib.proxy`'s `soleField` refuses when
-   a relayed field is ambiguous. -}
+   client asked for.
+
+   A REPEATED field is dropped for the same reason `lib.proxy`'s `soleField`
+   drops one: choosing among two values a client sent is choosing on its
+   behalf. First-wins would answer a permission the client may have meant to
+   narrow with its second field, and neither value is the one it asked
+   with. -}
 requestedHeaders : List Header -> Array Int
-requestedHeaders [] = [||]
-requestedHeaders (header :: rest) =
-  if headerName header == "access-control-request-headers" then
-    let value = headerValue header
-    if printableAscii value 0 then value else [||]
-  else
-    requestedHeaders rest
+requestedHeaders headers =
+  let asked =
+    filter
+      (header => headerName header == "access-control-request-headers")
+      headers
+  match asked
+    [only] =>
+      let value = headerValue only
+      if printableAscii value 0 then value else [||]
+    _ => [||]
 
 -- | The `Access-Control-Allow-Headers` answer carrying no allowance at all.
 -- A constant, so the one response field built from client bytes has a
 -- known-good value to fall back to rather than a crash.
 emptyAllowHeadersHeader : Header
-emptyAllowHeadersHeader = match makeHeader "access-control-allow-headers" [||]
-  Ok header => header
-  Err message =>
-    panic "lib.cors: internal allow-headers header error: \{message}"
+emptyAllowHeadersHeader = constantHeader "access-control-allow-headers" ""
 
 -- | Is this request a CORS preflight — an `OPTIONS` request — that must be
 -- answered before ordinary routing runs, ahead of `xrpc`'s `methodNotAllowed`
@@ -136,10 +144,9 @@ preflightResponse request =
     varyHeader,
     maxAgeHeader,
   ]
-  match makeResponse 204 "No Content" headers [||]
-    Ok response => response
-    Err message =>
-      panic "lib.cors: internal preflight response error: \{message}"
+  resultOrPanic
+    "lib.cors: the preflight answer is built from this file's own constants"
+    (makeResponse 204 "No Content" headers [||])
 
 -- | Append the one header every non-preflight response carries. Any caller
 -- that builds a `Response` outside `lib.server_core`'s `handle` (a proxied
@@ -149,11 +156,10 @@ export
 withAllowOrigin : Response -> Response
 withAllowOrigin response =
   let headers = allowOriginHeader :: responseHeaders response
-  match (makeResponse
-    (responseStatus response)
-    (responseReason response)
-    headers
-    (responseBody response))
-    Ok withHeader => withHeader
-    Err message =>
-      panic "lib.cors: internal allow-origin append error: \{message}"
+  resultOrPanic
+    "lib.cors: rebuilt from a Response makeResponse already accepted"
+    (makeResponse
+      (responseStatus response)
+      (responseReason response)
+      headers
+      (responseBody response))

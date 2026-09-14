@@ -223,3 +223,14 @@ reasoning and the counter-example each rule exists to protect: PR #2429
     sweep — no rename.** It collides in spelling only with `string.join`
     (different operation entirely) and is self-consistent with `flatMap`;
     the reasoning is recorded here so the detector never flags it.
+14. **A helper that panics takes a mandatory context string; there is no
+    no-message form.** `optionOrPanic`/`resultOrPanic` are the spellings, and
+    neither has an `unwrap`-shaped peer that panics with nothing to say. The
+    context is the whole message on the `Option` side and the prefix before
+    the error on the `Result` side, so a panic always names the invariant the
+    caller believed. A one-token unwrap makes panicking the path of least
+    resistance, against the standing rule that a panic is for a true
+    impossibility and never for anything a user program can reach; the
+    context string is the only enforcement available, because the linter has
+    no type environment and so cannot tell a reachable panic from an
+    unreachable one.

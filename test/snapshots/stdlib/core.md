@@ -1,5 +1,5 @@
 # META
-source_lines=2028
+source_lines=2058
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1562,6 +1562,20 @@ optionOr : a -> Option a -> a
 optionOr _ (Some a) = a
 optionOr d None = d
 
+{- | The value inside a `Some`, or a panic carrying `context` for `None`.
+
+   For an invariant the caller believes cannot fail, where `context` says why
+   it cannot. There is no form that omits `context`: a panic a reader cannot
+   place is worse than the failure it reports. `optionOr` is the form that
+   recovers instead.
+
+   > optionOrPanic "the table is installed before any read" (Some 42)
+   42 -}
+export
+optionOrPanic : String -> Option a -> a
+optionOrPanic _ (Some a) = a
+optionOrPanic context None = panic context
+
 {- | Applies `f` to the value inside a `Some`, or returns the default for
    `None`.
 
@@ -1620,6 +1634,22 @@ export
 resultOr : a -> Result e a -> a
 resultOr _ (Ok a) = a
 resultOr d (Err _) = d
+
+{- | The value inside an `Ok`, or a panic carrying `context` and the error
+   for `Err`.
+
+   For an invariant the caller believes cannot fail. The message is
+   `context`, a colon, and the error, so `context` says why the `Err` cannot
+   happen and the error says what did. There is no form that omits
+   `context`: a panic a reader cannot place is worse than the failure it
+   reports. `resultOr` is the form that recovers instead.
+
+   > resultOrPanic "this name and value are literals" (Ok 42)
+   42 -}
+export
+resultOrPanic : Display e => String -> Result e a -> a
+resultOrPanic _ (Ok a) = a
+resultOrPanic context (Err e) = panic "\{context}: \{e}"
 
 {- | Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
    `Ok`.
@@ -2300,6 +2330,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "optionOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "optionOr" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
 (DFunDef false "optionOr" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "optionOrPanic" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
+(DFunDef false "optionOrPanic" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
+(DFunDef false "optionOrPanic" ((PVar "context") (PCon "None")) (EApp (EVar "panic") (EVar "context")))
 (DTypeSig true "option" (TyFun (TyVar "b") (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "option" (PWild (PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "f") (EVar "x")))
 (DFunDef false "option" ((PVar "dflt") PWild (PCon "None")) (EVar "dflt"))
@@ -2318,6 +2351,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "resultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
 (DFunDef false "resultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
 (DFunDef false "resultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "resultOrPanic" (TyConstrained ((cstr "Display" (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a")))))
+(DFunDef false "resultOrPanic" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
+(DFunDef false "resultOrPanic" ((PVar "context") (PCon "Err" (PVar "e"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "context"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString "")))))
 (DTypeSig true "result" (TyFun (TyFun (TyVar "e") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "eff") (TyVar "c"))))))
 (DFunDef false "result" (PWild (PVar "onOk") (PCon "Ok" (PVar "x"))) (EApp (EVar "onOk") (EVar "x")))
 (DFunDef false "result" ((PVar "onErr") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "onErr") (EVar "e")))
@@ -2681,6 +2717,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "optionOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
 (DFunDef false "optionOr" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
 (DFunDef false "optionOr" ((PVar "d") (PCon "None")) (EVar "d"))
+(DTypeSig true "optionOrPanic" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyVar "a"))))
+(DFunDef false "optionOrPanic" (PWild (PCon "Some" (PVar "a"))) (EVar "a"))
+(DFunDef false "optionOrPanic" ((PVar "context") (PCon "None")) (EApp (EVar "panic") (EVar "context")))
 (DTypeSig true "option" (TyFun (TyVar "b") (TyFun (TyFun (TyVar "a") (TyEffect () (Some "e") (TyVar "b"))) (TyFun (TyApp (TyCon "Option") (TyVar "a")) (TyEffect () (Some "e") (TyVar "b"))))))
 (DFunDef false "option" (PWild (PVar "f") (PCon "Some" (PVar "x"))) (EApp (EVar "f") (EVar "x")))
 (DFunDef false "option" ((PVar "dflt") PWild (PCon "None")) (EVar "dflt"))
@@ -2699,6 +2738,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DTypeSig true "resultOr" (TyFun (TyVar "a") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a"))))
 (DFunDef false "resultOr" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
 (DFunDef false "resultOr" ((PVar "d") (PCon "Err" PWild)) (EVar "d"))
+(DTypeSig true "resultOrPanic" (TyConstrained ((cstr "Display" (TyVar "e"))) (TyFun (TyCon "String") (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyVar "a")))))
+(DFunDef false "resultOrPanic" (PWild (PCon "Ok" (PVar "a"))) (EVar "a"))
+(DFunDef false "resultOrPanic" ((PVar "context") (PCon "Err" (PVar "e"))) (EApp (EVar "panic") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "context"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString "")))))
 (DTypeSig true "result" (TyFun (TyFun (TyVar "e") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyFun (TyVar "a") (TyEffect () (Some "eff") (TyVar "c"))) (TyFun (TyApp (TyApp (TyCon "Result") (TyVar "e")) (TyVar "a")) (TyEffect () (Some "eff") (TyVar "c"))))))
 (DFunDef false "result" (PWild (PVar "onOk") (PCon "Ok" (PVar "x"))) (EApp (EVar "onOk") (EVar "x")))
 (DFunDef false "result" ((PVar "onErr") PWild (PCon "Err" (PVar "e"))) (EApp (EVar "onErr") (EVar "e")))
