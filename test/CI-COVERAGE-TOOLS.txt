@@ -346,6 +346,12 @@ pds/tools/gen_signing_corpus   regenerates the 80-row dual-oracle prehashed corp
 pds/tools/gen_did_key_corpus   regenerates the 16-row secp256k1 did:key corpus by calling
                                Secp256k1Keypair.did() in the pinned official-PDS Docker image;
                                the offline checker and vector_provenance gate grade the artifact.
+pds/tools/gen_sync_event_corpus
+                               regenerates the #identity/#account/#sync event-body corpus and
+                               the sync.getRecord/sync.getBlocks CAR-shape corpus by calling
+                               sequencer/events.js and @atproto/repo in the pinned official-PDS
+                               Docker image; vector_provenance grades the artifacts, network and
+                               docker required to regenerate.
 pds/tools/gen_mst_corpus       regenerates the P1-B deterministic MST roots and canonical node
                                blocks with npm ci from the committed exact atproto lock graph; the
                                offline mst_vectors and vector_provenance gates grade the artifact.
