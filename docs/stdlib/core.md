@@ -953,6 +953,24 @@ The value inside a `Some`, or the default for `None`.
 0
 ```
 
+### `optionOrPanic`
+
+```
+optionOrPanic : String -> Option a -> a
+```
+
+The value inside a `Some`, or a panic carrying `context` for `None`.
+
+For an invariant the caller believes cannot fail, where `context` says why
+it cannot. There is no form that omits `context`: a panic a reader cannot
+place is worse than the failure it reports. `optionOr` is the form that
+recovers instead.
+
+```medaka
+> optionOrPanic "the table is installed before any read" (Some 42)
+42
+```
+
 ### `option`
 
 ```
@@ -1030,6 +1048,26 @@ The value inside an `Ok`, or the default for `Err`.
 42
 > resultOr 0 (Err "boom")
 0
+```
+
+### `resultOrPanic`
+
+```
+resultOrPanic : Display e => String -> Result e a -> a
+```
+
+The value inside an `Ok`, or a panic carrying `context` and the error
+for `Err`.
+
+For an invariant the caller believes cannot fail. The message is
+`context`, a colon, and the error, so `context` says why the `Err` cannot
+happen and the error says what did. There is no form that omits
+`context`: a panic a reader cannot place is worse than the failure it
+reports. `resultOr` is the form that recovers instead.
+
+```medaka
+> resultOrPanic "this name and value are literals" (Ok 42)
+42
 ```
 
 ### `result`
