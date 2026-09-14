@@ -22,7 +22,12 @@
 # WHAT THIS COUNTS. Per root (`test/`, `stdlib/`), every tracked `.mdk` file
 # is run through `./medaka check --json`, and every `W-OPEN-GOAL-COMMITTED`
 # diagnostic entry in the resulting envelope is a row: one row per SITE
-# (file:line:col), not per distinct message.
+# (file:line:col), not per distinct message. `test/t4_census_fixtures/`
+# itself (this census's own positive-control corpus -- proves the instrument
+# fires at all) is excluded from the wild-population walk and reported
+# separately: folding it into `total` would make an empty census
+# structurally unreachable, defeating contract §7 criterion 2's "an empty
+# census is a valid answer."
 #
 # Needs a built ./medaka and jq. Portable POSIX sh.
 #
@@ -53,7 +58,7 @@ IFS='
 '
 for r in test stdlib; do
   [ -d "$ROOT/$r" ] || continue
-  files="$(git ls-files -- "$r/*.mdk")"
+  files="$(git ls-files -- "$r/*.mdk" | grep -v '^test/t4_census_fixtures/')"
   n_files=0
   n_hits=0
   echo "-- root: $r --"
@@ -77,8 +82,29 @@ for r in test stdlib; do
   total=$((total + n_hits))
 done
 
-echo "total $CODE sites: $total"
+echo "total $CODE sites: $total (wild population only, excludes the control corpus below)"
 echo ""
+
+echo "-- control: test/t4_census_fixtures (positive-control, NOT in total) --"
+control_hits=0
+control_files="$(git ls-files -- 'test/t4_census_fixtures/*.mdk')"
+for f in $control_files; do
+  [ -n "$f" ] || continue
+  out="$("$MEDAKA" check --json "$ROOT/$f" 2>/dev/null)"
+  [ -n "$out" ] || continue
+  rows="$(printf '%s' "$out" | jq -r --arg code "$CODE" '
+    .files[]? | .file as $file | .diagnostics[]?
+      | select(.code == $code)
+      | "\($file):\(.range.start.line + 1):\(.range.start.character + 1)\t\(.code)\t\(.message)"
+  ' 2>/dev/null)"
+  [ -n "$rows" ] || continue
+  printf '%s\n' "$rows"
+  hits="$(printf '%s\n' "$rows" | grep -c .)"
+  control_hits=$((control_hits + hits))
+done
+echo "  control corpus: $control_hits site(s) (expected > 0 -- proves the instrument fires)"
+echo ""
+
 echo "(report only -- exits 0 by design. Re-key that stopped one undercount"
 echo " mechanism: compiler/types/typecheck.mdk pushMatchWarningOnceAt. The"
 echo " other -- check --json vs. the human arm on an error-bearing file --"

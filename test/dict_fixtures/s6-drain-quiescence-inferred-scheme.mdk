@@ -10,9 +10,9 @@
 --
 -- SPEC ANSWER, hand-derived before running anything: `main` calls `top` at
 -- `Bool`, `h` forwards to `needsSh`, `impl Sh Bool` is the unique match, so the
--- program prints 22 on every engine and `check` accepts.  There is no numeric
--- literal anywhere in this file, so nothing here is the undefaulted-`Num` class
--- #2646 owes — the ambiguity the drain sees is manufactured by the drain.
+-- program prints 22 on every engine and `check` accepts.  `11`/`22` sit at a
+-- declared `Int` return position, fully grounded, so they are not the
+-- undefaulted-`Num` class #2646 owes — the ambiguity is manufactured by the drain.
 --
 -- WHAT THIS ROW PINS: `check` must NOT report `T-AMBIGUOUS-INSTANCE`.  Today it
 -- does not, because `DrainRollback` discards the drain's diagnostics on every

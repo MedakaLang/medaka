@@ -977,8 +977,8 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
 -- pass did not, so there is no located diagnostic to report instead.
 --
 -- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
--- two reviewers failed to construct one, and none of the three files the drain's
--- T4 census measures as its whole population (see `DrainDiags` in
+-- two reviewers failed to construct one, and none of the three files
+-- `DrainDiags`'s own population comprises (see `DrainDiags` in
 -- `compiler/types/typecheck.mdk`) arms the gate that would route here — one of
 -- them runs to completion, and the other two have no `main`, so `run` rejects
 -- them at `E-NO-MAIN` AFTER elaboration has already let them through.  It exists so

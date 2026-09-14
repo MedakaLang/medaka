@@ -8911,7 +8911,6 @@ export
 tcMsg : TcDiag -> String
 tcMsg (TcDiag _ _ _ m _ _) = m
 
-export
 tcLoc : TcDiag -> Option Loc
 tcLoc (TcDiag _ _ l _ _ _) = l
 
