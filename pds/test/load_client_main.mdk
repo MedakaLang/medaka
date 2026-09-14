@@ -28,6 +28,7 @@
 import array.{concat, fromList, sliceClamped, sortInPlace}
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
+import io.{eprintln}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import string.{
   fromUtf8,
@@ -472,6 +473,44 @@ sampleOne conn pending target plan i acc =
     Ok (status, rest, micros) =>
       (rest, Sample target route micros status :: acc)
 
+{- | Sample both targets for one tick, alternating which one goes first.
+
+   Whichever target is sampled right after `sleep` wakes the process pays
+   worst-case scheduler latency; the other, sampled microseconds later, gets
+   a warm/hot scheduler. Always sampling the loaded target first would tilt
+   every comparison against it regardless of any real effect. Flipping the
+   order by `i`'s parity spreads that wake-latency bias evenly across both
+   targets over a run. -}
+sampleTick : Connection ->
+  Option Connection ->
+  Array Int ->
+  Array Int ->
+  Plan ->
+  Int ->
+  List Sample ->
+  <Clock, IO, Net "_"> (Array Int, Array Int, List Sample)
+sampleTick loaded control loadedPending controlPending plan i acc =
+  if isEven i then
+    let () = eprintln "tick i=\{intToString i} first=loaded"
+    let (loadedRest, afterLoaded) =
+      sampleOne loaded loadedPending "loaded" plan i acc
+    let (controlRest, afterControl) = match control
+      None => ([||], afterLoaded)
+      Some conn => sampleOne conn controlPending "control" plan i afterLoaded
+    (loadedRest, controlRest, afterControl)
+  else match control
+    None =>
+      let (loadedRest, afterLoaded) =
+        sampleOne loaded loadedPending "loaded" plan i acc
+      (loadedRest, [||], afterLoaded)
+    Some conn =>
+      let () = eprintln "tick i=\{intToString i} first=control"
+      let (controlRest, afterControl) =
+        sampleOne conn controlPending "control" plan i acc
+      let (loadedRest, afterLoaded) =
+        sampleOne loaded loadedPending "loaded" plan i afterControl
+      (loadedRest, controlRest, afterLoaded)
+
 sampleLoop : Connection ->
   Option Connection ->
   Array Int ->
@@ -481,16 +520,13 @@ sampleLoop : Connection ->
   Int ->
   Int ->
   List Sample ->
-  <Clock, Net "_"> List Sample
+  <Clock, IO, Net "_"> List Sample
 sampleLoop loaded control loadedPending controlPending plan i remaining intervalMs acc =
   if remaining < 1 then
     acc
   else
-    let (loadedRest, afterLoaded) =
-      sampleOne loaded loadedPending "loaded" plan i acc
-    let (controlRest, afterControl) = match control
-      None => ([||], afterLoaded)
-      Some conn => sampleOne conn controlPending "control" plan i afterLoaded
+    let (loadedRest, controlRest, afterBoth) =
+      sampleTick loaded control loadedPending controlPending plan i acc
     let () = sleep (millis intervalMs)
     sampleLoop
       loaded
@@ -501,7 +537,7 @@ sampleLoop loaded control loadedPending controlPending plan i remaining interval
       (i + 1)
       (remaining - 1)
       intervalMs
-      afterControl
+      afterBoth
 
 runSample : Int -> Int -> Plan -> Int -> Int -> <Clock, IO, Net "_"> Unit
 runSample port controlPort plan requests intervalMs =

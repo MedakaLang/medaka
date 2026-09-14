@@ -245,11 +245,62 @@ grade_samples() {
   }
 }
 
+# Two independent server processes under real OS scheduling do not report
+# identical p50s even both idle — two 25-sample-per-route idle probe runs on
+# this box showed differences up to ~0.42ms absolute and ~30% relative on the
+# sub-millisecond routes (the cheap routes are where a fixed-ms tolerance
+# alone would be too tight, and a percent-only one would be too tight on a
+# near-zero base). The tolerance here is whichever of an absolute floor or a
+# relative margin is looser, set with headroom above that observed spread for
+# a noisier CI runner. It is a knob, not a magic number, so a route whose true
+# idle noise is wider can be widened without touching the check's logic.
+IDLE_ABS_TOL_MS=${LOAD_IDLE_ABS_TOL_MS:-0.75}
+IDLE_PCT_TOL=${LOAD_IDLE_PCT_TOL:-0.50}
+
+# For each route present in both the loaded and control lines, the two p50s
+# must agree within tolerance — otherwise the control is not proving what the
+# comment above it claims: that phase 2's loaded-vs-control gap is the load,
+# not the two servers already answering differently at rest.
+check_idle_agreement() {
+  file=$1
+  awk -v abs_tol="$IDLE_ABS_TOL_MS" -v pct_tol="$IDLE_PCT_TOL" '
+    /^sample target=loaded / {
+      route = $0; sub(/.*route=/, "", route); sub(/ .*/, "", route)
+      p50 = $0; sub(/.*p50_ms=/, "", p50); sub(/ .*/, "", p50)
+      loaded[route] = p50
+    }
+    /^sample target=control / {
+      route = $0; sub(/.*route=/, "", route); sub(/ .*/, "", route)
+      p50 = $0; sub(/.*p50_ms=/, "", p50); sub(/ .*/, "", p50)
+      control[route] = p50
+    }
+    END {
+      bad = 0
+      for (r in loaded) {
+        if (!(r in control)) continue
+        l = loaded[r] + 0
+        c = control[r] + 0
+        diff = l - c
+        if (diff < 0) diff = -diff
+        floor = l < c ? l : c
+        allowed = abs_tol
+        pct_allowed = floor * pct_tol
+        if (pct_allowed > allowed) allowed = pct_allowed
+        printf "idle-agreement route=%s loaded_p50_ms=%s control_p50_ms=%s diff_ms=%.3f allowed_ms=%.3f\n", \
+          r, loaded[r], control[r], diff, allowed
+        if (diff > allowed) bad = 1
+      }
+      exit bad
+    }
+  ' "$file"
+}
+
 # ── phase 1: baseline, both servers idle ────────────────────────────────────
 
 # Both targets idle here, so the two lines for one route must agree. That is
 # what makes the control a control: if the two servers did not already answer
 # alike, phase 2's difference could be the servers rather than the load.
+# `check_idle_agreement` below is what enforces that, not just this comment.
 BASELINE_START=$(now_seconds)
 "$WORK/client" sample "$LOADED_PORT" "$CONTROL_PORT" "$SAMPLE_SCENARIO" \
   "$COLLECTION" "$RECORDS" "$BLOBS" "$TICKS" "$INTERVAL_MS" \
@@ -259,6 +310,10 @@ BASELINE_START=$(now_seconds)
     fail 'baseline sampler failed'
   }
 grade_samples "$WORK/baseline.out" 'baseline'
+check_idle_agreement "$WORK/baseline.out" || {
+  cat "$WORK/baseline.out" >&2
+  fail 'baseline: loaded and control p50s did not agree within tolerance while both idle'
+}
 sed 's/^/baseline /' "$WORK/baseline.out"
 printf 'phase baseline seconds=%s\n' "$(($(now_seconds) - BASELINE_START))"
 
