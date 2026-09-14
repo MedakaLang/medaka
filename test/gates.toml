@@ -3664,11 +3664,11 @@ toolchain = []
 # both carry every required hardening directive, with a mutation control
 # proving the check can fail.
 #
-# ⚠️ `shard` below is a GUESS, as every brand-new gate's must be
-# ([W-SHARD-DERIVED], #2178): it has no row in test/gate_cost_baseline.json
-# yet, so `medaka gate balance` HARD-REFUSES to place it until an unnarrowed
-# CI run measures it, and `ci-gen-drift` reds until the follow-up `medaka gate
-# balance && make gen-ci` commit — expected, not a bug in this slice.
+# `shard` below started as a GUESS, as every brand-new gate's must
+# ([W-SHARD-DERIVED], #2178) before test/gate_cost_baseline.json has a row for
+# it. This one has since been costed and balanced in the same sprint (see the
+# gate's row in gate_cost_baseline.json), so the guess needs no further
+# discharge.
 [[gate]]
 name = "pds/test/deploy_config_lint"
 area = "engines"
