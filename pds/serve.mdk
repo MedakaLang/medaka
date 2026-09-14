@@ -132,12 +132,13 @@ import shell.persist.{
 import shell.server.{
   Serving,
   bindAddress,
+  defaultStatsInterval,
   makeServing,
   runServer,
   stageGenesisEvents,
 }
 import string.{drop, indexOf, lines, stripSuffix, take, toInt, trim}
-import time.{now}
+import time.{Duration, millis, now}
 
 serveSpec : ArgSpec
 serveSpec = spec "serve" [
@@ -191,6 +192,10 @@ serveSpec = spec "serve" [
     ["--contact-email"]
     "EMAIL"
     "an operator contact address, reported in describeServer's contact; omitted from the response when absent",
+  intValue
+    ["--stats-interval-ms"]
+    "MS"
+    "how often to emit the periodic stats line (active/unframed connections, subscriptions, repo rev, blocks and blobs on disk); default 60000",
 ]
 
 {- | `pds keygen`'s roster. Both flags name a file to CREATE, and both are
@@ -228,6 +233,18 @@ requiredPort parsed = do
         Err "--port must be in 0..65535"
       else
         Ok port
+
+-- `--stats-interval-ms`, defaulting to `defaultStatsInterval` when absent.
+statsIntervalOf : Args -> Result String Duration
+statsIntervalOf parsed = match flagValue "--stats-interval-ms" parsed
+  None => Ok defaultStatsInterval
+  Some text => match toInt text
+    None => Err "--stats-interval-ms is not an integer: \{text}"
+    Some ms =>
+      if ms <= 0 then
+        Err "--stats-interval-ms must be positive"
+      else
+        Ok (millis ms)
 
 loopbackAddress : String
 loopbackAddress = "127.0.0.1"
@@ -700,14 +717,15 @@ openRepo True dir did keyBytes secret =
 {- | Everything the server needs, or the first reason it may not run: the
    configured server, its initial store, the data directory, the port, the
    address to bind, where (if anywhere) to announce this repository to a
-   relay, and the startup lines `start` prints under the banner.
+   relay, how often to emit the periodic stats line, and the startup lines
+   `start` prints under the banner.
 
    The startup lines are a VALUE and not a print: this function decides and
    refuses, and a run it refuses must narrate nothing. `start` prints them,
    after the banner, so that a log still begins by saying which build produced
    everything under it. -}
 configure : Args ->
-  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, List String)
+  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -716,6 +734,7 @@ configure parsed = do
   dir <- required "--data" parsed
   port <- requiredPort parsed
   let bind = bindAddressOf parsed
+  statsInterval <- statsIntervalOf parsed
   let trustedProxy = TrustedProxy (flag "--trusted-proxy" parsed)
   -- Before anything else is read or generated: a bind refusal must leave no
   -- secret behind, same as every other refusal `configure` can raise
@@ -788,6 +807,7 @@ configure parsed = do
     bind,
     serving,
     relay,
+    statsInterval,
     [
       "serve: config did=\{did} handle=\{handle} hostname=\{hostname} data=\{dir} bind=\{bind} trusted-proxy=\{yesNo (flag "--trusted-proxy" parsed)} appview=\{yesNo (isSome egress)} relay=\{yesNo (isSome relay)}",
       "serve: event log recovery: \{recoveryOutcome recovery}",
@@ -894,15 +914,16 @@ announce : String ->
   Server ->
   Serving ->
   Option RelayTarget ->
+  Duration ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-announce bind port lis store dir server serving relay = defer
+announce bind port lis store dir server serving relay statsInterval = defer
   _ <- liftIO (u => ready bind port)
   _ <- match relay
     None => deferPure ()
     Some target =>
       spawn (announceToRelay target (accountHostname (serverAccount server)))
   storeRef <- liftIO (u => Ref store)
-  outcome <- runServer server dir storeRef lis serving
+  outcome <- runServer server dir storeRef lis serving statsInterval
   liftIO (u => reportOutcome outcome)
 
 bound : String ->
@@ -911,25 +932,28 @@ bound : String ->
   String ->
   Serving ->
   Option RelayTarget ->
+  Duration ->
   Result String Listener ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-bound _ _ _ _ _ _ (Err message) =
+bound _ _ _ _ _ _ _ (Err message) =
   liftIO (u => abort "serve: bind failed: \{message}")
-bound bind server store dir serving relay (Ok lis) = defer
+bound bind server store dir serving relay statsInterval (Ok lis) = defer
   port <- liftIO (u => listenPort lis)
   match port
     Err message =>
       liftIO (u => abort "serve: listener port unavailable: \{message}")
-    Ok given => announce bind given lis store dir server serving relay
+    Ok given =>
+      announce bind given lis store dir server serving relay statsInterval
 
-start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, List String) ->
+start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, List String) ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
-start (Ok (server, store, dir, port, bind, serving, relay, lines)) = defer
-  _ <- liftIO (u => banner ())
-  _ <- liftIO (u => startupLines lines)
-  listener <- liftIO (u => bindAddress bind port)
-  bound bind server store dir serving relay listener
+start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lines)) =
+  defer
+    _ <- liftIO (u => banner ())
+    _ <- liftIO (u => startupLines lines)
+    listener <- liftIO (u => bindAddress bind port)
+    bound bind server store dir serving relay statsInterval listener
 
 -- A `keygen` run touches no socket and no repository, so it finishes inside
 -- one synchronous step rather than entering the scheduler.

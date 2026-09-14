@@ -41,7 +41,7 @@ a real social identity, so the correctness bar is higher than the compiler's.
 | **P3** | **Standalone repo first; firehose (`com.atproto.sync.subscribeRepos`) deferred to Phase 5.** | Full network participation is a strict superset of a correct repo, and it is additive: WebSocket framing and event emission bolt onto a repo layer that already produces correct CIDs. Sequencing it second means the highest-risk work (MST, DAG-CBOR determinism) gets validated against an oracle before anything depends on it being right. |
 | **P4** | **Crypto is pure Medaka — SHA-256 and secp256k1 both.** Field arithmetic on 10 × 26-bit limbs (P10). | Chosen for the dogfooding, not merely accepted despite the cost: this is the most numerically demanding code anyone would have written in Medaka, and it arrives with an external oracle that says immediately when the *compiler* is wrong (§4.1). Made tractable by one property: **atproto requires deterministic signing behaviour and low-S normalization, and RFC 6979 makes ECDSA output byte-reproducible** — so signing is gradeable by *golden diff against published vectors*, not by a probabilistic property test. That converts the scariest part of this project into precisely the kind of differential gate this repo is built around. See §4. |
 | **P5** | **TLS is never implemented in Medaka. Caddy terminates.** | Caddy obtains and renews the Let's Encrypt certificate automatically and reverse-proxies plaintext HTTP to the Medaka process on localhost — which is what the official self-hosting guidance recommends regardless of implementation language. Cost to us: approximately zero. Writing TLS would be a larger and far more dangerous project than the entire rest of this document. |
-| **P6** | **Do NOT build a bespoke event loop. The PDS is a *consumer* of the #500 arc, not a fork of it.** | `docs/design/ASYNC-RUNTIME-DESIGN.md` already specifies the reactor, and its A2 extern set (`ioPoll` over `poll(2)`, `netSetNonblock`, `netTry{Accept,Recv,Send}`) is exactly and only what a server needs. Duplicating it inside `pds/` would produce a second scheduler with none of the guarantees G1–G9 that design carries, and would make the PDS the reason the real one can never land. |
+| **P6** | **Do NOT build a bespoke event loop. The PDS is a *consumer* of the #500 arc, not a fork of it.** | `docs/design/ASYNC-RUNTIME-DESIGN.md` already specifies the reactor, and its A2 extern set (`ioPoll` over `poll(2)`, `netSetNonblock`, `netTry{Accept,Recv,Send}`) is exactly and only what a server needs. Duplicating it inside `pds/` would produce a second scheduler with none of the guarantees G1–G9 that design carries, and would make the PDS the reason the real one can never land. **What one reactor thread costs is measured rather than assumed (2026-09-14):** a handler that does not yield stalls every other caller for its whole duration, which for `sync.getRepo` is +586 ms on an unrelated read of an 800-record repository and for a 2,674/s `sync.getBlob` burst is +1.19 ms. Both are accepted with their numbers in §6 under `com.atproto.sync.getRepo`; neither is fixable at the shell, and the `getRepo` figure is dominated by a quadratic in `pds/lib/repo.mdk` that is tracked separately. |
 | **P7** | **Block store is flat sharded files on disk**, CID → bytes, not `sqlite/`. | A block store is a pure key/value map with content-addressed immutable keys — the one workload where a filesystem is already the right database. Pressing the in-tree SQLite engine into service would add a large dependency, a write-path risk, and a schema, in exchange for nothing. |
 | **P8** | **Pinned official atproto/PDS code is the oracle; library reproduction and live-service evidence are distinct.** Every CID, CAR byte, and signature is diffed against exact official repo/crypto libraries. | Phase 1 pins the complete npm graph and independently reproduces the corpora with libraries installed in the digest-pinned official image. That applies the repo's differential methodology without starting a service. A live XRPC transcript is a separate manual tier: account creation stays disabled unless an isolated PLC endpoint is chosen, because the public default makes an irreversible identity write (§5). |
 | **P9** | **The running server is native-only**; the pure core stays all-engine **by design, not by luck**. | The interpreter implements zero net externs (the T7 family in `test/CAPABILITY-EXCEPTIONS.txt`) and wasm rejects net as PERMANENT. ⚠️ **The same is true of every file extern** — `stdlib/fs.mdk` says so in its own header: *"Scope: NATIVE/LLVM … not the tree-walking interpreter."* So effectful storage code is native-bound exactly like sockets, and a core that *performed* its own I/O would not be portable or doctestable at all. P14 is the structural response; without it, this row's "costs less than it sounds" would be unsupported. |
@@ -820,6 +820,54 @@ allowance #2612 installs, with `maxCarBytes` (64 MiB,
 `pds/lib/resource_limits.mdk`) capping any single export. A deployment that
 exposes this server past loopback must have that limiter in place; `getRepo`
 without it is an unauthenticated request for the entire account, repeatable.
+
+**What one export costs every OTHER caller — measured, and accepted (#2955,
+2026-09-14).** The paragraph above bounds how often and how large; it does not
+bound the one quantity an operator feels first, which is how long a single
+export makes the server unavailable to everyone else. The reactor is one
+thread (P6) and the seam hands it a finished `Response` value, so the whole CAR
+is built in one step that never yields: every other request in flight waits for
+it. `pds/nightly/load_harness.sh`'s `repo-export` scenario puts a number on
+that. One client exporting an 800-record (179 KB) repository back to back
+raises an unrelated `com.atproto.repo.getRecord`'s p50 from **0.939 ms to
+587 ms** and its p99 from 3.768 ms to 771 ms, while the idle control server
+sampled microseconds later in the same loop moves +0.029 ms — so the rise is
+this server's own queuing and not the box's. The delay tracks a whole export:
+587 ms against a 692 ms export, i.e. a request arriving at a uniformly random
+moment inside one waits the remainder of it. At 3200 records the same scenario
+reads 10.70 s p50 against a 13.31 s export.
+
+This is **accepted, not fixed**, and the accept is narrow. No shell-side
+mitigation is available: yielding between CAR chunks would require the chunks
+to exist at the shell, and they do not — `repoExportCar` (`pds/lib/repo.mdk`)
+returns the finished byte array, which is the seam decision this section
+already records. What is NOT accepted, and is tracked separately, is that the
+export is **quadratic in record count** while its output is linear: doubling
+records quadruples export time (0.095 s at 200 records, 0.765 s at 800,
+13.31 s at 3200, 28.74 s at 5000) while CAR bytes rise exactly 2x each step.
+`recordBlocks` and `walkLayer` in `pds/lib/repo.mdk` accumulate with
+`acc ++ [row]` per block, and `walkLayer` merges leaf CIDs through `addUnique`
+over a `List` used as a set. Fixing those does not remove the stall — an
+O(n) export of the same repository still blocks the reactor for its whole
+duration — but it is what decides whether the accepted number is milliseconds
+or half a minute, and `maxCarBytes` (64 MiB) is unreachable in practice until
+it is fixed.
+
+**A `getBlob` burst is NOT a second instance of this (#2956, 2026-09-14).**
+Blobs are read off disk exactly once, at startup: `blobFileRead`
+(`pds/shell/blobfile.mdk`) is called from `pds/serve.mdk` before the socket
+binds, and `applyGetBlob` (`pds/lib/handlers.mdk`) answers from the in-memory
+`Store` through `storeGet`. There is no per-request file read on the scheduler
+thread to yield between, so the shell-side mitigation that does not exist for
+`getRepo` is not needed here either. The harness's `blob-burst` scenario
+confirms the cost is ordinary queuing rather than a stall: 8 clients issuing
+320,860 `getBlob` requests in 120 s (2,674/s) raise an unrelated `getRecord`'s
+p50 from **1.766 ms to 2.960 ms** and its p99 from 18.901 ms to 24.210 ms,
+against a control column that moves +0.001 ms at p50. Accepted with that
+number. Its reach is bounded by the corpus: `pds/test/synth_repo_main.mdk`
+writes 42-byte blobs, so this measures request RATE and says nothing about a
+burst of bodies near `maxBlobBytes` (5 MiB), where the cost is the response
+copy rather than the lookup.
 
 **Rate limiting: what Caddy does and what this process does (#2612).** Caddy
 (P5) terminates TLS and reverse-proxies plaintext HTTP to the Medaka process
