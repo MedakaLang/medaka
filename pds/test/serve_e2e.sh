@@ -66,8 +66,12 @@ require_owner_only() {
 # Both `serve.mdk` (Async, Net) and the test client (Net) are native-only:
 # `stdlib/net` is unbound in the interpreter and rejected by Wasm.
 
+# `--stamp-build` bakes the commit, the compiler fingerprint and the build date
+# into the binary, which is how a deployed pdsd is built and therefore how this
+# gate builds one; case 59 reads them back off `--version`. Every other case
+# below exercises that same stamped binary rather than a variant of it.
 if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SERVE_SRC" -o "$WORK/pdsd" \
-  > "$WORK/build_serve.log" 2>&1
+  --stamp-build > "$WORK/build_serve.log" 2>&1
 then
   cat "$WORK/build_serve.log" >&2
   fail 'native serve.mdk build failed'
@@ -307,6 +311,13 @@ REFRESH=${LOGIN##* }
 # 1. a well-formed query gets a correct response
 client query "$PORT1" "$DID" || fail 'case 1: well-formed query'
 
+# 1b. GET /xrpc/_health with no Authorization header: 200, and a body
+#    carrying this build's own version-string shape (S-health-route, #2965).
+#    `_health` fails NSID syntax and is deliberately absent from the
+#    endpoint registry (see pds/test/route_policy_test.mdk), so it is proven
+#    here rather than by that registry-derived table.
+client health "$PORT1" || fail 'case 1b: GET /xrpc/_health'
+
 # 2. pipelined pair, both correct, in order
 client pipeline "$PORT1" || fail 'case 2: pipelined pair'
 
@@ -488,6 +499,71 @@ client malformed "$PORT1" || fail 'case 6: malformed request'
 
 # 7. over-cap body -> rejected (413), not truncated or hung
 client overcap "$PORT1" || fail 'case 7: over-cap body'
+
+# 7b. THE ACCESS LOG (#2964): one line per request, REFUSALS INCLUDED.
+#
+#    The refusal half is the load-bearing one and is asserted first. A log
+#    that covers only requests the server answered is worse than no log at
+#    all: the traffic an operator most needs to see is the traffic that was
+#    turned away, and a count of instrumented call sites establishes nothing
+#    about it.
+#
+#    Three refusals, because they leave the server by three different exits
+#    and a funnel that covered two of them would look identical here to one
+#    that covered all three: a routed 401 from the auth seam, a framed buffer
+#    that no parse can rescue (case 6, logged with `-` for the method and
+#    target it never supplied), and a buffer the FRAMER refused outright
+#    (case 7's over-cap body), which leaves through `rejectBufferAt` and never
+#    reaches the send funnel the other two share.
+client unauthorized "$PORT1" "$DID" "$COLLECTION" 's-accesslog-refused' \
+  || fail 'case 7b: unauthenticated write refused'
+grep -Eq '^serve: access method=POST path=/xrpc/com\.atproto\.repo\.createRecord status=401 bytes=[0-9]+ ms=[0-9]+ client=direct$' \
+  "$WORK/serve1.out" \
+  || fail 'case 7b: a refused (401) request produced no access log line'
+grep -Eq '^serve: access method=- path=- status=400 bytes=[0-9]+ ms=[0-9]+ client=direct$' \
+  "$WORK/serve1.out" \
+  || fail "case 7b: case 6's unparsable buffer produced no access log line"
+grep -Eq '^serve: access method=- path=- status=413 bytes=[0-9]+ ms=[0-9]+ client=direct$' \
+  "$WORK/serve1.out" \
+  || fail "case 7b: case 7's over-cap body produced no access log line"
+
+#    The served half: a request this case issues itself, answered 200.
+client query "$PORT1" "$DID" || fail 'case 7b: served query'
+grep -Eq '^serve: access method=GET path=/\.well-known/atproto-did status=200 bytes=[0-9]+ ms=[0-9]+ client=direct$' \
+  "$WORK/serve1.out" \
+  || fail 'case 7b: a served request produced no access log line'
+
+#    And the query string that must NOT be in a line. Case 5's LISTRECORDS
+#    sent `listRecords?repo=…&collection=…`; a query value is where a
+#    credential rides when one rides in a target at all, so the line carries
+#    the route and stops at the `?` — asserted for that route by name, and
+#    then for every line in the log at once.
+grep -Eq '^serve: access method=GET path=/xrpc/com\.atproto\.repo\.listRecords status=200 bytes=[0-9]+ ms=[0-9]+ client=direct$' \
+  "$WORK/serve1.out" \
+  || fail "case 7b: case 5's query-bearing route logged no stripped line"
+if grep -F 'serve: access' "$WORK/serve1.out" | grep -Fq '?'; then
+  fail 'case 7b: an access log line carries a query string'
+fi
+
+#    And nothing a request supplied in confidence reaches a line. Both secrets
+#    below are live in this server's history by now: case 4 logged in with the
+#    account password in a request body, and case 5b's token has been sent in
+#    an Authorization header since.
+for leaked in "$PASSWORD" "$TOKEN"; do
+  if grep -F 'serve: access' "$WORK/serve1.out" | grep -Fq "$leaked"; then
+    fail 'case 7b: an access log line carries a secret the request supplied'
+  fi
+done
+
+#    Finally the startup lines, which say what this process was configured to
+#    do and what it found in the event log — the two facts an operator reading
+#    an incident cannot reconstruct from the request lines.
+grep -Eq '^serve: config did=.* handle=.* hostname=.* data=.* bind=127\.0\.0\.1 trusted-proxy=no appview=no relay=no$' \
+  "$WORK/serve1.out" \
+  || fail '7b: startup logged no configuration summary'
+grep -Eq '^serve: event log recovery: (settled|promoted|discarded)$' \
+  "$WORK/serve1.out" \
+  || fail '7b: startup logged no event-log recovery outcome'
 
 # 8. a connection that says nothing at all is closed by the server rather
 #    than held. It is closed on the HEADER budget, not on idleTimeout: a peer
@@ -2394,4 +2470,24 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/stall.err" 'stalling stub appview'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output'
+# 59. `pdsd --version` reports the build it is running. The build above passed
+#    --stamp-build, so the three provenance externs read real strings and the
+#    version line carries them; without the flag the same binary reports the
+#    bare `pdsd 0.1.0`, which is what makes this a test of the stamp rather
+#    than of the version constant. The date half is asserted by shape (it is
+#    always derivable); the commit half is asserted against THIS checkout's own
+#    short hash, and only when git can name one, so a tree with no usable `.git`
+#    still grades the rest rather than reddening on its own environment.
+VERSION_LINE=$("$WORK/pdsd" --version) \
+  || fail 'case 59: pdsd --version exited nonzero'
+printf '%s\n' "$VERSION_LINE" \
+  | grep -Eq '^pdsd 0\.1\.0 \(.*built [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]\)$' \
+  || fail "case 59: pdsd --version carries no build stamp: $VERSION_LINE"
+STAMP_COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || true)
+if [ -n "$STAMP_COMMIT" ]; then
+  # Substring, not equality: a modified tree stamps `<short>-dirty`.
+  printf '%s\n' "$VERSION_LINE" | grep -Fq "$STAMP_COMMIT" \
+    || fail "case 59: pdsd --version names no commit ($STAMP_COMMIT): $VERSION_LINE"
+fi
+
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome'

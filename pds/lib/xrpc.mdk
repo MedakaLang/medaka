@@ -81,10 +81,12 @@ export data Registry = Registry (List Endpoint)
    the one table whose invariant is that every key passed NSID admission. -}
 public export data WellKnown = WellKnownDidDocument | WellKnownAtprotoDid
 
-{- | One dispatchable route the router produced. Five of the six arms are XRPC
-   methods keyed by an admitted NSID; `WellKnownCall` is the non-XRPC
+{- | One dispatchable route the router produced. Five of the seven arms are
+   XRPC methods keyed by an admitted NSID; `WellKnownCall` is the non-XRPC
    well-known class, which carries no NSID and no query parameters (both
-   well-known paths are defined to take none). -}
+   well-known paths are defined to take none); `HealthCall` is the health
+   probe, which likewise has no NSID — `_health` fails NSID syntax — and no
+   query parameters. -}
 public export data XrpcCall =
   | QueryCall String (List QueryParam)
   | ProcedureNoInputCall String (List QueryParam)
@@ -92,6 +94,7 @@ public export data XrpcCall =
   | ProcedureTextCall String (List QueryParam) MediaType String
   | ProcedureRawCall String (List QueryParam) MediaType (Array Int)
   | WellKnownCall WellKnown
+  | HealthCall
 
 export data XrpcFailure = XrpcFailure Int String String Response
 
@@ -315,18 +318,29 @@ slice input start size = arrayMakeWith size (i => input[start + i])
 
 {- | The path classification the router routes on. `NonXrpcPath` is the
    residual: every path that is neither under `/xrpc/` nor one of the two
-   well-knowns, and it is still a 404. -}
+   well-knowns nor the health probe, and it is still a 404. -}
 data XrpcPath =
   | NonXrpcPath
   | InvalidXrpcPath
   | XrpcPath String
   | WellKnownPath WellKnown
+  | HealthPath
 
 didDocumentPath : String
 didDocumentPath = "/.well-known/did.json"
 
 atprotoDidPath : String
 atprotoDidPath = "/.well-known/atproto-did"
+
+{- | The health probe's request path. It lives under `/xrpc/` the way a real
+   method's path does, but `_health` fails NSID syntax
+   (`validateNsidPrefix` in `lib.nsid` rejects any name with no dot), so it is
+   classified by this literal check BEFORE the `/xrpc/` prefix is treated as
+   naming a method — never registered in the endpoint registry, and never
+   reachable as `XrpcPath "_health"`. -}
+export
+healthPath : String
+healthPath = "/xrpc/_health"
 
 xrpcPath : String -> XrpcPath
 xrpcPath path =
@@ -336,6 +350,8 @@ xrpcPath path =
     WellKnownPath WellKnownDidDocument
   else if path == atprotoDidPath then
     WellKnownPath WellKnownAtprotoDid
+  else if path == healthPath then
+    HealthPath
   else if not (hasPrefix bytes prefix 0) then
     NonXrpcPath
   else if arrayLength bytes == arrayLength prefix then
@@ -556,6 +572,18 @@ routeWellKnown wellKnown request =
   else
     RouteCall PublicRoute (WellKnownCall wellKnown)
 
+{- | The health probe is a plain GET with no request body and no query
+   parameters, graded exactly as a well-known is. -}
+routeHealth : Request -> RouteResult
+routeHealth request =
+  if requestMethod request /= "GET" then
+    methodNotAllowed "the health probe requires GET"
+  else if requestBodyLength request > 0
+    || hasBodyFraming (requestHeaders request) then
+    invalidRequest "the health probe does not accept request body framing"
+  else
+    RouteCall PublicRoute HealthCall
+
 {- | The subscription route this request targets, if it targets a registered
    one at all: its admitted NSID, its query parameters, and the auth policy
    it was registered under.
@@ -598,6 +626,7 @@ routeRequest (Registry endpoints) request = match parseTargetQuery request
   Err _ => invalidRequest "Invalid XRPC query parameters"
   Ok (path, params) => match xrpcPath path
     WellKnownPath wellKnown => routeWellKnown wellKnown request
+    HealthPath => routeHealth request
     NonXrpcPath => notFound "XRPC route not found"
     InvalidXrpcPath => invalidRequest "Invalid XRPC method path"
     XrpcPath nsid => match validateNsid nsid

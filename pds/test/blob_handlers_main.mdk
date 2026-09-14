@@ -79,7 +79,7 @@ account = match makeAccount accountDidText accountHandleText accountHostText
   Err message => panic "blob_handlers: account setup failed: \{message}"
 
 server : Server
-server = match pdsServer account serverLinksEmpty
+server = match pdsServer account serverLinksEmpty "test-driver"
   Ok made => made
   Err message => panic "blob_handlers: server setup failed: \{message}"
 

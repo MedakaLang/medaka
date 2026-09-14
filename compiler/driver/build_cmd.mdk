@@ -25,7 +25,7 @@
 -- the emitter's own diagnostic surfaced.
 
 import support.util.{stringTrim, joinWith, joinNl}
-import string.{words}
+import string.{words, contains}
 import io.{runCommandOk}
 import support.timer.{perfEnabled, now, emitPhase}
 import driver.loader.{
@@ -533,6 +533,10 @@ keepIrOutcome path contents = match writeFile path contents
 --             for the `--json` route.  This suppresses the DUPLICATE only: a
 --             failing emit still carries the child's text, through the report's
 --             `status` and into `cjBuildFailedJson`, so nothing goes silent.
+-- stampBuild = True iff `--stamp-build` was passed: link a provenance object so
+--             the binary's own `buildCommit`/`buildFingerprint`/`buildDate` read
+--             real strings instead of "" (see provenanceObject).  The wasm target
+--             has no such object and ignores it.
 export
 runBuild : String ->
   String ->
@@ -542,11 +546,20 @@ runBuild : String ->
   String ->
   Bool ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr =
+runBuild root medaka cc TNative inputAbs outPath keepIrCli quietEmitStderr stampBuild =
   let _ = sweepStaleTempDirs ()
-  runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr
-runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr =
+  runBuildNative
+    root
+    medaka
+    cc
+    inputAbs
+    outPath
+    keepIrCli
+    quietEmitStderr
+    stampBuild
+runBuild root medaka cc TWasm inputAbs outPath keepIrCli quietEmitStderr _ =
   let _ = sweepStaleTempDirs ()
   runBuildWasm root medaka inputAbs outPath keepIrCli quietEmitStderr
 
@@ -562,8 +575,9 @@ runBuildNative : String ->
   String ->
   Bool ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr =
+runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr stampBuild =
   match makeTempDir ()
     Err e =>
       buildErr "error: could not create a scratch directory for the build: \{e}"
@@ -578,6 +592,7 @@ runBuildNative root medaka cc inputAbs outPath keepIrCli quietEmitStderr =
           tmpDir
           keepIrCli
           quietEmitStderr
+          stampBuild
       let _ = cleanupTempDir tmpDir
       res
 
@@ -592,8 +607,9 @@ runBuildNativeIn : String ->
   String ->
   Bool ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr =
+runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStderr stampBuild =
   runBuildNativeRoots
     root
     medaka
@@ -605,6 +621,7 @@ runBuildNativeIn root medaka cc inputAbs outPath tmpDir keepIrCli quietEmitStder
     []
     False
     quietEmitStderr
+    stampBuild
 
 -- Probe the C compiler up front — the native analogue of probeWasmTools
 -- below, run BEFORE the emitter/link path so a missing/misconfigured `cc`
@@ -659,8 +676,9 @@ runBuildNativeRoots : String ->
   List String ->
   Bool ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr =
+runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild =
   match probeClang cc
     None => buildErr (clangMissingError cc)
     Some _ =>
@@ -675,6 +693,7 @@ runBuildNativeRoots root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots 
         extraRoots
         strictEmit
         quietEmitStderr
+        stampBuild
 
 -- The original body, unmoved — split out only so the up-front probe above
 -- doesn't force reindenting this whole function under a match arm.
@@ -688,8 +707,9 @@ runBuildNativeRootsGo : String ->
   List String ->
   Bool ->
   Bool ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr =
+runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoots strictEmit quietEmitStderr stampBuild =
   let emitter = joinPath root "compiler/entries/llvm_emit_modules_main.mdk"
   let runtimeP = joinPath root "stdlib/runtime.mdk"
   let preludeP = joinPath root "stdlib/core.mdk"
@@ -793,6 +813,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 tmpDir
                 ffiRoot
                 (readForeignLibs ffiRoot)
+                stampBuild
             let (keptIr, keepNotes) =
               if effectiveKeepIr keepIrCli then
                 keepIrOutcome (outPath ++ ".ll") ir
@@ -1012,13 +1033,24 @@ clangLink : String ->
   String ->
   String ->
   List (String, String) ->
+  Bool ->
   <IO> Result BuildReport BuildReport
-clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs =
+clangLink cc rtC llPath outPath inputAbs tmpDir projRoot libs stampBuild =
   let libErr = foreignLibErr cc tmpDir projRoot libs
   if libErr /= "" then
     buildErr libErr
-  else
-    clangLinkGo cc rtC llPath outPath inputAbs tmpDir (libLinkFlags libs)
+  else match provenanceObject stampBuild cc tmpDir projRoot
+    Err e => buildErr e
+    Ok provObj =>
+      clangLinkGo
+        cc
+        rtC
+        llPath
+        outPath
+        inputAbs
+        tmpDir
+        (libLinkFlags libs)
+        provObj
 
 -- `-L<dir>`/`-l<name>` for each declared library, in declaration order.  A
 -- library with no search directory contributes `-l<name>` alone.
@@ -1092,6 +1124,107 @@ missingLibMsg projRoot name dir =
     "  install the library, or point that key at the directory holding it: ",
     name, " = \"vendor/lib\""
   ]
+
+-- ---- build provenance (`medaka build --stamp-build`, issue #2960) ---------
+-- runtime/medaka_rt.c defines mdk_build_{fingerprint,commit,date}_str WEAK and
+-- empty, so every binary that links no provenance object reads "" from the
+-- `buildFingerprint`/`buildCommit`/`buildDate` externs.  `--stamp-build` links
+-- one, the same way test/build_native_medaka.sh stamps ./medaka itself: the
+-- three strings live in their OWN translation unit rather than inside
+-- medaka_rt.c, because they change on every build while medaka_rt.c does not —
+-- folding them in would defeat the fingerprint-keyed runtime object cache
+-- (cachedRtObj) for every build on the machine.  Nothing on this link line is
+-- LTO'd (see the cache commentary below), so there is no ThinLTO cache key to
+-- invalidate here, unlike the emitter link the precedent guards against.
+--
+-- Opt-in, and silent by default: the four consumers that must keep reading ""
+-- — bootstrap_from_seed.sh, selfcompile_fixpoint.sh, stage A of
+-- build_native_medaka.sh, and the `--emit-rt-obj` precompile path — pass no
+-- flag, link no object, and see an argv byte-identical to the pre-flag one.
+--
+-- Returns the object to link, or "" when stamping is off.  `Err` only when
+-- stamping was ASKED FOR and could not be done: a silently unstamped binary is
+-- the one wrong answer for a flag whose whole job is to make a deployed binary
+-- say where it came from.
+provenanceObject : Bool ->
+  String ->
+  String ->
+  String ->
+  <IO> Result String String
+provenanceObject False _ _ _ = Ok ""
+provenanceObject True cc tmpDir projRoot =
+  let provC = joinPath tmpDir "provenance.c"
+  let provO = joinPath tmpDir "provenance.o"
+  match writeFile provC (provenanceSource projRoot)
+    Err e => Err "error: could not write the build-provenance source: \{e}"
+    Ok _ =>
+      -- Compiled with clangLink's own opt level and section flags, so the
+      -- object cannot be built under flags the link does not expect — the same
+      -- discipline emitRtObj and emitPreludeObj follow.
+      let ccArgs =
+        [clangOptFlag, "-c"] ++ gcSectionsCflags ++ [provC, "-o", provO]
+      match runCommandOk cc ccArgs
+        Err e => Err "error: compiling the build-provenance stamp failed\n\{e}"
+        Ok _ => Ok provO
+
+-- The three stamped strings as the C translation unit that overrides the weak
+-- definitions.  `fingerprint` is THIS compiler's own stamp, passed straight
+-- through: `buildFingerprint`'s contract is "compiler-source fingerprint this
+-- binary was built from", and for a `medaka build` output that is exactly the
+-- fingerprint of the medaka that built it — which is what pairs the binary with
+-- a `medaka --version` during triage.  `commit` and `date` describe the USER's
+-- project and the build, the two fields that answer "which revision of my
+-- program is this".
+provenanceSource : String -> <IO> String
+provenanceSource projRoot =
+  let fingerprint = stampSafe (buildFingerprint ())
+  let commit = stampSafe (stampCommit projRoot)
+  let date = stampSafe (stampDate ())
+  stringConcat [
+    "const char mdk_build_fingerprint_str[] = \"", fingerprint, "\";\n",
+    "const char mdk_build_commit_str[] = \"", commit, "\";\n",
+    "const char mdk_build_date_str[] = \"", date, "\";\n"
+  ]
+
+-- A stamp value is a hex digest, a short commit hash, or a YYYY-MM-DD date, so
+-- none of them can carry a quote, a backslash or a newline.  One that somehow
+-- does is dropped rather than escaped: an empty stamp is a documented outcome
+-- of every one of these fields, whereas a C source this function had to escape
+-- correctly is a second parser nobody asked for.
+stampSafe : String -> String
+stampSafe s =
+  if contains "\"" s || contains "\\" s || contains "\n" s then "" else s
+
+-- `git rev-parse --short HEAD` in the project's own tree, carrying the `-dirty`
+-- suffix ./medaka's own stamp carries: a modified tree otherwise reports a
+-- clean commit, which is backwards for a field whose only purpose is triaging a
+-- deployed binary.  "" when git is missing or the directory is no repository —
+-- `buildCommit`'s contract already reads "" for a `.git`-less tree.
+stampCommit : String -> <IO> String
+stampCommit projRoot =
+  match runCommand "git" ["-C", projRoot, "rev-parse", "--short", "HEAD"]
+    Ok (0, out, _) =>
+      let short = stringTrim out
+      if short == "" then "" else short ++ stampDirtySuffix projRoot
+    -- fail-open-by-design: no git, no repository, or a detached/empty HEAD all
+    -- mean the same thing here — this build has no commit to name.
+    _ => ""
+
+-- Only a SUCCESSFUL, empty `git status --porcelain` earns a clean commit,
+-- matching test/build_native_medaka.sh's `[ -n "$(... 2>/dev/null)" ]` test
+-- byte for byte so that `-dirty` means one thing across the whole tree.
+stampDirtySuffix : String -> <IO> String
+stampDirtySuffix projRoot =
+  match runCommand "git" ["-C", projRoot, "status", "--porcelain"]
+    Ok (0, out, _) => if stringTrim out == "" then "" else "-dirty"
+    _ => ""
+
+-- UTC build date: the same command and format build_native_medaka.sh stamps,
+-- and identical on GNU and BSD `date`.
+stampDate : Unit -> <IO> String
+stampDate _ = match runCommand "date" ["-u", "+%Y-%m-%d"]
+  Ok (0, out, _) => stringTrim out
+  _ => ""
 
 -- ---- the automatic C-runtime object cache (#133, epic #2036 G1) ------------
 -- MEASURED attribution of hello-world's ~1.5 s `medaka build` (this tree, this
@@ -1387,8 +1520,9 @@ clangLinkGo : String ->
   String ->
   String ->
   List String ->
+  String ->
   <IO> Result BuildReport BuildReport
-clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
+clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags provObj =
   clangLinkTimed
     cc
     rtC
@@ -1397,6 +1531,7 @@ clangLinkGo cc rtC llPath outPath inputAbs tmpDir libFlags =
     inputAbs
     tmpDir
     libFlags
+    provObj
     (perfEnabled ())
     (now ())
 
@@ -1407,10 +1542,11 @@ clangLinkTimed : String ->
   String ->
   String ->
   List String ->
+  String ->
   Bool ->
   Float ->
   <IO> Result BuildReport BuildReport
-clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
+clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags provObj perfOn tLink0 =
   match detectGC cc tmpDir
     None => buildErr (libgcMissingError ())
     Some (gcCflags, gcLibs) =>
@@ -1475,6 +1611,11 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
           [llPath, rtInput]
         else
           [llPath, preludeObj, rtInput]
+      -- `--stamp-build`'s provenance object, LAST so it overrides the weak,
+      -- empty definitions medaka_rt.c contributes; "" (the default) leaves the
+      -- input list byte-identical to the unstamped one.
+      let linkInputs =
+        if provObj == "" then objInputs else objInputs ++ [provObj]
       -- The runtime (runtime/medaka_rt.c) runs the compiled program on a 256 MB
       -- worker thread via GC_pthread_create, so it self-provisions its stack: no
       -- Mach-O-only `-Wl,-stack_size` link flag is needed on either platform.
@@ -1484,7 +1625,7 @@ clangLinkTimed cc rtC llPath outPath inputAbs tmpDir libFlags perfOn tLink0 =
         [optFlag, "-pthread"]
           ++ gcSectionsCflags
           ++ gcCflags
-          ++ objInputs
+          ++ linkInputs
           ++ libFlags
           ++ gcLibs
           ++ [sectionsLink, "-lm", "-o", outPath]

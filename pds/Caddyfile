@@ -10,9 +10,33 @@
 # Replace `pds.example.com` with the real hostname (the same one `pds serve
 # --hostname` is given) before use, and see docs/ops/PDS-DEPLOY.md for the
 # rest of the procedure — the port here must match `pds serve --port`.
+#
+# `request_body`'s `max_size` is set to the exact byte count of the PDS's
+# own largest body ceiling (`maxBlobBytes` / `maxHttpClientBodyBytes`, both
+# 5242880 bytes, pds/lib/resource_limits.mdk) — a unit suffix like `5MB` is
+# ambiguous (5,000,000 or 5,242,880 depending on the parser) and the smaller
+# reading would reject a legitimate PDS-accepted request here first.
 
 pds.example.com {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+	}
+
+	request_body {
+		max_size 5242880
+	}
+
+	log {
+		output file /var/log/caddy/pds-access.log
+	}
+
 	reverse_proxy 127.0.0.1:8080 {
 		header_up X-Forwarded-For {remote_host}
+
+		transport http {
+			read_timeout 30s
+			write_timeout 30s
+			dial_timeout 5s
+		}
 	}
 }

@@ -1449,6 +1449,7 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
               let medaka = envOr "MEDAKA" "medaka"
               let cc = envOr "CC" "clang"
               let keepIrCli = flag "--keep-ir" a
+              let stampBuild = flag "--stamp-build" a
               let outPath = match outOpt
                 Some o => o
                 None => defaultOutPath target input
@@ -1457,7 +1458,16 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
               -- so forwarding the child's human copy would report one diagnostic
               -- twice on two channels. A FAILING emit still carries the child's
               -- text, through `ppBuildReport rep` into `cjBuildFailedJson` below.
-              match runBuild root medaka cc target input outPath keepIrCli True
+              match (runBuild
+                root
+                medaka
+                cc
+                target
+                input
+                outPath
+                keepIrCli
+                True
+                stampBuild)
                 -- #2243: the build's own notes (a failed `--keep-ir` copy)
                 -- join the entry file's `diagnostics` array rather than
                 -- vanishing with the status line this channel never prints.
@@ -2198,6 +2208,9 @@ buildArgSpec =
           ["--allow-internal"]
           "permit internal-only externs outside stdlib/",
         switch ["--json"] "emit the structured-diagnostics envelope",
+        switch
+          ["--stamp-build"]
+          "stamp the commit, compiler fingerprint and build date into the binary",
         value ["-o"] "PATH" "output path for the binary",
         -- `value`, not `oneOf`: the rejection sentence for a bad target is
         -- `parseTarget`'s own `error: unknown --target '…' (expected native|wasm)`,
@@ -2284,6 +2297,7 @@ runBuildPlainCmd a =
         let inputAbs = input
         let allowInternal = flag "--allow-internal" a
         let keepIrCli = flag "--keep-ir" a
+        let stampBuild = flag "--stamp-build" a
         let outPath = match outOpt
           Some o => o
           None => defaultOutPath target input
@@ -2300,7 +2314,8 @@ runBuildPlainCmd a =
               inputAbs
               outPath
               keepIrCli
-              False)
+              False
+              stampBuild)
               Ok rep =>
                 let perfTEmit = now ()
                 let _ = emitPhase perfOn "emit" (perfTEmit - perfTTc) input
@@ -2333,7 +2348,7 @@ buildUsage : Unit -> <IO> Unit
 buildUsage _ =
   putStrLn
     (stringConcat [
-      "usage: medaka build [--target native|wasm] <file.mdk> [-o <out>] [--keep-ir] [--allow-internal] [--json]\n",
+      "usage: medaka build [--target native|wasm] <file.mdk> [-o <out>] [--keep-ir] [--allow-internal] [--json] [--stamp-build]\n",
       "\n",
       "  -o <out>          output path for the binary (default: <file> with its extension dropped)\n",
       "  --target <t>      backend: native (LLVM + clang, default) or wasm (WasmGC + wasm-tools)\n",
@@ -2345,6 +2360,12 @@ buildUsage _ =
       "                    kept path is printed. Env var MEDAKA_KEEP_IR=1 does the same for a\n",
       "                    build invoked by something else (e.g. a test harness)\n",
       "  --allow-internal  permit internal-only externs outside stdlib/\n",
+      "  --stamp-build     bake build provenance into the binary: the project's git commit\n",
+      "                    (with a -dirty suffix on a modified tree), the fingerprint of\n",
+      "                    the compiler that built it, and the UTC build date, read back at\n",
+      "                    run time through buildCommit/buildFingerprint/buildDate. Without\n",
+      "                    it those three read \"\", which is what every other build path\n",
+      "                    links; a field that cannot be derived is stamped empty\n",
       "  --emit-rt-obj <p> compile only runtime/medaka_rt.c to a reusable object at <p> (with\n",
       "                    the same flags a normal link uses) and exit; point MEDAKA_RT_OBJ at\n",
       "                    it to skip recompiling the runtime on every subsequent build\n",

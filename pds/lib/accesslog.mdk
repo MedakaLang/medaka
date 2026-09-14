@@ -1,0 +1,168 @@
+{- | The one line this server writes about one request, built and nothing
+   else: no clock is read here, no socket is looked at, and nothing is
+   printed. `pds/shell/server.mdk` gathers the six fields at the point the
+   response bytes leave, calls `accessLogLine`, and writes the result.
+
+   WHAT MAY BE IN A LINE is the whole reason this module is separate from the
+   place that prints it. An access log is read by whoever reads the journal,
+   which is a wider audience than whoever holds the account, so the fields are
+   an ALLOW-LIST of six and there is no way to add a seventh at a call site:
+   `AccessEvent` has exactly these fields, and a caller holding a password, a
+   token or a session secret has nowhere to put it. Three of the six are
+   attacker-supplied — `method` and `path` come off the request line, `client`
+   off `X-Forwarded-For` through `lib.ratelimit`'s admission — so each of the
+   three goes through `logField`, and `path` additionally through
+   `accessLogPath`:
+
+   - `logField` maps every byte outside printable ASCII to `.`, so a caller
+     cannot terminate the line early and forge a second one, and caps the
+     length, so it cannot push the fields after it out of a journal's own line
+     limit.
+   - `accessLogPath` drops the query string. A query value is the one part of
+     a request target that routinely carries a credential, and an operator
+     reading a log wants the route rather than its arguments. -}
+
+import string.{fromUtf8, indexOf, take, toUtf8}
+
+{- | One finished request, as the log records it.
+
+   `responseBytes` counts what was written to the socket — status line,
+   headers and body — rather than the body alone, because that is the figure
+   an operator sizing egress needs and the one this server knows without
+   re-parsing what it sent. `durationMillis` is measured from the point the
+   request framed, so it excludes the time a slow client spent sending it and
+   includes everything this server then did. -}
+public export data AccessEvent = AccessEvent {
+  method : String,
+  path : String,
+  status : Int,
+  responseBytes : Int,
+  durationMillis : Int,
+  client : String,
+}
+
+-- The printable ASCII range, which is also exactly the set of bytes that
+-- cannot end a line or open a new field: space, tab, CR and LF all fall
+-- outside it.
+printableLow : Int
+printableLow = 33
+
+-- One below '~' (126): '~' is reserved exclusively for the truncation
+-- marker `logField` appends below, so a sanitized value can never end in
+-- one on its own.
+printableHigh : Int
+printableHigh = 125
+
+-- '.' — what an unprintable byte becomes. A fixed substitute rather than an
+-- escape sequence, so that the rendered length stays the byte count and the
+-- caps below mean what they say.
+substituteByte : Int
+substituteByte = 46
+
+sanitizeByte : Int -> Int
+sanitizeByte b =
+  if b >= printableLow && b <= printableHigh then b else substituteByte
+
+{- | One field's value, made safe to put in a line: every unprintable byte
+   replaced, the whole capped at `limit` bytes, and an empty value written as
+   `-` so a field is never blank.
+
+   A value that was truncated ends in `~`, which the sanitizer above cannot
+   produce, so a reader can tell a truncated path from one that happens to end
+   there. -}
+export
+logField : Int -> String -> String
+logField limit text =
+  let bytes = toUtf8 text
+  let n = arrayLength bytes
+  if n == 0 then
+    "-"
+  else if n <= limit then
+    fromUtf8 (arrayMakeWith n (i => sanitizeByte bytes[i]))
+  else
+    fromUtf8 (arrayMakeWith limit (i => sanitizeByte bytes[i])) ++ "~"
+
+{- | The route half of a request target, with the query string dropped.
+
+   Both separators are cut, not just `?`: an origin-form target may not carry
+   a fragment, but a target that did carry one arrived here as a string and
+   would otherwise be logged whole. -}
+export
+accessLogPath : String -> String
+accessLogPath target = match indexOf "?" target
+  Some i => take i target
+  None => match indexOf "#" target
+    Some j => take j target
+    None => target
+
+httpVersionPrefix : String
+httpVersionPrefix = "HTTP/1.1 "
+
+statusDigitOffset : Int
+statusDigitOffset = 9
+
+matchesPrefix : Array Int -> Array Int -> Int -> Bool
+matchesPrefix bytes prefix i =
+  if i >= arrayLength prefix then
+    True
+  else if bytes[i] /= prefix[i] then
+    False
+  else
+    matchesPrefix bytes prefix (i + 1)
+
+digitAt : Array Int -> Int -> Option Int
+digitAt bytes i =
+  if bytes[i] >= 48 && bytes[i] <= 57 then Some (bytes[i] - 48) else None
+
+{- | The status code of a serialized HTTP/1.1 response, read back off the
+   bytes that are actually going out.
+
+   Read back rather than threaded down from a `Response` on purpose: the
+   response bytes are the one thing every exit in `pds/shell/server.mdk` has —
+   a refusal, a proxied upstream's own answer, the WebSocket handshake and the
+   pre-serialized persist failure alike — so a log keyed on them cannot record
+   a status the client was not sent, and an exit added later cannot forget to
+   say what it answered.
+
+   `0` for bytes that are not a status line at all. It is deliberately not a
+   valid HTTP status: a plausible code standing in for an unreadable one is
+   exactly the silent wrongness this module exists to avoid. -}
+export
+responseStatusCode : Array Int -> Int
+responseStatusCode bytes =
+  let prefix = toUtf8 httpVersionPrefix
+  if arrayLength bytes < statusDigitOffset + 3 then
+    0
+  else if not (matchesPrefix bytes prefix 0) then
+    0
+  else match (
+    digitAt bytes statusDigitOffset,
+    digitAt bytes (statusDigitOffset + 1),
+    digitAt bytes (statusDigitOffset + 2),
+  )
+    (Some h, Some t, Some u) => h * 100 + t * 10 + u
+    _ => 0
+
+-- How much of each attacker-supplied field survives into the line. A method
+-- token longer than this is not one any client this server answers sends, and
+-- a forwarded-for label is an address; the path is given room for a full NSID
+-- route and little more.
+methodLimit : Int
+methodLimit = 16
+
+pathLimit : Int
+pathLimit = 200
+
+clientLimit : Int
+clientLimit = 64
+
+{- | The line itself: one request, one line, `key=value` throughout so that
+   `grep` and a field splitter both work on it.
+
+   It carries the `serve: ` prefix every other line this process writes
+   carries, so an operator reading a journal sees one stream from one program
+   rather than two. -}
+export
+accessLogLine : AccessEvent -> String
+accessLogLine event =
+  "serve: access method=\{logField methodLimit event.method} path=\{logField pathLimit (accessLogPath event.path)} status=\{intToString event.status} bytes=\{intToString event.responseBytes} ms=\{intToString event.durationMillis} client=\{logField clientLimit event.client}"

@@ -83,7 +83,7 @@ mustAccount did = match makeAccount did accountHandleText accountHostText
   Err message => panic "read_handlers: account setup failed: \{message}"
 
 mustServer : Account -> Server
-mustServer account = match pdsServer account serverLinksEmpty
+mustServer account = match pdsServer account serverLinksEmpty "test-driver"
   Ok server => server
   Err message => panic "read_handlers: server setup failed: \{message}"
 

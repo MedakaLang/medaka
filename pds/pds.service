@@ -13,11 +13,24 @@
 # --hostname/paths, User/Group) before installing. Copy to
 # /etc/systemd/system/pds.service, then:
 #   systemctl daemon-reload && systemctl enable --now pds
+#
+# The `pds`/`pds` user/group referenced below is not created by this unit —
+# see docs/ops/PDS-DEPLOY.md's "Create the service user" step, run once
+# before the first `systemctl enable --now pds`.
+#
+# `/opt/pds/secrets` is deliberately `ReadOnlyPaths`, not `ReadWritePaths`:
+# the process only ever reads its signing key from there, and
+# `ProtectSystem=strict` already makes every other path read-only by
+# default, so this entry exists to say the read is intentional rather than
+# to grant it.
 
 [Unit]
 Description=Medaka atproto PDS
 After=network-online.target
 Wants=network-online.target
+RequiresMountsFor=/opt/pds
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple
@@ -36,8 +49,19 @@ Restart=on-failure
 RestartSec=5
 NoNewPrivileges=true
 ProtectSystem=strict
-ReadWritePaths=/opt/pds/data
+ProtectHome=true
+PrivateDevices=true
 PrivateTmp=true
+ReadWritePaths=/opt/pds/data
+ReadOnlyPaths=/opt/pds/secrets
+CapabilityBoundingSet=
+UMask=0077
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=512M
+TasksMax=256
+LimitNOFILE=65536
+CPUWeight=20
 
 [Install]
 WantedBy=multi-user.target
