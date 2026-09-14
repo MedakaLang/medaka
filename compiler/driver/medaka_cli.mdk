@@ -208,6 +208,7 @@ import types.typecheck.{
   mainTypeIsUnit,
   setStdlibOwnership,
   setLocalPinDisabled,
+  openGoalCommitWarnCode,
 }
 import driver.main_autoprint.{
   shouldAsyncWrapMain,
@@ -1700,8 +1701,19 @@ trimEntryTriple [(p, s, ds)] =
   [(p, s, filter (d => not (onTypecheckWarnChannel d)) ds)]
 trimEntryTriple (t :: rest) = t :: trimEntryTriple rest
 
+-- #3027 / D3: `openGoalCommitWarnCode` is pushed the same way `coherenceWarnCode`
+-- is (`pushMatchWarningOnceAt`, off the entry module's own diags), so the entry
+-- report already prints it loc-free exactly as it does the coherence warning —
+-- measured on a multi-module fixture with the T4 commitment in the entry module
+-- itself. Added here for the same reason `coherenceWarnCode` is: without it,
+-- `trimEntryTriple` would leave the code in the entry triple and `check` would
+-- print it twice. `W-PRELUDE-METHOD-SHADOW` and `W-IMPORT-METHOD-SHADOW` are NOT
+-- added — they are `analyzeProject`-side `Diag`s the entry report does not print
+-- (see `trimEntryTriple`'s own comment), so this stays a two-literal test, not a
+-- membership test over `runBuildWarnCodes`.
 onTypecheckWarnChannel : Diag -> Bool
-onTypecheckWarnChannel (Diag _ c _ _ _ _) = c == coherenceWarnCode
+onTypecheckWarnChannel (Diag _ c _ _ _ _) =
+  c == coherenceWarnCode || c == openGoalCommitWarnCode
 
 tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False

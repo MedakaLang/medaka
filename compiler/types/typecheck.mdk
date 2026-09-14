@@ -27022,10 +27022,11 @@ reportOverlapForIface iface goals cands
 -- `compiler/`+`stdlib/` modules, 2 of 3269 tracked `test/**/*.mdk`, both the known
 -- #1183 class) — so "open here, ground later" is not merely argued away, it is
 -- measured absent.
--- Deliberately NOT in `runBuildWarnCodes` (`driver/medaka_cli.mdk`): that list is a
--- decision with three measurements attached, and this code owes them before it can ask
--- for the multi-module `run`/`build` channel.  It surfaces on `check`, and on the
--- single-file `run`/`build` arms that filter the whole channel.
+-- #3027 / D3 (`driver/diagnostics.mdk`'s `runBuildWarnCodes`): this code now IS on
+-- that list, its own three measurements discharged there.  It surfaces on `check`,
+-- and on every `run`/`build` arm — single-file unconditionally, multi-module via
+-- the allowlist.
+export
 openGoalCommitWarnCode : String
 openGoalCommitWarnCode = "W-OPEN-GOAL-COMMITTED"
 

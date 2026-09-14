@@ -1,5 +1,5 @@
 # META
-source_lines=47029
+source_lines=47030
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -27026,10 +27026,11 @@ reportOverlapForIface iface goals cands
 -- `compiler/`+`stdlib/` modules, 2 of 3269 tracked `test/**/*.mdk`, both the known
 -- #1183 class) — so "open here, ground later" is not merely argued away, it is
 -- measured absent.
--- Deliberately NOT in `runBuildWarnCodes` (`driver/medaka_cli.mdk`): that list is a
--- decision with three measurements attached, and this code owes them before it can ask
--- for the multi-module `run`/`build` channel.  It surfaces on `check`, and on the
--- single-file `run`/`build` arms that filter the whole channel.
+-- #3027 / D3 (`driver/diagnostics.mdk`'s `runBuildWarnCodes`): this code now IS on
+-- that list, its own three measurements discharged there.  It surfaces on `check`,
+-- and on every `run`/`build` arm — single-file unconditionally, multi-module via
+-- the allowlist.
+export
 openGoalCommitWarnCode : String
 openGoalCommitWarnCode = "W-OPEN-GOAL-COMMITTED"
 
@@ -51292,7 +51293,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reportAmbiguousOverlap" ((PVar "goals") (PVar "cands")) (EMatch (EApp (EVar "candsOneIface") (EVar "cands")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "reportOverlapForIface") (EVar "iface")) (EVar "goals")) (EVar "cands")))))
 (DTypeSig false "reportOverlapForIface" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "Unit")))))
 (DFunDef false "reportOverlapForIface" ((PVar "iface") (PVar "goals") (PVar "cands")) (EIf (EApp (EVar "goalsClosed") (EVar "goals")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "ambiguousOverlapMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "pushMatchWarningOnceAt") (EVar "openGoalCommitWarnCode")) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "openGoalCommitMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EApp (EVar "Some") (EVar "openGoalCommitHelp"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "openGoalCommitWarnCode" (TyCon "String"))
+(DTypeSig true "openGoalCommitWarnCode" (TyCon "String"))
 (DFunDef false "openGoalCommitWarnCode" () (ELit (LString "W-OPEN-GOAL-COMMITTED")))
 (DTypeSig false "openGoalCommitMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "String")))))
 (DFunDef false "openGoalCommitMsg" ((PVar "iface") (PVar "goals") (PVar "cands")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Instance for `")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` chosen by declaration order. The goal `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "ppPredArgsShared") (EVar "goals")))) (ELit (LString "` is still undetermined here and matches "))) (EApp (EVar "display") (EApp (EVar "joinAnd") (EApp (EApp (EVar "map") (EApp (EVar "implHeadLabel") (EVar "iface"))) (EVar "cands"))))) (ELit (LString ", and "))) (EApp (EVar "display") (EApp (EVar "noMinimumClause") (EApp (EVar "listLen") (EVar "cands"))))) (ELit (LString " — so the first of them to be declared is the one that runs"))))
@@ -58277,7 +58278,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reportAmbiguousOverlap" ((PVar "goals") (PVar "cands")) (EMatch (EApp (EVar "candsOneIface") (EVar "cands")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "reportOverlapForIface") (EVar "iface")) (EVar "goals")) (EVar "cands")))))
 (DTypeSig false "reportOverlapForIface" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "Unit")))))
 (DFunDef false "reportOverlapForIface" ((PVar "iface") (PVar "goals") (PVar "cands")) (EIf (EApp (EVar "goalsClosed") (EVar "goals")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "ambiguousOverlapMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "pushMatchWarningOnceAt") (EVar "openGoalCommitWarnCode")) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "openGoalCommitMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EApp (EVar "Some") (EVar "openGoalCommitHelp"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "openGoalCommitWarnCode" (TyCon "String"))
+(DTypeSig true "openGoalCommitWarnCode" (TyCon "String"))
 (DFunDef false "openGoalCommitWarnCode" () (ELit (LString "W-OPEN-GOAL-COMMITTED")))
 (DTypeSig false "openGoalCommitMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "String")))))
 (DFunDef false "openGoalCommitMsg" ((PVar "iface") (PVar "goals") (PVar "cands")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Instance for `")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` chosen by declaration order. The goal `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "ppPredArgsShared") (EVar "goals")))) (ELit (LString "` is still undetermined here and matches "))) (EApp (EMethodRef "display") (EApp (EVar "joinAnd") (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadLabel") (EVar "iface"))) (EVar "cands"))))) (ELit (LString ", and "))) (EApp (EMethodRef "display") (EApp (EVar "noMinimumClause") (EApp (EVar "listLen") (EVar "cands"))))) (ELit (LString " — so the first of them to be declared is the one that runs"))))
