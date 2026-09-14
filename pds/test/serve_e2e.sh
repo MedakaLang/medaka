@@ -2511,9 +2511,32 @@ require_empty "$WORK/servestats.err" 'case 60 startup'
 client query "$PORTSTATS" "$DID" \
   || fail 'case 60: the stats-line server did not answer an ordinary request'
 
+# A freshly-`--init`ed server has zero blobs on disk, which exercises
+# `blobFileCount`'s walk only on an empty directory. Uploading a couple of
+# blobs here — through the real socket, the same path case 4b uses — drives
+# that walk over actual shards and leaves, including its `Err _ => ()`
+# drop-the-line arm, before the stats line is read below.
+STATSLOGIN=$(client login "$PORTSTATS" "$HANDLE" "$PASSWORD") \
+  || fail 'case 60: login on the stats-line server'
+STATSTOKEN=${STATSLOGIN%% *}
+STATS_BLOB_CID=$(
+  client upload-blob "$PORTSTATS" "$STATSTOKEN" "$BLOB_MIME" "$BLOB_TEXT"
+) || fail 'case 60: uploadBlob on the stats-line server'
+[ -n "$STATS_BLOB_CID" ] \
+  || fail 'case 60: uploadBlob on the stats-line server returned an empty CID'
+STATS_BLOB2_CID=$(
+  client upload-blob "$PORTSTATS" "$STATSTOKEN" "$BLOB2_MIME" "$BLOB2_TEXT"
+) || fail 'case 60: second uploadBlob on the stats-line server'
+[ -n "$STATS_BLOB2_CID" ] \
+  || fail 'case 60: second uploadBlob on the stats-line server returned an empty CID'
+
+# Waits for a line with a NONZERO blobs field specifically, not merely a
+# well-shaped one: the very first tick fires before the two uploads above
+# necessarily land, so a shape-only wait can break on that earlier line and
+# read it back as "no stats line yet" instead of "blobs not caught up yet".
 i=0
 while [ "$i" -lt 100 ]; do
-  if grep -Eq '^serve: stats active=[0-9]+ unframed=[0-9]+ subscriptions=[0-9]+ rev=\S+ blocks=[0-9]+ blobs=[0-9]+$' \
+  if grep -Eq '^serve: stats active=[0-9]+ unframed=[0-9]+ subscriptions=[0-9]+ rev=\S+ blocks=[0-9]+ blobs=[1-9][0-9]*$' \
     "$WORK/servestats.out"
   then
     break
@@ -2521,7 +2544,7 @@ while [ "$i" -lt 100 ]; do
   i=$((i + 1))
   sleep 0.1
 done
-STATS_LINE=$(grep -E '^serve: stats ' "$WORK/servestats.out" | head -1)
+STATS_LINE=$(grep -E '^serve: stats ' "$WORK/servestats.out" | tail -1)
 [ -n "$STATS_LINE" ] || {
   cat "$WORK/servestats.out" >&2
   fail 'case 60: no stats line was emitted within 10s'
@@ -2533,6 +2556,8 @@ printf '%s\n' "$STATS_LINE" | grep -Fq ' rev=- ' \
   && fail "case 60: a configured account repo's stats line carries no revision: $STATS_LINE"
 printf '%s\n' "$STATS_LINE" | grep -Eq ' blocks=0 ' \
   && fail "case 60: a freshly initialized repository's stats line reports zero blocks: $STATS_LINE"
+printf '%s\n' "$STATS_LINE" | grep -Eq ' blobs=0$' \
+  && fail "case 60: a repo with two uploaded blobs on disk reports zero blobs: $STATS_LINE"
 
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true

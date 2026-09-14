@@ -207,13 +207,23 @@ blobFileRead dir =
       Err "blobfile: \{blobDir dir}: unreadable blob directory: \{message}"
     Ok shards => readShards dir shards []
 
--- Bytes files among one shard's leaves, i.e. every leaf but the mime
--- sidecars: a blob's shard holds exactly one of each per CID, so counting
--- leaves that are not a sidecar counts blobs without reading any of them.
-countLeaves : List String -> Int
-countLeaves [] = 0
-countLeaves (leaf :: rest) =
-  if endsWith mimeSuffix leaf then countLeaves rest else 1 + countLeaves rest
+-- Bytes files among one shard's leaves that also have a sidecar present in
+-- the SAME listing, i.e. every leaf but the mime sidecars and the bytes
+-- files whose sidecar is missing. A shard's directory listing already names
+-- every sidecar it has, so checking membership in `all` answers the same
+-- question `readLeaves`'s sidecar-open does, without opening any file:
+-- `readLeaves` skips a bytes file whose sidecar is missing or unreadable
+-- (see the module's "Residue" note), and this count must agree with that or
+-- `blobFileCount` reports blobs the server cannot actually serve.
+countLeaves : List String -> List String -> Int
+countLeaves _ [] = 0
+countLeaves all (leaf :: rest) =
+  if endsWith mimeSuffix leaf then
+    countLeaves all rest
+  else if elem "\{leaf}\{mimeSuffix}" all then
+    1 + countLeaves all rest
+  else
+    countLeaves all rest
 
 countShards : String -> List String -> <FileRead "_"> Result String Int
 countShards _ [] = Ok 0
@@ -226,13 +236,15 @@ countShards dir (shard :: rest) =
       Err message =>
         Err
           "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
-      Ok leaves => map (countLeaves leaves + _) (countShards dir rest)
+      Ok leaves => map (countLeaves leaves leaves + _) (countShards dir rest)
 
 {- | How many blobs are persisted beneath `<dir>/blobs`, without reading any
    of their bytes: `pds/shell/server.mdk`'s periodic stats line wants a count
    on an interval, and `blobFileRead`'s full verify-by-read pass is too much
    work to repeat that often. A data directory that has never held a blob
-   counts as zero, the same convention `blobFileRead` uses. -}
+   counts as zero, the same convention `blobFileRead` uses — and, like
+   `blobFileRead`, a bytes file whose sidecar is missing is not counted, so
+   this agrees with what `getBlob`/`listBlobs` can actually serve. -}
 export
 blobFileCount : String -> <FileRead "_"> Result String Int
 blobFileCount dir =
