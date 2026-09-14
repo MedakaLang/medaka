@@ -399,6 +399,12 @@ pds/test/synth_repo_main.mdk   builds a large synthetic repository (thousands of
                                persistSave, bypassing pds/lib/repo.mdk's per-record write path; produces a
                                data directory a real pdsd serves. Not graded by any gate — later slices in
                                this sprint and the soak (#2957) read the corpus it builds.
+pds/test/cost_curve_main.mdk   times one listRecords page, one describeRepo, one listBlobs and one
+                               createRecord against a corpus synth_repo_main.mdk built, through the same
+                               persistLoad/repoFromBlocks/handleBytes seam pdsd serves it through, and
+                               reports microseconds per request. Not graded by any gate — it reports a
+                               wall-clock curve, which no fixed threshold can assert on a shared box; the
+                               measured curve for #2773 is read off it by hand.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──

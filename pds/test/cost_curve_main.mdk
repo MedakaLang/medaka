@@ -1,0 +1,237 @@
+{- | Wall-clock cost probe for the repository-size-sensitive routes.
+
+   Reads a corpus directory `pds/test/synth_repo_main.mdk` built, back through
+   the same seam a real `pdsd` serves it through — `persistLoad` /
+   `repoFromBlocks` / `blobFileRead` for the state, `lib.server_core`'s
+   `handleBytes` for every request — and reports microseconds per request for
+   one page of `listRecords`, one `describeRepo`, one `listBlobs`, and one
+   `createRecord` write.
+
+   Every request is answered against the SAME loaded store: the write's
+   resulting store is discarded, so each repetition measures one write against
+   a repository of the corpus's size rather than a repository that grows under
+   the measurement. The route answers are printed alongside the timings so a
+   reader can see the probe measured a real 200 and not an error path. -}
+
+import hex.{decode}
+import json.{Json(..), jObject, stringify}
+import string.{fromUtf8, toInt, toUtf8}
+import lib.cid.{Cid}
+import lib.handlers.{pdsServer, serverLinksEmpty}
+import lib.jwt.{mintToken}
+import lib.repo.{Repo, repoFromBlocks}
+import lib.server_core.{
+  Account,
+  RequestContext(..),
+  Server,
+  handleBytes,
+  makeAccount,
+}
+import lib.sign.{SecretKey, secretKeyFromBytes}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeFromRepo,
+  storePutBlob,
+  storeSessionOpen,
+  storeWithServerSecret,
+}
+import shell.blobfile.{blobFileRead}
+import shell.persist.{persistLoad}
+
+-- ── the corpus account, matching `synth_repo_main.mdk`'s fixed identity ─────
+
+secretHex : String
+secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
+
+corpusDid : String
+corpusDid = "did:plc:synthrepocorpus000000000"
+
+hostText : String
+hostText = "pds.example"
+
+handleText : String
+handleText = "synth.example"
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "cost_curve: malformed hex: \{message}"
+
+corpusSecret : SecretKey
+corpusSecret = match secretKeyFromBytes (mustHex secretHex)
+  Ok key => key
+  Err message => panic "cost_curve: bad signing key: \{message}"
+
+-- ── loading the corpus exactly as `pds/serve.mdk` does ──────────────────────
+
+loadRepo : String -> <FileRead "_"> Repo
+loadRepo dir =
+  let (head, blocks) = match persistLoad dir
+    Ok value => value
+    Err message => panic "cost_curve: corpus load failed: \{message}"
+  match repoFromBlocks corpusDid corpusSecret head blocks
+    Ok repo => repo
+    Err message => panic "cost_curve: corpus repository rejected: \{message}"
+
+admitBlobs : List (Cid, String, Array Int) -> Store -> Store
+admitBlobs [] store = store
+admitBlobs ((cid, mimeType, bytes) :: rest) store =
+  match storePutBlob cid mimeType bytes store
+    Ok next => admitBlobs rest next
+    Err message => panic "cost_curve: corpus blob rejected: \{message}"
+
+loadStore : String -> <FileRead "_"> Store
+loadStore dir =
+  let base = storeFromRepo (loadRepo dir)
+  let withBlobs = match blobFileRead dir
+    Ok rows => admitBlobs rows base
+    Err message => panic "cost_curve: corpus blobs unreadable: \{message}"
+  match storeWithServerSecret benchSecret withBlobs
+    Ok next =>
+      storeSessionOpen
+        (sessionFingerprint benchToken)
+        (sessionFingerprint "cost_curve: no refresh token in this probe")
+        (benchInstant + 3600)
+        next
+    Err message => panic "cost_curve: session secret setup failed: \{message}"
+
+-- ── the fixed credential every timed write presents ─────────────────────────
+
+benchSecret : Array Int
+benchSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
+
+benchInstant : Int
+benchInstant = 1700000000
+
+benchNonce : Array Int
+benchNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+
+benchContext : RequestContext
+benchContext = RequestContext { nowSeconds = benchInstant, nonce = benchNonce }
+
+benchToken : String
+benchToken =
+  mintToken
+    benchSecret
+    corpusDid
+    hostText
+    "cost_curve-probe-token"
+    (benchInstant - 60)
+    (benchInstant + 3600)
+
+-- ── request framing ─────────────────────────────────────────────────────────
+
+queryRequest : String -> Array Int
+queryRequest target =
+  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
+
+procedureRequest : String -> String -> Array Int
+procedureRequest nsid body =
+  let bytes = toUtf8 body
+  toUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+    ++ bytes
+
+createRequest : Array Int
+createRequest =
+  procedureRequest
+    "com.atproto.repo.createRecord"
+    (stringify
+      (jObject [
+        ("repo", JString corpusDid),
+        ("collection", JString "bench.synth.record"),
+        ("rkey", JString "costcurveprobe"),
+        (
+          "record",
+          jObject [
+            ("$type", JString "app.bsky.feed.post"),
+            ("text", JString "cost curve probe"),
+            ("createdAt", JString "2026-09-14T00:00:00.000Z"),
+          ],
+        ),
+      ]))
+
+-- ── response inspection ─────────────────────────────────────────────────────
+
+statusEnd : Array Int -> Int -> Int
+statusEnd bytes i =
+  if i + 1 >= arrayLength bytes then
+    arrayLength bytes
+  else if bytes[i] == 13 && bytes[i + 1] == 10 then
+    i
+  else
+    statusEnd bytes (i + 1)
+
+statusLine : Array Int -> String
+statusLine bytes = fromUtf8 (arrayMakeWith (statusEnd bytes 0) (i => bytes[i]))
+
+-- ── the measurement ─────────────────────────────────────────────────────────
+
+{- | Answer the same request `n` times against the same store, summing each
+   answer's length so no repetition can be discarded unevaluated. The store a
+   write returns is dropped on purpose — see the module header. -}
+repeatRequest : Server -> Store -> Array Int -> Int -> Int -> Int
+repeatRequest server store request n acc =
+  if n <= 0 then
+    acc
+  else
+    let (_, responseBytes) = handleBytes server benchContext store request
+    repeatRequest server store request (n - 1) (acc + arrayLength responseBytes)
+
+micros : Float -> Int -> Int
+micros elapsed reps = floatToInt (elapsed * 1000000.0 / intToFloat reps)
+
+measure : String -> Server -> Store -> Array Int -> Int -> <IO, Clock> Unit
+measure label server store request reps =
+  let (_, first) = handleBytes server benchContext store request
+  let start = monotonicSec ()
+  let checksum = repeatRequest server store request reps 0
+  let elapsed = monotonicSec () - start
+  println
+    "\{label} us=\{intToString (micros elapsed reps)} reps=\{intToString reps} bytes=\{intToString (checksum / reps)} status=\{statusLine first}"
+
+run : String -> String -> Int -> <IO, Clock, FileRead "_"> Unit
+run dir collection reps =
+  let store = loadStore dir
+  let server = match pdsServer (mustAccount ()) serverLinksEmpty "cost-curve"
+    Ok value => value
+    Err message => panic "cost_curve: server setup failed: \{message}"
+  let () =
+    measure
+      "listRecords"
+      server
+      store
+      (queryRequest
+        "com.atproto.repo.listRecords?repo=\{corpusDid}&collection=\{collection}&limit=25")
+      reps
+  let () =
+    measure
+      "describeRepo"
+      server
+      store
+      (queryRequest "com.atproto.repo.describeRepo?repo=\{corpusDid}")
+      reps
+  let () =
+    measure
+      "listBlobs"
+      server
+      store
+      (queryRequest "com.atproto.sync.listBlobs?did=\{corpusDid}&limit=25")
+      reps
+  measure "createRecord" server store createRequest reps
+
+mustAccount : Unit -> Account
+mustAccount _ = match makeAccount corpusDid handleText hostText
+  Ok account => account
+  Err message => panic "cost_curve: account setup failed: \{message}"
+
+mustInt : String -> Int
+mustInt text = match toInt text
+  Some value => value
+  None => panic "cost_curve: malformed integer: \{text}"
+
+main : <IO, Env, Clock, FileRead "_"> Unit
+main = match args ()
+  [dir, collection, repsText] => run dir collection (mustInt repsText)
+  _ => panic "usage: cost_curve_main <corpus-dir> <collection> <reps>"
