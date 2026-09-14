@@ -1252,26 +1252,11 @@ shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/cross_project_deps.sh"
+kind = "native"
+migration = "done"
+run = "test/cross_project_deps_test.mdk"
 oracles = []
-sources = []
-corpus = ["test/cross_project_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "cross_project_twonames"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/cross_project_twonames.sh"
-oracles = []
-sources = []
+sources = ["test/compiler_cli_test_support.mdk"]
 corpus = ["test/cross_project_fixtures"]
 toolchain = []
 

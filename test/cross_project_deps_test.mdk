@@ -1,0 +1,240 @@
+{- | Cross-project dependency resolution gate (native loader).
+
+   A project's `medaka.toml` may declare a `[dependencies]` section of the
+   form
+
+       [dependencies]
+       <name> = "<relative-or-abs-path-to-sibling-project-root>"
+
+   An import whose first dotted segment equals a declared dep name is
+   resolved by stripping that segment and resolving the remainder under the
+   dep's root (`minilib.lib.minilib` -> `<minilib-root>/lib/minilib.mdk`). A
+   dep's own stdlib imports still resolve via the normal stdlib root. This is
+   a NATIVE / loader-only feature (`compiler/driver/loader.mdk`); the frozen
+   OCaml oracle is untouched, so this gate has no oracle leg.
+
+   Fixture (`test/cross_project_fixtures/`):
+
+   - `minilib/` — a single-module dependency project (`lib/minilib.mdk`,
+     which itself imports from `list`).
+   - `consumer/` — declares `minilib = "../minilib"` and imports
+     `minilib.lib.minilib.{revSorted, double}`.
+   - `consumer/probe_test.mdk` — the same import behind a doctest and a
+     `test "…"` decl, so both native `medaka test` probe engines are
+     covered too.
+   - `twonames/` — the residual F1b corner: ONE physical dependency file
+     reached under TWO different dep names, realpath-canonicalized to one
+     module id (`app` depends on `sh = "../shared"` directly and on
+     `mid = "../mid"`, which itself depends on `core2 = "../shared"`).
+
+   Native `check`/`run`/`build`+exec are asserted to resolve the import and
+   produce the expected output, goldens stripped of the repo root so they
+   are location-independent. Two further rows pin deliberate corners:
+
+   - `samesrc` — two byte-identical files under different packages
+     (`samesrc/proj/user.mdk` and `samesrc/depdir/user.mdk`). The loader
+     must key its per-file desugar memo on path + source, not source text
+     alone, or `depdir`'s copy silently inherits `proj`'s resolution and the
+     genuine `R-PRIVATE-NAME` on `depdir/user.mdk` never fires.
+   - the RELATIVE probe target through both native `medaka test` engines
+     (#2749's corner): both spawn their probe inside a synthesized scratch
+     project (`scratchProjectManifest`, `compiler/driver/build_cmd.mdk`), and
+     joining a relative dep path onto a relative project root is a different
+     code path than joining it onto an absolute one — an absolute
+     invocation would pass vacuously.
+
+   Runs under `medaka test --native`: it spawns subprocesses, which the
+   interpreter does not bind. -}
+
+import compiler_cli_test_support.{
+  chompNewlines, emitterBin, fixtureIn, runMedaka
+}
+import string.{contains, lines, replaceAll}
+import test.{Expectation, expectEqualText, fail, pass}
+import test_process.{
+  boundedVerb, boundedVerbSeconds, medakaBin, medakaRoot, scratchDir,
+  spawnTimeoutSeconds
+}
+
+corpus : String
+corpus = "test/cross_project_fixtures"
+
+-- | `s` with every occurrence of the repo root replaced by a stable token,
+-- so a golden stays location-independent. Local to this module: one of the
+-- ~7 independent `strip_paths`/`strip_unit` variants in the tree, not
+-- consolidated here.
+stripRootPaths : String -> <IO> String
+stripRootPaths s = replaceAll medakaRoot "<ROOT>" s
+
+-- | `expectGolden`, with both sides chomped of trailing newlines first.
+--
+-- The committed goldens were captured through a shell `$(…)` command
+-- substitution, which strips every trailing newline from what it reads —
+-- from the spawned verb's output AND from the golden file itself. A raw
+-- `expectGolden` chomps neither, so a golden saved with (or without) a
+-- final newline as a text-file convention disagrees with a spawn's output
+-- on a blank last line that carries no information either author intended.
+compareGolden : String -> String -> <FileRead "_", IO> Expectation
+compareGolden goldenPath actual = match readFile goldenPath
+  Err e => fail "expected golden \{goldenPath}: \{e}"
+  Ok raw => expectEqualText (chompNewlines raw) (chompNewlines actual)
+
+-- # check / run, against a committed golden
+
+checkOrRunGolden : String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Expectation
+checkOrRunGolden verb entry goldenPath = match runMedaka [verb, entry]
+  Err e => fail "could not run `medaka \{verb} \{entry}`: \{e}"
+  Ok (code, out) =>
+    if code /= 0 then
+      fail "medaka \{verb} \{entry} exited \{intToString code}: \{debug out}"
+    else
+      compareGolden goldenPath (stripRootPaths out)
+
+-- | `test_process.scratchDir` is a top-level nullary, so it is evaluated
+-- ONCE per process and every caller in this module is handed the same
+-- path — this module calls `buildAndRunGolden` twice, one call per corpus.
+-- `binName` keeps the two builds from colliding inside that one shared
+-- directory, and it is deliberately never `rm -rf`'d: removing it after the
+-- first build leaves the second build's own fresh link unable to see its
+-- output path (`ld: cannot open output file … No such file or directory`)
+-- — reproduced standalone here, and already the documented reason
+-- `diff_compiler_shadow_semantics_test.mdk`'s own `scratchDir` use leaves
+-- its directory unremoved.
+buildAndRunGolden : String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Expectation
+buildAndRunGolden binName entry goldenPath = match scratchDir
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok scratch =>
+    let outBin = "\{scratch}/\{binName}"
+    match runMedaka ["build", entry, "-o", outBin]
+      Err e => fail "could not run `medaka build \{entry}`: \{e}"
+      Ok (buildCode, buildLog) =>
+        if buildCode /= 0 then
+          fail
+            "medaka build \{entry} exited \{intToString buildCode}: \{debug buildLog}"
+        else match boundedVerb outBin []
+          Err e => fail "could not run the built binary: \{e}"
+          Ok (binCode, binOut, binErr) =>
+            let stripped = stripRootPaths (binOut ++ binErr)
+            if contains "E-PANIC" binErr then
+              fail
+                "built binary panicked (exit \{intToString binCode}): \{debug (chompNewlines stripped)}"
+            else
+              compareGolden goldenPath stripped
+
+-- # samesrc: the per-path desugar-memo corner
+
+test "cross_project_deps: check" =
+  checkOrRunGolden
+    "check"
+    (fixtureIn corpus "consumer/main.mdk")
+    (fixtureIn corpus "goldens/check.golden")
+
+test "cross_project_deps: run" =
+  checkOrRunGolden
+    "run"
+    (fixtureIn corpus "consumer/main.mdk")
+    (fixtureIn corpus "goldens/run.golden")
+
+test "cross_project_deps: build + exec" =
+  buildAndRunGolden
+    "deps.bin"
+    (fixtureIn corpus "consumer/main.mdk")
+    (fixtureIn corpus "goldens/build.golden")
+
+test "cross_project_deps: same source under two packages pins R-PRIVATE-NAME on depdir/user.mdk" =
+  let entry = fixtureIn corpus "samesrc/proj/main.mdk"
+  match runMedaka ["check", "--json", entry]
+    Err e => fail "could not run `medaka check --json \{entry}`: \{e}"
+    Ok (code, out) =>
+      if code /= 1 then
+        fail "expected exit 1, got \{intToString code}: \{debug out}"
+      else if not (contains "R-PRIVATE-NAME" out) then
+        fail "expected R-PRIVATE-NAME in --json output: \{debug out}"
+      else if not (contains "depdir/user.mdk" out) then
+        fail "expected depdir/user.mdk named in --json output: \{debug out}"
+      else
+        pass
+
+-- # native `medaka test` probes span the dep, from a RELATIVE target
+
+-- The target of both probe spawns below. Named relatively on purpose: dep
+-- paths are joined onto the project root literally, so a relative root
+-- yields a relative dep path re-resolved against the scratch dir an
+-- absolute invocation never exercises.
+probeRelPath : String
+probeRelPath = "test/cross_project_fixtures/consumer/probe_test.mdk"
+
+nativeProbeScript : String
+nativeProbeScript = "cd \"$1\" && exec \"$2\" test --native \"$3\" 2>&1"
+
+evalProbeScript : String
+evalProbeScript = "cd \"$1\" && exec \"$2\" test \"$3\" 2>&1"
+
+-- Spawns `medaka test [--native] probeRelPath` from a cwd of `medakaRoot`,
+-- with `MEDAKA_STRICT=1` so a stale binary fails loudly rather than
+-- answering from source that predates this gate.
+relativeProbeRun : String -> <Exec "_", IO> Result String (Int, String)
+relativeProbeRun script =
+  let args = [
+    "MEDAKA_ROOT=\{medakaRoot}",
+    "MEDAKA_EMITTER=\{emitterBin}",
+    "MEDAKA_STRICT=1",
+    "sh",
+    "-c",
+    script,
+    "sh",
+    medakaRoot,
+    medakaBin,
+    probeRelPath,
+  ]
+  map
+    ((code, out, err) => (code, out ++ err))
+    (boundedVerbSeconds spawnTimeoutSeconds "env" args)
+
+-- Both probe engines print one "N/N passed" line per probe kind
+-- (doctest, then `test "…"`); the fixture carries exactly one of each.
+expectTwoProbesPassed : String -> String -> <Exec "_", IO> Expectation
+expectTwoProbesPassed verbDesc script = match relativeProbeRun script
+  Err e => fail "could not spawn `\{verbDesc} \{probeRelPath}`: \{e}"
+  Ok (code, out) =>
+    let okCount = length (filter (contains "1/1 passed") (lines out))
+    if code == 0 && okCount == 2 then
+      pass
+    else
+      fail
+        "expected exit 0 and two \"1/1 passed\" lines from `\{verbDesc} \{probeRelPath}`, got exit \{intToString code} (\{intToString okCount} matching lines): \{debug out}"
+
+test "cross_project_deps: native test engine resolves a relative probe target" =
+  expectTwoProbesPassed "medaka test --native" nativeProbeScript
+
+test "cross_project_deps: eval test engine resolves a relative probe target" =
+  expectTwoProbesPassed "medaka test" evalProbeScript
+
+-- # twonames: the realpath-canonicalization corner (F1b)
+
+twonamesCorpus : String
+twonamesCorpus = "\{corpus}/twonames"
+
+test "cross_project_twonames: check" =
+  checkOrRunGolden
+    "check"
+    (fixtureIn twonamesCorpus "app/main.mdk")
+    (fixtureIn twonamesCorpus "goldens/check.golden")
+
+test "cross_project_twonames: run" =
+  checkOrRunGolden
+    "run"
+    (fixtureIn twonamesCorpus "app/main.mdk")
+    (fixtureIn twonamesCorpus "goldens/run.golden")
+
+test "cross_project_twonames: build + exec" =
+  buildAndRunGolden
+    "twonames.bin"
+    (fixtureIn twonamesCorpus "app/main.mdk")
+    (fixtureIn twonamesCorpus "goldens/build.golden")

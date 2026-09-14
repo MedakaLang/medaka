@@ -208,7 +208,7 @@ add() { case " $pats " in *" $1 "*) ;; *) pats="$pats $1" ;; esac; }
 # "gate" candidate universe. First cut was an INCLUDE-list by naming family
 # (diff_compiler_*, bootstrap_*, selfcompile_*, wasm/diff_*) — wrong: this repo
 # has plenty of real corpus-consuming gates outside those families
-# (cross_project_twonames.sh reads test/cross_project_fixtures/twonames/goldens,
+# (cross_project_deps_test.mdk reads test/cross_project_fixtures/twonames/goldens,
 # check_removed_constructs.sh, effect_*_domain.sh, build_construct_coverage.sh,
 # manifest_emit.sh, lsp_harness.sh, assemble_check_main.sh, w1.sh, …), so an
 # include-list silently produced FALSE "no consumer found" on real corpora —
