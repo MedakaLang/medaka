@@ -26,13 +26,24 @@ never sets it against anything but Caddy on the same box.
 
 ## Procedure
 
-1. **Build the binary.**
+1. **Create the service user.** `pds/pds.service` runs as `User=pds`/
+   `Group=pds`, and a unit file cannot create that account itself:
+
+   ```sh
+   useradd --system --no-create-home --shell /usr/sbin/nologin pds
+   ```
+
+   (Or the `systemd-sysusers` equivalent, if the box already manages system
+   accounts that way.) Do this once, before the first `systemctl enable
+   --now pds`.
+
+2. **Build the binary.**
 
    ```sh
    ./medaka build pds/serve.mdk -o pdsd
    ```
 
-2. **Generate the secrets, with `pds keygen`** (`shell/keygen.mdk`) — not by
+3. **Generate the secrets, with `pds keygen`** (`shell/keygen.mdk`) — not by
    hand and not with `chmod`-and-hope. It writes both files at mode `0600`
    and prints the `did:key` the signing key corresponds to:
 
@@ -47,14 +58,14 @@ never sets it against anything but Caddy on the same box.
    spec if the hostname carries a port), and `--hostname` is what serves
    `/.well-known/did.json` for it.
 
-3. **Write the account password to a file, never an argument** — an
+4. **Write the account password to a file, never an argument** — an
    argument is visible in `ps` output to every account on the box:
 
    ```sh
    umask 077 && printf '%s\n' 'the account password' > secrets/password
    ```
 
-4. **Genesis run**, on the loopback default, to create the repository and
+5. **Genesis run**, on the loopback default, to create the repository and
    bootstrap the credential (`--init`, `--password-file`):
 
    ```sh
@@ -67,7 +78,7 @@ never sets it against anything but Caddy on the same box.
    Every subsequent run omits `--init` and `--password-file`: the data
    directory now holds both the repository and the credential.
 
-5. **Install the systemd unit** (`pds/pds.service`) — copy it to
+6. **Install the systemd unit** (`pds/pds.service`) — copy it to
    `/etc/systemd/system/pds.service`, replace its placeholders (paths,
    `--did`/`--handle`/`--hostname`, the service user), then:
 
@@ -83,18 +94,43 @@ never sets it against anything but Caddy on the same box.
    make the per-identity limiter meaningful in front of a reverse proxy that
    really is Caddy.
 
-6. **Install the Caddyfile** (`pds/Caddyfile`) — replace `pds.example.com`
+7. **Install the Caddyfile** (`pds/Caddyfile`) — replace `pds.example.com`
    with the real hostname (the same one `--hostname` above names) and the
    port with the one `--port` bound, then reload Caddy. Caddy obtains and
    renews the certificate on its own (P5).
 
-7. **Verify against the live origin, never an exit code**
+8. **Verify against the live origin, never an exit code**
    (`[WEB-PREVIEW-SILENT]`, `AGENTS.md`):
 
    ```sh
    curl -sS https://<hostname>/.well-known/atproto-did
    curl -sS https://<hostname>/xrpc/com.atproto.server.describeServer
    ```
+
+## Sharing the box
+
+`pds.service` (`pds/pds.service`) sets `CPUWeight=20` — a fifth of the
+systemd default of 100 — precisely so this rule has teeth: under
+contention, the kernel's CPU controller starves `pds.service` in favor of
+anything running at the default weight before it starves that other work,
+rather than the two competing as equals.
+
+**Do not run `make preflight`, a full gate suite (`make gates`), or an
+oracle build (`test/build_oracles.sh`) on the same box while `pds.service`
+is active, without first lowering that work's own priority to below the
+service's** (`nice`/`ionice`, or a cgroup slice with a `CPUWeight` above
+20 so the comparison still favors the service):
+
+```sh
+nice -n 15 sh test/run_gates.sh 'pattern*'
+```
+
+`CPUWeight` only arbitrates CPU time under contention — it does not cap
+memory or I/O — so a `make medaka` cold bootstrap or a `build_oracles.sh`
+run can still starve `pds.service` on memory or disk bandwidth even at a
+lower CPU weight. Prefer running such work on a different box, or during a
+maintenance window, when the deploy is not merely "sharing a core" but
+sharing all of it.
 
 ## Appview proxying (optional, off by default)
 
