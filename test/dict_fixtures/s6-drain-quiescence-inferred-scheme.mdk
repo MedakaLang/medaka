@@ -1,0 +1,38 @@
+-- §6.3 quiescence drain, INFERRED-scheme half of the `DrainDiags` population
+-- (`compiler/types/typecheck.mdk`, #2705 / SA-10a item 17).
+--
+-- `top`'s scheme is INFERRED, and it quantifies the receiver `Sh a` carries.  At
+-- graph quiescence the drain replays that goal with `a` still an unbound `TVar`,
+-- and `routeUndeterminedTop`'s `_ => reportAmbiguousImpl` arm reports
+-- `T-AMBIGUOUS-INSTANCE` on it because it never asks whether some scheme
+-- QUANTIFIES the variable — the `deferrableVarIds`/`goalsClosed` test the sibling
+-- T4-warning arm already applies.  That is #3031.
+--
+-- SPEC ANSWER, hand-derived before running anything: `main` calls `top` at
+-- `Bool`, `h` forwards to `needsSh`, `impl Sh Bool` is the unique match, so the
+-- program prints 22 on every engine and `check` accepts.  There is no numeric
+-- literal anywhere in this file, so nothing here is the undefaulted-`Num` class
+-- #2646 owes — the ambiguity the drain sees is manufactured by the drain.
+--
+-- WHAT THIS ROW PINS: `check` must NOT report `T-AMBIGUOUS-INSTANCE`.  Today it
+-- does not, because `DrainRollback` discards the drain's diagnostics on every
+-- check driver.  The day the drain residual reaches a shipped verb — the T4
+-- census ruling #2665 asks for — this row goes RED, which is the signal that
+-- `DrainDiags`'s deletion condition has moved.
+interface Sh a where
+  shv : a -> Int
+
+impl Sh Int where
+  shv _ = 11
+
+impl Sh Bool where
+  shv _ = 22
+
+needsSh : Sh a => a -> Int
+needsSh x = shv x
+
+top a = h a
+  where
+    h x = needsSh x
+
+main = println (top True)

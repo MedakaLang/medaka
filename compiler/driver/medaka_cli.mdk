@@ -972,11 +972,13 @@ resolveErrorJsonTriples ((file, errs) :: rest) =
 -- pass did not, so there is no located diagnostic to report instead.
 --
 -- NO KNOWN INPUT REACHES THIS ARM, so do not look for a fixture that covers it:
--- two reviewers failed to construct one, and the two files the drain's T4 census
--- names as its whole population (see `DrainDiags` in `compiler/types/typecheck.mdk`)
--- both take `run`'s ACCEPT path.  It exists so the empty-residual case cannot exit
--- 1 with an empty envelope, which is a shape the code must handle whether or not an
--- input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
+-- two reviewers failed to construct one, and none of the three files the drain's
+-- T4 census measures as its whole population (see `DrainDiags` in
+-- `compiler/types/typecheck.mdk`) arms the gate that would route here — one of
+-- them runs to completion, and the other two have no `main`, so `run` rejects
+-- them at `E-NO-MAIN` AFTER elaboration has already let them through.  It exists so
+-- the empty-residual case cannot exit 1 with an empty envelope, which is a shape the
+-- code must handle whether or not an input is known to produce it.  Documented in `compiler/DIAGNOSTIC-CODES-DESIGN.md`;
 -- `test/diag_census.sh` cannot see it, since that census enumerates codes that FIRE.
 genericResidualDiag : String -> Diag
 genericResidualDiag target =

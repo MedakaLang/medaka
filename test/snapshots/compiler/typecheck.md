@@ -1,5 +1,5 @@
 # META
-source_lines=47012
+source_lines=47029
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -43871,12 +43871,12 @@ data GraphOut = GOutDiags | GOutTrees
 -- `DrainRollback` saves and restores the sticky type-error cells around the
 -- drain, so a caller that gates on `hadTypeErrors` right after the drive does not
 -- see them; `DrainKeep` leaves them standing and they reach the caller as the
--- drive's residual.  The two are not a taste: the drain rejects things an
--- accepted program contains — an undefaulted `Num` literal in a test/prop body —
--- so reporting them universally would reject working programs.  (The HYPOTHESIS
--- the census below tested named two further members, `panic "…"` (#2315) and a
--- route re-unification the obligation channel already decided; neither is in the
--- measured population, and they are recorded here as what was looked for, not as
+-- drive's residual.  The two are not a taste: the drain reports things an accepted
+-- program contains, so reporting them universally would reject working programs.
+-- (The HYPOTHESIS the census below tested named three candidate members — an
+-- undefaulted `Num` literal in a test/prop body, `panic "…"` (#2315), and a route
+-- re-unification the obligation channel already decided.  NONE of the three is in
+-- the measured population; they are recorded here as what was looked for, not as
 -- what is there.)
 --
 -- The population is a property of the INSTRUMENT, not of what ships.  It is what a
@@ -43884,16 +43884,32 @@ data GraphOut = GOutDiags | GOutTrees
 -- (`run`, `build`) do not report it, because `emitElaborationGate` gates on
 -- `hadTypeErrors` and the residual does not arm it.
 --
+-- WHAT THE POPULATION ACTUALLY IS: every member is #3031 — `routeUndeterminedTop`'s
+-- `_ => reportAmbiguousImpl` arm firing on a receiver some scheme QUANTIFIES,
+-- because the drain replays the goal without the `deferrableVarIds`/`goalsClosed`
+-- test the sibling T4-warning arm (`reportOverlapForIface`) already applies, and
+-- pushing it at a STALE location (bare `pushTypeError`/`currentLoc`, so the span
+-- names whichever declaration was inferred last).  Not a defaulting failure: every
+-- member still reproduces with every numeric literal deleted.  Both halves of the
+-- shape are pinned: `test/dict_fixtures/s6-drain-quiescence-inferred-scheme.mdk`
+-- has the receiver quantified by an INFERRED scheme,
+-- `test/dict_fixtures/s6-drain-quiescence-declared-scheme.mdk` by a WRITTEN one, so
+-- a fix that closes one half and not the other goes red.
+--
 -- DELETION CONDITION: this parameter goes away, and every caller takes one
--- behavior, when the population is EMPTY or every member of it is reported.
+-- behavior, when the population is EMPTY or every member of it is reported —
+-- which, since the population is exactly #3031's output, means when #3031 is fixed
+-- (it empties) or when the T4 census ruling #2665 asks for decides to report the
+-- drain residual on a wider verb channel (it is reported).  Neither is this
+-- parameter's own call, and neither has happened.
 -- Re-derive the population before deciding — do not read the number below as
 -- current.  How: build a second arm with `DrainRollback` mapped to
 -- `drainStampQueue` and the drive's residual rendered as entry warnings, run both
 -- arms over every `.mdk` under `test/` and `stdlib/` this compiler accepts, and
--- diff.  Measured that way on this tree, it is 2 of 2,548 accepted files —
--- `test/engine_fixtures/where_dict_forward.mdk` and
--- `test/parse_fixtures/blocks.mdk`, both an `Ambiguous instance` on a literal the
--- graph never defaulted (#2646's owed D1 quiescence step).  Recorded in
+-- diff.  Measured that way on this tree, it is 3 of 2,704 accepted files (of 3,505
+-- tracked) — `test/engine_fixtures/where_dict_forward.mdk`,
+-- `test/parse_fixtures/blocks.mdk` and
+-- `test/engine_fixtures/numlit_alias_predicates/support.mdk`.  Recorded in
 -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 17 (ONE graph driver),
 -- #2705.
 data DrainDiags = DrainRollback | DrainKeep
@@ -46606,11 +46622,12 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 -- and do not arm the sticky gate here (`run`'s multi-module arm reads
 -- `hadTypeErrors` right after its check pass): the sticky cells are saved before
 -- the drain and restored after it.  On the elaborate side they stay live and `elaborateModules` returns them
--- as its residual.  They are not a verdict yet: a resolver rejects as ambiguous a
--- `Num` literal a test/prop body never defaulted (the D1 quiescence step #2646
--- names as owed) and `panic "…"` (#2315), and re-unifies at a site the obligation
--- channel already rejected.  Whether and how they are reported is the T4 census
--- ruling 1 asks for (#2705), not this driver's call.
+-- as its residual.  They are not a verdict yet: measured over `test/` and
+-- `stdlib/`, every one of them is #3031 — an `Ambiguous instance` the drain
+-- manufactures on a receiver some scheme QUANTIFIES, at a stale location.  The
+-- measurement, the file list and the deletion condition it bears on are on
+-- `data DrainDiags`; whether and how these are reported is the T4 census ruling 1
+-- asks for (#2705), not this driver's call.
 checkGraphFinish : Unit -> Unit
 checkGraphFinish _ =
   let savedSticky = !typeErrorsSticky
