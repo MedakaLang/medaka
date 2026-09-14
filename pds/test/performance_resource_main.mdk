@@ -1,11 +1,17 @@
 {- | Native scaling and resource-limit probe for the Phase 1 MST/CAR gates. -}
 
 import array.{drop}
+import hex.{decode}
+import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode, carEncode}
 import lib.cid.{Cid, cidForDagCbor, cidForRaw}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{
+  Mst,
   mstEmpty,
+  mstEntries,
+  mstFromEntries,
+  mstInsert,
   mstNodeBlocks,
   mstRootBytes,
   mstRootCid,
@@ -14,6 +20,7 @@ import lib.mst.{
   mstValidateNodeBytes,
 }
 import lib.multiformats.{uvarintEncode}
+import lib.repo.{repoExportGraph, repoFromBlocks}
 import lib.resource_limits.{
   checkCarBlocks,
   checkCarBytes,
@@ -30,7 +37,10 @@ import lib.resource_limits.{
   maxMstNodeEntries,
   maxMstTraversalDepth,
 }
+import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
+import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
+import sha256.{sha256}
 import string.{contains, toInt}
 
 mustBytes : Result String (Array Int) -> Array Int
@@ -77,6 +87,151 @@ runMst n =
       else
         panic "performance_resource: MST scaling wrong route: \{message}"
     Ok () => panic "performance_resource: MST hostile rows were accepted"
+
+-- ── write/export/startup routes ─────────────────────────────────────────────
+--
+-- A fixed synthetic signing identity, mirroring `synth_repo_main.mdk`'s own
+-- corpus key: these routes never read back through a client that cares which
+-- key signed the corpus, so one key serves every size.
+perfSecretHex : String
+perfSecretHex =
+  "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
+
+mustHexBytes : String -> Array Int
+mustHexBytes text = match decode text
+  Ok bytes => bytes
+  Err message => panic "performance_resource: malformed hex: \{message}"
+
+perfSecret : SecretKey
+perfSecret = match secretKeyFromBytes (mustHexBytes perfSecretHex)
+  Ok key => key
+  Err message => panic "performance_resource: bad signing key: \{message}"
+
+perfDid : String
+perfDid = "did:plc:perfrouteidentity0000000"
+
+perfRev : Tid
+perfRev = match tidParse "3lba2s5ykxs2a"
+  Ok tid => tid
+  Err message => panic "performance_resource: bad TID literal: \{message}"
+
+-- Every entry's key is a distinct fixed-width byte string and its value CID
+-- points at a small distinct record block, built once via `mstFromEntries`
+-- (non-quadratic per `synth_repo_main.mdk`'s own header note) rather than N
+-- calls to `mstInsert`.
+perfRowsGo : Int ->
+  Int ->
+  List (Array Int, Cid, Array Int) ->
+  List (Array Int, Cid, Array Int)
+perfRowsGo n i acc =
+  if i >= n then
+    reverse acc
+  else
+    let bytes = mustBytes (dagCborEncode (DcInt i))
+    perfRowsGo n (i + 1) ((intBytes i, cidForDagCbor bytes, bytes) :: acc)
+
+perfRows : Int -> List (Array Int, Cid, Array Int)
+perfRows n = perfRowsGo n 0 []
+
+perfEntriesOf : List (Array Int, Cid, Array Int) -> List (Array Int, Cid)
+perfEntriesOf [] = []
+perfEntriesOf ((key, cid, _) :: rest) = (key, cid) :: perfEntriesOf rest
+
+perfRecordBlocksOf : List (Array Int, Cid, Array Int) -> List (Cid, Array Int)
+perfRecordBlocksOf [] = []
+perfRecordBlocksOf ((_, cid, bytes) :: rest) =
+  (cid, bytes) :: perfRecordBlocksOf rest
+
+mustPerfTree : List (Array Int, Cid) -> Mst
+mustPerfTree entries = match mstFromEntries entries
+  Ok tree => tree
+  Err message => panic "performance_resource: mst build failed: \{message}"
+
+-- Mirrors `lib.repo`'s private `buildCommit` signed-commit shape, using only
+-- exported primitives — `buildCommit` itself is not exported.
+perfUnsignedValue : Cid -> DagCbor
+perfUnsignedValue dataCid = DcMap [
+  ("did", DcString perfDid),
+  ("version", DcInt 3),
+  ("data", DcLink dataCid),
+  ("rev", DcString (tidToString perfRev)),
+  ("prev", DcNull),
+]
+
+perfSignedCommit : Cid -> (Cid, Array Int)
+perfSignedCommit dataCid =
+  let unsigned = mustBytes (dagCborEncode (perfUnsignedValue dataCid))
+  let signature = match signDigest perfSecret (sha256 unsigned)
+    Ok value => value
+    Err message => panic "performance_resource: signing failed: \{message}"
+  let signed =
+    mustBytes
+      (dagCborEncode
+        (DcMap [
+          ("did", DcString perfDid),
+          ("version", DcInt 3),
+          ("data", DcLink dataCid),
+          ("rev", DcString (tidToString perfRev)),
+          ("prev", DcNull),
+          ("sig", DcBytes (signatureCompact signature)),
+        ]))
+  (cidForDagCbor signed, signed)
+
+-- The commit-plus-graph block list every route below shares: the record
+-- blocks, the MST node blocks over them, and a signed commit pointing at the
+-- tree's root.
+perfGraphBlocks : List (Array Int, Cid, Array Int) ->
+  Mst ->
+  Cid ->
+  Array Int ->
+  List (Cid, Array Int)
+perfGraphBlocks rows tree commitCid signed =
+  (commitCid, signed) :: mstNodeBlocks tree ++ perfRecordBlocksOf rows
+
+insertAllGo : Int -> Int -> Mst -> Mst
+insertAllGo n i tree =
+  if i >= n then
+    tree
+  else
+    let bytes = mustBytes (dagCborEncode (DcInt i))
+    match mstInsert (intBytes i) (cidForDagCbor bytes) tree
+      Ok next => insertAllGo n (i + 1) next
+      Err message => panic "performance_resource: MST insert failed: \{message}"
+
+-- One key at a time from empty, exactly how `repoCreate`/`repoApplyWrites`
+-- build a tree — the shape the write-path fix actually guards, since a
+-- single insert against an already-built tree costs the same complexity
+-- class before and after the fix and cannot discriminate them.
+runMstInsert : Int -> <IO> Unit
+runMstInsert n =
+  let tree = insertAllGo n 0 mstEmpty
+  println "MSTINSERT \{intToString n} \{intToString (length (mstEntries tree))}"
+
+runExport : Int -> <IO> Unit
+runExport n =
+  let rows = perfRows n
+  let tree = mustPerfTree (perfEntriesOf rows)
+  let dataCid = mstRootCid tree
+  let (commitCid, signed) = perfSignedCommit dataCid
+  let blocks = perfGraphBlocks rows tree commitCid signed
+  match blockStoreFromBlocks blocks
+    Err message =>
+      panic "performance_resource: export block store failed: \{message}"
+    Ok store => match repoExportGraph commitCid signed dataCid store
+      Ok (exported, _) =>
+        println "EXPORT \{intToString n} \{intToString (length exported)}"
+      Err message => panic "performance_resource: export failed: \{message}"
+
+runRehydrate : Int -> <IO> Unit
+runRehydrate n =
+  let rows = perfRows n
+  let tree = mustPerfTree (perfEntriesOf rows)
+  let dataCid = mstRootCid tree
+  let (commitCid, signed) = perfSignedCommit dataCid
+  let blocks = perfGraphBlocks rows tree commitCid signed
+  match repoFromBlocks perfDid perfSecret commitCid blocks
+    Ok _ => println "REHYDRATE \{intToString n} OK"
+    Err message => panic "performance_resource: rehydrate failed: \{message}"
 
 accept : String -> Result String Unit -> <IO> Int
 accept label (Ok ()) =
@@ -272,5 +427,16 @@ main = match args ()
   ["mst", nText] => match toInt nText
     Some n => runMst n
     None => panic "performance_resource: invalid MST size"
+  ["mst-insert", nText] => match toInt nText
+    Some n => runMstInsert n
+    None => panic "performance_resource: invalid MST insert size"
+  ["export", nText] => match toInt nText
+    Some n => runExport n
+    None => panic "performance_resource: invalid export size"
+  ["rehydrate", nText] => match toInt nText
+    Some n => runRehydrate n
+    None => panic "performance_resource: invalid rehydrate size"
   ["limits"] => runLimits
-  _ => panic "usage: performance_resource_main (car|mst) <size> | limits"
+  _ =>
+    panic
+      "usage: performance_resource_main (car|mst|mst-insert|export|rehydrate) <size> | limits"
