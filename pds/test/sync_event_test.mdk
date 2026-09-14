@@ -1,5 +1,5 @@
-{- | The `#commit` body's own lexicon bounds, and the shape of the three
-   activation frames (`pds/lib/sync_event.mdk`).
+{- | The `#commit` body's own lexicon bounds, the shape of the three activation
+   frames, and the genesis commit's block set (`pds/lib/sync_event.mdk`).
 
    `com.atproto.sync.subscribeRepos` def `commit` caps `ops` at 200 entries,
    and nothing at the repository layer caps a write batch, so a legal
@@ -13,26 +13,32 @@
    written with the wrong comparison passes one of them and fails another,
    which is why 200 and 201 are both here rather than a single "large" commit.
 
-   The last three are the activation frames' SHAPE, over inputs the pinned
+   The next three are the activation frames' SHAPE, over inputs the pinned
    corpus does not use: which message type the header announces, which keys
    the body carries and which it does not. `pds/test/
    activation_event_vectors_main.mdk` grades the same builders' BYTES against
    the official ones, and does it for one fixture; what is stated here is the
    shape as a property of any input, including the absence of the `status`
-   field an inactive account would carry. -}
+   field an inactive account would carry.
+
+   The last is the genesis `#commit`'s own `blocks` CAR, which has to carry
+   the empty MST root node as well as the commit. -}
 
 import array.{sliceClamped}
-import list.{lookup, range}
+import list.{lookup, range, sort}
 import string.{toUtf8}
 import test.{expectEqual}
 import lib.car.{carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidForRaw, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode}
+import lib.mst.{mstEmpty, mstRootCid}
+import lib.repo.{Repo, repoCommitCid, repoInitFromKeyBytes, repoLatestCommit}
 import lib.sync_event.{
   SyncCommitEvent(..),
   SyncRepoOp(..),
   syncAccountFrame,
   syncCommitBody,
+  syncCommitEventFor,
   syncIdentityFrame,
   syncSyncFrame,
 }
@@ -160,15 +166,19 @@ textOf value name = match bodyField name value
 boolOf : DagCbor -> String -> Option Bool
 boolOf value name = asBool (bodyField name value)
 
+-- A CAR's roots and its blocks, each as CID text, in the order it holds them.
+carCidsOf : Array Int -> (List String, List String)
+carCidsOf bytes = match carDecode bytes
+  Ok car => (
+    map cidToString (carRoots car),
+    map ((cid, _) => cidToString cid) (carBlocks car),
+  )
+  Err message => panic "sync_event: undecodable CAR: \{message}"
+
 -- The `blocks` CAR's roots and its block set, each as CID text.
 carCids : DagCbor -> (List String, List String)
 carCids body = match bodyField "blocks" body
-  Some (DcBytes bytes) => match carDecode bytes
-    Ok car => (
-      map cidToString (carRoots car),
-      map ((cid, _) => cidToString cid) (carBlocks car),
-    )
-    Err message => panic "sync_event: undecodable #sync CAR: \{message}"
+  Some (DcBytes bytes) => carCidsOf bytes
   _ => panic "sync_event: #sync body carries no blocks"
 
 test "an #identity frame names the handle beside the DID and nothing else" =
@@ -196,3 +206,42 @@ test "a #sync frame's CAR is rooted at and holds only the commit block" =
       ["did", "rev", "seq", "time", "blocks"],
       ([cidToString commitCid], [cidToString commitCid]),
     )
+
+-- # The genesis commit
+
+mustRepo : Result String Repo -> Repo
+mustRepo (Ok repo) = repo
+mustRepo (Err message) = panic "sync_event: repository init failed: \{message}"
+
+mustEvent : Result String SyncCommitEvent -> SyncCommitEvent
+mustEvent (Ok event) = event
+mustEvent (Err message) = panic "sync_event: event refused: \{message}"
+
+-- A repository at its first commit: created, never written to.
+genesisRepo : Repo
+genesisRepo =
+  mustRepo (repoInitFromKeyBytes sampleDid (arrayMake 32 1) sampleRev)
+
+{- | The genesis event. `None` for the prior repository is what
+   `pds/shell/server.mdk` hands `syncCommitEventFor` when it announces a new
+   account, and the only case that passes it. -}
+genesisEvent : SyncCommitEvent
+genesisEvent =
+  mustEvent (syncCommitEventFor sampleSeq sampleTime sampleDid None genesisRepo)
+
+{- | A genesis `blocks` CAR has to carry the empty MST root node as well as the
+   commit, because the commit's `data` field names that node and a reader
+   given neither it nor a prior root has no way to reach it. A rule that
+   subtracts a prior tree's nodes from the post-write tree's loses exactly
+   this block when the two are both empty, which at genesis they are.
+
+   The block list is asserted in sorted-CID order, not as a set: `sortBlocks`
+   makes the emitted bytes a function of the block set rather than of a
+   traversal, and a CAR that carried the right two blocks in an order that
+   varied run to run would still be a defect. -}
+test "a genesis commit's CAR carries the empty MST root beside the commit" =
+  let commit = cidToString (repoCommitCid (repoLatestCommit genesisRepo))
+  expectEqual (carCidsOf genesisEvent.blocksCar) (
+    [commit],
+    sort [commit, cidToString (mstRootCid mstEmpty)],
+  )

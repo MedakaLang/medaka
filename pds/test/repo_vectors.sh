@@ -276,6 +276,11 @@ grep -F -q 'SYNC: PASS' "$WORK/activation.out" || fail 'the #sync frame is not b
 # agreeing with itself.
 grep -F -q 'SYNC-CAR-ROOTS: PASS' "$WORK/activation.out" || fail "the #sync CAR's root is not the pinned commit"
 grep -F -q 'SYNC-CAR-BLOCKS: PASS' "$WORK/activation.out" || fail "the #sync CAR's block set is not the pinned commit alone"
+# The genesis #commit's own CAR, whose block set is NOT the commit alone: a
+# brand-new repository ships the empty MST root node beside it, or the relay
+# it just announced itself to has no block for the data root the commit names.
+grep -F -q 'GENESIS-COMMIT-CAR-ROOTS: PASS' "$WORK/activation.out" || fail "the genesis #commit's CAR is not rooted at the pinned genesis commit"
+grep -F -q 'GENESIS-COMMIT-CAR-BLOCKS: PASS' "$WORK/activation.out" || fail "the genesis #commit's CAR does not carry the empty MST root beside the commit"
 [ "$(tail -1 "$WORK/activation.out")" = 'TOTAL: PASS' ] || fail 'activation-event driver did not end in TOTAL: PASS'
 
 # ── the two sync READS, byte for byte against the official CARs ─────────────

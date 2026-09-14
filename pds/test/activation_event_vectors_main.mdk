@@ -1,9 +1,15 @@
 {- | The `com.atproto.sync.subscribeRepos` `#identity`/`#account`/`#sync`
-   driver.
+   driver, and the genesis `#commit`'s block set.
 
    Grades `pds/test/vectors/pds_sync_event_bodies_corpus.txt` — bodies the
    pinned official image's own `sequencer/events.js` builders produced — against
    `lib.sync_event`'s three activation-event frame builders, byte for byte.
+
+   The fourth event a repository's creation emits, the genesis `#commit`, is
+   graded here too, against rows the same image's `Repo.formatInitCommit`
+   produced. It is not a body comparison: `seq` and `time` are this server's
+   own and the CAR's block ORDER is not fixed by the lexicon, so what is
+   claimed is the commit CID and the block SET — see `gradeGenesisCommit`.
 
    The corpus records BODIES, not frames, and bodies without `seq` or `time`:
    the reference's sequencer splices those two in downstream of the builder,
@@ -34,14 +40,17 @@
 import array.{sliceClamped}
 import hex.{decode, encode}
 import io.{readLines}
-import list.{lookup}
-import string.{split, startsWith}
+import list.{lookup, sort}
+import string.{join, split, startsWith}
 import lib.car.{Car, carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.repo.{Repo, repoInitFromKeyBytes}
 import lib.sync_event.{
+  SyncCommitEvent(..),
   syncAccountBody,
   syncAccountFrame,
+  syncCommitEventFor,
   syncIdentityBody,
   syncIdentityFrame,
   syncSyncBody,
@@ -239,6 +248,68 @@ gradeSync rows =
       (soleCid (map ((cid, _) => cid) (carBlocks car)))
   shape && framed && roots && blocks
 
+-- ── the genesis `#commit` ───────────────────────────────────────────────────
+
+{- | The secret every row in this corpus was signed with
+   (`pds/tools/gen_sync_event_corpus.mjs`): an exportable secp256k1 key of
+   one.
+
+   It is not taken on trust. A wrong secret signs a different commit, and the
+   commit CID the repository below produces is graded against
+   `GENESIS-COMMIT-CAR-ROOTS` — the reference's own — which is what makes
+   naming the secret here a self-validating claim rather than a transcribed
+   one. -}
+fixtureSecretHex : String
+fixtureSecretHex =
+  "0000000000000000000000000000000000000000000000000000000000000001"
+
+genesisRepo : String -> Tid -> Repo
+genesisRepo did rev =
+  match repoInitFromKeyBytes did (mustHex fixtureSecretHex) rev
+    Ok repo => repo
+    Err message => panic "activation_event: repository init failed: \{message}"
+
+{- | The genesis `#commit`'s own `blocks` CAR: the signed commit AND the empty
+   MST root node its `data` field names.
+
+   The node is the half a plain `created = after − before` rule loses at
+   genesis. There is no prior repository at all there, so an empty tree
+   standing in for one cancels the only node the post-write tree has, and the
+   CAR goes out holding the commit alone — which the reference's own
+   `verifyRepo` refuses, because the data root the commit names has no block.
+
+   The block lists are compared SORTED. The reference CARs its blocks in the
+   order it built them and `sortBlocks` (`lib.sync_event`) emits them in CID
+   order; the lexicon fixes neither, so what is claimed against the reference
+   is the SET. That ours is the sorted one is stated by
+   `pds/test/sync_event_test.mdk` instead. -}
+gradeGenesisCommit : List (String, String) -> <IO> Bool
+gradeGenesisCommit rows =
+  let did = textOf (mustCbor (rowValue rows "SYNC")) "did"
+  let rev = mustTid (rowValue rows "GENESIS-COMMIT-REV")
+  match syncCommitEventFor sampleSeq sampleTime did None (genesisRepo did rev)
+    Err message =>
+      let () = println "GENESIS-COMMIT: FAIL builder refused: \{message}"
+      False
+    Ok event => match carDecode event.blocksCar
+      Err message =>
+        let () =
+          println "GENESIS-COMMIT: FAIL undecodable blocks CAR: \{message}"
+        False
+      Ok car =>
+        let roots = map cidToString (carRoots car)
+        let blocks = sort (map ((cid, _) => cidToString cid) (carBlocks car))
+        let rootOk = roots == [rowValue rows "GENESIS-COMMIT-CAR-ROOTS"]
+        let blockOk =
+          blocks == sort (split "," (rowValue rows "GENESIS-COMMIT-CAR-BLOCKS"))
+        let () =
+          println
+            "GENESIS-COMMIT-CAR-ROOTS: \{gradeWord rootOk} \{join "," roots}"
+        let () =
+          println
+            "GENESIS-COMMIT-CAR-BLOCKS: \{gradeWord blockOk} \{intToString (length blocks)} blocks: \{join "," blocks}"
+        rootOk && blockOk
+
 gradeCid : String -> String -> Cid -> <IO> Bool
 gradeCid tag expected actual =
   let ok = cidToString actual == expected
@@ -276,7 +347,8 @@ main = match args ()
       let identity = gradeIdentity rows
       let account = gradeAccount rows
       let sync = gradeSync rows
-      println (if identity && account && sync then
+      let genesis = gradeGenesisCommit rows
+      println (if identity && account && sync && genesis then
         "TOTAL: PASS"
       else
         "TOTAL: FAIL")

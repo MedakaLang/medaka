@@ -358,7 +358,7 @@ gradeStep did step priorData repo =
       let blocks =
         mustBlocks
           (syncCommitBlocks
-            before
+            (Some before)
             after
             (map (op => op.path) step.ops)
             (addedRecordsOf step.ops)

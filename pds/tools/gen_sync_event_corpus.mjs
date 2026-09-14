@@ -83,6 +83,12 @@ brow('#   `status` key; inactive always carries both `active:false` and `status`
 brow('# SYNC: formatSeqSyncEvt(did, syncEvtDataFromCommit(commitData)) over one signed commit;')
 brow('#   `blocks` is a CAR rooted at and containing ONLY that commit block -- SYNC-CAR-ROOTS and')
 brow('#   SYNC-CAR-BLOCKS record that shape directly rather than leaving it implicit in the hex.')
+brow('# GENESIS-COMMIT-*: Repo.formatInitCommit(new MemoryBlockstore(), did, keypair, [], rev) --')
+brow('#   a repository\'s FIRST commit over a brand-new EMPTY repo (zero records, zero ops). Its')
+brow('#   relevantBlocks is what the #commit frame\'s `blocks` field carries, and for an empty repo')
+brow('#   that is TWO blocks: the empty MST root node and the signed commit. A genesis CAR of the')
+brow('#   commit alone does not verify -- the reader has no node for the data root it names. Not')
+brow('#   the same case as the SYNC fixture above, whose repo already holds one record.')
 brow('#')
 brow('# `seq`/`time` are NOT part of any row: neither builder sets them (F1); they are spliced in')
 brow('# only by subscribeRepos.js, a shape fact already pinned and not re-derived by this tool.')
@@ -152,6 +158,23 @@ const syncDecoded = cbor.decode(Buffer.from(syncEvt.event))
 const { roots: syncRoots, blocks: syncBlocks } = await repo.readCar(syncDecoded.blocks)
 brow('SYNC-CAR-ROOTS', syncRoots.map((c) => c.toString()).join(','))
 brow('SYNC-CAR-BLOCKS', [...syncBlocks.entries()].map((e) => e.cid.toString()).join(','))
+
+// ── the genesis #commit's own blocks CAR ────────────────────────────────────
+// A brand-new EMPTY repository, through Repo.formatInitCommit -- the call
+// that produces the CommitData a repository's first #commit frame is built
+// from. Its `relevantBlocks` is the frame's `blocks` field, CARred the same
+// way (blocksToCarFile, rooted at the commit), so the row set below is the
+// genesis CAR's shape read off the reference rather than reasoned about.
+//
+// Its own revision, distinct from the one-record fixture's above, so a driver
+// that rebuilt the wrong repository could not match by reusing the other rev.
+const genesisRev = '3lhz6x6h6h622'
+const genesisCommit = await repo.Repo.formatInitCommit(new MemoryBlockstore(), did, keypair, [], genesisRev)
+const genesisCar = await repo.blocksToCarFile(genesisCommit.cid, genesisCommit.relevantBlocks)
+const { roots: genesisRoots, blocks: genesisBlocks } = await repo.readCar(genesisCar)
+brow('GENESIS-COMMIT-REV', genesisRev)
+brow('GENESIS-COMMIT-CAR-ROOTS', genesisRoots.map((c) => c.toString()).join(','))
+brow('GENESIS-COMMIT-CAR-BLOCKS', [...genesisBlocks.entries()].map((e) => e.cid.toString()).join(','))
 brow('END')
 
 await writeFile(`${output}/pds_sync_event_bodies_corpus.txt`, bodyLines.join('\n') + '\n')
@@ -227,6 +250,7 @@ crow('END')
 await writeFile(`${output}/pds_sync_car_shapes_corpus.txt`, carLines.join('\n') + '\n')
 
 console.log(
-  `sync event bodies: 4 events + 1 sync (${syncBlocks.entries().length} car block); ` +
+  `sync event bodies: 4 events + 1 sync (${syncBlocks.entries().length} car block) + ` +
+    `1 genesis commit (${genesisBlocks.entries().length} car blocks); ` +
     `car shapes: 2 getRecord + 2 getBlocks (partial refusal status=${refusal.statusCode})`,
 )
