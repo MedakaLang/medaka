@@ -92,9 +92,11 @@ flip|PASS
 foldThen|PASS
 forEach|PASS
 optionOr|PASS
+optionOrPanic|PASS
 option|PASS
 fromResult|PASS
 resultOr|PASS
+resultOrPanic|PASS
 result|PASS
 fst|PASS
 guard|PASS

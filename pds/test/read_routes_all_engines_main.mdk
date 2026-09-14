@@ -143,6 +143,13 @@ optionsRequest target requestedHeaders =
   toUtf8
     "OPTIONS \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAccess-Control-Request-Headers: \{requestedHeaders}\r\n\r\n"
 
+-- | The same preflight, asking TWICE with two different values — the shape a
+-- browser never sends and only a hand-built client can.
+optionsRequestRepeated : String -> String -> String -> Array Int
+optionsRequestRepeated target first second =
+  toUtf8
+    "OPTIONS \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nAccess-Control-Request-Headers: \{first}\r\nAccess-Control-Request-Headers: \{second}\r\n\r\n"
+
 -- ── response inspection ─────────────────────────────────────────────────────
 
 headerEnd : Array Int -> Int -> Int
@@ -281,6 +288,34 @@ preflightDroppedCell label target =
   let ok =
     status == "204"
       && contains "access-control-allow-headers: \r\n" "\{head}\r\n"
+      && contains "access-control-allow-origin: *" head
+      && contains "vary: Access-Control-Request-Headers" head
+      && not (contains "access-control-allow-credentials" head)
+      && storeIsEmpty next
+  check label ok "status=\{status}"
+
+{- | A preflight that asked TWICE: 204 with an EMPTY allowance, and NEITHER
+   value echoed.
+
+   Choosing among two values a client sent is choosing on its behalf, the
+   same reason `lib.proxy`'s `soleField` drops a repeated relayed field. Both
+   values are asserted ABSENT, so first-wins and last-wins each fail this
+   cell rather than only one of them. -}
+preflightRepeatedCell : String -> String -> <IO> Int
+preflightRepeatedCell label target =
+  let (next, response) =
+    handleBytes
+      mustServer
+      testContext
+      storeEmpty
+      (optionsRequestRepeated target "authorization" "content-type")
+  let status = statusText response
+  let head = headText response
+  let ok =
+    status == "204"
+      && contains "access-control-allow-headers: \r\n" "\{head}\r\n"
+      && not (contains "authorization" head)
+      && not (contains "content-type" head)
       && contains "access-control-allow-origin: *" head
       && contains "vary: Access-Control-Request-Headers" head
       && not (contains "access-control-allow-credentials" head)
@@ -1203,6 +1238,8 @@ runCells corpus =
       "content-type"
   let preflightDropped =
     preflightDroppedCell "preflight-unrepeatable-value" timelineTarget
+  let preflightRepeated =
+    preflightRepeatedCell "preflight-repeated-field" timelineTarget
   let originOnly200 =
     originOnlyCell
       "origin-only-on-200"
@@ -1245,13 +1282,14 @@ runCells corpus =
       + preflightTimeline
       + preflightWellKnown
       + preflightDropped
+      + preflightRepeated
       + originOnly200
       + originOnly401
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/59 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 59 then
+      "cells: \{intToString cells}/60 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 60 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
