@@ -394,6 +394,11 @@ pds/tools/gen_blob_corpus      regenerates pds/test/vectors/blob_reference_corpu
                                pinned official @atproto/lex-data + @atproto/lex-json packages
                                from that same exact lock graph (S-blob-core, #2605 model half);
                                the offline vector_provenance gate grades the artifact.
+pds/test/synth_repo_main.mdk   builds a large synthetic repository (thousands of records, several
+                               collections, hundreds of blobs) directly through mstFromEntries and
+                               persistSave, bypassing pds/lib/repo.mdk's per-record write path; produces a
+                               data directory a real pdsd serves. Not graded by any gate — later slices in
+                               this sprint and the soak (#2957) read the corpus it builds.
 
 # ── pds oracle (S-oracle-standup, #1707; docker re-cut fix-oracle-standup-docker — a
 #    local manual procedure, not a gate) ──

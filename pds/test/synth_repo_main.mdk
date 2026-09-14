@@ -1,0 +1,266 @@
+{- | Bulk repository-corpus synthesizer.
+
+   Builds a data directory a real `pdsd` can serve, holding thousands of
+   records across several collections plus hundreds of blobs — a corpus for
+   later slices in this sprint and the soak (#2957) to read, well past the
+   660-record ceiling every existing fixture repository stays under.
+
+   `pds/lib/repo.mdk`'s only mutation paths (`repoCreate`/`repoUpdate`/
+   `repoDelete`/`repoApplyWrites`) each thread one write at a time through
+   `mstInsert`/`mstReplace`/`mstDelete`, and every one of those rebuilds the
+   whole tree (`mstFromEntries` over the full entry list) — so N writes cost
+   O(N^2) regardless of whether they arrive as N separate calls or one big
+   batch list, since the batch path still applies its writes one at a time
+   internally. `lib.mst`'s `mstFromEntries` taking the complete entry set at
+   once is the only construction path that is not quadratic in record count,
+   so this driver builds every entry directly and calls it exactly once.
+
+   `Repo` and `Mst` are opaque outside `lib.repo`/`lib.mst`, so the only way
+   back into a `Repo` a real server accepts is `repoFromBlocks`, which
+   verifies a signed commit block against a supplied block graph. Signing
+   that commit is `lib.repo`'s private `buildCommit`, not exported, so this
+   driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
+   using only exported primitives — the alternative is the quadratic path
+   this driver exists to avoid. -}
+
+import hex.{decode}
+import string.{padLeft, toInt, toUtf8}
+import lib.blob.{blobCid}
+import lib.cid.{Cid, cidForDagCbor, cidToString}
+import lib.dagcbor.{DagCbor(..), dagCborEncode}
+import lib.mst.{Mst, mstFromEntries, mstNodeBlocks, mstRootCid}
+import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
+import lib.tid.{Tid, tidParse, tidToString}
+import sha256.{sha256}
+import shell.blobfile.{blobFileWrite}
+import shell.persist.{persistSave}
+
+-- ── fixed account identity ──────────────────────────────────────────────────
+
+-- A synthetic account is enough here: this corpus is read back through
+-- `repoFromBlocks`/`pdsd`, never through a client that cares which key signed
+-- it, so one fixed key and DID serve every shape and seed.
+secretHex : String
+secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
+
+mustHex : String -> Array Int
+mustHex text = match decode text
+  Ok bytes => bytes
+  Err message => panic "synth_repo: malformed hex: \{message}"
+
+corpusSecret : SecretKey
+corpusSecret = match secretKeyFromBytes (mustHex secretHex)
+  Ok key => key
+  Err message => panic "synth_repo: bad signing key: \{message}"
+
+corpusDid : String
+corpusDid = "did:plc:synthrepocorpus000000000"
+
+corpusRev : Tid
+corpusRev = match tidParse "3lba2s5ykxs2a"
+  Ok tid => tid
+  Err message => panic "synth_repo: bad TID literal: \{message}"
+
+-- ── the three named shapes ──────────────────────────────────────────────────
+
+-- (a) many small collections: ~40 records per collection.
+smallCollectionsPath : Int -> Int -> String
+smallCollectionsPath count i =
+  let numColls = 1 + count / 40
+  let idx = i % numColls
+  "c\{padLeft 4 '0' (intToString idx)}.synth.record/r\{padLeft 7 '0' (intToString i)}"
+
+-- (b) one collection holding nearly the whole repository, plus two tiny ones.
+oneCollectionPath : Int -> Int -> String
+oneCollectionPath count i =
+  let reserve = if count < 6 then 0 else 6
+  let coll =
+    if i < reserve / 2 then
+      "aux1.synth.record"
+    else if i < reserve then
+      "aux2.synth.record"
+    else
+      "bulk.synth.record"
+  "\{coll}/r\{padLeft 7 '0' (intToString i)}"
+
+-- (c) a collection whose keys sort late in byte order: every path here
+-- sorts after any path in the other two shapes, since 'z' (0x7A) is the
+-- highest lowercase-alnum byte a normalized NSID authority may contain.
+lateKeysPath : Int -> Int -> String
+lateKeysPath count i = "zzzzz.zzzzz.zzzzzz/r\{padLeft 7 '0' (intToString i)}"
+
+pathFor : String -> Int -> Int -> String
+pathFor "small-collections" count i = smallCollectionsPath count i
+pathFor "one-collection" count i = oneCollectionPath count i
+pathFor "late-keys" count i = lateKeysPath count i
+pathFor shape _ _ =
+  panic
+    "synth_repo: unknown shape \{shape} (want small-collections | one-collection | late-keys)"
+
+-- ── record and row construction ─────────────────────────────────────────────
+
+recordFor : Int -> Int -> DagCbor
+recordFor seed i = DcMap [
+  ("$type", DcString "app.bsky.feed.post"),
+  (
+    "text",
+    DcString "synth record seed=\{intToString seed} idx=\{intToString i}",
+  ),
+  ("createdAt", DcString "2026-09-14T00:00:00.000Z"),
+]
+
+mustEncode : DagCbor -> Array Int
+mustEncode value = match dagCborEncode value
+  Ok bytes => bytes
+  Err message => panic "synth_repo: record encoding failed: \{message}"
+
+-- One row: the record's path bytes, its content CID, and its encoded bytes —
+-- built once per record so the entry (for the MST) and the block (for the
+-- store) never re-derive each other.
+buildRow : String -> Int -> Int -> Int -> (Array Int, Cid, Array Int)
+buildRow shape seed count i =
+  let path = pathFor shape count i
+  let bytes = mustEncode (recordFor seed i)
+  (toUtf8 path, cidForDagCbor bytes, bytes)
+
+-- Builds descending so the ascending final list falls out of plain consing —
+-- no `++` accumulation over thousands of records.
+buildRowsGo : String ->
+  Int ->
+  Int ->
+  Int ->
+  List (Array Int, Cid, Array Int) ->
+  List (Array Int, Cid, Array Int)
+buildRowsGo shape seed count i acc =
+  if i < 0 then
+    acc
+  else
+    buildRowsGo shape seed count (i - 1) (buildRow shape seed count i :: acc)
+
+buildRows : String -> Int -> Int -> List (Array Int, Cid, Array Int)
+buildRows shape seed count = buildRowsGo shape seed count (count - 1) []
+
+entriesOf : List (Array Int, Cid, Array Int) -> List (Array Int, Cid)
+entriesOf [] = []
+entriesOf ((path, cid, _) :: rest) = (path, cid) :: entriesOf rest
+
+recordBlocksOf : List (Array Int, Cid, Array Int) -> List (Cid, Array Int)
+recordBlocksOf [] = []
+recordBlocksOf ((_, cid, bytes) :: rest) = (cid, bytes) :: recordBlocksOf rest
+
+mustTree : List (Array Int, Cid) -> Mst
+mustTree entries = match mstFromEntries entries
+  Ok tree => tree
+  Err message => panic "synth_repo: mst build failed: \{message}"
+
+-- ── the signed commit `lib.repo`'s `buildCommit` would produce ─────────────
+
+unsignedValue : String -> Cid -> Tid -> DagCbor
+unsignedValue did dataCid rev = DcMap [
+  ("did", DcString did),
+  ("version", DcInt 3),
+  ("data", DcLink dataCid),
+  ("rev", DcString (tidToString rev)),
+  ("prev", DcNull),
+]
+
+signedCommit : String -> SecretKey -> Tid -> Cid -> (Cid, Array Int)
+signedCommit did secret rev dataCid =
+  let unsigned = mustEncode (unsignedValue did dataCid rev)
+  let signature = match signDigest secret (sha256 unsigned)
+    Ok value => value
+    Err message => panic "synth_repo: signing failed: \{message}"
+  let signed =
+    mustEncode
+      (DcMap [
+        ("did", DcString did),
+        ("version", DcInt 3),
+        ("data", DcLink dataCid),
+        ("rev", DcString (tidToString rev)),
+        ("prev", DcNull),
+        ("sig", DcBytes (signatureCompact signature)),
+      ])
+  (cidForDagCbor signed, signed)
+
+-- ── blobs ───────────────────────────────────────────────────────────────────
+
+blobBytesFor : Int -> Int -> Array Int
+blobBytesFor seed j =
+  toUtf8
+    "synth blob seed=\{intToString seed} idx=\{intToString j} payload 0123456789"
+
+mimeFor : Int -> String
+mimeFor j = if isEven j then "text/plain" else "application/octet-stream"
+
+buildBlobRowsGo : Int ->
+  Int ->
+  List (Cid, String, Array Int) ->
+  List (Cid, String, Array Int)
+buildBlobRowsGo seed j acc =
+  if j < 0 then
+    acc
+  else
+    let bytes = blobBytesFor seed j
+    buildBlobRowsGo seed (j - 1) ((blobCid bytes, mimeFor j, bytes) :: acc)
+
+buildBlobRows : Int -> Int -> List (Cid, String, Array Int)
+buildBlobRows seed blobCount = buildBlobRowsGo seed (blobCount - 1) []
+
+-- ── driver ───────────────────────────────────────────────────────────────────
+
+runBuild : String ->
+  String ->
+  Int ->
+  Int ->
+  Int ->
+  <IO, FileRead "_", FileWrite "_"> Unit
+runBuild shape dir count blobCount seed =
+  let rows = buildRows shape seed count
+  let tree = mustTree (entriesOf rows)
+  let dataCid = mstRootCid tree
+  let (commitCid, signed) =
+    signedCommit corpusDid corpusSecret corpusRev dataCid
+  let allBlocks =
+    (commitCid, signed) :: mstNodeBlocks tree ++ recordBlocksOf rows
+  match persistSave dir commitCid allBlocks
+    Err message => panic "synth_repo: persist failed: \{message}"
+    Ok () =>
+      let blobRows = buildBlobRows seed blobCount
+      match blobFileWrite dir blobRows
+        Err message => panic "synth_repo: blob persist failed: \{message}"
+        Ok () =>
+          let () = println "shape \{shape}"
+          let () = println "dir \{dir}"
+          let () = println "records \{intToString count}"
+          let () = println "blobs \{intToString blobCount}"
+          let () = println "root \{cidToString dataCid}"
+          println "commit \{cidToString commitCid}"
+
+defaultRecordCount : Int
+defaultRecordCount = 5000
+
+defaultBlobCount : Int
+defaultBlobCount = 300
+
+defaultSeed : Int
+defaultSeed = 1
+
+mustInt : String -> Int
+mustInt text = match toInt text
+  Some value => value
+  None => panic "synth_repo: malformed integer: \{text}"
+
+main : <IO, Env, FileRead "_", FileWrite "_"> Unit
+main = match args ()
+  ["build", shape, dir] =>
+    runBuild shape dir defaultRecordCount defaultBlobCount defaultSeed
+  ["build", shape, dir, countText, blobsText, seedText] =>
+    runBuild
+      shape
+      dir
+      (mustInt countText)
+      (mustInt blobsText)
+      (mustInt seedText)
+  _ =>
+    panic
+      "usage: synth_repo_main build <small-collections|one-collection|late-keys> <dir> [recordCount blobCount seed]"
