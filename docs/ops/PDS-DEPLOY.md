@@ -123,6 +123,7 @@ away from reverting:
 
 ```sh
 STAMP=$(git rev-parse --short=9 HEAD)
+mkdir -p /opt/pds/releases/$STAMP
 ./medaka build pds/serve.mdk -o /opt/pds/releases/$STAMP/pdsd --stamp-build
 ln -sfn /opt/pds/releases/$STAMP /opt/pds/current
 ```
@@ -132,7 +133,11 @@ stamp-specific path, so promoting or rolling back a release never edits the
 unit file. `--stamp-build` bakes the commit into the binary
 (`compiler/driver/build_cmd.mdk`, #2960), so `pdsd --version` on the running
 binary and `readlink /opt/pds/current` should always name the same commit —
-a mismatch means the symlink was moved without a restart.
+a mismatch means the symlink was moved without a restart. Build from a clean
+checkout: any untracked or modified file anywhere in the repository at build
+time appends a `-dirty` suffix to the stamped commit, which will not match
+the clean `$STAMP` directory name above and breaks this check even though
+nothing is actually wrong.
 
 **Rollback**, once a known-good stamp exists under `/opt/pds/releases/`:
 
@@ -165,8 +170,8 @@ live deploy to exercise:
   ```
 - **The access log** is one `serve: access …` line per request — successes
   and refusals alike — naming method, path (query string dropped), status,
-  response size, duration, and client, all field-length-capped
-  (`accessLogLine`, `pds/lib/accesslog.mdk`). It goes to the same stream as
+  response size, duration, and client — method, path, and client are
+  field-length-capped (`accessLogLine`, `pds/lib/accesslog.mdk`). It goes to the same stream as
   the startup banner, so under the systemd unit both land in the journal:
 
   ```sh
@@ -184,8 +189,8 @@ rather than the two competing as equals.
 **Do not run `make preflight`, a full gate suite (`make gates`), or an
 oracle build (`test/build_oracles.sh`) on the same box while `pds.service`
 is active, without first lowering that work's own priority to below the
-service's** (`nice`/`ionice`, or a cgroup slice with a `CPUWeight` above
-20 so the comparison still favors the service):
+service's** (`nice`/`ionice`, or a cgroup slice with a `CPUWeight` below
+20, since a higher weight gets *more* CPU time under contention, not less):
 
 ```sh
 nice -n 15 sh test/run_gates.sh 'pattern*'

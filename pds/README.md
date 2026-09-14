@@ -48,8 +48,10 @@ A stranger arriving fresh gets the most out of these in this order:
 3. **`docs/ops/PDS-DEPLOY.md`** — how to run it: the systemd unit, Caddy in
    front of it, secrets, backup/restore, and the versioned-binary rollback
    procedure. This is the operator's document, not the reader-of-code's.
-4. **The `## Phase N …` sections further down this file** — the slice-by-slice
-   build log for each phase, each with its own gate and provenance.
+4. **The build-log sections further down this file** (`## Phase N …` and the
+   per-slice sections alongside them, e.g. "Encodings", "secp256k1 field
+   arithmetic", "Rate limiting") — the slice-by-slice build log, each with
+   its own gate and provenance.
 
 The shape in one sentence: a pure core (`pds/lib/`) that performs no I/O
 (P14) is driven by a thin native shell (`pds/shell/`, `pds/serve.mdk`) that
