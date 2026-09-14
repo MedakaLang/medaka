@@ -1,0 +1,80 @@
+{- | Vector-corpus gate for `pds/lib/scalar.mdk` (S-scalar, #1700 secp256k1
+   group ops + RFC 6979 + low-S), migrated from the retired
+   `scalar_vectors.sh` under #2593.
+
+   Grades the pure-Medaka secp256k1 SCALAR arithmetic (mod the group order
+   n) against a corpus generated from libsecp256k1 at the pinned commit,
+   never against a self-captured golden (G5,
+   `docs/design/ATPROTO-PDS-DESIGN.md` §5). The pin and the extraction
+   procedure are ledgered in `pds/test/VECTOR-PROVENANCE.txt`; the generator
+   is `pds/tools/gen_scalar_corpus.sh` (a TOOL, not a gate: it needs
+   network).
+
+   Every op's own `op <name>: <n> ok` line is pinned, not only the total —
+   the retired script separately checked that no op read 0 rows at the
+   bounded stride (a corpus reshaped past the stride could otherwise leave
+   one op silently unexercised while the total still cleared its floor).
+   Pinning each op's exact count subsumes that: an op dropping to 0 changes
+   its own line, which a `needs` substring catches directly, without a
+   negative-assertion field `Row` does not have. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+evalOpLines : List String
+evalOpLines = [
+  "op red: 2 ok",
+  "op neg: 2 ok",
+  "op inv: 2 ok",
+  "op high: 2 ok",
+  "op ovf: 2 ok",
+  "op mul: 10 ok",
+  "op add: 10 ok",
+  "op sub: 10 ok",
+  "counted: 40/40 rows ok, 988 skipped (stride 26)",
+]
+
+nativeOpLines : List String
+nativeOpLines = [
+  "op red: 52 ok",
+  "op neg: 52 ok",
+  "op inv: 52 ok",
+  "op high: 52 ok",
+  "op ovf: 52 ok",
+  "op mul: 256 ok",
+  "op add: 256 ok",
+  "op sub: 256 ok",
+  "counted: 1028/1028 rows ok, 0 skipped (stride 1)",
+]
+
+row : Row
+row = Row {
+  gate = "pds/test/scalar_vectors",
+  driver = "pds/test/scalar_vectors_main.mdk",
+  corpus = Ledgered "S-scalar",
+  corpusCount = AtLeast 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = EvalEngine,
+      driverArgs = ["--stride", "26"],
+      countFloor = None,
+      needs = evalOpLines,
+      lastLine = Some "TOTAL: PASS",
+    },
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = nativeOpLines,
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "scalar vectors: every op's row count holds at stride 26 (eval) and across the full corpus (native)" =
+  expectRow row

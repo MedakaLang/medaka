@@ -211,11 +211,11 @@ check_no_secret_in_access_log() {
       }
       BEGIN {
         depth = 0
-        site = "(^|[^A-Za-z0-9_])(logAccess|logAccessBytes|accessLogLine|traceFor|RequestTrace|AccessEvent)([^A-Za-z0-9_]|$)"
+        site = "(^|[^A-Za-z0-9_])(logAccess|logAccessBytes|accessLogLine|traceFor|RequestTrace|AccessEvent|StatsEvent|statsLogLine|emitStats)([^A-Za-z0-9_]|$)"
       }
       {
         code = strip($0)
-        if (code ~ /AccessEvent[ \t]*\{/) inrecord = 1
+        if (code ~ /AccessEvent[ \t]*\{/ || code ~ /StatsEvent[ \t]*\{/) inrecord = 1
         if ((inrecord || code ~ site) && tolower(code) ~ words)
           print file ":" FNR ": a secret reaches the access log: " code
         if (inrecord && code ~ /\}/) inrecord = 0

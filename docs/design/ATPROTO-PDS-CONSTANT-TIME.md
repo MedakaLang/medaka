@@ -173,9 +173,10 @@ The implementation PR must carry all of the following as one review unit.
 
 ### 6.1 Value preservation
 
-- `pds/test/field_vectors.sh`: all 944 externally generated field rows pass;
-- `pds/test/scalar_vectors.sh`: all 1028 externally generated scalar rows
+- `pds/test/field_vectors_test.mdk`: all 944 externally generated field rows
   pass;
+- `pds/test/scalar_vectors_test.mdk`: all 1028 externally generated scalar
+  rows pass;
 - the existing focused in-language PDS arithmetic tests pass;
 - both corpora remain byte-identical and retain their provenance ledger rows.
 

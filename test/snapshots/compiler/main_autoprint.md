@@ -5,7 +5,7 @@ stages=DESUGAR,MARK
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
 --
 -- A bare non-Unit VALUE `main` (`main = ("abc", 1.23)`, `main = [1,2,3]`, a
--- `deriving Display` ADT, …) used to CRASH the emitter (`emitPrint` panics on a
+-- `deriving Display` ADT, …) would otherwise CRASH the emitter (`emitPrint` panics on a
 -- non-scalar `main`).  This module implements the uniform fix from
 -- compiler/COMPOSITE-MAIN-AUTOPRINT-DESIGN.md §10: rewrite the entry decl
 --   main = <e>   ⟶   main = 0autoprintln <e>

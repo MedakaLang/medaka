@@ -1370,7 +1370,7 @@ writeMessage j =
 -- diagnostic, a documentSymbol body) would otherwise under-declare its length —
 -- the client then reads too few bytes and the frame boundary slips ("Header must
 -- provide a Content-Length property", server shutdown).  utf8Len / utf8CharWidth
--- moved to support/util.mdk (imported above).
+-- live in `compiler/support/util.mdk` (imported above).
 
 -- A JSON-RPC response envelope: { jsonrpc, id, result }.
 responseMsg : Json -> Json -> Json
@@ -1495,10 +1495,10 @@ semanticTokensOptions = jObject [
 
 -- Decides how an uppercase name is colored at this point.
 --
--- There used to be an `MRecord` mode here, entered only from the removed
+-- There is no `MRecord` mode here: its only producer was the removed
 -- `record` keyword (`nextMode TRecord _ = MRecord`).  Freeing `record` as an
--- ordinary identifier (#62) deleted its single producer, so the mode became
--- unreachable and went with it.  This is not a highlighting regression: the
+-- ordinary identifier (#62) deleted that producer, so the mode is
+-- unreachable.  This is not a highlighting regression: the
 -- token it keyed on could not appear in any program that parsed, so no valid
 -- source ever entered the mode — today's record fields live in `data X = { … }`
 -- and are already coloured by the `MDataHead`/`MDataVariant` path.

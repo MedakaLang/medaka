@@ -3,7 +3,7 @@
    Covers AT-URI, at-identifier (handle or DID), DID, handle, and record key —
    graded against the official atproto interop syntax corpora
    (`pds/test/vectors/interop_{aturi,atidentifier,did,handle,recordkey}_{valid,invalid}.txt`,
-   `pds/test/atsyntax_vectors.sh`). NSID and TID have their own modules
+   `pds/test/atsyntax_vectors_test.mdk`). NSID and TID have their own modules
    (`lib.nsid`, `lib.tid`) and are graded there. -}
 
 import regex.{Regex, isFullMatchBytes, mustCompile}

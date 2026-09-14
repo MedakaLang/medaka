@@ -431,7 +431,7 @@ dispatchInput src =
     processExprInput src
 
 -- ── String utilities ──────────────────────────────────────────────────────
--- stringTrim moved to support/util.mdk (imported above).
+-- stringTrim lives in `compiler/support/util.mdk` (imported above).
 
 -- Split a string on "\n".
 stringSplitNewlines : String -> List String

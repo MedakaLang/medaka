@@ -1,0 +1,36 @@
+{- | Vector-corpus gate for the P4-B lexicon-JSON<->DAG-CBOR round-trip,
+   migrated from the retired `lexjson_vectors.sh` under #2593.
+
+   Native-only, against the official `@atproto/lex-cbor` +
+   `@atproto/lex-json` reference corpus. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+row : Row
+row = Row {
+  gate = "pds/test/lexjson_vectors",
+  driver = "pds/test/lexjson_vectors_main.mdk",
+  corpus = Ledgered "P4-B-IPLD-JSON",
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = [
+        "lexjson: 18/18 round-trip (both directions)",
+        "malformed: 3/3 rejected",
+      ],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "lexjson vectors: the official reference corpus round-trips both directions; 3 malformed cases rejected" =
+  expectRow row

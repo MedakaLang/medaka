@@ -567,7 +567,7 @@ runCli _ = match args ()
   "mcp" :: rest => runMcpCmd rest
   sub :: _ => unknownSubcommand sub
 
--- #1348: `medaka <sub> --help`/`-h` used to fall straight into the
+-- #1348: `medaka <sub> --help`/`-h` would otherwise fall straight into the
 -- subcommand's own argv parsing, which (for every subcommand below) treats
 -- an unrecognized leading-`-` token as either a hard parse error or — worse,
 -- for `check`/`run`/`doc`/etc, whose parsers only strip a small flag
@@ -690,13 +690,13 @@ checkHelpText = stringConcat [
 ]
 
 -- C2: `check`'s whole flag vocabulary, as `checkHelpText` documents it.
--- `--release` is deliberately NOT here: the old shared `dropFlags` stripped it
--- for every consumer, so `medaka check --release` used to be accepted by
--- accident, but nothing documents it for `check` and `runCheckCmd` never reads
--- it.  (It has been REJECTED, not stripped, since the C2 floor landed: the
--- flag check ran before the strip.)
+-- `--release` is deliberately NOT here: nothing documents it for `check` and
+-- `runCheckCmd` never reads it, so it is REJECTED rather than stripped.  A
+-- shared flag strip that dropped it for every consumer would accept it by
+-- accident instead.  (The flag check runs before any strip, so the
+-- rejection wins.)
 -- `withStrictDash` (S-5, #2355 residual A): `check`'s file positional is what
--- an undeclared `-foo` used to fall into (AS-FILENAME, exemplar X3) — an
+-- an undeclared `-foo` would otherwise fall into (AS-FILENAME, exemplar X3) — an
 -- undeclared single-dash token is now C2-rejected like `--foo` is.
 checkArgSpec : ArgSpec
 checkArgSpec =
@@ -841,15 +841,15 @@ moduleLoadErrText tsrc target stdlibDir (LoadMsg lmsg) =
 --
 -- Why one pass.  `run`/`build`'s multi-module arms already call this analysis as
 -- their check-strength gate and then THREW THE WARNINGS AWAY — so after F-3d demoted
--- the coherence reject onto the warning channel, a program those verbs used to
+-- the coherence reject onto the warning channel, a program those verbs would
 -- reject compiled and ran with nothing on any channel.  A second entry point would
 -- mean a second whole-front-end pass over the whole graph, which is the dominant
 -- cost of the gate; splitting one pass's result costs a list filter.
 --
 -- 🚨 THE SECOND COMPONENT IS UNRENDERED, AND THAT IS LOAD-BEARING, NOT STYLE.
 -- Medaka is STRICT, so `fst`-only callers — every `medaka check` of a multi-module
--- project — evaluate it too.  An earlier revision returned RENDERED warning lines
--- for the whole channel here, and multi-module `check` went 16.0–17.1 s → 38.9–40.6 s
+-- project — evaluate it too.  Returning RENDERED warning lines for the whole
+-- channel here takes multi-module `check` from 16.0–17.1 s to 38.9–40.6 s
 -- with byte-identical stdout: rendering a located diagnostic has to materialise the
 -- containing file's lines (`ppDiagCliSrc` → `srcLinesArr`), so a rendered channel
 -- pays that per file — thousands of times over a graph — for output nobody reads.
@@ -936,9 +936,9 @@ isHiddenNonEntryWarn : Diag -> Bool
 isHiddenNonEntryWarn d = diagIsWarn d && not (isCoherenceWarn d)
 
 -- ── run --json structured error exit (#2798) ────────────────────────────────
--- `run`'s error arms used to call `runAbort` unconditionally on a non-empty
+-- `run`'s error arms would otherwise call `runAbort` unconditionally on a non-empty
 -- diagnostic list, printing human caret text on stderr even under `--json` —
--- the ONE compile-time gap `runHelpText` used to carry as a documented KNOWN
+-- the ONE compile-time gap `runHelpText` otherwise carries as a documented KNOWN
 -- GAP. `runAbortJson` is the JSON twin: it stages `triples` into the SAME
 -- `pendingRunDiags` envelope the clean-exit (`finishRunEval`) and
 -- runtime-panic (`eval.runtimePanic`) paths already flush, rather than
@@ -1091,7 +1091,7 @@ elaboratedProjectJsonTriples rtD coreD modsWithPath modsD perMod =
 -- `target` is passed for positioned error output (Stage-A: file:line:col: message).
 --
 -- 0.1.0 preview UX (audit #6): bare `medaka check` on a clean single-file
--- program used to dump the ~120-line prelude `=== TYPES ===` scheme corpus
+-- program would dump the ~120-line prelude `=== TYPES ===` scheme corpus
 -- ahead of the user's own bindings — noisy and beginner-unfriendly. `typesMode`
 -- (the `--types` flag) opts back into that full dump, byte-identical to the
 -- historical behaviour (preserves the diff_native_cli goldens, which now pass
@@ -1113,11 +1113,11 @@ checkRoute : Bool ->
 checkRoute typesMode allowInternal trusted _ _ rsrc csrc tsrc target [(mid, decls)] =
   -- BUGFIX (internal-extern noise on stdlib/compiler self-checks): the caller
   -- already computed `trusted` (projectTrustedMods, owning-root based) for
-  -- EVERY module count, but this single-module arm used to discard it and
-  -- gate purely on the CLI `--allow-internal` flag — so `medaka check` on a
+  -- EVERY module count, and this single-module arm must not discard it and
+  -- gate purely on the CLI `--allow-internal` flag — `medaka check` on a
   -- bare stdlib file (e.g. `stdlib/array.mdk`, no non-core imports ⇒ this
-  -- arm) flagged its OWN legitimate internal-extern calls as errors unless
-  -- the flag was passed every time, even with MEDAKA_ROOT correctly set.
+  -- arm) then flags its OWN legitimate internal-extern calls as errors unless
+  -- the flag is passed every time, even with MEDAKA_ROOT correctly set.
   -- Honour `trusted` here too, matching the multi-module arm below.
   -- S-3/#164: this arm already has the loader's parsed, real-span `decls` for
   -- this single module (`loadProgramFilesLocatedE` parsed it via
@@ -1223,7 +1223,7 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
             (flatMap renderTripleWarnings (trimEntryTriple projWarns))
         -- #1719: a non-entry module can carry OTHER warnings (chiefly
         -- non-exhaustive-match) that the line above does not surface — human
-        -- `check` used to just drop these with no trace, reading as a clean
+        -- `check` would otherwise drop these with no trace, reading as a clean
         -- bill of health.  Say so instead of staying silent; `--json` already
         -- reports them per-file.
         let _ = emitHiddenDiagNote hiddenCount
@@ -1251,10 +1251,10 @@ checkRoute typesMode allowInternal trusted pathMap roots rsrc csrc tsrc target m
 -- diagnostic uses, so the human CLI (`ppDiagCliSrc`/`emitLocatedWarnings`),
 -- `check --json`, and `run --json` all render/serialize it uniformly.  #1236:
 -- `findMainFunDef`/`mainBodyLoc`/`mainArityMsg`/`mainNonUnitMsg`/
--- `mainArityWarning`/`mainNonUnitWarning`/`mainShapeWarnings` moved to
--- `driver.diagnostics` so `checkJsonSingle`/`checkJsonFile` can fold this into
--- the SAME `{"files":[...]}` envelope `check --json` already builds instead of
--- each CLI surface keeping its own copy of the message.
+-- `mainArityWarning`/`mainNonUnitWarning`/`mainShapeWarnings` live in
+-- `compiler/driver/diagnostics.mdk` so `checkJsonSingle`/`checkJsonFile` can fold
+-- this into the SAME `{"files":[...]}` envelope `check --json` already builds
+-- instead of each CLI surface keeping its own copy of the message.
 
 -- Last (String, List Decl) pair — the entry module (loader's `mods` is
 -- dependency-first, entry last).
@@ -1311,7 +1311,7 @@ runFlagGiven nm (x :: rest)
 -- unrecognized `--`-shaped token in flag position; the rejection goes to
 -- stderr, names the offending token AND the verb's known flag set, and exits
 -- 1.  No verb may treat an unrecognized `--` token as a filename (the
--- AS-FILENAME cell `check`/`doc`/`check-policy`/`manifest` used to occupy,
+-- AS-FILENAME cell `check`/`doc`/`check-policy`/`manifest` would otherwise occupy,
 -- which turns a typo'd flag into `No such file or directory`), and no verb may
 -- ignore one (`lint`'s SILENT-ACCEPT cell — exit 0, nothing printed,
 -- indistinguishable from a clean run).
@@ -1330,7 +1330,7 @@ runFlagGiven nm (x :: rest)
 -- dropped or reinterpreted.
 --
 -- S-cli-onto-args (#2355): the scan, the sentences and the `(known: …)`
--- rendering all moved to `stdlib/args.mdk`, and every `<verb>ArgSpec` below is
+-- rendering all live in `stdlib/args.mdk`, and every `<verb>ArgSpec` below is
 -- the ONE declaration they are rendered from.  The per-verb `expandEqFlags` /
 -- `collapseEqFlags` argv rewrites are gone with it — `args.mdk` accepts both
 -- C1 spellings uniformly, so no verb has to normalise argv into the one
@@ -1719,7 +1719,7 @@ tripleHasDiags : (String, String, List Diag) -> Bool
 tripleHasDiags (_, _, []) = False
 tripleHasDiags _ = True
 
--- #1348: writing REQUIRES `--write`. The bare form used to default to
+-- #1348: writing REQUIRES `--write`. The bare form would otherwise default to
 -- FmtWrite (silent in-place rewrite, no output, exit 0 whether or not
 -- anything changed) — a destructive operation indistinguishable from a
 -- no-op, and it once silently reformatted ~500 tracked files. The bare
@@ -1908,9 +1908,9 @@ fmtArgSpec = spec "fmt" [
   switch ["--write", "-w"] "rewrite the file in place",
 ]
 
--- §5f: `--write` and `--stdout` are mutually exclusive MODES, but both used to
+-- §5f: `--write` and `--stdout` are mutually exclusive MODES, but both would
 -- be accepted with `--stdout` silently winning — so `medaka fmt --write
--- --stdout f.mdk` wrote nothing and exited 0, which reads as a successful
+-- --stdout f.mdk` writes nothing and exits 0, which reads as a successful
 -- rewrite.  `snapshot` already refuses its own mode conflict rather than
 -- guessing (`snapshotMode`); this mirrors that message.
 -- Reads RAW argv (not the parsed `Args`) on purpose — see `runFmtCmd`'s
@@ -1977,7 +1977,7 @@ codemodHelpText = stringConcat [
 runCodemodCmd : List String -> <IO> Unit
 runCodemodCmd [] = listCodemodsAndExit ()
 runCodemodCmd (name :: rest) = match findCodemod name
-  -- C3/C4: an unrecognized first token used to produce ONE message — "unknown
+  -- C3/C4: an unrecognized first token would otherwise produce ONE message — "unknown
   -- codemod '<tok>'" — for two different mistakes, and `medaka codemod <dir>`
   -- got the wrong one: a path was read as a codemod NAME, so a directory (empty
   -- or not) was reported as a typo'd codemod rather than as the missing name it
@@ -2046,7 +2046,7 @@ splitCodemodArgv ("--write" :: rest) _ cargs paths =
   splitCodemodArgv rest CmWrite cargs paths
 splitCodemodArgv ("--stdout" :: rest) _ cargs paths =
   splitCodemodArgv rest CmStdout cargs paths
--- C1: `--strip=<v>` used to be taken as a flag literally NAMED `--strip=<v>`
+-- C1: `--strip=<v>` would otherwise be taken as a flag literally NAMED `--strip=<v>`
 -- that then ate the next token (a PATH) as its value.  A codemod's flag names
 -- are its own (there is no central roster to consult), so the `=` form is
 -- split structurally here — `--strip=Log` becomes `--strip`, `Log` in `cargs`
@@ -2200,7 +2200,7 @@ runNewCmd args = match filterList (startsWith "-") args
 -- no MEDAKA set re-invokes THIS native binary as the emitter host (no OCaml).
 -- `build`'s whole flag vocabulary, as `buildUsage` documents it.  `--release`
 -- is deliberately ABSENT — a native build is always optimized, so there is no
--- mode to select.  `runHelpText` used to cross-reference it as if `build` had
+-- mode to select.  `runHelpText` must not cross-reference it as if `build` had
 -- it (exemplar X7); S-help-truthfulness fixed the SENTENCE rather than adding
 -- an arm, and test/diff_compiler_cli_help_conformance.sh property B now keeps
 -- any help text from citing a `medaka <verb> --flag` that verb does not parse.
@@ -2209,7 +2209,7 @@ runNewCmd args = match filterList (startsWith "-") args
 -- Declaration ORDER is the `(known: …)` roster order (`rosterOf` renders every
 -- name of every flag in declaration order), so it reproduces the old
 -- `buildBoolFlags ++ buildValueFlags` rendering exactly.
--- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
 -- through as the input file (AS-FILENAME); now C2-rejected like `--x`.
 buildArgSpec : ArgSpec
 buildArgSpec =
@@ -2245,7 +2245,7 @@ runBuildCmd argv =
   if contains "--help" argv || contains "-h" argv then
     buildUsage ()
   else
-    -- C1: `-o=out` / `--target=wasm` / `--emit-rt-obj=<p>` used to fall
+    -- C1: `-o=out` / `--target=wasm` / `--emit-rt-obj=<p>` would otherwise fall
     -- through as an extra positional ("takes exactly one input file") or be
     -- dropped; `args.mdk` takes both spellings.
     -- C2: REJECT-VAGUE — an unknown flag became a second positional and was
@@ -2687,7 +2687,7 @@ finishRunEval target jsonMode elaborated mods cohWarns postPerf =
   -- exactly once, never twice and never zero times.
   let _ = flushPendingRunDiags jsonMode
   -- #1681: the main-shape warning text already reads as a rejection ("'main'
-  -- must be a value of type Unit …"), but `run` used to exit 0 anyway — making
+  -- must be a value of type Unit …"), but `run` would otherwise exit 0 — making
   -- a program that computed and discarded a real value indistinguishable, by
   -- exit code, from one that ran clean. Since `main` was never applied/printed
   -- in this case (the underlying no-op behavior is unchanged, see the 0.1.0
@@ -2845,11 +2845,11 @@ runRunCmd argv =
       let _ = emitPhase perfOn "load" (perfTLoad - perfT0) target
       -- Route by module count, mirroring `checkRoute` EXACTLY, so that
       -- `run` accepts/rejects the SAME set of programs `medaka check`
-      -- does (beta P0-1 / P1-8).  The old gate was resolve-errors +
-      -- elaborate + hadTypeErrors for ALL programs — a WEAKER predicate
-      -- than check's: it missed constraint/no-impl/coherence errors
-      -- (so run silently executed ill-typed programs) AND spuriously
-      -- fired on some check-clean programs (standalone-fn-shadows-iface).
+      -- does (beta P0-1 / P1-8).  A gate of resolve-errors +
+      -- elaborate + hadTypeErrors for ALL programs is a WEAKER predicate
+      -- than check's: it misses constraint/no-impl/coherence errors
+      -- (so run silently executes ill-typed programs) AND spuriously
+      -- fires on some check-clean programs (standalone-fn-shadows-iface).
       -- S-3/#164 (F-converge): match on the RAW `mods` rather than the
       -- desugared `modsD` so this arm can hand `analyzeFrom` the loader's
       -- own raw, real-span decls (`analyzeFrom` desugars internally, and
@@ -3182,9 +3182,9 @@ runTestCmd argv0 =
 -- `test "…"` results `runTestReport` now also returns is needed; adapting
 -- `testReportJson` in place would have changed medaka_test's (unrelated,
 -- settled) contract.  F1: `cases`/`filterOpt` ARE now threaded through (they
--- used to be silently dropped here, so `--json --filter`/`--cases` reported
--- on ALL tests regardless) — `--seed` already reached this path unchanged,
--- via `seedPropRng` in `runTestCmd` before this function is ever called.
+-- are easy to drop here, and dropping them makes `--json --filter`/`--cases`
+-- report on ALL tests regardless) — `--seed` already reaches this path
+-- unchanged, via `seedPropRng` in `runTestCmd` before this function is called.
 runTestJsonCmd : List Engine -> Int -> Option String -> String -> <IO> Unit
 runTestJsonCmd engines cases filterOpt target =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
@@ -3232,7 +3232,7 @@ runTestJsonCmd engines cases filterOpt target =
 -- (docs/ops/CLI-CONFORMANCE.md §3): an empty resolved set (empty dir, or a dir
 -- with no .mdk files) is a USAGE ERROR — `(stderr, 1)`, the ONE pair every verb
 -- now uses for "no .mdk files found" — and no longer the vacuous exit-0 pass it
--- used to be.  A test command that ran zero tests and exited 0 is precisely the
+-- would otherwise be.  A test command that ran zero tests and exited 0 is precisely the
 -- "didn't run looks like passed" failure the test arc exists to close.
 -- `runTest`'s single-file zero-doctest pass is a DIFFERENT case and unchanged:
 -- there a file was resolved and examined, and it had nothing to assert.
@@ -3289,7 +3289,7 @@ docHelpText = stringConcat [
   "  --out DIR   output directory; enables library mode\n"
 ]
 
--- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
 -- through as the target file (AS-FILENAME, exemplar X4); now C2-rejected.
 docArgSpec : ArgSpec
 docArgSpec =
@@ -3309,7 +3309,7 @@ runDocCmd argv =
     Some dir => runDocLibraryTargets dir a.positionals
     None => runDocTargets a.positionals
 
--- §5f: `medaka doc <a> <b>` used to render <a> and silently ignore every
+-- §5f: `medaka doc <a> <b>` would otherwise render <a> and silently ignore every
 -- later positional at exit 0.  `doc` is single-file, so a second target is a
 -- usage error — mirrors `check`'s own extra-positional arm.
 runDocTargets : List String -> <IO> Unit
@@ -3460,12 +3460,12 @@ checkPolicyHelpText = stringConcat [
   "sample request. Exit 0 on accept, 1 on reject.\n"
 ]
 
--- `--allow`/`--fn` take values; only the space form used to be read, so
--- `--allow=IO` used to fall through as the FIRST POSITIONAL and become the
+-- `--allow`/`--fn` take values; only the space form would be read, so
+-- `--allow=IO` would fall through as the FIRST POSITIONAL and become the
 -- filename (AS-FILENAME, C1's §1 opening transcript).  Both spellings now
 -- reach the same key, and the `PolicyArgs` triple is built HERE from the
 -- parse rather than by re-scanning raw argv.
--- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
 -- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
 policyArgSpec : ArgSpec
 policyArgSpec =
@@ -3558,8 +3558,8 @@ manifestHelpText = stringConcat [
   "value; a Unit/top param becomes `true`).\n",
 ]
 
--- Same C1 fix as check-policy: `--fn=main` used to become the filename.
--- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- Same C1 fix as check-policy: `--fn=main` would otherwise become the filename.
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
 -- through as the target file (AS-FILENAME); now C2-rejected like `--x`.
 manifestArgSpec : ArgSpec
 manifestArgSpec =
@@ -3640,7 +3640,7 @@ lintHelpText = stringConcat [
 
 -- Declaration order is the roster order, reproducing the old
 -- `lintBoolFlags ++ lintValueFlags` rendering.
--- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
 -- through as a target path ("these targets do not exist"); now C2-rejected.
 lintArgSpec : ArgSpec
 lintArgSpec =
@@ -3668,10 +3668,10 @@ lintArgSpec =
 runLintCmd : List String -> <IO> Unit
 runLintCmd argv0 =
   -- C1: `parseLintFlagList` keys on the `--flag=` prefix (the spelling the
-  -- pre-commit hook uses) and the old `collapseEqFlags` rewrote the space form
-  -- INTO it — `--deny rule-x` used to leave `rule-x` behind as an ordinary
+  -- pre-commit hook uses).  Rewriting the space form INTO that prefix instead
+  -- leaves `--deny rule-x`'s `rule-x` behind as an ordinary
   -- lint TARGET with the flag applied to nothing.  `args.mdk` accepts BOTH
-  -- spellings and hands back one value, so the rewrite is gone and the split
+  -- spellings and hands back one value, so no rewrite is needed and the split
   -- goes straight through `splitLintNames` (the same splitter
   -- `parseLintFlagList` used, so the comma handling is unchanged, empty-string
   -- edge included).  `.githooks/pre-commit:164` uses `--deny=…` and
@@ -3845,7 +3845,7 @@ lintNamesOf nm a = match flagValue nm a
   None => []
   Some v => splitLintNames v
 
--- §5f: an unknown rule name in `--only=`/`--disable=`/`--deny=` used to be
+-- §5f: an unknown rule name in `--only=`/`--disable=`/`--deny=` would otherwise be
 -- accepted silently.  `--only=rule-nosuchrule` then matched NO rule, filtered
 -- every finding away, and exited 0 — a typo that reads exactly like a clean
 -- file.  Name the offender and the known set, same shape as an unknown flag.
@@ -3923,8 +3923,8 @@ assertLintTargetsExist targets =
 -- nothing.
 --
 -- That is exactly the silent-green bug class this whole harness was built to
--- REPLACE (see TESTING-DESIGN.md §2.3: a missing oracle used to exit 2 = SKIP, and
--- a fresh clone ran zero tests and printed "0 failed"). Never let "I could not read
+-- REPLACE (see TESTING-DESIGN.md §2.3: a missing oracle exiting 2 = SKIP let
+-- a fresh clone run zero tests and print "0 failed"). Never let "I could not read
 -- it" become an expected output. Fail loudly, up front.
 assertSnapshotTargetsExist : List String -> <IO> Unit
 assertSnapshotTargetsExist files =
@@ -3986,7 +3986,7 @@ snapshotHelpText = stringConcat [
 -- `internal`: it is a flag this verb genuinely parses (so it must stay in the
 -- roster — omitting it would make the crash-resume mechanism reject itself)
 -- but it is not for direct use.
--- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` used to fall
+-- `withStrictDash` (S-5, #2355 residual A): an undeclared `-x` would otherwise fall
 -- through as a target path ("these targets do not exist"); now C2-rejected.
 snapshotArgSpec : ArgSpec
 snapshotArgSpec =
@@ -4117,8 +4117,8 @@ replUsageLine = stringConcat [
   "                 stdin closes (EOF) or you enter :quit.\n"
 ]
 
--- #657: argv used to be discarded (`runReplCmd _ = ...`), so `--help`/`-h`/any
--- bogus arg silently fell into the interactive read loop — which blocks on
+-- #657: discarding argv (`runReplCmd _ = ...`) lets `--help`/`-h`/any
+-- bogus arg fall silently into the interactive read loop — which blocks on
 -- stdin forever if stdin is an open terminal, the same shape as the bug
 -- fixed in runLspCmd (#321), runMcpCmd (#299), and runNewCmd (#582). Blocking
 -- on stdin with NO args is correct (that's the actual REPL); only an
@@ -4174,8 +4174,8 @@ lspUsageLine = stringConcat [
   "                 server — it is not supposed to be interactive.\n"
 ]
 
--- #321: argv used to be discarded (`runLspCmd _ = ...`), so `--help`/`-h`/any
--- bogus arg silently fell into the JSON-RPC read loop — which blocks on stdin
+-- #321: discarding argv (`runLspCmd _ = ...`) lets `--help`/`-h`/any
+-- bogus arg fall silently into the JSON-RPC read loop — which blocks on stdin
 -- forever if stdin is an open terminal. Blocking on stdin with NO args is
 -- correct (that's the actual protocol); only an explicit/unknown arg needs
 -- handling before the server starts. Structurally mirrors runMcpCmd (#299,
@@ -4228,8 +4228,8 @@ mcpUsage _ =
 -- effect row as runLspCmd (the `Mut`/`Panic` class the issue cited was cut
 -- 2026-07-14 — effects are capabilities only).
 --
--- #299: argv used to be discarded (`runMcpCmd _ = ...`), so `--help`/`-h`/any
--- bogus arg silently fell into the JSON-RPC read loop — which blocks on stdin
+-- #299: discarding argv (`runMcpCmd _ = ...`) lets `--help`/`-h`/any
+-- bogus arg fall silently into the JSON-RPC read loop — which blocks on stdin
 -- forever if stdin is an open terminal. Blocking on stdin with NO args is
 -- correct (that's the actual protocol); only an explicit/unknown arg needs
 -- handling before the server starts.

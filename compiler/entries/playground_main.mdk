@@ -505,7 +505,7 @@ doEmit emit rsrc csrc tsrc entry mods warnTriples =
 -- here, so `compile` prints the WAT marker and the WAT while `analyze` prints its
 -- own marker and the same warnings JSON — no lowerProgramEmit, no wasmReachFilter,
 -- no emitProgram, and no `elaborateModules` at all (`runEmit`'s is now the only one
--- on either path — see doEmit's obituary for the discarded one that used to precede
+-- on either path — see doEmit's obituary for the discarded one that preceded
 -- it, which is why `analyze` reaches here having elaborated the user's program once).
 finishClean : Bool ->
   List (String, String, List Diag) ->

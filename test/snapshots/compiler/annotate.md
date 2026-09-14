@@ -287,9 +287,9 @@ annotateDecl (DLetGroup p binds) =
 -- silently reset (the `substTyVars` shape #1219 found).
 --
 -- ⚠️ `ifaceOrigin = _` is DEFENSIVE STYLE, not a correctness requirement, and it
--- is not about identity.  It used to be load-bearing: the interpreter's record
--- match discarded the constructor, so naming only `methods` — a label `DImpl` ALSO
--- has, with its arm BELOW this one — sent a `DImpl` to this arm under `medaka run`
+-- is not about identity.  It would be load-bearing if the interpreter's record
+-- match discarded the constructor: naming only `methods` — a label `DImpl` ALSO
+-- has, with its arm BELOW this one — would send a `DImpl` to this arm under `medaka run`
 -- and to the right arm under a built binary, at exit 0 both ways.  That is fixed
 -- (#1217/#1462): `matchPat`'s `VRecord` arm in `eval/eval.mdk` now binds and
 -- compares the constructor first —

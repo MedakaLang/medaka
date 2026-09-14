@@ -1,0 +1,86 @@
+{- | Exact RFC 6979 candidate gate for #1700 signing step 3, migrated from
+   the retired `rfc6979_vectors.sh` under #2592.
+
+   The committed candidate-0 answers are dual-oracle S3-A rows, so the
+   corpus grades them. Row 0's POST-REJECTION candidate 1 has no committed
+   answer, and computing it with the implementation under test would be
+   circular — so it comes from Python's stdlib HMAC, an implementation that
+   shares no code with this one, spawned per run rather than captured. That
+   is the `oracle` below; `needlePrefix` is what the driver must be seen to
+   print with the oracle's answer appended. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Oracle(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+{- | The independent post-rejection HMAC schedule, in Python.
+
+   It re-derives RFC 6979 §3.2 from the corpus's own first row: the HMAC-DRBG
+   seeding (steps d-g), then the candidate-0 output, then the ONE extra
+   `K = HMAC(K, V || 0x00); V = HMAC(K, V)` reseed that step h's rejection
+   branch prescribes, and finally candidate 1.
+
+   It is carried here as data rather than as a committed `.py` file because
+   every regular non-`.sh`/`.mdk` file under `pds/test/` owes a `[vector]`
+   stanza in `pds/test/VECTOR-PROVENANCE.txt`, and an oracle's own source is
+   not a vector. -}
+candidate1Oracle : Oracle
+candidate1Oracle = Oracle {
+  program = "python3",
+  needlePrefix = "CANDIDATE1 row=0 k=",
+  source = [
+    "import hashlib",
+    "import hmac",
+    "import sys",
+    "",
+    "n = int(\"fffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141\", 16)",
+    "with open(sys.argv[1], encoding=\"ascii\") as corpus:",
+    "    fields = corpus.readline().split()",
+    "x = bytes.fromhex(fields[2])",
+    "h1 = bytes.fromhex(fields[3])",
+    "bits2octets = (int.from_bytes(h1, \"big\") % n).to_bytes(32, \"big\")",
+    "",
+    "def h(key, message):",
+    "    return hmac.new(key, message, hashlib.sha256).digest()",
+    "",
+    "k = bytes(32)",
+    "v = bytes([1]) * 32",
+    "k = h(k, v + b\"\\x00\" + x + bits2octets)",
+    "v = h(k, v)",
+    "k = h(k, v + b\"\\x01\" + x + bits2octets)",
+    "v = h(k, v)",
+    "candidate0 = h(k, v)",
+    "k = h(k, candidate0 + b\"\\x00\")",
+    "v = h(k, candidate0)",
+    "candidate1 = h(k, v)",
+    "print(candidate1.hex())",
+  ],
+}
+
+row : Row
+row = Row {
+  gate = "pds/test/rfc6979_vectors",
+  driver = "pds/test/rfc6979_vectors_main.mdk",
+  corpus = Explicit ["pds/test/vectors/prehashed_signing_corpus.txt"],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = Some candidate1Oracle,
+  arms = [
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = [
+        "PROBE candidate-1-selection: PASS schedule=2 aggregate=1",
+        "PROBE two-candidate-exhaustion: PASS schedule=2 aggregate=0",
+        "counted: 80/80 rows ok",
+      ],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "RFC 6979: 80/80 candidate-0 rows, and candidate 1 against Python's HMAC" =
+  expectRow row

@@ -930,7 +930,7 @@ balOpenCands (c :: cs) rs
 
    A PURE FUNCTION OF (rows, costs, toolchains, INCUMBENT SHARDS).  That
    fourth input arrived with S-3/#2218's stability preference, and the wording
-   of this paragraph used to be its own load-bearing claim, so read the change
+   of this paragraph is its own load-bearing claim, so read the change
    carefully rather than as a widening of scope:
 
    IT USED TO SAY "it does not read the `shard` of any gate on an OPEN row",
@@ -1757,7 +1757,7 @@ balCurrentLegal (c :: cs) rs
 
    What the band cost, and what is paid for it: a baseline re-ingest whose
    noise moves a gate now moves that gate in `test/gates.toml` too, so a
-   re-ingest commit carries a matrix reshuffle it used to be able to skip.
+   re-ingest commit carries a matrix reshuffle it could otherwise skip.
    That is the price of the assignment being checkable at all, and the repair
    is two mechanical commands (`medaka gate balance`, `make gen-ci`), not a
    judgement call.

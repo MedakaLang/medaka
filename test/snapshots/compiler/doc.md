@@ -196,7 +196,7 @@ isDoctestInputText t = dlen t >= 5 && dsub 0 5 t == "-- > "
 -- Enumerating `commentBody`'s branches against `isDoctestInputText` shows the
 -- two agree on every comment shape but ONE: `--> x` (no space after the `--`)
 -- takes the 2-char-strip branch and yields the body `> x`, which doctest never
--- runs — so doc used to fence it and label it "run by `medaka test`", a claim
+-- runs — so doc must not fence it and label it "run by `medaka test`", a claim
 -- `medaka test` contradicts.
 --
 -- For exactly that shape the body's leading `>` is emitted MARKDOWN-ESCAPED
@@ -465,7 +465,7 @@ declKind _ = KPlain
 -- `declKind` above answers the same question about a RENDERED entry, and that
 -- is not good enough for ownership: `renderSig` emits no entry at all for a
 -- private `data`/`newtype`, so an owner map built from entries is blind to a
--- privately-declared type and `rebucketLibraryImpls` used to fall through to
+-- privately-declared type and `rebucketLibraryImpls` would otherwise fall through to
 -- its bare-name clause and file the impl on an unrelated module's page.  A
 -- declaration is evidence of ownership whether or not it is public, so the
 -- owner map is built from the RAW decls instead.
@@ -516,8 +516,8 @@ letgroupEntriesGo ((LetBind name _) :: rest) schemes doc line =
 
 -- ── derived instances (`deriving (…)`) ─────────────────────────────────────
 -- `public export data Duration = Duration Int deriving (Eq, Ord, Debug)`
--- (`stdlib/time.mdk:33`) used to publish ONE entry — the type — and nothing
--- for the three instances it brings into existence, so the reference asserted
+-- (`stdlib/time.mdk:33`) would otherwise publish ONE entry — the type — and nothing
+-- for the three instances it brings into existence, so the reference would assert
 -- by omission that `Duration` has no `Eq` (#2436).  Those instances are real:
 -- `desugar.mdk`'s `expandDecl` turns each `DeriveRef` into exactly
 -- `impl C (T p…) requires C p…` (`applyDeriveParams`/`appliedHead`/
@@ -1190,10 +1190,10 @@ export
 mdName : ModuleDoc -> String
 mdName (ModuleDoc n _ _ _) = n
 
--- (`mdEntries` used to sit here, exported.  Nothing outside this file ever
+-- (There is no exported `mdEntries` here.  Nothing outside this file ever
 -- called it — `grep -rn mdEntries compiler/ | grep -v doc.mdk` is empty — and
--- nothing inside did either, so it was dead in both directions and is gone
--- rather than merely un-exported.)
+-- nothing inside did either, so it is gone
+-- rather than merely un-exported.  Do not re-add it.)
 
 -- Shared by `runDoc` (single-file) and library mode: parse, infer schemes,
 -- extract entries + the module header, in one place so both modes see
@@ -1312,10 +1312,10 @@ renderModulePage (ModuleDoc name header entries _) =
 --   1. the module whose own `data`/`newtype` declares `T` — PUBLIC OR PRIVATE,
 --      read off the raw decls (`declaredTypeNames`), never off the rendered
 --      entries.  Declaration is the strongest possible evidence and always
---      wins.  (S2-1: this clause used to read `KTypeDecl` ENTRIES, and
---      `renderSig` renders no entry for a private `data`, so a module that
---      privately declared `T` and publicly wrote `impl Debug T` lost that impl
---      to whatever module happened to be named `t` — silently, with no
+--      wins.  (S2-1: reading `KTypeDecl` ENTRIES here instead misses a private
+--      `data`, for which `renderSig` renders no entry, so a module that
+--      privately declares `T` and publicly writes `impl Debug T` loses that impl
+--      to whatever module happens to be named `t` — silently, with no
 --      warning.);
 --   2. failing that, the module whose page NAME equals `toLower T` AND which
 --      independently MENTIONS `T` in one of its own entries' signatures.  This
@@ -1595,7 +1595,7 @@ sentenceEndAt prose (m :: rest) =
 -- one. Unlike lsp.mdk's completion consumer, this call site only ever looks
 -- up schemes BY NAME for names the caller already knows it declared
 -- (extractEntries/renderSig, never a full-environment enumeration).
--- #2422: falling back to `[]` here used to make a module with a broken
+-- #2422: falling back to `[]` here makes a module with a broken
 -- import graph and an un-annotated export render a silent, signature-less
 -- page at exit 0 — indistinguishable from a module that simply has no
 -- annotatable exports. `[]` is still the right EXTRACTION-level value (there

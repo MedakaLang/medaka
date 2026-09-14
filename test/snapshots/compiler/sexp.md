@@ -105,7 +105,7 @@ constraintSexp (Constraint { constraintHead = iface, constraintArgs = args }) =
 
 export
 -- A row's tail variables (#821): a join carries several.  Nought and one
--- render as the `None`/`Some` they used to be, so only a genuine join moves
+-- render as the `None`/`Some` spellings, so only a genuine join moves
 -- a golden.
 tailSexp : List String -> String
 tailSexp [] = "None"

@@ -598,7 +598,7 @@ implSrcValueArity _ = 0
 -- PAP; Medaka is strict and eval already behaves this way.  A call site that passes
 -- MORE than the lowered arity is an over-application against the impl's returned
 -- closure, which `emitImplCallSat`/`emitKnownFnSat` already lower via `emitOverApp` --
--- the same shape the eta-expansion used to hard-code into the define.
+-- the same shape an eta-expansion would hard-code into the define.
 -- `gatherGroup`'s define-arity site applies the SAME rule, so define and call sites
 -- keep agreeing (that agreement is #1450/#1668 and must not be broken here).
 methodArityOfEntry : Emit -> CImplEntry -> String -> Int
@@ -875,8 +875,8 @@ data EmitInputData = EmitInputData {
   -- #948/#1036/#1047: one row per DECLARED impl,
   -- (iface identity, iface, head tag, canonical impl key), minted by the emit
   -- driver from the SAME decl list it lowers (`core_ir_lower.ifaceImplHeadTable`).
-  -- Until 2026-09-01 this arrived through an ambient `Ref` installed by lowering;
-  -- it is a carried value now.  `[]` (a hand-built-`CProgram` harness with no
+  -- It is a carried value, never an ambient `Ref` installed by lowering.  `[]` (a
+  -- hand-built-`CProgram` harness with no
   -- decls) is the pre-#1036 bare-head answer, not a missing install.
   ifaceImplHeads : List (String, String, String, String),
 }
@@ -1298,13 +1298,13 @@ isKnownFn e name = match !e.knownFnMap
     None => False
   None => panic "llvm: knownFnMap read before install (internal error)"
 
--- Canonicalize a referenced function name to the actual emitted symbol.  The emit
--- drivers used to run `mangleUnits` BEFORE `elaborateModules`, so every prelude
--- definition was renamed `core__<name>` while `elaborateModules` SYNTHESIZES bare
--- references afterwards — notably the `/=` rewrite (`typecheck.mdk` binopMethodApp)
--- which builds `EApp (EVar "not") …`.  Such a bare prelude name was absent from the
--- `core__`-keyed known-fn table → it fell through to a closure-load and the emitter
--- aborted `unbound variable 'not'`.  The repair: a bare name that is not a known fn
+-- Canonicalize a referenced function name to the actual emitted symbol.  An emit
+-- driver that runs `mangleUnits` BEFORE `elaborateModules` renames every prelude
+-- definition `core__<name>` while `elaborateModules` SYNTHESIZES bare references
+-- afterwards — notably the `/=` rewrite (`typecheck.mdk` binopMethodApp)
+-- which builds `EApp (EVar "not") …`.  Such a bare prelude name is absent from the
+-- `core__`-keyed known-fn table → it falls through to a closure-load and the emitter
+-- aborts `unbound variable 'not'`.  The repair: a bare name that is not a known fn
 -- but whose `core__`-mangled form IS resolves to the mangled symbol.  A name already
 -- known (incl. a user `core__`-collision) is returned unchanged, and a genuinely
 -- unbound name still falls through to the original gap.
@@ -1328,9 +1328,9 @@ canonFnName e name =
 -- key, matching lookupAssoc's first-match. RUN-EMIT-003: the linear-scan half is
 -- retired — the map is always installed. Use for GLOBAL-sigs sites (`sigTable e`); the threaded
 -- `sigs` parameter is a DIFFERENT table, not a mutated one — it is indexed too, via
--- `sigMapOf` below. (This line used to forbid that, claiming threaded `sigs` is
--- "augmented" with Float-propagation types. It is not: `sigs` is never consed,
--- appended or iterated anywhere — only threaded and looked up.)
+-- `sigMapOf` below.  `sigs` is not "augmented" with Float-propagation types:
+-- it is never consed, appended or iterated anywhere — only threaded and looked
+-- up.
 sigLookup : Emit -> String -> Option FnSig
 sigLookup e name = match !e.sigMap
   Some m => omLookup name m
@@ -1370,8 +1370,8 @@ isCtor e name = match !e.ctorMap
 -- #1513: the table is SEEDED FROM THE DECLARATIONS (`input.recordFieldOrders`,
 -- `core_ir_lower.declaredRecordFieldOrders`), and only then extended with the
 -- `collectRecords` scan of the program's CRecord nodes — first entry wins, so the
--- declaration always answers for a declared record.  It used to be the scan ALONE,
--- which is silently wrong whenever a record has no construction site in a position
+-- declaration always answers for a declared record.  The scan ALONE is silently
+-- wrong whenever a record has no construction site in a position
 -- the scan happens to walk: `fieldIdxByName` then falls through to `findFieldIdx` →
 -- `findRecordByLabel`, which answers with the first OTHER record owning the label
 -- and emits ITS index — a wrong offset at exit 0 (MEASURED: `5 99` where `5 7` is
@@ -1711,7 +1711,7 @@ defaultAtOrArity fallback e method tag siteArity =
     None => fallback
 
 -- every untagged default named [method], in program order (the set first-match
--- used to take the head of).
+-- a first-match lookup would take the head of).
 findDefaults : String -> List CImplEntry -> List CImplEntry
 findDefaults _ [] = []
 findDefaults method ((CImplEntry n s (CImplDefault ifaceId pats body)) :: rest)
@@ -5842,18 +5842,18 @@ emitMethod e env name _ (RLocal sym dicts) implRoutes methRoutes argOps =
 -- CAPTURES the dict word and rebinds it from `%clos` field 1 in the body, so the
 -- runtime impl switch still reads the caller's dict.  A nullary method (arity 0,
 -- e.g. `def`) is a plain value — keep the immediate `emitMethod .. []`.
--- S1-RESIDUAL-A (FIXED 2026-07-16, issue #410; SHADOW-SEMANTICS.md §6): a VALUE-position
--- standalone SHADOW (`map size [1,2,3]`) used to miscompile here — the built binary
--- SEGFAULTed (wasm: `illegal cast`) while `check`/`run` were both green.  The lift built
--- the closure at `methodArityOf name` — the interface METHOD's arity — for a body that
--- calls the STANDALONE, whose value arity need not match.  With the two arities EQUAL the
--- lie is invisible, which is why every pre-#410 probe (and the whole d4/d10 corpus) missed
--- it.  When they differ the closure advertises N args to the HOF but its body forwards
--- them to an M-arg function: N>M makes `emitKnownFnSat` take the `emitOverApp` path
--- (:3941), which calls the target, gets a SCALAR back, and hands that Int to
--- `emitApplyAny`, which reads an arity out of the "cell header" of an integer ⇒ SEGFAULT.
--- Fix: the arity is now ROUTE-derived (`methValArity`), not name-derived — the RLocal arm
--- below already knew the truth via `fnArity e target`.
+-- S1-RESIDUAL-A (fixed 2026-07-16, issue #410; SHADOW-SEMANTICS.md §6): a VALUE-position
+-- standalone SHADOW (`map size [1,2,3]`) must not miscompile here.  The arity below is
+-- ROUTE-derived (`methValArity`), never name-derived, and that is what keeps it correct:
+-- lifting at `methodArityOf name` — the interface METHOD's arity — for a body that calls
+-- the STANDALONE, whose value arity need not match, builds a closure that lies.  With the
+-- two arities EQUAL the lie is invisible, which is why every pre-#410 probe (and the whole
+-- d4/d10 corpus) missed it.  When they differ the closure advertises N args to the HOF but
+-- its body forwards them to an M-arg function: N>M makes `emitKnownFnSat` take the
+-- `emitOverApp` path (:3941), which calls the target, gets a SCALAR back, and hands that
+-- Int to `emitApplyAny`, which reads an arity out of the "cell header" of an integer ⇒ the
+-- built binary SEGFAULTs (wasm: `illegal cast`) while `check`/`run` both stay green.  The
+-- RLocal arm below already knew the truth via `fnArity e target`.
 emitMethodValue : Emit ->
   OrdMap (String, LTy) ->
   String ->
@@ -6486,7 +6486,7 @@ soleImplDirectSite e name siteArity =
 -- per program emit only the program's own code plus `declare`s for what it uses.
 --
 -- This was IMPOSSIBLE until the dispatch chains were outlined (step 2, above): a
--- program's own `impl` decls used to be INLINED into prelude function bodies, so no
+-- program's own `impl` decls would be INLINED into prelude function bodies, so no
 -- one object could serve two programs.  With the chains outlined into shared
 -- `@mdk_disp_*` dispatchers, prelude bodies are program-independent — verified by
 -- emitting two programs differing only by an `impl Eq Color` and comparing all 249
@@ -6626,8 +6626,8 @@ declareOfDefine l =
     None
 
 -- ── issue #118: the dispatch chain is OUTLINED, one per method ──────────────
--- A runtime-dict dispatch site used to INLINE the whole impl chain — one `icmp` +
--- branch + call arm per impl of the method, at EVERY site.  That made the emitted IR
+-- INLINING the whole impl chain at a runtime-dict dispatch site — one `icmp` +
+-- branch + call arm per impl of the method, at EVERY site — makes the emitted IR
 -- grow as `Σ over sites of (#impls of that site's method)`, and it is the dominant
 -- term in a small program's IR: on `test/wasm/fixtures/adt_enum_nullary.mdk` (9 lines
 -- of source) there were 107 dispatch sites but only NINE distinct chains between
@@ -6947,11 +6947,11 @@ declTagOrKey heads iface tag key =
 -- call `@mdk_default_<method>_<tag>_a<arity>` (ensureDefaultEmitted restamps its inner
 -- same-interface calls to `RKey tag`, keeping `compare` a concrete direct call —
 -- the unsoundness trap is avoided precisely because the tag is concrete here).
--- An exhausted chain used to be a bare `unreachable` on the claim "the dict
+-- An exhausted chain must never be a bare `unreachable` on the claim "the dict
 -- names a real interface impl" (#1958: that claim was already false once for a
 -- sibling chain, :5287 above — a method-less cross-module impl gave a dict with
 -- no matching arm, and the bare `unreachable` was UB, a SIGSEGV on a
--- check-green, eval-correct program).  Now it calls the noreturn
+-- check-green, eval-correct program).  It calls the noreturn
 -- @mdk_dispatch_no_impl trap first, matching the CTFail / non-exhaustive-match
 -- precedent (:7592) so a mismatch is a loud, opt-level-stable abort instead.
 emitDefaultDispatchChain : Emit ->
@@ -7124,12 +7124,12 @@ loadReqDicts e dictPtr n i
 -- while `entry.mdk` — which imports the inheriting sibling too — stamps
 -- `Speak|(Box Int)|`.  BOTH words legitimately name this impl.
 --
--- Recomputing a single verdict here cannot be right for both, and the first cut of
--- this fix proved it: it made the emitter's verdict program-global while typecheck's
--- stayed module-local, so a module that could not see the sibling stamped `"Box"`,
--- matched no arm, and fell to the interface default — turning a program that is
+-- Recomputing a single verdict here cannot be right for both: making the emitter's
+-- verdict program-global while typecheck's stays module-local means a module
+-- that cannot see the sibling stamps `"Box"`, matches no arm, and falls to the
+-- interface default — turning a program that is
 -- CORRECT on main into a silent wrong answer.  That is the relocate-vs-eliminate
--- trap: the disagreement moved from "entries vs decls" to "module-local vs global"
+-- trap: the disagreement moves from "entries vs decls" to "module-local vs global"
 -- instead of going away.
 --
 -- Consuming the WORD SET makes the arm a superset instead of a competing verdict, so
@@ -7248,7 +7248,7 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- clamp is kept because the `- lengthS methWords` subtraction here is still a
     -- subtraction, and because #1818's `armArity` is read off the group rather than
     -- recomputed from `cellCount`.  Byte-identical either way for every shape the
-    -- clamp used to fire on.
+    -- clamp fires on.
     let cellCount = maxInt 0 (implReqCount e name ent - lengthS methWords)
     let cellDicts = loadReqDicts e dictPtr cellCount 0
     -- F10 (#1450/#1668 follow-on): SATURATE AGAINST THIS ARM'S OWN DECLARED ARITY.
@@ -7258,8 +7258,8 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     -- `gatherGroup` now mints at its interface's DECLARATION arity -- disagrees with
     -- that count, and a raw `emitImplCall` emitted a call whose argument count
     -- differed from its callee's parameter count.  That is UB, and it is the
-    -- mismatch the arity slice introduced: the define moved to the declaration
-    -- answer while this call site kept the bare one.  `emitKnownFnSat` closes the
+    -- mismatch between a define minted at the DECLARATION arity and a call site
+    -- reading the bare one.  `emitKnownFnSat` closes the
     -- gap WITHOUT re-opening which declaration supplies the arity: under-application
     -- becomes the residual PAP the source `op x` actually denotes, over-application
     -- the indirect re-apply.  Collision-free programs supply exactly the declared
@@ -7267,8 +7267,8 @@ emitDispatchArmBody e dictPtr ent groups name methWords argOps slot endL =
     --
     -- #1818: `armArity` is now READ OFF `gatherGroup`'s own minted define-arity
     -- (`groupArity`, matched by `symTag` -- the exact identity `gatherGroup` used
-    -- to name this same define), not independently recomputed.  The old formula
-    -- (`methodArityOfEntry + lengthS methWords + cellCount`) is a STRUCTURAL
+    -- to name this same define), not independently recomputed.  Recomputing it as
+    -- `methodArityOfEntry + lengthS methWords + cellCount` is a STRUCTURAL
     -- duplicate of `gatherGroup`'s `maxInt (clauseArity) (methodArityOfIface + nDicts)`
     -- -- the two are "coincidentally" equal, and #1816 was exactly the case where a
     -- negative `cellCount` broke that coincidence.  Consulting the group directly
@@ -8000,7 +8000,7 @@ groupPositionsOf (ImplGroup _ _ _ _ p _ _) = p
 
 -- #1818: the arity `gatherGroup` MINTED for this group's `define` — the single
 -- number every F10 call site should consult rather than re-derive.  See
--- `armArityOfEntry` below, the one caller that used to recompute it.
+-- `armArityOfEntry` below, the one caller that must not recompute it.
 groupArity : ImplGroup -> Int
 groupArity (ImplGroup _ _ _ _ _ arity _) = arity
 
@@ -8927,8 +8927,8 @@ paramEnvByPos _ _ _ = omEmpty
 -- than loading them back out of a cell.  Zero allocation, one fewer (always-true)
 -- tuple-discriminant test, and the param LTys survive into the leaf.
 -- `outer` is the fallthrough target for the LAST clause of the chain — see
--- emitClauseChain.  It is a PARAMETER (issue #354): it used to be read out of the
--- module-level fallthroughLabelRef, which made the contract "whatever ambient value
+-- emitClauseChain.  It is a PARAMETER (issue #354): it must never be read out of the
+-- module-level fallthroughLabelRef, which makes the contract "whatever ambient value
 -- some ancestor happened to leave behind".  Every caller today passes "" (a chain
 -- either opens a fresh `define` — where inheriting a parent function's block label
 -- would emit invalid cross-function LLVM, issue #53 — or sits at top level), so
@@ -8979,8 +8979,8 @@ emitClauseChain e env arity (c :: rest) roots slot endL rty outer =
   let nextL = chainNextLabel e rest outer
   -- Stamp this clause's next-clause label INTO its `__fallthrough__` sentinels
   -- (emit_support's labelFallthrough) before building the arms, so the sentinel
-  -- lowers to `br %nextL` from the var name alone.  The old code left the sentinel
-  -- bare and had emitFallthrough read the old module-level fallthrough Ref — which
+  -- lowers to `br %nextL` from the var name alone.  Leaving the sentinel
+  -- bare and having emitFallthrough read a module-level fallthrough Ref — which
   -- emitDecision NULLED, so a refutable pattern-guard clause (whose guard chain
   -- desugars to a body-level CDecision) fell through to `@mdk_oob` instead of the
   -- next clause.  (That Ref is gone as of issue #354; the label is now threaded.)
@@ -9501,11 +9501,11 @@ ctorArity e name = match !e.ctorMap
 
 -- #35: an APPLIED constructor, dispatched on saturation.  This is the arity check
 -- that the emitVar-side comment below has always ASSUMED but which emitApp did not
--- actually perform: the ctor arm used to call `emitCtorAlloc` unconditionally, so an
--- UNDER-applied ctor (`Bin OAdd` for arity-3 `Bin`) allocated a `Bin` cell holding 1
--- of its 3 fields.  Saturating that later applied args to a DATA cell as if it were a
--- closure (@mdk_apply read the ctor TAG out of the header as if it were an arity), so
--- the value carried the right tag but junk fields — a SILENT wrong-value miscompile:
+-- actually perform: the ctor arm must not call `emitCtorAlloc` unconditionally, or an
+-- UNDER-applied ctor (`Bin OAdd` for arity-3 `Bin`) allocates a `Bin` cell holding 1
+-- of its 3 fields.  Saturating that later applies args to a DATA cell as if it were a
+-- closure (@mdk_apply reads the ctor TAG out of the header as if it were an arity), so
+-- the value carries the right tag but junk fields — a SILENT wrong-value miscompile:
 -- `check` accepted, `run` was correct, `build` produced garbage (E-NONEXHAUSTIVE-MATCH).
 --   • SATURATED (the overwhelmingly common case) ⇒ `emitCtorAlloc`, byte-identical to
 --     before, so no gate/fixpoint churn.
@@ -9849,7 +9849,7 @@ envHasKey : OrdMap (String, LTy) -> String -> Bool
 envHasKey env k = omHasKey k env
 
 -- left-biased env union — `left`'s bindings win a same-name collision.  Mirrors
--- the old `left ++ right` first-match-wins list concat (used to compose a
+-- a `left ++ right` first-match-wins list concat (which composes a
 -- closure's captures/self-ref/params into one starting env), but O(|left| log n)
 -- instead of a linear scan per later lookup.
 envMergeL : OrdMap (String, LTy) -> OrdMap (String, LTy) -> OrdMap (String, LTy)
@@ -9927,11 +9927,11 @@ ctorTagShift = 4294967296
 -- here keeps construction and the match-head test consistent by construction.
 -- The C side hardcodes the SAME constants (MDK_TAG_* in runtime/medaka_rt.c); keep
 -- the two in sync.  Ordinals follow core.mdk: Option = Some|None, Result = Ok|Err,
--- Ordering = Lt|Eq|Gt; List (synthetic) = Cons|Nil.  #361: the comment that used to
--- stand here called a user type reusing one of these names a "KNOWN SPIKE LIMITATION"
--- that "the real backend resolves statically" — as if this emitter were the spike and
--- some other, more careful backend existed downstream. THIS is the real (and only)
--- backend; there is no other one to defer to. The actual guard is upstream, in the
+-- Ordering = Lt|Eq|Gt; List (synthetic) = Cons|Nil.  #361: a user type reusing
+-- one of these names is not a "spike limitation" that "the real backend resolves
+-- statically" — as if this emitter were the spike and some other, more careful
+-- backend existed downstream. THIS is the real (and only) backend; there is no
+-- other one to defer to. The actual guard is upstream, in the
 -- RESOLVER: `data Foo = Ok Int | Bad` is rejected before it ever reaches this file
 -- (`dupErr "constructor"`, resolve.mdk:1422, message "Duplicate constructor: Ok" —
 -- probed). So a user ctor can never actually alias `Cons`/`Some`/`None`/`Ok`/`Err`/
@@ -10257,8 +10257,8 @@ emitTree : Emit ->
 -- next clause" is NOT this arm — that is the `__fallthrough__` sentinel, lowered by
 -- emitFallthrough from the label stamped into the node.)
 --
--- `ftL` is a PLAIN PARAMETER, not ambient state (issue #354).  It used to be a
--- module-level Ref that four entry points saved+NULLED+restored, which made "is the
+-- `ftL` is a PLAIN PARAMETER, not ambient state (issue #354).  A
+-- module-level Ref that four entry points save+NULL+restore makes "is the
 -- fallthrough live here?" a whole-call-graph question — the exact shape that made the
 -- `__fallthrough__` sentinel branch to @mdk_oob instead of the next clause (a run≠build
 -- miscompile, fixed 2026-07-13 by moving THAT label into the node).  Threading it makes
@@ -10737,7 +10737,7 @@ emitRangeTest e v lo hi incl failL =
   emit e (ok ++ ":")
 
 -- (`rngBound` — the Int codepoint of a range bound literal — is backend-neutral and
--- now lives in backend.emit_support, shared with the WasmGC emitter.)
+-- lives in `compiler/backend/emit_support.mdk`, shared with the WasmGC emitter.)
 
 -- the i-th element of a list, or `dflt` if out of range.
 nthOr : List String -> Int -> String -> String
@@ -13755,7 +13755,7 @@ findFieldIdx e label = match findRecordByLabel e label
   None => panic ("llvm: CFieldAccess: unknown field '" ++ label ++ "'")
 
 -- #352: index-backed — `e.recByLabel` already holds, per label, the FIRST record in
--- table order that owns it, which is exactly what the scan used to return.
+-- table order that owns it, which is exactly what a first-match scan returns.
 -- RUN-EMIT-003: that scan (`findRecordByLabelIn`) is RETIRED — the index is the
 -- only path, and an uninstalled read is a broken invariant.
 findRecordByLabel : Emit -> String -> Option (String, List String)

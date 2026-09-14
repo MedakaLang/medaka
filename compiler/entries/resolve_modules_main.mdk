@@ -26,7 +26,7 @@ main = match args ()
       "usage: medaka run compiler/entries/resolve_modules_main.mdk <runtime.mdk> <core.mdk> <mod1.mdk> [mod2.mdk ...]"
 
 -- last path component, with the `.mdk` suffix stripped (flat module IDs):
--- modIdOf now lives in support/path.mdk.
+-- modIdOf lives in `compiler/support/path.mdk`.
 
 -- read + parse + desugar each module into a (modId, decls) pair, in order
 readModules : List String -> <IO> Result String (List (String, List Decl))

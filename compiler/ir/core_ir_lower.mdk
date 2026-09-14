@@ -36,9 +36,9 @@ import frontend.ast.{
   TyConOrigin,
   ifaceIdentity,
 }
--- B-2.2-e: the ONE route-word mint.  This module used to reach it as
--- `eval.eval.implKeyOf`; that mirror is deleted and both sides of the dict-word
--- seam now call `route_key.implRouteKeyWord` with the impl's own `implOrigin`.
+-- B-2.2-e: the ONE route-word mint.  There is no `eval.eval.implKeyOf` mirror:
+-- both sides of the dict-word seam call `route_key.implRouteKeyWord` with the
+-- impl's own `implOrigin`.
 import types.route_key.{
   implRouteKeyWord, ifaceWordOf, evDictRoutes, evMethodRoutes
 }
@@ -322,10 +322,10 @@ leafOrGuard guards i rest
 
 -- #408: the switch's rows are bucketed by head in ONE pass and each branch is
 -- handed its OWN rows, rather than every branch re-filtering the whole matrix.
--- The old shape called `specializeCon c a rows` once per distinct head, and each
--- of those calls scanned all N rows — O(N²) for an N-arm match over an N-ctor
--- type.  That cost was pure instruction count (each miss is an alloc-free
--- `c2 == c`), so it was invisible to both the op arm and the alloc arm of
+-- Calling `specializeCon c a rows` once per distinct head instead has each
+-- of those calls scan all N rows — O(N²) for an N-arm match over an N-ctor
+-- type.  That cost is pure instruction count (each miss is an alloc-free
+-- `c2 == c`), so it is invisible to both the op arm and the alloc arm of
 -- perf_scaling and only surfaced once diff_compiler_stage_ir_scaling.sh graded
 -- per-stage Callgrind Ir.  See `conBuckets` for the wildcard/ordering argument.
 buildConSwitch : OrdMap Unit -> List (List Pat, Int) -> CTree
@@ -529,9 +529,9 @@ filterMapRows f (r :: rest) = match f r
 
 -- ── one-pass matrix bucketing, replacing the per-branch rescan (#408) ───────
 --
--- `specializeCon c a rows` used to be a `filterMapRows` over the WHOLE matrix,
--- called once per distinct head by `buildConSwitch`; `specializeLit` mirrored it
--- for literal switches.  Both are replaced by a single bucketing pass whose
+-- A `specializeCon c a rows` that `filterMapRows` over the WHOLE matrix,
+-- called once per distinct head by `buildConSwitch` — with `specializeLit` mirroring it
+-- for literal switches — is replaced by a single bucketing pass whose
 -- result is read once per branch, so lowering an N-arm switch is O(N log N)
 -- instead of O(N²).
 --
@@ -1098,7 +1098,7 @@ hasDefaultL (_ :: rest) m = hasDefaultL rest m
 --
 --   • `memoKeysAll` — #747: ALL (method, selector) memo keys of the program
 --     (nullary/return-position/no-requires impls), computed once in
---     `hoistNullaryMemo`.  This is one value serving what used to be two: the
+--     `hoistNullaryMemo`.  This is one value serving what would otherwise be two: the
 --     `keys` parameter the walk threaded (read by `hoistExpr`'s `isMemoKey` gate)
 --     and `allMemoKeysRef`, which `hoistNullaryMemo` always assigned that same
 --     `keys`.  Read by the RDict/RDictFwd MULTI-impl arm of `hoistDictNullary` to
@@ -1464,11 +1464,11 @@ lowerImpls prog = lowerImplsWith (installDispatchTables prog) prog
 -- bare head "Box" — a DIFFERENT hash word.  With the declared keys here the two
 -- sides compute the same collision verdict from the same facts.
 --
--- Until 2026-09-01 this table was INSTALLED into an ambient `Ref` by `lowerImpls`
--- (the one chokepoint every emit path funnels through) and read back by the two
--- backends through zero-argument accessors.  It is now an explicit VALUE: the emit
--- driver mints it with `ifaceImplHeadTable` over the same decl list it lowers and
--- hands it to the backend inside `EmitInput`/`WasmEmitInput`, so the three readers
+-- This table is an explicit VALUE, never INSTALLED into an ambient `Ref` by
+-- `lowerImpls` and read back by the two backends through zero-argument accessors
+-- (`lowerImpls` being the one chokepoint every emit path funnels through).  The
+-- emit driver mints it with `ifaceImplHeadTable` over the same decl list it lowers
+-- and hands it to the backend inside `EmitInput`/`WasmEmitInput`, so the three readers
 -- below take it as a parameter.  The forgettable-`install*` hazard the old note
 -- worried about is now a TYPE error instead: a driver cannot build an emit input
 -- without supplying this table.  A driver that has no decls (a hand-built
@@ -1512,10 +1512,10 @@ ifaceImplHeadEntries _ = []
 -- (`llvm_emit.implFnSymTag`, `wasm_emit.implFnSymTagW`) and the one called here.
 --
 -- ⚠️ THIS GUARD IS NO LONGER FIREABLE FOR THE #1950 CLASS, BY CONSTRUCTION — AND IS
--- KEPT ANYWAY.  It used to catch a real collision: both backends spelled the C7 key
--- with the MANY-TO-ONE `sanitizeId` (everything outside [A-Za-z0-9_] → `_`), so two
--- impls whose keys differed ONLY in those characters (`Sz|(Q A_B C)|` vs
--- `Sz|(Q A B_C)|`) landed on ONE emitted symbol and reached the user as a RAW,
+-- KEPT ANYWAY.  It catches a real collision class: spelling the C7 key
+-- with the MANY-TO-ONE `sanitizeId` (everything outside [A-Za-z0-9_] → `_`) makes two
+-- impls whose keys differ ONLY in those characters (`Sz|(Q A_B C)|` vs
+-- `Sz|(Q A B_C)|`) land on ONE emitted symbol and reach the user as a RAW,
 -- UNLOCATED clang `invalid redefinition of function` (#1950).  `injectiveIdent`
 -- removed the collapse at its source, so no two distinct keys can reach one symbol
 -- through this arm any more.  What survives here is the ASSERTION — (method, tag,
@@ -1530,8 +1530,8 @@ ifaceImplHeadEntries _ = []
 -- `readAllDecls`/`driveModulesGo`) or `loader.loadProgram`, both of which use the
 -- PLACEHOLDER-LOC parser — only `parseLocated`/`parseLocatedResult` (the `check`
 -- and LSP paths) populate spans, and even those leave `Loc`'s `file` field "" for
--- the caller to fill.  An earlier revision of this guard printed
--- `firstTyLocList`'s answer and got `:1:0` for BOTH impls of the repro — a wrong
+-- the caller to fill.  Printing
+-- `firstTyLocList`'s answer here gives `:1:0` for BOTH impls of the repro — a wrong
 -- location is worse than none, so the canonical dispatch key (which is
 -- `<module>::<Iface>|<type args>|`, i.e. exactly the impl's declared identity) is
 -- what the message names instead.  Giving the emit path real spans is a
@@ -1672,7 +1672,7 @@ implSymTagOf collide method tag key =
 -- program's own pre-images do not happen to collide, and refuse if they do.
 --
 -- 🚨 This is not a theoretical shape, and the estimate it replaces was wrong in
--- both directions.  `wasm_emit.dictTag`'s own comment used to call a collision
+-- both directions.  `wasm_emit.dictTag`'s own comment called a collision
 -- "astronomically unlikely for the small impl-tag alphabet" and the native 64-bit
 -- scheme's the "same THEORETICAL collision shape".  Colliding pre-images are
 -- CONSTRUCTIBLE, in the FULL i64, with no masking and no search: djb2 is the

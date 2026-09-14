@@ -342,7 +342,7 @@ indexOwners ((f, owner) :: rest) m = match omLookup f m
 
 -- the owners registered for a field name in the field-owner multimap.
 -- O(log fields) index probe (see `buildFieldOwnerIndex`), NOT the per-mention
--- O(fields) scan it used to be (#984).  `opBump` makes this probe VISIBLE to the
+-- O(fields) scan (#984).  `opBump` makes this probe VISIBLE to the
 -- perf gate's op-count arm (#884): the `widerecords` shape's resolve-op grade now
 -- covers `ownersOf` — one counted op per field mention, so the FIXED path reads
 -- LINEAR, while a regression that scans (or returns a superlinear owners list)
@@ -997,9 +997,9 @@ suggestCtor : String -> Option String
 suggestCtor n = lookupAssoc n haskellCtorAliases
 
 -- ── the did-you-mean candidate pool (#1016) ───────────────────────────────
--- `suggestNameFuzzy` used to rebuild `omKeys env.values ++ omKeys env.ctors ++
--- omKeys env.imported` and run the O(len²) allocating Levenshtein DP against
--- EVERY key of it, once per unbound name — O(unbound × in-scope) on the
+-- Rebuilding `omKeys env.values ++ omKeys env.ctors ++
+-- omKeys env.imported` and running the O(len²) allocating Levenshtein DP against
+-- EVERY key of it, once per unbound name, is O(unbound × in-scope) on the
 -- diagnostics path the LSP recomputes on every keystroke (#1016: 19.3 s to
 -- check a file with 1000 typos that takes 0.81 s once they are defined).
 --
@@ -3586,11 +3586,11 @@ ownersForTypes types ((f, o) :: rest)
 --
 -- `core` resolves against `coreExp`, NOT against `known`: core is the IMPLICIT
 -- prelude, so it is prepended to every module rather than imported, and it never
--- appears in the driver's `known` list.  This arm used to be `if mid == "core"
--- then []`, which silently dropped every name an `export import core.{…}` named —
+-- appears in the driver's `known` list.  This arm must not be `if mid == "core"
+-- then []`, which silently drops every name an `export import core.{…}` names —
 -- so `stdlib/list.mdk`'s `export import core.{Filterable, filter, filterMap}`
--- re-exported NOTHING and `import list.{filter}` failed with "Module 'list' has no
--- exported name 'filter'", while `medaka check stdlib/list.mdk` stayed clean.
+-- re-exports NOTHING and `import list.{filter}` fails with "Module 'list' has no
+-- exported name 'filter'", while `medaka check stdlib/list.mdk` stays clean.
 overPubUse : ModuleExports ->
   OrdMap ModuleExports ->
   (UsePath -> ModuleExports -> List b) ->
@@ -3653,9 +3653,9 @@ resolveModulesErrors rt pre known mods =
 -- internalExterns guard list.
 --
 -- The ONE recursive walker (#1440 dedup): `resolveModulesErrorsG` and
--- `resolveModulesErrorsByPathGo` used to be two verbatim-identical copies of
--- this recursion, differing only in how each module's errors got rendered.
--- Now there's one walker returning each module's RAW `(modId, errs)` pair;
+-- `resolveModulesErrorsByPathGo` must not fork into two verbatim-identical copies of
+-- this recursion, differing only in how each module's errors get rendered.
+-- There is one walker returning each module's RAW `(modId, errs)` pair;
 -- the two renderers (flat union of raw errors vs per-module `file:L:C:`
 -- located-by-path) are lifted to the two callers below instead of duplicated
 -- here.
@@ -3827,7 +3827,7 @@ fileOfModuleErrors modPaths (mid, errs) =
 -- the sentinel id 0, overwriting whatever `lookupBindId` would otherwise find —
 -- exactly the same shadowing outcome as the old innermost-frame-first list walk,
 -- but a lookup is O(log n) regardless of how many scopes deep the reference sits.
--- The old `List BScope` (SLocal frame :: ... :: STop top) made a DEEP local
+-- A `List BScope` (SLocal frame :: ... :: STop top) makes a DEEP local
 -- nesting (N sequential lets, references to an outer binding) an O(depth) walk
 -- per EVar — O(depth²) over the body (the `scoperefs` shape, #1031).
 lookupBindId : OrdMap Int -> String -> Int
@@ -4418,7 +4418,7 @@ stampHeadWith : Ty -> TyConOrigin -> (Ty, Bool)
 stampHeadWith t OriginUnresolved = (t, False)
 stampHeadWith t o = (TyCon { t | tyConOrigin = o }, True)
 
--- ── the DECLARATION layer (#1110, this PR) ──────────────────────────────────
+-- ── the DECLARATION layer (#1110) ───────────────────────────────────────────
 -- The walk above stamps OCCURRENCES — every `TyCon` head written in a signature.
 -- This one stamps DECLARATIONS: `DData`/`DNewtype`/`DTypeAlias`/`DInterface` each
 -- carry a `…Origin` naming the module they were WRITTEN IN.
@@ -4540,8 +4540,8 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 -- ⚠️ THREE OF THE FOUR ARE UNREAD.  `implOrigin` IS READ — do not extend the
 -- negative to it.  Re-derived 2026-08-04, and stated with the command because a
 -- negative about the whole tree has no other expiry.  Note the **`-E`**: in a BRE
--- `|` is a LITERAL, so the alternation this paragraph used to carry ran as a
--- search for the single string `superOrigin|requireOrigin|…` and matched exactly
+-- `|` is a LITERAL, so an alternation written without it runs as a
+-- search for the single string `superOrigin|requireOrigin|…` and matches exactly
 -- one line — ITS OWN TEXT.  A probe that cannot fail manufactures the confidence
 -- the claim needs, which is how the `implOrigin` half of this sentence stayed
 -- "verified" while being false.
@@ -4860,7 +4860,7 @@ stampModulesGo coreTypes known ((mid, prog) :: rest) =
 -- A module id is a fact about a FILE IN A PROJECT, produced by the loader.  These
 -- drivers do not have one — `runCheck` receives SOURCE TEXT, the playground has a
 -- buffer, the repl has no file at all — so any id minted here would be invented.
--- The first cut of this function invented `"__user__"`, and that is exactly the
+-- Minting `"__user__"` here would be exactly the
 -- failure the design forbids: `stampTyHead`'s immunity rule (fill in only an
 -- `OriginUnresolved` head) is what makes re-stamping impossible, and it makes a
 -- WRONG FIRST STAMP PERMANENT.  `medaka run` on a no-import file reaches BOTH arms
@@ -4877,8 +4877,8 @@ stampModulesGo coreTypes known ((mid, prog) :: rest) =
 -- (`core`) whenever its boundary is given.  ⚠️ When it is NOT given (`coreDecls =
 -- []` while the caller has flattened the prelude into `prog` — the internal
 -- `checkProgramSeeded` discovery passes), the boundary is unknown, so the prelude's
--- types are left unstamped rather than being claimed by the user's module.  An
--- earlier cut of this function got that wrong and attributed `Option`/`Result`/
+-- types are left unstamped rather than being claimed by the user's module.
+-- Claiming them instead attributes `Option`/`Result`/
 -- `Ordering` to the user module.
 --
 -- ⚠️ RESIDUAL, greppable as `#1110 flat-identity`: giving the flat path REAL
@@ -4939,9 +4939,9 @@ flatTyOriginScope coreDecls =
 
 -- ── #1280: the scope `stdlib/runtime.mdk`'s EXTERN signatures are stamped under ─
 -- The identity-SUPPLY gap Stage A-2 left open, CLOSED HERE: `externSchemes`
--- (`types/typecheck.mdk`) used to turn each `DExtern`'s declared `Ty` into a
--- `Scheme` OUTSIDE `stampTyOrigins`' walk, so every `Mono` flowing out of an
--- extern's declared type reached its consumers `OriginUnresolved`.  MEASURED
+-- (`types/typecheck.mdk`) must not turn each `DExtern`'s declared `Ty` into a
+-- `Scheme` OUTSIDE `stampTyOrigins`' walk: every `Mono` flowing out of an
+-- extern's declared type then reaches its consumers `OriginUnresolved`.  MEASURED
 -- before the fix, on this tree, on BOTH driver arms (goal-side dispatch head for
 -- a user-declared interface at `Float`):
 --

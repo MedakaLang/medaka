@@ -160,7 +160,7 @@ ceval env (CRangeArray lo hi incl) =
 -- eval.mdk) applied the call site's impl dicts even to an impl method that declares
 -- none.  It now calls eval.mdk's `applyMethodDicts`, the SINGLE shared
 -- implementation.
--- #315 CORRECTION: that alone did NOT stop the drift, and the comment here used to
+-- #315 CORRECTION: that alone did NOT stop the drift.  Do not
 -- claim it did.  SHARING AN IMPLEMENTATION DOES NOT SHARE THE STATE IT READS:
 -- `applyMethodDicts` consults `methodReqCountRef`, which only eval.mdk's drivers
 -- filled, so every lookup on THIS path returned None, `implDictRoutes` took its

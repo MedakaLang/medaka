@@ -409,7 +409,7 @@ runGateCmd (sub :: _) =
 -- two must not be blurred into one failure count without saying which.
 -- `vacuous` is set only for a `kind = "native"` gate whose `--json` summary
 -- shows zero assertions of any kind (no doctests, no props, no `test "…"`
--- decls matched) — the exit-code-only contract this record used to carry
+-- decls matched) — an exit-code-only contract for this record
 -- cannot distinguish that from "ran and passed", so `medaka test --native
 -- --json`'s own summary is parsed to tell the two apart (#2633).
 public export data GateResult = GateResult {
@@ -1174,7 +1174,7 @@ candidatesFor root pattern = match gitLsFilesSh root ["ls-files"] pattern
 -- `run` module lives at `test/<name>_test.mdk`, e.g.
 -- `test/effect_set_domain_test.mdk`) — so a native test module nobody
 -- enrolled is flagged exactly like an unenrolled `.sh` script, rather than
--- silently invisible to `gate verify` the way check 1 used to be (#2633).
+-- silently invisible to `gate verify` (#2633).
 -- git's pathspec glob does NOT stop `*` at `/` (`test/*_test.mdk` matches
 -- `test/construct_fixtures/prop_test.mdk`, a data fixture some OTHER gate
 -- reads, not a gate module of its own) — measured:
@@ -1443,7 +1443,7 @@ unsafeNameViolations gates shs = unsafeGateNames gates ++ unsafeShardNames shs
 -- Check 8 (FR-5, review finding S2-3): every entry's `cost` is one of the
 -- THREE classes `timeoutFor` actually matches (`cheap`/`medium`/`heavy`).
 -- `cost` is a required TOML string with no enum check at parse time, so a
--- typo (`cost = "banana"`) used to fall through `timeoutFor`'s `otherwise =
+-- typo (`cost = "banana"`) would otherwise fall through `timeoutFor`'s `otherwise =
 -- 900` fallback silently — same kill timeout as `medium`, but with no
 -- registry-level signal that anything was wrong, and `gate budget` clause
 -- (b) grading it against `medium`'s ceiling without ever having declared it.
@@ -1459,8 +1459,8 @@ invalidCostViolations (g :: gs)
       :: invalidCostViolations gs
 
 -- Check 9 (S-tier-is-data, #2181): every entry's `tiers` is a well-formed set of
--- RUN TOKENS.  The old `tier : String` had no enum check either, but a bad
--- value there could only mis-answer a `tier:` selector; a bad value HERE also
+-- RUN TOKENS.  A bare `tier : String` has no enum check either, but a bad
+-- value there can only mis-answer a `tier:` selector; a bad value HERE also
 -- mis-answers `test/diff_compiler_tier_drift.sh`, which compares these tokens
 -- against the workflows.  A drift gate whose declared side can be arbitrary
 -- text is a drift gate that reports on typos rather than on drift.

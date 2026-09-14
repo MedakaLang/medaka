@@ -1,5 +1,5 @@
 {- | P4-B lexicon-JSON<->DAG-CBOR round-trip driver
-   (`pds/test/lexjson_vectors.sh`).
+   (`pds/test/lexjson_vectors_test.mdk`).
 
    Graded against the official `@atproto/lex-cbor` + `@atproto/lex-json`
    reference corpus (`pds/test/vectors/lexjson_reference_corpus.txt`), both

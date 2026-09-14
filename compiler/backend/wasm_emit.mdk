@@ -513,8 +513,8 @@ makeWasmEmitInput methodIfaces declSigTypes ctorFieldTypes mainIsFloat recordFie
 --
 -- 2026-09-01: renamed from `makeWasmEmitInputWithFfi` and widened again, by
 -- `ifaceImplHeads` — `core_ir_lower.ifaceImplHeadTable` over the SAME decl list the
--- caller lowers.  That table used to reach `ifaceIdsAtTag` through an ambient `Ref`
--- installed by lowering; it is a carried value now, so this is no longer the
+-- caller lowers.  It is a carried value, never reaching `ifaceIdsAtTag` through
+-- an ambient `Ref` installed by lowering, so this is no longer the
 -- FFI-only widening the name claimed.  The decl-free harnesses keep the 5-argument
 -- `makeWasmEmitInput` above.
 export
@@ -1104,9 +1104,9 @@ gapL3P prog reason = gapL3 (progEmit prog) reason
 -- Gates the `$__rub<d>` scratch local that `emitUpdateCopy` stashes the update base
 -- in — the ONLY consumer of that local, and reached from exactly those two nodes.
 --
--- It used to be gated on whether the construction-field fallback was non-empty, i.e. on the
--- CONSTRUCTION-SITE scan, which asks a different question and got it wrong the
--- moment the resolvers started reading declaration-seeded WasmEmitInput indexes:
+-- It must not be gated on whether the construction-field fallback is non-empty, i.e. on the
+-- CONSTRUCTION-SITE scan, which asks a different question and gets it wrong the
+-- moment the resolvers read declaration-seeded WasmEmitInput indexes:
 -- a program whose only record is constructed somewhere `scanRecFields` does not
 -- walk (a match-arm guard) but which UPDATES that record emitted `local.set
 -- $__rub0` with no `(local $__rub0 …)` to match. MEASURED on this branch before
@@ -1437,7 +1437,7 @@ emitProgramCore emit input (CProgram groups ctorArs ctorTypes impls) =
 -- ── emit-time closure check (#392) ──────────────────────────────────────────
 -- The runtime-line gating graph (which WAT helper block a program's use-flags
 -- pull in) is hand-maintained; S1-S3 each narrowed it (fewer impls, per-operator
--- splits, dropped names), and a wrongly-narrowed gate used to surface only as a
+-- splits, dropped names), and a wrongly-narrowed gate would otherwise surface only as a
 -- downstream `wasm-tools validate` "unknown func $x" on whichever fixture
 -- happened to exercise the gap (#388: `$mdk_value_mod` called `$mdk_float_rem`
 -- with only `useValueArith` set, silently broke 21 int-only fixtures). Run on
@@ -1477,7 +1477,7 @@ assertEmittedClosureW text =
 
 -- ⚠️ ACCUMULATOR-PASSING, DELIBERATELY (#392 follow-up).  The three walkers
 -- below (`collectCalledNamesGoW`, `collectDefinedNamesGoW`, `identsAfterAllGoW`)
--- used to build their result AFTER the recursive call returned (`idents ++
+-- would otherwise build their result AFTER the recursive call returns (`idents ++
 -- recurse rest` / `name :: recurse ...`), i.e. one live stack frame per WAT line
 -- and per `call $` occurrence within a line.  That is fine on the native path
 -- (a 256 MB GC-aware worker thread, runtime/medaka_rt.c) but FATAL on the wasm
@@ -4556,7 +4556,7 @@ patTestBind prog PWild occ clLabel env = ([], [], env)
 patTestBind prog (PVar x _) occ clLabel env =
   ([], occ ++ ["local.set $" ++ gname x], x :: env)
 -- #759: unbox the scrutinee through the $mdk_unbox_int seam (i31 OR $boxint) and
--- compare at full i64 width.  The old `i31.get_s` + `i32.const n` path truncated to
+-- compare at full i64 width.  An `i31.get_s` + `i32.const n` path truncates to
 -- 31 bits — for |n| >= 2^30 the `i32.const` overflows (wasm-tools REJECTS the module)
 -- and a boxed scrutinee ref.casts to i31 and TRAPS.
 patTestBind prog (PLit (LInt n)) occ clLabel env = (
@@ -6713,12 +6713,12 @@ emitVarRefPlain prog env d x =
   else if x == "e" then
     ["f64.const 2.718281828459045", "struct.new $float"]
   else if x == "intMaxBound" then
-    -- P1: builtin Int bounds.  These used to be a bare `unreachable` trap-stub, on the
-    -- (then-true, now STALE) grounds that a 64-bit bound "overflows i31" and so had no
-    -- wasm rep — but layer-17 §2.1 gave ref-mode the `$boxint` i64 box, and every int
+    -- P1: builtin Int bounds.  These must not be a bare `unreachable` trap-stub, on the
+    -- STALE grounds that a 64-bit bound "overflows i31" and so has no
+    -- wasm rep: layer-17 §2.1 gave ref-mode the `$boxint` i64 box, and every int
     -- binop already round-trips through `$mdk_box_int`/`$mdk_unbox_int` (both always in
-    -- scope via ioRuntimeLines).  So the bound is representable and the stub was simply
-    -- never revisited: `main = intMaxBound` ASSEMBLED and VALIDATED, then trapped
+    -- scope via ioRuntimeLines).  So the bound is representable, and a stub here makes
+    -- `main = intMaxBound` ASSEMBLE and VALIDATE, then trap
     -- `unreachable` at instantiate.
     --
     -- The VALUES are the language's, not the machine's.  Medaka's Int is the NATIVE
@@ -7666,9 +7666,9 @@ emitLeafExternRef : Prog ->
   List String
 -- #179: randomInt lo hi — the draw (and lo/hi) can exceed ±2^30, so BOTH args unbox
 -- through the i31/$boxint seam ($mdk_unbox_int → i64) and the i64 result reboxes via
--- $mdk_box_int.  The old code cast args + result to a bare `ref.i31`, which trapped
--- `illegal cast` when lo/hi/draw fell outside i31 (e.g. `randomInt 0 1000000000000000`
--- drew 457532755261734).  $mdk_random_int is now i64→i64 (mirrors native mdk_random_int:
+-- $mdk_box_int.  Casting args + result to a bare `ref.i31` instead traps
+-- `illegal cast` when lo/hi/draw fall outside i31 (e.g. `randomInt 0 1000000000000000`
+-- draws 457532755261734).  $mdk_random_int is i64→i64 (mirrors native mdk_random_int:
 -- inclusive, unsigned modulus of hi-lo+1).
 emitLeafExternRef prog env d "randomInt" [lo, hi] =
   emitRefExpr prog env d lo
@@ -8311,8 +8311,8 @@ b2fByteRead arrL offL bitsL i = [
 ]
 
 -- #35 (wasm peer of llvm_emit's emitCtorApp): an APPLIED constructor, dispatched on
--- SATURATION.  This arm used to call `emitCtorConstruct` unconditionally, so an
--- UNDER-applied ctor (`Bin OAdd` for arity-3 `Bin`) emitted a `struct.new $S_Bin`
+-- SATURATION.  This arm must not call `emitCtorConstruct` unconditionally, or an
+-- UNDER-applied ctor (`Bin OAdd` for arity-3 `Bin`) emits a `struct.new $S_Bin`
 -- with only 1 of its 3 fields on the stack — the identical shape (and identical
 -- silent wrong-value miscompile: `check` accepts, `run` is right, `build` is garbage)
 -- as the LLVM bug, and the same shape as the pre-W9b bare-ctor bug that
@@ -10007,10 +10007,10 @@ argLoadAt (p, i) = [
 -- A zero-binding group is just its body.
 --
 -- P1 — a NULLARY VALUE binding (`base = 10`, i.e. `CBind n [CClause [] rhs]`) is NOT a
--- local function and must NOT be lifted.  It used to be: every member was lambda-lifted
--- uniformly, so `where base = 10 …` bound `base` to an arity-0 CLOSURE that was never
--- forced, and a sibling's `x + base` then ran $mdk_unbox_int over a `$clos` → the module
--- validated and trapped `illegal cast` at instantiate (test/llvm_fixtures/where_sibling_ref).
+-- local function and must NOT be lifted.  Lifting every member of the group
+-- uniformly binds `base` in `where base = 10 …` to an arity-0 CLOSURE that is never
+-- forced, and a sibling's `x + base` then runs $mdk_unbox_int over a `$clos` → the module
+-- validates and traps `illegal cast` at instantiate (test/llvm_fixtures/where_sibling_ref).
 -- llvm_emit's emitLetGroup has always had the dedicated nullary-value arm; ref-mode
 -- didn't.  Fix: evaluate a value binding's rhs at the use site into its local, and hand
 -- the value to the lifted members as an ordinary CAPTURE (it joins groupCaps, so each
@@ -10391,9 +10391,9 @@ emitTupleRef prog env d es =
 -- #712/S0: the `[]` terminator is the BUILT-IN list Nil — emit its reserved ordinal
 -- i31 directly, not `emitCtorConstruct "Nil"` (whose `ctorOrdinal "Nil"` a coexisting
 -- user `Nil` ctor would poison to the user's declaration-order ordinal).
--- Assembled LINEARLY.  The old two-clause recursion emitted, per cons level,
--- `["i32.const 0"] ++ hd ++ tl ++ ["struct.new $C_Cons"]`, whose right-associated
--- `tl ++ ["struct.new $C_Cons"]` COPIED the growing accumulated instruction list at
+-- Assembled LINEARLY.  A two-clause recursion emitting, per cons level,
+-- `["i32.const 0"] ++ hd ++ tl ++ ["struct.new $C_Cons"]` right-associates the
+-- `tl ++ ["struct.new $C_Cons"]`, COPYING the growing accumulated instruction list at
 -- each of N levels — O(n²) instruction-cons allocation in list-literal width (#522;
 -- the LLVM peer emitList/emitRtList prepends via `::` and is linear).  The emitted WAT
 -- is BYTE-IDENTICAL: N leading `(i32.const 0, <head instrs>)` prefixes, then the
@@ -10564,7 +10564,7 @@ emitIndexRef prog env d a i =
 -- segment), so wasm reports the CODE but not the `[lo..hi]` numbers that eval and
 -- native's @mdk_slice_oob both print.
 --
--- E-INDEX-OOB used to have the same gap and no longer does: #1787's wasmTrapNum
+-- E-INDEX-OOB does not have this gap: #1787's wasmTrapNum
 -- streams a runtime value through $mdk_write_err_int between two fixed byte runs, so
 -- all three engines name the offending index.  The same treatment would work here (two
 -- numbers instead of one); it is simply not done yet.
@@ -11875,8 +11875,8 @@ ctorTypeName prog name = match omLookup name (indexCtorTypesW (progIndex prog))
 --
 -- #712/S0: a USER ctor is looked up in the ctor TABLE **before** the name-based
 -- `syntheticCtorOrdinal` short-circuit — mirroring `ctorArity`/`ctorTypeName` (both
--- table-first) and native `llvm_emit.mdk`'s `ctorOrdinal`.  The old order took the
--- synthetic short-circuit FIRST, so a user ctor literally named `Cons`/`Nil` got the
+-- table-first) and native `llvm_emit.mdk`'s `ctorOrdinal`.  Taking the
+-- synthetic short-circuit FIRST instead gives a user ctor named `Cons`/`Nil` the
 -- built-in list ordinal (Cons=0/Nil=1) instead of its DECLARATION-ORDER index.  In a
 -- ≥3-ctor ADT like `data T = Extra | Cons Int T | Nil` that collides the user `Cons`
 -- (wrongly 0) with `Extra` (legitimately 0) → wasm `br_table` sent `Cons` to `Extra`'s
@@ -11948,8 +11948,8 @@ switchTypeName prog ((CTBranch h _) :: rest) = match conHeadInfo h
   None => switchTypeName prog rest
 
 -- ordinal → the branch that fills that br_table slot, built ONCE per switch (#381).
--- The tower walks every ordinal slot 0..n-1 and each slot used to re-scan the whole
--- branch list (`branchForOrdinal`) calling `ctorOrdinal` per branch — O(slots ×
+-- The tower walks every ordinal slot 0..n-1; re-scanning the whole
+-- branch list per slot (`branchForOrdinal`) calling `ctorOrdinal` per branch is O(slots ×
 -- branches) even with `ctorOrdinal` memoized.  Keyed by the ordinal rendered as a
 -- string (`OrdMap` is String-keyed).  The `omHasKey` guard keeps the FIRST branch on
 -- a duplicate ordinal, matching the old left-to-right `branchForOrdinal` scan.
@@ -12286,7 +12286,7 @@ indent lines = map ("    " ++ _) lines
 
 -- `indent` applied `d` times, but in ONE pass (#381).  The if/else CHAIN emitters
 -- (emitLitSwitch{Ref,Tail}, emitDispatchChain) nest their own recursion inside
--- `indent`, so the k-th arm's text used to be re-mapped — and every line
+-- `indent`, so the k-th arm's text would be re-mapped — and every line
 -- re-allocated — once per level above it: O(arms²) line copies for one chain.
 -- Threading the depth and padding ONCE collapses that to one copy per line.  The
 -- emitted text is unchanged: `indentBy d` is by construction `indent` iterated d
@@ -12321,8 +12321,8 @@ gname n =
 notIn : List String -> String -> Bool
 notIn xs x = not (contains x xs)
 
--- perf #382: dedup a String list keeping FIRST-seen order.  The old `contains x acc`
--- membership was O(kept) per element ⇒ O(k²), and `dedupKeep` is called ~20× across
+-- perf #382: dedup a String list keeping FIRST-seen order.  A `contains x acc`
+-- membership test is O(kept) per element ⇒ O(k²), and `dedupKeep` is called ~20× across
 -- emit (locals/free-var/num-poly/impl-value-use collection) — several on lists that grow
 -- with program size, so the quadratic surfaced as superlinear wasm-emit OP counts on
 -- dispatch-heavy code.  An OrdMap seen-set makes membership O(log k); `acc` still carries

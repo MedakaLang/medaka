@@ -586,7 +586,7 @@ stripLoc (ELoc _ e) = stripLoc e
 stripLoc e = e
 
 -- #164: a BOUNDED (single-layer) variant of `stripLoc`, for the one call site
--- (`leftSectionOrExpr`) that used to pay for the full recursive unwind at every
+-- (`leftSectionOrExpr`) that would otherwise pay for the full recursive unwind at every
 -- paren-nesting level.  `parseAtom = located parseAtomRaw` wraps EVERY atom
 -- production in exactly one fresh `ELoc`, including a parenthesised expr read
 -- back as an atom by its enclosing parens — so at nesting level k the content
@@ -2997,8 +2997,8 @@ ifaceWhereBody t
 -- otherwise have started: end of line (marker interface / method-less impl),
 -- a dedent closing an enclosing block, or end of file.  Anything else after a
 -- header — or after its `where` — is a layout mistake, not a body (#1140/#1160);
--- it used to be swallowed by a `_` arm that returned an EMPTY member list, which
--- silently discarded the declaration the user actually wrote.
+-- a `_` arm returning an EMPTY member list swallows it, silently discarding
+-- the declaration the user actually wrote.
 endsDecl : Token -> Bool
 endsDecl TNewline = True
 endsDecl TDedent = True
@@ -3728,9 +3728,9 @@ coalesceStep name acc n ps b rest
   | otherwise =
     LetBind name (reverseL acc) :: coalesceGo n [FunClause ps b] rest
 
--- Same offside-block production as `parseBracketBlock` (#602: the two used to
--- be independently-maintained byte-identical copies — one backing decl bodies,
--- the other let/where RHS and lambda bodies — which is exactly the class of
+-- Same offside-block production as `parseBracketBlock` (#602: the two must not
+-- fork into independently-maintained byte-identical copies — one backing decl
+-- bodies, the other let/where RHS and lambda bodies — exactly the class of
 -- silent-divergence hazard `rule-duplicate-body` exists to catch). Consolidated
 -- to a single definition; both call sites keep their own name since each is
 -- reached from a different grammar context.
@@ -5222,9 +5222,9 @@ firstRecordDeclIdx toks i depth lineStart
 
 -- #935.  `let`/`rec`/`if`/`then`/`else` are reserved, but they are deliberately
 -- absent from `reservedIdentKeyword` (see its comment: a fatal there would
--- break match-arm guards and every `let rec`), so binding one used to produce a
--- grammar-internal error that never names the real problem — `let = 5` reported
--- ``unexpected `=`; expected `rec` ``, and `if = 5` reported ``unexpected `if` ``.
+-- break match-arm guards and every `let rec`), so binding one would otherwise produce a
+-- grammar-internal error that never names the real problem — `let = 5` reports
+-- ``unexpected `=`; expected `rec` ``, and `if = 5` reports ``unexpected `if` ``.
 --
 -- A TOP-LEVEL logical line whose FIRST token is one of these five and whose
 -- SECOND is `=` or `:` is unambiguously an attempted top-level binding or type

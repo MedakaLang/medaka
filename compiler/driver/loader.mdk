@@ -915,9 +915,9 @@ joinArrow (x :: xs) = stringConcat [x, " → ", joinArrow xs]
 --     `roots` (the stdlib root is never dropped).
 --
 -- 🚨 The rebase is UNCONDITIONAL — `owningRoot` is prepended even when it is
--- ALREADY in `roots`.  It used to be guarded by `contains owningRoot roots`
--- ("nothing changes for a module found under a root we already have"), and that
--- guard silently exempted the two roots it matters most for: the STDLIB root and
+-- ALREADY in `roots`.  It must not be guarded by `contains owningRoot roots`
+-- ("nothing changes for a module found under a root we already have"): that
+-- guard silently exempts the two roots it matters most for: the STDLIB root and
 -- the entry project root, both of which are ALWAYS in `roots`.  `roots` is
 -- ordered entry-dir-FIRST (`[entryDir, projRoot, stdlibDir]` on the check/run
 -- path), so under the guard a stdlib module's OWN `import list as L` searched the

@@ -112,8 +112,8 @@ stages=DESUGAR,MARK
 --   * `TyRow`                — both print `<row>`; these agree.
 -- `rkTy` is based on typecheck's `ppTy`/`ppTyAtom`, the MORE COMPLETE of the
 -- two, so adopting it at eval's callers WIDENED eval's words for the two rows
--- above: two impls differing only in an effect row or a constraint used to
--- collapse onto one `implKeyOf` word there and no longer do.
+-- above: two impls differing only in an effect row or a constraint no longer
+-- collapse onto one `implKeyOf` word there.
 -- ✅ MEASURED SAFE, and this is the derivation rather than the assertion: a
 -- program that could OBSERVE the collapse does not typecheck. `impl Sz Int`
 -- beside `impl Sz (<Stdout> Int)` — and `impl Sz a` beside `impl Sz (Eq a => a)`
