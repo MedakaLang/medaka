@@ -76,6 +76,16 @@ test/snapshot_bless            the WRITE half of the snapshot suite: `--new` min
                                 (`kind = "native"`, registry name diff_compiler_snapshot_frontend),
                                 which also holds the family table this script mirrors and
                                 fails if the two have drifted.
+test/lsp_bless                 the WRITE half of the LSP suite: re-mints the ten goldens
+                                test/lsp_goldens/ holds, from the same `medaka check --json`
+                                and `medaka fmt --stdout` oracles and the same JSON-RPC
+                                sessions the gate drives. A blessing action, like
+                                capture_goldens — it writes goldens and asserts nothing. The
+                                CHECK half IS a gate and is enrolled as one:
+                                test/diff_compiler_lsp_test.mdk (`kind = "native"`, registry
+                                name diff_compiler_lsp), whose last test holds this script's
+                                golden list to the one those rows read.
+
 # CHECK=1 turns this one into a comparison, but its DEFAULT action (no env var) is to WRITE
 # the goldens — still a blessing action, exactly like capture_goldens. #2446/S-diag-census
 # wired the CHECK=1 comparison into CI via a thin wrapper,

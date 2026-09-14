@@ -385,13 +385,13 @@ name's real `Loc`; give the inlay-hint site a real name column too (retiring `co
 **NOT `ast.mdk`** — the carrier stays in the positions channel for this increment.
 
 **Moves goldens:** YES — LSP `lsp_goldens/b3_sym_def_hl.ndjson` and `b4_inlay.ndjson`
-(`diff_compiler_lsp_b3.sh`/`_b4.sh`), MCP `mcp_fixtures` (`diff_compiler_mcp.sh`), plus the
+(`test/diff_compiler_lsp_test.mdk`), MCP `mcp_fixtures` (`diff_compiler_mcp.sh`), plus the
 parser.mdk+lsp.mdk own snapshot source (`snapshot_bless.sh --bless`). The
 `positions` snapshot family does NOT move (renderDeclPos is line-only). Recapture via each
-gate's `CAPTURE=1`. **Fixpoint:** parser.mdk is in the self-compile graph, but the new field
+`sh test/lsp_bless.sh <golden>` and each other gate's `CAPTURE=1`. **Fixpoint:** parser.mdk is in the self-compile graph, but the new field
 is display-only (no codegen feed) and S-expr-invisible → fixpoint re-validates byte-identical,
 **no seed re-mint expected** (same profile as RESOLVER doc's `DUse`/`TyCon` loc adds, which
-were zero-re-mint). Decisive gate: `diff_compiler_lsp_b3.sh` + `selfcompile_fixpoint.sh`.
+were zero-re-mint). Decisive gate: `diff_compiler_lsp` + `selfcompile_fixpoint.sh`.
 
 **Model tier:** **Sonnet** — mechanical, well-scoped, mirrors existing `locOfSpan`/`DUse`-loc
 patterns; the only judgment is the per-decl-kind name-token table (enumerable from

@@ -1,0 +1,1289 @@
+{- | The LSP differential suite — every request set, every golden — as one
+   runner over a table of properties.
+
+   Three shell gates used to do this, 1,083 lines between them, each carrying
+   its own copy of the same four mechanisms: frame a JSON-RPC message with a
+   byte-counted `Content-Length`, feed the whole framed stream to one
+   `medaka lsp` process, split the framed responses back apart, and compare
+   the decoded objects against a committed golden. The mechanisms are the
+   loop; the REQUESTS and what each answer has to say are the data. The rows
+   here name them:
+
+   | row | request set | what it pins |
+   |---|---|---|
+   | `initialize` | `initialize` with bare `{}` params | a JSON-RPC 2.0 result advertising `textDocumentSync`, from a server calling itself `medaka-lsp` |
+   | `didopen-clean` | didOpen a clean buffer | `publishDiagnostics []`, agreeing with `medaka check --json` on the same source |
+   | `didopen-type-error` | didOpen a buffer with a type error | one severity-1 `medaka` diagnostic whose expr-level range START and END are `check --json`'s |
+   | `didchange-clean-to-error` | didOpen clean, then didChange to an error | two publishes, the second carrying the diagnostic the first did not |
+   | `project-didopen` | didOpen a 3-module project's entry | one publish per file in the import graph, the bad import not blanking its clean siblings |
+   | `b3-providers` | `initialize` | the four B.10.3 providers, and sync mode 1 |
+   | `b3-documentsymbol` | didOpen, documentSymbol | every decl's name, `SymbolKind` and start line, children included |
+   | `b3-definition` | didOpen, definition at the `area` decl | the defining decl's uri and start line |
+   | `b3-documenthighlight` | didOpen, documentHighlight at `area` | each occurrence's FULL range, start and end |
+   | `b3-formatting` | didOpen an unformatted buffer, formatting | one whole-document `TextEdit` whose `newText` is `medaka fmt`'s answer |
+   | `b3-formatting-clean` | didOpen a formatted buffer, formatting | `[]` — an already-formatted document earns no edit |
+   | `b4-providers` | `initialize` | hover, completion and inlayHint are advertised |
+   | `b4-hover` | didOpen, hover on `double` | a Markdown `name : type`, rendered by `ppScheme` |
+   | `b4-hover-off-identifier` | didOpen, hover on `=` | `null`, not the nearest identifier |
+   | `b4-completion-prefix` | didOpen, completion after `doub` | the prefix-filtered candidate set, with kinds and details |
+   | `b4-completion-empty-prefix` | didOpen, completion at column 0 | the WHOLE typecheck env, this buffer's own names included |
+   | `b4-inlayhint` | didOpen, inlayHint over the buffer | one `: <ty>` hint per UNSIGNATURED top-level binding, at the real end-of-name column |
+   | `b4-hover-shadowed-local` | didOpen, hover on a local shadowing a prelude name | the LOCAL's type (#2092, an S0: the prelude's scheme was answered instead) |
+   | `b4-hover-no-local-control` | didOpen, hover where no local is in scope | the PRELUDE's scheme — proving #2092's fix is position-scoped, not "locals always win" |
+
+   Each row is its own `medaka lsp` process, exactly as the retired scripts
+   drove them: a session is one framed stream in and one framed stream out,
+   so a row cannot inherit another row's server state.
+
+   # What this grades that the retired scripts did not
+
+   The scripts split the response stream on a `Content-Length: \d+` REGEX and
+   then decoded whatever JSON followed, so the declared byte count was never
+   read back. `decodeFrames` below consumes exactly the declared number of
+   BYTES per frame and requires the next frame's header to begin where that
+   count lands — a server that miscounts a multi-byte diagnostic desyncs the
+   stream and fails the row it broke, rather than being re-synchronized by
+   the regex and passing.
+
+   The scripts also sent every spawn's stderr to `/dev/null` and read only
+   the decoded stdout. This grades the exit code and stderr too (#2890): a
+   server that answered correctly on its way out of a panic, or one printing
+   the CLI's own staleness warning, has not passed.
+
+   # What is NOT here
+
+   `lsp.sh`'s seventh property — a multi-module project driven through seven
+   `didChange` states, each compared against a COLD `medaka check --json` —
+   needs the two disk edits to land BETWEEN messages of ONE session, which a
+   single pre-framed stdin stream cannot express. Medaka's only process
+   extern is `runCommand` (`stdlib/runtime.mdk`), which runs a command to
+   completion with no stdin handle, so there is no native spelling of an
+   interactive session. That property keeps its interactive driver in
+   `test/lsp_warm_session.sh` and is graded here as its own test, on the
+   script's exit code and output.
+
+   # The goldens
+
+   `test/lsp_goldens/` is READ here, never written. `check_{clean,err,
+   project}.json` are `medaka check --json` over the same sources — a
+   cross-check against a different code path, not a capture of the server
+   under test. The `b3_*`/`b4_*` files are raw protocol dumps with no
+   independent oracle, so blessing one enshrines whatever the server printed
+   and is a decision to review by hand. Re-minting any of them is
+   `test/lsp_bless.sh`; the last test below holds its golden list to the one
+   these rows read, so a golden cannot lose its re-mint path in silence.
+
+   Runs under `medaka test --native`: it spawns `medaka lsp` and reads the
+   goldens, neither of which the interpreter binds. -}
+
+import array as A
+import compiler_cli_test_support.{boundedInTree, chompNewlines, sweepUnits}
+import fs.{mkdirAll}
+import json.{
+  JArray,
+  JBool,
+  JInt,
+  JNull,
+  JString,
+  Json,
+  asInt,
+  asString,
+  get,
+  jArray,
+  jObject,
+  parse,
+  stringify,
+}
+import list.{nub, reverse, somes, sort}
+import path.{basename}
+import string.{contains, join, lines, startsWith, trim, unlines}
+import test.{Expectation, fail, pass}
+import test_process.{medakaBin, medakaRoot}
+
+-- # Framing
+
+{- | One Content-Length-framed JSON-RPC packet.
+
+   The header's count is a BYTE count, so it comes from the UTF-8 encoding
+   and never from `stringLength`, which counts codepoints: a request carrying
+   one multi-byte character would otherwise declare a length short of its own
+   body and desync the server on the first frame. -}
+frame : Json -> String
+frame msg =
+  let body = stringify msg
+  "Content-Length: \{intToString (utf8Len body)}\r\n\r\n\{body}"
+
+utf8Len : String -> Int
+utf8Len s = arrayLength (stringToUtf8Bytes s)
+
+-- # Decoding
+
+headerBytes : Array Int
+headerBytes = stringToUtf8Bytes "Content-Length: "
+
+separatorBytes : Array Int
+separatorBytes = stringToUtf8Bytes "\r\n\r\n"
+
+{- | The JSON objects of a framed JSON-RPC response stream, or an `Err`
+   naming the byte offset where the framing stopped making sense.
+
+   Strict by construction: each frame's declared count is consumed exactly,
+   and the bytes that follow must begin the next header or end the stream.
+   A declared count that does not match the body therefore fails here rather
+   than being re-synchronized. -}
+decodeFrames : String -> Result String (List Json)
+decodeFrames out = framesFrom (stringToUtf8Bytes out) 0 []
+
+framesFrom : Array Int -> Int -> List Json -> Result String (List Json)
+framesFrom bs i acc
+  | i >= arrayLength bs = Ok (reverse acc)
+  | not (matchesAt bs i headerBytes) =
+    Err
+      "byte \{intToString i}: expected a Content-Length header, found \{debug (peek bs i)}"
+  | otherwise = match digitsAt bs (i + arrayLength headerBytes)
+    None => Err "byte \{intToString i}: Content-Length carries no digits"
+    Some (declared, afterDigits) =>
+      if not (matchesAt bs afterDigits separatorBytes) then
+        Err
+          "byte \{intToString afterDigits}: Content-Length is not followed by a blank line"
+      else
+        bodyFrom bs declared (afterDigits + arrayLength separatorBytes) acc
+
+bodyFrom : Array Int -> Int -> Int -> List Json -> Result String (List Json)
+bodyFrom bs declared start acc =
+  let stop = start + declared
+  if stop > arrayLength bs then
+    Err
+      "byte \{intToString start}: the frame declares \{intToString declared} bytes but only \{intToString (arrayLength bs - start)} remain"
+  else match parse (stringFromUtf8Bytes (A.sliceClamped start stop bs))
+    Err e =>
+      Err
+        "byte \{intToString start}: the \{intToString declared} bytes the frame declares are not one JSON value: \{e}"
+    Ok j => framesFrom bs stop (j :: acc)
+
+-- | The byte at `i`, or `-1` past either end, so a scan never has to bound
+-- itself twice.
+byteAt : Array Int -> Int -> Int
+byteAt bs i = match A.get i bs
+  Some b => b
+  None => -1
+
+matchesAt : Array Int -> Int -> Array Int -> Bool
+matchesAt bs i pat = matchesFrom bs i pat 0
+
+matchesFrom : Array Int -> Int -> Array Int -> Int -> Bool
+matchesFrom bs i pat j
+  | j >= arrayLength pat = True
+  | byteAt bs (i + j) /= byteAt pat j = False
+  | otherwise = matchesFrom bs i pat (j + 1)
+
+-- | The decimal run at `i` and the index just past it, or `None` when `i`
+-- is not a digit.
+digitsAt : Array Int -> Int -> Option (Int, Int)
+digitsAt bs i =
+  if isDigitByte (byteAt bs i) then Some (digitsFrom bs i 0) else None
+
+digitsFrom : Array Int -> Int -> Int -> (Int, Int)
+digitsFrom bs i acc =
+  let b = byteAt bs i
+  if isDigitByte b then
+    digitsFrom bs (i + 1) (acc * 10 + (b - 48))
+  else
+    (acc, i)
+
+isDigitByte : Int -> Bool
+isDigitByte b = b >= 48 && b <= 57
+
+-- | A short excerpt for a framing failure's message.
+peek : Array Int -> Int -> String
+peek bs i = stringFromUtf8Bytes (A.sliceClamped i (i + 48) bs)
+
+-- # Reading a response apart
+
+-- | The value at a path of object keys, or `None` at the first key that is
+-- absent or whose parent is not an object.
+dig : List String -> Json -> Option Json
+dig [] j = Some j
+dig (k :: rest) j = match get k j
+  None => None
+  Some v => dig rest v
+
+-- | The response object carrying `id`, or `None` when the server never
+-- answered that request.
+replyTo : Int -> List Json -> Option Json
+replyTo idn objs = match filter (o => get "id" o == Some (JInt idn)) objs
+  o :: _ => Some o
+  [] => None
+
+{- | The `result` of the reply to `id`.
+
+   `Some JNull` (the server answered `null`) and `None` (the server did not
+   answer at all) are different outcomes, and `textDocument/hover` off an
+   identifier is specified to produce the first. -}
+resultTo : Int -> List Json -> Option Json
+resultTo idn objs = match replyTo idn objs
+  None => None
+  Some o => get "result" o
+
+publishes : List Json -> List Json
+publishes objs =
+  filter
+    (o => get "method" o == Some (JString "textDocument/publishDiagnostics"))
+    objs
+
+-- | The elements of a JSON array, or `[]` for anything else.
+elems : Option Json -> List Json
+elems (Some (JArray a)) = toList a
+elems _ = []
+
+diagsOf : Json -> List Json
+diagsOf pub = elems (dig ["params", "diagnostics"] pub)
+
+uriOf : Json -> String
+uriOf pub = match dig ["params", "uri"] pub
+  Some (JString u) => u
+  _ => ""
+
+strField : String -> Json -> String
+strField k j = match get k j
+  Some (JString s) => s
+  _ => ""
+
+intField : String -> Json -> Int
+intField k j = match get k j
+  Some (JInt n) => n
+  _ => -1
+
+-- | `line:character` of one end of a range, or a legible stand-in.
+endpoint : String -> Json -> String
+endpoint which j = match dig ["range", which] j
+  None => "(no \{which})"
+  Some p =>
+    "\{intToString (intField "line" p)}:\{intToString (intField "character" p)}"
+
+-- | One diagnostic's severity and start, as a sortable line. The MESSAGE is
+-- deliberately absent: it is prose that reorders with unification order, the
+-- documented divergence the retired gates also declined to diff.
+diagKey : Json -> String
+diagKey d =
+  "severity \{intToString (intField "severity" d)} at \{endpoint "start" d}"
+
+-- | `Some msg` when the claim does not hold — the shape `somes` collects.
+unless : Bool -> String -> Option String
+unless ok msg = if ok then None else Some msg
+
+-- # The request sets
+
+rpc : Int -> String -> Json -> Json
+rpc idn method params = jObject [
+  ("jsonrpc", JString "2.0"),
+  ("id", JInt idn),
+  ("method", JString method),
+  ("params", params),
+]
+
+notify : String -> Json -> Json
+notify method params = jObject [
+  ("jsonrpc", JString "2.0"),
+  ("method", JString method),
+  ("params", params),
+]
+
+{- | `initialize` with bare `{}` params.
+
+   The empty params are the assertion: `InitializeParams` has no required
+   member the server needs, and a server that fataled without a
+   `capabilities` object would reject an editor that sent none. -}
+initBare : Json
+initBare = rpc 1 "initialize" (jObject [])
+
+initCaps : Json
+initCaps = rpc 1 "initialize" (jObject [("capabilities", jObject [])])
+
+inited : Json
+inited = notify "initialized" (jObject [])
+
+bye : Json
+bye = notify "exit" (jObject [])
+
+{- | `textDocument/didOpen` carrying a whole `TextDocumentItem`.
+
+   All four members are sent, `languageId` and `version` included: they are
+   required by the protocol, and two of the retired scripts already sent
+   them. -}
+didOpenMsg : String -> String -> Json
+didOpenMsg uri text =
+  notify
+    "textDocument/didOpen"
+    (jObject [
+      (
+        "textDocument",
+        jObject [
+          ("uri", JString uri),
+          ("languageId", JString "medaka"),
+          ("version", JInt 1),
+          ("text", JString text),
+        ],
+      ),
+    ])
+
+-- | `textDocument/didChange` under Full sync: the whole document is replaced.
+didChangeMsg : String -> String -> Json
+didChangeMsg uri text =
+  notify
+    "textDocument/didChange"
+    (jObject [
+      ("textDocument", jObject [("uri", JString uri), ("version", JInt 2)]),
+      ("contentChanges", jArray [jObject [("text", JString text)]]),
+    ])
+
+docParams : String -> Json
+docParams uri = jObject [("textDocument", jObject [("uri", JString uri)])]
+
+posParams : String -> Int -> Int -> Json
+posParams uri line ch = jObject [
+  ("textDocument", jObject [("uri", JString uri)]),
+  ("position", jObject [("line", JInt line), ("character", JInt ch)]),
+]
+
+-- # The sources each row opens
+
+cleanSrc : String
+cleanSrc = "main = println \"hi\"\n"
+
+errSrc : String
+errSrc = "main = 1 + \"x\"\n"
+
+{- | A record decl, a sum decl and a function — the shapes `documentSymbol`
+   has to render as a symbol with children, a symbol with none, and a
+   function. -}
+symSrc : String
+symSrc =
+  "data Point = { x : Int, y : Int }\n\ndata Shape = Circle Int | Square Int\n\narea s = match s\n  Circle r => r * r\n  Square w => w * w\n"
+
+-- | Extra spaces and trailing blank lines, all of which `medaka fmt` removes.
+unformattedSrc : String
+unformattedSrc = "main   =   println    \"hi\"\n\n\n"
+
+{- | One unsignatured binding, one signatured one, a use, and an
+   `export`-prefixed binding.
+
+   The `export quad` line is the discriminating one for `inlayHint`: its
+   name ENDS at column 11, while a heuristic scanning the leading identifier
+   run from column 0 would stop after `export`, at column 6. Every other
+   line here begins its name at column 0 and cannot tell the two apart.
+   (`public export` is not available: `public` alone is a data-only modifier,
+   so a value binding can only be `export`-prefixed.) -}
+b4Src : String
+b4Src =
+  "double x = x + x\ntriple : Int -> Int\ntriple x = x * 3\nresult = double 5\nexport quad x = x * 4\n"
+
+-- | Two top-level names, for the empty-prefix completion row to find among
+-- the whole prelude env.
+b4NamesSrc : String
+b4NamesSrc = "alpha = 1\nbeta = 2\n\n"
+
+-- | A local binding shadowing the prelude's `count` (#2092).
+shadowSrc : String
+shadowSrc = "main =\n  let count = 5\n  println count\n"
+
+-- | The same name with NO local in scope — the prelude's `count` is the
+-- right answer here.
+noLocalSrc : String
+noLocalSrc = "main = println (count (x => x > 1) [1, 2, 3])\n"
+
+{- | A `count` local in an EARLIER decl, and a prelude `count` use in a later
+   one.
+
+   A name-only preference — "a local named `count` exists in this buffer" —
+   would answer `Int` for the second decl. Only a position-scoped one
+   answers the prelude's scheme. -}
+crossDeclSrc : String
+crossDeclSrc =
+  "f =\n  let count = 5\n  println count\n\nmain = println (count (x => x > 1) [1, 2, 3])\n"
+
+-- # The project one row opens
+
+libCleanSrc : String
+libCleanSrc = "export double : Int -> Int\ndouble x = x + x\n"
+
+libBadSrc : String
+libBadSrc =
+  "import lib_clean.{double}\n\nexport oops : Int\noops = double \"no\"\n"
+
+mainAppSrc : String
+mainAppSrc =
+  "import lib_clean.{double}\nimport lib_bad.{oops}\n\nmain = println (double 21)\n"
+
+projectFiles : List (String, String)
+projectFiles = [
+  ("lib_clean.mdk", libCleanSrc),
+  ("lib_bad.mdk", libBadSrc),
+  ("main_app.mdk", mainAppSrc),
+]
+
+-- # The table
+
+{- | The golden a row reads, and how to read it.
+
+   - `NoOracle` — the row's expected values are decided from the source, so
+     there is nothing a re-capture could bless away.
+   - `Frames f` — `test/lsp_goldens/<f>`, one JSON object per line.
+   - `Text f` — `test/lsp_goldens/<f>`, read verbatim. -}
+data Oracle = NoOracle | Frames String | Text String
+
+{- | One property: the session that provokes it, the golden it reads, and
+   what the answer has to say.
+
+   `requests` takes the row's own scratch directory because one row opens a
+   project whose `file://` uris only exist once that directory does; every
+   other row ignores it. `files` is what gets written there first, relative
+   to it. -}
+data Probe = Probe {
+  name : String,
+  files : List (String, String),
+  requests : String -> List Json,
+  oracle : Oracle,
+  grade : Seen -> List String,
+}
+
+{- | One session as its grader sees it: the decoded responses, the golden's
+   frames, and the golden's raw text. -}
+data Seen = Seen { objs : List Json, gold : List Json, goldText : String }
+
+probes : List Probe
+probes = [
+  Probe {
+    name = "initialize",
+    files = [],
+    requests = _ => [initBare, bye],
+    oracle = NoOracle,
+    grade = gradeInitialize,
+  },
+  Probe {
+    name = "didopen-clean",
+    files = [],
+    requests =
+      _ => [
+        initBare,
+        didOpenMsg "file:///clean.mdk" cleanSrc,
+        bye,
+      ],
+    oracle = Frames "check_clean.json",
+    grade = gradeClean,
+  },
+  Probe {
+    name = "didopen-type-error",
+    files = [],
+    requests = _ => [initBare, didOpenMsg "file:///err.mdk" errSrc, bye],
+    oracle = Frames "check_err.json",
+    grade = gradeTypeError,
+  },
+  Probe {
+    name = "didchange-clean-to-error",
+    files = [],
+    requests =
+      _ => [
+        initBare,
+        didOpenMsg "file:///d.mdk" cleanSrc,
+        didChangeMsg "file:///d.mdk" errSrc,
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = gradeDidChange,
+  },
+  Probe {
+    name = "project-didopen",
+    files = projectFiles,
+    requests =
+      dir => [
+        initBare,
+        didOpenMsg "file://\{dir}/main_app.mdk" mainAppSrc,
+        bye,
+      ],
+    oracle = Frames "check_project.json",
+    grade = gradeProject,
+  },
+  Probe {
+    name = "b3-providers",
+    files = [],
+    requests = _ => [initCaps, bye],
+    oracle = NoOracle,
+    grade = gradeProviders b3Providers,
+  },
+  Probe {
+    name = "b3-documentsymbol",
+    files = [],
+    requests = _ => b3Session,
+    oracle = Frames "b3_sym_def_hl.ndjson",
+    grade = gradeDocumentSymbol,
+  },
+  Probe {
+    name = "b3-definition",
+    files = [],
+    requests = _ => b3Session,
+    oracle = Frames "b3_sym_def_hl.ndjson",
+    grade = gradeDefinition,
+  },
+  Probe {
+    name = "b3-documenthighlight",
+    files = [],
+    requests = _ => b3Session,
+    oracle = Frames "b3_sym_def_hl.ndjson",
+    grade = gradeHighlight,
+  },
+  Probe {
+    name = "b3-formatting",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        inited,
+        didOpenMsg "file:///u.mdk" unformattedSrc,
+        rpc 2 "textDocument/formatting" (docParams "file:///u.mdk"),
+        bye,
+      ],
+    oracle = Text "b3_fmt.txt",
+    grade = gradeFormatting,
+  },
+  Probe {
+    name = "b3-formatting-clean",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        inited,
+        didOpenMsg "file:///f.mdk" cleanSrc,
+        rpc 2 "textDocument/formatting" (docParams "file:///f.mdk"),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = gradeFormattingClean,
+  },
+  Probe {
+    name = "b4-providers",
+    files = [],
+    requests = _ => [initCaps, bye],
+    oracle = NoOracle,
+    grade = gradeProviders b4Providers,
+  },
+  Probe {
+    name = "b4-hover",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///b4.mdk" b4Src,
+        rpc 2 "textDocument/hover" (posParams "file:///b4.mdk" 0 2),
+        bye,
+      ],
+    oracle = Frames "b4_hover.ndjson",
+    grade = gradeHover,
+  },
+  Probe {
+    name = "b4-hover-off-identifier",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///b4.mdk" b4Src,
+        rpc 2 "textDocument/hover" (posParams "file:///b4.mdk" 0 9),
+        bye,
+      ],
+    oracle = Frames "b4_hover_off.ndjson",
+    grade = gradeHoverOff,
+  },
+  Probe {
+    name = "b4-completion-prefix",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///b4.mdk" b4Src,
+        rpc 3 "textDocument/completion" (posParams "file:///b4.mdk" 3 13),
+        bye,
+      ],
+    oracle = Frames "b4_compl.ndjson",
+    grade = gradeCompletionPrefix,
+  },
+  Probe {
+    name = "b4-completion-empty-prefix",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///b4b.mdk" b4NamesSrc,
+        rpc 3 "textDocument/completion" (posParams "file:///b4b.mdk" 2 0),
+        bye,
+      ],
+    oracle = Frames "b4_compl_full.ndjson",
+    grade = gradeCompletionFull,
+  },
+  Probe {
+    name = "b4-inlayhint",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///b4.mdk" b4Src,
+        rpc 4 "textDocument/inlayHint" (inlayParams "file:///b4.mdk"),
+        bye,
+      ],
+    oracle = Frames "b4_inlay.ndjson",
+    grade = gradeInlay,
+  },
+  Probe {
+    name = "b4-hover-shadowed-local",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///b4shadow.mdk" shadowSrc,
+        rpc 7 "textDocument/hover" (posParams "file:///b4shadow.mdk" 2 11),
+        rpc 8 "textDocument/hover" (posParams "file:///b4shadow.mdk" 1 7),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = gradeShadowedLocal,
+  },
+  Probe {
+    name = "b4-hover-no-local-control",
+    files = [],
+    requests =
+      _ => [
+        initCaps,
+        didOpenMsg "file:///b4noloc.mdk" noLocalSrc,
+        rpc 9 "textDocument/hover" (posParams "file:///b4noloc.mdk" 0 17),
+        didOpenMsg "file:///b4xdecl.mdk" crossDeclSrc,
+        rpc 10 "textDocument/hover" (posParams "file:///b4xdecl.mdk" 4 17),
+        bye,
+      ],
+    oracle = NoOracle,
+    grade = gradeNoLocalControl,
+  },
+]
+
+-- | The three B.10.3 queries share one buffer and one session; splitting
+-- them into three rows keeps each answer's failure its own, without paying
+-- three spawns for one didOpen.
+b3Session : List Json
+b3Session = [
+  initCaps,
+  inited,
+  didOpenMsg "file:///s.mdk" symSrc,
+  rpc 2 "textDocument/documentSymbol" (docParams "file:///s.mdk"),
+  rpc 3 "textDocument/definition" (posParams "file:///s.mdk" 4 0),
+  rpc 4 "textDocument/documentHighlight" (posParams "file:///s.mdk" 4 0),
+  rpc 9 "shutdown" (jObject []),
+  bye,
+]
+
+inlayParams : String -> Json
+inlayParams uri = jObject [
+  ("textDocument", jObject [("uri", JString uri)]),
+  (
+    "range",
+    jObject [
+      ("start", jObject [("line", JInt 0), ("character", JInt 0)]),
+      ("end", jObject [("line", JInt 10), ("character", JInt 0)]),
+    ],
+  ),
+]
+
+{- | A capability roster: the key, and either the value it must carry or
+   `None` for "advertised at all".
+
+   `completionProvider` is the one that cannot be spelled as a value — it is
+   a `CompletionOptions` object, and an editor reads its presence, not its
+   contents. -}
+b3Providers : List (String, Option Json)
+b3Providers = [
+  ("textDocumentSync", Some (JInt 1)),
+  ("documentFormattingProvider", Some (JBool True)),
+  ("documentSymbolProvider", Some (JBool True)),
+  ("definitionProvider", Some (JBool True)),
+  ("documentHighlightProvider", Some (JBool True)),
+]
+
+b4Providers : List (String, Option Json)
+b4Providers = [
+  ("hoverProvider", Some (JBool True)),
+  ("completionProvider", None),
+  ("inlayHintProvider", Some (JBool True)),
+]
+
+-- # The graders
+
+gradeInitialize : Seen -> List String
+gradeInitialize s = match replyTo 1 s.objs
+  None => ["the server never answered the initialize request"]
+  Some init => somes [
+    unless
+      (get "jsonrpc" init == Some (JString "2.0"))
+      "the reply is not JSON-RPC 2.0",
+    unless (get "result" init /= None) "the reply carries no result",
+    unless
+      (dig ["result", "capabilities", "textDocumentSync"] init /= None)
+      "the capabilities do not advertise textDocumentSync",
+    unless
+      (dig ["result", "serverInfo", "name"] init == Some (JString "medaka-lsp"))
+      "serverInfo.name is not \"medaka-lsp\"",
+  ]
+
+gradeProviders : List (String, Option Json) -> Seen -> List String
+gradeProviders wanted s = match dig ["result", "capabilities"] (initReply s)
+  None => ["the initialize reply carries no capabilities"]
+  Some caps => somes (map (advertised caps) wanted)
+
+initReply : Seen -> Json
+initReply s = match replyTo 1 s.objs
+  Some init => init
+  None => JNull
+
+advertised : Json -> (String, Option Json) -> Option String
+advertised caps (key, want) = match get key caps
+  None => Some "the capabilities do not advertise \{key}"
+  Some got => match want
+    None => None
+    Some v =>
+      unless (got == v) "\{key} is \{stringify got}, expected \{stringify v}"
+
+gradeClean : Seen -> List String
+gradeClean s = match publishes s.objs
+  [] => ["the server published no diagnostics for the opened buffer"]
+  pub :: _ => somes [
+    unless
+      (diagsOf pub == [])
+      "a clean buffer published \{intToString (length (diagsOf pub))} diagnostics",
+    unless
+      (oracleDiags s == [])
+      "medaka check --json reports diagnostics on the same source, so the fixture is not clean",
+  ]
+
+gradeTypeError : Seen -> List String
+gradeTypeError s = match publishes s.objs
+  [] => ["the server published no diagnostics for the opened buffer"]
+  pub :: _ => checkOneDiag (diagsOf pub) (oracleDiags s)
+
+checkOneDiag : List Json -> List Json -> List String
+checkOneDiag [d] [o] = somes [
+  unless
+    (intField "severity" d == 1)
+    "the diagnostic's severity is not 1 (Error)",
+  unless
+    (intField "severity" o == 1)
+    "check --json's diagnostic is not an error either, so the fixture proves nothing",
+  unless
+    (strField "source" d == "medaka")
+    "the diagnostic's source is not \"medaka\"",
+  unless (get "message" d /= None) "the diagnostic carries no message",
+  unless
+    (endpoint "start" d == endpoint "start" o)
+    "range START is \{endpoint "start" d}, check --json says \{endpoint "start" o}",
+  unless
+    (endpoint "end" d == endpoint "end" o)
+    "range END is \{endpoint "end" d}, check --json says \{endpoint "end" o}",
+]
+checkOneDiag ds os = [
+  "expected one diagnostic on each side, got \{intToString (length ds)} published and \{intToString (length os)} from check --json",
+]
+
+gradeDidChange : Seen -> List String
+gradeDidChange s = match publishes s.objs
+  [first, second] => somes [
+    unless
+      (diagsOf first == [])
+      "the didOpen of a clean buffer published a diagnostic",
+    unless
+      (length (diagsOf second) == 1)
+      "the didChange to an ill-typed buffer published \{intToString (length (diagsOf second))} diagnostics, expected 1",
+    unless
+      (all (d => intField "severity" d == 1) (diagsOf second))
+      "the republished diagnostic is not an error",
+  ]
+  pubs => [
+    "expected two publishes — one per notification — got \{intToString (length pubs)}",
+  ]
+
+gradeProject : Seen -> List String
+gradeProject s =
+  let mine =
+    map (p => perFile (basename (uriOf p)) (diagsOf p)) (publishes s.objs)
+  let theirs =
+    map (f => perFile (strField "file" f) (oracleFileDiags f)) (oracleFilesOf s)
+  somes [
+    unless
+      (sort mine == sort theirs)
+      "the published diagnostics differ from check --json's\n  published:\n\{indentAll (sort mine)}  check --json:\n\{indentAll (sort theirs)}",
+    unless
+      (elem (perFile "lib_clean.mdk" []) mine)
+      "lib_clean.mdk was not published clean — a bad import blanked a clean sibling",
+    unless
+      (elem (perFile "main_app.mdk" []) mine)
+      "main_app.mdk was not published clean — a bad import blanked the entry",
+    unless
+      (not (elem (perFile "lib_bad.mdk" []) mine))
+      "lib_bad.mdk was published clean — its diagnostic was lost",
+  ]
+
+-- | One file's published diagnostics as a sortable line.
+perFile : String -> List Json -> String
+perFile file diags = "\{file} -> [\{join ", " (sort (map diagKey diags))}]"
+
+oracleFilesOf : Seen -> List Json
+oracleFilesOf s = match s.gold
+  doc :: _ => elems (get "files" doc)
+  [] => []
+
+oracleFileDiags : Json -> List Json
+oracleFileDiags f = elems (get "diagnostics" f)
+
+-- | The diagnostics of the FIRST file of a `medaka check --json` document —
+-- the whole of a single-file check.
+oracleDiags : Seen -> List Json
+oracleDiags s = match oracleFilesOf s
+  f :: _ => oracleFileDiags f
+  [] => []
+
+indentAll : List String -> String
+indentAll ls = unlines (map (l => "    \{l}") ls)
+
+{- | A symbol's name, kind and start line, with its children — the decl-level
+   skeleton.
+
+   END lines are not compared: the AST's per-decl end is its last content
+   token, so a decl followed by blank lines ends earlier than an editor's
+   own notion of the decl's extent. The `detail` an outline may carry is
+   additive and not compared either. -}
+symbolSkeleton : Json -> String
+symbolSkeleton sym =
+  let kids = elems (get "children" sym)
+  "\{strField "name" sym}:\{intToString (intField "kind" sym)}@\{startLine sym}(\{join "," (map symbolSkeleton kids)})"
+
+startLine : Json -> String
+startLine j = match dig ["range", "start", "line"] j
+  Some (JInt n) => intToString n
+  _ => "(no start line)"
+
+gradeDocumentSymbol : Seen -> List String
+gradeDocumentSymbol s =
+  let mine = map symbolSkeleton (elems (resultTo 2 s.objs))
+  let theirs = map symbolSkeleton (elems (resultTo 2 s.gold))
+  somes [
+    unless (mine /= []) "documentSymbol returned no symbols at all",
+    unless
+      (mine == theirs)
+      "the outline differs from the golden\n  got:  \{join " " mine}\n  want: \{join " " theirs}",
+  ]
+
+-- | A location's uri and start line — what "go to definition" lands on.
+locationKey : Json -> String
+locationKey loc = "\{strField "uri" loc}@\{startLine loc}"
+
+gradeDefinition : Seen -> List String
+gradeDefinition s =
+  let mine = map locationKey (elems (resultTo 3 s.objs))
+  let theirs = map locationKey (elems (resultTo 3 s.gold))
+  somes [
+    unless
+      (mine == theirs)
+      "definition differs from the golden: got \{debug mine}, want \{debug theirs}",
+    unless
+      (mine == ["file:///s.mdk@4"])
+      "definition did not land on the `area` decl (line 4 of its own file): \{debug mine}",
+  ]
+
+-- | An occurrence's FULL range. Highlights are computed textually, so both
+-- ends are exact and both are compared.
+highlightKey : Json -> String
+highlightKey h = "\{endpoint "start" h}-\{endpoint "end" h}"
+
+gradeHighlight : Seen -> List String
+gradeHighlight s =
+  let mine = sort (map highlightKey (elems (resultTo 4 s.objs)))
+  let theirs = sort (map highlightKey (elems (resultTo 4 s.gold)))
+  somes [
+    unless
+      (mine == theirs)
+      "documentHighlight differs from the golden: got \{debug mine}, want \{debug theirs}",
+    unless
+      (mine == ["4:0-4:4"])
+      "`area` occurs once, spanning its four characters; got \{debug mine}",
+  ]
+
+gradeFormatting : Seen -> List String
+gradeFormatting s = match elems (resultTo 2 s.objs)
+  [edit] => somes [
+    unless
+      (chompNewlines (strField "newText" edit) == chompNewlines s.goldText)
+      "the edit's newText is not what `medaka fmt` produces:\n    got:  \{debug (strField "newText" edit)}\n    want: \{debug s.goldText}",
+    unless
+      (dig ["range", "start"] edit
+        == Some (jObject [("line", JInt 0), ("character", JInt 0)]))
+      "the edit does not start at the top of the document",
+  ]
+  edits =>
+    ["expected one whole-document TextEdit, got \{intToString (length edits)}"]
+
+gradeFormattingClean : Seen -> List String
+gradeFormattingClean s = somes [
+  unless
+    (resultTo 2 s.objs == Some (jArray []))
+    "an already-formatted document earned an edit: \{debug (resultTo 2 s.objs)}",
+]
+
+-- | The rendered hover body of the reply to `id`, or `""`.
+hoverValue : Int -> List Json -> String
+hoverValue idn objs = match replyTo idn objs
+  None => ""
+  Some o => match dig ["result", "contents", "value"] o
+    Some (JString v) => v
+    _ => ""
+
+hoverKind : Int -> List Json -> String
+hoverKind idn objs = match replyTo idn objs
+  None => ""
+  Some o => match dig ["result", "contents", "kind"] o
+    Some (JString k) => k
+    _ => ""
+
+gradeHover : Seen -> List String
+gradeHover s = somes [
+  unless (hoverKind 2 s.objs == "markdown") "the hover body is not Markdown",
+  unless
+    (hoverValue 2 s.objs == hoverValue 2 s.gold)
+    "the hover body differs from the golden: got \{debug (hoverValue 2 s.objs)}, want \{debug (hoverValue 2 s.gold)}",
+  unless
+    (contains "double" (hoverValue 2 s.objs))
+    "the hover body does not name `double`, so it is not this identifier's type",
+]
+
+gradeHoverOff : Seen -> List String
+gradeHoverOff s = somes [
+  unless
+    (resultTo 2 s.objs == Some JNull)
+    "hover off an identifier answered \{debug (resultTo 2 s.objs)}, expected null",
+  unless
+    (resultTo 2 s.gold == Some JNull)
+    "the golden does not record a null there, so this row is comparing the wrong position",
+]
+
+{- | One completion candidate's label, kind and detail.
+
+   Compared as a SET, never as a list: the env is walked in an order the
+   protocol does not fix, and an editor sorts the items itself. -}
+itemKey : Json -> String
+itemKey it =
+  "\{strField "label" it}:\{intToString (intField "kind" it)}:\{strField "detail" it}"
+
+-- | A completion result is either the item list or a `CompletionList`
+-- wrapping it; both spellings are legal and the server may use either.
+itemsOf : Option Json -> List Json
+itemsOf (Some (JArray a)) = toList a
+itemsOf (Some o) = elems (get "items" o)
+itemsOf None = []
+
+gradeCompletionPrefix : Seen -> List String
+gradeCompletionPrefix s =
+  let mine = sort (map itemKey (itemsOf (resultTo 3 s.objs)))
+  let theirs = sort (map itemKey (itemsOf (resultTo 3 s.gold)))
+  somes [
+    unless
+      (mine == theirs)
+      "the candidate set differs from the golden\n  got:  \{debug mine}\n  want: \{debug theirs}",
+    unless
+      (elem
+        "double"
+        (map (l => strField "label" l) (itemsOf (resultTo 3 s.objs))))
+      "`double` is not among the candidates for the prefix `doub`",
+    unless
+      (all
+        (l => startsWith "doub" (strField "label" l))
+        (itemsOf (resultTo 3 s.objs)))
+      "a candidate does not start with the prefix `doub`",
+  ]
+
+gradeCompletionFull : Seen -> List String
+gradeCompletionFull s =
+  let labels = map (l => strField "label" l) (itemsOf (resultTo 3 s.objs))
+  somes [
+    unless
+      (sort (map itemKey (itemsOf (resultTo 3 s.objs)))
+        == sort (map itemKey (itemsOf (resultTo 3 s.gold))))
+      "the whole-env candidate set differs from the golden (\{intToString (length labels)} candidates here, \{intToString (length (itemsOf (resultTo 3 s.gold)))} there)",
+    unless
+      (elem "alpha" labels)
+      "the buffer's own `alpha` is missing from the env",
+    unless
+      (elem "beta" labels)
+      "the buffer's own `beta` is missing from the env",
+  ]
+
+-- | One hint's position, label and padding.
+hintKey : Json -> String
+hintKey h =
+  "\{intToString (hintLine h)}:\{intToString (hintChar h)} \{debug (strField "label" h)} pad=\{debug (get "paddingLeft" h)}"
+
+hintLine : Json -> Int
+hintLine h = match dig ["position", "line"] h
+  Some (JInt n) => n
+  _ => -1
+
+hintChar : Json -> Int
+hintChar h = match dig ["position", "character"] h
+  Some (JInt n) => n
+  _ => -1
+
+gradeInlay : Seen -> List String
+gradeInlay s =
+  let mine = elems (resultTo 4 s.objs)
+  let onLine = n => filter (h => hintLine h == n) mine
+  somes [
+    unless
+      (sort (map hintKey mine)
+        == sort (map hintKey (elems (resultTo 4 s.gold))))
+      "the hints differ from the golden\n  got:  \{debug (sort (map hintKey mine))}\n  want: \{debug (sort (map hintKey (elems (resultTo 4 s.gold))))}",
+    unless (onLine 0 /= []) "the unsignatured `double` earned no hint",
+    unless (onLine 1 == []) "the signature line of `triple` earned a hint",
+    unless (onLine 2 == []) "the already-signatured `triple` earned a hint",
+    unless
+      (map hintChar (onLine 4) == [11])
+      "the `export quad` hint sits at column \{debug (map hintChar (onLine 4))}, not 11 — the end of the NAME, not the end of the `export` keyword",
+  ]
+
+gradeShadowedLocal : Seen -> List String
+gradeShadowedLocal s =
+  somes (map (localIsInt s) [(7, "the use"), (8, "the binder")])
+
+localIsInt : Seen -> (Int, String) -> Option String
+localIsInt s (idn, which) =
+  let v = hoverValue idn s.objs
+  if contains "count : Int" v && not (contains "Foldable" v) then
+    None
+  else
+    Some
+      "\{which} of the local `count` hovers as \{debug v}, expected the local's own `count : Int`"
+
+gradeNoLocalControl : Seen -> List String
+gradeNoLocalControl s =
+  somes
+    (map (preludeScheme s) [
+      (9, "with no local anywhere"),
+      (10, "with a local in another decl"),
+    ])
+
+preludeScheme : Seen -> (Int, String) -> Option String
+preludeScheme s (idn, which) =
+  let v = hoverValue idn s.objs
+  if contains "Foldable" v && not (contains "count : Int\n" v) then
+    None
+  else
+    Some
+      "`count` \{which} hovers as \{debug v}, expected the prelude's Foldable-constrained scheme"
+
+-- # Running one row
+
+{- | The ceiling on one session.
+
+   A session that opens a project typechecks its whole import graph, and the
+   whole-env completion row renders every prelude scheme, so the single-verb
+   default in `test_process` is not a ceiling either can borrow. -}
+sessionTimeoutSeconds : Int
+sessionTimeoutSeconds = 180
+
+{- | Drives one `medaka lsp` over the framed request stream, and grades the
+   spawn itself: the findings it returns are about the PROCESS, and the string
+   is its stdout for the row's own grader to read.
+
+   The stream reaches the server's stdin through a `sh -c` redirect because
+   `boundedVerb` has no stdin parameter; `printf '%s'` writes its argument
+   with no escape processing, so the CR bytes the protocol requires survive
+   verbatim. The pipeline's status is the server's own, which is what makes
+   the exit code gradeable at all.
+
+   A nonzero exit, a panic, or ANY stderr is a failure (#2890): `medaka lsp`
+   speaks on stdout and says nothing on stderr, so a line there is the CLI's
+   own staleness warning or a server that was not well — either of which makes
+   every answer below untrustworthy however right it looks. -}
+drive : List Json -> <Exec "_", IO> (List String, String)
+drive msgs =
+  let stream = join "" (map frame msgs)
+  let args = ["-c", "printf '%s' \"$1\" | \"$2\" lsp", "sh", stream, medakaBin]
+  match boundedInTree sessionTimeoutSeconds "sh" args
+    Err e => (["could not spawn medaka lsp: \{e}"], "")
+    Ok (code, out, err) =>
+      let findings = somes [
+        unless (code == 0) "medaka lsp exited \{intToString code}",
+        unless
+          (not (contains "E-PANIC" err))
+          "medaka lsp panicked: \{debug err}",
+        unless (err == "") "medaka lsp wrote to stderr: \{debug err}",
+      ]
+      (findings, out)
+
+{- | One row's outcome. `findings` is the whole list rather than the first,
+   so a red run names every disagreement at once. -}
+data Outcome = Outcome { name : String, findings : List String }
+
+gradeProbe : String ->
+  Probe ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> Outcome
+gradeProbe scratch p =
+  let dir = "\{scratch}/\{p.name}"
+  match layOut dir p.files
+    Err e => Outcome { name = p.name, findings = [e] }
+    Ok _ => match drive (p.requests dir)
+      (spawned, out) =>
+        Outcome { name = p.name, findings = spawned ++ decodeAndGrade p out }
+
+{- | Writes a row's fixture files under its own directory.
+
+   Each row gets its own, since one row's project is another row's noise:
+   a leftover `main_app.mdk` in a shared directory would be read by whatever
+   later row opened a buffer beside it. -}
+layOut : String ->
+  List (String, String) ->
+  <FileWrite "_", IO> Result String Unit
+layOut _ [] = Ok ()
+layOut dir files = match mkdirAll dir
+  Err e => Err "could not make \{dir}: \{e}"
+  Ok _ => writeAll dir files
+
+writeAll : String ->
+  List (String, String) ->
+  <FileWrite "_", IO> Result String Unit
+writeAll _ [] = Ok ()
+writeAll dir ((rel, text) :: rest) = match writeFile "\{dir}/\{rel}" text
+  Err e => Err "could not write \{dir}/\{rel}: \{e}"
+  Ok _ => writeAll dir rest
+
+decodeAndGrade : Probe -> String -> <FileRead "_", IO> List String
+decodeAndGrade p out = match decodeFrames out
+  Err e => ["the response stream is not well framed: \{e}"]
+  Ok objs => match readOracle p.oracle
+    Err e => [e]
+    Ok (gold, goldText) =>
+      p.grade Seen { objs = objs, gold = gold, goldText = goldText }
+
+readOracle : Oracle -> <FileRead "_", IO> Result String (List Json, String)
+readOracle NoOracle = Ok ([], "")
+readOracle (Text name) = map (text => ([], text)) (goldenText name)
+readOracle (Frames name) = match goldenText name
+  Err e => Err e
+  Ok text => match parseLines (filter (l => trim l /= "") (lines text))
+    Err e => Err "test/lsp_goldens/\{name}: \{e}"
+    Ok objs => Ok (objs, text)
+
+goldenText : String -> <FileRead "_", IO> Result String String
+goldenText name = match readFile "\{medakaRoot}/test/lsp_goldens/\{name}"
+  Err e => Err "could not read test/lsp_goldens/\{name}: \{e}"
+  Ok text => Ok text
+
+parseLines : List String -> Result String (List Json)
+parseLines [] = Ok []
+parseLines (l :: rest) = match parse l
+  Err e => Err "a line is not JSON: \{e}"
+  Ok j => map (j :: _) (parseLines rest)
+
+probeFailure : Outcome -> Option String
+probeFailure o = match o.findings
+  [] => None
+  fs =>
+    Some "  \{o.name} (\{intToString (length fs)} findings):\n\{indentAll fs}"
+
+summarize : Int -> List String -> Expectation
+summarize _ [] = pass
+summarize graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} LSP properties failed:\n\{unlines failures}"
+
+test "every LSP request set answers as its golden and its source say" =
+  sweepUnits probes gradeProbe probeFailure summarize
+
+-- # The one session that cannot be pre-framed
+
+{- | `lsp.sh`'s warm-versus-cold property, still driven by a script.
+
+   Graded on the script's exit code AND its transcript, not on the code
+   alone: the script prints one line per state and a `N ok, M failing`
+   summary, and a run that reached no state at all would otherwise exit 0
+   having proved nothing. -}
+warmSessionScript : String
+warmSessionScript = "test/lsp_warm_session.sh"
+
+runWarmSession : <Exec "_", IO> Result String (Int, String, String)
+runWarmSession =
+  let args = ["\{medakaRoot}/\{warmSessionScript}"]
+  boundedInTree sessionTimeoutSeconds "sh" args
+
+test "a warm multi-module session publishes what a cold check --json reports" =
+  match runWarmSession
+    Err e => fail "could not run \{warmSessionScript}: \{e}"
+    Ok (code, out, err) =>
+      let text = out ++ err
+      if code /= 0 then
+        fail "\{warmSessionScript} exited \{intToString code}:\n\{text}"
+      else if not (contains ", 0 failing" text) then
+        fail
+          "\{warmSessionScript} exited 0 without a passing summary — it may have graded nothing:\n\{text}"
+      else
+        pass
+
+-- # Every golden this gate reads has a re-mint path
+
+{- | The goldens `test/lsp_bless.sh` mints, from the sentinel-delimited list
+   it carries, one name per line.
+
+   The tool has to spell the sessions and sources that produce each golden,
+   which is a second copy of this file's own table — but a copy that cannot
+   rot in silence, because a golden minted from the WRONG session is one this
+   gate then compares against and rejects on the next run. What a wrong copy
+   CAN do quietly is mint nothing at all for a golden, or mint one nothing
+   reads; so the two halves are held to each other by NAME, which is exactly
+   the part no later run would catch. -}
+toolTableStart : String
+toolTableStart = "# ── GOLDEN TABLE BEGIN"
+
+toolTableEnd : String
+toolTableEnd = "# ── GOLDEN TABLE END"
+
+toolGoldens : <FileRead "_", IO> Result String (List String)
+toolGoldens = match readFile "\{medakaRoot}/test/lsp_bless.sh"
+  Err e => Err "cannot read test/lsp_bless.sh: \{e}"
+  Ok src => match between toolTableStart toolTableEnd (lines src)
+    [] => Err "test/lsp_bless.sh has no GOLDEN TABLE block"
+    ls => Ok (sort (filter isName (map trim ls)))
+
+isName : String -> Bool
+isName l = l /= "" && not (startsWith "#" l)
+
+between : String -> String -> List String -> List String
+between _ _ [] = []
+between from to (l :: rest) =
+  if startsWith from l then untilLine to rest else between from to rest
+
+untilLine : String -> List String -> List String
+untilLine _ [] = []
+untilLine to (l :: rest) =
+  if startsWith to l then [] else l :: untilLine to rest
+
+-- | The goldens the rows above read, each once. Three rows share the B.10.3
+-- session dump, so the list is deduplicated before it is compared.
+ownGoldens : List String
+ownGoldens = sort (nub (somes (map oracleName probes)))
+
+oracleName : Probe -> Option String
+oracleName p = match p.oracle
+  NoOracle => None
+  Text name => Some name
+  Frames name => Some name
+
+test "the bless tool mints exactly the goldens this file reads" =
+  match toolGoldens
+    Err e => fail e
+    Ok minted =>
+      if minted == ownGoldens then
+        pass
+      else
+        fail
+          "test/lsp_bless.sh and this file disagree about the golden set.\n  the tool mints:\n\{indentAll minted}  this gate reads:\n\{indentAll ownGoldens}"

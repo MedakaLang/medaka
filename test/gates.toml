@@ -2162,47 +2162,17 @@ corpus = ["test/llvm_fixtures_typed"]
 toolchain = ["clang"]
 
 [[gate]]
-name = "diff_compiler_lsp_b3"
-area = "tools"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_compiler_lsp_b3.sh"
-oracles = []
-sources = ["compiler/tools/lsp.mdk", "test/diff_compiler_lsp_b3.sh"]
-corpus = ["test/lsp_goldens"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_lsp_b4"
-area = "tools"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_compiler_lsp_b4.sh"
-oracles = []
-sources = ["compiler/tools/lsp.mdk", "test/diff_compiler_lsp_b4.sh"]
-corpus = ["test/lsp_goldens"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_lsp"
 area = "tools"
 shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "split-first"
-run = "test/diff_compiler_lsp.sh"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_lsp_test.mdk"
 oracles = []
-sources = ["compiler/tools/lsp.mdk", "test/diff_compiler_lsp.sh"]
+sources = ["compiler/tools/lsp.mdk", "test/compiler_cli_test_support.mdk", "test/diff_compiler_lsp_test.mdk", "test/lsp_bless.sh", "test/lsp_warm_session.sh"]
 corpus = ["test/lsp_goldens"]
 toolchain = []
 
@@ -2969,6 +2939,21 @@ run = "test/pr_helper_test.sh"
 oracles = []
 sources = []
 corpus = ["test/fixtures"]
+toolchain = []
+
+[[gate]]
+name = "lsp_warm_session"
+area = "tools"
+shard = "other-job"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-wrap"
+run = "test/lsp_warm_session.sh"
+oracles = []
+sources = ["compiler/driver/diagnostics.mdk", "compiler/tools/lsp.mdk", "compiler/types/typecheck.mdk", "test/lsp_warm_session.sh"]
+corpus = []
 toolchain = []
 
 [[gate]]

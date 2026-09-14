@@ -387,7 +387,7 @@ emitter (6 real `medaka build` + clang), already provided here for `diff_compile
 `build_cmd`.
 
 **`tools` shard**: `diff_compiler_mcp` (#253, golden JSON-RPC transcript gate for `medaka mcp`) is
-the same shape as its nearest sibling, `diff_compiler_lsp*` — placed by cost too: it reads no
+the same shape as its nearest sibling, `diff_compiler_lsp` — placed by cost too: it reads no
 oracle and the T1 handshake fixture is a handful of tiny `./medaka mcp` invocations (<1s), while
 `engines`/`backend` (the two heaviest) have none to spare. `diff_compiler_entry_exit_codes` (#440,
 pins that `compiler/entries/entry_support.mdk` exits non-zero on error) is parked here for cost —

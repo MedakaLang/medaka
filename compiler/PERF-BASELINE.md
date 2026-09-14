@@ -455,7 +455,7 @@ populating the cache during `medaka new` or at install time — **not** disablin
 First committed numbers for the two editor-loop metrics #2040 names
 (`prelude-floor` S-2). Method: a Python harness drives `medaka lsp` over its
 real stdio JSON-RPC framing (Content-Length, same protocol
-`test/diff_compiler_lsp*.sh` uses) — no gate/CLI shortcut — timing wall-clock
+`test/diff_compiler_lsp_test.mdk` uses) — no gate/CLI shortcut — timing wall-clock
 `time.perf_counter()` around the actual request/response or request/
 notification pair, one fresh `medaka lsp` subprocess per trial, N=7 trials,
 min-of-N and median reported (min isolates steady-state cost from scheduler

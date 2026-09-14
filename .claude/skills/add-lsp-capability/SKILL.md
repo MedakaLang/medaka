@@ -70,14 +70,16 @@ make preflight
 Then:
 
 ```sh
-bash test/diff_compiler_lsp.sh
-bash test/diff_compiler_lsp_b3.sh
-bash test/diff_compiler_lsp_b4.sh
+./medaka gate run diff_compiler_lsp
 ```
 
-New LSP output almost always **moves an LSP golden**. Re-capture it (`CAPTURE=1`
-on the specific gate) and bless it — by NAMING the path — in the **same commit**,
-or `main` goes red.
+One gate now holds every LSP request set as rows of a table
+(`test/diff_compiler_lsp_test.mdk`); add yours there rather than beside it.
+
+New LSP output almost always **moves an LSP golden**. Re-mint it by NAME
+(`sh test/lsp_bless.sh b4_inlay.ndjson`) and stage it in the **same commit**, or
+`main` goes red. Read the diff first: six of the ten goldens are dumps of the
+server under test, so a capture is not evidence that the new answer is right.
 
 For an end-to-end stdio check, use `test/lsp_harness.sh`. The harness drives
 the **compiled** `medaka lsp` binary over JSON-RPC — run `make medaka` first.

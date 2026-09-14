@@ -1102,6 +1102,18 @@ while IFS= read -r f; do
     # correctly invisible as a gate would otherwise be UNMAPPED as a SOURCE.
     test/snapshot_bless.sh)        add 'diff_compiler_snapshot*' ;;
 
+    # ── the LSP suite's two shell halves ─────────────────────────────────────
+    # Neither is a gate — `test/lsp_bless.sh` only writes goldens (ledgered in
+    # test/CI-COVERAGE-TOOLS.txt) and `test/lsp_warm_session.sh` is the live
+    # session diff_compiler_lsp spawns (ledgered in
+    # test/CI-COVERAGE-EXCEPTIONS.txt) — but that gate READS both: one test
+    # compares the bless tool's golden list against its own rows, and another
+    # grades the warm session's exit code and transcript. An edit to either can
+    # red it, so both have to be mapped as SOURCES; a tool that is correctly
+    # invisible as a gate is otherwise UNMAPPED, which widens the whole PR run.
+    test/lsp_bless.sh|test/lsp_warm_session.sh)
+                                   add 'diff_compiler_lsp' ;;
+
     # ── #1319 unit 0: the import-order ledger, which `_fixture_dir_for` cannot see ──
     # It is a loose file under test/, not inside a `*fixtures*` directory, so the
     # corpus derivation never fires for it. This arm matters more than most: the
