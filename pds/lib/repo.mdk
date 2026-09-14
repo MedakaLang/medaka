@@ -3,8 +3,10 @@
    Every mutation returns a fresh state.  Record, MST, and commit blocks cross
    the verified blockstore boundary before the state becomes observable. -}
 
+import hex.{encode}
 import list.{reverse}
 import regex.{Regex, isFullMatchBytes, mustCompile}
+import set.{Set(..), has, insert}
 import string.{startsWith, toUtf8}
 import lib.blockstore.{
   BlockStore,
@@ -15,7 +17,7 @@ import lib.blockstore.{
   blockStorePut,
 }
 import lib.car.{carEncode}
-import lib.cid.{Cid, cidEqual, cidForDagCbor}
+import lib.cid.{Cid, cidEqual, cidForDagCbor, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.mst.{
   Mst,
@@ -289,7 +291,7 @@ rehydrate did secret commitCid signed store = do
     Ok ()
   else
     Err "repo: persisted commit DID mismatch"
-  (nodes, leaves) <- walkNodes [dataCid] store [] [] 0
+  (nodes, leaves) <- walkNodes [dataCid] store [] cidSeqEmpty 0
   tree <- match mstFromBlocks dataCid nodes
     Err message => Err "repo: invalid persisted MST: \{message}"
     Ok value => Ok value
@@ -604,26 +606,41 @@ listRecords ((path, cid) :: rest) store acc = match decodeAt cid store
   Err message => Err message
   Ok value => listRecords rest store ((path, cid, value) :: acc)
 
-cidMember : Cid -> List Cid -> Bool
-cidMember _ [] = False
-cidMember wanted (cid :: rest) = cidEqual wanted cid || cidMember wanted rest
+{- | CIDs in first-seen order, carrying their own membership index.
 
-addUnique : Cid -> List Cid -> List Cid
-addUnique cid values = if cidMember cid values then values else values ++ [cid]
+   The graph walk needs both "have I already queued this CID" and "in what
+   order were they first queued", and the export order is part of the format:
+   commit, breadth-first MST nodes, then reachable record leaves. The set
+   answers membership without scanning, and `values` holds the first-seen
+   order reversed, so a duplicate test costs a key comparison rather than a
+   pass over everything queued so far. `cidSeqList` restores the order. -}
+data CidSeq = CidSeq (Set String) (List Cid)
 
-entryLinks : List DagCbor ->
-  List Cid ->
-  List Cid ->
-  Result String (List Cid, List Cid)
+cidSeqEmpty : CidSeq
+cidSeqEmpty = CidSeq Tip []
+
+-- The key is the CID's byte encoding in hex, so key equality is `cidEqual`.
+cidSeqAdd : Cid -> CidSeq -> CidSeq
+cidSeqAdd cid (CidSeq seen values) =
+  let key = encode (cidToBytes cid)
+  if has key seen then
+    CidSeq seen values
+  else
+    CidSeq (insert key seen) (cid :: values)
+
+cidSeqList : CidSeq -> List Cid
+cidSeqList (CidSeq _ values) = reverse values
+
+entryLinks : List DagCbor -> CidSeq -> CidSeq -> Result String (CidSeq, CidSeq)
 entryLinks [] trees leaves = Ok (trees, leaves)
 entryLinks ((DcMap [("k", DcBytes _), ("p", DcInt _), ("t", child), ("v", DcLink leaf)]) :: rest) trees leaves =
   let nextTrees = match child
     DcNull => trees
-    DcLink cid => addUnique cid trees
+    DcLink cid => cidSeqAdd cid trees
     _ => trees
   match child
-    DcNull => entryLinks rest nextTrees (addUnique leaf leaves)
-    DcLink _ => entryLinks rest nextTrees (addUnique leaf leaves)
+    DcNull => entryLinks rest nextTrees (cidSeqAdd leaf leaves)
+    DcLink _ => entryLinks rest nextTrees (cidSeqAdd leaf leaves)
     _ => Err "repo: tampered graph node child"
 entryLinks _ _ _ = Err "repo: tampered graph node entry"
 
@@ -632,59 +649,58 @@ nodeLinks bytes = match dagCborDecode bytes
   Err message => Err "repo: tampered graph node: \{message}"
   Ok (DcMap [("e", DcArray entries), ("l", left)]) =>
     let initial = match left
-      DcNull => Ok []
-      DcLink cid => Ok [cid]
+      DcNull => Ok cidSeqEmpty
+      DcLink cid => Ok (cidSeqAdd cid cidSeqEmpty)
       _ => Err "repo: tampered graph left link"
     match initial
       Err message => Err message
-      Ok trees => entryLinks entries trees []
+      Ok trees =>
+        map
+          ((foundTrees, foundLeaves) =>
+            (cidSeqList foundTrees, cidSeqList foundLeaves))
+          (entryLinks entries trees cidSeqEmpty)
   Ok _ => Err "repo: tampered graph node form"
 
 walkNodes : List Cid ->
   BlockStore ->
   List (Cid, Array Int) ->
-  List Cid ->
+  CidSeq ->
   Int ->
   Result String (List (Cid, Array Int), List Cid)
-walkNodes [] _ blocks leaves _ = Ok (blocks, leaves)
+walkNodes [] _ blocks leaves _ = Ok (reverse blocks, cidSeqList leaves)
 walkNodes frontier store blocks leaves traversal = do
   _ <- checkMstTraversalDepth traversal
   _ <- checkMstBlocks (length blocks + length frontier)
-  match walkLayer frontier store [] leaves blocks
+  match walkLayer frontier store cidSeqEmpty leaves blocks
     Err message => Err message
     Ok (next, nextLeaves, nextBlocks) =>
       walkNodes next store nextBlocks nextLeaves (traversal + 1)
 
 walkLayer : List Cid ->
   BlockStore ->
-  List Cid ->
-  List Cid ->
+  CidSeq ->
+  CidSeq ->
   List (Cid, Array Int) ->
-  Result String (List Cid, List Cid, List (Cid, Array Int))
-walkLayer [] _ next leaves blocks = Ok (next, leaves, blocks)
+  Result String (List Cid, CidSeq, List (Cid, Array Int))
+walkLayer [] _ next leaves blocks = Ok (cidSeqList next, leaves, blocks)
 walkLayer (cid :: rest) store next leaves blocks = match blockStoreGet cid store
   None => Err "repo: missing graph MST block"
   Some bytes => match nodeLinks bytes
     Err message => Err message
     Ok (children, foundLeaves) =>
-      let mergedChildren = fold (acc child => addUnique child acc) next children
+      let mergedChildren = fold (acc child => cidSeqAdd child acc) next children
       let mergedLeaves =
-        fold (acc leaf => addUnique leaf acc) leaves foundLeaves
-      walkLayer
-        rest
-        store
-        mergedChildren
-        mergedLeaves
-        (blocks ++ [(cid, bytes)])
+        fold (acc leaf => cidSeqAdd leaf acc) leaves foundLeaves
+      walkLayer rest store mergedChildren mergedLeaves ((cid, bytes) :: blocks)
 
 recordBlocks : List Cid ->
   BlockStore ->
   List (Cid, Array Int) ->
   Result String (List (Cid, Array Int))
-recordBlocks [] _ acc = Ok acc
+recordBlocks [] _ acc = Ok (reverse acc)
 recordBlocks (cid :: rest) store acc = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
-  Some bytes => recordBlocks rest store (acc ++ [(cid, bytes)])
+  Some bytes => recordBlocks rest store ((cid, bytes) :: acc)
 
 {- | Validate a commit root and export this implementation's deterministic order:
    commit, breadth-first MST nodes, then reachable record leaves. -}
@@ -706,7 +722,7 @@ repoExportGraph commitCid commitBytes dataRoot store =
         Ok (_, commitData, _, _) =>
           if not (cidEqual commitData dataRoot) then
             Err "repo: commit data mismatch"
-          else match walkNodes [dataRoot] store [] [] 0
+          else match walkNodes [dataRoot] store [] cidSeqEmpty 0
             Err message => Err message
             Ok (nodes, leaves) => match mstValidateBlocks dataRoot nodes
               Err message => Err "repo: invalid graph MST: \{message}"
