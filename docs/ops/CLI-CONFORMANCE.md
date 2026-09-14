@@ -51,8 +51,8 @@ choices break live callers, in opposite directions:
 
 * the pre-commit hook depends on the `=` form — `.githooks/pre-commit:164` runs
   `"$MEDAKA" lint --only="$GATED_LINT_RULES" --deny="$GATED_LINT_RULES" "$f"`;
-* the snapshot gates depend on the space form — `test/diff_compiler_snapshot_types_user.sh:93`
-  runs `"$MEDAKA" snapshot "$MODE" --root "$ROOT" --out "$SNAPDIR/$sub" --stages "$stages"`.
+* the snapshot suite depends on the space form — `test/snapshot_bless.sh`
+  runs `"$MEDAKA" snapshot --new --root "$ROOT" --out "$SNAPDIR/$sub" --stages "$stages"`.
 
 More importantly, **the spelling is not the harm.** The harm is that the *unsupported*
 spelling is, on four verbs, absorbed silently or misread as a filename:

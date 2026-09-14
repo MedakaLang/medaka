@@ -40,7 +40,7 @@ per-file checks.
 
 ## [H-SNAPSHOT] what the snapshot check actually covers
 
-Gates on `test/diff_compiler_snapshot_frontend.sh` over ANY staged `.mdk` — `test/` fixtures
+Gates on `test/diff_compiler_snapshot_frontend_test.mdk` over ANY staged `.mdk` — `test/` fixtures
 included, since they're in the corpus too — plus `test/snapshots/*.md` itself. The reason it
 must cover fixtures and the `.md` goldens both: a compiler-source change, or even a pure
 `medaka fmt` reflow with no semantic change, can move a snapshot. A stale snapshot fails the

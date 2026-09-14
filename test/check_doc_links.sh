@@ -125,7 +125,7 @@ command -v awk >/dev/null 2>&1 || { echo "FAIL: awk not found"; exit 2; }
 # chapters; derive with `git ls-files '*.md' | grep ' '`), but the corpus is
 # git's to shape, not this gate's, so the read stays space-safe.
 #
-# test/snapshots/** is EXCLUDED: it is the diff_compiler_snapshot_frontend.sh
+# test/snapshots/** is EXCLUDED: it is the diff_compiler_snapshot_frontend_test.mdk
 # golden corpus — literal `.mdk` SOURCE dumped verbatim inside a "# SOURCE"
 # fenced section per file (see AGENTS.md's snapshot-check target), not prose
 # documentation. It is a real hazard for this gate specifically: single

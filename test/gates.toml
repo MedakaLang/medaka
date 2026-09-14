@@ -2597,108 +2597,18 @@ corpus = []
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_snapshot_core_ir"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_compiler_snapshot_core_ir.sh"
-oracles = []
-sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_core_ir.sh", "test/snapshots/*"]
-corpus = ["test/eval_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_snapshot_eval_errors"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "inverted-polarity"
-run = "test/diff_compiler_snapshot_eval_errors.sh"
-oracles = ["eval_prelude_main"]
-sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_eval_errors.sh", "test/snapshots/*"]
-corpus = ["test/eval_error_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_snapshot_eval"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_snapshot_eval.sh"
-oracles = ["eval_dict_main", "eval_typed_main"]
-sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_eval.sh", "test/snapshots/*"]
-corpus = ["test/eval_dict_fixtures", "test/eval_typed_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_snapshot_frontend"
 area = "frontend"
 shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "split-first"
-run = "test/diff_compiler_snapshot_frontend.sh"
-oracles = ["parse_main"]
-sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_frontend.sh", "test/snapshots/*"]
-corpus = ["test/comment_fixtures", "test/diff_fixtures", "test/parse_fixtures", "test/parse_only_fixtures", "test/positions_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_snapshot_prelude"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_compiler_snapshot_prelude.sh"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_snapshot_frontend_test.mdk"
 oracles = []
-sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_prelude.sh", "test/snapshots/*"]
-corpus = []
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_snapshot_types"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_compiler_snapshot_types.sh"
-oracles = []
-sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_types.sh", "test/snapshots/*"]
-corpus = ["test/typecheck_fixtures", "test/typecheck_panic_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_snapshot_types_user"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_compiler_snapshot_types_user.sh"
-oracles = []
-sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/diff_compiler_snapshot_types_user.sh", "test/snapshots/*"]
-corpus = ["test/diff_fixtures"]
+sources = ["compiler/*.mdk", "compiler/*/*.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "compiler/tools/snapshot.mdk", "compiler/types/*", "stdlib/*.mdk", "test/compiler_cli_test_support.mdk", "test/diff_compiler_snapshot_frontend_test.mdk", "test/snapshot_bless.sh", "test/snapshots/*"]
+corpus = ["test/comment_fixtures", "test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_error_fixtures", "test/eval_fixtures", "test/eval_typed_fixtures", "test/parse_fixtures", "test/parse_only_fixtures", "test/positions_fixtures", "test/typecheck_fixtures", "test/typecheck_panic_fixtures"]
 toolchain = []
 
 [[gate]]

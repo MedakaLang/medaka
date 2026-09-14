@@ -207,17 +207,17 @@ test: medaka
 gates: medaka
 	sh test/run_gates.sh
 
-## snapshot-check — the snapshot suite, CHECK only (never blesses). ~7s, no oracles.
+## snapshot-check — the snapshot suite, CHECK only (never blesses). ~30s, no oracles.
 ##           This is what the pre-commit hook runs, and the two facts are related:
-##           the compiler's own 50 sources are IN the snapshot corpus, so any edit to
+##           the compiler's own sources are IN the snapshot corpus, so any edit to
 ##           compiler/**.mdk — including a pure `medaka fmt` reflow — moves that file's
 ##           `# SOURCE` section and turns the gate red until it is re-cut.
 ##           Re-cut what you changed, by name:
-##             sh test/diff_compiler_snapshot_frontend.sh --bless compiler/frontend/lexer.mdk
+##             sh test/snapshot_bless.sh --bless compiler/frontend/lexer.mdk
 ##           There is no whole-suite bless, and a diagnostic-bearing section will refuse
 ##           to bless at all (see compiler/tools/snapshot.mdk's header for the 3 locks).
-snapshot-check:
-	sh test/diff_compiler_snapshot_frontend.sh
+snapshot-check: medaka
+	./medaka test --native test/diff_compiler_snapshot_frontend_test.mdk
 
 ## ci      — everything CI runs, locally. Slow. Prefer `make preflight`.
 ci: medaka

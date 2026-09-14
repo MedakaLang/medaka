@@ -343,10 +343,10 @@ rather than being thrown away.
 
 **Golden fan-out note (applies to every increment).** `parser.mdk` and `lsp.mdk` are both in
 the compiler-source snapshot corpus, and BOTH are covered by the **single** suite
-`test/diff_compiler_snapshot_frontend.sh` (its `run_family compiler` globs
-`compiler/tools/*.mdk` and `compiler/frontend/*.mdk`, `:164-168`). So any edit to either moves
+`test/diff_compiler_snapshot_frontend_test.mdk` (its `compiler` family row walks
+`compiler/tools/*.mdk` and `compiler/frontend/*.mdk`). So any edit to either moves
 that file's own desugar/mark snapshot golden and must be blessed **same-commit** via
-`sh test/diff_compiler_snapshot_frontend.sh --bless <path>` (NOT the `medaka snapshot` CLI —
+`sh test/snapshot_bless.sh --bless <path>` (NOT the `medaka snapshot` CLI —
 memory note). Because all new spans are made **S-expr-invisible** (the `tySexp (TyCon c _)`
 idiom), the desugar/mark renders stay byte-identical → the snapshot move is only the *source
 text* of the edited file, not a semantic golden churn.
@@ -386,7 +386,7 @@ name's real `Loc`; give the inlay-hint site a real name column too (retiring `co
 
 **Moves goldens:** YES — LSP `lsp_goldens/b3_sym_def_hl.ndjson` and `b4_inlay.ndjson`
 (`diff_compiler_lsp_b3.sh`/`_b4.sh`), MCP `mcp_fixtures` (`diff_compiler_mcp.sh`), plus the
-parser.mdk+lsp.mdk own snapshot source (`diff_compiler_snapshot_frontend.sh --bless`). The
+parser.mdk+lsp.mdk own snapshot source (`snapshot_bless.sh --bless`). The
 `positions` snapshot family does NOT move (renderDeclPos is line-only). Recapture via each
 gate's `CAPTURE=1`. **Fixpoint:** parser.mdk is in the self-compile graph, but the new field
 is display-only (no codegen feed) and S-expr-invisible → fixpoint re-validates byte-identical,
@@ -758,7 +758,7 @@ sub-decision, reuse the increment-2 child-field finder or add a `Loc` to `RecPat
 1. **Inc 1 — thread the field (substrate).** Arity-change `PVar`/`PAs`; parser mints binder
    `Loc`s; both serializers drop/default; mechanically `_` every match site. refindex unchanged.
    Zero behavior change → moves only source-text snapshot goldens (bless same-commit,
-   `diff_compiler_snapshot_frontend.sh --bless <path>`); fixpoint re-validates, no re-mint.
+   `snapshot_bless.sh --bless <path>`); fixpoint re-validates, no re-mint.
    Decisive gates: `selfcompile_fixpoint` + `typecheck_compiler_source` + snapshots. **Blocks on a
    typecheck.mdk-quiet window (§9.6).**
 2. **Inc 2 — refindex consumes binder Locs (the fix).** §9.4. Fixes both S0s; moves

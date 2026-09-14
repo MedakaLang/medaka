@@ -385,7 +385,7 @@ _fixture_dir_for() {
 # Gates that consume fixture dir $1. If the exact dir has no direct/one-hop
 # consumer, climb to its parent and retry — some gates key off the PARENT, not
 # the leaf (real case: test/snapshots/diff_fixtures is a snapshot-golden
-# subdir; diff_compiler_snapshot_frontend.sh reads `$ROOT/test/snapshots`
+# subdir; diff_compiler_snapshot_frontend_test.mdk reads `$ROOT/test/snapshots`
 # as a whole via SNAPDIR, never the literal string "test/snapshots/diff_fixtures").
 # Stops before climbing to bare "test" (which would trivially match everything).
 _gates_for_fixture_dir() {
@@ -1092,6 +1092,15 @@ while IFS= read -r f; do
     # Only the snapshot gates read them, and they read the tree as a whole (SNAPDIR),
     # never a per-file path — so the answer is the same for every file under it.
     test/snapshots/*)              add 'diff_compiler_snapshot*' ;;
+
+    # ── the snapshot suite's WRITE half ──────────────────────────────────────
+    # `test/snapshot_bless.sh` is a tool, not a gate (it is ledgered in
+    # test/CI-COVERAGE-TOOLS.txt so `_gate_candidates` never offers to RUN it),
+    # but the gate reads it: `diff_compiler_snapshot_frontend`'s second test
+    # compares the write tool's family table against its own rows. So an edit
+    # here can red that gate, and the map has to say so — a tool that is
+    # correctly invisible as a gate would otherwise be UNMAPPED as a SOURCE.
+    test/snapshot_bless.sh)        add 'diff_compiler_snapshot*' ;;
 
     # ── #1319 unit 0: the import-order ledger, which `_fixture_dir_for` cannot see ──
     # It is a loose file under test/, not inside a `*fixtures*` directory, so the
@@ -1973,7 +1982,7 @@ make -C "$ROOT" medaka >/dev/null 2>&1 || { echo "preflight: make medaka FAILED"
 # preflight used to scrape `test/bin/<name>` out of the gate scripts itself, with the
 # same one-line grep build_oracles uses — but WITHOUT build_oracles' crucial second
 # step: intersecting the scraped names against the authoritative ENTRIES list. The grep
-# matches COMMENTS, and diff_compiler_snapshot_frontend.sh:9 carries a comment naming
+# matches COMMENTS, and a snapshot gate's header carried a comment naming
 # `test/bin/desugar_batch` — an oracle whose entry was deleted when that gate was
 # migrated into the snapshot corpus. So preflight dutifully tried to build a
 # nonexistent oracle and hard-failed:

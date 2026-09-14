@@ -67,6 +67,15 @@ test/gate_cost_collect         the AUTOMATED half of #2180's baseline auto-advan
                                compiler itself; it has no pass/fail assertion of its own.
 
 # ── golden capture ──
+test/snapshot_bless            the WRITE half of the snapshot suite: `--new` mints every
+                                MISSING snapshot across the fifteen families, `--bless
+                                <path>...` re-cuts the NAMED fixtures. A blessing action,
+                                like capture_goldens — it writes test/snapshots/ and asserts
+                                nothing about the compiler. The CHECK half IS a gate and is
+                                enrolled as one: test/diff_compiler_snapshot_frontend_test.mdk
+                                (`kind = "native"`, registry name diff_compiler_snapshot_frontend),
+                                which also holds the family table this script mirrors and
+                                fails if the two have drifted.
 # CHECK=1 turns this one into a comparison, but its DEFAULT action (no env var) is to WRITE
 # the goldens — still a blessing action, exactly like capture_goldens. #2446/S-diag-census
 # wired the CHECK=1 comparison into CI via a thin wrapper,

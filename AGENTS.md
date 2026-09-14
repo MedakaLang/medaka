@@ -92,7 +92,7 @@ suffix is load-bearing, not cosmetic: it is what three computations subtract on.
 in `test/build_native_medaka.sh`, mirrored byte-for-byte by `liveSourceFingerprint` in
 `compiler/driver/medaka_cli.mdk`) exclude it, so editing a test never rebuilds the emitter and
 never makes every `./medaka` run warn stale ([B-STALENESS], [B-STDERR]); the `compiler` family
-in `test/diff_compiler_snapshot_frontend.sh` excludes it, so a test owes no blessed snapshot
+in `test/diff_compiler_snapshot_frontend_test.mdk` excludes it, so a test owes no blessed snapshot
 and `--bless` on one is refused. `test/preflight.sh` needs no exclusion — its `compiler/<dir>/*`
 arms are path globs, so a sibling derives its SUBJECT's gate set. Run one with
 `medaka test <file>`; a module outside every entry's import closure is otherwise unwalked
@@ -574,7 +574,7 @@ over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-co
   an interior comment. 🚨 Exit code alone does not reflect findings unless `--deny` is used
   (#1822) — read the output, not just `$?`.
 - **[H-SNAPSHOT] Snapshot** — CHECK ONLY. **Run `make snapshot-check` first**; bless with `sh
-  test/diff_compiler_snapshot_frontend.sh --bless <file.mdk>`, re-stage `test/snapshots/`.
+  test/snapshot_bless.sh --bless <file.mdk>`, re-stage `test/snapshots/`.
   - **[H-SNAPSHOT-NEW]** New source file → `--new` (**SUITE-WIDE**, never overwrites). ⇒ run
     `--new`, `diff -rq` vs a before-copy to verify, **RE-RUN the plain check**. → dossier
   - **[H-SNAPSHOT-UNSTAGED]** ⚠️ Reads the **WORKING TREE**: `git add` any blessed snapshot
@@ -783,7 +783,7 @@ Each of these was paid for in an incident — pointers, not post-mortems.
   git checkout "$BASE" -- test/selfproc_goldens/legA test/snapshots
   make -C "$PWD" medaka
   sh test/capture_goldens.sh --frozen selfproc_legA
-  sh test/diff_compiler_snapshot_frontend.sh --bless <the source file you moved>
+  sh test/snapshot_bless.sh --bless <the source file you moved>
   git diff -- test/selfproc_goldens/legA test/snapshots   # must be additive-only
   ```
 - **[T-STDLIB-IMPORT]** The compiler MAY import `stdlib/`, per module — MEASURED (#2352, on
