@@ -1,8 +1,9 @@
 {- | Pure persistent atproto Merkle Search Trees.
 
-   Keys are arbitrary non-empty byte arrays. The authoritative sorted entry
-   map is rebuilt after each mutation, which keeps the implementation simple
-   while preserving the protocol's history-independent root and node bytes.
+   Keys are arbitrary non-empty byte arrays. A mutation splices the
+   authoritative sorted entry list in place and rebuilds the node structure
+   from it, so only the touched key is ever hashed and the protocol's
+   history-independent root and node bytes are preserved.
    Node constructors remain private so depth, ordering, prefix compression,
    and link invariants cannot be bypassed.
 
@@ -268,25 +269,33 @@ export
 mstEntries : Mst -> List (Array Int, Cid)
 mstEntries (Mst entries _ _ _) = copyEntries entries
 
+insertSorted : MstEntry -> List MstEntry -> List MstEntry
+insertSorted entry [] = [entry]
+insertSorted (entry@(MstEntry key _ _)) ((candidate@(MstEntry other _ _)) :: rest) =
+  match bytesCompare key other
+    Gt => candidate :: insertSorted entry rest
+    _ => entry :: candidate :: rest
+
 -- | Insert a previously absent key.
 export
 mstInsert : Array Int -> Cid -> Mst -> Result String Mst
 mstInsert key value tree = match mstKeyDepth key
   Err message => Err message
-  Ok _ => match mstLookup key tree
+  Ok depth => match mstLookup key tree
     Some _ => Err "mst: duplicate key is not allowed"
-    None => mstFromEntries ((key, value) :: mstEntries tree)
+    None =>
+      let (Mst entries _ _ _) = tree
+      -- The caller still owns `key`, so the tree keeps its own copy of it.
+      let fresh = MstEntry (arrayCopy key) value depth
+      Ok (buildMst (insertSorted fresh entries))
 
-replaceEntry : Array Int ->
-  Cid ->
-  List (Array Int, Cid) ->
-  List (Array Int, Cid)
+replaceEntry : Array Int -> Cid -> List MstEntry -> List MstEntry
 replaceEntry _ _ [] = []
-replaceEntry key value ((candidate, old) :: rest) =
+replaceEntry key value ((entry@(MstEntry candidate _ depth)) :: rest) =
   if bytesCompare key candidate == Eq then
-    (candidate, value) :: rest
+    MstEntry candidate value depth :: rest
   else
-    (candidate, old) :: replaceEntry key value rest
+    entry :: replaceEntry key value rest
 
 -- | Replace the value at an existing key.
 export
@@ -295,15 +304,17 @@ mstReplace key value tree = match mstKeyDepth key
   Err message => Err message
   Ok _ => match mstLookup key tree
     None => Err "mst: replace key was not found"
-    Some _ => mstFromEntries (replaceEntry key value (mstEntries tree))
+    Some _ =>
+      let (Mst entries _ _ _) = tree
+      Ok (buildMst (replaceEntry key value entries))
 
-deleteEntry : Array Int -> List (Array Int, Cid) -> List (Array Int, Cid)
+deleteEntry : Array Int -> List MstEntry -> List MstEntry
 deleteEntry _ [] = []
-deleteEntry key ((candidate, value) :: rest) =
+deleteEntry key ((entry@(MstEntry candidate _ _)) :: rest) =
   if bytesCompare key candidate == Eq then
     rest
   else
-    (candidate, value) :: deleteEntry key rest
+    entry :: deleteEntry key rest
 
 -- | Delete an existing key, pruning the root back to the canonical empty node.
 export
@@ -312,7 +323,9 @@ mstDelete key tree = match mstKeyDepth key
   Err message => Err message
   Ok _ => match mstLookup key tree
     None => Err "mst: delete key was not found"
-    Some _ => mstFromEntries (deleteEntry key (mstEntries tree))
+    Some _ =>
+      let (Mst entries _ _ _) = tree
+      Ok (buildMst (deleteEntry key entries))
 
 -- | Root node CID.
 export
