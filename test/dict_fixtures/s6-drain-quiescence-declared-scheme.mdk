@@ -1,0 +1,40 @@
+-- §6.3 quiescence drain, DECLARED-scheme half of the `DrainDiags` population
+-- (`compiler/types/typecheck.mdk`, #2705 / SA-10a item 17).
+--
+-- The twin of `s6-drain-quiescence-inferred-scheme.mdk`: here the receiver is
+-- quantified by a WRITTEN signature (`nonlead`'s `(Ixd a b, Shb b) => …`) rather
+-- than by an inferred one, and an unannotated relay carries it to graph end.  The
+-- drain replays `Shb b` with `b` still an unbound `TVar` and
+-- `routeUndeterminedTop`'s `_ => reportAmbiguousImpl` arm reports
+-- `T-AMBIGUOUS-INSTANCE` on it (#3031).  Both halves matter because a fix that
+-- consults only the binding's own inferred scheme would close one and leave the
+-- other.
+--
+-- SPEC ANSWER, hand-derived before running anything: `main` calls the relay at
+-- `b = Bool`, `a = Int`; `impl Shb Bool` and `impl Ixd Int Bool` are each the
+-- unique match, `ixd` returns its first argument, so the program prints 7 on
+-- every engine and `check` accepts.
+--
+-- WHAT THIS ROW PINS: `check` must NOT report `T-AMBIGUOUS-INSTANCE` — see the
+-- sibling fixture's header for what a RED here means.
+interface Ixd a b where
+  ixd : a -> b -> a
+
+impl Ixd Int Bool where
+  ixd x _ = x
+
+interface Shb a where
+  shb : a -> a
+
+impl Shb Bool where
+  shb x = x
+
+impl Shb Int where
+  shb x = x
+
+nonlead : (Ixd a b, Shb b) => b -> a -> a
+nonlead n x = ixd x (shb n)
+
+relay n x = nonlead n x
+
+main = println (relay True 7)

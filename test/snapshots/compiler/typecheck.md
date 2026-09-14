@@ -1,5 +1,5 @@
 # META
-source_lines=46999
+source_lines=47029
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -8914,6 +8914,9 @@ tcCode (TcDiag c _ _ _ _ _) = c
 export
 tcMsg : TcDiag -> String
 tcMsg (TcDiag _ _ _ m _ _) = m
+
+tcLoc : TcDiag -> Option Loc
+tcLoc (TcDiag _ _ l _ _ _) = l
 
 -- ── type-error accumulator ─────────────────────────────────────────────────
 -- Unification failures record diagnostics here instead of panicking, so
@@ -24079,21 +24082,30 @@ pushCoherenceWarning loc msg =
     warning :: driverState.value.matchWarnings.value
 
 -- The warning-channel analogue of `pushTypeErrorOnceAt`: same channel discipline as
--- `pushCoherenceWarning` above, plus message dedup.  Dedup is by MESSAGE rather than
--- by code, because one code may legitimately report several distinct sites in one
--- module while a single site can be visited many times — `pickMostSpecificEntry` runs
--- per goal occurrence, so an undeduped push would report one expression once per
--- constraint it poses.  The channel is scanned linearly; that is affordable only
--- because it holds warnings, which are rare by construction, and a code that ever
--- makes it long owes a keyed set the way `typeErrorMsgSetRef` is one.
+-- `pushCoherenceWarning` above, plus dedup.  Dedup is by `(code, loc, msg)` rather
+-- than by message alone, so the collapse still absorbs one expression being visited
+-- once per constraint it poses — `pickMostSpecificEntry` runs per goal occurrence,
+-- and a repeat visit reproduces the SAME code/loc/msg triple — while no longer
+-- collapsing two distinct sites whose message text happens to coincide.  The channel
+-- is scanned linearly; that is affordable only because it holds warnings, which are
+-- rare by construction, and a code that ever makes it long owes a keyed set the way
+-- `typeErrorMsgSetRef` is one.
 pushMatchWarningOnceAt : String -> Option Loc -> String -> Option String -> Unit
 pushMatchWarningOnceAt code loc msg help =
-  if anyList (w => tcMsg w == msg) driverState.value.matchWarnings.value then
+  let thisLoc = orElseLoc loc !currentLoc
+  if anyList
+    (w => tcCode w == code && optLocEq (tcLoc w) thisLoc && tcMsg w == msg)
+    driverState.value.matchWarnings.value then
     ()
   else
     driverState.value.matchWarnings :=
-      TcDiag code 2 (orElseLoc loc !currentLoc) msg help None
+      TcDiag code 2 thisLoc msg help None
         :: driverState.value.matchWarnings.value
+
+optLocEq : Option Loc -> Option Loc -> Bool
+optLocEq (Some a) (Some b) = locEq a b
+optLocEq None None = True
+optLocEq _ _ = False
 
 -- run coherence over USER decls; push at most one HARD conflict into typeErrors and
 -- at most one SOFT one onto the warning channel.  The impls are scanned in REVERSE
@@ -27013,10 +27025,11 @@ reportOverlapForIface iface goals cands
 -- `compiler/`+`stdlib/` modules, 2 of 3269 tracked `test/**/*.mdk`, both the known
 -- #1183 class) — so "open here, ground later" is not merely argued away, it is
 -- measured absent.
--- Deliberately NOT in `runBuildWarnCodes` (`driver/medaka_cli.mdk`): that list is a
--- decision with three measurements attached, and this code owes them before it can ask
--- for the multi-module `run`/`build` channel.  It surfaces on `check`, and on the
--- single-file `run`/`build` arms that filter the whole channel.
+-- #3027 / D3 (`driver/diagnostics.mdk`'s `runBuildWarnCodes`): this code now IS on
+-- that list, its own three measurements discharged there.  It surfaces on `check`,
+-- and on every `run`/`build` arm — single-file unconditionally, multi-module via
+-- the allowlist.
+export
 openGoalCommitWarnCode : String
 openGoalCommitWarnCode = "W-OPEN-GOAL-COMMITTED"
 
@@ -43858,12 +43871,12 @@ data GraphOut = GOutDiags | GOutTrees
 -- `DrainRollback` saves and restores the sticky type-error cells around the
 -- drain, so a caller that gates on `hadTypeErrors` right after the drive does not
 -- see them; `DrainKeep` leaves them standing and they reach the caller as the
--- drive's residual.  The two are not a taste: the drain rejects things an
--- accepted program contains — an undefaulted `Num` literal in a test/prop body —
--- so reporting them universally would reject working programs.  (The HYPOTHESIS
--- the census below tested named two further members, `panic "…"` (#2315) and a
--- route re-unification the obligation channel already decided; neither is in the
--- measured population, and they are recorded here as what was looked for, not as
+-- drive's residual.  The two are not a taste: the drain reports things an accepted
+-- program contains, so reporting them universally would reject working programs.
+-- (The HYPOTHESIS the census below tested named three candidate members — an
+-- undefaulted `Num` literal in a test/prop body, `panic "…"` (#2315), and a route
+-- re-unification the obligation channel already decided.  NONE of the three is in
+-- the measured population; they are recorded here as what was looked for, not as
 -- what is there.)
 --
 -- The population is a property of the INSTRUMENT, not of what ships.  It is what a
@@ -43871,16 +43884,32 @@ data GraphOut = GOutDiags | GOutTrees
 -- (`run`, `build`) do not report it, because `emitElaborationGate` gates on
 -- `hadTypeErrors` and the residual does not arm it.
 --
+-- What the population actually is: every member is #3031 — `routeUndeterminedTop`'s
+-- `_ => reportAmbiguousImpl` arm firing on a receiver some scheme QUANTIFIES,
+-- because the drain replays the goal without the `deferrableVarIds`/`goalsClosed`
+-- test the sibling T4-warning arm (`reportOverlapForIface`) already applies, and
+-- pushing it at a STALE location (bare `pushTypeError`/`currentLoc`, so the span
+-- names whichever declaration was inferred last).  Not a defaulting failure: every
+-- member still reproduces with every numeric literal deleted.  Both halves of the
+-- shape are pinned: `test/dict_fixtures/s6-drain-quiescence-inferred-scheme.mdk`
+-- has the receiver quantified by an INFERRED scheme,
+-- `test/dict_fixtures/s6-drain-quiescence-declared-scheme.mdk` by a WRITTEN one, so
+-- a fix that closes one half and not the other goes red.
+--
 -- DELETION CONDITION: this parameter goes away, and every caller takes one
--- behavior, when the population is EMPTY or every member of it is reported.
+-- behavior, when the population is EMPTY or every member of it is reported —
+-- which, since the population is exactly #3031's output, means when #3031 is fixed
+-- (it empties) or when the T4 census ruling #2665 asks for decides to report the
+-- drain residual on a wider verb channel (it is reported).  Neither is this
+-- parameter's own call, and neither has happened.
 -- Re-derive the population before deciding — do not read the number below as
 -- current.  How: build a second arm with `DrainRollback` mapped to
 -- `drainStampQueue` and the drive's residual rendered as entry warnings, run both
 -- arms over every `.mdk` under `test/` and `stdlib/` this compiler accepts, and
--- diff.  Measured that way on this tree, it is 2 of 2,548 accepted files —
--- `test/engine_fixtures/where_dict_forward.mdk` and
--- `test/parse_fixtures/blocks.mdk`, both an `Ambiguous instance` on a literal the
--- graph never defaulted (#2646's owed D1 quiescence step).  Recorded in
+-- diff.  Measured that way on this tree, it is 3 of 2,704 accepted files (of 3,505
+-- tracked) — `test/engine_fixtures/where_dict_forward.mdk`,
+-- `test/parse_fixtures/blocks.mdk` and
+-- `test/engine_fixtures/numlit_alias_predicates/support.mdk`.  Recorded in
 -- `compiler/TYPECHECK-TARGET-ARCHITECTURE.md` SA-10a item 17 (ONE graph driver),
 -- #2705.
 data DrainDiags = DrainRollback | DrainKeep
@@ -46593,11 +46622,12 @@ runStampStep ctx SSMethodDicts = resolveMethodDicts (methodDictsIn ctx.scGoals)
 -- and do not arm the sticky gate here (`run`'s multi-module arm reads
 -- `hadTypeErrors` right after its check pass): the sticky cells are saved before
 -- the drain and restored after it.  On the elaborate side they stay live and `elaborateModules` returns them
--- as its residual.  They are not a verdict yet: a resolver rejects as ambiguous a
--- `Num` literal a test/prop body never defaulted (the D1 quiescence step #2646
--- names as owed) and `panic "…"` (#2315), and re-unifies at a site the obligation
--- channel already rejected.  Whether and how they are reported is the T4 census
--- ruling 1 asks for (#2705), not this driver's call.
+-- as its residual.  They are not a verdict yet: measured over `test/` and
+-- `stdlib/`, every one of them is #3031 — an `Ambiguous instance` the drain
+-- manufactures on a receiver some scheme QUANTIFIES, at a stale location.  The
+-- measurement, the file list and the deletion condition it bears on are on
+-- `data DrainDiags`; whether and how these are reported is the T4 census ruling 1
+-- asks for (#2705), not this driver's call.
 checkGraphFinish : Unit -> Unit
 checkGraphFinish _ =
   let savedSticky = !typeErrorsSticky
@@ -48260,6 +48290,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tcCode" ((PCon "TcDiag" (PVar "c") PWild PWild PWild PWild PWild)) (EVar "c"))
 (DTypeSig true "tcMsg" (TyFun (TyCon "TcDiag") (TyCon "String")))
 (DFunDef false "tcMsg" ((PCon "TcDiag" PWild PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
+(DTypeSig false "tcLoc" (TyFun (TyCon "TcDiag") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tcLoc" ((PCon "TcDiag" PWild PWild (PVar "l") PWild PWild PWild)) (EVar "l"))
 (DTypeSig false "typeErrorsSticky" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "typeErrorsSticky" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "typeErrorsStickyDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
@@ -50894,7 +50926,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "pushMatchWarningOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))
+(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
+(DTypeSig false "optLocEq" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "optLocEq" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EApp (EVar "locEq") (EVar "a")) (EVar "b")))
+(DFunDef false "optLocEq" ((PCon "None") (PCon "None")) (EVar "True"))
+(DFunDef false "optLocEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))
 (DFunDef false "checkCoherence" ((PVar "env") (PVar "cur") (PVar "hasPrelude")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EVar "map") (EVar "cohImplOfRow")) (EApp (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "hasPrelude")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
 (DTypeSig false "cohPushHard" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))
@@ -51256,7 +51292,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reportAmbiguousOverlap" ((PVar "goals") (PVar "cands")) (EMatch (EApp (EVar "candsOneIface") (EVar "cands")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "reportOverlapForIface") (EVar "iface")) (EVar "goals")) (EVar "cands")))))
 (DTypeSig false "reportOverlapForIface" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "Unit")))))
 (DFunDef false "reportOverlapForIface" ((PVar "iface") (PVar "goals") (PVar "cands")) (EIf (EApp (EVar "goalsClosed") (EVar "goals")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "ambiguousOverlapMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "pushMatchWarningOnceAt") (EVar "openGoalCommitWarnCode")) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "openGoalCommitMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EApp (EVar "Some") (EVar "openGoalCommitHelp"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "openGoalCommitWarnCode" (TyCon "String"))
+(DTypeSig true "openGoalCommitWarnCode" (TyCon "String"))
 (DFunDef false "openGoalCommitWarnCode" () (ELit (LString "W-OPEN-GOAL-COMMITTED")))
 (DTypeSig false "openGoalCommitMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "String")))))
 (DFunDef false "openGoalCommitMsg" ((PVar "iface") (PVar "goals") (PVar "cands")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Instance for `")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "` chosen by declaration order. The goal `"))) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EApp (EVar "ppPredArgsShared") (EVar "goals")))) (ELit (LString "` is still undetermined here and matches "))) (EApp (EVar "display") (EApp (EVar "joinAnd") (EApp (EApp (EVar "map") (EApp (EVar "implHeadLabel") (EVar "iface"))) (EVar "cands"))))) (ELit (LString ", and "))) (EApp (EVar "display") (EApp (EVar "noMinimumClause") (EApp (EVar "listLen") (EVar "cands"))))) (ELit (LString " — so the first of them to be declared is the one that runs"))))
@@ -55239,6 +55275,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tcCode" ((PCon "TcDiag" (PVar "c") PWild PWild PWild PWild PWild)) (EVar "c"))
 (DTypeSig true "tcMsg" (TyFun (TyCon "TcDiag") (TyCon "String")))
 (DFunDef false "tcMsg" ((PCon "TcDiag" PWild PWild PWild (PVar "m") PWild PWild)) (EVar "m"))
+(DTypeSig false "tcLoc" (TyFun (TyCon "TcDiag") (TyApp (TyCon "Option") (TyCon "Loc"))))
+(DFunDef false "tcLoc" ((PCon "TcDiag" PWild PWild (PVar "l") PWild PWild PWild)) (EVar "l"))
 (DTypeSig false "typeErrorsSticky" (TyApp (TyCon "Ref") (TyCon "Bool")))
 (DFunDef false "typeErrorsSticky" () (EApp (EVar "Ref") (EVar "False")))
 (DTypeSig false "typeErrorsStickyDiags" (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag")))))
@@ -57873,7 +57911,11 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "pushCoherenceWarning" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Unit"))))
 (DFunDef false "pushCoherenceWarning" ((PVar "loc") (PVar "msg")) (EBlock (DoLet false false (PVar "warning") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (ELit (LString "W-INCOMPARABLE-IMPLS"))) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EApp (EVar "Some") (EVar "cohIncomparableHelp"))) (EVar "None"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EVar "warning") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "pushMatchWarningOnceAt" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Unit"))))))
-(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg")))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))
+(DFunDef false "pushMatchWarningOnceAt" ((PVar "code") (PVar "loc") (PVar "msg") (PVar "help")) (EBlock (DoLet false false (PVar "thisLoc") (EApp (EApp (EVar "orElseLoc") (EVar "loc")) (EUnOp "!" (EVar "currentLoc")))) (DoExpr (EIf (EApp (EApp (EVar "anyList") (ELam ((PVar "w")) (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EVar "tcCode") (EVar "w")) (EVar "code")) (EApp (EApp (EVar "optLocEq") (EApp (EVar "tcLoc") (EVar "w"))) (EVar "thisLoc"))) (EBinOp "==" (EApp (EVar "tcMsg") (EVar "w")) (EVar "msg"))))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")) (ELit LUnit) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "TcDiag") (EVar "code")) (ELit (LInt 2))) (EVar "thisLoc")) (EVar "msg")) (EVar "help")) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
+(DTypeSig false "optLocEq" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Bool"))))
+(DFunDef false "optLocEq" ((PCon "Some" (PVar "a")) (PCon "Some" (PVar "b"))) (EApp (EApp (EVar "locEq") (EVar "a")) (EVar "b")))
+(DFunDef false "optLocEq" ((PCon "None") (PCon "None")) (EVar "True"))
+(DFunDef false "optLocEq" (PWild PWild) (EVar "False"))
 (DTypeSig false "checkCoherence" (TyFun (TyCon "ImplEnv") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Unit")))))
 (DFunDef false "checkCoherence" ((PVar "env") (PVar "cur") (PVar "hasPrelude")) (EMatch (EApp (EApp (EVar "cohScan") (EVar "CohSweepOwn")) (EApp (EVar "reverseL") (EApp (EApp (EMethodRef "map") (EVar "cohImplOfRow")) (EApp (EApp (EApp (EVar "cohRowsOwnedBy") (EVar "cur")) (EVar "hasPrelude")) (EVar "env"))))) (arm (PCon "CohScan" (PVar "hard") (PVar "soft")) () (EBlock (DoLet false false PWild (EApp (EVar "cohPushHard") (EVar "hard"))) (DoExpr (EApp (EVar "cohPushSoft") (EVar "soft")))))))
 (DTypeSig false "cohPushHard" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc")))) (TyCon "Unit")))
@@ -58235,7 +58277,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "reportAmbiguousOverlap" ((PVar "goals") (PVar "cands")) (EMatch (EApp (EVar "candsOneIface") (EVar "cands")) (arm (PCon "None") () (ELit LUnit)) (arm (PCon "Some" (PVar "iface")) () (EApp (EApp (EApp (EVar "reportOverlapForIface") (EVar "iface")) (EVar "goals")) (EVar "cands")))))
 (DTypeSig false "reportOverlapForIface" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "Unit")))))
 (DFunDef false "reportOverlapForIface" ((PVar "iface") (PVar "goals") (PVar "cands")) (EIf (EApp (EVar "goalsClosed") (EVar "goals")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "ambiguousOverlapMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "pushMatchWarningOnceAt") (EVar "openGoalCommitWarnCode")) (EUnOp "!" (EVar "goalSiteLoc"))) (EApp (EApp (EApp (EVar "openGoalCommitMsg") (EVar "iface")) (EVar "goals")) (EVar "cands"))) (EApp (EVar "Some") (EVar "openGoalCommitHelp"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig false "openGoalCommitWarnCode" (TyCon "String"))
+(DTypeSig true "openGoalCommitWarnCode" (TyCon "String"))
 (DFunDef false "openGoalCommitWarnCode" () (ELit (LString "W-OPEN-GOAL-COMMITTED")))
 (DTypeSig false "openGoalCommitMsg" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyApp (TyCon "List") (TyCon "KeyEntry")) (TyCon "String")))))
 (DFunDef false "openGoalCommitMsg" ((PVar "iface") (PVar "goals") (PVar "cands")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "Instance for `")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "` chosen by declaration order. The goal `"))) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EApp (EVar "ppPredArgsShared") (EVar "goals")))) (ELit (LString "` is still undetermined here and matches "))) (EApp (EMethodRef "display") (EApp (EVar "joinAnd") (EApp (EApp (EMethodRef "map") (EApp (EVar "implHeadLabel") (EVar "iface"))) (EVar "cands"))))) (ELit (LString ", and "))) (EApp (EMethodRef "display") (EApp (EVar "noMinimumClause") (EApp (EVar "listLen") (EVar "cands"))))) (ELit (LString " — so the first of them to be declared is the one that runs"))))
