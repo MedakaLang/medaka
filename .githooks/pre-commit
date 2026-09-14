@@ -37,6 +37,17 @@
 #      -U0`) — an existing shout that is merely touched but textually unchanged does
 #      not trigger, and it needs no built binary. CI twin:
 #      test/diff_compiler_comment_shout_diff.sh (#2621).
+#   6b. COMMENT-REGISTER BASELINE: `test/comment_register_census.sh --check
+#      test/comment_register_baseline.toml <staged files>` — a per-file COUNT
+#      ratchet (not diff-scoped like 6) over the 8 baselined comment-register
+#      classes, so a MOVED/duplicated existing line that raises a staged
+#      file's class total still fails even when check 6's added-line diff
+#      wouldn't catch it on its own. A file with a nonzero class count and no
+#      row in the baseline fails closed. Counts move only by regenerating
+#      (`sh test/comment_register_census.sh --write
+#      test/comment_register_baseline.toml`), never by hand. CI twin:
+#      test/diff_compiler_comment_shout_diff.sh's second assertion
+#      (#S-register-baseline).
 #
 # ── #491: this hook covers ONE of five golden families outright, plus one more
 # OPPORTUNISTICALLY (check 5, only when test/bin/lex_main happens to already be
@@ -468,6 +479,23 @@ if [ -n "$badshout" ]; then
   exit 1
 fi
 
+# ── 6b. comment-register count baseline (staged .mdk, per-file) ─────────────
+# Unlike check 6, not diff-scoped -- catches a moved/duplicated existing line
+# that raises a staged file's class total without any individually new-
+# looking added line. Reuses $files from check 1. Needs no built binary.
+baseline_out="$(sh "$ROOT/test/comment_register_census.sh" --check "$ROOT/test/comment_register_baseline.toml" $files 2>&1)"
+baseline_status=$?
+if [ "$baseline_status" -ne 0 ]; then
+  echo "" >&2
+  echo "✗ pre-commit: comment-register baseline ratchet violated:" >&2
+  echo "" >&2
+  printf '%s\n' "$baseline_out" | sed 's/^/  /' >&2
+  echo "" >&2
+  echo "  Bypass once:  git commit --no-verify" >&2
+  echo "" >&2
+  exit 1
+fi
+
 # ── #491: NAME THE BLIND SPOT ─────────────────────────────────────────────────
 # This hook's silence has repeatedly been read as "goldens are complete" — it
 # never is. State plainly, every run that reaches here, what got checked and
@@ -476,7 +504,7 @@ fi
 # (#536) on why `test/diff_compiler_test.sh` cannot be scoped to staged files
 # from the outside — running it here would risk rejecting a commit over an
 # unrelated, stale fixture with no working per-file remediation.
-checked="fmt, lint, baselined-lint, emoji-shout-diff"
+checked="fmt, lint, baselined-lint, emoji-shout-diff, comment-register-baseline"
 notchecked=""
 if [ -n "${PRECOMMIT_SNAPSHOT_DEFER:-}" ]; then notchecked="$notchecked snapshots(deferred)"; else checked="$checked, snapshots"; fi
 if [ "$lex_checked" = 1 ]; then checked="$checked, lextok"; else notchecked="$notchecked lextok"; fi

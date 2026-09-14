@@ -26,6 +26,17 @@
 # drains nothing; it only stops the count from growing further. `.md`
 # files are out of scope entirely (this only ever looks at `.mdk`).
 #
+# SECOND ASSERTION (#S-register-baseline): the comment-register count
+# baseline ratchet, tree-wide, over test/comment_register_baseline.toml --
+# the CI twin of .githooks/pre-commit check 6b (per staged file). Unlike the
+# diff check above, this is not scoped to the PR's added lines -- it reads
+# the CURRENT count for every (file, class) in the tree and compares against
+# the pinned baseline, so it catches a moved/duplicated existing line the
+# diff check would miss, and it does not depend on anything the hook wrote
+# (so `--no-verify` cannot smuggle a rise past it either). Runs FIRST and
+# unconditionally, ahead of the diff check's own early-exit (no .mdk in the
+# diff is not the same as no tree-wide violation).
+#
 # Same include/exclude pattern the hook derives its file set with (staged
 # .mdk, test/** excluded, diff-filter ACM) -- re-derived independently here
 # rather than shared code, so `--no-verify` cannot bypass this by skipping
@@ -84,6 +95,22 @@ if [ -z "$BASE" ]; then
   [ -n "$BASE" ] || BASE="$(git merge-base main "$HEAD" 2>/dev/null)"
 fi
 [ -n "$BASE" ] || { echo "FAIL: could not determine a merge-base with main -- pass <base> explicitly"; exit 2; }
+
+# ── second assertion: comment-register baseline ratchet, tree-wide ─────────
+# Runs FIRST and unconditionally -- it is not diff-scoped like the first
+# assertion below, so it must not sit behind that assertion's early-exit
+# when the diff between $BASE and $HEAD happens to touch no .mdk file (e.g.
+# this gate run alone, with no other .mdk change in the PR).
+baseline_out="$(sh "$ROOT/test/comment_register_census.sh" --check "$ROOT/test/comment_register_baseline.toml")"
+baseline_status=$?
+if [ "$baseline_status" -ne 0 ]; then
+  echo ""
+  echo "FAIL: comment-register baseline ratchet violated:"
+  echo ""
+  printf '%s\n' "$baseline_out" | sed 's/^/  /'
+  exit 1
+fi
+echo "-- comment register baseline: ok"
 
 files="$(git diff --name-only --diff-filter=ACM "$BASE" "$HEAD" -- '*.mdk' ':(exclude)test/**')"
 if [ -z "$files" ]; then
