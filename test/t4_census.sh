@@ -60,8 +60,8 @@ for r in test stdlib; do
   [ -d "$ROOT/$r" ] || continue
   files="$(git ls-files -- "$r/*.mdk" | grep -v '^test/t4_census_fixtures/')"
   n_files=0
-  n_hits=0
   echo "-- root: $r --"
+  raw="$(mktemp)"
   for f in $files; do
     [ -n "$f" ] || continue
     n_files=$((n_files + 1))
@@ -73,10 +73,21 @@ for r in test stdlib; do
         | "\($file):\(.range.start.line + 1):\(.range.start.character + 1)\t\(.code)\t\(.message)"
     ' 2>/dev/null)"
     [ -n "$rows" ] || continue
-    printf '%s\n' "$rows"
-    hits="$(printf '%s\n' "$rows" | grep -c .)"
-    n_hits=$((n_hits + hits))
+    printf '%s\n' "$rows" >> "$raw"
   done
+  # A site inside an IMPORTED module gets one JSON entry per entry-point that
+  # reaches it -- reported once when it's swept as its own entry (path
+  # spelled absolute, "$ROOT/$f") and again when reached via an importer
+  # (path spelled relative-to-cwd by the envelope, which is $ROOT since this
+  # script cd's there). Same site, two path spellings for one location:
+  # normalize both to $ROOT-relative and de-dup before counting.
+  norm="$(sed "s|^$ROOT/||" "$raw" | sort -u)"
+  rm -f "$raw"
+  n_hits=0
+  if [ -n "$norm" ]; then
+    printf '%s\n' "$norm"
+    n_hits="$(printf '%s\n' "$norm" | grep -c .)"
+  fi
   echo "  root $r: $n_hits site(s) across $n_files file(s)"
   echo ""
   total=$((total + n_hits))

@@ -2297,13 +2297,14 @@ coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 --
 --     make t4-census
 --
--- which at this writing finds 2 WILD sites total, both under `test/` (0 under
--- `stdlib/`) -- the two pre-existing #1183-class fixtures. The census's own
--- positive-control corpus (`test/t4_census_fixtures/`, 3 sites) is reported
--- separately, not folded into the wild total, so an empty wild census stays a
--- reachable answer. (3) The render cost is therefore bounded by the (small,
--- test-only) site count, not by the module graph, exactly as for the second
--- and third members.
+-- which at this writing finds 3 WILD sites total, all under `test/` (0 under
+-- `stdlib/`) -- the two pre-existing #1183-class fixtures plus this member's
+-- own multi-module regression pin. The census's own positive-control corpus
+-- (`test/t4_census_fixtures/`, 3 sites) is reported separately, not folded
+-- into the wild total, so an empty wild census stays a reachable answer.
+-- (3) The render cost is therefore bounded by the (small, test-only) site
+-- count, not by the module graph, exactly as for the second and third
+-- members.
 export
 runBuildWarnCodes : List String
 runBuildWarnCodes = [
