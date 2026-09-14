@@ -7,7 +7,7 @@
 -- pds/lib/multiformats.mdk against them, and prints one line per checked
 -- cell: "<PASS|FAIL>\t<arm>\t<expected>\t<actual>". The LAST stdout line is
 -- exactly "TOTAL: PASS" or "TOTAL: FAIL" — that is what the gate
--- (pds/test/encodings_vectors.sh) reads. An "ERRATUM" line is printed for
+-- (pds/test/encodings_vectors_test.mdk) reads. An "ERRATUM" line is printed for
 -- the one documented, non-graded cell (see the base58 spec vectors arm
 -- below) and is not counted toward PASS or FAIL.
 
@@ -186,7 +186,8 @@ erratumReports (l :: rest) = match split "\t" l
     -- still matches the corrected column it discloses, so disagreement
     -- aborts. Still NOT a graded PASS/FAIL cell: the driver's header
     -- contract that erratum rows are "not counted toward PASS or FAIL"
-    -- stays true, and encodings_vectors.sh's EVAL_FLOOR is unchanged.
+    -- stays true, so an erratum row never moves the count a caller checks
+    -- this driver's output against.
     let () =
       if correctedExpected /= encoded then
         panic

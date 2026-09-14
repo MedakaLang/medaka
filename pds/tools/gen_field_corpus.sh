@@ -9,8 +9,9 @@
 # shard glob (pds/README.md, "CI classification policy" (c)).  Its row lives
 # in test/CI-COVERAGE-TOOLS.txt, keyed by repo-relative path minus `.sh`.
 #
-# What IS graded is the artifact it produces: pds/test/field_vectors.sh runs
-# the corpus against pds/lib/field.mdk, and pds/test/vector_provenance.sh
+# What IS graded is the artifact it produces:
+# pds/test/field_vectors_test.mdk runs the corpus against pds/lib/field.mdk,
+# and pds/test/vector_provenance.sh
 # checks the corpus's ledger row and re-hashes its bytes.
 #
 # Usage:

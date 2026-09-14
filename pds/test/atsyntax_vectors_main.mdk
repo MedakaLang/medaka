@@ -1,5 +1,5 @@
 {- | P4-A identifier and URI syntax driver, graded against the official
-   atproto interop syntax corpora (`pds/test/atsyntax_vectors.sh`).
+   atproto interop syntax corpora (`pds/test/atsyntax_vectors_test.mdk`).
 
    Prints one `N/N valid accepted, M/M invalid rejected` line per corpus, plus
    two extra lines cross-grading `lib.repo`'s existing `validateRkey`/

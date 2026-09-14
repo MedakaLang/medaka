@@ -257,7 +257,7 @@ test "a * (b + c) = a*b + a*c" =
 -- Nothing is lost: `inverse` is graded against the EXTERNAL answer key over
 -- 52 inputs — including 0, 1, n-1, n_h, n_h+1 and 16 pseudo-random values —
 -- by the corpus's `inv` rows, on the NATIVE engine, in well under a second
--- (pds/test/scalar_vectors.sh phase B, full corpus). This assertion's job is
+-- (pds/test/scalar_vectors_test.mdk's native arm, full corpus). This assertion's job is
 -- the structural one: that `a * inverse a = 1` holds as an identity of the
 -- ring, at representative limb positions.
 --

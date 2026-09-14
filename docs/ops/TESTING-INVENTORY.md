@@ -13,32 +13,30 @@
 
 | destination | n |
 |---|---:|
-| native gate module (`N`) | 208 |
+| native gate module (`N`) | 209 |
 | stays shell (`SHELL`) | 43 |
 | not a check (`OUT`) | 31 |
 | undecided (`UNSURE`) | 4 |
-| `*_test.mdk` sibling (`T`) | 2 |
-| **total** | **288** |
+| `*_test.mdk` sibling (`T`) | 0 |
+| **total** | **287** |
 
 | today? | n |
 |---|---:|
-| NO | 209 |
+| NO | 198 |
 | n/a | 74 |
 | UNSURE | 4 |
-| YES | 1 |
+| YES | 11 |
 
 | blocker | gates carrying it |
 |---|---:|
-| `NATIVE-KIND-RUNNER` | 211 |
-| `EXTERNAL-TOOL` | 120 |
-| `GOLDEN-ASSERT` | 101 |
+| `NATIVE-KIND-RUNNER` | 201 |
+| `EXTERNAL-TOOL` | 118 |
+| `GOLDEN-ASSERT` | 99 |
 | `ORACLE-PROBE` | 68 |
 | `NOT-A-CHECK` | 32 |
 | `TRUST-ANCHOR` | 25 |
 | `SECTION-SPLIT` | 13 |
 | `INVERTED-POLARITY` | 8 |
-| `TEST-IO` | 1 |
-| `NONE` | 1 |
 
 ## The table
 
@@ -51,29 +49,29 @@
 | `parsec/test/check.sh` | CLI-CONTRACT | native | N | NO | NATIVE-KIND-RUNNER | 1201 | 25 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/nightly/repo_vectors_eval_engine.sh` | DIFFERENTIAL | multiple (eval vs native) | N | NO | NATIVE-KIND-RUNNER | — | 92 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/nightly/signing_parity.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | — | 96 | WRAP: spawns ./medaka + diffs, module does the same [node] |
-| `pds/test/atsyntax_vectors.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 3352 | 88 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/atsyntax_vectors_test.mdk` | GOLDEN | native | N | YES | — | 3352 | 88 | DONE: was `atsyntax_vectors.sh`, now one `vector_runner` row |
 | `pds/test/car_vectors.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 10759 | 108 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `pds/test/constant_time_parity.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 228782 | 78 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `pds/test/constant_time_public_key.sh` | STRUCTURAL-IR | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, SECTION-SPLIT | 3586 | 221 | WRAP: spawns ./medaka + diffs, module does the same [clang] |
 | `pds/test/constant_time_reductions.sh` | STRUCTURAL-IR | native (some wasm required-checks) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, SECTION-SPLIT | 34263 | 989 | WRAP: spawns ./medaka + diffs, module does the same [clang,node] |
 | `pds/test/constant_time_signing.sh` | STRUCTURAL-IR | native | N | NO | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, EXTERNAL-TOOL, SECTION-SPLIT | 66762 | 641 | WRAP: spawns ./medaka + diffs, module does the same [clang,python3] |
-| `pds/test/dagcbor_cid_vectors.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 5707 | 68 | WRAP: spawns ./medaka + diffs, module does the same [node] |
+| `pds/test/dagcbor_cid_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native/wasm) | N | YES | — | 5707 | 68 | DONE: was `dagcbor_cid_vectors.sh`, now one `vector_runner` row [node] |
 | `pds/test/did_key_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 232991 | 120 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
-| `pds/test/ecdsa_vectors.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 74788 | 82 | WRAP: spawns ./medaka + diffs, module does the same |
-| `pds/test/field_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 49216 | 125 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/ecdsa_vectors_test.mdk` | GOLDEN | native | N | YES | — | 74788 | 82 | DONE: was `ecdsa_vectors.sh`, now one `vector_runner` row |
+| `pds/test/field_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native) | N | YES | — | 49216 | 125 | DONE: was `field_vectors.sh`, now one `vector_runner` row |
 | `pds/test/inlang_test_oracle.sh` | INLANG-WRAPPER | interpreter | N | NO | NATIVE-KIND-RUNNER | 418939 | 102 | WRAP: spawns ./medaka + diffs, module does the same |
-| `pds/test/lexjson_vectors.sh` | GOLDEN | native | N | NO | NATIVE-KIND-RUNNER | 3305 | 59 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/lexjson_vectors_test.mdk` | GOLDEN | native | N | YES | — | 3305 | 59 | DONE: was `lexjson_vectors.sh`, now one `vector_runner` row |
 | `pds/test/lib_boundary.sh` | RATCHET/LEDGER | none | N | NO | NATIVE-KIND-RUNNER | 288 | 154 | REWRITE: probe/static text becomes library calls |
 | `pds/test/mst_vectors.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 30928 | 114 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `pds/test/opaque_field_scalar.sh` | GOLDEN | none (typecheck-only) | N | NO | NATIVE-KIND-RUNNER | 3375 | 429 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/protocol_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 23834 | 123 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
 | `pds/test/read_routes_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 35748 | 157 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
 | `pds/test/repo_vectors.sh` | DIFFERENTIAL | multiple (native/wasm only, no eval) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 18410 | 171 | WRAP: spawns ./medaka + diffs, module does the same [node] |
-| `pds/test/rfc6979_vectors.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 2234 | 80 | WRAP: spawns ./medaka + diffs, module does the same [python3] |
-| `pds/test/scalar_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 63804 | 143 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/rfc6979_vectors_test.mdk` | DIFFERENTIAL | native | N | YES | — | 2234 | 80 | DONE: was `rfc6979_vectors.sh`, now one `vector_runner` row [python3] |
+| `pds/test/scalar_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native) | N | YES | — | 63804 | 143 | DONE: was `scalar_vectors.sh`, now one `vector_runner` row |
 | `pds/test/secp256k1_point_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 200484 | 17 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/serve_e2e.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 44227 | 233 | WRAP: spawns ./medaka + diffs, module does the same |
-| `pds/test/sha256_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 16052 | 115 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/sha256_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native) | N | YES | — | 16052 | 115 | DONE: was `sha256_vectors.sh`, now one `vector_runner` row |
 | `pds/test/store_persistence.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 7958 | 102 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/trust_boundary_guards.sh` | OTHER | interpreter (eval only, deliberately) | N | NO | NATIVE-KIND-RUNNER | 3052 | 125 | WRAP: spawns ./medaka + diffs, module does the same |
 | `sqlite/test/aggregate_oracle.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 4491 | 71 | WRAP: spawns ./medaka + diffs, module does the same [sqlite3] |
@@ -325,8 +323,8 @@
 | `test/wasm/diff_visitor_analyze_latency.sh` | PERF | wasm | SHELL | n/a | EXTERNAL-TOOL | — | 64 | valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing |
 | `test/wasm/diff_visitor_cost_bytes.sh` | PERF | none | SHELL | n/a | EXTERNAL-TOOL | — | 77 | valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing |
 | `test/wasm/diff_wasm_emitted_size.sh` | PERF | wasm | SHELL | n/a | EXTERNAL-TOOL | — | 233 | valgrind/cachegrind/wall-clock instrumentation plus statistics; wrap gains nothing |
-| `pds/test/encodings_vectors.sh` | GOLDEN | interpreter (eval only) | T | NO | TEST-IO | 994 | 84 | pure in-language assertions over a library function |
-| `pds/test/secp256k1_public_key.sh` | OTHER | native | T | YES | NONE | 2324 | 33 | pure in-language assertions over a library function |
+| `pds/test/encodings_vectors_test.mdk` | GOLDEN | interpreter (eval only) | N | YES | — | 994 | 84 | DONE: was `encodings_vectors.sh`, now one `vector_runner` row |
+| `pds/test/secp256k1_public_key_test.mdk` | OTHER | native | N | YES | — | 2324 | 33 | DONE: was `secp256k1_public_key.sh`, now one `vector_runner` row |
 | `pds/test/vector_provenance.sh` | RATCHET/LEDGER | none | UNSURE | UNSURE | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 1869 | 834 | UNSURE: also a shared helper (--files-for) called by ~8 sibling gates; migrating it moves a de-facto library, not just a check |
 | `test/diff_compiler_ported.sh` | INLANG-WRAPPER | interpreter | UNSURE | UNSURE | NATIVE-KIND-RUNNER, EXTERNAL-TOOL, INVERTED-POLARITY | 2785 | 231 | UNSURE: the tests are already (T); the shell is a known-bug ledger + anti-vacuity floor that derived discovery may retire outright rather than migrate |
 | `test/diff_compiler_test.sh` | GOLDEN | interpreter | UNSURE | UNSURE | NATIVE-KIND-RUNNER, GOLDEN-ASSERT, ORACLE-PROBE | 59668 | 326 | UNSURE: goldens are OCaml-era captures for a compiler that no longer exists; what the gate still proves must be settled before a destination is picked |

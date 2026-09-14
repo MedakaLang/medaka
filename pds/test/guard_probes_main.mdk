@@ -30,7 +30,7 @@ main = match args ()
   -- off-by-one in the guard. It prints the digest LENGTH, never a digest
   -- VALUE — an expected digest asserted here would be a self-captured
   -- golden, and the real digests are graded against the ledgered corpus by
-  -- pds/test/sha256_vectors.sh.
+  -- pds/test/sha256_vectors_test.mdk.
   ["sha256-edges"] =>
     let d = sha256 (arrayFromList [0, 255])
     println "OK sha256-edges len=\{intToString (arrayLength d)}"

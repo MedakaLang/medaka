@@ -264,7 +264,7 @@ structurally — no in-family source publishes it.
 **Run the gates locally:**
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/encodings_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/encodings_vectors_test.mdk
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
@@ -309,7 +309,7 @@ cmp /tmp/x pds/test/vectors/field_reference_corpus.txt   # must be byte-identica
 **Run the gates locally:**
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/field_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/field_vectors_test.mdk
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
@@ -813,7 +813,7 @@ or signing call graph.
 **Run the gates locally:**
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/scalar_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/scalar_vectors_test.mdk
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
@@ -849,7 +849,7 @@ natively because the generic interpreter roster would put four complete
 256-round ladders on its hot path:
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/secp256k1_public_key.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/secp256k1_public_key_test.mdk
 ```
 
 ## secp256k1 signatures (S-signing-contract, #1700 step 4)
@@ -870,7 +870,7 @@ eight public APIs, and roots the native P15 audit at `signDigest` and
 candidate-1/exhaustion and raw negative evidence.
 
 ```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/ecdsa_vectors.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/ecdsa_vectors_test.mdk
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/opaque_field_scalar.sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
 ```

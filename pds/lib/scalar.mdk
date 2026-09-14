@@ -49,7 +49,7 @@
 
    The rejected alternative was shift-and-subtract on the 512-bit product:
    simplest to argue, but ~256 compare-and-subtract passes per multiply,
-   which the tree-walking interpreter arm of `pds/test/scalar_vectors.sh`
+   which the tree-walking interpreter arm of `pds/test/scalar_vectors_test.mdk`
    could not run in any reasonable time.
 
    ── The canonical invariant, EAGER ───────────────────────────────────

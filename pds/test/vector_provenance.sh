@@ -635,73 +635,41 @@ pds/test/later.txt"
     st_rc=1
   fi
 
-  # T9 — integration: every real vector gate must hand its ledger-selected
-  # corpus to the engine. The fake engine rejects only an argument containing
-  # `wrong-answer`; a hard-coded old gate never passes that path and therefore
-  # goes green, making this cell fail for the pre-#1729 implementation.
+  # T9 — integration: a SHELL vector gate that still does its own
+  # `--files-for` plumbing must hand the ledger-selected corpus to the
+  # engine, not some other path. The fake engine rejects any argument
+  # containing `wrong-answer`; a gate whose corpus wiring silently drifted
+  # away from the ledger would never pass that argument through and would
+  # therefore stay green, so this cell fails for a gate that stopped
+  # actually reading the ledger.
+  #
+  # pds/test/car_vectors.sh is the sampled consumer: it reads one ledger
+  # consumer id and hands the resulting path straight to the engine, the
+  # same shape pds/test/mst_vectors.sh and pds/test/repo_vectors.sh use.
+  # A native row (one that reads the ledger through
+  # pds/test/vector_ledger.mdk instead) needs no cell here: that module's
+  # Err and zero-file paths already fail the row outright on every run, so
+  # its ledger consumption is asserted structurally rather than sampled.
   t9="$(mktemp -d "$VP_WORK/t9.XXXXXX")"
   mkdir -p "$t9/pds/test/vectors"
   cp "$ROOT/pds/test/vector_provenance.sh" "$t9/pds/test/vector_provenance.sh"
-  for gate in sha256_vectors.sh field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
-    cp "$ROOT/pds/test/$gate" "$t9/pds/test/$gate"
-  done
-  for consumer in sha256 field scalar encodings; do
-    mk_vector "$t9" "pds/test/vectors/$consumer-wrong-answer.txt" "deliberately wrong answer for $consumer"
-  done
-  sha_hash="$(sha256_of_file "$t9/pds/test/vectors/sha256-wrong-answer.txt")"
-  field_hash="$(sha256_of_file "$t9/pds/test/vectors/field-wrong-answer.txt")"
-  scalar_hash="$(sha256_of_file "$t9/pds/test/vectors/scalar-wrong-answer.txt")"
-  encodings_hash="$(sha256_of_file "$t9/pds/test/vectors/encodings-wrong-answer.txt")"
+  cp "$ROOT/pds/test/car_vectors.sh" "$t9/pds/test/car_vectors.sh"
+  mk_vector "$t9" "pds/test/vectors/car-wrong-answer.txt" "deliberately wrong answer for car"
+  car_hash="$(sha256_of_file "$t9/pds/test/vectors/car-wrong-answer.txt")"
   cat > "$t9/pds/test/VECTOR-PROVENANCE.txt" << EOF
 [vector]
-file: pds/test/vectors/sha256-wrong-answer.txt
-local-sha256: $sha_hash
+file: pds/test/vectors/car-wrong-answer.txt
+local-sha256: $car_hash
 kind: published-artifact
-source: Synthetic SHA fixture
-source-url: https://example.invalid/t9-sha256
+source: Synthetic CAR fixture
+source-url: https://example.invalid/t9-car
 source-sha256: UNAVAILABLE
 source-note: synthetic self-test fixture, no real artifact
 extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-sha256 (#1729)
-
-[vector]
-file: pds/test/vectors/field-wrong-answer.txt
-local-sha256: $field_hash
-kind: published-artifact
-source: Synthetic field fixture
-source-url: https://example.invalid/t9-field
-source-sha256: UNAVAILABLE
-source-note: synthetic self-test fixture, no real artifact
-extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-field (#1729)
-
-[vector]
-file: pds/test/vectors/scalar-wrong-answer.txt
-local-sha256: $scalar_hash
-kind: published-artifact
-source: Synthetic scalar fixture
-source-url: https://example.invalid/t9-scalar
-source-sha256: UNAVAILABLE
-source-note: synthetic self-test fixture, no real artifact
-extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-scalar (#1729)
-
-[vector]
-file: pds/test/vectors/encodings-wrong-answer.txt
-local-sha256: $encodings_hash
-kind: published-artifact
-source: Synthetic encodings fixture
-source-url: https://example.invalid/t9-encodings
-source-sha256: UNAVAILABLE
-source-note: synthetic self-test fixture, no real artifact
-extraction: hand-written for self-test T9
-retrieved: 2026-08-22
-consumer: S-encodings (#1729)
+retrieved: 2026-09-14
+consumer: P1-C-CAR-STORE (self-test T9)
 EOF
-  cat > "$t9/fake-medaka" << 'EOF'
+  cat > "$t9/fake-medaka" << 'FAKEEOF'
 #!/bin/sh
 for arg in "$@"; do
   case "$arg" in
@@ -710,59 +678,21 @@ for arg in "$@"; do
       exit 1 ;;
   esac
 done
-
-case "$1:$2" in
-  run:*sha256*) echo "67 ok, 0 failed" ;;
-  run:*field*)
-    echo "counted: 135/135 rows ok, 0 skipped (stride 7)"
-    echo "TOTAL: PASS" ;;
-  run:*scalar*)
-    echo "op red: 1 ok"
-    echo "counted: 40/40 rows ok, 0 skipped (stride 26)"
-    echo "TOTAL: PASS" ;;
-  run:*encodings*)
-    i=0
-    while [ "$i" -lt 29 ]; do
-      printf 'PASS\tfixture-%s\n' "$i"
-      i=$((i + 1))
-    done
-    echo "TOTAL: PASS" ;;
-  build:*)
-    driver="$2"
-    shift 2
-    out=""
-    while [ "$#" -gt 0 ]; do
-      if [ "$1" = "-o" ]; then out="$2"; break; fi
-      shift
-    done
-    case "$driver" in
-      *sha256*) body='echo "132 ok, 0 failed"' ;;
-      *field*) body='echo "counted: 944/944 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
-      *scalar*) body='echo "counted: 1028/1028 rows ok, 0 skipped (stride 1)"; echo "TOTAL: PASS"' ;;
-      *) exit 1 ;;
-    esac
-    printf '#!/bin/sh\n%s\n' "$body" > "$out"
-    chmod +x "$out" ;;
-  *) exit 1 ;;
-esac
-EOF
+exit 1
+FAKEEOF
   chmod +x "$t9/fake-medaka"
 
-  t9_rc=0
-  for gate in sha256_vectors.sh field_vectors.sh scalar_vectors.sh encodings_vectors.sh; do
-    t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/$gate" 2>&1)"
-    t9_gate_rc=$?
-    if [ "$t9_gate_rc" -ne 0 ] \
-       && printf '%s' "$t9_out" | grep -q 'FAKE-ENGINE: rejected ledgered wrong-answer corpus'; then
-      echo "T9 $gate consumes ledgered wrong answer: PASS"
-    else
-      echo "T9 $gate consumes ledgered wrong answer: FAIL (rc=$t9_gate_rc)"
-      printf '%s\n' "$t9_out"
-      t9_rc=1
-    fi
-  done
+  t9_out="$(MEDAKA_ROOT="$t9" MEDAKA="$t9/fake-medaka" sh "$t9/pds/test/car_vectors.sh" 2>&1)"
+  t9_rc=$?
   rm -rf "$t9"
-  if [ "$t9_rc" -ne 0 ]; then st_rc=1; fi
+  if [ "$t9_rc" -ne 0 ] \
+     && printf '%s' "$t9_out" | grep -q 'FAKE-ENGINE: rejected ledgered wrong-answer corpus'; then
+    echo "T9 car_vectors.sh consumes ledgered wrong answer: PASS"
+  else
+    echo "T9 car_vectors.sh consumes ledgered wrong answer: FAIL (rc=$t9_rc)"
+    printf '%s\n' "$t9_out"
+    st_rc=1
+  fi
 
   # T10/T11 exercise the optional secondary authority used by the point corpus.
   for case_name in missing same; do

@@ -24,7 +24,8 @@
 
    SCOPE, stated honestly (inherited from the retired script): this is the
    EVAL arm only (`medaka run`). The native arm of the sha256 domain scan is
-   covered by `pds/test/sha256_vectors.sh` phase B; base58's cells are
+   covered by `pds/test/sha256_vectors_test.mdk`'s native arm; base58's
+   cells are
    eval-only; `uvarintEncode` has no native cell.
 
    ANTI-ROT FLOOR (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is

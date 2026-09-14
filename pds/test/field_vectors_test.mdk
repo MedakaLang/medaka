@@ -1,0 +1,53 @@
+{- | Vector-corpus gate for `pds/lib/field.mdk` (S-field, #1699 field
+   10x2^26 limbs), migrated from the retired `field_vectors.sh` under #2593.
+
+   Grades the pure-Medaka secp256k1 field arithmetic against a corpus
+   generated from libsecp256k1 at the pinned commit, never against a
+   self-captured golden (G5, `docs/design/ATPROTO-PDS-DESIGN.md` §5). The
+   pin and the extraction procedure are ledgered in
+   `pds/test/VECTOR-PROVENANCE.txt`; the generator is
+   `pds/tools/gen_field_corpus.sh` (a TOOL, not a gate: it needs network).
+
+   Both arms print `counted: <checked>/<total> rows ok, <skipped> skipped
+   (stride <n>)` — a shape that does not contain a `<n> ok,` substring, so
+   `Row`'s generic `countFloor` cannot parse it (the word before " ok," is
+   "rows", not a number). The exact line is pinned as a `needs` substring
+   instead: the corpus and the stride are both fixed, so the count is
+   deterministic, and this is the same "raise it when vectors are added"
+   discipline `countFloor` gives elsewhere, expressed with the field
+   `Row` already has. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+row : Row
+row = Row {
+  gate = "pds/test/field_vectors",
+  driver = "pds/test/field_vectors_main.mdk",
+  corpus = Ledgered "S-field",
+  corpusCount = AtLeast 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = EvalEngine,
+      driverArgs = ["--stride", "7"],
+      countFloor = None,
+      needs = ["counted: 135/135 rows ok, 809 skipped (stride 7)"],
+      lastLine = Some "TOTAL: PASS",
+    },
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = None,
+      needs = ["counted: 944/944 rows ok, 0 skipped (stride 1)"],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "field vectors: eval (bounded, stride 7) and native (full corpus) reproduce the ledgered corpus" =
+  expectRow row
