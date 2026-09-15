@@ -27,7 +27,14 @@
    rewinds the head file to; `blob-survey` reports what the blob reader makes
    of a blob whose two files did not both land;    `event-recover-*` stages an
    entry against a persisted head and recovers over it, the way `configure`
-   does: plan, then apply. -}
+   does: plan, then apply.
+
+   `genesis-init` and `genesis-resume` are that same pair for the four events a
+   repository's creation emits: the first creates the repository and emits
+   them, the second is every later start over that data directory. The gate
+   runs the second over a log it truncated to none, one, two or three of the
+   four, and requires the result to be the log an uninterrupted creation
+   leaves. -}
 
 import hex.{decode, encode}
 import json.{Json(..), jObject}
@@ -69,6 +76,7 @@ import shell.persist.{
   persistPreferences,
   persistSave,
 }
+import shell.server.{completeGenesisEvents}
 
 -- The gate greps every persisted file for this hex and for its raw bytes; it is
 -- the signing key the adapter must never be able to write.
@@ -463,6 +471,66 @@ frameFor : Option String -> String
 frameFor None = "a2626f7001617469236964656e74697479"
 frameFor (Some _) = "a1"
 
+-- ── the genesis quartet ─────────────────────────────────────────────────────
+
+-- The handle the genesis `#identity` event announces. Fixed like every other
+-- input to these two routes, so the frames they produce are deterministic
+-- bytes and two runs over one data directory can be compared line for line.
+genesisHandle : String
+genesisHandle = "persistence.fixture.test"
+
+-- Every promoted entry, one line each: position, anchor, and the frame BYTES
+-- rather than a count of them. A resumption that emitted four events of the
+-- wrong kinds, or the right kinds out of order, satisfies a count.
+printGenesis : List EventLogEntry -> <IO> Unit
+printGenesis [] = ()
+printGenesis (entry :: rest) =
+  let () =
+    println
+      "GENESIS \{intToString entry.seq} \{anchorLabel entry.anchorCommitCid} \{entry.frameHex}"
+  printGenesis rest
+
+genesisSurvey : String -> <IO, FileRead "_"> Unit
+genesisSurvey dir = match eventLogRead dir 0
+  Err message => panic "store_persistence: genesis log unreadable: \{message}"
+  Ok entries =>
+    let () = printGenesis entries
+    println "GENESIS count \{intToString (length entries)}"
+
+{- | A start over a data directory that already holds a repository, with no
+   `--init` anywhere: load the repository from disk, make the call `configure`
+   makes on every start, and survey what the log holds afterwards.
+
+   Pointed at a log the gate truncated this is the resumption; pointed at a
+   finished one it must add nothing, which is the same route run twice. -}
+runGenesisResume : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisResume dir = match reload dir
+  Err message => panic "store_persistence: genesis reload failed: \{message}"
+  Ok repo =>
+    match (completeGenesisEvents
+      dir
+      accountDid
+      genesisHandle
+      eventFixtureTime
+      repo)
+      Err message => panic "store_persistence: genesis emit failed: \{message}"
+      Ok () => genesisSurvey dir
+
+{- | The repository's creation: the commit persisted first, then the four
+   events emitted over it.
+
+   The events are emitted over the repository READ BACK from disk and not over
+   the one just built, so that this route's survey and `genesis-resume`'s are
+   the same bytes whenever the log is. What the gate compares is a log nothing
+   interrupted against one it truncated and let this finish, and the
+   comparison would otherwise be grading the reload as well. -}
+runGenesisInit : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisInit dir =
+  let repo = fixtureRepo
+  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+    Err message => panic "store_persistence: genesis save failed: \{message}"
+    Ok () => runGenesisResume dir
+
 main : <IO, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()
   ["save", dir] => runSave dir
@@ -480,6 +548,8 @@ main = match args ()
   ["event-recover-orphan", dir] =>
     runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
   ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
+  ["genesis-init", dir] => runGenesisInit dir
+  ["genesis-resume", dir] => runGenesisResume dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan|event-recover-unanchored> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan|event-recover-unanchored|genesis-init|genesis-resume> <dir>"

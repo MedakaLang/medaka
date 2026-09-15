@@ -529,24 +529,65 @@ stageCommitEvent dir did nowSeconds before after = do
    first of them is staged, so none of them can publish state a reader cannot
    fetch.
 
+   This runs on EVERY start and not only on the one that creates the
+   repository, because a start is the only place the sequence can be finished:
+   `--init` refuses a directory that already holds a repository, so a process
+   that died between two of the four would otherwise leave a stream that opens
+   mid-story for as long as that repository lives.
+
    Nothing can interleave: this runs inside `configure`, before the listener
    is bound, so there is no connection through which a write could reach the
    log until all four are promoted. -}
 export
-stageGenesisEvents : String ->
+completeGenesisEvents : String ->
   String ->
   String ->
   Int ->
   Repo ->
   <FileRead "_", FileWrite "_"> Result String Unit
-stageGenesisEvents dir did handle nowSeconds repo = do
+completeGenesisEvents dir did handle nowSeconds repo = do
+  resumeAt <- eventLogNextSequence dir
+  genesisFrom resumeAt dir did handle nowSeconds repo
+
+{- | The genesis events from `step` onward, where `step` is the sequence
+   number the next promoted event will take.
+
+   The next sequence number IS the step number, and the log alone decides it.
+   These four are the only events any repository emits before its listener is
+   bound, and `eventLogNextSequence` counts what was ever PROMOTED rather than
+   what is still readable — the retention sweep unlinks entry files and leaves
+   the pointer where it stood. So a log whose next number is 3 holds
+   `#identity` and `#account` and owes the other two, and one whose next
+   number is past the fourth owes nothing, on that start and on every later
+   one.
+
+   Each step is emitted by the call that would have emitted it on a first
+   start, and an already-promoted step is skipped rather than repeated:
+   `emitUnanchored` and `stageCommitEvent` take a fresh sequence number every
+   time they are called, so re-running step 1 would mint a fifth event rather
+   than replace the first. -}
+genesisFrom : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Repo ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+genesisFrom 1 dir did handle nowSeconds repo = do
   let identityFrame = seq time => syncIdentityFrame seq time did handle
-  let accountFrame = seq time => syncAccountFrame seq time did
   () <- emitUnanchored dir nowSeconds identityFrame
+  genesisFrom 2 dir did handle nowSeconds repo
+genesisFrom 2 dir did handle nowSeconds repo = do
+  let accountFrame = seq time => syncAccountFrame seq time did
   () <- emitUnanchored dir nowSeconds accountFrame
+  genesisFrom 3 dir did handle nowSeconds repo
+genesisFrom 3 dir did handle nowSeconds repo = do
   () <- stageCommitEvent dir did nowSeconds None repo
   () <- eventLogPromote dir eventLogRetentionSeconds nowSeconds
+  genesisFrom 4 dir did handle nowSeconds repo
+genesisFrom 4 dir did _ nowSeconds repo =
   emitUnanchored dir nowSeconds (headSyncFrame did repo)
+genesisFrom _ _ _ _ _ _ = Ok ()
 
 -- The `#sync` frame for a repository's current head: the one event that
 -- states where the repository stands without describing how it got there.

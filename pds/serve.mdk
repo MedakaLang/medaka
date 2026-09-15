@@ -132,10 +132,10 @@ import shell.persist.{
 import shell.server.{
   Serving,
   bindAddress,
+  completeGenesisEvents,
   defaultStatsInterval,
   makeServing,
   runServer,
-  stageGenesisEvents,
 }
 import string.{drop, indexOf, lines, stripSuffix, take, toInt, trim}
 import time.{Duration, millis, now}
@@ -763,7 +763,7 @@ configure parsed = do
   -- `openRepo True` returns `Ok` only down its `initRepo` branch — every other
   -- branch under `--init` refuses a directory that already holds a
   -- repository — so reaching here with this flag set means THIS run created
-  -- the genesis repository, and is what the four genesis events below key on.
+  -- the genesis repository.
   let created = flag "--init" parsed
   repo <- openRepo created dir did keyBytes secret
   -- A previous process may have died between persisting a commit and
@@ -793,12 +793,18 @@ configure parsed = do
   -- touched it. The genesis events are a durable log mutation with nothing
   -- downstream of them that can refuse, so they belong at the same point and
   -- not beside the `--init` repository write that provoked them.
+  --
+  -- Unconditional, and after the single-entry recovery rather than in place of
+  -- it: the two questions are independent and are asked in this order. The
+  -- recovery above finishes or drops whatever ONE entry a previous process
+  -- left pending, which is what makes the promoted count the whole truth about
+  -- how far the quartet got. `created` cannot gate this: the only run allowed
+  -- to pass `--init` is the run that creates the repository, so a quartet
+  -- interrupted partway through would have no later start able to finish it
+  -- (#3006).
   let nowSeconds = floatToInt (now ())
   () <- eventLogApplyRecovery dir recovery eventLogRetentionSeconds nowSeconds
-  () <- if created then
-    stageGenesisEvents dir did handle nowSeconds repo
-  else
-    Ok ()
+  () <- completeGenesisEvents dir did handle nowSeconds repo
   Ok (
     server,
     storeWithPreferences prefs withCredential,

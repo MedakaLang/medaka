@@ -12,9 +12,12 @@
 # each is built directly rather than raced. Barriers do not change that set: an
 # `fsync` decides WHEN a write reaches the platter, never which file a `rename`
 # publishes, so every state those cases build stays reachable and each must
-# still serve the previous value or refuse. Case 12 grades the barriers
-# themselves, which is the one claim building a directory by hand cannot make —
-# it needs the syscall ORDER, not the resulting tree (#2952).
+# still serve the previous value or refuse. Case 11b is that same claim for a
+# creation interrupted partway through the four events it emits: the state is
+# built by winding a finished log back, and the next start has to finish it.
+# Case 12 grades the barriers themselves, which is the one claim building a
+# directory by hand cannot make — it needs the syscall ORDER, not the resulting
+# tree (#2952).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -355,6 +358,71 @@ grep -q '^EVENTAFTER staged none entries 1$' "$WORK/eventfree.out" || {
 }
 echo 'staged event anchored to no commit finished, and planning wrote nothing'
 
+# ── 11b. a creation interrupted partway through the genesis quartet ────────
+# The four events `com.atproto.sync.subscribeRepos` opens a stream with are
+# emitted by the run that CREATES the repository, and `--init` refuses a
+# directory that already holds one — so a process that died between two of them
+# has exactly one chance left to finish the sequence: an ordinary start over
+# that data directory (#3006).
+#
+# Built rather than raced, like every other state here. An uninterrupted
+# creation runs first; the log is then wound back to the crash point (every
+# entry past the Nth unlinked, and the last-promoted pointer — the only record
+# of how far the sequence got — set back to N); and a plain start runs over it.
+# What that start leaves must be the log the uninterrupted creation left, BYTE
+# for byte, which is a claim about which four events and in what order rather
+# than about how many. N=0 is the crash between persisting the genesis commit
+# and promoting the first event, where the pointer does not exist at all.
+GENREF="$WORK/genesis-ref"
+"$WORK/driver" genesis-init "$GENREF" > "$WORK/genesis-ref.out" \
+  2> "$WORK/genesis-ref.err"
+require_empty "$WORK/genesis-ref.err" genesis-init
+grep -q '^GENESIS count 4$' "$WORK/genesis-ref.out" \
+  || fail 'a repository creation did not emit the four genesis events'
+
+for N in 0 1 2 3; do
+  GENDIR="$WORK/genesis-$N"
+  "$WORK/driver" genesis-init "$GENDIR" > "$WORK/genesis-$N.init" \
+    2> "$WORK/genesis-$N.err"
+  require_empty "$WORK/genesis-$N.err" "genesis-init (N=$N)"
+  cmp "$WORK/genesis-ref.out" "$WORK/genesis-$N.init" \
+    || fail "case 11b: two uninterrupted creations left different logs"
+
+  K=$((N + 1))
+  while [ "$K" -le 4 ]; do
+    rm -f "$GENDIR"/events/entries/000000000000000"$K"-*
+    K=$((K + 1))
+  done
+  if [ "$N" -eq 0 ]; then
+    rm -f "$GENDIR/events/.last"
+  else
+    printf '%s' "$N" > "$GENDIR/events/.last"
+  fi
+  REMAIN=$(ls "$GENDIR/events/entries" | wc -l | tr -d ' ')
+  [ "$REMAIN" = "$N" ] \
+    || fail "case 11b: winding the log back to $N left $REMAIN entries"
+
+  "$WORK/driver" genesis-resume "$GENDIR" > "$WORK/genesis-$N.resumed" \
+    2> "$WORK/genesis-$N.err"
+  require_empty "$WORK/genesis-$N.err" "genesis-resume (N=$N)"
+  cmp "$WORK/genesis-ref.out" "$WORK/genesis-$N.resumed" || {
+    diff "$WORK/genesis-ref.out" "$WORK/genesis-$N.resumed" >&2 || true
+    fail "case 11b: a start over a log holding $N of the 4 did not finish it"
+  }
+
+  # The same start once more: a finished quartet must not grow a fifth event,
+  # and the sequence counter must not move.
+  LASTAFTER=$(cat "$GENDIR/events/.last")
+  "$WORK/driver" genesis-resume "$GENDIR" > "$WORK/genesis-$N.again" \
+    2> "$WORK/genesis-$N.err"
+  require_empty "$WORK/genesis-$N.err" "genesis-resume repeat (N=$N)"
+  cmp "$WORK/genesis-$N.resumed" "$WORK/genesis-$N.again" \
+    || fail "case 11b: a start after the quartet was finished emitted more"
+  [ "$(cat "$GENDIR/events/.last")" = "$LASTAFTER" ] \
+    || fail "case 11b: a start after the quartet was finished moved the counter"
+done
+echo 'genesis quartet finished from 0, 1, 2 and 3 promoted events, and adds nothing once whole'
+
 # ── 12. every promote is barriered, staged file first and directory after ──
 # The only case here that reads the syscall STREAM rather than the resulting
 # tree, because that is where the claim lives: after a power loss what survives
@@ -525,4 +593,4 @@ done
 echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES"
 
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; every promote barriered before and after; key absent'
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again; every promote barriered before and after; key absent'
