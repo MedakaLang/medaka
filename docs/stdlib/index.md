@@ -709,6 +709,7 @@ The host primitives.
 - [`makeDir`](runtime.md#makedir)
 - [`removeFile`](runtime.md#removefile)
 - [`rename`](runtime.md#rename)
+- [`fsync`](runtime.md#fsync)
 - [`removeDir`](runtime.md#removedir)
 - [`statFile`](runtime.md#statfile)
 - [`args`](runtime.md#args)

@@ -222,6 +222,16 @@ rename : String -> String -> <FileWrite _> Result String Unit
 
 Moves or renames a path.
 
+### `fsync`
+
+```
+fsync : String -> <FileWrite _> Result String Unit
+```
+
+Flushes a path's contents to durable storage. Works on a regular file or
+a directory — the durability of a `rename` is a property of the
+containing directory, not either file.
+
 ### `removeDir`
 
 ```
