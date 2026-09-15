@@ -25881,7 +25881,7 @@ intercalateComma (x :: rest) = "'\{x}', \{intercalateComma rest}"
 -- why the abstention arm needs a POSITIVE control -- a shape whose edge MUST still be
 -- followed -- rather than only a negative one.
 --
--- 🚨 CITE FIXTURES THAT EXIST, AND CHECK WHAT ACTUALLY CONSUMES THEM.  The gate
+-- Cite fixtures that exist, and check what actually consumes them.  The gate
 -- for this arm is `test/diff_compiler_fmt_test.mdk`'s `typecheckErrorFailures`,
 -- which walks its fixture directory RECURSIVELY via `fixtureFiles` -- so a
 -- directory-nested fixture IS discovered and consumed.  No gate catches a wrong
