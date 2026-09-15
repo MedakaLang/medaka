@@ -18,7 +18,12 @@
    The `prefs-*` routes are the same save/load claim for the preferences half
    (`shell.persist`'s `persistPreferences`/`persistLoadPreferences`), written
    into the same data directory as the repository and blob halves so the
-   signing-key sweep in `store_persistence.sh` covers it too.
+   signing-key sweep in `store_persistence.sh` covers it too. `credential-save`
+   is the write half of the same claim for the account's password credential
+   (`shell.persist`'s `persistCredential`); there is no `credential-load` route
+   because reading it back is `pds/shell/server.mdk`'s job, not this shell's —
+   this route exists only so case 12's syscall trace sees the credential
+   file's promote.
 
    The remaining routes are for HALF-WRITTEN directories. None of them races a
    process kill: each write path here promotes with `rename`, so the states a
@@ -44,6 +49,7 @@ import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
 import lib.cid.{Cid, cidEqual, cidToString}
+import lib.credential.{CredentialRecord, makeCredential}
 import lib.dagcbor.{DagCbor(..)}
 import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
 import lib.repo.{
@@ -73,6 +79,7 @@ import shell.eventlog.{
   eventLogSweepStaging,
 }
 import shell.persist.{
+  persistCredential,
   persistLoad,
   persistLoadPreferences,
   persistPreferences,
@@ -368,6 +375,28 @@ runPrefsSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
 runPrefsSave dir = match persistPreferences dir fixturePrefs
   Err message => panic "store_persistence: preferences save failed: \{message}"
   Ok () => println "PREFS SAVE: PASS"
+
+-- ── the credential half ─────────────────────────────────────────────────────
+
+-- A fixed record, persisted into the same data directory as the repository
+-- and preferences halves so case 12's syscall trace covers it too.
+fixtureCredentialSalt : Array Int
+fixtureCredentialSalt = mustHex "000102030405060708090a0b0c0d0e0f"
+
+fixtureCredential : CredentialRecord
+fixtureCredential =
+  match (makeCredential
+    fixtureCredentialSalt
+    100000
+    "correct horse battery staple")
+    Err message =>
+      panic "store_persistence: malformed credential fixture: \{message}"
+    Ok record => record
+
+runCredentialSave : String -> <IO, FileWrite "_"> Unit
+runCredentialSave dir = match persistCredential dir fixtureCredential
+  Err message => panic "store_persistence: credential save failed: \{message}"
+  Ok () => println "CREDENTIAL SAVE: PASS"
 
 runPrefsLoad : String -> <IO, FileRead "_"> Unit
 runPrefsLoad dir = match persistLoadPreferences dir
@@ -750,6 +779,7 @@ main = match args ()
   ["blob-oversize", dir] => runBlobOversize dir
   ["prefs-save", dir] => runPrefsSave dir
   ["prefs-load", dir] => runPrefsLoad dir
+  ["credential-save", dir] => runCredentialSave dir
   ["event-recover-owed", dir] => runEventRecover dir (_ head => Some head)
   ["event-recover-orphan", dir] =>
     runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
@@ -760,4 +790,4 @@ main = match args ()
   ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan|event-recover-unanchored|genesis-init|genesis-resume|genesis-guard> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|genesis-init|genesis-resume|genesis-guard> <dir>"

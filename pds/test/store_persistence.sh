@@ -603,6 +603,7 @@ mkdir -p "$TRACED"
 trace_route save "$TRACED/repo"
 trace_route blob-save "$TRACED/repo"
 trace_route prefs-save "$TRACED/repo"
+trace_route credential-save "$TRACED/repo"
 trace_route event-recover-owed "$TRACED/events"
 
 [ -s "$WORK/promotes" ] || fail 'the traced routes performed no promote at all'
@@ -672,15 +673,16 @@ ENTRY_PROMOTES=$(promote_count '.*/events/entries/.*')
 POINTER_PROMOTES=$(promote_count '.*/events/\..*')
 HEAD_PROMOTES=$(promote_count '.*/head')
 PREFS_PROMOTES=$(promote_count '.*/preferences')
+CREDENTIAL_PROMOTES=$(promote_count '.*/credential')
 for PAIR in "blockfile:$BLOCK_PROMOTES" "blobfile sidecar:$BLOB_MIME_PROMOTES" \
   "blobfile bytes:$BLOB_BYTE_PROMOTES" "eventlog entry:$ENTRY_PROMOTES" \
   "eventlog pointer:$POINTER_PROMOTES" "persist head:$HEAD_PROMOTES" \
-  "persist preferences:$PREFS_PROMOTES"
+  "persist preferences:$PREFS_PROMOTES" "persist credential:$CREDENTIAL_PROMOTES"
 do
   [ "${PAIR#*:}" -ge 1 ] \
     || fail "no ${PAIR%:*} promote was traced; that path is no longer graded"
 done
-echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES"
+echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES"
 
 
 echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every promote barriered before and after; key absent'

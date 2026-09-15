@@ -19,8 +19,11 @@
    `fsync`ed before its `rename` and the containing directory after: without
    those barriers the kernel is free to make the `rename` visible before the
    block writes it was ordered after, and the head would name a graph that is
-   not there. The credential file is not staged — `writeFilePrivate` writes it
-   in place — so it has no promotion to order and no barrier is owed. -}
+   not there. The credential file is staged and barriered the same way: it is
+   written to a temporary path with `writeFilePrivate` (so the mode is 0600
+   from the moment the bytes land, and stays 0600 across `rename`), `fsync`ed,
+   then `rename`d onto the real path, then the containing directory is
+   `fsync`ed. -}
 
 import array
 import fs.{mkdirAll}
@@ -69,10 +72,14 @@ export
 persistCredential : String ->
   CredentialRecord ->
   <FileWrite "_"> Result String Unit
-persistCredential dir record =
-  match writeFilePrivate (credentialPath dir) (credentialText record)
+persistCredential dir record = do
+  let staged = "\{credentialPath dir}.tmp"
+  () <- match writeFilePrivate staged (credentialText record)
     Err message => Err "unwritable credential \{credentialPath dir}: \{message}"
     Ok () => Ok ()
+  () <- fsync staged
+  () <- rename staged (credentialPath dir)
+  fsync dir
 
 headPath : String -> String
 headPath dir = "\{dir}/head"
