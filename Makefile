@@ -195,6 +195,12 @@ test: medaka
 	## test tables rather than from this engine. It is not enrolled as a gate,
 	## so this line is the only thing that runs it.
 	./medaka test test/regex_conformance_test.mdk
+	## compiler/frontend/resolve.mdk carries its own `test "…"` block
+	## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
+	## module's TYPES are checked on every build via the live pipeline's
+	## import closure, but nothing else runs `medaka test` on it, so
+	## without this line the memo assertions would never execute.
+	./medaka test compiler/frontend/resolve.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:

@@ -1,0 +1,40 @@
+-- A constrained generic wrapper (`describe : Sub a => a -> Int`) calling an
+-- interface method must return the method's Int, not a representation word, when
+-- the constrained parameter unifies with a compiler-builtin scalar head
+-- (Int/Bool) rather than a user `data` head. The `Rock` co-impl is the
+-- discriminating half: an unrelated user-type arm through the SAME wrapper must
+-- stay correct while the builtin-scalar arms are present, so a regression that
+-- corrupts only the bystander is still observable. `label` covers the
+-- String-returning method through the same wrapper shape.
+
+data Rock = Rock
+
+interface Sub a where
+  sub : a -> Int
+
+impl Sub Int where
+  sub _ = 99
+
+impl Sub Bool where
+  sub _ = 42
+
+impl Sub Rock where
+  sub _ = 7
+
+interface Name a where
+  name : a -> String
+
+impl Name Int where
+  name _ = "int-name"
+
+describe : Sub a => a -> Int
+describe x = sub x
+
+label : Name a => a -> String
+label x = name x
+
+main =
+  println (describe Rock)
+  println (describe (1 : Int))
+  println (describe True)
+  println (label (1 : Int))

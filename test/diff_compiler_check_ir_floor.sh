@@ -73,6 +73,7 @@
 # Usage:  sh test/diff_compiler_check_ir_floor.sh
 #         CHECK_IR_CEIL=<n> sh test/diff_compiler_check_ir_floor.sh   # per-verb override
 #         BUILD_IR_CEIL / RUN_IR_CEIL / TEST_IR_CEIL                  # ... for testing
+#         LINT_IR_CEIL / CHECKPOLICY_IR_CEIL                          # the two workload cells
 # Exit:   0 every measured Ir is at or under its ceiling
 #         1 any verb over ceiling, or the harness could not measure something (never a
 #           silent no-op)
@@ -152,6 +153,62 @@ CEIL_build="${BUILD_IR_CEIL:-695000000}"
 CEIL_run="${RUN_IR_CEIL:-760000000}"
 CEIL_test="${TEST_IR_CEIL:-680000000}"
 
+# ── S-pin-the-wins (#2332, this-sprint slice) — two WORKLOAD cells, not hello-world ──
+# The four ceilings above are hello-world only (by this gate's own stated scope).
+# S-pin-the-wins adds two workload-specific cells to pin the two prior-slice wins an
+# absolute hello-world ceiling cannot see — each cell is its own fixed command on its
+# own fixture, graded against ITS OWN measured cost, not the hello-world baseline.
+#
+# LINT cell — `medaka lint --disable rule-stdlib-reimpl compiler/tools/lint.mdk`
+# (S-lint-pays-for-what-it-uses, #2351/#2062): skip buildStdlibIndex (a full-stdlib
+# parse) when the only consuming rule (rule-stdlib-reimpl) is excluded. DERIVED
+# 2026-09-15 (S-pin-the-wins, this tree, base be76ffe99b), cachegrind method, two
+# back-to-back runs, plus a revert of compiler/tools/{lint,lint_cmd,mcp}.mdk and
+# compiler/driver/medaka_cli.mdk to 7cebc7617's parent to confirm falsifiability:
+#
+#   run 1          run 2          spread   reverted (pre-fix)   CEIL (fixed x1.20, up to 5M)
+#   2,926,667,237  2,926,672,579  0.0002%  5,866,772,911        3,515,000,000
+#
+# Reverting drives the number 67% over ceiling — unlike the resolve.mdk case below,
+# this win is large relative to its own workload, so an absolute ceiling sees it.
+#
+# CHECK-POLICY cell — `medaka check-policy demo/plugin_good.mdk --allow
+# "Cache,Log,FFI" --fn transform` (S-prelude-on-the-cold-verbs, half (a)): converge
+# check-policy's three re-parse/re-desugar sites onto the shared `desugaredPrelude`
+# memo. DERIVED 2026-09-15 (S-pin-the-wins, this tree), same method, plus a revert
+# of compiler/tools/check_policy.mdk to be76ffe99's parent:
+#
+#   run 1        run 2        spread   reverted (pre-fix)   CEIL (fixed x1.20, up to 5M)
+#   895,902,089  895,903,446  0.0002%  1,087,657,364        1,080,000,000
+#
+# Margin is tight (reverted exceeds ceiling by ~0.7%, not the wide margin the
+# hello-world ceilings carry), because this fix's own win on this workload
+# (-17.6%) sits close to the 20% headroom convention's boundary — it clears the
+# ceiling but not by much. If this cell starts flaking, re-derive rather than
+# widen blindly (same discipline as every other ceiling in this file).
+#
+# NOT ADDED: a cell for S-suggest-pools-lazy (resolve.mdk's on-demand did-you-mean
+# pools). Its own multi-module `check gzip/main.mdk` measurement (see
+# reports/S-suggest-pools-lazy.md §6.3, re-confirmed on this tree) is -0.99%
+# (2,625,651,287 reverted vs. 2,599,659,942 fixed) — reverting does NOT push the
+# number over a ceiling sized at fixed x1.20 (3,119,591,930). Per this slice's own
+# pre-license (#2854: the 20% headroom cannot see a single-slice-scale
+# regression), an absolute Ir ceiling is the WRONG instrument for this win, and
+# none is added here. A mechanism-specific assertion was also not added: the
+# memoized pools (`sugValuePool`/`sugTypePool`, compiler/frontend/resolve.mdk) are
+# private to that module and not on any exported surface a black-box CLI probe or
+# a `*_test.mdk` sibling (which sees only the public surface, per AGENTS.md's
+# [P-TEST-SIBLING]) can observe — exporting them for a test hook would touch
+# resolve.mdk's snapshot/LEG-A corpus for a test-only change, outside this
+# slice's licensed sites. See the slice report's Notes.
+CEIL_lint="${LINT_IR_CEIL:-3515000000}"
+CEIL_checkpolicy="${CHECKPOLICY_IR_CEIL:-1080000000}"
+
+LINT_TARGET="$ROOT/compiler/tools/lint.mdk"
+POLICY_FILE="$ROOT/demo/plugin_good.mdk"
+[ -f "$LINT_TARGET" ] || { echo "missing fixture: $LINT_TARGET"; exit 2; }
+[ -f "$POLICY_FILE" ] || { echo "missing fixture: $POLICY_FILE"; exit 2; }
+
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/mdk-checkirfloor.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT INT TERM
 
@@ -166,6 +223,9 @@ measure_ir() {
     build) set -- "$MEDAKA" build "$HELLO_FILE" -o "$WORK/hello.bin" ;;
     run)   set -- "$MEDAKA" run "$HELLO_FILE" ;;
     test)  set -- "$MEDAKA" test "$HELLO_FILE" ;;
+    lint)  set -- "$MEDAKA" lint --disable rule-stdlib-reimpl "$LINT_TARGET" ;;
+    checkpolicy)
+      set -- "$MEDAKA" check-policy "$POLICY_FILE" --allow "Cache,Log,FFI" --fn transform ;;
     *)     echo "measure_ir: unknown verb '$_verb'" >&2; return 1 ;;
   esac
   valgrind --tool=cachegrind --cache-sim=no --branch-sim=no \
@@ -183,13 +243,20 @@ measure_ir() {
 fails=0
 measured=0
 
-for verb in check build run test; do
+for verb in check build run test lint checkpolicy; do
   eval "ceil=\$CEIL_$verb"
+
+  case "$verb" in
+    lint)         workload="lint --disable rule-stdlib-reimpl compiler/tools/lint.mdk" ;;
+    checkpolicy)  workload="check-policy demo/plugin_good.mdk (--allow Cache,Log,FFI --fn transform)" ;;
+    *)            workload="hello-world \`$verb\`" ;;
+  esac
+
   ir="$(measure_ir "$verb")"
 
   case "$ir" in
     ''|*[!0-9]*)
-      printf 'FAIL: could not measure cachegrind Ir for `medaka %s` on hello — harness bug.\n' "$verb" >&2
+      printf 'FAIL: could not measure cachegrind Ir for `medaka %s` — harness bug.\n' "$verb" >&2
       cat "$WORK/vg.$verb.err" >&2
       fails=$((fails + 1))
       continue
@@ -199,10 +266,10 @@ for verb in check build run test; do
   measured=$((measured + 1))
 
   if [ "$ir" -gt "$ceil" ]; then
-    printf 'FAIL (CEILING): hello-world `%s` cost %s Ir, over the %s ceiling.\n' "$verb" "$ir" "$ceil"
+    printf 'FAIL (CEILING): %s cost %s Ir, over the %s ceiling.\n' "$workload" "$ir" "$ceil"
     fails=$((fails + 1))
   else
-    printf 'PASS: hello-world `%s` = %s Ir (ceiling %s).\n' "$verb" "$ir" "$ceil"
+    printf 'PASS: %s = %s Ir (ceiling %s).\n' "$workload" "$ir" "$ceil"
   fi
 done
 

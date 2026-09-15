@@ -333,12 +333,15 @@ stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
 stmtLoc : DoStmt -> Option Loc
+storeSugPool : Ref (Option (List SugCand)) -> List SugCand -> List SugCand
 stubOrUnknown : Map String ModuleExports -> UsePath -> String -> Loc -> ImportAdds
 sugCandOf : String -> SugCand
 sugPoolOf : List String -> List SugCand
 sugQueryOf : String -> SugQuery
 sugRejects : SugQuery -> String -> Int -> Int -> Int -> Int -> Bool -> Bool
 sugRejectsName : SugQuery -> String -> Int -> Bool -> Bool
+sugTypePool : Env -> List SugCand
+sugValuePool : Env -> List SugCand
 suggestCtor : String -> Option String
 suggestName : Env -> Scope -> String -> Option String
 suggestNameFuzzy : Env -> Scope -> String -> Option String

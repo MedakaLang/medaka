@@ -1,0 +1,28 @@
+-- #1956 — a structured declared context must route each call site on its whole
+-- argument vector, not on the predicate's lead argument alone. `f` declares
+-- `Conv (Wrap a) b`, and the two impls are identical in the first argument and
+-- differ ONLY in the second, so a deferred dict slot keyed on the lead
+-- argument's abstract id leaves `b` with no independent route and both call
+-- sites run the same impl.
+--
+-- The `b` axis is the whole point: a probe varying both arguments would still
+-- pass under lead-only keying, because the lead argument alone already
+-- separates the two impls. The pinned string is read off the impl bodies —
+-- `f (Wrap 5) True` selects `Conv (Wrap Int) Bool` and `f (Wrap 5) 'c'` selects
+-- `Conv (Wrap Int) Char`. Under lead-only keying the second half repeats the
+-- first, printing `wrap-int-bool wrap-int-bool`.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv (Wrap Int) Bool where
+  conv _ _ = "wrap-int-bool"
+
+impl Conv (Wrap Int) Char where
+  conv _ _ = "wrap-int-char"
+
+f : Conv (Wrap a) b => Wrap a -> b -> String
+f x y = conv x y
+
+main = println "\{f (Wrap 5) True} \{f (Wrap 5) 'c'}"
