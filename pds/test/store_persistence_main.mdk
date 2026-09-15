@@ -34,6 +34,9 @@
    entry against a persisted head and recovers over it, the way `configure`
    does: plan, then apply.
 
+   `transition` is the one route that drives BOTH halves in a single process,
+   which is what makes their relative order observable at all.
+
    `genesis-init` and `genesis-resume` are that same pair for the four events a
    repository's creation emits: the first creates the repository and emits
    them, the second is every later start over that data directory. The gate
@@ -78,6 +81,7 @@ import lib.repo.{
 import sha256.{sha256}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
+import lib.store.{Store, storeFromRepo, storePutBlob, storeWithRepo}
 import lib.tid.{Tid, tidParse}
 import shell.blobfile.{
   blobDir,
@@ -103,7 +107,7 @@ import shell.persist.{
   persistSave,
   persistSweepStagedBlocks,
 }
-import shell.server.{completeGenesisEvents}
+import shell.server.{completeGenesisEvents, persistTransition}
 
 -- The gate greps every persisted file for this hex and for its raw bytes; it is
 -- the signing key the adapter must never be able to write.
@@ -519,6 +523,38 @@ runEventRecover dir anchorFor =
 frameFor : Option String -> String
 frameFor None = "a2626f7001617469236964656e74697479"
 frameFor (Some _) = "a1"
+
+-- ── both halves of one transition, in one process ───────────────────────────
+
+putBlobs : List (Cid, String, Array Int) -> Store -> Store
+putBlobs [] store = store
+putBlobs ((cid, mimeType, bytes) :: rest) store =
+  match storePutBlob cid mimeType bytes store
+    Err message => panic "store_persistence: blob fixture rejected: \{message}"
+    Ok next => putBlobs rest next
+
+{- | One `persistTransition` over a data directory that already holds the
+   earlier generation: the blob half gains both fixture blobs and the repo half
+   advances `olderRepo` to `fixtureRepo`, so both halves move and one process
+   performs the whole sequence.
+
+   Every other route here drives a single half, and a trace of one says nothing
+   about which half reached the disk first. That ORDER is the claim (#3057): a
+   commit may name blob bytes and never the reverse, so a crash between the
+   halves must be able to leave an unreferenced blob and never a committed
+   record naming bytes that are not there. This route exists so
+   `store_persistence.sh` can read the order out of one trace rather than infer
+   it from five.
+
+   The gate persists the earlier generation through `crash-save-old` BEFORE it
+   starts tracing, so what the trace holds is this transition alone. -}
+runTransition : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runTransition dir =
+  let before = storeFromRepo olderRepo
+  let after = putBlobs blobFixtures (storeWithRepo fixtureRepo before)
+  match persistTransition dir accountDid eventFixtureTime before after
+    Err message => panic "store_persistence: transition failed: \{message}"
+    Ok () => println "TRANSITION: PASS"
 
 -- ── the crash-residue sweeps (#2572 part 2, #3052) ──────────────────────────
 
@@ -967,6 +1003,7 @@ main = match args ()
   ["event-recover-orphan", dir] =>
     runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
   ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
+  ["transition", dir] => runTransition dir
   ["sweep-staging", dir] => runSweepStaging dir
   ["stray-entries", dir] => runStrayEntries dir
   ["genesis-init", dir] => runGenesisInit dir
@@ -974,4 +1011,4 @@ main = match args ()
   ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"

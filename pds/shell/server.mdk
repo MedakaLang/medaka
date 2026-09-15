@@ -409,6 +409,7 @@ applyRequest server dir storeRef bytes =
    directory a power loss can take with every blob under it. The other two
    halves reference nothing, are referenced by nothing, and create no
    directory, so their position is free. -}
+export
 persistTransition : String ->
   String ->
   Int ->

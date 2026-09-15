@@ -25,6 +25,10 @@
 # backup tool or an operator leaves behind (#3055). Case 12 grades the
 # barriers themselves, which is the one claim building a directory by hand
 # cannot make — it needs the syscall ORDER, not the resulting tree (#2952).
+# Cases 12a and 12b read the same traces for two orders that rule is
+# deliberately blind to, each within ONE process: which half of a transition
+# reached the disk first (#3057), and whether a commit's shard-directory
+# barriers came after its block promotes or in between them (#3058).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -734,7 +738,25 @@ trace_route() {
     fail "traced $_route route failed"
   fi
   require_empty "$WORK/trace.$_route.err" "traced $_route"
-  normalize_trace "$WORK/trace.$_route" >> "$WORK/promotes"
+  # Kept per route as well as concatenated: an ORDER claim about two writes
+  # only holds inside ONE process, and `$WORK/promotes` interleaves five.
+  normalize_trace "$WORK/trace.$_route" > "$WORK/events.$_route"
+  cat "$WORK/events.$_route" >> "$WORK/promotes"
+}
+
+# The line number of the first or last normalized event in file $2 matching the
+# regex $3, or the empty string when nothing matches. Line numbers ARE trace
+# order, which is what every order assertion below compares.
+trace_index() {
+  case $1 in
+    first) grep -n -E -- "$3" "$2" | head -1 | cut -d: -f1 ;;
+    last) grep -n -E -- "$3" "$2" | tail -1 | cut -d: -f1 ;;
+    *) fail "trace_index: $1 is not first or last" ;;
+  esac
+}
+
+trace_count() {
+  grep -c -E -- "$2" "$1" || true
 }
 
 : > "$WORK/promotes"
@@ -746,7 +768,71 @@ trace_route prefs-save "$TRACED/repo"
 trace_route credential-save "$TRACED/repo"
 trace_route event-recover-owed "$TRACED/events"
 
+# The earlier generation is persisted BEFORE tracing starts, so the transition
+# route's own trace holds `persistTransition` and nothing else — which is what
+# lets 12a compare two writes without first having to say where the setup ended.
+"$WORK/driver" crash-save-old "$TRACED/transition" > "$WORK/transition.setup" \
+  2> "$WORK/transition.setup.err"
+require_empty "$WORK/transition.setup.err" 'crash-save-old (transition setup)'
+trace_route transition "$TRACED/transition"
+[ "$(tail -1 "$WORK/trace.transition.out")" = 'TRANSITION: PASS' ] \
+  || fail 'the traced transition route did not pass'
+
 [ -s "$WORK/promotes" ] || fail 'the traced routes performed no promote at all'
+
+# ── 12a. the two halves of one transition, in the order a crash needs ──────
+# `persistTransition` runs the BLOB half before the repo half, and nothing in
+# the resulting tree records which ran first: both halves succeed, so only the
+# syscall order can say. The claim is the crash-safety one — a record may name
+# blob bytes and never the reverse — so every blob promote must precede the
+# `head` promote that publishes the commit able to name them. Swap the two
+# calls in `persistTransition` and this is what notices (#3057).
+#
+# Read out of the transition route's OWN trace. `$WORK/promotes` concatenates
+# five processes, and "before" across a process boundary is not this claim.
+#
+# Both order assertions run BEFORE the universal rule below, because a swap
+# also strands `blobs/`'s dentry and the universal rule would otherwise fail
+# first, reporting the consequence instead of the cause.
+TRANS="$WORK/events.transition"
+BLOB_PROMOTED=$(trace_count "$TRANS" '^R [^ ]* [^ ]*/blobs/[0-9a-f][0-9a-f]/')
+[ "$BLOB_PROMOTED" -ge 1 ] \
+  || fail 'case 12a: the transition promoted no blob, so the half order is ungraded'
+LAST_BLOB_AT=$(trace_index last "$TRANS" '^R [^ ]* [^ ]*/blobs/[0-9a-f][0-9a-f]/')
+FIRST_HEAD_AT=$(trace_index first "$TRANS" '^R [^ ]* [^ ]*/head$')
+[ -n "$FIRST_HEAD_AT" ] \
+  || fail 'case 12a: the transition promoted no head, so the half order is ungraded'
+[ "$LAST_BLOB_AT" -lt "$FIRST_HEAD_AT" ] || {
+  sed -n "${FIRST_HEAD_AT}p;${LAST_BLOB_AT}p" "$TRANS" >&2
+  fail "case 12a: the commit was promoted at event $FIRST_HEAD_AT, the last blob at event $LAST_BLOB_AT; a crash between the halves can leave a committed record naming bytes that are not on disk"
+}
+echo "case 12a: $BLOB_PROMOTED blob promote(s), all before the commit's head promote"
+
+# ── 12b. one directory barrier per batch, not one per block ────────────────
+# `blockfile.mdk` promotes every block of a commit and then barriers the
+# DISTINCT shard directories it touched, instead of barriering after each
+# block. The universal rule below tolerates both — an extra fsync breaks
+# nothing it states — so the batching was in fact ungraded, and the
+# pre-batching code passes that rule unchanged (#3058).
+#
+# The discriminator is ORDER, not count. Under batching every block promote
+# precedes every shard-directory barrier within one route; under a per-block
+# barrier the two interleave from the second block onward. A count would not
+# discriminate: a shard name is one digest byte, this fixture holds a handful
+# of blocks, so distinct shards and blocks are equal with high probability and
+# a per-block regression passes any count of them.
+SAVED="$WORK/events.save"
+SAVED_BLOCKS=$(trace_count "$SAVED" '^R [^ ]* [^ ]*/blocks/[0-9a-f][0-9a-f]/')
+[ "$SAVED_BLOCKS" -ge 2 ] \
+  || fail "case 12b: the save route promoted $SAVED_BLOCKS block(s); two are needed for an interleaving to be possible at all"
+LAST_BLOCK_AT=$(trace_index last "$SAVED" '^R [^ ]* [^ ]*/blocks/[0-9a-f][0-9a-f]/')
+FIRST_SHARD_AT=$(trace_index first "$SAVED" '^F [^ ]*/blocks/[0-9a-f][0-9a-f]$')
+[ -n "$FIRST_SHARD_AT" ] || fail 'case 12b: no shard directory was barriered at all'
+[ "$FIRST_SHARD_AT" -gt "$LAST_BLOCK_AT" ] || {
+  sed -n "${FIRST_SHARD_AT}p;${LAST_BLOCK_AT}p" "$SAVED" >&2
+  fail "case 12b: a shard directory was barriered at event $FIRST_SHARD_AT, before the last block promote at event $LAST_BLOCK_AT; the barriers are per block, not per batch"
+}
+echo "case 12b: $SAVED_BLOCKS block promote(s), all before the first shard-directory barrier"
 
 awk '
   { ev[++n] = $0 }
@@ -865,4 +951,4 @@ done
 echo "barriered directory creations: block shards $BLOCK_SHARD_DIRS, blob shards $BLOB_SHARD_DIRS, entry directories $ENTRY_DIRS, staging directories $STAGING_DIRS"
 
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in; key absent'
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in, with the blob half of one transition promoted before the commit that can name it and every shard barrier of one commit taken after all of its block promotes; key absent'
