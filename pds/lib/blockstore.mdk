@@ -1,8 +1,10 @@
 {- | Pure immutable content-addressed block storage.
 
-   Every insertion recomputes the blessed atproto CID from the supplied bytes.
-   Views return defensive copies, and entries are exposed in canonical binary-CID
-   order so callers never inherit mutation or insertion-order state. -}
+   Insertion looks up the CID first: an already-present CID is idempotent and
+   recomputes nothing, while a new CID is verified against the blessed atproto
+   CID recomputed from the supplied bytes. Views return defensive copies, and
+   entries are exposed in canonical binary-CID order so callers never inherit
+   mutation or insertion-order state. -}
 
 -- The byte-range validator is intentionally local at each untrusted boundary.
 -- lint-disable-file rule-duplicate-body
@@ -58,7 +60,10 @@ blockStoreGet : Cid -> BlockStore -> Option (Array Int)
 blockStoreGet cid (BlockStore entries) = map arrayCopy (findBytes cid entries)
 
 {- | Verify and immutably insert one block. An identical duplicate is
-   idempotent; a CID collision with different bytes fails loudly. -}
+   idempotent; a CID collision with different bytes fails loudly, whether
+   the differing bytes are in-range ("duplicate CID has different bytes")
+   or themselves out of the valid byte range (same message — the
+   present-CID branch never calls the byte-range validator). -}
 export
 blockStorePut : Cid -> Array Int -> BlockStore -> Result String BlockStore
 blockStorePut cid bytes (BlockStore entries) = match get (cidKey cid) entries

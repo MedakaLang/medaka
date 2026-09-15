@@ -69,11 +69,12 @@ engineLabel NativeSpeed = "native (speed)"
    `lib.repo`'s call graph, which the interpreter's capability policy does
    not bind.
 
-   `NativeSpeed` (6 files): eval completes but is materially slower —
+   `NativeSpeed` (7 files): eval completes but is materially slower —
    `field_test` 159 s vs 2.2 s, `scalar_test` and `pbkdf2_test` both past a
    180 s timeout vs 2.5 s / 18.0 s, the two JWT/PBKDF2 files roughly 4-5x,
-   and `websocket_test` 295 s vs 4 s (RFC 3174's one-million-byte SHA-1
-   vector is most of that). -}
+   `websocket_test` 295 s vs 4 s (RFC 3174's one-million-byte SHA-1
+   vector is most of that), and `mst_test` 416-446 s vs 3 s (the MST
+   sharing mutation test walks a large synthetic tree). -}
 suites : List (String, (Int, Engine))
 suites = [
   ("skeleton_test", (2, Eval)),
@@ -83,7 +84,7 @@ suites = [
   ("server_core_test", (11, Eval)),
   ("encodings_test", (29, Eval)),
   ("dagcbor_cid_test", (12, Eval)),
-  ("mst_test", (12, Eval)),
+  ("mst_test", (13, NativeSpeed)),
   ("car_store_test", (14, Eval)),
   ("repo_tid_test", (9, NativeCapability)),
   ("field_test", (30, NativeSpeed)),
@@ -257,7 +258,7 @@ test "pds/test/encodings_test.mdk executed >= 29 assertions" =
 test "pds/test/dagcbor_cid_test.mdk executed >= 12 assertions" =
   floorExpectation "dagcbor_cid_test"
 
-test "pds/test/mst_test.mdk executed >= 12 assertions" =
+test "pds/test/mst_test.mdk executed >= 13 assertions" =
   floorExpectation "mst_test"
 
 test "pds/test/car_store_test.mdk executed >= 14 assertions" =

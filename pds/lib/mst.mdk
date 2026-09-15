@@ -385,12 +385,16 @@ export
 mstEntries : Mst -> List (Array Int, Cid)
 mstEntries (Mst entries _ _ _) = copyEntries entries
 
+-- Every caller must guarantee `key` is absent from the list before calling;
+-- `mstInsert` enforces this with an `mstLookup` guard. The `Eq` arm panics
+-- rather than silently inserting a duplicate key.
 insertSorted : MstEntry -> List MstEntry -> List MstEntry
 insertSorted entry [] = [entry]
 insertSorted (entry@(MstEntry key _ _)) ((candidate@(MstEntry other _ _)) :: rest) =
   match bytesCompare key other
     Gt => candidate :: insertSorted entry rest
-    _ => entry :: candidate :: rest
+    Lt => entry :: candidate :: rest
+    Eq => panic "mst: insertSorted called with a key already present"
 
 -- | Insert a previously absent key.
 export

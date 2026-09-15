@@ -4,7 +4,7 @@ import array.{drop}
 import hex.{decode}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode, carEncode}
-import lib.cid.{Cid, cidForDagCbor, cidForRaw}
+import lib.cid.{Cid, cidEqual, cidForDagCbor, cidForRaw, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
 import lib.mst.{
   Mst,
@@ -20,7 +20,12 @@ import lib.mst.{
   mstValidateNodeBytes,
 }
 import lib.multiformats.{uvarintEncode}
-import lib.repo.{repoExportGraph, repoFromBlocks}
+import lib.repo.{
+  repoCommitDataCid,
+  repoExportGraph,
+  repoFromBlocks,
+  repoLatestCommit,
+}
 import lib.resource_limits.{
   checkCarBlocks,
   checkCarBytes,
@@ -117,8 +122,8 @@ perfRev = match tidParse "3lba2s5ykxs2a"
 
 -- Every entry's key is a distinct fixed-width byte string and its value CID
 -- points at a small distinct record block, built once via `mstFromEntries`
--- (non-quadratic per `synth_repo_main.mdk`'s own header note) rather than N
--- calls to `mstInsert`.
+-- rather than N calls to `mstInsert` — the simplest way to build a corpus
+-- this large in a single call, per `synth_repo_main.mdk`'s own header note.
 perfRowsGo : Int ->
   Int ->
   List (Array Int, Cid, Array Int) ->
@@ -230,7 +235,13 @@ runRehydrate n =
   let (commitCid, signed) = perfSignedCommit dataCid
   let blocks = perfGraphBlocks rows tree commitCid signed
   match repoFromBlocks perfDid perfSecret commitCid blocks
-    Ok _ => println "REHYDRATE \{intToString n} OK"
+    Ok repo =>
+      let recovered = repoCommitDataCid (repoLatestCommit repo)
+      if cidEqual recovered dataCid then
+        println "REHYDRATE \{intToString n} OK root=\{cidToString recovered}"
+      else
+        panic
+          "performance_resource: rehydrate root CID mismatch: expected \{cidToString dataCid} got \{cidToString recovered}"
     Err message => panic "performance_resource: rehydrate failed: \{message}"
 
 accept : String -> Result String Unit -> <IO> Int

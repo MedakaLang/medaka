@@ -7,21 +7,19 @@
 
    `pds/lib/repo.mdk`'s only mutation paths (`repoCreate`/`repoUpdate`/
    `repoDelete`/`repoApplyWrites`) each thread one write at a time through
-   `mstInsert`/`mstReplace`/`mstDelete`, and every one of those rebuilds the
-   whole tree (`mstFromEntries` over the full entry list) — so N writes cost
-   O(N^2) regardless of whether they arrive as N separate calls or one big
-   batch list, since the batch path still applies its writes one at a time
-   internally. `lib.mst`'s `mstFromEntries` taking the complete entry set at
-   once is the only construction path that is not quadratic in record count,
-   so this driver builds every entry directly and calls it exactly once.
+   `mstInsert`/`mstReplace`/`mstDelete`; those no longer rebuild the whole
+   tree per write (`lib.mst` shares untouched nodes and splices in place), so
+   N writes are no longer quadratic in record count. `lib.mst`'s
+   `mstFromEntries` taking the complete entry set at once remains the
+   simplest way to build a corpus this large in a single call, so this
+   driver builds every entry directly and calls it exactly once.
 
    `Repo` and `Mst` are opaque outside `lib.repo`/`lib.mst`, so the only way
    back into a `Repo` a real server accepts is `repoFromBlocks`, which
    verifies a signed commit block against a supplied block graph. Signing
    that commit is `lib.repo`'s private `buildCommit`, not exported, so this
    driver mirrors its exact commit shape (`unsignedValue`/`signedValue`)
-   using only exported primitives — the alternative is the quadratic path
-   this driver exists to avoid. -}
+   using only exported primitives. -}
 
 import hex.{decode}
 import string.{padLeft, toInt, toUtf8}
