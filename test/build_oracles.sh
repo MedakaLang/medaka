@@ -171,9 +171,9 @@ fi
 #                           It must be a compiled probe, not `./medaka`: the fact it
 #                           reads (`Ty.TyCon`'s `TyConOrigin`) is deliberately not
 #                           surfaced by any CLI verb.
-#   draft_semantic_main   — diff_compiler_draft_semantic.sh (#1399 X-0D): builds
-#                           the non-authoritative comparison carrier on the real
-#                           multi-module emit seam and prints transport receipts.
+#   draft_semantic_main   — test/diff_compiler_fmt_test.mdk's `draftSemanticFixtureFailure`
+#                           (#1399 X-0D): builds the non-authoritative comparison carrier on
+#                           the real multi-module emit seam and prints transport receipts.
 #   anf_identity_main     — diff_compiler_anf_identity.sh (#1400 X-A): validates
 #                           and serializes the non-authoritative StableNodeId substrate.
 #   resolve_main          — diff_compiler_check, same file: a Row over resolveLeg.
