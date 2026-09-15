@@ -127,7 +127,7 @@ only the non-exhaustive-match warnings.
                                               #   over 15 rows (test/diff_compiler_snapshot_frontend_test.mdk)
 sh test/diff_compiler_check_test.mdk         # parser/lexer rejection path (~0.4s)
 sh test/diff_compiler_check_test.mdk          # type-aware non-exhaustive-match warnings vs diagdump --check-match (11 fixtures)
-sh test/diff_compiler_typecheck_errors.sh     # typecheck TYPE ERROR accumulation (3 fixtures × 2 drivers, ~1s)
+sh test/diff_compiler_fmt_test.mdk            # typecheckErrorFailures: typecheck TYPE ERROR accumulation (3 fixtures × 2 drivers, ~1s)
 sh test/diff_compiler_selfproc.sh             # the bootstrap (#3) self-processing gate (4 legs, ~18s)
 ./medaka gate run diff_compiler_eval          # Stage 2 §2.1 Core IR equivalence + the tree-walker value
                                               #   sweeps, as one native runner over 18 rows / 16 oracles:
@@ -611,9 +611,9 @@ Stage-0 prerequisites in `../PLAN.md`).
      `checkToLinesWithRuntime` emit `TYPE ERROR: <msg>` lines when errors exist
      (matching `tc_probe.exe`'s format) and suppress the scheme output, matching
      the reference's single-exception behavior.  Validated by
-     `test/diff_compiler_typecheck_errors.sh` (3 fixtures × 2 drivers:
-     `typecheck_main` + `check.mdk`; int-vs-string mismatch, tuple-arity
-     mismatch, occurs-check).
+     `test/diff_compiler_fmt_test.mdk`'s `typecheckErrorFailures` (3 fixtures
+     × 2 drivers: `typecheck_main` + `check.mdk`; int-vs-string mismatch,
+     tuple-arity mismatch, occurs-check).
    - **Type-aware match exhaustiveness (`check_match`) — DONE 2026-06-05:**
      `inferMatch` runs the exhaustiveness check after each `match`'s arms have
      unified the scrutinee type, pushing `Warning: non-exhaustive match — some
@@ -1329,8 +1329,9 @@ gap in fidelity. Concretely, by stage:
   `checkToLinesWithRuntime` emit `TYPE ERROR: <msg>` lines (matching
   `tc_probe.exe`) when errors are present and suppress scheme output — matching
   the reference's single-exception behavior.  Validated by
-  `test/diff_compiler_typecheck_errors.sh` (int-vs-string, tuple-arity,
-  occurs-check; each via both `typecheck_main.mdk` and `check.mdk`).
+  `test/diff_compiler_fmt_test.mdk`'s `typecheckErrorFailures`
+  (int-vs-string, tuple-arity, occurs-check; each via both
+  `typecheck_main.mdk` and `check.mdk`).
   The type-aware `check_match` exhaustiveness pass (lives inside the reference
   typechecker, needs the scrutinee type) is now **also ported** — it accumulates
   into a separate `matchWarnings` ref, surfaced by `checkMatchToLines` (see the
