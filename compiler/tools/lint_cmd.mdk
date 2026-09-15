@@ -499,10 +499,17 @@ lintOneFileReport idx multiFile disableNames onlyNames denyNames baseCtx cacheCt
       let filtered =
         applyFindingFilters disableNames onlyNames denyNames allFindings
       let findings = applyBaselineFindings baseCtx target filtered
-      let srcLines = srcLinesArr src
-      let output =
-        joinNl
-          (map (f => ppDiagCliLines srcLines target (findingToDiag f)) findings)
+      -- `srcLinesArr` whole-file-splits `src` — deferred until there is at
+      -- least one finding to render, since a clean file (the common case
+      -- across a large corpus) never needs it.
+      let output = match findings
+        [] => ""
+        _ =>
+          let srcLines = srcLinesArr src
+          joinNl
+            (map
+              (f => ppDiagCliLines srcLines target (findingToDiag f))
+              findings)
       let hasOutput = stringLength output > 0
       let _ = if multiFile && hasOutput then putStrLn (target ++ ":")
       let _ = if hasOutput then putStrLn output

@@ -83,6 +83,7 @@ import support.util.{
   dedup,
   dedupBy,
 }
+import test.{expectTrue}
 
 -- ── Errors ──────────────────────────────────────────────────────────────
 -- Stage B (WS-4 / F6): every ctor carries a trailing `Option Loc` — the source
@@ -283,8 +284,8 @@ public export data Env = Env {
   typeAmbiguous : List (String, List String),
   ifaceAmbiguous : List (String, List String),
   internalGuard : OrdMap Unit,
-  sugValues : List SugCand,  -- the did-you-mean candidate POOLS, materialized ONCE per `Env`
-  sugTypes : List SugCand,  -- (see `SugCand`) instead of per unbound name — #1016.
+  sugValuesMemo : Ref (Option (List SugCand)),  -- the did-you-mean candidate POOLS, built at most
+  sugTypesMemo : Ref (Option (List SugCand)),  -- ONCE per `Env` — see `sugValuePool` (#1016, #2800).
 }  -- imported module (needs a selective import, not a typo fix; audit #5).
 -- (modId, expValues) pairs for every non-`core` module this file `import`s
 -- (multi-module path only; single-file `buildEnv` leaves this `[]`) — lets
@@ -969,7 +970,7 @@ suggestNameFuzzy env scope n
     let q = sugQueryOf n
     match bestOfNames q (scopeNames scope)
       Some best => Some best
-      None => bestOfPool q env.sugValues
+      None => bestOfPool q (sugValuePool env)
 
 -- "did you mean" for an unknown TYPE name: an exact curated Haskell-alias
 -- match takes priority; otherwise same policy as `suggestName` (nearest by
@@ -984,7 +985,7 @@ suggestType env n = match lookupAssoc n haskellTypeAliases
 suggestTypeFuzzy : Env -> String -> Option String
 suggestTypeFuzzy env n
   | stringLength n < 3 = None
-  | otherwise = bestOfPool (sugQueryOf n) env.sugTypes
+  | otherwise = bestOfPool (sugQueryOf n) (sugTypePool env)
 
 -- "did you mean" for an unknown CONSTRUCTOR (pattern position): today ONLY an
 -- exact curated Haskell-alias match (e.g. `Just`→`Some`) — there is no
@@ -999,8 +1000,9 @@ suggestCtor n = lookupAssoc n haskellCtorAliases
 -- diagnostics path the LSP recomputes on every keystroke (#1016: 19.3 s to
 -- check a file with 1000 typos that takes 0.81 s once they are defined).
 --
--- The pool is now materialized ONCE per `Env` (`sugValues` / `sugTypes` — the
--- same once-per-Env discipline as `fieldOwnersIdx`), and every entry carries
+-- The pool is materialized at most ONCE per `Env` (`sugValuePool` /
+-- `sugTypePool` — the same once-per-Env discipline as `fieldOwnersIdx`, but
+-- demand-driven: see those two), and every entry carries
 -- precomputed keys for O(1), ALLOCATION-FREE prefilters that reject a candidate
 -- WITHOUT running the DP at all:
 --
@@ -1066,6 +1068,54 @@ data SugCand = SugCand String Int Int Int Int Bool
 
 sugPoolOf : List String -> List SugCand
 sugPoolOf ns = map sugCandOf ns
+
+-- The two pools, ON DEMAND.  Both are a pure function of membership maps the
+-- `Env` already carries, so the memo cell stores no inputs: a miss derives the
+-- names and stores the pool, a hit returns it, and the derivation is reached
+-- only from the unbound-name / unknown-type error paths.  A module that
+-- resolves cleanly therefore pays nothing for suggestions it never asks for,
+-- while a module with many unbound names still builds one pool between them
+-- (the #1016 discipline, unchanged).
+--
+-- The cell is a field rather than a process-global `Ref` like
+-- `preludeScopeMemoRef` because the multi-module path holds one `Env` per
+-- module live at once, each with its own merged maps.  Nothing updates an
+-- `Env` after construction — `Env {` appears at exactly the two builders and
+-- there is no `Env { env | … }` anywhere — so a stored pool cannot go stale.
+sugValuePool : Env -> List SugCand
+sugValuePool env = match !env.sugValuesMemo
+  Some pool => pool
+  None =>
+    storeSugPool
+      env.sugValuesMemo
+      (sugPoolOf (omKeys env.values ++ omKeys env.ctors ++ omKeys env.imported))
+
+sugTypePool : Env -> List SugCand
+sugTypePool env = match !env.sugTypesMemo
+  Some pool => pool
+  None =>
+    storeSugPool
+      env.sugTypesMemo
+      (sugPoolOf (omKeys env.types ++ omKeys env.imported))
+
+storeSugPool : Ref (Option (List SugCand)) -> List SugCand -> List SugCand
+storeSugPool cell pool =
+  cell := Some pool
+  pool
+
+-- Directly observes the #2800 claim: a freshly built `Env` carries no pool
+-- yet, and one fuzzy lookup materializes it.
+test "the value pool memo is empty until the first fuzzy lookup, then holds one" =
+  let env = buildEnv [] [] [] []
+  let beforeLookup = isNone !env.sugValuesMemo
+  let _ = suggestNameFuzzy env (Scope [] omEmpty) "widgetish"
+  expectTrue (beforeLookup && isSome !env.sugValuesMemo)
+
+test "the type pool memo is empty until the first fuzzy lookup, then holds one" =
+  let env = buildEnv [] [] [] []
+  let beforeLookup = isNone !env.sugTypesMemo
+  let _ = suggestTypeFuzzy env "widgetish"
+  expectTrue (beforeLookup && isSome !env.sugTypesMemo)
 
 sugCandOf : String -> SugCand
 sugCandOf n =
@@ -1742,8 +1792,8 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     typeAmbiguous = [],
     ifaceAmbiguous = [],
     internalGuard = omFromNames internalGuard omEmpty,
-    sugValues = sugPoolOf (omKeys valuesM ++ omKeys ctorsM ++ omKeys importedM),
-    sugTypes = sugPoolOf (omKeys typesM ++ omKeys importedM),
+    sugValuesMemo = Ref None,
+    sugTypesMemo = Ref None,
   }
 
 whenL : Bool -> List a -> List a
@@ -3128,7 +3178,7 @@ oneImportEffects known path =
 -- and insertion order does not change the key set.  That argument covers
 -- membership sets ONLY and does not extend to a value-carrying map.
 --
--- `sugValues`/`sugTypes` are NOT here: they are derived from the MERGED map (the
+-- `sugValuePool`/`sugTypePool` are NOT here: they derive from the MERGED map (the
 -- prelude's names plus the module's plus its imports'), not from the prelude's.
 data PreludeScope = PreludeScope {
   psTypes : List String,
@@ -3248,8 +3298,8 @@ buildEnvMM ps known prog internalGuard =
     typeAmbiguous = typeAmbiguousSet known prog,
     ifaceAmbiguous = ifaceAmbiguousSet known prog,
     internalGuard = omFromNames internalGuard omEmpty,
-    sugValues = sugPoolOf (omKeys valuesM ++ omKeys ctorsM ++ omKeys importedM),
-    sugTypes = sugPoolOf (omKeys typesM ++ omKeys importedM),
+    sugValuesMemo = Ref None,
+    sugTypesMemo = Ref None,
   }
   (env, adds.iaErrors)
 

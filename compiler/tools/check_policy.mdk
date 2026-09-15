@@ -43,6 +43,7 @@ import frontend.ast.{
 }
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
+import frontend.desugar_cache.{desugaredPrelude}
 import tools.check.{checkHasErrors}
 import types.repr.{
   Scheme(..),
@@ -516,8 +517,8 @@ runCheckPolicy rtSrc coreSrc src allowStr fnName =
     let policy = parsePolicy allowStr
     let rawUser = parse src
     let userD = desugar rawUser
-    let rtD = desugar (parse rtSrc)
-    let coreD = desugar (parse coreSrc)
+    let rtD = desugaredPrelude rtSrc
+    let coreD = desugaredPrelude coreSrc
     let callGraph = buildCallGraph userD
     -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
     -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
@@ -651,8 +652,8 @@ runManifest : String -> String -> String -> String -> String
 runManifest rtSrc coreSrc src fnName =
   let rawUser = parse src
   let userD = desugar rawUser
-  let rtD = desugar (parse rtSrc)
-  let coreD = desugar (parse coreSrc)
+  let rtD = desugaredPrelude rtSrc
+  let coreD = desugaredPrelude coreSrc
   -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
   -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
   -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
@@ -710,8 +711,8 @@ runManifestAtoms : String -> String -> String -> String -> List Atom
 runManifestAtoms rtSrc coreSrc src fnName =
   let rawUser = parse src
   let userD = desugar rawUser
-  let rtD = desugar (parse rtSrc)
-  let coreD = desugar (parse coreSrc)
+  let rtD = desugaredPrelude rtSrc
+  let coreD = desugaredPrelude coreSrc
   -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
   -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
   -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted

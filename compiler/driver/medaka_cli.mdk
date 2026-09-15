@@ -258,6 +258,8 @@ import tools.lint.{
   lintProgram,
   StdlibIndex,
   buildStdlibIndex,
+  emptyStdlibIndex,
+  stdlibIndexNeeded,
   applySuppressions,
   applySuppressionsMulti,
   applySuppressionsDirs,
@@ -3703,11 +3705,28 @@ runLintCmd argv0 =
   let _ = assertLintTargetsNonEmpty files
   -- The stdlib reference index: every exported stdlib name with its DECLARED
   -- signature, for the rules that ask what the stdlib actually provides.  Built
-  -- exactly ONCE per `medaka lint` invocation and threaded down — a rule's
+  -- at most ONCE per `medaka lint` invocation and threaded down — a rule's
   -- `check` is pure, and rebuilding it per target file would re-parse the whole
   -- stdlib once per file.  It self-disables to empty when the stdlib cannot be
   -- read (see `buildStdlibIndex`), the same way `lintCacheCtx` declines below.
-  let stdlibIdx = buildStdlibIndex
+  -- `stdlibIndexNeeded` answers whether the only rule that reads it is even in
+  -- the active `--only`/`--disable` set; when it isn't, `emptyStdlibIndex`
+  -- skips the whole-stdlib parse for free (every other rule ignores its
+  -- `StdlibIndex` argument, and this rule's own findings get discarded by the
+  -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
+  -- uncached path, where that discarding happens in this same process, on this
+  -- same `idx`.  `--cache` persists `lintFileFresh`'s full-roster findings past
+  -- this process's flag choices (`lintFileFresh` calls `lintProgram idx
+  -- allRules ...`, unfiltered), so a populate run under `--disable
+  -- rule-stdlib-reimpl --cache` (or `--only <anything else> --cache`) must
+  -- still build the real index — an `emptyStdlibIndex`-computed entry would
+  -- silently omit that rule's findings for every later `--cache` read, even a
+  -- default-rules one that never named it.
+  let stdlibIdx =
+    if stdlibIndexNeeded onlyNames disableNames || flag "--cache" a then
+      buildStdlibIndex
+    else
+      emptyStdlibIndex
   -- The baseline keys on paths relative to the process's working directory (see
   -- lint_baseline.mdk's header), so the anchor is resolved once, here, and
   -- handed down alongside the parsed rows.

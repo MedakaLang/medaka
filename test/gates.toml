@@ -3438,7 +3438,7 @@ kind = "exec"
 migration = "shell:instrumentation"
 run = "test/diff_compiler_check_ir_floor.sh"
 oracles = []
-sources = ["test/diff_compiler_check_ir_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/eval/eval.mdk", "compiler/tools/test_cmd.mdk"]
+sources = ["test/diff_compiler_check_ir_floor.sh", "compiler/backend/llvm_emit.mdk", "compiler/eval/eval.mdk", "compiler/tools/test_cmd.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/lint.mdk", "compiler/tools/lint_cmd.mdk", "compiler/driver/medaka_cli.mdk", "compiler/tools/mcp.mdk", "compiler/tools/check_policy.mdk"]
 corpus = []
 toolchain = ["clang", "valgrind"]
 
