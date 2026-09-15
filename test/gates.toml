@@ -936,7 +936,7 @@ toolchain = ["node>=24"]
 [[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -951,7 +951,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/index_write_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_5"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -986,7 +986,7 @@ toolchain = []
 [[gate]]
 name = "sqlite/test/oracle"
 area = "engines"
-shard = "gates_7"
+shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -2221,7 +2221,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_5"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2806,7 +2806,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "selfcompile_emit"
 area = "backend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3220,7 +3220,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_emitted_code_floor"
 area = "infra"
-shard = "gates_5"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
