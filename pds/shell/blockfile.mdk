@@ -7,7 +7,19 @@
    version and codec prefix, so sharding on the CID's own leading bytes would put
    the whole repository in one directory. Writes land in `<dir>/.staging` and are
    promoted with `rename`, so a reader never observes a half-written block and a
-   crash never leaves a torn one under a shard.
+   crash never leaves a torn one under a shard. A block's bytes are barriered
+   before the `rename` that publishes them, so the promotion cannot reach disk
+   ahead of what it names: without that pair, a power loss can leave a shard
+   entry naming bytes the kernel has not written yet. The containing shard
+   directory is barriered once per distinct directory one write touched, after
+   the last block promoted into it and before that write returns — a commit
+   landing many blocks in one shard owes that directory one barrier, not one per
+   block. Deferring a directory's barrier past a promotion into a different
+   directory costs no guarantee, because blocks are content-addressed and
+   mutually independent: nothing reads one block's entry only if another's is
+   already durable, and an entry a crash leaves unbarriered is the ordinary
+   promote-in-flight state, repaired by writing the same bytes again under the
+   same name.
 
    Nothing here trusts the disk. Bytes read back are returned as raw rows for
    `blockStoreFromBlocks` to verify against their own CIDs; this module never
@@ -19,7 +31,7 @@
 
 import hex.{decode, encode}
 import string.{take}
-import fs.{mkdirAll}
+import fs.{isDir, mkdirAll}
 import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
 
 -- Temporary writes are promoted out of this directory, which is therefore the
@@ -46,15 +58,31 @@ writeOne dir cid bytes = do
   () <- mkdirAll (blockShardDir dir cid)
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
   () <- writeFileBytes staged bytes
+  () <- fsync staged
   rename staged (blockFilePath dir cid)
 
+-- Promote every row, answering the distinct shard directories they landed in.
+-- At most 256 shard names exist, so membership over a list costs less than the
+-- barrier it saves.
 writeRows : String ->
   List (Cid, Array Int) ->
-  <FileRead "_", FileWrite "_"> Result String Unit
-writeRows _ [] = Ok ()
-writeRows dir ((cid, bytes) :: rest) = match writeOne dir cid bytes
+  List String ->
+  <FileRead "_", FileWrite "_"> Result String (List String)
+writeRows _ [] shards = Ok shards
+writeRows dir ((cid, bytes) :: rest) shards = match writeOne dir cid bytes
   Err message => Err message
-  Ok () => writeRows dir rest
+  Ok () =>
+    let shard = blockShardDir dir cid
+    if elem shard shards then
+      writeRows dir rest shards
+    else
+      writeRows dir rest (shard :: shards)
+
+fsyncShards : List String -> <FileRead "_", FileWrite "_"> Result String Unit
+fsyncShards [] = Ok ()
+fsyncShards (shard :: rest) = match fsync shard
+  Err message => Err message
+  Ok () => fsyncShards rest
 
 {- | Write every row durably beneath `dir`. Writing a block that is already
    present is idempotent: a block's name is its content, so the promoted file
@@ -65,7 +93,8 @@ blockFileWrite : String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 blockFileWrite dir rows = do
   () <- mkdirAll "\{dir}/\{stagingName}"
-  writeRows dir rows
+  shards <- writeRows dir rows []
+  fsyncShards shards
 
 cidForName : String -> Result String Cid
 cidForName name = match decode name
@@ -94,20 +123,68 @@ readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
   if shard == stagingName then
     readShards dir rest acc
-  else match listDir "\{dir}/\{shard}"
-    Err message => Err "blockfile: unreadable shard directory: \{message}"
-    Ok leaves => match readLeaves dir shard leaves acc
-      Err message => Err message
-      Ok next => readShards dir rest next
+  else match isDir "\{dir}/\{shard}"
+    -- A shard is a directory; anything else under `dir` is residue this
+    -- module did not write, and `listDir` on it would report an unreadable
+    -- shard directory — a refused startup, under a wrong description.
+    Ok False => readShards dir rest acc
+    _ => match listDir "\{dir}/\{shard}"
+      Err message =>
+        Err "blockfile: \{dir}/\{shard}: unreadable shard directory: \{message}"
+      Ok leaves => match readLeaves dir shard leaves acc
+        Err message => Err message
+        Ok next => readShards dir rest next
 
 {- | Read every persisted row beneath `dir`, in unspecified order.
 
    The returned rows are UNVERIFIED bytes off disk paired with the CID their file
    name spells. `blockStoreFromBlocks` is what proves each row's bytes hash to
-   that CID, and a tampered file fails there. An entry that is neither a shard nor
-   the staging directory fails loudly rather than being skipped. -}
+   that CID, and a tampered file fails there. An entry under `dir` that is not a
+   directory — an editor swapfile, a `.DS_Store` — is residue this module did
+   not write and is skipped rather than failing the whole read; a directory
+   whose name is not the staging directory is still expected to be a shard, and
+   an unreadable one fails loudly. -}
 export
 blockFileRead : String -> <FileRead "_"> Result String (List (Cid, Array Int))
 blockFileRead dir = match listDir dir
   Err message => Err "blockfile: unreadable block directory: \{message}"
   Ok shards => readShards dir shards []
+
+-- Every file left behind under `<dir>/.staging` by a process that crashed
+-- between staging a file and its `rename`. `.staging` never holds a
+-- subdirectory in this module's own write path (`writeOne` stages a leaf
+-- file directly), but this sweep also tolerates residue it did not write —
+-- a stray subdirectory is skipped rather than passed to `removeFile`, which
+-- fails on a directory.
+removeStagingResidue : String ->
+  List String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+removeStagingResidue _ [] = Ok ()
+removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
+  Ok True => removeStagingResidue dir rest
+  _ => match removeFile "\{dir}/\{leaf}"
+    Err message =>
+      Err "blockfile: \{dir}/\{leaf}: undeletable staging residue: \{message}"
+    Ok () => removeStagingResidue dir rest
+
+{- | Remove every file staged beneath `<dir>/.staging` and never promoted or
+   cleaned up — the residue a crash between `writeFileBytes staged` and its
+   `rename` leaves behind. Nothing else in this module ever removes from
+   `.staging`, so this is the only place stale entries go away.
+
+   Meant to be called once, at startup, before the listener binds
+   (`pds/serve.mdk`'s `configure`): that is the only window in which a file
+   under `.staging` unambiguously means residue from a prior crash rather
+   than a promotion this process has in flight. A data directory that has
+   never staged a block reads as nothing to sweep, not as a failure. -}
+export
+blockFileSweepStaging : String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+blockFileSweepStaging dir =
+  let staging = "\{dir}/\{stagingName}"
+  if not (fileExists staging) then
+    Ok ()
+  else match listDir staging
+    Err message =>
+      Err "blockfile: \{staging}: unreadable staging directory: \{message}"
+    Ok leaves => removeStagingResidue staging leaves

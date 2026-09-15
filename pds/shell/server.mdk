@@ -71,7 +71,11 @@ import lib.ratelimit.{
   step,
 }
 import hex.{encode}
-import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
+import lib.event_log_record.{
+  EventLogEntry(..),
+  eventLogFirstSeq,
+  eventLogRetentionSeconds,
+}
 import lib.blockstore.{blockStoreSize}
 import lib.repo.{
   Repo,
@@ -135,7 +139,9 @@ import net_async as A
 import shell.blobfile.{blobFileCount, blobFileWrite}
 import shell.egress.{Egress, egressAppviews, egressCall, egressMintToken}
 import shell.eventlog.{
+  eventLogDir,
   eventLogDiscardStaged,
+  eventLogHasEntries,
   eventLogNextSequence,
   eventLogPromote,
   eventLogStage,
@@ -389,7 +395,13 @@ applyRequest server dir storeRef bytes =
    Each half is skipped when it did not move, so a read route rewrites neither
    the block graph nor the blob area. None is an `Async` step: this runs
    inside `applyRequest`'s single indivisible sequence, and a suspension
-   between any two would let a second connection publish in the gap. -}
+   between any two would let a second connection publish in the gap.
+
+   The BLOB half runs before the repo half, and the order is load-bearing: a
+   record may name blob bytes, never the reverse, so a crash between the two
+   halves must leave at most an unreferenced blob and never a committed record
+   naming bytes that are not on disk. The other two halves reference nothing
+   and are referenced by nothing, so their position is free. -}
 persistTransition : String ->
   String ->
   Int ->
@@ -397,9 +409,9 @@ persistTransition : String ->
   Store ->
   <FileRead "_", FileWrite "_"> Result String Unit
 persistTransition dir did nowSeconds before after = do
+  () <- if blobsMoved before after then persistBlobHalf dir after else Ok ()
   () <- persistRepoHalf dir did nowSeconds before after
   () <- persistCredentialHalf dir before after
-  () <- if blobsMoved before after then persistBlobHalf dir after else Ok ()
   persistPreferencesHalf dir before after
 
 {- | Persist the preference half when the transition moved it, which
@@ -523,24 +535,100 @@ stageCommitEvent dir did nowSeconds before after = do
    first of them is staged, so none of them can publish state a reader cannot
    fetch.
 
+   This runs on EVERY start and not only on the one that creates the
+   repository, because a start is the only place the sequence can be finished:
+   `--init` refuses a directory that already holds a repository, so a process
+   that died between two of the four would otherwise leave a stream that opens
+   mid-story for as long as that repository lives.
+
    Nothing can interleave: this runs inside `configure`, before the listener
    is bound, so there is no connection through which a write could reach the
-   log until all four are promoted. -}
+   log until all four are promoted.
+
+   How far the sequence got is read from one pointer file, so that pointer is
+   checked against the entries it indexes before any of the four is emitted
+   again: a pointer that says NOTHING was ever promoted, over an entry
+   directory that is not empty, describes a repository whose pointer was lost
+   rather than a fresh one, and re-minting the quartet there would publish a
+   second identity, account, commit and sync beside the first, which no
+   subscriber can reconcile. Such a start refuses instead. -}
 export
-stageGenesisEvents : String ->
+completeGenesisEvents : String ->
   String ->
   String ->
   Int ->
   Repo ->
   <FileRead "_", FileWrite "_"> Result String Unit
-stageGenesisEvents dir did handle nowSeconds repo = do
+completeGenesisEvents dir did handle nowSeconds repo = do
+  resumeAt <- eventLogNextSequence dir
+  () <- refuseLostPointer dir resumeAt
+  genesisFrom resumeAt dir did handle nowSeconds repo
+
+{- | Refuse a log whose last-promoted pointer contradicts the entries beside
+   it, rather than treating it as a repository that has emitted nothing.
+
+   Checked in one direction only. A retention sweep unlinks entry files and
+   leaves the pointer where it stood, so a pointer standing over an empty
+   entry directory is ordinary and says nothing is wrong; the reverse — no
+   pointer at all over entries that exist — is reachable by no sequence
+   `shell.eventlog` writes, because a promotion writes the entry first and the
+   pointer second and the staged copy it leaves behind makes the pair run
+   again.
+
+   Deciding only, like `eventLogPlanRecovery`: naming what an operator has to
+   look at is the whole of the answer, because which of the two files is the
+   damaged one is not something this process can know. -}
+refuseLostPointer : String -> Int -> <FileRead "_"> Result String Unit
+refuseLostPointer dir resumeAt =
+  if resumeAt /= eventLogFirstSeq then
+    Ok ()
+  else match eventLogHasEntries dir
+    Err message => Err message
+    Ok False => Ok ()
+    Ok True =>
+      let log = eventLogDir dir
+      Err
+        "serve: \{log}: the last-promoted pointer records no promoted event, but the entry directory is not empty. Emitting the genesis events here would announce a second identity, account, commit and sync over history that already holds them. Compare \{log}/.last against \{log}/entries before starting this repository again."
+
+{- | The genesis events from `step` onward, where `step` is the sequence
+   number the next promoted event will take.
+
+   The next sequence number IS the step number, and the log alone decides it.
+   These four are the only events any repository emits before its listener is
+   bound, and `eventLogNextSequence` counts what was ever PROMOTED rather than
+   what is still readable — the retention sweep unlinks entry files and leaves
+   the pointer where it stood. So a log whose next number is 3 holds
+   `#identity` and `#account` and owes the other two, and one whose next
+   number is past the fourth owes nothing, on that start and on every later
+   one.
+
+   Each step is emitted by the call that would have emitted it on a first
+   start, and an already-promoted step is skipped rather than repeated:
+   `emitUnanchored` and `stageCommitEvent` take a fresh sequence number every
+   time they are called, so re-running step 1 would mint a fifth event rather
+   than replace the first. -}
+genesisFrom : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Repo ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+genesisFrom 1 dir did handle nowSeconds repo = do
   let identityFrame = seq time => syncIdentityFrame seq time did handle
-  let accountFrame = seq time => syncAccountFrame seq time did
   () <- emitUnanchored dir nowSeconds identityFrame
+  genesisFrom 2 dir did handle nowSeconds repo
+genesisFrom 2 dir did handle nowSeconds repo = do
+  let accountFrame = seq time => syncAccountFrame seq time did
   () <- emitUnanchored dir nowSeconds accountFrame
+  genesisFrom 3 dir did handle nowSeconds repo
+genesisFrom 3 dir did handle nowSeconds repo = do
   () <- stageCommitEvent dir did nowSeconds None repo
   () <- eventLogPromote dir eventLogRetentionSeconds nowSeconds
+  genesisFrom 4 dir did handle nowSeconds repo
+genesisFrom 4 dir did _ nowSeconds repo =
   emitUnanchored dir nowSeconds (headSyncFrame did repo)
+genesisFrom _ _ _ _ _ _ = Ok ()
 
 -- The `#sync` frame for a repository's current head: the one event that
 -- states where the repository stands without describing how it got there.

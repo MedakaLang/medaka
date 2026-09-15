@@ -18,7 +18,12 @@
    The `prefs-*` routes are the same save/load claim for the preferences half
    (`shell.persist`'s `persistPreferences`/`persistLoadPreferences`), written
    into the same data directory as the repository and blob halves so the
-   signing-key sweep in `store_persistence.sh` covers it too.
+   signing-key sweep in `store_persistence.sh` covers it too. `credential-save`
+   is the write half of the same claim for the account's password credential
+   (`shell.persist`'s `persistCredential`); there is no `credential-load` route
+   because reading it back is `pds/shell/server.mdk`'s job, not this shell's —
+   this route exists only so case 12's syscall trace sees the credential
+   file's promote.
 
    The remaining routes are for HALF-WRITTEN directories. None of them races a
    process kill: each write path here promotes with `rename`, so the states a
@@ -27,8 +32,16 @@
    rewinds the head file to; `blob-survey` reports what the blob reader makes
    of a blob whose two files did not both land;    `event-recover-*` stages an
    entry against a persisted head and recovers over it, the way `configure`
-   does: plan, then apply. -}
+   does: plan, then apply.
 
+   `genesis-init` and `genesis-resume` are that same pair for the four events a
+   repository's creation emits: the first creates the repository and emits
+   them, the second is every later start over that data directory. The gate
+   runs the second over a log it truncated to none, one, two or three of the
+   four, and requires the result to be the log an uninterrupted creation
+   leaves. -}
+
+import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
 import string.{toUtf8}
@@ -36,6 +49,7 @@ import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
 import lib.cid.{Cid, cidEqual, cidToString}
+import lib.credential.{CredentialRecord, makeCredential}
 import lib.dagcbor.{DagCbor(..)}
 import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
 import lib.repo.{
@@ -55,20 +69,24 @@ import sha256.{sha256}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}
-import shell.blobfile.{blobFileRead, blobFileWrite}
+import shell.blobfile.{blobFileRead, blobFileSweepStaging, blobFileWrite}
 import shell.eventlog.{
   eventLogApplyRecovery,
   eventLogPlanRecovery,
   eventLogRead,
   eventLogStage,
   eventLogStaged,
+  eventLogSweepStaging,
 }
 import shell.persist.{
+  persistCredential,
   persistLoad,
   persistLoadPreferences,
   persistPreferences,
   persistSave,
+  persistSweepStagedBlocks,
 }
+import shell.server.{completeGenesisEvents}
 
 -- The gate greps every persisted file for this hex and for its raw bytes; it is
 -- the signing key the adapter must never be able to write.
@@ -358,6 +376,28 @@ runPrefsSave dir = match persistPreferences dir fixturePrefs
   Err message => panic "store_persistence: preferences save failed: \{message}"
   Ok () => println "PREFS SAVE: PASS"
 
+-- ── the credential half ─────────────────────────────────────────────────────
+
+-- A fixed record, persisted into the same data directory as the repository
+-- and preferences halves so case 12's syscall trace covers it too.
+fixtureCredentialSalt : Array Int
+fixtureCredentialSalt = mustHex "000102030405060708090a0b0c0d0e0f"
+
+fixtureCredential : CredentialRecord
+fixtureCredential =
+  match (makeCredential
+    fixtureCredentialSalt
+    100000
+    "correct horse battery staple")
+    Err message =>
+      panic "store_persistence: malformed credential fixture: \{message}"
+    Ok record => record
+
+runCredentialSave : String -> <IO, FileWrite "_"> Unit
+runCredentialSave dir = match persistCredential dir fixtureCredential
+  Err message => panic "store_persistence: credential save failed: \{message}"
+  Ok () => println "CREDENTIAL SAVE: PASS"
+
 runPrefsLoad : String -> <IO, FileRead "_"> Unit
 runPrefsLoad dir = match persistLoadPreferences dir
   Err message => panic "store_persistence: preferences load failed: \{message}"
@@ -463,6 +503,269 @@ frameFor : Option String -> String
 frameFor None = "a2626f7001617469236964656e74697479"
 frameFor (Some _) = "a1"
 
+-- ── the crash-residue sweeps (#2572 part 2, #3052) ──────────────────────────
+
+presentLabel : Bool -> String
+presentLabel True = "present"
+presentLabel False = "absent"
+
+-- What the three sweeps left `dir` holding: whether each planted residue file
+-- is still there (it must not be), whether each planted stray SUBDIRECTORY
+-- and its own inner file are still there (they must be — a sweep tolerates,
+-- never recurses into, an entry it did not write), and the state of the
+-- legitimate content the residue sat beside (it must be untouched) — the
+-- same repository, blob and event summaries the other routes already print,
+-- so the gate can compare them against what `save`/`blob-save`/an applied
+-- recovery produced.
+reportSweep : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, FileRead "_"> Unit
+reportSweep dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFile strayEventFile =
+  let () =
+    println "SWEEP residue-block \{presentLabel (fileExists blockResidue)}"
+  let () = println "SWEEP residue-blob \{presentLabel (fileExists blobResidue)}"
+  let () =
+    println "SWEEP residue-event \{presentLabel (fileExists eventResidue)}"
+  let () =
+    println "SWEEP stray-block \{presentLabel (fileExists strayBlockFile)}"
+  let () = println "SWEEP stray-blob \{presentLabel (fileExists strayBlobFile)}"
+  let () =
+    println "SWEEP stray-event \{presentLabel (fileExists strayEventFile)}"
+  match reload dir
+    Err message =>
+      panic "store_persistence: sweep-staging reload failed: \{message}"
+    Ok repo =>
+      let () = summary "SWEEP" repo
+      match verifiedBlobs dir
+        Err message =>
+          panic
+            "store_persistence: sweep-staging blob reload failed: \{message}"
+        Ok rows =>
+          let () = println "SWEEP blobs \{intToString (length rows)}"
+          match eventLogRead dir 0
+            Err message =>
+              panic
+                "store_persistence: sweep-staging event reload failed: \{message}"
+            Ok entries =>
+              let () = println "SWEEP entries \{intToString (length entries)}"
+              println "SWEEP-STAGING: PASS"
+
+-- Run the same three sweeps `pds/serve.mdk`'s `configure` runs at startup,
+-- then report what is left.
+sweepAndReport : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, FileRead "_", FileWrite "_"> Unit
+sweepAndReport dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFile strayEventFile =
+  match persistSweepStagedBlocks dir
+    Err message =>
+      panic "store_persistence: block staging sweep failed: \{message}"
+    Ok () => match blobFileSweepStaging dir
+      Err message =>
+        panic "store_persistence: blob staging sweep failed: \{message}"
+      Ok () => match eventLogSweepStaging dir
+        Err message =>
+          panic "store_persistence: event staging sweep failed: \{message}"
+        Ok () =>
+          reportSweep
+            dir
+            blockResidue
+            blobResidue
+            eventResidue
+            strayBlockFile
+            strayBlobFile
+            strayEventFile
+
+-- Plant one file directly under each of the three `.staging` directories —
+-- the residue a crash between a `writeFileBytes`/`writeFile` and its `rename`
+-- leaves behind — beside content this route already persisted legitimately.
+-- Also plant a stray SUBDIRECTORY (with a file of its own inside) under each
+-- `.staging` — residue this process did not write, which the sweep must
+-- skip rather than fail on or recurse into (F5, #3053).
+plantAndSweep : String -> <IO, FileRead "_", FileWrite "_"> Unit
+plantAndSweep dir =
+  let blockResidue = "\{dir}/blocks/.staging/crash-residue"
+  let blobResidue = "\{dir}/blobs/.staging/crash-residue"
+  let eventResidue = "\{dir}/events/.staging/crash-residue"
+  let strayBlockDir = "\{dir}/blocks/.staging/stray-dir"
+  let strayBlobDir = "\{dir}/blobs/.staging/stray-dir"
+  let strayEventDir = "\{dir}/events/.staging/stray-dir"
+  let strayBlockFile = "\{strayBlockDir}/inner"
+  let strayBlobFile = "\{strayBlobDir}/inner"
+  let strayEventFile = "\{strayEventDir}/inner"
+  match writeFile blockResidue "residue"
+    Err message =>
+      panic "store_persistence: planting block residue failed: \{message}"
+    Ok () => match writeFile blobResidue "residue"
+      Err message =>
+        panic "store_persistence: planting blob residue failed: \{message}"
+      Ok () => match writeFile eventResidue "residue"
+        Err message =>
+          panic "store_persistence: planting event residue failed: \{message}"
+        Ok () => match mkdirAll strayBlockDir
+          Err message =>
+            panic
+              "store_persistence: planting stray block dir failed: \{message}"
+          Ok () => match mkdirAll strayBlobDir
+            Err message =>
+              panic
+                "store_persistence: planting stray blob dir failed: \{message}"
+            Ok () => match mkdirAll strayEventDir
+              Err message =>
+                panic
+                  "store_persistence: planting stray event dir failed: \{message}"
+              Ok () => match writeFile strayBlockFile "stray"
+                Err message =>
+                  panic
+                    "store_persistence: planting stray block file failed: \{message}"
+                Ok () => match writeFile strayBlobFile "stray"
+                  Err message =>
+                    panic
+                      "store_persistence: planting stray blob file failed: \{message}"
+                  Ok () => match writeFile strayEventFile "stray"
+                    Err message =>
+                      panic
+                        "store_persistence: planting stray event file failed: \{message}"
+                    Ok () =>
+                      sweepAndReport
+                        dir
+                        blockResidue
+                        blobResidue
+                        eventResidue
+                        strayBlockFile
+                        strayBlobFile
+                        strayEventFile
+
+{- | Persist a repository, blobs and one promoted event entry — the
+   legitimate content a normal, uninterrupted run leaves behind — then plant
+   residue in all three `.staging` directories and run the sweeps
+   `pds/serve.mdk`'s `configure` runs before the listener binds. The residue
+   must be gone afterward; the legitimate content it sat beside must not be,
+   since a sweep that cannot tell staged residue from a directory it should
+   never touch is not the sweep #2572 part 2 asked for. -}
+runSweepStaging : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runSweepStaging dir =
+  let repo = fixtureRepo
+  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+    Err message =>
+      panic "store_persistence: sweep-staging save failed: \{message}"
+    Ok () => match blobFileWrite dir blobFixtures
+      Err message =>
+        panic "store_persistence: sweep-staging blob save failed: \{message}"
+      Ok () => match eventLogStage dir (eventFixture None (frameFor None))
+        Err message =>
+          panic
+            "store_persistence: sweep-staging event stage failed: \{message}"
+        Ok () => match eventLogPlanRecovery dir None
+          Err message =>
+            panic
+              "store_persistence: sweep-staging event plan failed: \{message}"
+          Ok plan =>
+            match (eventLogApplyRecovery
+              dir
+              plan
+              eventLogRetentionSeconds
+              eventFixtureTime)
+              Err message =>
+                panic
+                  "store_persistence: sweep-staging event promote failed: \{message}"
+              Ok () => plantAndSweep dir
+
+-- ── the genesis quartet ─────────────────────────────────────────────────────
+
+-- The handle the genesis `#identity` event announces. Fixed like every other
+-- input to these two routes, so the frames they produce are deterministic
+-- bytes and two runs over one data directory can be compared line for line.
+genesisHandle : String
+genesisHandle = "persistence.fixture.test"
+
+-- Every promoted entry, one line each: position, anchor, and the frame BYTES
+-- rather than a count of them. A resumption that emitted four events of the
+-- wrong kinds, or the right kinds out of order, satisfies a count.
+printGenesis : List EventLogEntry -> <IO> Unit
+printGenesis [] = ()
+printGenesis (entry :: rest) =
+  let () =
+    println
+      "GENESIS \{intToString entry.seq} \{anchorLabel entry.anchorCommitCid} \{entry.frameHex}"
+  printGenesis rest
+
+genesisSurvey : String -> <IO, FileRead "_"> Unit
+genesisSurvey dir = match eventLogRead dir 0
+  Err message => panic "store_persistence: genesis log unreadable: \{message}"
+  Ok entries =>
+    let () = printGenesis entries
+    println "GENESIS count \{intToString (length entries)}"
+
+{- | A start over a data directory that already holds a repository, with no
+   `--init` anywhere: load the repository from disk, make the call `configure`
+   makes on every start, and survey what the log holds afterwards.
+
+   Pointed at a log the gate truncated this is the resumption; pointed at a
+   finished one it must add nothing, which is the same route run twice. -}
+runGenesisResume : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisResume dir = match reload dir
+  Err message => panic "store_persistence: genesis reload failed: \{message}"
+  Ok repo =>
+    match (completeGenesisEvents
+      dir
+      accountDid
+      genesisHandle
+      eventFixtureTime
+      repo)
+      Err message => panic "store_persistence: genesis emit failed: \{message}"
+      Ok () => genesisSurvey dir
+
+-- A LATER start than the one that created the repository, which is what makes
+-- the entry count a real claim: an entry's file name carries its timestamp,
+-- so a quartet re-minted at the creation's own second would overwrite the
+-- four files it duplicates and leave the same four names behind.
+genesisSecondStartTime : Int
+genesisSecondStartTime = eventFixtureTime + 3600
+
+{- | The same start as `genesis-resume`, but reporting the refusal instead of
+   panicking on it: a log whose last-promoted pointer is gone while its
+   entries remain must be refused, and a route that dies on `Err` cannot tell
+   a refusal apart from a crash. -}
+runGenesisGuard : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisGuard dir = match reload dir
+  Err message => panic "store_persistence: genesis reload failed: \{message}"
+  Ok repo =>
+    match (completeGenesisEvents
+      dir
+      accountDid
+      genesisHandle
+      genesisSecondStartTime
+      repo)
+      Err message => println "GENESIS-GUARD: ERR \{message}"
+      Ok () =>
+        let () = genesisSurvey dir
+        println "GENESIS-GUARD: OK"
+
+{- | The repository's creation: the commit persisted first, then the four
+   events emitted over it.
+
+   The events are emitted over the repository READ BACK from disk and not over
+   the one just built, so that this route's survey and `genesis-resume`'s are
+   the same bytes whenever the log is. What the gate compares is a log nothing
+   interrupted against one it truncated and let this finish, and the
+   comparison would otherwise be grading the reload as well. -}
+runGenesisInit : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisInit dir =
+  let repo = fixtureRepo
+  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+    Err message => panic "store_persistence: genesis save failed: \{message}"
+    Ok () => runGenesisResume dir
+
 main : <IO, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()
   ["save", dir] => runSave dir
@@ -476,10 +779,15 @@ main = match args ()
   ["blob-oversize", dir] => runBlobOversize dir
   ["prefs-save", dir] => runPrefsSave dir
   ["prefs-load", dir] => runPrefsLoad dir
+  ["credential-save", dir] => runCredentialSave dir
   ["event-recover-owed", dir] => runEventRecover dir (_ head => Some head)
   ["event-recover-orphan", dir] =>
     runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
   ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
+  ["sweep-staging", dir] => runSweepStaging dir
+  ["genesis-init", dir] => runGenesisInit dir
+  ["genesis-resume", dir] => runGenesisResume dir
+  ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan|event-recover-unanchored> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|genesis-init|genesis-resume|genesis-guard> <dir>"

@@ -143,6 +143,7 @@ preambleLines = [
   "declare i64 @mdk_remove_file(i64)",
   "declare i64 @mdk_rename(i64, i64)",
   "declare i64 @mdk_remove_dir(i64)",
+  "declare i64 @mdk_fsync(i64)",
   "declare i64 @mdk_stat_file(i64)",
   "declare i64 @mdk_file_mode(i64)",
   "declare i64 @mdk_run_command(i64, i64)",

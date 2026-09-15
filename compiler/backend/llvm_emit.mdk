@@ -3089,6 +3089,7 @@ isFileExtern name = contains name [
   "removeFile",
   "rename",
   "removeDir",
+  "fsync",
   "statFile",
   "runCommand",
   "executablePath",
@@ -3213,6 +3214,12 @@ emitFileExtern e env "removeDir" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_remove_dir(i64 \{p})"
     (r, LTCon)
   _ => panic "llvm: removeDir takes one argument"
+emitFileExtern e env "fsync" args = match emitArgs e env args
+  [p] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_fsync(i64 \{p})"
+    (r, LTCon)
+  _ => panic "llvm: fsync takes one argument"
 emitFileExtern e env "statFile" args = match emitArgs e env args
   [p] =>
     let r = freshReg e

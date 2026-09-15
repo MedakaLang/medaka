@@ -9,9 +9,20 @@
 # Cases 7-11 grade the HALF-WRITTEN directories a process crash can leave: each
 # of the three write paths promotes with `rename` after writing what the
 # promotion points at, so the reachable interrupted states are a finite set and
-# each is built directly rather than raced. They cover process-crash
-# consistency only; no path here calls `fsync`, so what the kernel may reorder
-# across a power loss is outside what any of them can observe (#2952).
+# each is built directly rather than raced. Barriers do not change that set: an
+# `fsync` decides WHEN a write reaches the platter, never which file a `rename`
+# publishes, so every state those cases build stays reachable and each must
+# still serve the previous value or refuse. Case 11b is that same claim for a
+# creation interrupted partway through the four events it emits: the state is
+# built by winding a finished log back, and the next start has to finish it —
+# except for the one wound-back state no crash can produce, a lost
+# last-promoted pointer over entries that remain, where the next start has to
+# refuse.
+# Case 11c grades the residue those same crash points leave behind under
+# `.staging`: swept at startup rather than mistaken for corruption (#2572
+# part 2, #3052). Case 12 grades the barriers themselves, which is the one
+# claim building a directory by hand cannot make — it needs the syscall ORDER,
+# not the resulting tree (#2952).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -352,4 +363,326 @@ grep -q '^EVENTAFTER staged none entries 1$' "$WORK/eventfree.out" || {
 }
 echo 'staged event anchored to no commit finished, and planning wrote nothing'
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; key absent'
+# ── 11b. a creation interrupted partway through the genesis quartet ────────
+# The four events `com.atproto.sync.subscribeRepos` opens a stream with are
+# emitted by the run that CREATES the repository, and `--init` refuses a
+# directory that already holds one — so a process that died between two of them
+# has exactly one chance left to finish the sequence: an ordinary start over
+# that data directory (#3006).
+#
+# Built rather than raced, like every other state here. An uninterrupted
+# creation runs first; the log is then wound back to the crash point (every
+# entry past the Nth unlinked, and the last-promoted pointer — the only record
+# of how far the sequence got — set back to N); and a plain start runs over it.
+# What that start leaves must be the log the uninterrupted creation left, BYTE
+# for byte, which is a claim about which four events and in what order rather
+# than about how many. N=0 is the crash between persisting the genesis commit
+# and promoting the first event, where the pointer does not exist at all.
+GENREF="$WORK/genesis-ref"
+"$WORK/driver" genesis-init "$GENREF" > "$WORK/genesis-ref.out" \
+  2> "$WORK/genesis-ref.err"
+require_empty "$WORK/genesis-ref.err" genesis-init
+grep -q '^GENESIS count 4$' "$WORK/genesis-ref.out" \
+  || fail 'a repository creation did not emit the four genesis events'
+
+for N in 0 1 2 3; do
+  GENDIR="$WORK/genesis-$N"
+  "$WORK/driver" genesis-init "$GENDIR" > "$WORK/genesis-$N.init" \
+    2> "$WORK/genesis-$N.err"
+  require_empty "$WORK/genesis-$N.err" "genesis-init (N=$N)"
+  cmp "$WORK/genesis-ref.out" "$WORK/genesis-$N.init" \
+    || fail "case 11b: two uninterrupted creations left different logs"
+
+  K=$((N + 1))
+  while [ "$K" -le 4 ]; do
+    rm -f "$GENDIR"/events/entries/000000000000000"$K"-*
+    K=$((K + 1))
+  done
+  if [ "$N" -eq 0 ]; then
+    rm -f "$GENDIR/events/.last"
+  else
+    printf '%s' "$N" > "$GENDIR/events/.last"
+  fi
+  REMAIN=$(ls "$GENDIR/events/entries" | wc -l | tr -d ' ')
+  [ "$REMAIN" = "$N" ] \
+    || fail "case 11b: winding the log back to $N left $REMAIN entries"
+
+  "$WORK/driver" genesis-resume "$GENDIR" > "$WORK/genesis-$N.resumed" \
+    2> "$WORK/genesis-$N.err"
+  require_empty "$WORK/genesis-$N.err" "genesis-resume (N=$N)"
+  cmp "$WORK/genesis-ref.out" "$WORK/genesis-$N.resumed" || {
+    diff "$WORK/genesis-ref.out" "$WORK/genesis-$N.resumed" >&2 || true
+    fail "case 11b: a start over a log holding $N of the 4 did not finish it"
+  }
+
+  # The same start once more: a finished quartet must not grow a fifth event,
+  # and the sequence counter must not move.
+  LASTAFTER=$(cat "$GENDIR/events/.last")
+  "$WORK/driver" genesis-resume "$GENDIR" > "$WORK/genesis-$N.again" \
+    2> "$WORK/genesis-$N.err"
+  require_empty "$WORK/genesis-$N.err" "genesis-resume repeat (N=$N)"
+  cmp "$WORK/genesis-$N.resumed" "$WORK/genesis-$N.again" \
+    || fail "case 11b: a start after the quartet was finished emitted more"
+  [ "$(cat "$GENDIR/events/.last")" = "$LASTAFTER" ] \
+    || fail "case 11b: a start after the quartet was finished moved the counter"
+done
+echo 'genesis quartet finished from 0, 1, 2 and 3 promoted events, and adds nothing once whole'
+
+# The other shape those same two files can take, which is NOT a crash point
+# and must not be resumed as one: the last-promoted pointer gone while the
+# entries it indexed remain. No sequence this tree writes reaches it — a
+# promotion writes the entry first and the pointer second, and leaves the
+# staged copy behind so the pair runs again — so it means the pointer alone
+# was lost, and the entries are real history. Resuming there reads "nothing
+# was ever promoted" and re-mints the whole quartet beside the original one,
+# which is a stream serving two #identity, #account, #commit and #sync events
+# a subscriber cannot reconcile. N=0 above is the shape this must NOT fire on:
+# no pointer AND no entries is an ordinary fresh creation, and it still
+# completes the quartet.
+GENLOST="$WORK/genesis-lost-pointer"
+"$WORK/driver" genesis-init "$GENLOST" > "$WORK/genesis-lost.init" \
+  2> "$WORK/genesis-lost.err"
+require_empty "$WORK/genesis-lost.err" 'genesis-init (lost pointer)'
+cmp "$WORK/genesis-ref.out" "$WORK/genesis-lost.init" \
+  || fail 'case 11b: two uninterrupted creations left different logs'
+rm -f "$GENLOST/events/.last"
+"$WORK/driver" genesis-guard "$GENLOST" > "$WORK/genesis-lost.out" \
+  2> "$WORK/genesis-lost.err"
+require_empty "$WORK/genesis-lost.err" 'genesis-guard (lost pointer)'
+grep -q '^GENESIS-GUARD: ERR ' "$WORK/genesis-lost.out" || {
+  cat "$WORK/genesis-lost.out" >&2
+  fail 'a lost last-promoted pointer over surviving entries was resumed instead of refused'
+}
+REMAIN=$(ls "$GENLOST/events/entries" | wc -l | tr -d ' ')
+[ "$REMAIN" = 4 ] \
+  || fail "case 11b: the refused start left $REMAIN entries where it found 4"
+[ ! -e "$GENLOST/events/.last" ] \
+  || fail 'case 11b: the refused start wrote the pointer it refused over'
+sed -n 's/^GENESIS-GUARD: ERR /lost pointer refused: /p' "$WORK/genesis-lost.out"
+
+# ── 11c. `.staging` residue is swept at startup, never treated as corruption ──
+# A crash between `writeFileBytes staged`/`writeFile staged` and its `rename`
+# leaves a file behind in one of the three `.staging` directories, and nothing
+# else in the tree ever removes one. The `sweep-staging` route plants exactly
+# that residue beside content it ALSO persists legitimately (a repository, two
+# blobs, one promoted event entry), then runs the same three sweeps
+# `pds/serve.mdk`'s `configure` runs before the listener binds (#2572 part 2,
+# #3052). It also plants a stray SUBDIRECTORY (with a file of its own inside)
+# under each `.staging` — residue an operator or an external process left
+# behind, which this process never wrote and must not fail to sweep over
+# (F5). The claim is three-sided: every planted plain-file residue is gone
+# afterward, every stray subdirectory (and its inner file) is untouched, and
+# the legitimate content it all sat beside is not.
+"$WORK/driver" sweep-staging "$WORK/sweep-staging" \
+  > "$WORK/sweep-staging.out" 2> "$WORK/sweep-staging.err"
+require_empty "$WORK/sweep-staging.err" sweep-staging
+[ "$(tail -1 "$WORK/sweep-staging.out")" = 'SWEEP-STAGING: PASS' ] \
+  || fail 'case 11c: sweep-staging route did not pass'
+grep -q '^SWEEP residue-block absent$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: staged block residue survived the sweep'
+grep -q '^SWEEP residue-blob absent$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: staged blob residue survived the sweep'
+grep -q '^SWEEP residue-event absent$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: staged event residue survived the sweep'
+grep -q '^SWEEP stray-block present$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: a stray blocks/.staging subdirectory did not survive the sweep'
+grep -q '^SWEEP stray-blob present$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: a stray blobs/.staging subdirectory did not survive the sweep'
+grep -q '^SWEEP stray-event present$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: a stray events/.staging subdirectory did not survive the sweep'
+grep -q '^SWEEP records 3$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: the sweep disturbed the legitimately persisted repository'
+grep -q '^SWEEP blobs 2$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: the sweep disturbed a legitimately persisted blob'
+grep -q '^SWEEP entries 1$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: the sweep disturbed the legitimately promoted event entry'
+# Every `.staging` directory the sweeps touched must itself still be there —
+# swept means the plain-file residue emptied out, not the directory removed —
+# and the only thing left inside is the stray subdirectory the sweep must not
+# have touched.
+for HALF in blocks blobs events; do
+  [ -d "$WORK/sweep-staging/$HALF/.staging" ] \
+    || fail "case 11c: the sweep removed the $HALF/.staging directory itself"
+  LEFT=$(ls -A "$WORK/sweep-staging/$HALF/.staging")
+  [ "$LEFT" = 'stray-dir' ] \
+    || fail "case 11c: $HALF/.staging holds '$LEFT' after the sweep, expected only stray-dir"
+  [ -d "$WORK/sweep-staging/$HALF/.staging/stray-dir" ] \
+    || fail "case 11c: $HALF/.staging/stray-dir is no longer a directory after the sweep"
+  [ -f "$WORK/sweep-staging/$HALF/.staging/stray-dir/inner" ] \
+    || fail "case 11c: $HALF/.staging/stray-dir/inner did not survive the sweep"
+done
+echo 'case 11c: crash residue swept from all three .staging directories; a stray subdirectory and legitimate content both untouched'
+
+# ── 12. every promote is barriered, staged file first and directory after ──
+# The only case here that reads the syscall STREAM rather than the resulting
+# tree, because that is where the claim lives: after a power loss what survives
+# is decided by the order writes reached the platter, and a directory built by
+# hand cannot say which `rename` outran the bytes it publishes. Two rules over
+# every `rename` the driver performs, checked in trace order:
+#
+#   - the syscall immediately BEFORE it is an `fsync` of exactly the path it
+#     renames, so the promotion cannot become visible before its own contents;
+#   - an `fsync` of the directory it renames INTO follows it, and follows every
+#     later `rename` into that same directory, so the promotion itself is
+#     durable.
+#
+# The second rule tolerates a writer that promotes a batch and then barriers the
+# distinct directories it touched, which `blockfile.mdk` does: a directory's
+# barrier may be deferred past promotes into other directories. What it does not
+# tolerate is a barrier that never arrives, so the deferral is bounded — once a
+# directory barrier is issued, every directory owed one must be barriered before
+# the next `rename` starts a new batch. An owed barrier that outlives its batch,
+# or the whole trace, is a rename published with nothing on the platter naming
+# it.
+#
+# Universal over renames rather than a list of expected paths: a promote path
+# added later is graded the day it is written, and cannot be forgotten here.
+# The per-path coverage counts below are the other half — they fail if a
+# promote path stopped being EXERCISED, which a universal rule alone reads as
+# silence.
+if ! command -v strace >/dev/null 2>&1; then
+  # A SKIP IS ONLY LEGITIMATE OFF CI — `test/diff_compiler_ir_scaling.sh`'s
+  # valgrind branch, same reasoning: on a dev box not everyone has strace, and a
+  # hard failure there is noise. On a runner it means the install stopped
+  # happening and the barrier claim has silently gone dark, which is the one
+  # outcome a gate must never produce quietly. exit 1, not 2, so no
+  # skip-classifier can reinterpret the verdict.
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL: strace is not on PATH, and this is CI." >&2
+    echo "  Case 12 reads the syscall order of the promote paths; without strace it" >&2
+    echo "  grades NOTHING. Add strace to .github/actions/setup-medaka rather than" >&2
+    echo "  deleting the case." >&2
+    echo "  Debian/Ubuntu: sudo apt-get install -y strace" >&2
+    exit 1
+  fi
+  echo "SKIP: strace not on PATH — case 12 reads the promote paths' syscall order."
+  echo "  (A skip is only legitimate OFF CI; on CI this is a hard failure.)"
+  echo "  Debian/Ubuntu: sudo apt-get install -y strace"
+  exit 2
+fi
+
+# strace -y resolves an fd to its CANONICAL path, while `rename` reports the
+# literal arguments, so the two only compare if the directory handed to the
+# driver has no symlink in it.
+PHYS=$(cd "$WORK" && pwd -P)
+
+# One normalized event per line, in trace order: `F <path>` per fsync, `R <src>
+# <dst>` per rename. Everything else in the trace — the Boehm collector's
+# SIGPWR/SIGXCPU pair above all — is dropped here rather than by an strace
+# filter, so a syscall the filter forgot shows up as a missing line and not as
+# a wrong verdict.
+normalize_trace() {
+  sed -n \
+    -e 's/^[0-9][0-9]*  *//' \
+    -e 's/^fsync([0-9][0-9]*<\(.*\)>) *= 0$/F \1/p' \
+    -e 's/^rename("\([^"]*\)", "\([^"]*\)") *= 0$/R \1 \2/p' \
+    "$1"
+}
+
+# The driver runs under strace with threads followed: the compiler's runtime
+# does its work on a GC-aware worker pthread, so an unfollowed trace records
+# none of these calls at all.
+trace_route() {
+  _route=$1
+  _dir=$2
+  if ! strace -f -y -qq -e signal=none -e trace=fsync,rename,renameat,renameat2 \
+    -o "$WORK/trace.$_route" "$WORK/driver" "$_route" "$_dir" \
+    > "$WORK/trace.$_route.out" 2> "$WORK/trace.$_route.err"
+  then
+    cat "$WORK/trace.$_route.err" >&2
+    cat "$WORK/trace.$_route.out" >&2
+    fail "traced $_route route failed"
+  fi
+  require_empty "$WORK/trace.$_route.err" "traced $_route"
+  normalize_trace "$WORK/trace.$_route" >> "$WORK/promotes"
+}
+
+: > "$WORK/promotes"
+TRACED="$PHYS/traced"
+mkdir -p "$TRACED"
+trace_route save "$TRACED/repo"
+trace_route blob-save "$TRACED/repo"
+trace_route prefs-save "$TRACED/repo"
+trace_route credential-save "$TRACED/repo"
+trace_route event-recover-owed "$TRACED/events"
+
+[ -s "$WORK/promotes" ] || fail 'the traced routes performed no promote at all'
+
+awk '
+  { ev[++n] = $0 }
+  END {
+    for (i = 1; i <= n; i++) {
+      if (substr(ev[i], 1, 2) == "F ") {
+        path = substr(ev[i], 3)
+        # A staged-file barrier is the one whose own rename comes next; every
+        # other fsync is a directory barrier and discharges what that directory
+        # is owed.
+        if (i < n && substr(ev[i + 1], 1, length(path) + 3) == "R " path " ")
+          continue
+        if (path in owed) { delete owed[path]; nowed-- }
+        flushed = 1
+        continue
+      }
+      if (substr(ev[i], 1, 2) != "R ") continue
+      renames++
+      split(ev[i], a, " ")
+      src = a[2]; dst = a[3]
+      if (i == 1 || ev[i - 1] != "F " src) {
+        printf "UNBARRIERED PROMOTE: %s\n  preceded by: %s\n", ev[i],
+          (i > 1 ? ev[i - 1] : "<nothing>")
+        bad++
+        continue
+      }
+      if (flushed && nowed > 0) {
+        for (d in owed) {
+          printf "ABANDONED DIRECTORY: %s\n  %s was still owed a barrier when %s began\n",
+            owed[d], d, ev[i]
+          bad++
+          delete owed[d]
+        }
+        nowed = 0
+      }
+      dir = dst
+      sub(/\/[^\/]*$/, "", dir)
+      if (!(dir in owed)) nowed++
+      owed[dir] = ev[i]
+      flushed = 0
+    }
+    for (d in owed) {
+      printf "UNBARRIERED DIRECTORY: %s\n  no fsync of %s follows it\n", owed[d], d
+      bad++
+    }
+    printf "graded %d rename(s), %d unbarriered\n", renames, bad
+    exit (bad > 0)
+  }
+' "$WORK/promotes" > "$WORK/promotes.verdict" || {
+  cat "$WORK/promotes.verdict" >&2
+  fail 'a rename published a value no barrier had put on disk'
+}
+cat "$WORK/promotes.verdict"
+
+# Per promote path: the universal rule above is silent about a path that
+# stopped running, so each is counted by the shape of what it renames INTO.
+promote_count() {
+  grep -c "^R .* $1\$" "$WORK/promotes" || true
+}
+BLOCK_PROMOTES=$(promote_count '.*/blocks/[0-9a-f][0-9a-f]/[0-9a-f]*')
+BLOB_MIME_PROMOTES=$(promote_count '.*/blobs/[0-9a-f][0-9a-f]/[0-9a-f]*\.mime')
+BLOB_BYTE_PROMOTES=$(promote_count '.*/blobs/[0-9a-f][0-9a-f]/[0-9a-f]*')
+ENTRY_PROMOTES=$(promote_count '.*/events/entries/.*')
+POINTER_PROMOTES=$(promote_count '.*/events/\..*')
+HEAD_PROMOTES=$(promote_count '.*/head')
+PREFS_PROMOTES=$(promote_count '.*/preferences')
+CREDENTIAL_PROMOTES=$(promote_count '.*/credential')
+for PAIR in "blockfile:$BLOCK_PROMOTES" "blobfile sidecar:$BLOB_MIME_PROMOTES" \
+  "blobfile bytes:$BLOB_BYTE_PROMOTES" "eventlog entry:$ENTRY_PROMOTES" \
+  "eventlog pointer:$POINTER_PROMOTES" "persist head:$HEAD_PROMOTES" \
+  "persist preferences:$PREFS_PROMOTES" "persist credential:$CREDENTIAL_PROMOTES"
+do
+  [ "${PAIR#*:}" -ge 1 ] \
+    || fail "no ${PAIR%:*} promote was traced; that path is no longer graded"
+done
+echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES"
+
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every promote barriered before and after; key absent'

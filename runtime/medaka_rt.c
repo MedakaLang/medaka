@@ -1726,6 +1726,22 @@ long long mdk_remove_dir(long long path) {
   return mdk_err(mdk_str_cstr(strerror(errno)));
 }
 
+/* fsync : String -> Result String Unit — open(O_RDONLY)+fsync(2)+close.
+ * O_RDONLY opens both a regular file and a directory, since the durability
+ * of a rename is a property of the containing directory, not either file. */
+long long mdk_fsync(long long path) {
+  const char *p = (const char *)path + 24;
+  int fd = open(p, O_RDONLY);
+  if (fd < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  if (fsync(fd) != 0) {
+    int saved_errno = errno;
+    close(fd);
+    return mdk_err(mdk_str_cstr(strerror(saved_errno)));
+  }
+  close(fd);
+  return mdk_ok(1);  /* Ok () */
+}
+
 /* runCommand : String -> List String -> Result (Int, String, String) String.
  * Spawns prog with args, captures stdout+stderr via temp files.
  * Ok (exitCode, stdout, stderr) on spawn success; Err osError on fork/exec fail.

@@ -4710,6 +4710,10 @@ pRename : Value e -> Value e -> <FileWrite "_" | e> Value e
 pRename (VString old) (VString new) = unitResultToValue (rename old new)
 pRename _ _ = panic "rename: expected String String"
 
+pFsync : Value e -> <FileWrite "_" | e> Value e
+pFsync (VString path) = unitResultToValue (fsync path)
+pFsync _ = panic "fsync: expected String"
+
 -- ── Env ───────────────────────────────────────────────────────────────────
 -- `args` is the interpreted PROGRAM's argv, not the host `medaka` process's:
 -- under `medaka run [flags] prog.mdk a b c` the program must see ["a","b","c"].
@@ -4787,6 +4791,7 @@ ioExternBindings _ = [
   ("removeFile", prim1 pRemoveFile),
   ("removeDir", prim1 pRemoveDir),
   ("rename", prim2M pRename),
+  ("fsync", prim1 pFsync),
   -- Env
   ("args", prim1M pArgs),
   ("getEnv", prim1 pGetEnv),

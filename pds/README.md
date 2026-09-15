@@ -642,8 +642,11 @@ stage-then-rename discipline: one file per blob under `<data>/blobs`, sharded
 like the block store, plus a `.mime` sidecar recording the declared MIME
 type (bytes alone don't carry it) — the sidecar is promoted before the bytes,
 so a reader keying on the bytes file ordinarily sees a blob only once its
-declared type is already there. There is no fsync, so that order is a
-preference rather than a guarantee, and the reader skips whatever it cannot
+declared type is already there. Each staged file is `fsync`ed before its own
+`rename` and the shard once after the pair, so neither promotion outruns the
+bytes it publishes; one directory barrier makes the two renames durable
+together rather than in order, so sidecar-before-bytes remains a preference
+rather than a guarantee, and the reader skips whatever it cannot
 account for — a stray non-directory entry, an orphan sidecar, a bytes file
 whose sidecar is gone, and a sidecar whose text is not a MIME type at all —
 losing at most the one blob involved rather than refusing every later startup.

@@ -13,9 +13,11 @@
 
    APPENDING IS TWO PHASES, and the split is the whole point. An event and the
    commit it announces must land together or not at all, and the only atomic
-   step this tree has is `rename` (`pds/shell/persist.mdk`: process-crash
-   consistency, not power-loss durability — nothing here calls `fsync`
-   either). So a caller STAGES the entry, persists the commit, and then
+   step this tree has is `rename` (`pds/shell/persist.mdk`, whose barrier
+   discipline this module also follows: every staged file is `fsync`ed before
+   the `rename` that publishes it and the containing directory after, so a
+   promotion cannot reach disk ahead of the entry it promotes). So a caller
+   STAGES the entry, persists the commit, and then
    PROMOTES it, and every crash point in that sequence is recoverable from
    what survives:
 
@@ -45,7 +47,7 @@
    This module is an effectful shell (P14): it holds no protocol state, and
    its signatures carry no `Repo` and no `SecretKey`. -}
 
-import fs.{mkdirAll}
+import fs.{isDir, mkdirAll}
 import list.{reverse}
 import string.{toInt}
 import lib.event_log_record.{
@@ -101,7 +103,9 @@ promoteText dir name text = do
   () <- mkdirAll (stagingDir dir)
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged text
-  rename staged "\{eventLogDir dir}/\{name}"
+  () <- fsync staged
+  () <- rename staged "\{eventLogDir dir}/\{name}"
+  fsync (eventLogDir dir)
 
 {- | The sequence number of the last PROMOTED entry, or `None` when this
    repository has emitted no event yet.
@@ -176,7 +180,9 @@ writeEntry dir entry = do
   let name = eventLogEntryName entry.seq entry.timeSeconds
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged (eventLogEncodeEntry entry)
-  rename staged "\{entriesDir dir}/\{name}"
+  () <- fsync staged
+  () <- rename staged "\{entriesDir dir}/\{name}"
+  fsync (entriesDir dir)
 
 {- | Promote the pending entry, if there is one, and sweep the window.
 
@@ -261,6 +267,46 @@ eventLogApplyRecovery dir EventLogOwed retentionSeconds nowSeconds =
   eventLogPromote dir retentionSeconds nowSeconds
 eventLogApplyRecovery dir EventLogOrphaned _ _ = eventLogDiscardStaged dir
 
+-- Every file left behind under `<dir>/events/.staging` by a process that
+-- crashed between staging a file and its `rename`. `.staging` holds only
+-- leaf files in every caller of `promoteText`/`writeEntry` — an entry file,
+-- or the `.staged`/`.last` pointer, never a subdirectory — but this sweep
+-- also tolerates residue it did not write — a stray subdirectory is skipped
+-- rather than passed to `removeFile`, which fails on a directory.
+removeStagingResidue : String ->
+  List String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+removeStagingResidue _ [] = Ok ()
+removeStagingResidue dir (name :: rest) = match isDir "\{dir}/\{name}"
+  Ok True => removeStagingResidue dir rest
+  _ => match removeFile "\{dir}/\{name}"
+    Err message =>
+      Err "eventlog: \{dir}/\{name}: undeletable staging residue: \{message}"
+    Ok () => removeStagingResidue dir rest
+
+{- | Remove every file staged beneath `<dir>/events/.staging` and never
+   promoted or cleaned up — the residue a crash between staging an entry or a
+   pointer file and its `rename` leaves behind. Nothing else in this module
+   ever removes from `.staging`, so this is the only place stale entries go
+   away.
+
+   Meant to be called once, at startup, before the listener binds
+   (`pds/serve.mdk`'s `configure`): that is the only window in which a file
+   under `.staging` unambiguously means residue from a prior crash rather
+   than a promotion this process has in flight. A data directory that has
+   never staged an entry reads as nothing to sweep, not as a failure. -}
+export
+eventLogSweepStaging : String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+eventLogSweepStaging dir =
+  let staging = stagingDir dir
+  if not (fileExists staging) then
+    Ok ()
+  else match listDir staging
+    Err message =>
+      Err "eventlog: \{staging}: unreadable staging directory: \{message}"
+    Ok names => removeStagingResidue staging names
+
 entryRows : String ->
   List String ->
   List (Int, Int, String) ->
@@ -277,6 +323,22 @@ listEntryRows dir =
   else match listDir (entriesDir dir)
     Err message => Err "eventlog: unreadable entry directory: \{message}"
     Ok names => entryRows dir names []
+
+{- | Whether the log holds any promoted entry at all.
+
+   Answered by listing the entries rather than by reading the last-promoted
+   pointer, which is the whole of its use: it is the one question
+   `eventLogLast` cannot answer, because a caller asking it is checking that
+   pointer against what the log actually holds. A log directory that does not
+   exist yet reads as empty, the same way `listEntryRows` reads it.
+
+   Linear in the live log, so it belongs at startup and not on an append. -}
+export
+eventLogHasEntries : String -> <FileRead "_"> Result String Bool
+eventLogHasEntries dir = match listEntryRows dir
+  Err message => Err message
+  Ok [] => Ok False
+  Ok _ => Ok True
 
 dropRows : String ->
   List (Int, Int, String) ->

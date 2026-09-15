@@ -780,6 +780,31 @@ SIDECAR18=$(blob1_sidecar "$DATA18")
 rm "${SIDECAR18%.mime}"
 residue_case case18 "$DATA18" skipped
 
+# 15b. the blocks-half mirror of case 15: a stray NON-DIRECTORY entry directly
+#    under `<data>/blocks` — an editor swapfile, a `.DS_Store` — is residue
+#    outside `blockfile.mdk`'s business too, not an unreadable shard directory
+#    that must brick the startup (#2572 part 2, #3052). Unlike the blob half,
+#    nothing here is damaged, so the check is that the repository the blocks
+#    back and the blobs beside it are both still served intact.
+DATA15B="$WORK/data15b"
+cp -R "$DATA" "$DATA15B"
+touch "$DATA15B/blocks/.DS_Store"
+start_resume_at "$DATA15B" "$WORK/case15b.out" "$WORK/case15b.err"
+PORT15B=$(wait_for_port "$WORK/case15b.out") || {
+  cat "$WORK/case15b.err" >&2
+  fail 'case 15b: server did not start over a blocks directory holding residue'
+}
+require_empty "$WORK/case15b.err" 'case 15b startup'
+client sync-get-record "$PORT15B" "$DID" "$COLLECTION" "$RKEY" "$RECORD_TEXT" \
+  || fail 'case 15b: repository record did not survive stray blocks/ residue'
+client get-blob "$PORT15B" "$DID" "$BLOB_CID" "$BLOB_MIME" "$BLOB_TEXT" \
+  || fail 'case 15b: blob did not survive stray blocks/ residue'
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/case15b.err" 'case 15b (post-run)'
+echo 'case 15b: started over stray blocks/ residue, repository and blob intact'
+
 # ── a RESTORED --data dir: the backup/restore rehearsal (#2613) ────────────
 # 33. A backup is taken, a SEPARATE data directory is restored from it, and a
 #    server is started on the restored copy. What that server exports from
