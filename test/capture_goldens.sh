@@ -47,7 +47,8 @@
 #      --frozen tag", exit 2):
 #        grep -nE '^    [A-Za-z_]+\)$' test/capture_goldens.sh
 #      — currently `fmt`, `lextok`, `lint_fix`, `selfproc_legA`, `boot_typecheck`,
-#      `llvm_eval`, `build_construct`, `native_cli`.
+#      `llvm_eval`, `build_construct`, `native_cli`, `draft_semantic`,
+#      `references_correctness`.
 # EVERY OTHER corpus this file's comments describe as "FROZEN" (eval, eval_prelude,
 # eval_list, eval_typed_modules, tcmod, tc_probe, diag_analyze, analyze_project,
 # new, build_diff, selfproc's lex/parse/tc probes, …) has NO regenerator here at
@@ -179,7 +180,7 @@ case "${1:-}" in
   --frozen)
     FROZEN_TAG="${2:-}"
     [ -n "$FROZEN_TAG" ] || {
-      echo "usage: sh test/capture_goldens.sh --frozen <fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli> [--only <fixture-or-glob>]"
+      echo "usage: sh test/capture_goldens.sh --frozen <fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness> [--only <fixture-or-glob>]"
       exit 2
     }
     case "${3:-}" in
@@ -561,8 +562,60 @@ PY
         exit 2
       fi
       ;;
+    draft_semantic)
+      # test/draft_semantic_fixtures/<name>/ : one main_*.mdk entry plus
+      # draft.golden, captured from the SAME baseline spawn (no
+      # MEDAKA_DRAFT_MUTATION set) that test/diff_compiler_fmt_test.mdk's
+      # draft-semantic row asserts "(different 0)" against before ever
+      # reaching here — a malformed baseline is rejected by the gate, not
+      # silently captured by this arm.
+      DS="$BIN/draft_semantic_main"
+      [ -x "$DS" ] || { echo "missing $DS — run: sh test/build_oracles.sh --build-one draft_semantic_main"; exit 2; }
+      for dir in "$ROOT"/test/draft_semantic_fixtures/*/; do
+        [ -d "$dir" ] || continue
+        name="$(basename "$dir")"
+        only_match "$name" || continue
+        entry=""
+        for candidate in "$dir"main_*.mdk; do
+          [ -f "$candidate" ] || continue
+          entry="$candidate"
+        done
+        [ -n "$entry" ] || { echo "skipping $name — no main_*.mdk entry under $dir"; continue; }
+        golden="${dir%/}/draft.golden"
+        ds_tmp="$(mktemp)"
+        "$DS" "$RUNTIME" "$CORE" "$entry" "${dir%/}" > "$ds_tmp" 2>&1
+        fwrote=$((fwrote+1))
+        finish_write "$golden" "$ds_tmp"
+        rm -f "$ds_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/draft_semantic_fixtures/"; exit 2
+      fi ;;
+    references_correctness)
+      # test/references_fixtures/<name>/expected.golden : a refindex_main
+      # --dump of <name>/main.mdk rooted at <name>/, with the fixture's own
+      # absolute path prefix stripped so the golden stays machine-
+      # independent (the same normalization
+      # test/diff_compiler_fmt_test.mdk's references-correctness block
+      # applies before comparing).
+      RX="$BIN/refindex_main"
+      [ -x "$RX" ] || { echo "missing $RX — run: sh test/build_oracles.sh --build-one refindex_main"; exit 2; }
+      for name in binder_loc correctness dup_field_def iface_collide \
+        iface_method_loc iface_ty_collide impl_method multiclause; do
+        only_match "$name" || continue
+        fixdir="$ROOT/test/references_fixtures/$name"
+        [ -d "$fixdir" ] || { echo "missing fixture dir $fixdir"; exit 2; }
+        rx_tmp="$(mktemp)"
+        "$RX" --dump "$RUNTIME" "$CORE" "$fixdir/main.mdk" "$fixdir" 2>&1 | sed "s#$fixdir/##g" > "$rx_tmp"
+        fwrote=$((fwrote+1))
+        finish_write "$fixdir/expected.golden" "$rx_tmp"
+        rm -f "$rx_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/references_fixtures/"; exit 2
+      fi ;;
     *)
-      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli)"
+      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness)"
       exit 2 ;;
   esac
   status=$?

@@ -10,6 +10,7 @@
 
    | retired gate | probe | corpus | golden |
    |---|---|---|---|
+   | `diff_compiler_diagnostics` | `diagnostics_main` | `resolve`/`exhaust`/`check_match` fixtures | `.analyze.golden` |
    | `diff_compiler_exhaust` | `exhaust_main` | `test/exhaust_fixtures` | `.expected` |
    | `diff_compiler_fmt` | `fmt_main` | `test/fmt_fixtures` + `test/parse_fixtures` | `.fmt.golden` |
    | `diff_compiler_lex_files` | `lex_main` | the lexer and twelve stdlib modules | `.lextok.golden` |
@@ -20,8 +21,31 @@
    whatever real code actually uses (block comments, the full operator set)
    rather than what a curated corpus remembered to include.
 
-   Two of the six retired scripts are not corpus-and-golden shaped and are
-   not bent into rows — the two tests at the foot of this file:
+   Six more retired scripts do NOT fit `Row` — each spawns its probe more
+   than once per fixture, with per-fixture routing, injected environment
+   variables, or stdin, which one (probe, corpus, goldenSuffix) triple can't
+   express. Each keeps its own block below instead, over the SAME two
+   predicates as a `Row`: a spawn's exit code and stderr, and its stdout
+   against a golden.
+
+   - `diff_compiler_draft_semantic` grades FIVE spawns per fixture (a
+     baseline plus four `MEDAKA_DRAFT_MUTATION`-controlled runs), only the
+     first of which is diffed against a golden.
+   - `diff_compiler_references_correctness` dumps a whole 1-4-module
+     project per fixture via `refindex_main --dump`, not a per-file corpus
+     loop, over eight fixture directories.
+   - `diff_compiler_effect_hole` / `diff_compiler_effect_param` spawn BOTH
+     the native CLI (`./medaka check`) and `test/bin/check_main` over
+     inline-heredoc fixtures, asserting on type-scheme substrings and
+     rejection diagnostics rather than a single stdout diff.
+   - `diff_compiler_typecheck_errors` routes each fixture to one or both of
+     two drivers (`typecheck_main`, `check_main`) by a per-fixture
+     "prelude-dependent" list — not expressible as one row's single probe.
+   - `diff_compiler_repl` feeds a whole session transcript to its probe over
+     STDIN, which no `Row` has a path for.
+
+   Two of the twelve retired scripts are not corpus-and-golden shaped and are
+   not bent into rows either — the two tests at the foot of this file:
 
    - `diff_compiler_new` scaffolded ONE project tree and compared the whole
      TREE (file list and bytes) against `test/new_golden/myapp`. There is no
@@ -46,9 +70,18 @@
    its stderr, not stdout alone (`probe_runner.processFailure`). Runs under
    `medaka test --native`. -}
 
+import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint}
+import fs.{fixtureDirs, fixtureFiles}
+import io.{runVerb}
+import list.{dropWhile, somes, sort}
+import path.{basename, dirname, stem}
 import probe_runner.{
   Row, errorPathFailures, gradeProbeRows, report, scaffoldFailures
 }
+import string.{
+  contains, endsWith, lines, replaceAll, startsWith, toLower, unlines
+}
+import test_process.{boundedVerb, medakaRoot, scratchDir, underRoot}
 
 -- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
 lexCorpus : List String
@@ -70,6 +103,19 @@ lexCorpus = [
 
 rows : List Row
 rows = [
+  Row {
+    gate = "diff_compiler_diagnostics",
+    probe = "test/bin/diagnostics_main",
+    corpus = [
+      "test/resolve_fixtures", "test/exhaust_fixtures",
+      "test/check_match_fixtures"
+    ],
+    prelude = ["stdlib/runtime.mdk", "stdlib/core.mdk"],
+    goldenSuffix = ".analyze.golden",
+    sorted = True,
+    stripUnit = True,
+    fixtures = 40,
+  },
   Row {
     gate = "diff_compiler_exhaust",
     probe = "test/bin/exhaust_main",
@@ -121,3 +167,721 @@ test "`medaka new`'s scaffold matches its golden tree" =
 
 test "entry-probe error paths exit nonzero with an empty artifact" =
   report "error-path" (errorPathFailures "test/bin/llvm_emit_modules_main")
+
+-- # Shared helpers for the rows below that do not fit `Row`
+
+{- | Runs `cmd` with `name=value` set in its environment, on top of
+   `boundedVerb`'s own `env`-then-`perl` wrapping (`test_process.mdk`): a
+   bare `env` first argument is itself a valid command name, so `env` sees
+   it, re-execs `env name=value cmd args...`, and the variable reaches
+   `cmd`. -}
+withEnv : String ->
+  String ->
+  String ->
+  List String ->
+  <Exec "_"> Result String (Int, String, String)
+withEnv name value cmd args =
+  boundedVerb "env" (["\{name}=\{value}", cmd] ++ args)
+
+-- | Where two texts first disagree, one line of message — the local twin of
+-- `probe_runner.diffNote`, which `probe_runner.mdk` keeps unexported.
+mismatchNote : String -> String -> String
+mismatchNote expected actual =
+  firstMismatchLine 1 (lines expected) (lines actual)
+
+firstMismatchLine : Int -> List String -> List String -> String
+firstMismatchLine _ [] [] =
+  "texts differ but no line does — check trailing bytes"
+firstMismatchLine n (e :: es) (a :: rest)
+  | e == a = firstMismatchLine (n + 1) es rest
+  | otherwise = "line \{intToString n}: expected \{debug e}, got \{debug a}"
+firstMismatchLine n [] (a :: _) =
+  "line \{intToString n}: expected (no line), got \{debug a}"
+firstMismatchLine n (e :: _) [] =
+  "line \{intToString n}: expected \{debug e}, got (no line)"
+
+{- | The exit-code/stderr half of grading a spawn — the same predicate every
+   `Row` uses (`probe_runner.processFailure`), which stays unexported. -}
+spawnFailure : String -> Int -> String -> Option String
+spawnFailure label code err
+  | code == 0 && not (contains "E-PANIC" err) = None
+  | otherwise = Some "\{label}: exited \{intToString code}\{errTail err}"
+
+errTail : String -> String
+errTail "" = ""
+errTail err = " — \{debug err}"
+
+-- | `text` contains every string in `needles`.
+containsAll : String -> List String -> Bool
+containsAll text needles = all (n => contains n text) needles
+
+-- | `text` reads as a rejected `check` run: a parse/type-error vocabulary
+-- word, case-insensitively.
+hasParseErr : String -> Bool
+hasParseErr text =
+  let low = toLower text
+  contains "parse error" low
+    || contains "type error" low
+    || contains "unbound" low
+    || contains "unknown" low
+
+{- | The `# TYPES_USER` section of a snapshot `.md`'s lines: everything
+   after a line reading exactly `# TYPES_USER`, up to the next `# `-headed
+   line or the end. -}
+typesUserSection : List String -> List String
+typesUserSection ls = takeSection (dropWhile (/= "# TYPES_USER") ls)
+
+takeSection : List String -> List String
+takeSection [] = []
+takeSection (_ :: rest) = takeUntilHeader rest
+
+takeUntilHeader : List String -> List String
+takeUntilHeader [] = []
+takeUntilHeader (l :: rest)
+  | startsWith "# " l = []
+  | otherwise = l :: takeUntilHeader rest
+
+-- | The lines of `want` absent, verbatim, from `got`.
+missingLines : List String -> List String -> List String
+missingLines want got = filter (l => not (elem l got)) want
+
+{- | Every committed `# TYPES_USER` line of the snapshot at `snapshotRel`
+   appears verbatim in `host`'s own TYPES output over `fix` — the
+   subset-membership check `diff_compiler_effect_hole`/`_effect_param`
+   shared (#81 Stage C2: the prelude scheme table is pinned once elsewhere,
+   so only the user schemes are re-checked here). -}
+effectTypesSuperset : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Option String
+effectTypesSuperset snapshotRel host rt core fix =
+  let snap = underRoot snapshotRel
+  match readFile snap
+    Err e => Some "missing snapshot \{snap}: \{e}"
+    Ok snapRaw =>
+      let want = typesUserSection (lines (chompNewlines snapRaw))
+      match boundedVerb host [rt, core, fix]
+        Err e => Some "native-host TYPES: could not spawn check_main: \{e}"
+        Ok (code, out, err) => match spawnFailure "native-host TYPES" code err
+          Some m => Some m
+          None =>
+            let got = lines (chompNewlines (stripUnitAutoPrint out))
+            let missing = missingLines want got
+            if missing == [] then
+              None
+            else
+              let body = unlines (map (l => "  missing: \{l}") missing)
+              Some "native-host TYPES missing # TYPES_USER lines:\n\{body}"
+
+-- # `diff_compiler_draft_semantic`
+
+draftSemanticFixturesDir : String
+draftSemanticFixturesDir = "test/draft_semantic_fixtures"
+
+{- | The one `main_*.mdk` entry directly under `dir`, or an error naming how
+   many were found — the fixture is malformed unless there is exactly
+   one. -}
+draftSemanticEntry : String -> <FileRead "_"> Result String String
+draftSemanticEntry dir = match fixtureFiles dir
+  Err e => Err "\{dir}: \{e}"
+  Ok paths =>
+    match (filter
+      (p => startsWith "main_" (basename p) && endsWith ".mdk" p)
+      paths)
+      [e] => Ok e
+      es =>
+        Err
+          "\{dir}: expected exactly one main_*.mdk entry, found \{intToString (length es)}"
+
+{- | Runs the probe under `mutation` (unmutated when `""`) and asserts
+   `wantReceipt` appears in its output, plus `wantDiffCount` when given —
+   the shared shape of every `MEDAKA_DRAFT_MUTATION` check the retired
+   script ran. `wantDiffCount` is `None` for the positive control, whose
+   difference count is asserted NONZERO by its own caller instead of a
+   fixed string here. -}
+draftSemanticAssert : String ->
+  String ->
+  String ->
+  Option String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String String
+draftSemanticAssert label mutation wantReceipt wantDiffCount bin rt core entry =
+  let spawn =
+    if mutation == "" then
+      boundedVerb bin [rt, core, entry]
+    else
+      withEnv "MEDAKA_DRAFT_MUTATION" mutation bin [rt, core, entry]
+  match spawn
+    Err e => Err "\{label}: could not spawn: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        Err
+          "\{label}: exited \{intToString code} instead of producing a receipt"
+      else
+        let text = chompNewlines out
+        if not (contains wantReceipt text) then
+          Err "\{label}: expected receipt not found: \{wantReceipt}"
+        else match wantDiffCount
+          Some needle =>
+            if contains needle text then
+              Ok text
+            else
+              Err
+                "\{label}: expected difference-count summary not found: \{needle}"
+          None => Ok text
+
+methodIfaceReceipt : String
+methodIfaceReceipt =
+  "(receipt method-iface methodIfaceTable elaborated-graph DIFFERENT)"
+
+{- | Everything wrong with one `draft_semantic_fixtures/<name>/` fixture:
+   the baseline draft (diffed against its golden), and the four mutation
+   controls that prove the golden's comparator can actually observe a
+   copied-field mismatch rather than only ever printing MATCH. -}
+draftSemanticFixtureFailure : String ->
+  <Exec "_", FileRead "_", IO> Option String
+draftSemanticFixtureFailure dir = match draftSemanticEntry dir
+  Err e => Some e
+  Ok entry =>
+    let name = basename dir
+    let bin = underRoot "test/bin/draft_semantic_main"
+    let rt = underRoot "stdlib/runtime.mdk"
+    let core = underRoot "stdlib/core.mdk"
+    match boundedVerb bin [rt, core, entry, dir]
+      Err e => Some "\{name}: could not spawn draft_semantic_main: \{e}"
+      Ok (code, out, err) => match spawnFailure name code err
+        Some m => Some m
+        None =>
+          let baseline = chompNewlines out
+          if not (contains "(different 0)" baseline) then
+            Some
+              "\{name}: baseline draft has a transport mismatch (or no summary)"
+          else
+            draftSemanticChecks name bin rt core entry dir baseline
+
+draftSemanticChecks : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Option String
+draftSemanticChecks name bin rt core entry dir baseline =
+  let malformed =
+    draftSemanticAssert
+      "\{name}: malformed-field control"
+      "method-iface"
+      methodIfaceReceipt
+      (Some "(different 1)")
+      bin
+      rt
+      core
+      entry
+  match malformed
+    Err e => Some e
+    Ok _ =>
+      let provenance =
+        draftSemanticAssert
+          "\{name}: provenance control"
+          "method-iface-provenance"
+          methodIfaceReceipt
+          (Some "(different 1)")
+          bin
+          rt
+          core
+          entry
+      match provenance
+        Err e => Some e
+        Ok _ =>
+          let control =
+            draftSemanticAssert
+              "\{name}: unrelated positive control"
+              "unrelated-control"
+              "(receipt module-emitter-projection elaborateModules elaborated-modules DIFFERENT)"
+              None
+              bin
+              rt
+              core
+              entry
+          match control
+            Err e => Some e
+            Ok text =>
+              if contains "(different 0)" text then
+                Some
+                  "\{name}: unrelated positive control could not observe its unrelated module"
+              else
+                draftSemanticIsolation name bin rt core entry dir baseline
+
+draftSemanticIsolation : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Option String
+draftSemanticIsolation name bin rt core entry dir baseline =
+  match withEnv "MEDAKA_DRAFT_MUTATION" "same-process" bin [rt, core, entry]
+    Err e => Some "\{name}: P -> P+U -> P control could not spawn: \{e}"
+    Ok (code, out, _) =>
+      if code /= 0 then
+        Some "\{name}: P -> P+U -> P control exited \{intToString code}"
+      else if chompNewlines out /= baseline then
+        Some
+          "\{name}: P changed after constructing unrelated P+U in the same process"
+      else match readFile "\{dir}/draft.golden"
+        Err e => Some "\{name}: no readable golden: \{e}"
+        Ok raw =>
+          let want = chompNewlines raw
+          if want == baseline then
+            None
+          else
+            Some "\{name}: \{mismatchNote want baseline}"
+
+-- # `diff_compiler_references_correctness`
+
+-- | The eight project fixtures the retired script dumped, in its own
+-- order. `test/references_fixtures/query` is a DIFFERENT gate's corpus
+-- (JSONL query goldens, not `expected.golden`) and stays out.
+referencesFixtures : List String
+referencesFixtures = [
+  "binder_loc",
+  "correctness",
+  "dup_field_def",
+  "iface_collide",
+  "iface_method_loc",
+  "iface_ty_collide",
+  "impl_method",
+  "multiclause",
+]
+
+{- | Everything wrong with one `references_fixtures/<name>/` project: a
+   `refindex_main --dump` over its `main.mdk`, path-normalized the same way
+   the retired script's `sed` was, diffed against `expected.golden`. -}
+referencesFixtureFailure : String -> <Exec "_", FileRead "_", IO> Option String
+referencesFixtureFailure name =
+  let dir = underRoot "test/references_fixtures/\{name}"
+  let bin = underRoot "test/bin/refindex_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  match boundedVerb bin ["--dump", rt, core, "\{dir}/main.mdk", dir]
+    Err e => Some "\{name}: could not spawn refindex_main: \{e}"
+    Ok (code, out, err) => match spawnFailure name code err
+      Some m => Some m
+      None =>
+        let got = chompNewlines (replaceAll "\{dir}/" "" out)
+        match readFile "\{dir}/expected.golden"
+          Err e => Some "\{name}: no readable golden: \{e}"
+          Ok raw =>
+            let want = chompNewlines raw
+            if want == got then
+              None
+            else
+              Some "\{name}: \{mismatchNote want got}"
+
+-- # `diff_compiler_effect_param`
+
+effectParamFixture : String
+effectParamFixture = "test/diff_fixtures/effect_param.mdk"
+
+effectParamSnapshot : String
+effectParamSnapshot = "test/snapshots/diff_fixtures_types/effect_param.md"
+
+{- | Stage-2a's parameterized effect surface (`effect Net Prefix`,
+   `<Net "a.com/foo">`) accepted by the native CLI, inferred correctly, and
+   agreeing with the committed `# TYPES_USER` snapshot. -}
+effectParamFailures : <Exec "_", FileRead "_", IO> List String
+effectParamFailures =
+  let fix = underRoot effectParamFixture
+  let native = underRoot "medaka"
+  let host = underRoot "test/bin/check_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  match boundedVerb native ["check", fix]
+    Err e => ["native-cli/check: could not spawn: \{e}"]
+    Ok (code, natOut, natErr) =>
+      match spawnFailure "native-cli/check" code natErr
+        Some m => [m]
+        None =>
+          let natText = natOut ++ natErr
+          let acceptFail =
+            if hasParseErr natText then
+              Some
+                "native-cli/check emitted an error accepting effect-param syntax"
+            else
+              None
+          let inferFail =
+            if containsAll natText [
+              "fetch : String -> <FFI, Net \"a.com/foo\"> String",
+              "netGet : String -> <FFI, Net \"a.com/foo\"> String",
+            ] then
+              None
+            else
+              Some "native-cli/check did not infer the <Net \"a.com/foo\"> rows"
+          let typesFail =
+            effectTypesSuperset effectParamSnapshot host rt core fix
+          somes [acceptFail, inferFail, typesFail]
+
+-- # `diff_compiler_effect_hole`
+
+effectHoleFixture : String
+effectHoleFixture = "test/diff_fixtures/effect_param_hole.mdk"
+
+effectHoleSnapshot : String
+effectHoleSnapshot = "test/snapshots/diff_fixtures_types/effect_param_hole.md"
+
+effectHoleWs2Src : String
+effectHoleWs2Src = unlines [
+  "effect Net Prefix",
+  "extern netGet : String -> <FFI, Net _> String",
+  "fetch _ =",
+  "  let dest = \"a.com/foo\"",
+  "  netGet dest",
+  "main : <IO> Unit",
+  "main = println \"x\"",
+]
+
+effectHoleRejectSiblingSrc : String
+effectHoleRejectSiblingSrc = unlines [
+  "effect Net Prefix",
+  "extern netGet : String -> <FFI, Net _> String",
+  "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
+  "fetch _ = netGet \"a.com.evil.com/x\"",
+  "main : <IO> Unit",
+  "main = println \"x\"",
+]
+
+effectHoleRejectComputedSrc : String
+effectHoleRejectComputedSrc = unlines [
+  "effect Net Prefix",
+  "extern netGet : String -> <FFI, Net _> String",
+  "fetch : String -> <FFI, Net \"a.com/*\"> String",
+  "fetch url = netGet url",
+  "main : <IO> Unit",
+  "main = println \"x\"",
+]
+
+effectHoleRejectOuterComputedSrc : String
+effectHoleRejectOuterComputedSrc = unlines [
+  "effect Net Prefix",
+  "extern netGet : String -> <FFI, Net _> String",
+  "fetch : String -> <FFI, Net \"a.com/*\"> String",
+  "fetch url =",
+  "  let dest = url",
+  "  netGet dest",
+  "main : <IO> Unit",
+  "main = println \"x\"",
+]
+
+{- | Writes `name`.mdk under `scratch` as `src`, then runs `use` on its
+   path. `scratch` is shared across every synthesized fixture this test
+   needs — `test_process.scratchDir` is a top-level nullary, evaluated ONCE
+   per process (`probe_runner.ownScratch`'s own warning), so a helper that
+   called `scratchDir` and then `rm -rf`ed it per fixture would delete the
+   ONE shared directory out from under every fixture after the first. -}
+withScratchFile : String ->
+  String ->
+  String ->
+  (String -> <Exec "_", FileRead "_", IO> Option String) ->
+  <Exec "_", FileWrite "_", IO> Option String
+withScratchFile scratch name src use =
+  let f = "\{scratch}/\{name}.mdk"
+  match writeFile f src
+    Err e => Some "\{name}: could not write \{f}: \{e}"
+    Ok () => use f
+
+{- | Stage-2b's inferred-hole surface (`<Net _>`), the α-derived wildcard
+   admission, and the delimiter-aware rejections the WS-2 scope-seeding
+   soundness rule depends on (#440-adjacent, WS-2). -}
+effectHoleFailures : <Exec "_", FileWrite "_", FileRead "_", IO> List String
+effectHoleFailures =
+  let fix = underRoot effectHoleFixture
+  let native = underRoot "medaka"
+  let host = underRoot "test/bin/check_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  match boundedVerb native ["check", fix]
+    Err e => ["native-cli/check: could not spawn: \{e}"]
+    Ok (_, natOut, natErr) =>
+      let natText = natOut ++ natErr
+      let acceptFail =
+        if hasParseErr natText then
+          Some
+            "native-cli/check emitted an error accepting the <Net _> hole fixture"
+        else
+          None
+      let inferFail =
+        if containsAll natText [
+          "netGet : String -> <FFI, Net> String",
+          "fetch : Unit -> <FFI, Net \"a.com/*\"> String",
+        ] then
+          None
+        else
+          Some "native-cli/check did not infer the hole/wildcard rows"
+      let typesFail = effectTypesSuperset effectHoleSnapshot host rt core fix
+      let synthesized = match scratchDir
+        Err e => Err "could not make a scratch directory: \{e}"
+        Ok scratch =>
+          let ws2Fail =
+            withScratchFile
+              scratch
+              "ws2_outer"
+              effectHoleWs2Src
+              (effectHoleWs2Check host rt core)
+          let rejectSibling = withScratchFile
+            scratch
+            "reject_sibling"
+            effectHoleRejectSiblingSrc
+            (f => effectHoleRejectCheck native "reject_sibling" f)
+          let rejectComputed = withScratchFile
+            scratch
+            "reject_computed"
+            effectHoleRejectComputedSrc
+            (f => effectHoleRejectCheck native "reject_computed" f)
+          let rejectOuterComputed = withScratchFile
+            scratch
+            "reject_outer_computed"
+            effectHoleRejectOuterComputedSrc
+            (f => effectHoleRejectCheck native "reject_outer_computed" f)
+          let _ = runVerb "rm" ["-rf", scratch]
+          Ok
+            (somes [
+              ws2Fail, rejectSibling, rejectComputed, rejectOuterComputed
+            ])
+      let synthFails = match synthesized
+        Err e => [e]
+        Ok fs => fs
+      somes [acceptFail, inferFail, typesFail] ++ synthFails
+
+{- | WS-2 scope-seeding (E3 precision): an OUTER-BODY `let` literal reaches
+   an inner `<Net _>` call site, so the recovered row must carry the
+   literal's prefix rather than staying the bare `<Net>` an empty `lets`
+   scope would infer. -}
+effectHoleWs2Check : String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", IO> Option String
+effectHoleWs2Check host rt core f = match boundedVerb host [rt, core, f]
+  Err e => Some "WS-2 outer-let: could not spawn check_main: \{e}"
+  Ok (code, out, err) => match spawnFailure "WS-2 outer-let" code err
+    Some m => Some m
+    None =>
+      let text = chompNewlines (unlines (sort (lines (stripUnitAutoPrint out))))
+      if contains "fetch : a -> <FFI, Net \"a.com/foo\"> String" text then
+        None
+      else
+        Some "WS-2: outer-let row not recovered"
+
+-- | `native check f` must reject: a nonzero exit, or an error/`Effectful`
+-- capability diagnostic on its combined output.
+effectHoleRejectCheck : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Option String
+effectHoleRejectCheck native name f = match boundedVerb native ["check", f]
+  Err e => Some "\{name}: could not spawn native check: \{e}"
+  Ok (code, out, err) =>
+    let low = toLower (out ++ err)
+    if code /= 0 || contains "error" low || contains "effectful" low then
+      None
+    else
+      Some "\{name}: native did not reject (rc=\{intToString code})"
+
+-- # `diff_compiler_typecheck_errors`
+
+typecheckErrorFixturesDir : String
+typecheckErrorFixturesDir = "test/typecheck_error_fixtures"
+
+{- | Fixtures whose documented error depends on the prelude (#11: an integer
+   literal desugars to `fromInt`, so the no-prelude driver structurally
+   cannot resolve `Num` and would wrongly accept). These run ONLY through
+   the prelude-aware driver; every other fixture runs through both. -}
+typecheckPreludeDep : List String
+typecheckPreludeDep = [
+  "int_vs_string.mdk",
+  "value_restriction.mdk",
+  "value_restriction_scc.mdk",
+  "value_restriction_sig_pointfree.mdk",
+  "value_restriction_sig_expansive.mdk",
+  "value_restriction_sig_variable_ok.mdk",
+  "missing_super_impl.mdk",
+  "cyclic_superinterface.mdk",
+  "ambiguous_impl.mdk",
+  "ambiguous_return_nested.mdk",
+  "ambiguous_return_noconstraint.mdk",
+  "do_bind_annot_mismatch.mdk",
+  "do_not_thenable.mdk",
+  "nested_requires_function_key.mdk",
+  "semigroup_no_impl.mdk",
+  "negate_no_impl.mdk",
+  "nonlinear_head_inconsistent.mdk",
+  "effect_impl_launder_cb.mdk",
+  "effect_impl_launder_ghost.mdk",
+  "effect_impl_launder_mixed.mdk",
+  "effect_impl_launder_retlam.mdk",
+  "impl_pins_method_tyvar.mdk",
+  "impl_pins_method_tyvar_num.mdk",
+  "impl_pins_method_tyvar_tuple.mdk",
+  "impl_collapses_method_tyvars.mdk",
+  "impl_effvar_offspine_launder.mdk",
+  "impl_default_pins_method_tyvar.mdk",
+  "impl_method_constraint_ok.mdk",
+  "impl_constraint_via_helper.mdk",
+  "iface_effvar_arg_uncovered.mdk",
+  "iface_effvar_arg_only.mdk",
+  "default_generic_pins_tyvar.mdk",
+  "impl_constraint_via_local_alias.mdk",
+  "default_generic_effect_launder.mdk",
+  "impl_shadow_generalized_local_ok.mdk",
+  "iface_effvar_doubleflip_ok.mdk",
+  "impl_stale_shadow_then_method.mdk",
+  "scc_sibling_shadow_no_impl.mdk",
+  "where_orphan_num_reject.mdk",
+  "ambiguous_captured_in_let.mdk",
+  "method_level_constraint_no_impl.mdk",
+  "tuple_conditional_dedup_no_impl.mdk",
+  "graded_iface_declares_ok.mdk",
+  "graded_ctor_row_arg_ok.mdk",
+  "graded_iface_prelude_clean.mdk",
+  "graded_head_name_collision.mdk",
+  "graded_written_row_slot_ok.mdk",
+  "graded_closed_row_grade_ok.mdk",
+  "graded_krow_data_slot_abstract_head.mdk",
+  "effect_index_unrelated_ok.mdk",
+  "graded_index_eager_apply.mdk",
+  "graded_index_deferred_ok.mdk",
+  "graded_prelude_head_wrong_kind_flat.mdk",
+]
+
+sortedText : String -> String
+sortedText s = chompNewlines (unlines (sort (lines (chompNewlines s))))
+
+{- | One driver's grading of one fixture against its golden — both sides
+   `LC_ALL=C`-sorted the way the retired script's `sort` was, since the
+   single-error fixtures' line order carries no meaning. -}
+typecheckDriverFailure : String ->
+  String ->
+  List String ->
+  String ->
+  <Exec "_", IO> Option String
+typecheckDriverFailure driver bin args want = match boundedVerb bin args
+  Err e => Some "\{driver}: could not spawn: \{e}"
+  Ok (code, out, err) => match spawnFailure driver code err
+    Some m => Some m
+    None =>
+      let got = sortedText (stripUnitAutoPrint out)
+      if got == want then None else Some "\{driver}: \{mismatchNote want got}"
+
+{- | One `typecheck_error_fixtures/*.mdk`'s driver(s), routed by
+   `typecheckPreludeDep`: prelude-dependent fixtures run ONLY `check_main`;
+   every other fixture runs `typecheck_main` and `check_main` both. -}
+typecheckErrorFixtureFailures : String ->
+  <Exec "_", FileRead "_", IO> List String
+typecheckErrorFixtureFailures path =
+  let name = basename path
+  let golden = "\{dirname path}/\{stem path}.tc.golden"
+  match readFile golden
+    Err e => ["\{name}: no readable golden \{golden}: \{e}"]
+    Ok raw =>
+      let want = sortedText raw
+      let rt = underRoot "stdlib/runtime.mdk"
+      let core = underRoot "stdlib/core.mdk"
+      let checkMain = underRoot "test/bin/check_main"
+      let checkArgs = [rt, core, path]
+      let checkResult =
+        map
+          (m => "check/\{name}: \{m}")
+          (typecheckDriverFailure "check" checkMain checkArgs want)
+      if elem name typecheckPreludeDep then
+        somes [checkResult]
+      else
+        let tcMain = underRoot "test/bin/typecheck_main"
+        let tcResult =
+          map
+            (m => "tc_main/\{name}: \{m}")
+            (typecheckDriverFailure "tc_main" tcMain [path] want)
+        somes [tcResult, checkResult]
+
+-- | Every `.mdk` fixture directly under `typecheckErrorFixturesDir`,
+-- against its two (or one) drivers.
+typecheckErrorFailures : <Exec "_", FileRead "_", IO> List String
+typecheckErrorFailures =
+  match fixtureFiles (underRoot typecheckErrorFixturesDir)
+    Err e => ["\{typecheckErrorFixturesDir}: \{e}"]
+    Ok paths =>
+      let fixtures = sort (filter (endsWith ".mdk") paths)
+      fold (acc p => acc ++ typecheckErrorFixtureFailures p) [] fixtures
+
+-- # `diff_compiler_repl`
+
+replInput : String
+replInput = "test/repl_fixtures/session.in"
+
+replGolden : String
+replGolden = "test/repl_fixtures/session.golden"
+
+{- | The self-hosted REPL over its committed session transcript, fed on
+   STDIN — the one thing `boundedVerb` cannot express directly, so the
+   redirection is carried by an `sh -c` wrapper, the same trick
+   `probe_runner.spawnIn` uses to set a spawn's working directory. The
+   transcript deliberately runs past an unbound-variable line, which exits
+   the repl nonzero on this session's last input, so this only bounds the
+   exit code to the two values the golden transcript's own scripted errors
+   can produce (matching the original script, which never inspected the
+   exit code at all) rather than requiring 0 — an escape outside {0, 1}
+   (a crash, not a scripted repl error) is still graded a finding, with
+   `err` folded into its message. Stdout is graded against the golden. -}
+replFailures : <Exec "_", FileRead "_", IO> List String
+replFailures =
+  let bin = underRoot "test/bin/repl_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  let input = underRoot replInput
+  let golden = underRoot replGolden
+  match (boundedVerb "sh" [
+    "-c", "exec \"$1\" \"$2\" \"$3\" < \"$4\"", "sh", bin, rt, core, input
+  ])
+    Err e => ["could not spawn repl_main: \{e}"]
+    Ok (code, out, err) =>
+      let codeFail =
+        if code == 0 || code == 1 then
+          None
+        else
+          Some "repl: exited unexpectedly: \{intToString code}\{errTail err}"
+      let got = chompNewlines out
+      let transcriptFail = match readFile golden
+        Err e => Some "no readable golden \{golden}: \{e}"
+        Ok raw =>
+          let want = chompNewlines raw
+          if want == got then None else Some "repl: \{mismatchNote want got}"
+      somes [codeFail, transcriptFail]
+
+test "draft-semantic transport survives every current emitter input" = report
+  "draft-semantic"
+  (match fixtureDirs (underRoot draftSemanticFixturesDir)
+    Err e => ["\{draftSemanticFixturesDir}: \{e}"]
+    Ok dirs => somes (map draftSemanticFixtureFailure (sort dirs)))
+
+test "reference-index dumps match binders, not strings" =
+  report
+    "references-correctness"
+    (somes (map referencesFixtureFailure referencesFixtures))
+
+test "the parameterized effect surface typechecks through the real front-end" =
+  report "effect-param" effectParamFailures
+
+test "the inferred-hole effect surface typechecks through the real front-end" =
+  report "effect-hole" effectHoleFailures
+
+test "typecheck-error fixtures agree with their driver(s)' committed golden" =
+  report "typecheck-errors" typecheckErrorFailures
+
+test "the self-hosted repl reproduces its committed session transcript" =
+  report "repl" replFailures

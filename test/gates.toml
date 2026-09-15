@@ -1514,21 +1514,6 @@ corpus = ["test/core_ir_typed_modules_fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_diagnostics"
-area = "types"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_diagnostics.sh"
-oracles = ["diagnostics_main"]
-sources = ["compiler/driver/*", "compiler/types/*", "test/diff_compiler_diagnostics.sh"]
-corpus = ["test/check_match_fixtures", "test/diff_fixtures", "test/exhaust_fixtures", "test/resolve_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_dict_semantics"
 area = "infra"
 shard = "gates_2"
@@ -1616,51 +1601,6 @@ run = "test/diff_compiler_stdlib_conventions.sh"
 oracles = []
 sources = ["test/diff_compiler_stdlib_conventions.sh", "docs/stdlib/inventory.json"]
 corpus = ["docs/stdlib"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_draft_semantic"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_draft_semantic.sh"
-oracles = ["draft_semantic_main"]
-sources = ["compiler/ir/*", "test/diff_compiler_draft_semantic.sh"]
-corpus = ["test/draft_semantic_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_effect_hole"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_effect_hole.sh"
-oracles = ["check_main"]
-sources = ["test/diff_compiler_effect_hole.sh"]
-corpus = ["test/diff_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_effect_param"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_effect_param.sh"
-oracles = ["check_main"]
-sources = ["test/diff_compiler_effect_param.sh"]
-corpus = ["test/diff_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1808,9 +1748,9 @@ cost = "cheap"
 kind = "native"
 migration = "done"
 run = "test/diff_compiler_fmt_test.mdk"
-oracles = ["exhaust_main", "fmt_main", "lex_main", "lint_fix_main", "llvm_emit_modules_main", "new_main"]
-sources = ["compiler/entries/entry_support.mdk", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "compiler/tools/fmt.mdk", "compiler/tools/lint*.mdk", "compiler/tools/new_cmd.mdk", "compiler/tools/printer.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_fmt_test.mdk", "test/probe_runner.mdk"]
-corpus = ["test/exhaust_fixtures", "test/fmt_fixtures", "test/lint_fix_fixtures", "test/new_golden", "test/parse_fixtures"]
+oracles = ["check_main", "diagnostics_main", "draft_semantic_main", "exhaust_main", "fmt_main", "lex_main", "lint_fix_main", "llvm_emit_modules_main", "new_main", "refindex_main", "repl_main", "typecheck_main"]
+sources = ["compiler/driver/*", "compiler/entries/entry_support.mdk", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/tools/fmt.mdk", "compiler/tools/lint*.mdk", "compiler/tools/new_cmd.mdk", "compiler/tools/printer.mdk", "compiler/tools/repl.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_fmt_test.mdk", "test/probe_runner.mdk"]
+corpus = ["test/check_match_fixtures", "test/diff_fixtures", "test/draft_semantic_fixtures", "test/exhaust_fixtures", "test/fmt_fixtures", "test/lint_fix_fixtures", "test/new_golden", "test/parse_fixtures", "test/references_fixtures", "test/repl_fixtures", "test/resolve_fixtures", "test/typecheck_error_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2339,21 +2279,6 @@ corpus = []
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_references_correctness"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_references_correctness.sh"
-oracles = ["refindex_main"]
-sources = ["test/diff_compiler_references_correctness.sh"]
-corpus = ["test/references_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_references_scaling"
 area = "infra"
 shard = "gates_2"
@@ -2397,21 +2322,6 @@ oracles = []
 sources = ["test/diff_compiler_rejection_parity.sh"]
 corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
-
-[[gate]]
-name = "diff_compiler_repl"
-area = "tools"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_repl.sh"
-oracles = ["repl_main"]
-sources = ["compiler/tools/repl.mdk", "test/diff_compiler_repl.sh"]
-corpus = ["test/repl_fixtures"]
-toolchain = []
 
 [[gate]]
 name = "diff_compiler_rt_obj"
@@ -2669,21 +2579,6 @@ corpus = ["test/stack_fixtures", "test/wasm/fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_typecheck_errors"
-area = "types"
-shard = "gates_4"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_typecheck_errors.sh"
-oracles = ["check_main", "typecheck_main"]
-sources = ["compiler/types/*", "test/diff_compiler_typecheck_errors.sh"]
-corpus = ["test/typecheck_error_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_wasm_shim_parity"
 area = "wasm"
 shard = "gates_2"
@@ -2716,7 +2611,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "gates_3"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
