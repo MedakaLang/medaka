@@ -1,0 +1,18 @@
+-- A bare-value `main` whose value is a record FIELD ACCESS. Both halves are
+-- load-bearing: `medaka build` and the WasmGC emitter wrap a bare-value `main` as
+-- `main = println <e>` and re-run the check gate on the wrapped program BETWEEN the
+-- two emit elaborations of `runEmitWith` (compiler/entries/entry_support.mdk), so a
+-- ctor-oracle row that interleaved check leaves behind is read by the emit
+-- elaboration that follows it. When that happened, the un-mangled ctor `A` was read
+-- as a sibling of the mangled survivor, `a.k` was false-rejected, `Display Int` never
+-- grounded, and the emitter wrote a null dict word — clean exit 0 and a SIGSEGV at run
+-- time, with eval correct throughout, which is why this is pinned as a three-engine
+-- fixture and not an eval-side test. Writing `main = println a.k` instead skips the
+-- wrap entirely and never reaches the interleaved check; a single-field record gives
+-- the sibling check nothing to withhold.
+
+data A = A { p : Int, k : Int }
+
+main =
+  let a = A { p = 10, k = 5 }
+  a.k
