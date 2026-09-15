@@ -15,9 +15,12 @@
    The head file is written to a temporary path and promoted with `rename` after
    every block file is written, so a save that is interrupted by the process
    dying leaves the previous head pointing at a graph that is still wholly
-   present. That ordering is process-crash consistency, not durability across a
-   power loss: nothing here calls `fsync`, so the kernel is free to make the
-   `rename` visible before the block writes it was ordered after. -}
+   present. That ordering survives a power loss because each staged file is
+   `fsync`ed before its `rename` and the containing directory after: without
+   those barriers the kernel is free to make the `rename` visible before the
+   block writes it was ordered after, and the head would name a graph that is
+   not there. The credential file is not staged — `writeFilePrivate` writes it
+   in place — so it has no promotion to order and no barrier is owed. -}
 
 import array
 import fs.{mkdirAll}
@@ -89,7 +92,9 @@ persistSave dir head blocks = do
   () <- blockFileWrite (blocksDir dir) blocks
   let staged = "\{headPath dir}.tmp"
   () <- writeFile staged (cidToString head)
-  rename staged (headPath dir)
+  () <- fsync staged
+  () <- rename staged (headPath dir)
+  fsync dir
 
 {- | Read back the persisted head commit CID and every persisted block row.
 
@@ -122,7 +127,9 @@ persistPreferences dir prefs = do
   () <- mkdirAll dir
   let staged = "\{preferencesPath dir}.tmp"
   () <- writeFile staged (stringify (jArray prefs))
-  rename staged (preferencesPath dir)
+  () <- fsync staged
+  () <- rename staged (preferencesPath dir)
+  fsync dir
 
 {- | Read back the persisted preference set, or the empty list when `dir` has
    never had one written — a fresh account, or one that has never called

@@ -23,9 +23,13 @@
    **Write order.** Both files stage under `.staging` and are promoted with
    `rename`; the MIME sidecar is promoted FIRST and the bytes LAST, so a reader
    — which keys on the bytes file — sees a blob only once its declared type is
-   already there. That order is a preference and not a guarantee: it holds
-   across a process crash, but there is no fsync anywhere here, so a power loss
-   can leave either half alone on disk.
+   already there. Each staged file is barriered before its own `rename`, and the
+   shard both land in is barriered once after the pair, so neither promotion can
+   reach disk ahead of the bytes it publishes. What the barriers do NOT order is
+   the two renames against EACH OTHER: one directory barrier makes them durable
+   together, so across a power loss the sidecar-first order stays a preference
+   and either half can be alone on disk. The reader grades both halves as
+   residue for that reason.
 
    **Residue.** The reader therefore skips, rather than fails on, anything
    under `blobs/` it cannot account for: an entry that is not a directory (an
@@ -104,10 +108,13 @@ writeOne dir cid mimeType bytes = do
   () <- mkdirAll (blobShardDir dir cid)
   let stagedMime = "\{blobDir dir}/\{stagingName}/\{cidKey cid}\{mimeSuffix}"
   () <- writeFile stagedMime mimeType
+  () <- fsync stagedMime
   () <- rename stagedMime "\{blobFilePath dir cid}\{mimeSuffix}"
   let staged = "\{blobDir dir}/\{stagingName}/\{cidKey cid}"
   () <- writeFileBytes staged bytes
-  rename staged (blobFilePath dir cid)
+  () <- fsync staged
+  () <- rename staged (blobFilePath dir cid)
+  fsync (blobShardDir dir cid)
 
 writeRows : String ->
   List (Cid, String, Array Int) ->

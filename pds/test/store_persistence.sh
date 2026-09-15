@@ -9,9 +9,12 @@
 # Cases 7-11 grade the HALF-WRITTEN directories a process crash can leave: each
 # of the three write paths promotes with `rename` after writing what the
 # promotion points at, so the reachable interrupted states are a finite set and
-# each is built directly rather than raced. They cover process-crash
-# consistency only; no path here calls `fsync`, so what the kernel may reorder
-# across a power loss is outside what any of them can observe (#2952).
+# each is built directly rather than raced. Barriers do not change that set: an
+# `fsync` decides WHEN a write reaches the platter, never which file a `rename`
+# publishes, so every state those cases build stays reachable and each must
+# still serve the previous value or refuse. Case 12 grades the barriers
+# themselves, which is the one claim building a directory by hand cannot make —
+# it needs the syscall ORDER, not the resulting tree (#2952).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -352,4 +355,151 @@ grep -q '^EVENTAFTER staged none entries 1$' "$WORK/eventfree.out" || {
 }
 echo 'staged event anchored to no commit finished, and planning wrote nothing'
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; key absent'
+# ── 12. every promote is barriered, staged file first and directory after ──
+# The only case here that reads the syscall STREAM rather than the resulting
+# tree, because that is where the claim lives: after a power loss what survives
+# is decided by the order writes reached the platter, and a directory built by
+# hand cannot say which `rename` outran the bytes it publishes. Two rules over
+# every `rename` the driver performs, checked in trace order:
+#
+#   - the syscall immediately BEFORE it is an `fsync` of exactly the path it
+#     renames, so the promotion cannot become visible before its own contents;
+#   - an `fsync` of the directory it renames INTO follows, before any `rename`
+#     into a different directory, so the promotion itself is durable.
+#
+# Universal over renames rather than a list of expected paths: a promote path
+# added later is graded the day it is written, and cannot be forgotten here.
+# The per-path coverage counts below are the other half — they fail if a
+# promote path stopped being EXERCISED, which a universal rule alone reads as
+# silence.
+if ! command -v strace >/dev/null 2>&1; then
+  # A SKIP IS ONLY LEGITIMATE OFF CI — `test/diff_compiler_ir_scaling.sh`'s
+  # valgrind branch, same reasoning: on a dev box not everyone has strace, and a
+  # hard failure there is noise. On a runner it means the install stopped
+  # happening and the barrier claim has silently gone dark, which is the one
+  # outcome a gate must never produce quietly. exit 1, not 2, so no
+  # skip-classifier can reinterpret the verdict.
+  if [ -n "${CI:-}" ]; then
+    echo "FAIL: strace is not on PATH, and this is CI." >&2
+    echo "  Case 12 reads the syscall order of the promote paths; without strace it" >&2
+    echo "  grades NOTHING. Add strace to .github/actions/setup-medaka rather than" >&2
+    echo "  deleting the case." >&2
+    echo "  Debian/Ubuntu: sudo apt-get install -y strace" >&2
+    exit 1
+  fi
+  echo "SKIP: strace not on PATH — case 12 reads the promote paths' syscall order."
+  echo "  (A skip is only legitimate OFF CI; on CI this is a hard failure.)"
+  echo "  Debian/Ubuntu: sudo apt-get install -y strace"
+  exit 2
+fi
+
+# strace -y resolves an fd to its CANONICAL path, while `rename` reports the
+# literal arguments, so the two only compare if the directory handed to the
+# driver has no symlink in it.
+PHYS=$(cd "$WORK" && pwd -P)
+
+# One normalized event per line, in trace order: `F <path>` per fsync, `R <src>
+# <dst>` per rename. Everything else in the trace — the Boehm collector's
+# SIGPWR/SIGXCPU pair above all — is dropped here rather than by an strace
+# filter, so a syscall the filter forgot shows up as a missing line and not as
+# a wrong verdict.
+normalize_trace() {
+  sed -n \
+    -e 's/^[0-9][0-9]*  *//' \
+    -e 's/^fsync([0-9][0-9]*<\(.*\)>) *= 0$/F \1/p' \
+    -e 's/^rename("\([^"]*\)", "\([^"]*\)") *= 0$/R \1 \2/p' \
+    "$1"
+}
+
+# The driver runs under strace with threads followed: the compiler's runtime
+# does its work on a GC-aware worker pthread, so an unfollowed trace records
+# none of these calls at all.
+trace_route() {
+  _route=$1
+  _dir=$2
+  if ! strace -f -y -qq -e signal=none -e trace=fsync,rename,renameat,renameat2 \
+    -o "$WORK/trace.$_route" "$WORK/driver" "$_route" "$_dir" \
+    > "$WORK/trace.$_route.out" 2> "$WORK/trace.$_route.err"
+  then
+    cat "$WORK/trace.$_route.err" >&2
+    cat "$WORK/trace.$_route.out" >&2
+    fail "traced $_route route failed"
+  fi
+  require_empty "$WORK/trace.$_route.err" "traced $_route"
+  normalize_trace "$WORK/trace.$_route" >> "$WORK/promotes"
+}
+
+: > "$WORK/promotes"
+TRACED="$PHYS/traced"
+mkdir -p "$TRACED"
+trace_route save "$TRACED/repo"
+trace_route blob-save "$TRACED/repo"
+trace_route prefs-save "$TRACED/repo"
+trace_route event-recover-owed "$TRACED/events"
+
+[ -s "$WORK/promotes" ] || fail 'the traced routes performed no promote at all'
+
+awk '
+  { ev[++n] = $0 }
+  END {
+    for (i = 1; i <= n; i++) {
+      if (substr(ev[i], 1, 2) != "R ") continue
+      renames++
+      split(ev[i], a, " ")
+      src = a[2]; dst = a[3]
+      if (i == 1 || ev[i - 1] != "F " src) {
+        printf "UNBARRIERED PROMOTE: %s\n  preceded by: %s\n", ev[i],
+          (i > 1 ? ev[i - 1] : "<nothing>")
+        bad++
+        continue
+      }
+      dir = dst
+      sub(/\/[^\/]*$/, "", dir)
+      found = 0
+      for (j = i + 1; j <= n; j++) {
+        if (ev[j] == "F " dir) { found = 1; break }
+        if (substr(ev[j], 1, 2) == "R ") {
+          split(ev[j], b, " ")
+          other = b[3]
+          sub(/\/[^\/]*$/, "", other)
+          if (other != dir) break
+        }
+      }
+      if (!found) {
+        printf "UNBARRIERED DIRECTORY: %s\n  no fsync of %s follows it\n", ev[i], dir
+        bad++
+      }
+    }
+    printf "graded %d rename(s), %d unbarriered\n", renames, bad
+    exit (bad > 0)
+  }
+' "$WORK/promotes" > "$WORK/promotes.verdict" || {
+  cat "$WORK/promotes.verdict" >&2
+  fail 'a rename published a value no barrier had put on disk'
+}
+cat "$WORK/promotes.verdict"
+
+# Per promote path: the universal rule above is silent about a path that
+# stopped running, so each is counted by the shape of what it renames INTO.
+promote_count() {
+  grep -c "^R .* $1\$" "$WORK/promotes" || true
+}
+BLOCK_PROMOTES=$(promote_count '.*/blocks/[0-9a-f][0-9a-f]/[0-9a-f]*')
+BLOB_MIME_PROMOTES=$(promote_count '.*/blobs/[0-9a-f][0-9a-f]/[0-9a-f]*\.mime')
+BLOB_BYTE_PROMOTES=$(promote_count '.*/blobs/[0-9a-f][0-9a-f]/[0-9a-f]*')
+ENTRY_PROMOTES=$(promote_count '.*/events/entries/.*')
+POINTER_PROMOTES=$(promote_count '.*/events/\..*')
+HEAD_PROMOTES=$(promote_count '.*/head')
+PREFS_PROMOTES=$(promote_count '.*/preferences')
+for PAIR in "blockfile:$BLOCK_PROMOTES" "blobfile sidecar:$BLOB_MIME_PROMOTES" \
+  "blobfile bytes:$BLOB_BYTE_PROMOTES" "eventlog entry:$ENTRY_PROMOTES" \
+  "eventlog pointer:$POINTER_PROMOTES" "persist head:$HEAD_PROMOTES" \
+  "persist preferences:$PREFS_PROMOTES"
+do
+  [ "${PAIR#*:}" -ge 1 ] \
+    || fail "no ${PAIR%:*} promote was traced; that path is no longer graded"
+done
+echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES"
+
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; every promote barriered before and after; key absent'

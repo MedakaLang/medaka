@@ -7,7 +7,10 @@
    version and codec prefix, so sharding on the CID's own leading bytes would put
    the whole repository in one directory. Writes land in `<dir>/.staging` and are
    promoted with `rename`, so a reader never observes a half-written block and a
-   crash never leaves a torn one under a shard.
+   crash never leaves a torn one under a shard. The block's bytes are barriered
+   before the `rename` and its shard directory after, so the promotion cannot
+   reach disk ahead of what it publishes: without the pair, a power loss can
+   leave a shard entry naming bytes the kernel has not written yet.
 
    Nothing here trusts the disk. Bytes read back are returned as raw rows for
    `blockStoreFromBlocks` to verify against their own CIDs; this module never
@@ -46,7 +49,9 @@ writeOne dir cid bytes = do
   () <- mkdirAll (blockShardDir dir cid)
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
   () <- writeFileBytes staged bytes
-  rename staged (blockFilePath dir cid)
+  () <- fsync staged
+  () <- rename staged (blockFilePath dir cid)
+  fsync (blockShardDir dir cid)
 
 writeRows : String ->
   List (Cid, Array Int) ->

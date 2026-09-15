@@ -13,9 +13,11 @@
 
    APPENDING IS TWO PHASES, and the split is the whole point. An event and the
    commit it announces must land together or not at all, and the only atomic
-   step this tree has is `rename` (`pds/shell/persist.mdk`: process-crash
-   consistency, not power-loss durability — nothing here calls `fsync`
-   either). So a caller STAGES the entry, persists the commit, and then
+   step this tree has is `rename` (`pds/shell/persist.mdk`, whose barrier
+   discipline this module also follows: every staged file is `fsync`ed before
+   the `rename` that publishes it and the containing directory after, so a
+   promotion cannot reach disk ahead of the entry it promotes). So a caller
+   STAGES the entry, persists the commit, and then
    PROMOTES it, and every crash point in that sequence is recoverable from
    what survives:
 
@@ -101,7 +103,9 @@ promoteText dir name text = do
   () <- mkdirAll (stagingDir dir)
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged text
-  rename staged "\{eventLogDir dir}/\{name}"
+  () <- fsync staged
+  () <- rename staged "\{eventLogDir dir}/\{name}"
+  fsync (eventLogDir dir)
 
 {- | The sequence number of the last PROMOTED entry, or `None` when this
    repository has emitted no event yet.
@@ -176,7 +180,9 @@ writeEntry dir entry = do
   let name = eventLogEntryName entry.seq entry.timeSeconds
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged (eventLogEncodeEntry entry)
-  rename staged "\{entriesDir dir}/\{name}"
+  () <- fsync staged
+  () <- rename staged "\{entriesDir dir}/\{name}"
+  fsync (entriesDir dir)
 
 {- | Promote the pending entry, if there is one, and sweep the window.
 
