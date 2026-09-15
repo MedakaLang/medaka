@@ -1,0 +1,20 @@
+-- #2055 — two differently-spelled interfaces (`amod.IA`, `zmod.IZ`) sharing one
+-- method name (`sz`) at one receiver head (`Int`), imported A-then-Z.
+-- Permutation partner: iface_name_collision_za_2055.mdk (same program, the two
+-- imports swapped).
+--
+-- Expected `(11, 110)`, DERIVED FROM THE SOURCE, not captured: `viaA 10` calls
+-- `IA`'s `sz` (`n + 1`) and `viaZ 10` calls `IZ`'s `sz` (`n + 100`).  Interface
+-- identity, not import order, selects the impl, so neither ordering may change
+-- the answer.
+--
+-- Before the fix each dispatcher arm accepted the bare head tag `Int` alongside
+-- its own identity-mangled route word, so whichever arm emitted first swallowed
+-- both calls: this file printed `(11, 11)` and the partner `(110, 110)`, both at
+-- exit 0 with `check` clean, while the wasm arm trapped at instantiate.  The
+-- PAIR is what makes an order-dependent selection visible; one ordering alone
+-- cannot see it.
+import iface_name_collision_az_2055.amod.{viaA}
+import iface_name_collision_az_2055.zmod.{viaZ}
+
+main = println (viaA 10, viaZ 10)

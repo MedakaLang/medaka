@@ -1,0 +1,37 @@
+-- #2557 (S0) — an <IO>-performing callback laundered into a <>-declared callback
+-- slot through a plain generic, under a `main` declared `<> Unit`.
+--
+-- `cb3` is never called for its value; it exists only to pin `coerce`'s invariant
+-- `a` to the WIDER parameter row.  `coerce` returns its SECOND argument, so
+-- `hidden` carries `cb3`'s declared type and `cb2`'s body, and `hidden f1` runs a
+-- genuinely effectful `f1` under `cb2`'s `<>` row.  Both parameter rows sit at a
+-- CONTRAVARIANT position, where nothing re-opens them, so they meet as two closed
+-- rows through an invariant type variable — the one seam with no compensator.
+--
+-- Rejection here is the run/build-level observable the typecheck-error sibling
+-- (test/typecheck_error_fixtures/effect_closed_row_generic_launder.mdk) cannot
+-- state: the pinned symptom was that `run` and the built binary EXECUTED this
+-- program at exit 0 and printed, not merely that `check` accepted it.  The
+-- rejection must be a diagnostic; a runtime panic would satisfy the exit code
+-- while leaving the leak in place.
+f1 : Unit -> <IO> Unit
+f1 () = println "LEAKED-VIA-COERCE"
+
+cb2 : (Unit -> <> Unit) -> Int
+cb2 f =
+  let _ = f ()
+  0
+
+cb3 : (Unit -> <IO> Unit) -> Int
+cb3 g = 1
+
+coerce : a -> a -> a
+coerce x y = y
+
+hidden : (Unit -> <IO> Unit) -> Int
+hidden = coerce cb3 cb2
+
+main : <> Unit
+main =
+  let _ = hidden f1
+  ()

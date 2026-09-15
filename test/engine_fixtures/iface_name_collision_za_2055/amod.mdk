@@ -1,0 +1,13 @@
+-- #2055 — interface `IA`, method `sz`, impl at head `Int`.  The sibling module
+-- `zmod` spells a DIFFERENT interface with the SAME method name at the SAME
+-- head, so a dispatcher arm that accepts the bare head tag as well as its own
+-- identity-mangled word would swallow the other module's dictionary.
+export interface IA a where
+  sz : a -> Int
+
+export impl IA Int where
+  sz n = n + 1
+
+export
+viaA : IA a => a -> Int
+viaA x = sz x
