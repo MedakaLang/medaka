@@ -1,0 +1,12 @@
+-- #2055 — the PERMUTATION partner of iface_name_collision_az_2055.mdk:
+-- byte-identical except that the two imports are written in the opposite order.
+--
+-- Expected `(11, 110)` — the SAME answer as the partner, hand-derived from the
+-- source.  Impl selection is by interface identity, not by import order, so a
+-- fixture pair that disagrees is the bug.  Pre-fix this file printed
+-- `(110, 110)` while its partner printed `(11, 11)`: both wrong, differently, at
+-- exit 0, with the wasm arm trapping at instantiate.
+import iface_name_collision_za_2055.zmod.{viaZ}
+import iface_name_collision_za_2055.amod.{viaA}
+
+main = println (viaA 10, viaZ 10)

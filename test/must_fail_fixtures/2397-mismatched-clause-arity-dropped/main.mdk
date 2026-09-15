@@ -1,0 +1,7 @@
+f : Int -> Int -> Int
+f 0 y = y
+f x = y => 99
+
+main =
+  println (f 0 5)
+  println (f 1 5 == 99)

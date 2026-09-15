@@ -1,0 +1,35 @@
+-- #1904 — non-lead bound-tyvar identity inside a predicate argument vector.
+-- All three bindings carry the same two-predicate context `(Ix a b c, Ix a c
+-- b)`, whose members differ ONLY in their non-lead positions. A dict-slot key
+-- that renders every tyvar position as one constant makes both predicates key
+-- alike, `dedupSlotVecs` folds them into a single slot, and every use then runs
+-- whichever impl won the fold.
+--
+-- The pinned values are read off the impls, not captured. `size 5 'z' True`
+-- binds a=Int, b=Char, c=Bool and selects `Ix Int Char Bool` = 333; `sizeSwap`
+-- passes y before x and so selects `Ix Int Bool Char` = 111; `both` renders the
+-- two in one expression, where a collapse is visible as `333/333` or `111/111`
+-- rather than `333/111`. The single-predicate-use form the issue was filed with
+-- cannot show the collapse at all, which is why all three uses are here.
+interface Ix a b c where
+  ix : a -> b -> c -> Int
+
+impl Ix Int Char Bool where
+  ix _ _ _ = 333
+
+impl Ix Int Bool Char where
+  ix _ _ _ = 111
+
+size : (Ix a b c, Ix a c b) => a -> b -> c -> Int
+size n x y = ix n x y
+
+sizeSwap : (Ix a b c, Ix a c b) => a -> b -> c -> Int
+sizeSwap n x y = ix n y x
+
+both : (Ix a b c, Ix a c b) => a -> b -> c -> String
+both n x y = "\{ix n x y}/\{ix n y x}"
+
+main =
+  println (size 5 'z' True)
+  println (sizeSwap 5 'z' True)
+  println (both 5 'z' True)

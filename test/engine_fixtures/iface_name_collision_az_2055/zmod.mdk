@@ -1,0 +1,11 @@
+-- #2055 — the collision partner of `amod`: a differently-spelled interface
+-- (`IZ`) whose method is also named `sz` and whose impl is also at head `Int`.
+export interface IZ b where
+  sz : b -> Int
+
+export impl IZ Int where
+  sz n = n + 100
+
+export
+viaZ : IZ b => b -> Int
+viaZ x = sz x
