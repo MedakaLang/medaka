@@ -3713,9 +3713,17 @@ runLintCmd argv0 =
   -- the active `--only`/`--disable` set; when it isn't, `emptyStdlibIndex`
   -- skips the whole-stdlib parse for free (every other rule ignores its
   -- `StdlibIndex` argument, and this rule's own findings get discarded by the
-  -- CLI-flag filters below regardless of what index it saw).
+  -- CLI-flag filters below regardless of what index it saw) — but ONLY on the
+  -- uncached path, where that discarding happens in this same process, on this
+  -- same `idx`.  `--cache` persists `lintFileFresh`'s full-roster findings past
+  -- this process's flag choices (`lintFileFresh` calls `lintProgram idx
+  -- allRules ...`, unfiltered), so a populate run under `--disable
+  -- rule-stdlib-reimpl --cache` (or `--only <anything else> --cache`) must
+  -- still build the real index — an `emptyStdlibIndex`-computed entry would
+  -- silently omit that rule's findings for every later `--cache` read, even a
+  -- default-rules one that never named it.
   let stdlibIdx =
-    if stdlibIndexNeeded onlyNames disableNames then
+    if stdlibIndexNeeded onlyNames disableNames || flag "--cache" a then
       buildStdlibIndex
     else
       emptyStdlibIndex

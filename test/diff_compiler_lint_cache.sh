@@ -446,6 +446,48 @@ else
       "target.mdk's own content never changed (content-hash cache-HIT), but the stdlib now declares a colliding export — a stale cache key would still report nothing here"
 fi
 
+# ── 8. STDLIB-INDEX CACHE POISONING (F1) ─────────────────────────────────────
+# `stdlibIndexNeeded` lets an uncached run skip `buildStdlibIndex` for free when
+# the active `--only`/`--disable` set never reads it — but a `--cache` POPULATE
+# run persists `lintFileFresh`'s FULL rule roster regardless of which rules are
+# active, so populating with `rule-stdlib-reimpl` disabled must not poison the
+# entry with a degraded (empty) stdlib index: a LATER default-rules `--cache`
+# read of the same entry must still see the finding.
+# corpus/stdlib_reimpl.mdk (copied in from test/lint_fixtures above) reimplements
+# `list.reverse`, so it is the fixture that fires the rule under test.
+rm -rf "$CACHE"
+"$MEDAKA" lint --disable rule-stdlib-reimpl --cache corpus > "$WORK/warm8_populate.txt" 2>&1
+printf '%s\n' "$?" >> "$WORK/warm8_populate.txt"
+if grep -q 'rule-stdlib-reimpl' "$WORK/warm8_populate.txt"; then
+  bad "8a precondition: populate run with the rule disabled reports nothing for it" \
+      "rule-stdlib-reimpl fired despite --disable — scenario 8 would be vacuous"
+else
+  ok "8a precondition: populate run with the rule disabled reports nothing for it"
+fi
+
+lint_cached "$WORK/warm8.txt"
+if grep -q 'rule-stdlib-reimpl' "$WORK/warm8.txt"; then
+  ok "8b default-rules cache read sees the finding a disabled-rule populate run never computed"
+else
+  bad "8b default-rules cache read sees the finding a disabled-rule populate run never computed" \
+      "cache entry was populated against an empty stdlib index (--disable rule-stdlib-reimpl --cache) and a later default --cache read silently dropped the finding"
+fi
+
+lint_plain "$WORK/cold8.txt"
+if same "$WORK/cold8.txt" "$WORK/warm8.txt"; then
+  ok "8c cached read == uncached read after a disabled-rule populate"
+else
+  bad "8c cached read == uncached read after a disabled-rule populate" "$(diff "$WORK/cold8.txt" "$WORK/warm8.txt" | head -5)"
+fi
+
+"$MEDAKA" lint --deny rule-stdlib-reimpl --cache corpus > "$WORK/warm8_deny.txt" 2>&1
+deny_status=$?
+if [ "$deny_status" -eq 1 ]; then
+  ok "8d --deny rule-stdlib-reimpl --cache exits 1 on the real finding"
+else
+  bad "8d --deny rule-stdlib-reimpl --cache exits 1 on the real finding" "exit $deny_status, expected 1"
+fi
+
 printf '\n%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
 exit 0

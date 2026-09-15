@@ -1,5 +1,5 @@
 # META
-source_lines=6676
+source_lines=6681
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -736,7 +736,12 @@ public export data StdlibIndex =
   | StdlibIndex (HashMap String (List (String, Ty)))
 
 -- The degraded index.  Also what a caller passes when it deliberately wants no
--- stdlib knowledge (no such caller today; every entry point builds a real one).
+-- stdlib knowledge: `medaka_cli.mdk`'s `runLintCmd` and `mcp.mdk`'s
+-- `runLintTool` both pass this when `stdlibIndexNeeded` says the active
+-- `--only`/`--disable` set never reads it.  `runLintCmd` additionally forces
+-- the real index whenever `--cache` is active, regardless of
+-- `stdlibIndexNeeded`'s answer — a cache entry outlives this process's flag
+-- choices, so it must never be populated from a degraded index.
 export
 emptyStdlibIndex : StdlibIndex
 emptyStdlibIndex = StdlibIndex (new ())
