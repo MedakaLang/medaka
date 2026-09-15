@@ -122,4 +122,84 @@ if ! awk -v small="$MST_SMALL" -v large="$MST_LARGE" 'BEGIN {
 fi
 echo "MST scaling: 1000=$MST_SMALL s 2000=$MST_LARGE s"
 
+# The assertion above times `mstValidateBlocks` REJECTING a hostile
+# UNREACHABLE corpus — never the write path (`mstInsert`), the export path
+# (`repoExportGraph`), or the startup path (`repoFromBlocks`/`rehydrate`).
+# All three quadratics this sprint fixed lived under this one green gate;
+# these three routes exercise those paths directly so a regression in any of
+# them reds here instead of hiding behind an unrelated assertion again.
+
+measure_mst_insert() {
+  label=$1
+  size=$2
+  start=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  "$WORK/perf-native" mst-insert "$size" > "$WORK/$label.out"
+  finish=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  grep -F -q "MSTINSERT $size $size" "$WORK/$label.out" || fail "MST insert route failed at $size rows"
+  awk -v start="$start" -v finish="$finish" 'BEGIN { printf "%.6f", finish - start }'
+}
+
+MSTINSERT_SMALL=$(measure_mst_insert mst-insert-1000 1000)
+MSTINSERT_LARGE=$(measure_mst_insert mst-insert-2000 2000)
+if ! awk -v small="$MSTINSERT_SMALL" -v large="$MSTINSERT_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 3.5 && ratio <= 3.5)
+}'; then
+  fail "MST insert scaling exceeded bounds: 1000=$MSTINSERT_SMALL s 2000=$MSTINSERT_LARGE s"
+fi
+echo "MST insert scaling: 1000=$MSTINSERT_SMALL s 2000=$MSTINSERT_LARGE s"
+
+measure_export() {
+  label=$1
+  size=$2
+  start=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  "$WORK/perf-native" export "$size" > "$WORK/$label.out"
+  finish=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  grep -F -q "EXPORT $size " "$WORK/$label.out" || fail "export route failed at $size rows"
+  awk -v start="$start" -v finish="$finish" 'BEGIN { printf "%.6f", finish - start }'
+}
+
+EXPORT_SMALL=$(measure_export export-1000 1000)
+EXPORT_LARGE=$(measure_export export-2000 2000)
+if ! awk -v small="$EXPORT_SMALL" -v large="$EXPORT_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 1.5 && ratio <= 2.5)
+}'; then
+  fail "export scaling exceeded bounds: 1000=$EXPORT_SMALL s 2000=$EXPORT_LARGE s"
+fi
+# Pinned against this fixed synthetic corpus — a graph walk that silently
+# dropped or duplicated reachable nodes would still print "EXPORT $size "
+# but with a different block count.
+grep -F -q "EXPORT 1000 1278" "$WORK/export-1000.out" || fail 'export block count drifted at 1000 rows'
+grep -F -q "EXPORT 2000 2535" "$WORK/export-2000.out" || fail 'export block count drifted at 2000 rows'
+echo "export scaling: 1000=$EXPORT_SMALL s 2000=$EXPORT_LARGE s"
+
+measure_rehydrate() {
+  label=$1
+  size=$2
+  start=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  "$WORK/perf-native" rehydrate "$size" > "$WORK/$label.out"
+  finish=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
+  grep -F -q "REHYDRATE $size OK" "$WORK/$label.out" || fail "rehydrate route failed at $size rows"
+  awk -v start="$start" -v finish="$finish" 'BEGIN { printf "%.6f", finish - start }'
+}
+
+REHYDRATE_SMALL=$(measure_rehydrate rehydrate-1000 1000)
+REHYDRATE_LARGE=$(measure_rehydrate rehydrate-2000 2000)
+if ! awk -v small="$REHYDRATE_SMALL" -v large="$REHYDRATE_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 1.5 && ratio <= 2.5)
+}'; then
+  fail "rehydrate scaling exceeded bounds: 1000=$REHYDRATE_SMALL s 2000=$REHYDRATE_LARGE s"
+fi
+# Pinned against this fixed synthetic corpus — the driver itself already
+# panics if the recovered commit's data CID disagrees with the CID it
+# built the graph from, and this pins the specific root so a rehydrate
+# that landed on a different-but-still-self-consistent root also reds.
+grep -F -q "REHYDRATE 1000 OK root=bafyreicxu3nelkrlk4qshzzfhw5elx74sunybhcasxknazig2n7foegsyu" \
+  "$WORK/rehydrate-1000.out" || fail 'rehydrate root CID drifted at 1000 rows'
+grep -F -q "REHYDRATE 2000 OK root=bafyreicw3pzj4d4qkmxvx5vhtvfpyn5byiqbd4arsyufrvfk7ycjmoxe5y" \
+  "$WORK/rehydrate-2000.out" || fail 'rehydrate root CID drifted at 2000 rows'
+echo "rehydrate scaling: 1000=$REHYDRATE_SMALL s 2000=$REHYDRATE_LARGE s"
+
 echo "PASS: MST — 11 official-reference cases; 17 covering-proof rows (13 narrower than the whole tree); 14 hostile routes; 3 lexical controls; $ENGINE_GRADE"

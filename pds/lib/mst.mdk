@@ -1,8 +1,11 @@
 {- | Pure persistent atproto Merkle Search Trees.
 
-   Keys are arbitrary non-empty byte arrays. The authoritative sorted entry
-   map is rebuilt after each mutation, which keeps the implementation simple
-   while preserving the protocol's history-independent root and node bytes.
+   Keys are arbitrary non-empty byte arrays. A mutation splices the
+   authoritative sorted entry list in place and rebuilds the node structure
+   from it, so only the touched key is ever hashed and the protocol's
+   history-independent root and node bytes are preserved. The rebuild reuses
+   every old node the touched key cannot reach, so a write re-encodes the
+   root-to-key path rather than the whole tree.
    Node constructors remain private so depth, ordering, prefix compression,
    and link invariants cannot be bypassed.
 
@@ -47,6 +50,23 @@ data NodeEntry = NodeLeaf (Array Int) Cid | NodeSubtree MstNode
 data LayerSplit = LayerSplit (List MstEntry) (Option (MstEntry, List MstEntry))
 
 data BuiltEntries = BuiltEntries (List DagCbor) (List NodeEntry)
+
+{- | One already-built node re-read as the child slots it offers. A slot is
+   bounded by the leaf keys either side of it, so `OldLeaf` pairs a leaf key
+   with the subtree immediately right of it and `OldShape` adds the subtree
+   left of every leaf. Bounds, not positions, are what a rebuild matches on:
+   a single-key mutation leaves every other leaf key at this node alone, so a
+   slot whose two bounds survive holds exactly the entries it held before. -}
+data OldLeaf = OldLeaf (Array Int) (Option MstNode)
+
+data OldShape = OldShape (Option MstNode) (List OldLeaf)
+
+{- | What a rebuild knows about the tree it is replacing: the one key the
+   mutation touched, and the old node standing in the position now being
+   built. Every child slot the touched key falls outside is reused verbatim,
+   CID and canonical bytes included, so only the root-to-key path is encoded
+   and hashed again. -}
+data Reuse = FreshBuild | ReuseFrom (Array Int) OldShape
 
 data DecodedEntry = DecodedEntry (Array Int) Cid (Option Cid)
 
@@ -170,13 +190,94 @@ mustEncodeNode value = match dagCborEncode value
   Ok bytes => bytes
   Err message => panic "mst: internal node encoding failed: \{message}"
 
-childFor : List MstEntry -> Int -> Option MstNode
-childFor [] _ = None
-childFor entries layer =
+oldLeaves : List NodeEntry -> List OldLeaf
+oldLeaves [] = []
+oldLeaves ((NodeLeaf key _) :: (NodeSubtree node) :: rest) =
+  OldLeaf key (Some node) :: oldLeaves rest
+oldLeaves ((NodeLeaf key _) :: rest) = OldLeaf key None :: oldLeaves rest
+oldLeaves ((NodeSubtree _) :: rest) = oldLeaves rest
+
+nodeShape : MstNode -> OldShape
+nodeShape (MstNode _ _ ((NodeSubtree left) :: rest)) =
+  OldShape (Some left) (oldLeaves rest)
+nodeShape (MstNode _ _ entries) = OldShape None (oldLeaves entries)
+
+leadKey : List OldLeaf -> Option (Array Int)
+leadKey [] = None
+leadKey ((OldLeaf key _) :: _) = Some key
+
+boundEqual : Option (Array Int) -> Option (Array Int) -> Bool
+boundEqual None None = True
+boundEqual (Some left) (Some right) = bytesCompare left right == Eq
+boundEqual _ _ = False
+
+descendInto : Array Int -> Option MstNode -> Reuse
+descendInto _ None = FreshBuild
+descendInto key (Some node) = ReuseFrom key (nodeShape node)
+
+firstKey : Option (MstEntry, List MstEntry) -> Option (Array Int)
+firstKey None = None
+firstKey (Some (MstEntry key _ _, _)) = Some key
+
+{- | Take the old child of a slot whose bounds the mutation left standing: as
+   it is when the touched key falls outside those bounds, and otherwise as the
+   starting point for the one child that still has to be rebuilt. -}
+takeSlot : Array Int ->
+  Option MstNode ->
+  Option (Array Int) ->
+  Option (Array Int) ->
+  List MstEntry ->
+  Int ->
+  Option MstNode
+takeSlot key old lower upper entries layer =
+  if keyAboveLower key lower && keyBelowUpper key upper then
+    childFor (descendInto key old) entries layer
+  else
+    old
+
+reuseSlotAfter : Array Int ->
+  List OldLeaf ->
+  Array Int ->
+  Option (Array Int) ->
+  List MstEntry ->
+  Int ->
+  Option MstNode
+reuseSlotAfter _ [] _ _ entries layer = childFor FreshBuild entries layer
+reuseSlotAfter key ((OldLeaf leafKey child) :: rest) lower upper entries layer =
+  if bytesCompare leafKey lower /= Eq then
+    reuseSlotAfter key rest lower upper entries layer
+  else if boundEqual upper (leadKey rest) then
+    takeSlot key child (Some lower) upper entries layer
+  else
+    childFor FreshBuild entries layer
+
+{- | Build the child of one slot, bounded by the leaf keys `lower` and `upper`.
+   An old slot carrying the same two bounds holds the same entries unless the
+   touched key lies between them; a slot the mutation reshaped — the one the
+   touched key was added to or removed from as a leaf — has no such old slot
+   and is built afresh. -}
+childSlot : Reuse ->
+  Option (Array Int) ->
+  Option (Array Int) ->
+  List MstEntry ->
+  Int ->
+  Option MstNode
+childSlot FreshBuild _ _ entries layer = childFor FreshBuild entries layer
+childSlot (ReuseFrom key (OldShape left leaves)) None upper entries layer =
+  if boundEqual upper (leadKey leaves) then
+    takeSlot key left None upper entries layer
+  else
+    childFor FreshBuild entries layer
+childSlot (ReuseFrom key (OldShape _ leaves)) (Some lower) upper entries layer =
+  reuseSlotAfter key leaves lower upper entries layer
+
+childFor : Reuse -> List MstEntry -> Int -> Option MstNode
+childFor _ [] _ = None
+childFor reuse entries layer =
   if layer < 0 then
     panic "mst: internal entry fell below depth zero"
   else
-    Some (buildNode entries layer)
+    Some (buildNode reuse entries layer)
 
 childValue : Option MstNode -> DagCbor
 childValue None = DcNull
@@ -186,12 +287,12 @@ childEntries : Option MstNode -> List NodeEntry
 childEntries None = []
 childEntries (Some node) = [NodeSubtree node]
 
-buildNode : List MstEntry -> Int -> MstNode
-buildNode entries layer =
+buildNode : Reuse -> List MstEntry -> Int -> MstNode
+buildNode reuse entries layer =
   let (LayerSplit before first) = splitLayer entries layer
-  let left = childFor before (layer - 1)
+  let left = childSlot reuse None (firstKey first) before (layer - 1)
   let (BuiltEntries wireEntries rightEntries) =
-    buildWireEntries first layer None
+    buildWireEntries reuse first layer None
   let bytes =
     mustEncodeNode (DcMap [("l", childValue left), ("e", DcArray wireEntries)])
   let cid = cidForDagCbor bytes
@@ -206,14 +307,15 @@ subtreeBlocks ((NodeLeaf _ _) :: rest) = subtreeBlocks rest
 subtreeBlocks ((NodeSubtree node) :: rest) =
   nodeBlocks node ++ subtreeBlocks rest
 
-buildWireEntries : Option (MstEntry, List MstEntry) ->
+buildWireEntries : Reuse ->
+  Option (MstEntry, List MstEntry) ->
   Int ->
   Option (Array Int) ->
   BuiltEntries
-buildWireEntries None _ _ = BuiltEntries [] []
-buildWireEntries (Some (MstEntry key value _, rest)) layer previous =
+buildWireEntries _ None _ _ = BuiltEntries [] []
+buildWireEntries reuse (Some (MstEntry key value _, rest)) layer previous =
   let (LayerSplit between next) = splitLayer rest layer
-  let right = childFor between (layer - 1)
+  let right = childSlot reuse (Some key) (firstKey next) between (layer - 1)
   let prefix = match previous
     None => 0
     Some prior => commonPrefix prior key
@@ -223,17 +325,32 @@ buildWireEntries (Some (MstEntry key value _, rest)) layer previous =
     ("v", DcLink value),
     ("t", childValue right),
   ]
-  let (BuiltEntries later laterEntries) = buildWireEntries next layer (Some key)
+  let (BuiltEntries later laterEntries) =
+    buildWireEntries reuse next layer (Some key)
   BuiltEntries
     (wire :: later)
     (NodeLeaf key value :: childEntries right ++ laterEntries)
 
-buildMst : List MstEntry -> Mst
-buildMst entries =
-  let layer = if length entries == 0 then 0 else maximumDepth entries 0
-  let node = buildNode entries layer
+buildAt : Reuse -> List MstEntry -> Int -> Mst
+buildAt reuse entries layer =
+  let node = buildNode reuse entries layer
   let (MstNode root bytes _) = node
   Mst entries root bytes node
+
+buildMst : List MstEntry -> Mst
+buildMst entries = buildAt FreshBuild entries (maximumDepth entries 0)
+
+{- | Rebuild after a single-key mutation, sharing every node the touched key
+   does not reach. A node's layer is part of what it encodes, so a promoted or
+   demoted root leaves the old nodes no position to be reused in and the tree
+   is rebuilt from scratch. -}
+rebuildAround : Array Int -> Mst -> List MstEntry -> Mst
+rebuildAround key (Mst before _ _ node) entries =
+  let layer = maximumDepth entries 0
+  if layer == maximumDepth before 0 then
+    buildAt (ReuseFrom key (nodeShape node)) entries layer
+  else
+    buildAt FreshBuild entries layer
 
 -- | The one canonical empty repository tree.
 export
@@ -268,25 +385,37 @@ export
 mstEntries : Mst -> List (Array Int, Cid)
 mstEntries (Mst entries _ _ _) = copyEntries entries
 
+-- Every caller must guarantee `key` is absent from the list before calling;
+-- `mstInsert` enforces this with an `mstLookup` guard. The `Eq` arm panics
+-- rather than silently inserting a duplicate key.
+insertSorted : MstEntry -> List MstEntry -> List MstEntry
+insertSorted entry [] = [entry]
+insertSorted (entry@(MstEntry key _ _)) ((candidate@(MstEntry other _ _)) :: rest) =
+  match bytesCompare key other
+    Gt => candidate :: insertSorted entry rest
+    Lt => entry :: candidate :: rest
+    Eq => panic "mst: insertSorted called with a key already present"
+
 -- | Insert a previously absent key.
 export
 mstInsert : Array Int -> Cid -> Mst -> Result String Mst
 mstInsert key value tree = match mstKeyDepth key
   Err message => Err message
-  Ok _ => match mstLookup key tree
+  Ok depth => match mstLookup key tree
     Some _ => Err "mst: duplicate key is not allowed"
-    None => mstFromEntries ((key, value) :: mstEntries tree)
+    None =>
+      let (Mst entries _ _ _) = tree
+      -- The caller still owns `key`, so the tree keeps its own copy of it.
+      let fresh = MstEntry (arrayCopy key) value depth
+      Ok (rebuildAround key tree (insertSorted fresh entries))
 
-replaceEntry : Array Int ->
-  Cid ->
-  List (Array Int, Cid) ->
-  List (Array Int, Cid)
+replaceEntry : Array Int -> Cid -> List MstEntry -> List MstEntry
 replaceEntry _ _ [] = []
-replaceEntry key value ((candidate, old) :: rest) =
+replaceEntry key value ((entry@(MstEntry candidate _ depth)) :: rest) =
   if bytesCompare key candidate == Eq then
-    (candidate, value) :: rest
+    MstEntry candidate value depth :: rest
   else
-    (candidate, old) :: replaceEntry key value rest
+    entry :: replaceEntry key value rest
 
 -- | Replace the value at an existing key.
 export
@@ -295,15 +424,17 @@ mstReplace key value tree = match mstKeyDepth key
   Err message => Err message
   Ok _ => match mstLookup key tree
     None => Err "mst: replace key was not found"
-    Some _ => mstFromEntries (replaceEntry key value (mstEntries tree))
+    Some _ =>
+      let (Mst entries _ _ _) = tree
+      Ok (rebuildAround key tree (replaceEntry key value entries))
 
-deleteEntry : Array Int -> List (Array Int, Cid) -> List (Array Int, Cid)
+deleteEntry : Array Int -> List MstEntry -> List MstEntry
 deleteEntry _ [] = []
-deleteEntry key ((candidate, value) :: rest) =
+deleteEntry key ((entry@(MstEntry candidate _ _)) :: rest) =
   if bytesCompare key candidate == Eq then
     rest
   else
-    (candidate, value) :: deleteEntry key rest
+    entry :: deleteEntry key rest
 
 -- | Delete an existing key, pruning the root back to the canonical empty node.
 export
@@ -312,7 +443,9 @@ mstDelete key tree = match mstKeyDepth key
   Err message => Err message
   Ok _ => match mstLookup key tree
     None => Err "mst: delete key was not found"
-    Some _ => mstFromEntries (deleteEntry key (mstEntries tree))
+    Some _ =>
+      let (Mst entries _ _ _) = tree
+      Ok (rebuildAround key tree (deleteEntry key entries))
 
 -- | Root node CID.
 export

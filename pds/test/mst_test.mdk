@@ -2,6 +2,7 @@
    and node bytes remain exclusively in the provenance-ledgered corpus. -}
 
 import array as A
+import string.{toUtf8}
 import test.{expectEqual, expectTrue}
 import lib.cid.{Cid, cidEqual, cidForDagCbor}
 import lib.mst.{
@@ -116,3 +117,76 @@ test "entry and root byte views are defensive copies" =
 test "reachable block view validates after layered construction" =
   let tree = mustTree (mstFromEntries [(key0, value0), (key1, value1)])
   expectEqual (mstValidateBlocks (mstRootCid tree) (mstNodeBlocks tree)) (Ok ())
+
+-- ── mutation against a from-scratch build, step by step ─────────────────────
+
+{- | A mutation rebuilds only the path to the touched key and keeps every
+   other node as it stands, so the whole tree it produces has to be the tree a
+   from-scratch build of the same entries produces — same root CID, same node
+   blocks in the same order, byte for byte. The orders below are two different
+   permutations of the same key set, so the sequence visits insertion at the
+   front, in the middle and at the end of a node, the layer promotions those
+   force, and the prune back to the canonical empty root. -}
+
+probeCount : Int
+probeCount = 64
+
+probeKey : Int -> Array Int
+probeKey i = toUtf8 "app.bsky.feed.post/probe-\{intToString i}"
+
+insertOrder : Int -> Int
+insertOrder i = (i * 37 + 11) % probeCount
+
+deleteOrder : Int -> Int
+deleteOrder i = (i * 45 + 7) % probeCount
+
+blocksEqual : List (Cid, Array Int) -> List (Cid, Array Int) -> Bool
+blocksEqual [] [] = True
+blocksEqual ((leftCid, leftBytes) :: left) ((rightCid, rightBytes) :: right) =
+  cidEqual leftCid rightCid && leftBytes == rightBytes && blocksEqual left right
+blocksEqual _ _ = False
+
+agrees : Mst -> Bool
+agrees tree =
+  let fresh = mustTree (mstFromEntries (mstEntries tree))
+  cidEqual (mstRootCid tree) (mstRootCid fresh)
+    && blocksEqual (mstNodeBlocks tree) (mstNodeBlocks fresh)
+
+data Walk = Walk Mst Bool
+
+stepped : Walk -> Mst -> Walk
+stepped (Walk _ ok) next = Walk next (ok && agrees next)
+
+insertPhase : Int -> Walk -> Walk
+insertPhase i (walk@(Walk tree _)) =
+  if i >= probeCount then
+    walk
+  else
+    insertPhase
+      (i + 1)
+      (stepped
+        walk
+        (mustTree (mstInsert (probeKey (insertOrder i)) value0 tree)))
+
+replacePhase : Int -> Walk -> Walk
+replacePhase i (walk@(Walk tree _)) =
+  if i >= probeCount then
+    walk
+  else
+    replacePhase
+      (i + 3)
+      (stepped walk (mustTree (mstReplace (probeKey i) value1 tree)))
+
+deletePhase : Int -> Walk -> Walk
+deletePhase i (walk@(Walk tree _)) =
+  if i >= probeCount then
+    walk
+  else
+    deletePhase
+      (i + 1)
+      (stepped walk (mustTree (mstDelete (probeKey (deleteOrder i)) tree)))
+
+test "every single-key mutation matches a from-scratch build" =
+  let (Walk final ok) =
+    deletePhase 0 (replacePhase 0 (insertPhase 0 (Walk mstEmpty True)))
+  expectTrue (ok && cidEqual (mstRootCid final) (mstRootCid mstEmpty))
