@@ -35,7 +35,7 @@
    neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint, sweepUnits}
-import fs.{fixtureFiles, isFile, mkdirAll}
+import fs.{expectUnitCount, fixtureFiles, isFile, mkdirAll}
 import io.{runVerb}
 import list.{somes, sort}
 import path.{dirname, stem, stripPrefix}
@@ -132,6 +132,7 @@ labelOf path = stem path
    `compiler_cli_test_support.binaryRanClean` asserts of a built binary: a
    process that printed the right bytes on its way out of a panic has not
    passed. -}
+export
 processFailure : String -> String -> Int -> String -> Option String
 processFailure probe label code err =
   if code == 0 && not (contains "E-PANIC" err) then
@@ -139,6 +140,14 @@ processFailure probe label code err =
   else
     Some "\{label}: \{probe} exited \{intToString code}\{stderrTail err}"
 
+{- | The FIRST line of a spawn's stderr, as a message tail, and nothing at
+   all when it wrote none.
+
+   One line rather than the whole stream: a probe that panicked prints a
+   stack of runtime frames, and a failure message that carries all of them
+   is not a message anybody reads — the same judgement `diffNote` makes
+   about printing two whole files. -}
+export
 stderrTail : String -> String
 stderrTail "" = ""
 stderrTail err = match lines (chompNewlines err)
@@ -179,6 +188,7 @@ valueFailure r path actual = match readFile (goldenPath r path)
 
    > diffNote "a" "a\nb"
    "line 2: expected (no line), got \"b\"" -}
+export
 diffNote : String -> String -> String
 diffNote expected actual = firstMismatch 1 (lines expected) (lines actual)
 
@@ -302,13 +312,21 @@ spawnIn dir probe name = boundedVerb "sh" [
 
    `probe` and `golden` are repo-relative. The scaffold has no regeneration
    script — `test/capture_goldens.sh new` is a stale no-op — so a mismatch
-   here is reviewed and hand-copied, never captured. -}
+   here is reviewed and hand-copied, never captured.
+
+   `files` is how many files the scaffolded tree carries, floored the way
+   every other block here floors its corpus. It cannot be the thing that
+   catches a vacuous run — both sides resolve through `fixtureFiles`, whose
+   own anti-vacuity floor makes an empty tree an `Err` — but it is what
+   catches a golden and a scaffolder that shrank TOGETHER, which the file-set
+   comparison reads as agreement. -}
 export
 scaffoldFailures : String ->
   String ->
   String ->
+  Int ->
   <Exec "_", FileRead "_", FileWrite "_", IO> List String
-scaffoldFailures probe name golden = match ownScratch "new"
+scaffoldFailures probe name golden files = match ownScratch "new"
   Err e => ["\{name}: could not make a scratch directory: \{e}"]
   Ok scratch =>
     let bin = "\{medakaRoot}/\{probe}"
@@ -316,16 +334,18 @@ scaffoldFailures probe name golden = match ownScratch "new"
       Err e => ["\{name}: could not spawn \{probe}: \{e}"]
       Ok (code, _, err) => match processFailure probe name code err
         Some m => [m]
-        None => treeFailures "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
+        None =>
+          treeFailures files "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
     let _ = runVerb "rm" ["-rf", scratch]
     found
 
-treeFailures : String -> String -> <FileRead "_", IO> List String
-treeFailures got want = match treeFiles want
+treeFailures : Int -> String -> String -> <FileRead "_", IO> List String
+treeFailures files got want = match treeFiles want
   Err e => ["golden tree unreadable: \{e}"]
   Ok wantFiles => match treeFiles got
     Err e => ["scaffolded tree unreadable: \{e}"]
     Ok gotFiles =>
+      let counted = countFloor "scaffolded tree" files gotFiles
       let missing =
         map
           (f => "\{f}: scaffolded tree has no such file")
@@ -335,7 +355,7 @@ treeFailures got want = match treeFiles want
           (f => "\{f}: scaffolded tree has a file the golden does not")
           (only gotFiles wantFiles)
       let shared = filter (f => elem f gotFiles) wantFiles
-      missing ++ extra ++ somes (map (fileFailure got want) shared)
+      counted ++ missing ++ extra ++ somes (map (fileFailure got want) shared)
 
 only : List String -> List String -> List String
 only these those = filter (f => not (elem f those)) these
@@ -408,11 +428,18 @@ undispSrc = "data Foo = Foo\n\nmain = Foo\n"
 
    `probe` is repo-relative. The paths are synthesized rather than committed
    as fixtures: three of the five are a file that must NOT exist, which a
-   corpus cannot hold. -}
+   corpus cannot hold.
+
+   `checks` is how many assertions the block runs. A synthesized corpus
+   cannot collapse the way a directory or a list literal can, so the floor
+   here is against the other way a block goes vacuous: an assertion deleted
+   from the literal below, which leaves a shorter list that still reports
+   nothing. -}
 export
 errorPathFailures : String ->
+  Int ->
   <Exec "_", FileRead "_", FileWrite "_", IO> List String
-errorPathFailures probe = match ownScratch "entry"
+errorPathFailures probe checks = match ownScratch "entry"
   Err e => ["could not make a scratch directory: \{e}"]
   Ok scratch =>
     let bin = "\{medakaRoot}/\{probe}"
@@ -425,18 +452,47 @@ errorPathFailures probe = match ownScratch "entry"
       Err e => ["could not write \{good}: \{e}"]
       Ok () => match writeFile undisp undispSrc
         Err e => ["could not write \{undisp}: \{e}"]
-        Ok () => somes [
-          expectFails "usage/arity (too few args)" bin [good],
-          expectFails "nonexistent runtime.mdk" bin [nope, core, good],
-          expectFails "nonexistent core.mdk" bin [runtime, nope, good],
-          expectFails "nonexistent entry.mdk" bin [runtime, core, nope],
-          expectFails "underived Display main (typecheck diagnostic)" bin [
-            runtime, core, undisp
-          ],
-          expectEmits bin [runtime, core, good] "define i32 @mdk_program_main",
-        ]
+        Ok () =>
+          let graded = [
+            expectFails "usage/arity (too few args)" bin [good],
+            expectFails "nonexistent runtime.mdk" bin [nope, core, good],
+            expectFails "nonexistent core.mdk" bin [runtime, nope, good],
+            expectFails "nonexistent entry.mdk" bin [runtime, core, nope],
+            expectFails "underived Display main (typecheck diagnostic)" bin [
+              runtime, core, undisp
+            ],
+            expectEmits bin [runtime, core, good] "define i32 @mdk_program_main",
+          ]
+          countFloor "error paths" checks graded ++ somes graded
     let _ = runVerb "rm" ["-rf", scratch]
     found
+
+{- | A finding when a sweep covered a different number of units than the
+   count written beside it, and nothing when it covered exactly that many.
+
+   `report`'s base case is `report _ [] = pass`, so a block whose corpus
+   resolved to NOTHING hands it an empty findings list and passes having
+   graded nothing: a list literal emptied, a corpus directory renamed, a
+   filter that matches none of it. `Row.fixtures` closes a row against
+   exactly that; this is that field for a block that is not a row, and
+   `what` is what the block calls the units so a red one names which corpus
+   moved.
+
+   The count is EXACT rather than a `> 0` floor for the same reason
+   `Row.fixtures` is: a corpus that shrank to one member is as silent as
+   one that shrank to none, and the only thing separating "graded every
+   unit, all clean" from "graded a few" is a number the block wrote down.
+
+   > countFloor "references_fixtures" 8 ["a", "b"]
+   ["references_fixtures: expected 8 units, found 2"]
+
+   > countFloor "references_fixtures" 2 ["a", "b"]
+   [] -}
+export
+countFloor : String -> Int -> List a -> List String
+countFloor what want units = match expectUnitCount want units
+  Ok () => []
+  Err e => ["\{what}: \{e}"]
 
 {- | `findings` as one expectation, named by `what`. -}
 export
