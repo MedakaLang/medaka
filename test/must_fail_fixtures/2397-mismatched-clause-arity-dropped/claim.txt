@@ -1,0 +1,29 @@
+issue: 2397
+what: A multi-clause function whose second clause has a different arity than
+what: the first (`f 0 y = y` / `f x = y => 99`, arity 2 then arity 1) is
+what: silently accepted. `check` and `run` both treat `f` as a single
+what: 2-parameter clause and warn only on exhaustiveness ("Missing case:
+what: '(_, _)'"), never on the arity mismatch. The native binary compiles the
+what: dropped clause anyway: calling `f 1 5` returns the raw closure address
+what: of the `y => 99` lambda reinterpreted as an Int, not 99. This fixture
+what: projects that address into a deterministic Bool (`f 1 5 == 99`) so the
+what: symptom is gradeable without pinning a per-run heap address.
+cmd: build-run main.mdk
+exit: 0
+stdout: 5
+stdout: False
+control: build-run control.mdk
+why-fixture: Measured 2026-09-15 at cdcb9e02cf39730971186f0d9aa574b6dd5f85cf
+why-fixture: with a fresh binary and MEDAKA_STRICT=1. `check` exits 0 with only
+why-fixture: the exhaustiveness warning. Building and running the binary
+why-fixture: prints `5` then `False` (the raw closure address never equals
+why-fixture: the Int 99, so the comparison deterministically fails). The
+why-fixture: address itself varies run to run; the Bool it projects to does
+why-fixture: not, which is why this pins `== 99` rather than the raw value.
+why-control: control.mdk gives the second clause the matching arity
+why-control: (`f x y = 99` instead of `f x = y => 99`) — the ONE dimension
+why-control: main's defect keys on. Nothing else differs. Measured: build
+why-control: exit 0, binary exit 0, stdout `5` then `True` (the clause is no
+why-control: longer dropped, so `f 1 5` genuinely returns 99). The day #2397
+why-control: is fixed, main's own second line becomes `True` too and this row
+why-control: drains.
