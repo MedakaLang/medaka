@@ -298,6 +298,55 @@ that refuses the connection, times out, or answers with an error is logged to
 stderr and otherwise ignored — it neither blocks startup nor prevents this
 server from answering any other request.
 
+## One writer per data directory
+
+**One `--data` directory is served by exactly one `pdsd` process at a time.**
+Two of them destroy each other's work rather than merely racing: each start
+sweeps every file under the three `.staging` directories, and a file there
+means residue from a prior crash only while no other process is between a
+write and its `rename` — so the second process to start deletes what the
+first one has in flight. The two servers also hold independent in-memory
+copies of state they are both advancing on disk.
+
+Sequential reuse of one directory across a process boundary is normal and
+supported (that is what a restart is). Concurrent reuse is refused: the
+server takes a lock, `<data>/.lock`, before it reads or writes anything else
+beneath `--data`, and a second start over a held directory exits nonzero
+naming the lock, without sweeping, binding, or generating anything.
+
+```
+serve: data directory /srv/pds/data is already locked by a running server
+(/srv/pds/data/.lock, last heartbeat 0s ago). …
+```
+
+The holder writes a heartbeat into the lock about twice a second, and a lock
+is graded by that heartbeat and not by its existence — `mkdir(2)` gives no
+release on death, so a killed process always leaves its lock behind. A lock
+whose heartbeat has stopped for three seconds is reclaimed by the next start
+on its own, which is why an ordinary `systemctl restart pds` needs no flag
+and costs a few seconds of extra startup. The startup line says which
+happened:
+
+```
+serve: data directory lock: acquired
+serve: data directory lock: reclaimed after 3s with no heartbeat from the previous holder
+serve: data directory lock: taken with --force-lock
+```
+
+`--force-lock` takes the lock immediately, without waiting the window out.
+It is an assertion by you that the recorded holder is gone — after a power
+cut, or over a lock that came back inside a backup — and it is the only way
+past a lock whose owner file cannot be read at all. **Never pass it to get
+past a server that is still running**; that is the exact situation the lock
+exists to refuse.
+
+Two limits worth knowing. A holder that stalls for longer than the window —
+swapping, or a startup that spends three seconds loading blobs — can have
+its lock reclaimed under it, because nothing on this side can distinguish a
+stalled process from a dead one. And the lock protects a directory against
+processes, not against you: an external `cp`, `tar`, or `rsync` takes no
+lock and is covered by the next section instead.
+
 ## Backup and restore
 
 **Consistency, in one sentence:** take a file-level backup with the server
@@ -316,6 +365,12 @@ account credential (`<data>/credential`), the session-token secret (whichever of
 `--token-secret` or `<data>/session-secret` this deployment uses), and **the
 signing key** (`--key`). Losing the signing key loses the ability to sign any
 future commit for this DID; it is the one file no later work can reconstruct.
+
+An archive taken this way also carries `<data>/.lock`, because it is a
+directory under `--data` like any other. That is harmless: nothing is
+beating it, so the first server started over the restored copy reclaims it
+after the stale window and says so on its startup line. `--force-lock`
+skips that wait if you would rather not spend it.
 
 **Backup.**
 

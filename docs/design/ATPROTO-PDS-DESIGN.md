@@ -755,6 +755,46 @@ pure core stays reachable from every engine Phase 3 does not run on. The signatu
 half is load-bearing rather than stylistic: an export with no signature gets an
 inferred effect row, which a check that reads declared rows cannot see.
 
+**One writer per data directory, and the reuse that IS blessed is sequential.**
+The restart-and-resume case above — a second process over the same `--data`
+directory once the first has exited — is supported and gated. CONCURRENT reuse
+is not, and the difference is destructive rather than merely racy: every start
+sweeps the three `.staging` directories, which is sound only because a file
+there means residue from a prior crash, and that reading holds only while no
+other process is between a write and its `rename`. A second concurrent server
+turns the first one's in-flight promotion into residue and deletes it. Nothing
+in the on-disk layout made the window exclusive, so `pds/shell/dirlock.mdk`
+does: `configure` takes `<data>/.lock` after `requireDir` and before the first
+thing that reads or writes anything beneath `--data` — ahead of both `openRepo`
+and the three sweeps — so a second process is refused before it can destroy
+what it was refused for (`#3059`). The lock is a directory because `makeDir` is
+`mkdir(2)`, whose second creation fails rather than succeeding twice; it needs
+no new extern and no capability-matrix row. What `mkdir` does not give is
+release on death, and this server has no shutdown path to release one in (there
+is no signal handling in the runtime), so a killed holder ALWAYS leaves its
+lock behind and lock EXISTENCE cannot be the test. A holder therefore beats a
+heartbeat into the lock for as long as it runs, and a contender grades the
+heartbeat: one that is moving refuses the contender in about one beat, one that
+has stopped for the stale window is taken over and the takeover is reported on
+the startup line. The residual, stated rather than papered over, is that a
+holder stalled longer than the window is indistinguishable from a dead one to
+any test this process can make; `--force-lock` covers the opposite direction,
+taking a lock immediately rather than waiting the window out.
+
+**Recovery runs before the genesis quartet, and `completeGenesisEvents` checks
+that it did.** `refuseLostPointer` (`pds/shell/server.mdk`) reads the
+last-promoted pointer as the whole truth about how far the quartet got, and
+that reading is true only of a log nothing still owes — a staged entry is a
+promotion a previous process began, whose entry file may already sit beside a
+pointer that has not moved, which is the exact shape `refuseLostPointer`
+refuses. So `configure` calls `eventLogApplyRecovery` first and
+`completeGenesisEvents` second, and the order is enforced rather than merely
+written down: `completeGenesisEvents` refuses outright if a staged entry is
+still present, naming the ordering as the fault instead of blaming the
+operator's data. `pds/test/serve_e2e.sh` case 64 grades the legitimate case the
+order exists for — a lost pointer over a still-owed staged entry recovering
+into a clean start.
+
 **Loopback by default, and a non-loopback bind is a deliberate act.** `--bind`
 (`pds/serve.mdk`) defaults to `127.0.0.1`; a bind to anything else is refused
 before any secret is read or generated and before the listener binds, unless

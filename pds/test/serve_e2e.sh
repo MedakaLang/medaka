@@ -2589,4 +2589,164 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/servestats.err" 'case 60 (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome, and a periodic stats line carrying active/un-framed connections, open subscriptions, the account repo'"'"'s revision, and blocks and blobs on disk, at an operator-configurable interval'
+# ── a dedicated --data dir: one writer per directory (#3059) ────────────────
+# Two servers over one --data directory delete each other's work: each start
+# sweeps every file under `.staging`, and a file there means residue from a
+# prior crash only while no OTHER process is between a write and its `rename`.
+# `pds/shell/dirlock.mdk` is what makes that window exclusive, and these four
+# cases grade the three states it can be in — held, abandoned, and abandoned
+# with a half-finished event-log append still owed.
+
+DATALOCK="$WORK/data-lock"
+mkdir -p "$DATALOCK"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATALOCK" --port 0 --init \
+  >"$WORK/servelock.out" 2>"$WORK/servelock.err" &
+SERVER_PID=$!
+PORTLOCK=$(wait_for_port "$WORK/servelock.out") || {
+  cat "$WORK/servelock.err" >&2
+  fail 'case 61: the lock-holding server did not report readiness'
+}
+require_empty "$WORK/servelock.err" 'case 61 startup'
+grep -Fq 'serve: data directory lock: acquired' "$WORK/servelock.out" \
+  || fail 'case 61: the holder did not report taking the lock'
+client query "$PORTLOCK" "$DID" \
+  || fail 'case 61: the lock-holding server did not answer an ordinary request'
+
+# 61. a second process against a LIVE data directory is refused, and refused
+#    BEFORE the sweep that would destroy what it was refused for. The file
+#    planted below is what a promotion the live server has in flight looks
+#    like on disk; that it is STILL THERE afterwards is the ordering claim,
+#    which the exit status on its own would not make.
+mkdir -p "$DATALOCK/blocks/.staging"
+printf 'in-flight\n' > "$DATALOCK/blocks/.staging/inflight"
+# `run_until_exit` binds $SERVER_PID to the process it runs, so the live
+# holder's pid is saved across it the way case 4f saves the main instance's.
+LOCK_HOLDER_PID="$SERVER_PID"
+run_until_exit "$WORK/serve61.out" "$WORK/serve61.err" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATALOCK" --port 0
+SERVER_PID="$LOCK_HOLDER_PID"
+[ "$RC" -ne 0 ] \
+  || fail 'case 61: a second process over a live data directory was accepted'
+grep -Fq 'is already locked by a running server' "$WORK/serve61.err" \
+  || fail 'case 61: the refusal did not name the lock'
+grep -Fq -e '--force-lock' "$WORK/serve61.err" \
+  || fail 'case 61: the refusal did not name the remedy'
+[ -f "$DATALOCK/blocks/.staging/inflight" ] \
+  || fail "case 61: the refused process swept the live holder's staged file"
+if grep -F 'serve: listening on' "$WORK/serve61.out" >/dev/null 2>&1; then
+  fail 'case 61: the refused process bound a listener'
+fi
+# The live holder is still serving, which is what makes the refusal above a
+# refusal of the SECOND process rather than of both.
+client query "$PORTLOCK" "$DID" \
+  || fail 'case 61: the lock holder stopped answering after refusing a rival'
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servelock.err" 'case 61 (post-run)'
+
+# 62. a `mkdir` lock is not released by a process that is killed, so the lock
+#    the holder above left behind is still there and still freshly beaten.
+#    `--force-lock` is the documented remedy for an operator who knows it is
+#    gone: it takes the lock without waiting the stale window out. The residue
+#    planted in case 61 is gone afterwards, which is how this case proves the
+#    run went PAST the sweep rather than merely past the lock.
+[ -d "$DATALOCK/.lock" ] \
+  || fail 'case 62: a killed holder released its lock, so nothing is being tested'
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATALOCK" --port 0 --force-lock \
+  >"$WORK/serve62.out" 2>"$WORK/serve62.err" &
+SERVER_PID=$!
+PORT62=$(wait_for_port "$WORK/serve62.out") || {
+  cat "$WORK/serve62.err" >&2
+  fail 'case 62: --force-lock did not get past a lock its holder had left behind'
+}
+require_empty "$WORK/serve62.err" 'case 62 startup'
+grep -Fq 'serve: data directory lock: taken with --force-lock' "$WORK/serve62.out" \
+  || fail 'case 62: the run did not report forcing the lock'
+[ ! -e "$DATALOCK/blocks/.staging/inflight" ] \
+  || fail 'case 62: the run that took the lock never reached the sweep'
+client query "$PORT62" "$DID" \
+  || fail 'case 62: the server that forced the lock did not answer a request'
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve62.err" 'case 62 (post-run)'
+
+# 63. and with NO flag at all: a lock whose heartbeat has stopped is reclaimed
+#    on its own. This is the ordinary restart — a supervisor that had to pass
+#    a flag after every kill would be an operator trained to always pass it,
+#    which is a lock nobody has.
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATALOCK" --port 0 \
+  >"$WORK/serve63.out" 2>"$WORK/serve63.err" &
+SERVER_PID=$!
+PORT63=$(wait_for_port "$WORK/serve63.out") || {
+  cat "$WORK/serve63.err" >&2
+  fail 'case 63: a restart over a lock left by a killed process never started'
+}
+require_empty "$WORK/serve63.err" 'case 63 startup'
+grep -Fq 'serve: data directory lock: reclaimed after' "$WORK/serve63.out" \
+  || fail 'case 63: the restart did not report reclaiming an abandoned lock'
+client query "$PORT63" "$DID" \
+  || fail 'case 63: the server that reclaimed the lock did not answer a request'
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve63.err" 'case 63 (post-run)'
+
+# 64. the startup ORDER the genesis guard depends on, graded rather than
+#    documented (F5). A process that died between promoting an event's own
+#    file and moving the last-promoted pointer leaves the staged copy behind
+#    and the pointer where it stood — here, reconstructed by hand from the log
+#    this directory already holds. `configure` applies the event-log recovery
+#    BEFORE it completes the genesis quartet, and only in that order is this a
+#    start rather than a refusal: read first, the pointer says nothing was
+#    ever promoted over an entry directory that is not empty, which
+#    `refuseLostPointer` refuses. Swap those two calls and this case reds.
+LOCK_LAST_ENTRY=$(ls -1 "$DATALOCK/events/entries" | tail -1)
+[ -n "$LOCK_LAST_ENTRY" ] \
+  || fail 'case 64: the event log holds no promoted entry to interrupt'
+LOCK_ENTRIES_BEFORE=$(ls -1 "$DATALOCK/events/entries" | wc -l)
+cp "$DATALOCK/events/entries/$LOCK_LAST_ENTRY" "$DATALOCK/events/.staged"
+rm -f "$DATALOCK/events/.last"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --data "$DATALOCK" --port 0 --force-lock \
+  >"$WORK/serve64.out" 2>"$WORK/serve64.err" &
+SERVER_PID=$!
+PORT64=$(wait_for_port "$WORK/serve64.out") || {
+  cat "$WORK/serve64.err" >&2
+  fail 'case 64: a lost pointer over a recoverable staged entry refused the start'
+}
+require_empty "$WORK/serve64.err" 'case 64 startup'
+grep -Fq 'serve: event log recovery: promoted' "$WORK/serve64.out" \
+  || fail 'case 64: the owed entry was not promoted'
+[ "$(cat "$DATALOCK/events/.last")" = "$(ls -1 "$DATALOCK/events/entries" | tail -1 | sed 's/^0*\([0-9]*\)-.*/\1/')" ] \
+  || fail 'case 64: the recovered pointer does not name the last promoted entry'
+[ ! -e "$DATALOCK/events/.staged" ] \
+  || fail 'case 64: the pending entry survived its own recovery'
+# The quartet was NOT re-minted over the history that already holds it, which
+# is the damage `refuseLostPointer` exists to prevent and which a recovery run
+# in the wrong order would either cause or falsely refuse.
+[ "$(ls -1 "$DATALOCK/events/entries" | wc -l)" = "$LOCK_ENTRIES_BEFORE" ] \
+  || fail 'case 64: the genesis quartet was emitted a second time'
+client query "$PORT64" "$DID" \
+  || fail 'case 64: the recovered server did not answer a request'
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/serve64.err" 'case 64 (post-run)'
+
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome, and a periodic stats line carrying active/un-framed connections, open subscriptions, the account repo'"'"'s revision, and blocks and blobs on disk, at an operator-configurable interval, and a second server over a LIVE data directory refused before its sweep could delete the staged file the live one had in flight while that live one kept answering, a lock its killed holder left behind taken by --force-lock and reclaimed with no flag at all once its heartbeat stopped, and a lost last-promoted pointer over a still-owed staged entry recovered into a clean start rather than refused, which is the startup order the genesis guard depends on'
