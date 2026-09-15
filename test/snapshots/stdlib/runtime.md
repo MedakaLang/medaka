@@ -1,5 +1,5 @@
 # META
-source_lines=665
+source_lines=670
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -126,6 +126,11 @@ extern removeFile : String -> <FileWrite "_"> Result String Unit
 
 -- | Moves or renames a path.
 extern rename : String -> String -> <FileWrite "_"> Result String Unit
+
+-- | Flushes a path's contents to durable storage. Works on a regular file or
+-- a directory — the durability of a `rename` is a property of the
+-- containing directory, not either file.
+extern fsync : String -> <FileWrite "_"> Result String Unit
 
 -- | Removes an empty directory.
 extern removeDir : String -> <FileWrite "_"> Result String Unit
@@ -692,6 +697,7 @@ extern stringToLower : String -> String
 (DExtern false "makeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "removeFile" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "rename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "fsync" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "removeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "statFile" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
 (DExtern false "args" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyApp (TyCon "List") (TyCon "String")))))
@@ -843,6 +849,7 @@ extern stringToLower : String -> String
 (DExtern false "makeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "removeFile" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "rename" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "fsync" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "removeDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "statFile" (TyFun (TyCon "String") (TyEffect ((hole "FileRead")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyTuple (TyCon "Int") (TyCon "Bool") (TyCon "Bool") (TyCon "Float"))))))
 (DExtern false "args" (TyFun (TyCon "Unit") (TyEffect ("Env") None (TyApp (TyCon "List") (TyCon "String")))))
