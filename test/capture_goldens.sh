@@ -46,9 +46,9 @@
 #      say `printer` is valid; it has no case arm and falls through to "unknown
 #      --frozen tag", exit 2):
 #        grep -nE '^    [A-Za-z_]+\)$' test/capture_goldens.sh
-#      — currently `fmt`, `lextok`, `lint_fix`, `selfproc_legA`, `boot_typecheck`,
-#      `llvm_eval`, `build_construct`, `native_cli`, `draft_semantic`,
-#      `references_correctness`.
+#      — currently `fmt`, `lextok`, `lint`, `lint_fix`, `selfproc_legA`,
+#      `boot_typecheck`, `llvm_eval`, `build_construct`, `native_cli`,
+#      `draft_semantic`, `references_correctness`, `test`.
 # EVERY OTHER corpus this file's comments describe as "FROZEN" (eval, eval_prelude,
 # eval_list, eval_typed_modules, tcmod, tc_probe, diag_analyze, analyze_project,
 # new, build_diff, selfproc's lex/parse/tc probes, …) has NO regenerator here at
@@ -180,7 +180,7 @@ case "${1:-}" in
   --frozen)
     FROZEN_TAG="${2:-}"
     [ -n "$FROZEN_TAG" ] || {
-      echo "usage: sh test/capture_goldens.sh --frozen <fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness> [--only <fixture-or-glob>]"
+      echo "usage: sh test/capture_goldens.sh --frozen <fmt|lextok|lint|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness|test> [--only <fixture-or-glob>]"
       exit 2
     }
     case "${3:-}" in
@@ -284,6 +284,72 @@ if [ -n "$FROZEN_TAG" ]; then
       regen_frozen lint_fix_main fixed "" "$ROOT/test/lint_fix_fixtures/*.mdk"
       if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
         echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/lint_fix_fixtures/"; exit 2
+      fi ;;
+    lint)
+      # test/lint_fixtures/<name>.expected : lint_main's own report, trailing
+      # Unit auto-print dropped and LC_ALL=C sorted — the order the
+      # `diff_compiler_lint` row in test/diff_compiler_fmt_test.mdk compares in.
+      # regen_frozen cannot serve this family: it neither sorts nor pins
+      # MEDAKA_ROOT. The pin is load-bearing, not defensive — lint_main builds
+      # its stdlib index from $MEDAKA_ROOT/stdlib and indexes nothing when that
+      # is unset, which silences every rule-stdlib-reimpl finding and would
+      # capture a shorter, wrong golden for eight of these fixtures.
+      LINT="$BIN/lint_main"
+      [ -x "$LINT" ] || { echo "missing $LINT — run: sh test/build_oracles.sh --build-one lint_main"; exit 2; }
+      MEDAKA_ROOT="$ROOT"
+      export MEDAKA_ROOT
+      for f in "$ROOT"/test/lint_fixtures/*.mdk; do
+        [ -f "$f" ] || continue
+        only_match "$(basename "$f" .mdk)" || continue
+        lt_tmp="$(mktemp)"
+        "$LINT" "$f" 2>/dev/null | strip_unit | LC_ALL=C sort > "$lt_tmp"
+        fwrote=$((fwrote+1))
+        finish_write "${f%.mdk}.expected" "$lt_tmp"
+        rm -f "$lt_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/lint_fixtures/"; exit 2
+      fi ;;
+    test)
+      # <module>.test.golden : the `medaka test` report for each module in the
+      # corpus the `test-report` block of test/diff_compiler_fmt_test.mdk
+      # grades, with this checkout's absolute root prefix stripped and the
+      # trailing Unit auto-print dropped — the same normalization that block's
+      # `testRelative` applies before comparing. Each module is its own root
+      # (`dirname`), and each run is bounded at the same 120s the block's
+      # `testReportSeconds` names, so a fixture that starts hanging fails the
+      # capture instead of wedging it.
+      TESTB="$BIN/test_main"
+      [ -x "$TESTB" ] || { echo "missing $TESTB — run: sh test/build_oracles.sh --build-one test_main"; exit 2; }
+      tr_run() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+      for f in "$ROOT"/stdlib/core.mdk "$ROOT"/stdlib/args.mdk \
+        "$ROOT"/stdlib/json.mdk "$ROOT"/stdlib/toml.mdk \
+        "$ROOT"/stdlib/list.mdk "$ROOT"/stdlib/set.mdk \
+        "$ROOT"/stdlib/string.mdk "$ROOT"/stdlib/async.mdk \
+        "$ROOT"/stdlib/byteparser.mdk "$ROOT"/stdlib/bytebuilder.mdk \
+        "$ROOT"/stdlib/hash_map.mdk "$ROOT"/stdlib/hash_set.mdk \
+        "$ROOT"/stdlib/array.mdk "$ROOT"/stdlib/vector.mdk \
+        "$ROOT"/stdlib/map.mdk \
+        "$ROOT"/test/compiler_test_fixtures/mixed.mdk \
+        "$ROOT"/test/compiler_test_fixtures/sum_dict.mdk \
+        "$ROOT"/test/compiler_test_fixtures/record_prop.mdk \
+        "$ROOT"/test/compiler_test_fixtures/int_shrink.mdk \
+        "$ROOT"/test/compiler_test_fixtures/user_arbitrary.mdk \
+        "$ROOT"/test/compiler_test_fixtures/mappable_not_foldable.mdk \
+        "$ROOT"/test/compiler_test_fixtures/shadow_impl_tolist.mdk \
+        "$ROOT"/test/compiler_test_fixtures/blockquote_and_valid.mdk \
+        "$ROOT"/test/compiler_test_fixtures/doctest_typecheck_gate.mdk; do
+        [ -f "$f" ] || continue
+        only_match "$(basename "$f" .mdk)" || continue
+        tr_tmp="$(mktemp)"
+        tr_run 120 "$TESTB" "$RUNTIME" "$CORE" "$f" "$(dirname "$f")" 2>/dev/null \
+          | sed "s#$ROOT/##g" | strip_unit > "$tr_tmp"
+        fwrote=$((fwrote+1))
+        finish_write "${f%.mdk}.test.golden" "$tr_tmp"
+        rm -f "$tr_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in the medaka-test corpus"; exit 2
       fi ;;
     selfproc_legA)
       # Mirrors LEG A of test/diff_compiler_selfproc.sh EXACTLY: one full-closure
@@ -615,7 +681,7 @@ PY
         echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/references_fixtures/"; exit 2
       fi ;;
     *)
-      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness)"
+      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|lextok|lint|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness|test)"
       exit 2 ;;
   esac
   status=$?

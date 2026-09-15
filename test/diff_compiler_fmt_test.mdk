@@ -14,6 +14,7 @@
    | `diff_compiler_exhaust` | `exhaust_main` | `test/exhaust_fixtures` | `.expected` |
    | `diff_compiler_fmt` | `fmt_main` | `test/fmt_fixtures` + `test/parse_fixtures` | `.fmt.golden` |
    | `diff_compiler_lex_files` | `lex_main` | the lexer and twelve stdlib modules | `.lextok.golden` |
+   | `diff_compiler_lint` | `lint_main` | `test/lint_fixtures` | `.expected` |
    | `diff_compiler_lint_fix` | `lint_fix_main` | `test/lint_fix_fixtures` | `.fixed` |
 
    `diff_compiler_lex_files`' corpus is REAL SOURCE, not fixtures: the
@@ -21,12 +22,21 @@
    whatever real code actually uses (block comments, the full operator set)
    rather than what a curated corpus remembered to include.
 
-   Six more retired scripts do NOT fit `Row` — each spawns its probe more
+   `diff_compiler_lint`'s probe reads an environment variable the other five
+   do not: `lint_main` builds its stdlib index from `$MEDAKA_ROOT/stdlib`, and
+   indexes NOTHING when that is unset, which silences every
+   `rule-stdlib-reimpl` finding. Eight of its 41 fixtures answer differently
+   without it and the goldens are the with-index answer, so an unset
+   `MEDAKA_ROOT` reds those eight rather than passing on an empty index.
+   `medaka gate run` sets it for every gate (`gate_cmd.gateArgs`); a bare
+   `medaka test --native` on this file inherits whatever the shell had.
+
+   Eight more retired scripts do NOT fit `Row` — each spawns its probe more
    than once per fixture, with per-fixture routing, injected environment
-   variables, or stdin, which one (probe, corpus, goldenSuffix) triple can't
-   express. Each keeps its own block below instead, over the SAME two
-   predicates as a `Row`: a spawn's exit code and stderr, and its stdout
-   against a golden.
+   variables, stdin, or a comparison that is not a text diff, which one
+   (probe, corpus, goldenSuffix) triple can't express. Each keeps its own
+   block below instead, over the SAME two predicates as a `Row`: a spawn's
+   exit code and stderr, and its stdout against a golden.
 
    - `diff_compiler_draft_semantic` grades FIVE spawns per fixture (a
      baseline plus four `MEDAKA_DRAFT_MUTATION`-controlled runs), only the
@@ -43,9 +53,18 @@
      "prelude-dependent" list — not expressible as one row's single probe.
    - `diff_compiler_repl` feeds a whole session transcript to its probe over
      STDIN, which no `Row` has a path for.
+   - `diff_compiler_analyze_project` compares two whole-project diagnostic
+     dumps SEMANTICALLY: per file, the MULTISET of `(severity, message)`
+     pairs and the START position of each located diagnostic, against a
+     frozen `oracle.json` that has no regenerator. Ordering is not part of
+     the claim, so a text diff would report a reordering as a failure.
+   - `diff_compiler_test` grades its corpus against per-module goldens AND
+     an eleven-case battery over the same probe — exit codes, two whole
+     pinned reports, and substrings that must and must not appear — which
+     one row's single stdout diff cannot express.
 
-   Two of the twelve retired scripts are not corpus-and-golden shaped and are
-   not bent into rows either — the two tests at the foot of this file:
+   Two of the sixteen retired scripts are not corpus-and-golden shaped and
+   are not bent into rows either — the two tests at the foot of this file:
 
    - `diff_compiler_new` scaffolded ONE project tree and compared the whole
      TREE (file list and bytes) against `test/new_golden/myapp`. There is no
@@ -61,10 +80,12 @@
    The registry entry keeps `diff_compiler_fmt`'s name so the merged gate
    inherits that gate's measured cost history rather than arriving uncosted
    (`gate_cost.baselineKey` reads the `run` path, and `medaka gate balance`
-   hard-refuses on a gate with no cost sample). The five other baseline rows
-   are orphans and are pruned by `test/gate_cost_ingest.sh`'s `--registry`
-   pass. A failure names the RETIRED gate it belongs to, so the shared
-   registry name never hides which property broke.
+   hard-refuses on a gate with no cost sample). Each retired gate's own
+   baseline row is dropped in the commit that retires it, so the baseline
+   holds no row the registry cannot key — `test/gate_cost_ingest.sh`'s
+   `--registry` pass would drop it anyway, a release later. A failure names
+   the RETIRED gate it belongs to, so the shared registry name never hides
+   which property broke.
 
    Every row also grades what the scripts did not: the probe's exit code and
    its stderr, not stdout alone (`probe_runner.processFailure`). Runs under
@@ -73,15 +94,19 @@
 import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint}
 import fs.{fixtureDirs, fixtureFiles}
 import io.{runVerb}
-import list.{dropWhile, somes, sort}
+import json.{Json, asArray, asInt, asString, get, parse}
+import list.{dropWhile, lookup, partitionResults, somes, sort, span}
 import path.{basename, dirname, stem}
 import probe_runner.{
   Row, errorPathFailures, gradeProbeRows, report, scaffoldFailures
 }
 import string.{
-  contains, endsWith, lines, replaceAll, startsWith, toLower, unlines
+  contains, endsWith, join, lines, replaceAll, split, startsWith, stripPrefix,
+  toInt, toLower, trim, unlines
 }
-import test_process.{boundedVerb, medakaRoot, scratchDir, underRoot}
+import test_process.{
+  boundedVerb, boundedVerbSeconds, medakaRoot, scratchDir, underRoot
+}
 
 -- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
 lexCorpus : List String
@@ -145,6 +170,16 @@ rows = [
     sorted = False,
     stripUnit = True,
     fixtures = 13,
+  },
+  Row {
+    gate = "diff_compiler_lint",
+    probe = "test/bin/lint_main",
+    corpus = ["test/lint_fixtures"],
+    prelude = [],
+    goldenSuffix = ".expected",
+    sorted = True,
+    stripUnit = True,
+    fixtures = 41,
   },
   Row {
     gate = "diff_compiler_lint_fix",
@@ -863,6 +898,574 @@ replFailures =
           if want == got then None else Some "repl: \{mismatchNote want got}"
       somes [codeFail, transcriptFail]
 
+-- # `diff_compiler_analyze_project`
+
+analyzeProjectFixturesDir : String
+analyzeProjectFixturesDir = "test/analyze_project_fixtures"
+
+{- | The per-spawn ceiling this probe runs under. It loads and typechecks a
+   whole project's import graph per fixture, which is a longer job than the
+   single-file probes `test_process.spawnTimeoutSeconds` is sized for. -}
+analyzeProjectSeconds : Int
+analyzeProjectSeconds = 180
+
+{- | One project diagnostic, as the two sides are compared on it: `key` over
+   the (severity, message) pair, and `start` for the side that located it.
+
+   `key` renders severity first and the message after a tab, so sorting keys
+   orders exactly as sorting (severity, message) pairs does: a severity is
+   one digit, and a tab sorts below every character a message carries. -}
+data ProjectDiag = ProjectDiag { key : String, start : Option String }
+
+projectDiagKey : Int -> String -> String
+projectDiagKey sev msg = "\{intToString sev}\t\{msg}"
+
+projectDiagStart : Int -> Int -> String
+projectDiagStart line col = "\{intToString line}:\{intToString col}"
+
+{- | The one `root_*.mdk` or `main_*.mdk` entry directly under `dir`, or an
+   error naming how many were found — the fixture is malformed unless there
+   is exactly one, and the probe takes a single entry. -}
+analyzeProjectEntry : String -> <FileRead "_"> Result String String
+analyzeProjectEntry dir = match fixtureFiles dir
+  Err e => Err "\{basename dir}: \{e}"
+  Ok paths => match sort (filter (projectEntryFile dir) paths)
+    [e] => Ok e
+    es =>
+      Err
+        "\{basename dir}: expected exactly one root_*.mdk or main_*.mdk entry, found \{intToString (length es)}"
+
+projectEntryFile : String -> String -> Bool
+projectEntryFile dir p =
+  endsWith ".mdk" p
+    && dirname p == dir
+    && (startsWith "root_" (basename p) || startsWith "main_" (basename p))
+
+{- | An `oracle.json`'s `files` array as (basename, diagnostics) buckets. -}
+oracleBuckets : Json -> Result String (List (String, List ProjectDiag))
+oracleBuckets j = match map asArray (get "files" j)
+  Some (Some arr) => match partitionResults (map oracleBucket (toList arr))
+    (e :: _, _) => Err e
+    ([], buckets) => Ok buckets
+  _ => Err "oracle.json has no \"files\" array"
+
+oracleBucket : Json -> Result String (String, List ProjectDiag)
+oracleBucket entry = match map asString (get "file" entry)
+  Some (Some path) => match map asArray (get "diagnostics" entry)
+    Some (Some arr) => match partitionResults (map oracleDiag (toList arr))
+      (e :: _, _) => Err "\{basename path}: \{e}"
+      ([], diags) => Ok (basename path, diags)
+    _ => Err "\{basename path}: no \"diagnostics\" array"
+  _ => Err "a \"files\" entry has no string \"file\""
+
+{- | One diagnostic object of the oracle. A `range` that is PRESENT with the
+   value `null` means the same as an absent one: `MethodNotInInterface`
+   (`compiler/frontend/resolve.mdk`) always builds with a literal `None`
+   location, so its JSON `range` is `null` rather than missing (#1269). -}
+oracleDiag : Json -> Result String ProjectDiag
+oracleDiag d = match (
+  map asInt (get "severity" d),
+  map asString (get "message" d),
+)
+  (Some (Some sev), Some (Some msg)) =>
+    Ok ProjectDiag { key = projectDiagKey sev msg, start = oracleStart d }
+  _ => Err "a diagnostic has no integer \"severity\" and string \"message\""
+
+oracleStart : Json -> Option String
+oracleStart d = match map (get "start") (get "range" d)
+  Some (Some s) => match (
+    map asInt (get "line" s),
+    map asInt (get "character" s),
+  )
+    (Some (Some line), Some (Some col)) => Some (projectDiagStart line col)
+    _ => None
+  _ => None
+
+{- | The probe's report as (basename, diagnostics) buckets: a `## FILE <path>`
+   line opens a bucket and every non-blank line under it is one diagnostic.
+   A line before the first `## FILE` belongs to no bucket and is dropped. -}
+reportBuckets : List String -> Result String (List (String, List ProjectDiag))
+reportBuckets [] = Ok []
+reportBuckets (l :: rest) = match stripPrefix "## FILE " l
+  None => reportBuckets rest
+  Some path => match span (ln => not (startsWith "## FILE " ln)) rest
+    (body, more) =>
+      match (partitionResults
+        (map reportDiag (filter (ln => trim ln /= "") body)))
+        (e :: _, _) => Err "\{basename (trim path)}: \{e}"
+        ([], diags) =>
+          map ((basename (trim path), diags) :: _) (reportBuckets more)
+
+{- | One `<severity>@<line>:<col>: <message>` or `<severity>: <message>` line
+   of the probe's report. An unparsable line is an error, not a dropped
+   line: the report's whole shape is this grammar, so a line outside it is a
+   claim about the probe, not noise to skip. -}
+reportDiag : String -> Result String ProjectDiag
+reportDiag l = match reportDiagAs "error" 1 l
+  Some d => Ok d
+  None => match reportDiagAs "warning" 2 l
+    Some d => Ok d
+    None => Err "unparsable diagnostic line: \{debug l}"
+
+reportDiagAs : String -> Int -> String -> Option ProjectDiag
+reportDiagAs word sev l = match stripPrefix "\{word}@" l
+  Some rest => locatedReportDiag sev rest
+  None =>
+    map
+      (msg => ProjectDiag { key = projectDiagKey sev msg, start = None })
+      (stripPrefix "\{word}: " l)
+
+locatedReportDiag : Int -> String -> Option ProjectDiag
+locatedReportDiag sev rest = match split ":" rest
+  lineText :: colText :: msgParts => match (toInt lineText, toInt colText)
+    (Some line, Some col) =>
+      map
+        (msg => ProjectDiag {
+          key = projectDiagKey sev msg,
+          start = Some (projectDiagStart line col),
+        })
+        (stripPrefix " " (join ":" msgParts))
+    _ => None
+  _ => None
+
+{- | The two sides' buckets compared: the FILE SET first, because a per-file
+   comparison over disagreeing sets reports every unshared file as an empty
+   bucket rather than as the missing file it is. -}
+bucketFailures : String ->
+  List (String, List ProjectDiag) ->
+  List (String, List ProjectDiag) ->
+  List String
+bucketFailures name want got =
+  let wantFiles = sort (map fst want)
+  let gotFiles = sort (map fst got)
+  if wantFiles /= gotFiles then
+    [
+      "\{name}: FILE SET mismatch: oracle=\{debug wantFiles} self=\{debug gotFiles}",
+    ]
+  else
+    somes
+      (map
+        (f => fileDiagFailure name f (bucketOf f want) (bucketOf f got))
+        wantFiles)
+
+bucketOf : String -> List (String, List ProjectDiag) -> List ProjectDiag
+bucketOf f buckets = match lookup f buckets
+  None => []
+  Some diags => diags
+
+{- | One file's two buckets: the sorted (severity, message) multiset, then
+   the START of every diagnostic the probe located. -}
+fileDiagFailure : String ->
+  String ->
+  List ProjectDiag ->
+  List ProjectDiag ->
+  Option String
+fileDiagFailure name f want got =
+  let wantKeys = sort (map (d => d.key) want)
+  let gotKeys = sort (map (d => d.key) got)
+  if wantKeys /= gotKeys then
+    Some
+      "\{name}/\{f}: (severity, message) mismatch: oracle=\{debug wantKeys} self=\{debug gotKeys}"
+  else match somes (map (startFailure name f want) got)
+    [] => None
+    m :: _ => Some m
+
+{- | A diagnostic the probe LOCATED must start where an oracle diagnostic
+   with the same (severity, message) starts. A diagnostic the probe left
+   positionless is not checked here: the resolve layer's own location
+   fallback publishes none, which is what the oracle records too. -}
+startFailure : String ->
+  String ->
+  List ProjectDiag ->
+  ProjectDiag ->
+  Option String
+startFailure name f want d = match d.start
+  None => None
+  Some at =>
+    let starts =
+      somes (map (w => if w.key == d.key then w.start else None) want)
+    if elem at starts then
+      None
+    else
+      Some
+        "\{name}/\{f}: START mismatch for \{debug d.key}: self=\{debug at} oracle_starts=\{debug starts}"
+
+{- | Everything wrong with one `analyze_project_fixtures/<name>/` project:
+   the probe's per-file diagnostic buckets against the committed
+   `oracle.json`'s.
+
+   `oracle.json` is FROZEN — `test/capture_goldens.sh` has no arm for this
+   corpus, and one is re-derived by hand from `./medaka check --json` and
+   reviewed before being committed. -}
+analyzeProjectFixtureFailures : String ->
+  <Exec "_", FileRead "_", IO> List String
+analyzeProjectFixtureFailures dir =
+  let name = basename dir
+  match analyzeProjectEntry dir
+    Err e => [e]
+    Ok entry => match readFile "\{dir}/oracle.json"
+      Err e => ["\{name}: no readable oracle.json: \{e}"]
+      Ok raw => match parse raw
+        Err e => ["\{name}: oracle.json did not parse: \{e}"]
+        Ok j => match oracleBuckets j
+          Err e => ["\{name}: \{e}"]
+          Ok want => analyzeProjectSpawn name dir entry want
+
+analyzeProjectSpawn : String ->
+  String ->
+  String ->
+  List (String, List ProjectDiag) ->
+  <Exec "_", IO> List String
+analyzeProjectSpawn name dir entry want =
+  let bin = underRoot "test/bin/diagnostics_project_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  match boundedVerbSeconds analyzeProjectSeconds bin [rt, core, entry, dir]
+    Err e => ["\{name}: could not spawn diagnostics_project_main: \{e}"]
+    Ok (code, out, err) => match spawnFailure name code err
+      Some m => [m]
+      None =>
+        match reportBuckets (lines (chompNewlines (stripUnitAutoPrint out)))
+          Err e => ["\{name}: \{e}"]
+          Ok got => bucketFailures name want got
+
+-- # `diff_compiler_test`
+
+{- | The per-spawn ceiling every `test_main` spawn below runs under.
+
+   #1307: a hung shrink loop stalled this family to CI's job ceiling with no
+   diagnostic. A bounded spawn turns that into a nonzero exit on the row that
+   hung, so the sweep still names the fixture. -}
+testReportSeconds : Int
+testReportSeconds = 120
+
+{- | The corpus the retired script ran by default: the stdlib modules whose
+   doctests and props the self-hosted `test_main` reproduces, plus the
+   `compiler_test_fixtures` whose whole report is pinned. Each has a
+   committed `<stem>.test.golden` beside it.
+
+   The three `array`/`vector`/`map` entries are #1712: all three had ZERO
+   doctests or props running under any gate, which is how
+   `Array.concat`/`concatLookup`'s documented O(outer*total) quadratic and
+   its empty-inner-array boundary hazard went unobserved. -}
+testReportCorpus : List String
+testReportCorpus = [
+  "stdlib/core.mdk",
+  "stdlib/args.mdk",
+  "stdlib/json.mdk",
+  "stdlib/toml.mdk",
+  "stdlib/list.mdk",
+  "stdlib/set.mdk",
+  "stdlib/string.mdk",
+  "stdlib/async.mdk",
+  "stdlib/byteparser.mdk",
+  "stdlib/bytebuilder.mdk",
+  "stdlib/hash_map.mdk",
+  "stdlib/hash_set.mdk",
+  "stdlib/array.mdk",
+  "stdlib/vector.mdk",
+  "stdlib/map.mdk",
+  "test/compiler_test_fixtures/mixed.mdk",
+  "test/compiler_test_fixtures/sum_dict.mdk",
+  "test/compiler_test_fixtures/record_prop.mdk",
+  "test/compiler_test_fixtures/int_shrink.mdk",
+  "test/compiler_test_fixtures/user_arbitrary.mdk",
+  "test/compiler_test_fixtures/mappable_not_foldable.mdk",
+  "test/compiler_test_fixtures/shadow_impl_tolist.mdk",
+  "test/compiler_test_fixtures/blockquote_and_valid.mdk",
+  "test/compiler_test_fixtures/doctest_typecheck_gate.mdk",
+]
+
+testFixturesDir : String
+testFixturesDir = "test/compiler_test_fixtures"
+
+{- | `text` with the tree's own absolute prefix removed and trailing newlines
+   chomped — the normalization the retired script's `sed "s#$ROOT/##g"` plus
+   `$(…)` did, and what makes a `.test.golden` machine-independent: the
+   doctest report embeds the path of every file it ran. -}
+testRelative : String -> <IO> String
+testRelative text = chompNewlines (replaceAll "\{medakaRoot}/" "" text)
+
+{- | One `test_main` spawn over `rel` with `roots` as its search roots: the
+   exit code, and stdout and stderr each path-normalized. -}
+testSpawn : String ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+testSpawn rel roots =
+  let bin = underRoot "test/bin/test_main"
+  let rt = underRoot "stdlib/runtime.mdk"
+  let core = underRoot "stdlib/core.mdk"
+  let args = [rt, core, underRoot rel] ++ map underRoot roots
+  match boundedVerbSeconds testReportSeconds bin args
+    Err e => Err "could not spawn test_main: \{e}"
+    Ok (code, out, err) => Ok (code, testRelative out, testRelative err)
+
+{- | One corpus module's report against its committed `.test.golden`.
+
+   The exit code is NOT graded here: three of the fixtures exist to hold a
+   FAILING doctest or prop and exit 1 by construction, so the golden is the
+   whole claim. Stderr still is — no corpus member writes an `E-PANIC`
+   today, and the retired script's `2>/dev/null` could not have said so. -}
+testGoldenFailure : String -> <Exec "_", FileRead "_", IO> Option String
+testGoldenFailure rel =
+  let name = basename rel
+  match testSpawn rel [dirname rel]
+    Err e => Some "\{name}: \{e}"
+    Ok (_, out, err) =>
+      if contains "E-PANIC" err then
+        Some "\{name}: test_main panicked — \{debug err}"
+      else
+        testGoldenCompare name rel (chompNewlines (stripUnitAutoPrint out))
+
+testGoldenCompare : String ->
+  String ->
+  String ->
+  <FileRead "_", IO> Option String
+testGoldenCompare name rel got =
+  let golden = underRoot "\{dirname rel}/\{stem rel}.test.golden"
+  match readFile golden
+    Err e => Some "\{name}: no readable golden \{golden}: \{e}"
+    Ok raw =>
+      let want = chompNewlines raw
+      if want == got then None else Some "\{name}: \{mismatchNote want got}"
+
+{- | One fixture asserted on its EXIT CODE alone: `medaka test` must exit
+   nonzero exactly when a doctest, prop or `test` declaration failed (P0-6 —
+   a printed "N passed, M failed" report used to always exit 0). -}
+testExitFailure : String ->
+  String ->
+  List String ->
+  Bool ->
+  <Exec "_", IO> Option String
+testExitFailure label rel roots wantZero = match testSpawn rel roots
+  Err e => Some "\{label}: \{e}"
+  Ok (code, _, _) =>
+    if code == 0 == wantZero then
+      None
+    else
+      Some
+        "\{label}: exited \{intToString code}, expected \{wantedExit wantZero}"
+
+wantedExit : Bool -> String
+wantedExit True = "0"
+wantedExit False = "nonzero"
+
+{- | One fixture asserted on its report CONTENT and its exit code: every
+   needle in `wanted` present, every needle in `unwanted` absent.
+
+   Content rather than a golden wherever the RIGHT answer and a WRONG one
+   both exit nonzero and the wrong one's shape varies — a non-exhaustive
+   match for one constructor arity, a dispatch panic for another — so the
+   only stable signal is which message was printed, and the ABSENCE half is
+   what carries the claim. -}
+testContentFailure : String ->
+  String ->
+  List String ->
+  Bool ->
+  List String ->
+  List String ->
+  <Exec "_", IO> Option String
+testContentFailure label rel roots wantZero wanted unwanted =
+  match testSpawn rel roots
+    Err e => Some "\{label}: \{e}"
+    Ok (code, out, err) =>
+      let text = "\{out}\n\{err}"
+      let missing = filter (n => not (contains n text)) wanted
+      let present = filter (n => contains n text) unwanted
+      if code == 0 /= wantZero then
+        Some
+          "\{label}: exited \{intToString code}, expected \{wantedExit wantZero}"
+      else if missing /= [] then
+        Some "\{label}: report is missing \{debug missing}"
+      else if present /= [] then
+        Some "\{label}: report contains \{debug present}"
+      else
+        None
+
+{- | One fixture whose WHOLE report is pinned inline rather than as a
+   capturable golden, because capturing at the buggy base would have
+   enshrined the wrong answer: the expected text is derived from the
+   fixture's own semantics. -}
+testReportFailure : String ->
+  String ->
+  List String ->
+  String ->
+  <Exec "_", IO> Option String
+testReportFailure label rel roots want = match testSpawn rel roots
+  Err e => Some "\{label}: \{e}"
+  Ok (_, out, _) =>
+    if want == out then None else Some "\{label}: \{mismatchNote want out}"
+
+{- | Phase 127's `test "…" = <Expectation>` runner: discovery, evaluation,
+   the per-test ok/FAIL report, and the summary.
+
+   Derived from the fixture rather than captured: it declares four tests at
+   lines 8, 9, 10 and 16, of which `expectEqual 1 2` and `fail "boom"` fail
+   with those two detail lines, and the surrounding `running`/verdict/summary
+   protocol is the one `hashNegativeHashReport` below already pins. -}
+testDeclsReport : String
+testDeclsReport = join "\n" [
+  "running doctests in test/compiler_test_fixtures/test_decls.mdk",
+  "  (no doctests found)",
+  "running tests in test/compiler_test_fixtures/test_decls.mdk",
+  "  running test/compiler_test_fixtures/test_decls.mdk:8: passing assertion",
+  "  ok   test/compiler_test_fixtures/test_decls.mdk:8: passing assertion",
+  "  running test/compiler_test_fixtures/test_decls.mdk:9: failing assertion",
+  "  FAIL test/compiler_test_fixtures/test_decls.mdk:9: failing assertion",
+  "       expected 1 but got 2",
+  "  running test/compiler_test_fixtures/test_decls.mdk:10: explicit fail",
+  "  FAIL test/compiler_test_fixtures/test_decls.mdk:10: explicit fail",
+  "       boom",
+  "  running test/compiler_test_fixtures/test_decls.mdk:16: block body",
+  "  ok   test/compiler_test_fixtures/test_decls.mdk:16: block body",
+  "",
+  "test/compiler_test_fixtures/test_decls.mdk: 2/4 passed (2 failed, 0 errors)",
+]
+
+{- | #416 (S1): a NEGATIVE hash from a contract-compliant `Hashable` impl —
+   the contract requires eq-agreement only, not non-negativity — reached a
+   negative bucket index and an out-of-bounds `arrayGetUnsafe` in
+   `hash_map`/`hash_set`'s `slotOf`. This is the EVAL-side guard; the native
+   one is `test/build_diff_fixtures/hash_negative_hash.mdk`. -}
+hashNegativeHashReport : String
+hashNegativeHashReport = join "\n" [
+  "running doctests in test/compiler_test_fixtures/hash_negative_hash.mdk",
+  "  (no doctests found)",
+  "running tests in test/compiler_test_fixtures/hash_negative_hash.mdk",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416)",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:32: hash_map: negative hash finds its key (#416)",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416)",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:35: hash_set: negative hash finds its element (#416)",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416)",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:38: hash_map: intMinBound hash (#416)",
+  "  running test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416)",
+  "  ok   test/compiler_test_fixtures/hash_negative_hash.mdk:40: hash_set: intMinBound hash (#416)",
+  "",
+  "test/compiler_test_fixtures/hash_negative_hash.mdk: 4/4 passed",
+]
+
+{- | #1292 (S0): `eval.runtimeTypeTag` tagged a `VCon` by its BARE
+   constructor name through the program-global `ctorToTypeRef`, so two
+   modules declaring a same-named constructor collapsed to one entry and
+   every value of the loser's type dispatched to the winner's impl, silently,
+   at exit 0.
+
+   This grades the THIRD driver, `evalModulesRootEnvWith` — the one the
+   `test` phase, the prop runner and the repl use, where `evalModulesWith`
+   serves doctests only; a fix wired into the other two module drivers alone
+   passes every other check in this tree. It also pins the `Pass`/`Fail`
+   exemption: `tools/test_runner.mdk` matches a test body's result as a bare
+   `VCon "Pass" []` / `VCon "Fail" [_]`, so renaming those would report all
+   three cases as ERROR instead of ok. -}
+ctorCollisionReport : String
+ctorCollisionReport = join "\n" [
+  "running doctests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk",
+  "  (no doctests found)",
+  "running tests in test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk",
+  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA",
+  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA",
+  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB",
+  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB",
+  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:29: a Pass/Fail collision does not break the test runner",
+  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:29: a Pass/Fail collision does not break the test runner",
+  "",
+  "test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk: 3/3 passed",
+]
+
+{- | #2820's four entries, and they are a SET: an alias-qualified name is a
+   parse error in type position, so one file can name only one of the two
+   `Color`s, and a fix that always takes the first candidate passes `main_a`
+   and fails `main_b`. The `2` entries vary the second, independent axis —
+   which type the prop is over and which order the two modules were imported
+   in are separate questions, and the candidate list under the shared route
+   word is built in load order, so a fix keyed on position rather than on the
+   resolved type's own identity splits the `main_a`/`main_a2` pair. -}
+twoModuleCollisionEntries : List (String, String)
+twoModuleCollisionEntries = [
+  ("main_a", "a's own Arbitrary instance is what a's Color draws from"),
+  ("main_b", "b's own Arbitrary instance is what b's Color draws from"),
+  ("main_a2", "a's own Arbitrary instance is what a's Color draws from"),
+  ("main_b2", "b's own Arbitrary instance is what b's Color draws from"),
+]
+
+twoModuleCollisionFailure : (String, String) -> <Exec "_", IO> Option String
+twoModuleCollisionFailure (entry, want) =
+  let dir = "\{testFixturesDir}/arbitrary_two_module_collision"
+  testContentFailure
+    "arbitrary_two_module_collision/\{entry}.mdk"
+    "\{dir}/\{entry}.mdk"
+    [dir]
+    True
+    ["Testing \{debug want} ... OK (100 tests)", "1 passed, 0 failed"]
+    []
+
+{- | The regression battery the retired script ran UNCONDITIONALLY beside its
+   corpus loop: fixtures whose claim is an exit code, a whole hand-derived
+   report, or the presence and ABSENCE of a specific message, none of which a
+   per-fixture golden diff can carry. -}
+testBatteryFailures : <Exec "_", IO> List String
+testBatteryFailures =
+  let fix = testFixturesDir
+  let stdlib = "stdlib"
+  somes [
+      testExitFailure "mixed.mdk exit code" "\{fix}/mixed.mdk" [fix] False,
+      testExitFailure "list.mdk exit code" "stdlib/list.mdk" [stdlib] True,
+      testExitFailure
+        "doctest_typecheck_gate.mdk exit code (#260)"
+        "\{fix}/doctest_typecheck_gate.mdk"
+        [fix]
+        False,
+      testExitFailure
+        "test_decls.mdk exit code"
+        "\{fix}/test_decls.mdk"
+        [fix, stdlib]
+        False,
+      testReportFailure
+        "test_decls.mdk (test-decl runner)"
+        "\{fix}/test_decls.mdk"
+        [fix, stdlib]
+        testDeclsReport,
+      testReportFailure
+        "hash_negative_hash.mdk (#416)"
+        "\{fix}/hash_negative_hash.mdk"
+        [fix, stdlib]
+        hashNegativeHashReport,
+      testReportFailure
+        "ctor_collision_test_seam/main.mdk (#1292)"
+        "\{fix}/ctor_collision_test_seam/main.mdk"
+        ["\{fix}/ctor_collision_test_seam", stdlib]
+        ctorCollisionReport,
+      testContentFailure
+        "arbitrary_name_collision"
+        "\{fix}/arbitrary_name_collision/main.mdk"
+        ["\{fix}/arbitrary_name_collision", stdlib]
+        False
+        ["prop_runner: no generator for type 'Color'"]
+        ["E-NONEXHAUSTIVE-MATCH", "no matching impl for dispatch"],
+      testContentFailure
+        "arbitrary_constrained_instance (#2813)"
+        "\{fix}/arbitrary_constrained_instance.mdk"
+        [fix]
+        False
+        ["the 'Arbitrary' instance for 'Tree' cannot be drawn from"]
+        ["Counterexample"],
+      testContentFailure
+        "shrink_not_called (#2812)"
+        "\{fix}/shrink_not_called.mdk"
+        [fix]
+        False
+        ["w = Wrap 500", "0 passed, 1 failed"]
+        ["w = Wrap 0"],
+      testContentFailure
+        "parse_error.mdk (#892)"
+        "\{fix}/parse_error.mdk"
+        [fix]
+        False
+        ["test/compiler_test_fixtures/parse_error.mdk:1:0:"]
+        ["E-PANIC"],
+    ]
+    ++ somes (map twoModuleCollisionFailure twoModuleCollisionEntries)
+
 test "draft-semantic transport survives every current emitter input" = report
   "draft-semantic"
   (match fixtureDirs (underRoot draftSemanticFixturesDir)
@@ -885,3 +1488,16 @@ test "typecheck-error fixtures agree with their driver(s)' committed golden" =
 
 test "the self-hosted repl reproduces its committed session transcript" =
   report "repl" replFailures
+
+test "project-wide diagnostics bucket per file the way the oracle does" = report
+  "analyze-project"
+  (match fixtureDirs (underRoot analyzeProjectFixturesDir)
+    Err e => ["\{analyzeProjectFixturesDir}: \{e}"]
+    Ok dirs =>
+      fold (acc d => acc ++ analyzeProjectFixtureFailures d) [] (sort dirs))
+
+test "`medaka test`'s corpus reproduces its committed reports" =
+  report "test-report" (somes (map testGoldenFailure testReportCorpus))
+
+test "`medaka test`'s exit code and its pinned reports still discriminate" =
+  report "test-battery" testBatteryFailures

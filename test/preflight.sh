@@ -701,9 +701,9 @@ while IFS= read -r f; do
     # subsystem produces, and the ones a `check*`/`snapshot*`/goldens-only diff
     # cannot see (they compare against captured output, not the spec).
     compiler/types/*)
-      add 'diff_compiler_typecheck*'; add 'diff_compiler_snapshot*'
+      add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*'
       add 'diff_compiler_check*'; add 'diff_compiler_fmt'
-      add 'diff_compiler_diagnostics'; add 'diff_compiler_eval*'
+      add 'diff_compiler_fmt'; add 'diff_compiler_eval*'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
       # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
@@ -741,7 +741,7 @@ while IFS= read -r f; do
       # typecheck.mdk-owned — that regression went undetected by every gate this
       # arm already listed. Listed in ci.yml's `types` shard pattern, so it runs at
       # the merge queue; missing here it ran neither locally nor on the PR check.
-      add 'diff_compiler_analyze_project'
+      add 'diff_compiler_fmt'
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # typecheck.mdk's usesImplDict decides whether a dict param exists at all
       # (the #1648 half), so a types/* change can move it without touching backend/*.
@@ -823,7 +823,7 @@ while IFS= read -r f; do
     # #1131: eval/eval.mdk is a cited site in BOTH semantics tables.
     compiler/eval/*|compiler/ir/core_ir_eval.mdk)
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'
-      add 'diff_compiler_ported'; add 'diff_compiler_test'; add 'diff_compiler_capability_matrix'
+      add 'diff_compiler_ported'; add 'diff_compiler_fmt'; add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
       # F-S3-6/F-2-mechanical-fixes: gates.toml now declares compiler/eval/eval.mdk
@@ -835,7 +835,7 @@ while IFS= read -r f; do
     # cited sites under compiler/ir/*.
     compiler/ir/*)
       add 'diff_compiler_core_ir*'; add 'diff_compiler_eval*'; add 'diff_compiler_llvm*'; add 'diff_compiler_snapshot*'
-      add 'diff_compiler_draft_semantic'
+      add 'diff_compiler_fmt'
       add 'diff_compiler_anf_identity'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
@@ -890,7 +890,7 @@ while IFS= read -r f; do
     # #1319 unit 0: loader.mdk owns the dependency walk and topo sort — the module
     # ORDER every table downstream is populated in.
     compiler/driver/*)
-      add 'diff_compiler_check*'; add 'diff_compiler_diagnostics'; add 'diff_compiler_build'
+      add 'diff_compiler_check*'; add 'diff_compiler_fmt'; add 'diff_compiler_build'
       add 'diff_compiler_import_order'
       # G-0: same reason — the loader fixes the order every downstream table is
       # populated in, interface declarations included.
@@ -913,7 +913,7 @@ while IFS= read -r f; do
       # AND the `requireArgs <verb>ArgSpec` call sites the reject-floor gate derives
       # its covered set from, so a change here moves both of that gate's inputs.
       add 'diff_compiler_cli_reject_floor'
-      add 'diff_compiler_analyze_project' ;;
+      add 'diff_compiler_fmt' ;;
     # diff_compiler_fmt carries the autofix golden rows (the former
     # diff_compiler_lint_fix), which no `lint*` glob reaches.
     compiler/tools/lint*.mdk)      add 'diff_compiler_lint*'; add 'diff_compiler_fmt' ;;
@@ -921,14 +921,14 @@ while IFS= read -r f; do
     compiler/tools/lsp.mdk)        add 'diff_compiler_lsp*' ;;
     compiler/tools/snapshot.mdk)
                                    add 'diff_compiler_snapshot*' ;;
-    compiler/tools/repl.mdk)       add 'diff_compiler_repl' ;;
+    compiler/tools/repl.mdk)       add 'diff_compiler_fmt' ;;
     # #1131: tools/test_cmd.mdk (matched by the `*test*` glob below) is a
     # cited DICT-SEMANTICS site.
     # #1110: test_cmd.mdk is the driver the agreement probe's `single` arm mirrors
     # (elaborateModules over [("__user__", decls)]), so a change to how it elaborates
     # moves which module id that arm claims.
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
-      add 'diff_compiler_test'; add 'diff_compiler_ported'
+      add 'diff_compiler_fmt'; add 'diff_compiler_ported'
       # #1229: diff_compiler_test_typecheck.sh pins the typecheck-first gate in
       # test_cmd.mdk (`typecheckExempt` + the two `prepareMulti` arms) — including
       # the zero-doctest cell, whose whole failure mode is exit 0 with no output,

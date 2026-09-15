@@ -551,8 +551,8 @@ echo "" >&2
 echo "pre-commit: checked this run: $checked." >&2
 echo "pre-commit: NOT checked this run:$notchecked —" >&2
 echo "pre-commit:   if you touched stdlib/ or compiler/, run their gates before you push" >&2
-echo "pre-commit:   (test/diff_compiler_fmt_test.mdk, test/diff_compiler_test.sh," >&2
-echo "pre-commit:    test/diff_compiler_selfproc.sh, test/diff_native_cli.sh). This hook's" >&2
+echo "pre-commit:   (test/diff_compiler_fmt_test.mdk, test/diff_compiler_selfproc.sh," >&2
+echo "pre-commit:    test/diff_native_cli.sh). This hook's" >&2
 echo "pre-commit:   silence is not evidence those goldens are still current. (#491)" >&2
 
 exit 0
