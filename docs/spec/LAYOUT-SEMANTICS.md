@@ -582,7 +582,7 @@ left-shifted.
 1. *(Historical.)* Both lexers computed the relation L of §4 plus the
    Stage-A/§5/§6 rules, bit-for-bit. The differential gates
    `test/diff_compiler_snapshot_frontend_test.mdk` (the `# TOKENS` snapshot) and
-   `test/diff_compiler_lex_files.sh` (the stdlib + the lexer itself) enforced
+   the `lex_files` row of `test/diff_compiler_fmt_test.mdk` (the stdlib + the lexer itself) enforced
    token-stream identity against the OCaml oracle before its removal; they
    passed and the audit battery (≈65 probes beyond the corpus) found **zero**
    token-level divergence.

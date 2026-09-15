@@ -186,7 +186,7 @@ The playground runs this backend; everything below is tested on llvm only today.
   `medaka build` stderr == `medaka check` stderr (locks F3's `1:0` location collapse — this
   whole failure class is currently un-gateable).
 
-### 4. doctest gate — `test/diff_compiler_test.sh` (+ `stdlib/*.test.golden`)
+### 4. doctest gate — `test/diff_compiler_fmt_test.mdk` (+ `stdlib/*.test.golden`)
 - **P1 gate the passing-but-ungated modules** (all verified green natively today):
   `math`, `time`, `option`, `result`, `hex`, `base64`, `path`, `nonempty`, `validation`.
 - **P1 un-defer `map`, `array`, `mut_array`** — the gate header's deferral reasons are stale:

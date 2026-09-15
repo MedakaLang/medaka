@@ -97,7 +97,7 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
 9. **Printer/fmt** — `compiler/tools/printer.mdk` and `compiler/tools/fmt.mdk`.
    Round-trip must hold: parse → print → parse yields the same AST.
    The `# PRINTER` section of `test/diff_compiler_snapshot_frontend_test.mdk` pins the
-   reprinted source; `test/diff_compiler_fmt.sh` covers the comment-preserving formatter.
+   reprinted source; `test/diff_compiler_fmt_test.mdk` covers the comment-preserving formatter.
 
 ## Nodes introduced by a pass, not the parser
 

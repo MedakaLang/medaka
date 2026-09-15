@@ -586,7 +586,7 @@ over staged `.mdk` (`test/` fixtures excluded). Re-install: `cp .githooks/pre-co
     LAST**, after every `.mdk`-staging commit is in — or stash across it. `--no-verify` and
     `core.hooksPath=/dev/null` are not substitutes. → dossier
 - **[H-LEXTOK] Lextok** — OPPORTUNISTIC (needs `test/bin/lex_main` + a sibling
-  `.lextok.golden`). Stale golden: `CAPTURE=1 sh test/diff_compiler_lex_files.sh <files>`,
+  `.lextok.golden`). Stale golden: `sh test/capture_goldens.sh --frozen lextok`,
   re-stage `.lextok.golden`.
 - **[H-LINT-BASELINE] Baselined lint** — a per-file COUNT ratchet for a rule the tree isn't
   clean of yet (`rule-stdlib-reimpl`), scoped to `$LINT_ROOTS` (`compiler stdlib sqlite`).

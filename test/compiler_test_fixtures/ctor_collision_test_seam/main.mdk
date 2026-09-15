@@ -10,7 +10,7 @@
 -- down `runOneTest`'s `other => Errored` arm, so all three below would report
 -- `ERROR` rather than `ok`.
 --
--- 🚨 EXPECTED REPORT HAND-DERIVED, held INLINE in test/diff_compiler_test.sh (no
+-- 🚨 EXPECTED REPORT HAND-DERIVED, held INLINE in test/diff_compiler_fmt_test.mdk (no
 -- capturable golden), because the buggy base would have enshrined the wrong answer:
 --   * `mkA 7` is built inside amodl, so it is amodl's `Box` : TA -> "amod"
 --   * `Box 5` is bmodl's `Box` (the only `Box` this file imports) : TB -> "bmod"

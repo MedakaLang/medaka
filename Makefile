@@ -154,18 +154,18 @@ test: medaka
 	## crash, never a pass.
 	## S-hashes: stdlib/hmac.mdk's RFC 4231 / boundary-key-length checks. Its
 	## own module is outside every entry's import closure ([W-MODULE-BLIND]),
-	## and it is not in test/diff_compiler_test.sh's explicit file list, so
+	## and it is not in test/diff_compiler_fmt_test.mdk's testReportCorpus list, so
 	## without this line nothing would run them and reverting the variable-key
 	## schedule would be caught by nothing.
 	./medaka test stdlib/hmac.mdk
 	## S-base32: stdlib/base32.mdk's RFC 4648 vectors and canonical-rejection
 	## checks. Its own module is outside every entry's import closure
-	## ([W-MODULE-BLIND]) and is not in test/diff_compiler_test.sh's explicit
+	## ([W-MODULE-BLIND]) and is not in test/diff_compiler_fmt_test.mdk's testReportCorpus
 	## file list, so without this line nothing would run them.
 	./medaka test stdlib/base32.mdk
 	## stdlib/http.mdk's resource-limit examples. Its own module is outside
 	## every entry's import closure ([W-MODULE-BLIND]) and is not in
-	## test/diff_compiler_test.sh's explicit file list, so without this line
+	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without this line
 	## nothing would run them.
 	./medaka test stdlib/http.mdk
 	./medaka test --native stdlib/fs.mdk
@@ -187,7 +187,7 @@ test: medaka
 	## and the two linear-time step-count sentinels that fail loudly if the
 	## Pike VM's sparse-set dedup or its priority cut is ever lost). Outside
 	## every entry's import closure ([W-MODULE-BLIND]) and not in
-	## test/diff_compiler_test.sh's explicit file list, so without this line
+	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without this line
 	## nothing would run them.
 	./medaka test stdlib/regex.mdk
 	## …and the conformance table beside it, whose expected spans, captures,

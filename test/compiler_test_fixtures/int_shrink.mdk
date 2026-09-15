@@ -12,10 +12,10 @@
 -- TERMINATED and CONVERGED to the true minimal counterexample (0), not just
 -- that it eventually gave up.
 --
--- ⚠️ If this fixture ever hangs again, `test/diff_compiler_test.sh` wraps its
--- oracle invocation in a portable per-fixture alarm timeout (see that
--- script's `run_t` helper) so CI reports a clear timeout failure here rather
--- than burning to the 60-minute job ceiling with no diagnostic.
+-- ⚠️ If this fixture ever hangs again, `test/diff_compiler_fmt_test.mdk` wraps
+-- its oracle invocation in a per-fixture bounded spawn (see that module's
+-- `boundedVerbSeconds testReportSeconds` call) so CI reports a clear timeout
+-- failure here rather than burning to the 60-minute job ceiling with no diagnostic.
 
 prop "int_shrink: deliberately false over Int (#1307)" (a : Int) = False
 

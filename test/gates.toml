@@ -281,7 +281,7 @@ toolchain = []
 [[gate]]
 name = "build_cmd"
 area = "backend"
-shard = "gates_8"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -297,7 +297,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "lsp_harness"
 area = "tools"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -643,7 +643,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/field_vectors"
 area = "engines"
-shard = "gates_7"
+shard = "gates_4"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -936,7 +936,7 @@ toolchain = ["node>=24"]
 [[gate]]
 name = "sqlite/test/dml_oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -951,7 +951,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/index_write_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_5"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -986,7 +986,7 @@ toolchain = []
 [[gate]]
 name = "sqlite/test/oracle"
 area = "engines"
-shard = "gates_7"
+shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1035,7 +1035,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_3"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1290,7 +1290,7 @@ toolchain = []
 [[gate]]
 name = "check_syntax_examples"
 area = "docs"
-shard = "gates_4"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1305,7 +1305,7 @@ toolchain = []
 [[gate]]
 name = "cross_project_deps"
 area = "infra"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1315,21 +1315,6 @@ run = "test/cross_project_deps_test.mdk"
 oracles = []
 sources = ["compiler/driver/loader.mdk", "test/compiler_cli_test_support.mdk", "test/cross_project_deps_test.mdk"]
 corpus = ["test/cross_project_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_analyze_project"
-area = "infra"
-shard = "gates_4"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_analyze_project.sh"
-oracles = ["diagnostics_project_main"]
-sources = ["compiler/driver/*", "compiler/types/*", "test/diff_compiler_analyze_project.sh"]
-corpus = ["test/analyze_project_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1350,7 +1335,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_build"
 area = "backend"
-shard = "gates_4"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1396,7 +1381,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_cli_modules"
 area = "types"
-shard = "gates_4"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1514,21 +1499,6 @@ corpus = ["test/core_ir_typed_modules_fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_diagnostics"
-area = "types"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_diagnostics.sh"
-oracles = ["diagnostics_main"]
-sources = ["compiler/driver/*", "compiler/types/*", "test/diff_compiler_diagnostics.sh"]
-corpus = ["test/check_match_fixtures", "test/diff_fixtures", "test/exhaust_fixtures", "test/resolve_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_dict_semantics"
 area = "infra"
 shard = "gates_2"
@@ -1619,51 +1589,6 @@ corpus = ["docs/stdlib"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_draft_semantic"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_draft_semantic.sh"
-oracles = ["draft_semantic_main"]
-sources = ["compiler/ir/*", "test/diff_compiler_draft_semantic.sh"]
-corpus = ["test/draft_semantic_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_effect_hole"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_effect_hole.sh"
-oracles = ["check_main"]
-sources = ["test/diff_compiler_effect_hole.sh"]
-corpus = ["test/diff_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_effect_param"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_effect_param.sh"
-oracles = ["check_main"]
-sources = ["test/diff_compiler_effect_param.sh"]
-corpus = ["test/diff_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_effect_polarity"
 area = "infra"
 shard = "gates_2"
@@ -1694,21 +1619,6 @@ corpus = ["test/engine_fixtures", "test/llvm_fixtures", "test/llvm_fixtures_modu
 toolchain = ["wasm-tools", "node>=24", "clang"]
 
 [[gate]]
-name = "diff_compiler_entry_exit_codes"
-area = "infra"
-shard = "gates_8"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_entry_exit_codes.sh"
-oracles = ["llvm_emit_modules_main"]
-sources = ["test/diff_compiler_entry_exit_codes.sh"]
-corpus = []
-toolchain = ["wasm-tools", "node>=24"]
-
-[[gate]]
 name = "diff_compiler_eval_json"
 area = "eval"
 shard = "gates_2"
@@ -1726,7 +1636,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_error_quality_baseline"
 area = "diagnostics"
-shard = "gates_4"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1766,21 +1676,6 @@ run = "test/diff_compiler_eval_test.mdk"
 oracles = ["core_ir_main", "core_ir_modules_main", "core_ir_prelude_main", "core_ir_roundtrip_main", "core_ir_run_main", "core_ir_typed_main", "eval_dict_batch", "eval_list_batch", "eval_main", "eval_modules_main", "eval_prelude_batch", "eval_prelude_main", "eval_run_batch", "eval_run_main", "eval_typed_batch", "eval_typed_modules_main"]
 sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_eval_test.mdk"]
 corpus = ["test/diff_fixtures", "test/eval_dict_fixtures", "test/eval_fixtures", "test/eval_list_fixtures", "test/eval_modules_fixtures", "test/eval_prelude_fixtures", "test/eval_typed_fixtures", "test/eval_typed_modules_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_exhaust"
-area = "types"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_exhaust.sh"
-oracles = ["exhaust_main"]
-sources = ["compiler/frontend/exhaust.mdk", "compiler/types/*", "test/diff_compiler_exhaust.sh"]
-corpus = ["test/exhaust_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1835,12 +1730,12 @@ shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_fmt.sh"
-oracles = ["fmt_main"]
-sources = ["compiler/frontend/ast.mdk", "compiler/frontend/parser.mdk", "compiler/tools/fmt.mdk", "compiler/tools/printer.mdk", "test/diff_compiler_fmt.sh"]
-corpus = ["test/fmt_fixtures", "test/parse_fixtures"]
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_fmt_test.mdk"
+oracles = ["check_main", "diagnostics_main", "diagnostics_project_main", "draft_semantic_main", "exhaust_main", "fmt_main", "lex_main", "lint_fix_main", "lint_main", "llvm_emit_modules_main", "new_main", "refindex_main", "repl_main", "test_main", "typecheck_main"]
+sources = ["compiler/backend/private_mangle.mdk", "compiler/driver/*", "compiler/entries/entry_support.mdk", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/parser.mdk", "compiler/ir/*", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/fmt.mdk", "compiler/tools/lint*.mdk", "compiler/tools/new_cmd.mdk", "compiler/tools/printer.mdk", "compiler/tools/prop_runner.mdk", "compiler/tools/repl.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_fmt_test.mdk", "test/probe_runner.mdk"]
+corpus = ["test/analyze_project_fixtures", "test/check_match_fixtures", "test/compiler_test_fixtures", "test/diff_fixtures", "test/draft_semantic_fixtures", "test/exhaust_fixtures", "test/fmt_fixtures", "test/lint_fix_fixtures", "test/lint_fixtures", "test/new_golden", "test/parse_fixtures", "test/references_fixtures", "test/repl_fixtures", "test/resolve_fixtures", "test/typecheck_error_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -1921,7 +1816,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_internal_extern"
 area = "infra"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1979,21 +1874,6 @@ corpus = ["test/let_refute_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
-name = "diff_compiler_lex_files"
-area = "frontend"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_lex_files.sh"
-oracles = ["lex_main"]
-sources = ["compiler/frontend/lexer.mdk", "test/diff_compiler_lex_files.sh"]
-corpus = []
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
 shard = "gates_7"
@@ -2021,21 +1901,6 @@ run = "test/diff_compiler_lint_crossfile.sh"
 oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_crossfile.sh"]
 corpus = ["test/lint_crossfile_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_lint_fix"
-area = "tools"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_lint_fix.sh"
-oracles = ["lint_fix_main"]
-sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint_fix.sh"]
-corpus = ["test/lint_fix_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2069,24 +1934,9 @@ corpus = ["test/lint_multi_fixtures"]
 toolchain = []
 
 [[gate]]
-name = "diff_compiler_lint"
-area = "tools"
-shard = "gates_3"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_lint.sh"
-oracles = ["lint_main"]
-sources = ["compiler/tools/lint*.mdk", "test/diff_compiler_lint.sh"]
-corpus = ["test/lint_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_lint_baseline"
 area = "tooling"
-shard = "gates_3"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2221,7 +2071,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_mcp"
 area = "tools"
-shard = "gates_2"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2231,21 +2081,6 @@ run = "test/diff_compiler_mcp.sh"
 oracles = []
 sources = ["test/diff_compiler_mcp.sh"]
 corpus = ["test/mcp_fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_new"
-area = "tools"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_new.sh"
-oracles = ["new_main"]
-sources = ["test/diff_compiler_new.sh"]
-corpus = []
 toolchain = []
 
 [[gate]]
@@ -2386,7 +2221,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_project_enrolment"
 area = "soundness"
-shard = "gates_5"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2411,21 +2246,6 @@ run = "test/diff_compiler_reach_fail_open.sh"
 oracles = []
 sources = [".github/workflows/ci.yml", "test/preflight.sh", "test/gates.toml", "test/diff_compiler_reach_fail_open.sh"]
 corpus = []
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_references_correctness"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_references_correctness.sh"
-oracles = ["refindex_main"]
-sources = ["test/diff_compiler_references_correctness.sh"]
-corpus = ["test/references_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2472,21 +2292,6 @@ oracles = []
 sources = ["test/diff_compiler_rejection_parity.sh"]
 corpus = ["test/llvm_fixtures", "test/llvm_fixtures_typed", "test/wasm/fixtures", "test/wasm/fixtures_typed"]
 toolchain = ["wasm-tools", "node>=24", "clang"]
-
-[[gate]]
-name = "diff_compiler_repl"
-area = "tools"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_repl.sh"
-oracles = ["repl_main"]
-sources = ["compiler/tools/repl.mdk", "test/diff_compiler_repl.sh"]
-corpus = ["test/repl_fixtures"]
-toolchain = []
 
 [[gate]]
 name = "diff_compiler_rt_obj"
@@ -2699,21 +2504,6 @@ corpus = []
 toolchain = ["clang"]
 
 [[gate]]
-name = "diff_compiler_test"
-area = "infra"
-shard = "gates_4"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_compiler_test.sh"
-oracles = ["test_main"]
-sources = ["compiler/eval/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/backend/private_mangle.mdk", "test/diff_compiler_test.sh"]
-corpus = ["test/compiler_test_fixtures"]
-toolchain = []
-
-[[gate]]
 name = "diff_compiler_test_typecheck"
 area = "infra"
 shard = "gates_2"
@@ -2741,21 +2531,6 @@ run = "test/diff_compiler_tmc_parity.sh"
 oracles = []
 sources = ["compiler/backend/*", "test/diff_compiler_tmc_parity.sh"]
 corpus = ["test/stack_fixtures", "test/wasm/fixtures"]
-toolchain = []
-
-[[gate]]
-name = "diff_compiler_typecheck_errors"
-area = "types"
-shard = "gates_4"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_typecheck_errors.sh"
-oracles = ["check_main", "typecheck_main"]
-sources = ["compiler/types/*", "test/diff_compiler_typecheck_errors.sh"]
-corpus = ["test/typecheck_error_fixtures"]
 toolchain = []
 
 [[gate]]
@@ -2791,7 +2566,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_native_stack"
 area = "infra"
-shard = "gates_3"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3016,7 +2791,7 @@ toolchain = []
 [[gate]]
 name = "selfcompile_build_fixpoint"
 area = "backend"
-shard = "gates_5"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3031,7 +2806,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "selfcompile_emit"
 area = "backend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3445,7 +3220,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_emitted_code_floor"
 area = "infra"
-shard = "gates_5"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"

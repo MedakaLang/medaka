@@ -46,8 +46,9 @@
 #      say `printer` is valid; it has no case arm and falls through to "unknown
 #      --frozen tag", exit 2):
 #        grep -nE '^    [A-Za-z_]+\)$' test/capture_goldens.sh
-#      — currently `fmt`, `selfproc_legA`, `boot_typecheck`, `llvm_eval`,
-#      `build_construct`, `native_cli`.
+#      — currently `fmt`, `lextok`, `lint`, `lint_fix`, `selfproc_legA`,
+#      `boot_typecheck`, `llvm_eval`, `build_construct`, `native_cli`,
+#      `draft_semantic`, `references_correctness`, `test`.
 # EVERY OTHER corpus this file's comments describe as "FROZEN" (eval, eval_prelude,
 # eval_list, eval_typed_modules, tcmod, tc_probe, diag_analyze, analyze_project,
 # new, build_diff, selfproc's lex/parse/tc probes, …) has NO regenerator here at
@@ -179,7 +180,7 @@ case "${1:-}" in
   --frozen)
     FROZEN_TAG="${2:-}"
     [ -n "$FROZEN_TAG" ] || {
-      echo "usage: sh test/capture_goldens.sh --frozen <fmt|printer|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli> [--only <fixture-or-glob>]"
+      echo "usage: sh test/capture_goldens.sh --frozen <fmt|lextok|lint|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness|test> [--only <fixture-or-glob>]"
       exit 2
     }
     case "${3:-}" in
@@ -261,6 +262,116 @@ if [ -n "$FROZEN_TAG" ]; then
         "$ROOT/test/fmt_fixtures/*.mdk" "$ROOT/test/parse_fixtures/*.mdk"
       if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
         echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/fmt_fixtures/ or test/parse_fixtures/"; exit 2
+      fi ;;
+    lextok)
+      # The self-lex corpus is REAL SOURCE, not a fixture directory: the lexer
+      # itself plus twelve stdlib modules, named one by one here and by the same
+      # list in test/diff_compiler_fmt_test.mdk's `lexCorpus`.  Both sides run
+      # `lex_main <f> | strip_unit`, so a captured golden cannot drift from what
+      # the gate checks (#167).
+      regen_frozen lex_main lextok.golden "" \
+        "$ROOT/compiler/frontend/lexer.mdk" \
+        "$ROOT/stdlib/core.mdk" "$ROOT/stdlib/list.mdk" \
+        "$ROOT/stdlib/array.mdk" "$ROOT/stdlib/string.mdk" \
+        "$ROOT/stdlib/map.mdk" "$ROOT/stdlib/set.mdk" \
+        "$ROOT/stdlib/io.mdk" "$ROOT/stdlib/hash_map.mdk" \
+        "$ROOT/stdlib/hash_set.mdk" "$ROOT/stdlib/vector.mdk" \
+        "$ROOT/stdlib/json.mdk" "$ROOT/stdlib/test.mdk"
+      # Fallback for --only <name> outside the fixed 13-module gate corpus above:
+      # the pre-commit hook (check 5) enforces every TRACKED `.lextok.golden`
+      # sibling, not just the 13 the diff_compiler_fmt gate's lexCorpus checks, so
+      # a name outside those 13 must still be reachable. Search the whole tree for
+      # a tracked `<name>.mdk` with a `.lextok.golden` sibling and regenerate it
+      # through the same regen_frozen/lex_main capture used above — never a second
+      # copy of the capture logic.
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        fallback_srcs=""
+        fallback_n=0
+        for g in $(git -C "$ROOT" ls-files '*.lextok.golden'); do
+          src="$ROOT/${g%.lextok.golden}.mdk"
+          [ -f "$src" ] || continue
+          only_match "$(basename "$src" .mdk)" || continue
+          fallback_srcs="$fallback_srcs $src"
+          fallback_n=$((fallback_n+1))
+        done
+        if [ "$fallback_n" -gt 1 ]; then
+          echo "wrote 0 goldens — --only '$ONLY_FILTER' matched $fallback_n tracked .lextok.golden siblings; refusing to guess"; exit 2
+        fi
+        [ "$fallback_n" -eq 1 ] && regen_frozen lex_main lextok.golden "" $fallback_srcs
+      fi
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in the self-lex corpus or any tracked .lextok.golden sibling"; exit 2
+      fi ;;
+    lint_fix)
+      regen_frozen lint_fix_main fixed "" "$ROOT/test/lint_fix_fixtures/*.mdk"
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/lint_fix_fixtures/"; exit 2
+      fi ;;
+    lint)
+      # test/lint_fixtures/<name>.expected : lint_main's own report, trailing
+      # Unit auto-print dropped and LC_ALL=C sorted — the order the
+      # `diff_compiler_lint` row in test/diff_compiler_fmt_test.mdk compares in.
+      # regen_frozen cannot serve this family: it neither sorts nor pins
+      # MEDAKA_ROOT. The pin is load-bearing, not defensive — lint_main builds
+      # its stdlib index from $MEDAKA_ROOT/stdlib and indexes nothing when that
+      # is unset, which silences every rule-stdlib-reimpl finding and would
+      # capture a shorter, wrong golden for eight of these fixtures.
+      LINT="$BIN/lint_main"
+      [ -x "$LINT" ] || { echo "missing $LINT — run: sh test/build_oracles.sh --build-one lint_main"; exit 2; }
+      MEDAKA_ROOT="$ROOT"
+      export MEDAKA_ROOT
+      for f in "$ROOT"/test/lint_fixtures/*.mdk; do
+        [ -f "$f" ] || continue
+        only_match "$(basename "$f" .mdk)" || continue
+        lt_tmp="$(mktemp)"
+        "$LINT" "$f" 2>/dev/null | strip_unit | LC_ALL=C sort > "$lt_tmp"
+        fwrote=$((fwrote+1))
+        finish_write "${f%.mdk}.expected" "$lt_tmp"
+        rm -f "$lt_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/lint_fixtures/"; exit 2
+      fi ;;
+    test)
+      # <module>.test.golden : the `medaka test` report for each module in the
+      # corpus the `test-report` block of test/diff_compiler_fmt_test.mdk
+      # grades, with this checkout's absolute root prefix stripped and the
+      # trailing Unit auto-print dropped — the same normalization that block's
+      # `testRelative` applies before comparing. Each module is its own root
+      # (`dirname`), and each run is bounded at the same 120s the block's
+      # `testReportSeconds` names, so a fixture that starts hanging fails the
+      # capture instead of wedging it.
+      TESTB="$BIN/test_main"
+      [ -x "$TESTB" ] || { echo "missing $TESTB — run: sh test/build_oracles.sh --build-one test_main"; exit 2; }
+      tr_run() { perl -e 'alarm shift; exec @ARGV' "$@"; }
+      for f in "$ROOT"/stdlib/core.mdk "$ROOT"/stdlib/args.mdk \
+        "$ROOT"/stdlib/json.mdk "$ROOT"/stdlib/toml.mdk \
+        "$ROOT"/stdlib/list.mdk "$ROOT"/stdlib/set.mdk \
+        "$ROOT"/stdlib/string.mdk "$ROOT"/stdlib/async.mdk \
+        "$ROOT"/stdlib/byteparser.mdk "$ROOT"/stdlib/bytebuilder.mdk \
+        "$ROOT"/stdlib/hash_map.mdk "$ROOT"/stdlib/hash_set.mdk \
+        "$ROOT"/stdlib/array.mdk "$ROOT"/stdlib/vector.mdk \
+        "$ROOT"/stdlib/map.mdk \
+        "$ROOT"/test/compiler_test_fixtures/mixed.mdk \
+        "$ROOT"/test/compiler_test_fixtures/sum_dict.mdk \
+        "$ROOT"/test/compiler_test_fixtures/record_prop.mdk \
+        "$ROOT"/test/compiler_test_fixtures/int_shrink.mdk \
+        "$ROOT"/test/compiler_test_fixtures/user_arbitrary.mdk \
+        "$ROOT"/test/compiler_test_fixtures/mappable_not_foldable.mdk \
+        "$ROOT"/test/compiler_test_fixtures/shadow_impl_tolist.mdk \
+        "$ROOT"/test/compiler_test_fixtures/blockquote_and_valid.mdk \
+        "$ROOT"/test/compiler_test_fixtures/doctest_typecheck_gate.mdk; do
+        [ -f "$f" ] || continue
+        only_match "$(basename "$f" .mdk)" || continue
+        tr_tmp="$(mktemp)"
+        tr_run 120 "$TESTB" "$RUNTIME" "$CORE" "$f" "$(dirname "$f")" 2>/dev/null \
+          | sed "s#$ROOT/##g" | strip_unit > "$tr_tmp"
+        fwrote=$((fwrote+1))
+        finish_write "${f%.mdk}.test.golden" "$tr_tmp"
+        rm -f "$tr_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in the medaka-test corpus"; exit 2
       fi ;;
     selfproc_legA)
       # Mirrors LEG A of test/diff_compiler_selfproc.sh EXACTLY: one full-closure
@@ -539,8 +650,60 @@ PY
         exit 2
       fi
       ;;
+    draft_semantic)
+      # test/draft_semantic_fixtures/<name>/ : one main_*.mdk entry plus
+      # draft.golden, captured from the SAME baseline spawn (no
+      # MEDAKA_DRAFT_MUTATION set) that test/diff_compiler_fmt_test.mdk's
+      # draft-semantic row asserts "(different 0)" against before ever
+      # reaching here — a malformed baseline is rejected by the gate, not
+      # silently captured by this arm.
+      DS="$BIN/draft_semantic_main"
+      [ -x "$DS" ] || { echo "missing $DS — run: sh test/build_oracles.sh --build-one draft_semantic_main"; exit 2; }
+      for dir in "$ROOT"/test/draft_semantic_fixtures/*/; do
+        [ -d "$dir" ] || continue
+        name="$(basename "$dir")"
+        only_match "$name" || continue
+        entry=""
+        for candidate in "$dir"main_*.mdk; do
+          [ -f "$candidate" ] || continue
+          entry="$candidate"
+        done
+        [ -n "$entry" ] || { echo "skipping $name — no main_*.mdk entry under $dir"; continue; }
+        golden="${dir%/}/draft.golden"
+        ds_tmp="$(mktemp)"
+        "$DS" "$RUNTIME" "$CORE" "$entry" "${dir%/}" > "$ds_tmp" 2>&1
+        fwrote=$((fwrote+1))
+        finish_write "$golden" "$ds_tmp"
+        rm -f "$ds_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/draft_semantic_fixtures/"; exit 2
+      fi ;;
+    references_correctness)
+      # test/references_fixtures/<name>/expected.golden : a refindex_main
+      # --dump of <name>/main.mdk rooted at <name>/, with the fixture's own
+      # absolute path prefix stripped so the golden stays machine-
+      # independent (the same normalization
+      # test/diff_compiler_fmt_test.mdk's references-correctness block
+      # applies before comparing).
+      RX="$BIN/refindex_main"
+      [ -x "$RX" ] || { echo "missing $RX — run: sh test/build_oracles.sh --build-one refindex_main"; exit 2; }
+      for name in binder_loc correctness dup_field_def iface_collide \
+        iface_method_loc iface_ty_collide impl_method multiclause; do
+        only_match "$name" || continue
+        fixdir="$ROOT/test/references_fixtures/$name"
+        [ -d "$fixdir" ] || { echo "missing fixture dir $fixdir"; exit 2; }
+        rx_tmp="$(mktemp)"
+        "$RX" --dump "$RUNTIME" "$CORE" "$fixdir/main.mdk" "$fixdir" 2>&1 | sed "s#$fixdir/##g" > "$rx_tmp"
+        fwrote=$((fwrote+1))
+        finish_write "$fixdir/expected.golden" "$rx_tmp"
+        rm -f "$rx_tmp"
+      done
+      if [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/references_fixtures/"; exit 2
+      fi ;;
     *)
-      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|printer|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli)"
+      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|lextok|lint|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli|draft_semantic|references_correctness|test)"
       exit 2 ;;
   esac
   status=$?
@@ -816,13 +979,18 @@ fi
 # parse_result : FROZEN (native canonical; astdump.exe had no native equivalent).
 # Committed .parse_result_oracle files are the reference.
 
-# lex_files : re-cuttable via `CAPTURE=1 sh test/diff_compiler_lex_files.sh` — the
-# gate's own CAPTURE=1 branch writes each .lextok.golden through the IDENTICAL
-# "$RUN" "$f" | strip_unit invocation the gate reads with (single source of
-# truth; #167). Needs only test/bin/lex_main (`sh test/build_oracles.sh
+# lex_files : re-cuttable via `sh test/capture_goldens.sh --frozen lextok` (the
+# arm in the FROZEN_TAG case above), which writes each .lextok.golden through the
+# IDENTICAL "$RUN" "$f" | strip_unit invocation the gate reads with (single source
+# of truth; #167). Needs only test/bin/lex_main (`sh test/build_oracles.sh
 # --build-one lex_main`), NOT $MAIN. Historical note: lextok.exe (OCaml) had no
 # native equivalent, which is why this family was frozen in the first place —
 # the goldens are native-canonical output, not a cross-checked oracle.
+
+# lint_fix : re-cuttable via `sh test/capture_goldens.sh --frozen lint_fix`, the
+# same shape. A fixture whose .fixed equals its .mdk proves the fixer's
+# safe-subset guard declined to touch it, so a regen that "fixes" one of those is
+# a real change to review, not a formatting refresh.
 
 # check_modules / tcmod : FROZEN (native canonical; tc_module_probe.exe had no
 # native equivalent).  Committed oracle.tcmod files are the reference.

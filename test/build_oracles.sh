@@ -153,7 +153,7 @@ fi
 #                           driver/main_autoprint's value-main wrap, so eval honours the
 #                           same auto-print contract `medaka build` and wasm_emit do)
 #   ── Phase 2 §2b front-end gates, goldens captured from dev probes ──
-#   lex_main              — diff_compiler_lex_files.sh / bootstrap_lex.sh / selfcompile_lex.sh
+#   lex_main              — diff_compiler_fmt (the lex_files row of test/diff_compiler_fmt_test.mdk) / bootstrap_lex.sh / selfcompile_lex.sh
 #                           (diff_compiler_lexer.sh MIGRATED to the # TOKENS section of
 #                           test/diff_compiler_snapshot_frontend_test.mdk, #81 R4; lex_main
 #                           survives because those three still drive it)
@@ -171,9 +171,9 @@ fi
 #                           It must be a compiled probe, not `./medaka`: the fact it
 #                           reads (`Ty.TyCon`'s `TyConOrigin`) is deliberately not
 #                           surfaced by any CLI verb.
-#   draft_semantic_main   — diff_compiler_draft_semantic.sh (#1399 X-0D): builds
-#                           the non-authoritative comparison carrier on the real
-#                           multi-module emit seam and prints transport receipts.
+#   draft_semantic_main   — test/diff_compiler_fmt_test.mdk's `draftSemanticFixtureFailure`
+#                           (#1399 X-0D): builds the non-authoritative comparison carrier on
+#                           the real multi-module emit seam and prints transport receipts.
 #   anf_identity_main     — diff_compiler_anf_identity.sh (#1400 X-A): validates
 #                           and serializes the non-authoritative StableNodeId substrate.
 #   resolve_main          — diff_compiler_check, same file: a Row over resolveLeg.
@@ -181,7 +181,8 @@ fi
 #   resolve_modules_main  — diff_compiler_check, same file: a Row over the
 #                           `OrderedModules`-shaped resolve_module_fixtures.
 #   ── Phase 2 §2b typecheck/check/error gates ──
-#   typecheck_main          — diff_compiler_typecheck_errors.sh
+#   typecheck_main          — diff_compiler_fmt (the typecheckErrorFailures row
+#                             of test/diff_compiler_fmt_test.mdk)
 #                             (was also _typecheck.sh + _panic_errors.sh — migrated to the
 #                              TYPES snapshot families of
 #                              diff_compiler_snapshot_frontend_test.mdk, #81 R5;
@@ -190,20 +191,23 @@ fi
 #                              `prelude` snapshot family dump, per-fixture user
 #                              schemes to # TYPES_USER; typecheck_golden_batch had no other
 #                              consumer, so its oracle + entry source went with them)
-#   check_main              — diff_compiler_typecheck_errors.sh (driver B) / diff_compiler_check
+#   check_main              — diff_compiler_fmt (typecheckErrorFailures driver B) / diff_compiler_check
 #   check_batch             — diff_compiler_check (batched leg)
 #   check_modules_main      — diff_compiler_check (multi-module leg)
 #   check_all_main          — diff_compiler_selfproc.sh (LEG A)
 #   check_match_main        — diff_compiler_check (match-exhaustiveness leg)
-#   exhaust_main            — diff_compiler_exhaust.sh
-#   lint_main               — diff_compiler_lint.sh (added by the lint workstream)
-#   diagnostics_main        — diff_compiler_diagnostics.sh
-#   diagnostics_project_main — diff_compiler_analyze_project.sh
+#   exhaust_main            — diff_compiler_fmt (the exhaust row of test/diff_compiler_fmt_test.mdk)
+#   lint_main               — diff_compiler_fmt (the lint row of
+#                             test/diff_compiler_fmt_test.mdk; added by the lint workstream)
+#   diagnostics_main        — diff_compiler_fmt (the diagnostics row of
+#                             test/diff_compiler_fmt_test.mdk)
+#   diagnostics_project_main — diff_compiler_fmt (analyzeProjectFixtureFailures,
+#                             test/diff_compiler_fmt_test.mdk)
 #   ── Phase 2 §2c tooling gates (fmt/new/test/repl/lsp) ──
-#   fmt_main    — diff_compiler_fmt.sh        (native host vs .fmt.golden)
-#   new_main    — diff_compiler_new.sh        (native scaffold tree vs golden tree)
-#   test_main   — diff_compiler_test.sh       (native test report vs .test.golden)
-#   repl_main   — diff_compiler_repl.sh       (SKIPPED re-root; see capture_goldens.sh)
+#   fmt_main    — diff_compiler_fmt (the fmt row of test/diff_compiler_fmt_test.mdk: native host vs .fmt.golden)
+#   new_main    — diff_compiler_fmt (its scaffold block: native scaffold tree vs golden tree)
+#   test_main   — diff_compiler_fmt (the test_main row of test/diff_compiler_fmt_test.mdk: native test report vs .test.golden)
+#   repl_main   — diff_compiler_fmt (the repl row of test/diff_compiler_fmt_test.mdk; SKIPPED re-root; see capture_goldens.sh)
 #   (lsp_main is NOT a build target: `medaka build lsp_main.mdk` fails the native G1
 #    typecheck gate — tools.lsp imports don't resolve under the build path's roots.
 #    The 3 lsp gates stay on the OCaml oracle.  See REROOT-PLAN STOP guardrail.)

@@ -57,7 +57,7 @@ if [ -n "$_missing" ]; then
   exit 2
 fi
 
-# NOTE on the sibling gates' "Unit auto-print" convention (test/diff_compiler_fmt.sh,
+# NOTE on the sibling gates' "Unit auto-print" convention (test/diff_compiler_fmt_test.mdk,
 # and the retired printer gate — now the # PRINTER snapshot section — both piped
 # through a `strip_unit` that drops a trailing
 # "()"): that convention does NOT apply here, verified empirically against this build —

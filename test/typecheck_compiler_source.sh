@@ -9,8 +9,9 @@
 # `medaka check` would catch it, and nothing runs that over the WHOLE compiler
 # today). This gate closes that hole: it runs the project-wide diagnostics
 # driver (compiler/entries/diagnostics_project_main.mdk, oracle at
-# test/bin/diagnostics_project_main, same one test/diff_compiler_analyze_project.sh
-# uses) over `compiler/driver/medaka_cli.mdk` — the real top-level CLI entry,
+# test/bin/diagnostics_project_main, same one test/diff_compiler_fmt_test.mdk's
+# `analyzeProjectFixtureFailures` uses) over `compiler/driver/medaka_cli.mdk` —
+# the real top-level CLI entry,
 # whose transitive imports pull in essentially every compiler subsystem
 # (frontend/types/ir/backend/driver/tools) in one closure — and FAILS if any
 # ERROR-severity diagnostic is reported anywhere in the graph.

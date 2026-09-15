@@ -1,5 +1,5 @@
 # META
-source_lines=4896
+source_lines=4897
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -3213,7 +3213,8 @@ u64ToSignedInt (U64 a0 a1 a2 a3) =
 -- build` for random* — issue #98). prop_runner.mdk keeps its OWN independent LCG
 -- over `rngStateRef` for property-value generation (deliberately unrelated: a
 -- passing prop prints `OK (100 tests)` regardless of the draws, and a failing
--- prop's shrunk counterexample is engine-specific — see test/diff_compiler_test.sh).
+-- prop's shrunk counterexample is engine-specific — see
+-- test/diff_compiler_fmt_test.mdk's `testGoldenFailure`).
 export
 rngStateRef : Ref Int
 rngStateRef = Ref 123456789

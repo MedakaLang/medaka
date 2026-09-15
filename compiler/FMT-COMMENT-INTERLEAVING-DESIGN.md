@@ -63,6 +63,6 @@ comments exactly.
 - `test/diff_compiler_fmt_roundtrip.sh`: over every tracked `.mdk` that is
   meant to parse, `parse(fmt(f)) == parse(f)`, `fmt(fmt(f)) == fmt(f)`, and
   no trailing whitespace.
-- `test/diff_compiler_fmt.sh`: golden output for `test/fmt_fixtures/` and
+- `test/diff_compiler_fmt_test.mdk`: golden output for `test/fmt_fixtures/` and
   `test/parse_fixtures/`.
 - The comment count invariant runs on every `fmt` invocation.
