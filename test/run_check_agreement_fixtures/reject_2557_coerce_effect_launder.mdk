@@ -28,7 +28,11 @@ cb3 g = 1
 coerce : a -> a -> a
 coerce x y = y
 
-hidden : (Unit -> <IO> Unit) -> Int
+-- `hidden` carries no signature on purpose: the rejection must fall out of
+-- unifying `coerce`'s two arguments through its invariant `a`, not out of
+-- matching a stated annotation, and `lint --fix` restoring one would take the
+-- discriminator away.
+-- lint-disable-next-line rule-missing-signature
 hidden = coerce cb3 cb2
 
 main : <> Unit

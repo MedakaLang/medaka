@@ -1,0 +1,28 @@
+-- #1560 — a `requires` residual whose argument vector mixes a structured type
+-- with a bare variable. `conv (Wrap x) y` discharges `Conv (Wrap a) b` against
+-- the parametric impl, leaving `Conv a b` as a residual that `f`'s declared
+-- context is what supplies. Dropping that residual leaves the inner `conv` with
+-- no dict to call through, and the built binary faults at run time rather than
+-- failing to compile — an exit-139 shape a verdict column alone cannot see,
+-- which is why this is graded with a stdout pin.
+--
+-- The context is written out by hand rather than inferred: with an inferred
+-- signature the residual can be carried by inference without the n-ary joint
+-- dict slot ever being built, so the hand-written form is the discriminating
+-- one. The pinned string is read off the impl bodies — the parametric impl
+-- wraps `Conv Int Bool`'s `int-bool` as `w:int-bool`.
+data Wrap a = Wrap a
+
+interface Conv a b where
+  conv : a -> b -> String
+
+impl Conv Int Bool where
+  conv _ _ = "int-bool"
+
+impl Conv (Wrap a) b requires Conv a b where
+  conv (Wrap x) y = "w:\{conv x y}"
+
+f : Conv a b => a -> b -> String
+f x y = conv (Wrap x) y
+
+main = println (f 5 True)
