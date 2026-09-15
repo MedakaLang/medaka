@@ -780,8 +780,23 @@ stdlibAmbiguousNames : StdlibIndex -> List String
 stdlibAmbiguousNames idx =
   filterList (n => listLen (stdlibEntriesOf idx n) > 1) (stdlibIndexNames idx)
 
+-- Whether `rule-stdlib-reimpl` — the sole `Rule` whose `check` reads its
+-- `StdlibIndex` argument — is in the active `--only`/`--disable` set. Mirrors
+-- `ruleActiveFixable`'s only/disable semantics (the `enabled`/fixer checks
+-- that helper also makes don't apply here: the registry always enables this
+-- rule). A caller uses this to decide whether `buildStdlibIndex` is worth
+-- its cost at all.
+export
+stdlibIndexNeeded : List String -> List String -> Bool
+stdlibIndexNeeded only disable =
+  (isEmptyL only || contains ruleNameStdlibReimpl only)
+    && not (contains ruleNameStdlibReimpl disable)
+
 -- THE one IO entry point.  Call it ONCE per process and thread the result: it
--- parses the whole stdlib, which is cheap once and wasteful per file.
+-- parses the whole stdlib, which is cheap once and wasteful per file. Callers
+-- gate this behind `stdlibIndexNeeded` first — when no active rule reads the
+-- index, `emptyStdlibIndex` costs nothing and every rule's `check` behaves
+-- identically (see `emptyStdlibIndex`'s own doc).
 export
 buildStdlibIndex : <IO> StdlibIndex
 buildStdlibIndex =

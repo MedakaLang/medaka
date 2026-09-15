@@ -1,5 +1,5 @@
 # META
-source_lines=6661
+source_lines=6676
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -784,8 +784,23 @@ stdlibAmbiguousNames : StdlibIndex -> List String
 stdlibAmbiguousNames idx =
   filterList (n => listLen (stdlibEntriesOf idx n) > 1) (stdlibIndexNames idx)
 
+-- Whether `rule-stdlib-reimpl` — the sole `Rule` whose `check` reads its
+-- `StdlibIndex` argument — is in the active `--only`/`--disable` set. Mirrors
+-- `ruleActiveFixable`'s only/disable semantics (the `enabled`/fixer checks
+-- that helper also makes don't apply here: the registry always enables this
+-- rule). A caller uses this to decide whether `buildStdlibIndex` is worth
+-- its cost at all.
+export
+stdlibIndexNeeded : List String -> List String -> Bool
+stdlibIndexNeeded only disable =
+  (isEmptyL only || contains ruleNameStdlibReimpl only)
+    && not (contains ruleNameStdlibReimpl disable)
+
 -- THE one IO entry point.  Call it ONCE per process and thread the result: it
--- parses the whole stdlib, which is cheap once and wasteful per file.
+-- parses the whole stdlib, which is cheap once and wasteful per file. Callers
+-- gate this behind `stdlibIndexNeeded` first — when no active rule reads the
+-- index, `emptyStdlibIndex` costs nothing and every rule's `check` behaves
+-- identically (see `emptyStdlibIndex`'s own doc).
 export
 buildStdlibIndex : <IO> StdlibIndex
 buildStdlibIndex =
@@ -6826,6 +6841,8 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" (PVar "m"))) (EApp (EVar "sortUniqS") (EApp (EVar "keys") (EVar "m"))))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
+(DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "disable")))))
 (DTypeSig true "buildStdlibIndex" (TyEffect ("IO") None (TyCon "StdlibIndex")))
 (DFunDef false "buildStdlibIndex" () (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EApp (EVar "stdlibSigTriples") (EVar "lintStdlibDir")))))
 (DTypeSig false "lintStdlibDir" (TyEffect ("IO") None (TyCon "String")))
@@ -8806,6 +8823,8 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "stdlibIndexNames" ((PCon "StdlibIndex" (PVar "m"))) (EApp (EVar "sortUniqS") (EApp (EVar "keys") (EVar "m"))))
 (DTypeSig true "stdlibAmbiguousNames" (TyFun (TyCon "StdlibIndex") (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "stdlibAmbiguousNames" ((PVar "idx")) (EApp (EApp (EVar "filterList") (ELam ((PVar "n")) (EBinOp ">" (EApp (EVar "listLen") (EApp (EApp (EVar "stdlibEntriesOf") (EVar "idx")) (EVar "n"))) (ELit (LInt 1))))) (EApp (EVar "stdlibIndexNames") (EVar "idx"))))
+(DTypeSig true "stdlibIndexNeeded" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
+(DFunDef false "stdlibIndexNeeded" ((PVar "only") (PVar "disable")) (EBinOp "&&" (EBinOp "||" (EApp (EVar "isEmptyL") (EVar "only")) (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "only"))) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "ruleNameStdlibReimpl")) (EVar "disable")))))
 (DTypeSig true "buildStdlibIndex" (TyEffect ("IO") None (TyCon "StdlibIndex")))
 (DFunDef false "buildStdlibIndex" () (EApp (EVar "StdlibIndex") (EApp (EVar "groupStdlibSigs") (EApp (EVar "stdlibSigTriples") (EVar "lintStdlibDir")))))
 (DTypeSig false "lintStdlibDir" (TyEffect ("IO") None (TyCon "String")))

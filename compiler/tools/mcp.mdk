@@ -75,6 +75,8 @@ import tools.lint.{
   applyFindingDeny,
   splitLintNames,
   buildStdlibIndex,
+  emptyStdlibIndex,
+  stdlibIndexNeeded,
   StdlibIndex,
 }
 import tools.test_cmd.{runTestReport}
@@ -1364,8 +1366,14 @@ runLintTool _runtimeSrc _coreSrc _stdlibDir args = match pathsArg args
     let disable = lintNameListArg "disable" args
     let only = lintNameListArg "only" args
     let deny = lintNameListArg "deny" args
-    -- once per REQUEST, not per path (see lintPathsToDiagQuads)
-    let idx = buildStdlibIndex
+    -- at most once per REQUEST, not per path (see lintPathsToDiagQuads) — and
+    -- not at all when `rule-stdlib-reimpl`, the sole `StdlibIndex` reader, is
+    -- outside the active `disable`/`only` set (see `stdlibIndexNeeded`).
+    let idx =
+      if stdlibIndexNeeded only disable then
+        buildStdlibIndex
+      else
+        emptyStdlibIndex
     let quads = lintPathsToDiagQuads idx disable only deny paths
     let triples = map dropQuadParse quads
     let cross = crossFileMcpFindings disable only deny quads
