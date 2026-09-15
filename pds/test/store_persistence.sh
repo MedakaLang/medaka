@@ -364,8 +364,18 @@ echo 'staged event anchored to no commit finished, and planning wrote nothing'
 #
 #   - the syscall immediately BEFORE it is an `fsync` of exactly the path it
 #     renames, so the promotion cannot become visible before its own contents;
-#   - an `fsync` of the directory it renames INTO follows, before any `rename`
-#     into a different directory, so the promotion itself is durable.
+#   - an `fsync` of the directory it renames INTO follows it, and follows every
+#     later `rename` into that same directory, so the promotion itself is
+#     durable.
+#
+# The second rule tolerates a writer that promotes a batch and then barriers the
+# distinct directories it touched, which `blockfile.mdk` does: a directory's
+# barrier may be deferred past promotes into other directories. What it does not
+# tolerate is a barrier that never arrives, so the deferral is bounded — once a
+# directory barrier is issued, every directory owed one must be barriered before
+# the next `rename` starts a new batch. An owed barrier that outlives its batch,
+# or the whole trace, is a rename published with nothing on the platter naming
+# it.
 #
 # Universal over renames rather than a list of expected paths: a promote path
 # added later is graded the day it is written, and cannot be forgotten here.
@@ -443,6 +453,17 @@ awk '
   { ev[++n] = $0 }
   END {
     for (i = 1; i <= n; i++) {
+      if (substr(ev[i], 1, 2) == "F ") {
+        path = substr(ev[i], 3)
+        # A staged-file barrier is the one whose own rename comes next; every
+        # other fsync is a directory barrier and discharges what that directory
+        # is owed.
+        if (i < n && substr(ev[i + 1], 1, length(path) + 3) == "R " path " ")
+          continue
+        if (path in owed) { delete owed[path]; nowed-- }
+        flushed = 1
+        continue
+      }
       if (substr(ev[i], 1, 2) != "R ") continue
       renames++
       split(ev[i], a, " ")
@@ -453,22 +474,24 @@ awk '
         bad++
         continue
       }
+      if (flushed && nowed > 0) {
+        for (d in owed) {
+          printf "ABANDONED DIRECTORY: %s\n  %s was still owed a barrier when %s began\n",
+            owed[d], d, ev[i]
+          bad++
+          delete owed[d]
+        }
+        nowed = 0
+      }
       dir = dst
       sub(/\/[^\/]*$/, "", dir)
-      found = 0
-      for (j = i + 1; j <= n; j++) {
-        if (ev[j] == "F " dir) { found = 1; break }
-        if (substr(ev[j], 1, 2) == "R ") {
-          split(ev[j], b, " ")
-          other = b[3]
-          sub(/\/[^\/]*$/, "", other)
-          if (other != dir) break
-        }
-      }
-      if (!found) {
-        printf "UNBARRIERED DIRECTORY: %s\n  no fsync of %s follows it\n", ev[i], dir
-        bad++
-      }
+      if (!(dir in owed)) nowed++
+      owed[dir] = ev[i]
+      flushed = 0
+    }
+    for (d in owed) {
+      printf "UNBARRIERED DIRECTORY: %s\n  no fsync of %s follows it\n", owed[d], d
+      bad++
     }
     printf "graded %d rename(s), %d unbarriered\n", renames, bad
     exit (bad > 0)

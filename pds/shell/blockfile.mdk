@@ -7,10 +7,19 @@
    version and codec prefix, so sharding on the CID's own leading bytes would put
    the whole repository in one directory. Writes land in `<dir>/.staging` and are
    promoted with `rename`, so a reader never observes a half-written block and a
-   crash never leaves a torn one under a shard. The block's bytes are barriered
-   before the `rename` and its shard directory after, so the promotion cannot
-   reach disk ahead of what it publishes: without the pair, a power loss can
-   leave a shard entry naming bytes the kernel has not written yet.
+   crash never leaves a torn one under a shard. A block's bytes are barriered
+   before the `rename` that publishes them, so the promotion cannot reach disk
+   ahead of what it names: without that pair, a power loss can leave a shard
+   entry naming bytes the kernel has not written yet. The containing shard
+   directory is barriered once per distinct directory one write touched, after
+   the last block promoted into it and before that write returns — a commit
+   landing many blocks in one shard owes that directory one barrier, not one per
+   block. Deferring a directory's barrier past a promotion into a different
+   directory costs no guarantee, because blocks are content-addressed and
+   mutually independent: nothing reads one block's entry only if another's is
+   already durable, and an entry a crash leaves unbarriered is the ordinary
+   promote-in-flight state, repaired by writing the same bytes again under the
+   same name.
 
    Nothing here trusts the disk. Bytes read back are returned as raw rows for
    `blockStoreFromBlocks` to verify against their own CIDs; this module never
@@ -50,16 +59,30 @@ writeOne dir cid bytes = do
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
   () <- writeFileBytes staged bytes
   () <- fsync staged
-  () <- rename staged (blockFilePath dir cid)
-  fsync (blockShardDir dir cid)
+  rename staged (blockFilePath dir cid)
 
+-- Promote every row, answering the distinct shard directories they landed in.
+-- At most 256 shard names exist, so membership over a list costs less than the
+-- barrier it saves.
 writeRows : String ->
   List (Cid, Array Int) ->
-  <FileRead "_", FileWrite "_"> Result String Unit
-writeRows _ [] = Ok ()
-writeRows dir ((cid, bytes) :: rest) = match writeOne dir cid bytes
+  List String ->
+  <FileRead "_", FileWrite "_"> Result String (List String)
+writeRows _ [] shards = Ok shards
+writeRows dir ((cid, bytes) :: rest) shards = match writeOne dir cid bytes
   Err message => Err message
-  Ok () => writeRows dir rest
+  Ok () =>
+    let shard = blockShardDir dir cid
+    if elem shard shards then
+      writeRows dir rest shards
+    else
+      writeRows dir rest (shard :: shards)
+
+fsyncShards : List String -> <FileRead "_", FileWrite "_"> Result String Unit
+fsyncShards [] = Ok ()
+fsyncShards (shard :: rest) = match fsync shard
+  Err message => Err message
+  Ok () => fsyncShards rest
 
 {- | Write every row durably beneath `dir`. Writing a block that is already
    present is idempotent: a block's name is its content, so the promoted file
@@ -70,7 +93,8 @@ blockFileWrite : String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 blockFileWrite dir rows = do
   () <- mkdirAll "\{dir}/\{stagingName}"
-  writeRows dir rows
+  shards <- writeRows dir rows []
+  fsyncShards shards
 
 cidForName : String -> Result String Cid
 cidForName name = match decode name
