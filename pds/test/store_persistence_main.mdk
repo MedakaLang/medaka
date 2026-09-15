@@ -39,19 +39,29 @@
    them, the second is every later start over that data directory. The gate
    runs the second over a log it truncated to none, one, two or three of the
    four, and requires the result to be the log an uninterrupted creation
-   leaves. -}
+   leaves.
+
+   `sweep-staging` and `stray-entries` are about entries NOBODY wrote rather
+   than half-written ones: the first that startup clears crash residue out of
+   the three `.staging` directories, the second that every other directory the
+   three stores list has a stated disposition for an entry no write path here
+   can produce. -}
 
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
-import string.{toUtf8}
+import string.{take, toUtf8}
 import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
-import lib.cid.{Cid, cidEqual, cidToString}
+import lib.cid.{Cid, cidDigest, cidEqual, cidToBytes, cidToString}
 import lib.credential.{CredentialRecord, makeCredential}
 import lib.dagcbor.{DagCbor(..)}
-import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
+import lib.event_log_record.{
+  EventLogEntry(..),
+  eventLogEntryName,
+  eventLogRetentionSeconds,
+}
 import lib.repo.{
   Repo,
   repoCommitCid,
@@ -69,7 +79,14 @@ import sha256.{sha256}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}
-import shell.blobfile.{blobFileRead, blobFileSweepStaging, blobFileWrite}
+import shell.blobfile.{
+  blobDir,
+  blobFileCount,
+  blobFileRead,
+  blobFileSweepStaging,
+  blobFileWrite,
+}
+import shell.blockfile.{blockFileRead}
 import shell.eventlog.{
   eventLogApplyRecovery,
   eventLogPlanRecovery,
@@ -645,6 +662,25 @@ plantAndSweep dir =
                         strayBlobFile
                         strayEventFile
 
+{- | A data directory as an uninterrupted run leaves it: the fixture
+   repository, both fixture blobs, and one promoted event entry.
+
+   Shared by every route that plants something beside legitimate content, so
+   that "the readers still answer with everything real" is a claim about all
+   three halves and not a vacuous one over an empty directory. -}
+persistFixtureTree : String -> <FileRead "_", FileWrite "_"> Result String Unit
+persistFixtureTree dir =
+  let repo = fixtureRepo
+  do
+    () <- persistSave
+      dir
+      (repoCommitCid (repoLatestCommit repo))
+      (blocksOf repo)
+    () <- blobFileWrite dir blobFixtures
+    () <- eventLogStage dir (eventFixture None (frameFor None))
+    plan <- eventLogPlanRecovery dir None
+    eventLogApplyRecovery dir plan eventLogRetentionSeconds eventFixtureTime
+
 {- | Persist a repository, blobs and one promoted event entry — the
    legitimate content a normal, uninterrupted run leaves behind — then plant
    residue in all three `.staging` directories and run the sweeps
@@ -653,32 +689,179 @@ plantAndSweep dir =
    since a sweep that cannot tell staged residue from a directory it should
    never touch is not the sweep #2572 part 2 asked for. -}
 runSweepStaging : String -> <IO, FileRead "_", FileWrite "_"> Unit
-runSweepStaging dir =
-  let repo = fixtureRepo
-  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+runSweepStaging dir = match persistFixtureTree dir
+  Err message =>
+    panic "store_persistence: sweep-staging setup failed: \{message}"
+  Ok () => plantAndSweep dir
+
+-- ── entries no store wrote (#3055) ──────────────────────────────────────────
+
+strayText : String
+strayText = "planted by the gate; no store in this tree wrote it"
+
+-- A planted entry, answering the path it planted so the gate can require a
+-- refusal to NAME it. A planted directory gets a file of its own inside, so
+-- that "skipped" means the whole subtree was passed over rather than that an
+-- empty directory happened to contribute nothing.
+plantFile : String -> <FileWrite "_"> Result String String
+plantFile path = map (_ => path) (writeFile path strayText)
+
+plantDir : String -> <FileWrite "_"> Result String String
+plantDir path = do
+  () <- mkdirAll path
+  _ <- plantFile "\{path}/inner"
+  Ok path
+
+-- The shard a CID's bytes land in. Re-derived here rather than imported: both
+-- stores keep this arithmetic private, and the gate has to plant INSIDE a
+-- shard that really exists for a leaf-level case to be a leaf-level case.
+shardOf : Cid -> String
+shardOf cid = take 2 (encode (cidDigest cid))
+
+cidName : Cid -> String
+cidName cid = encode (cidToBytes cid)
+
+firstBlobCid : Cid
+firstBlobCid = match blobFixtures
+  (cid, _, _) :: _ => cid
+  [] => panic "store_persistence: no blob fixture to shard on"
+
+-- A shard name nothing under `parent` occupies, so a directory planted under
+-- it is genuinely an entry nobody wrote and not a second handle on a real
+-- shard. Derived rather than written down: which shards this fixture occupies
+-- is a function of its bytes, and a hand-picked name would go stale the first
+-- time a fixture record changes.
+freeShardFrom : String -> Int -> <FileRead "_"> String
+freeShardFrom parent n =
+  if n >= 256 then
+    panic "store_persistence: \{parent} occupies every shard name"
+  else
+    let name = encode (arrayMakeWith 1 (_ => n))
+    if fileExists "\{parent}/\{name}" then
+      freeShardFrom parent (n + 1)
+    else
+      name
+
+plantShard : String -> <FileRead "_", FileWrite "_"> Result String String
+plantShard parent = plantDir "\{parent}/\{freeShardFrom parent 0}"
+
+-- A reader's answer in one word: how many rows it returned, or that it
+-- refused. The message goes on its own line, so the gate can require BOTH the
+-- disposition and that a refusal names the path it is about.
+strayVerdict : Result String Int -> String
+strayVerdict (Ok n) = "ok:\{intToString n}"
+strayVerdict (Err _) = "refused"
+
+strayMessage : String -> String -> Result String Int -> <IO> Unit
+strayMessage _ _ (Ok _) = ()
+strayMessage label reader (Err message) =
+  println "STRAYMSG \{label} \{reader} \{message}"
+
+{- | What all four readers make of one planted entry.
+
+   Every case reports every reader and not only the one the planted entry sits
+   under: a disposition that also moved a store the entry never touched is the
+   failure this is otherwise blind to. `count` is `blobFileCount` beside
+   `blobs`, which is `blobFileRead` — the two answer the same question by
+   different means and a case where they disagree is a count of blobs the
+   server cannot serve. -}
+straySurvey : String -> String -> <IO, FileRead "_"> Unit
+straySurvey label dir =
+  let blocks = map length (blockFileRead "\{dir}/blocks")
+  let blobs = map length (blobFileRead dir)
+  let counted = blobFileCount dir
+  let events = map length (eventLogRead dir 0)
+  let () =
+    println
+      "STRAY \{label} blocks \{strayVerdict blocks} blobs \{strayVerdict blobs} count \{strayVerdict counted} events \{strayVerdict events}"
+  let () = strayMessage label "blocks" blocks
+  let () = strayMessage label "blobs" blobs
+  let () = strayMessage label "count" counted
+  strayMessage label "events" events
+
+-- One case: its own legitimate data directory, one planted entry, and the
+-- survey of what every reader then answers.
+strayCase : String ->
+  String ->
+  (String -> <FileRead "_", FileWrite "_"> Result String String) ->
+  <IO, FileRead "_", FileWrite "_"> Unit
+strayCase root label plant =
+  let dir = "\{root}/\{label}"
+  match persistFixtureTree dir
     Err message =>
-      panic "store_persistence: sweep-staging save failed: \{message}"
-    Ok () => match blobFileWrite dir blobFixtures
+      panic "store_persistence: stray-entries setup failed: \{message}"
+    Ok () => match plant dir
       Err message =>
-        panic "store_persistence: sweep-staging blob save failed: \{message}"
-      Ok () => match eventLogStage dir (eventFixture None (frameFor None))
-        Err message =>
-          panic
-            "store_persistence: sweep-staging event stage failed: \{message}"
-        Ok () => match eventLogPlanRecovery dir None
-          Err message =>
-            panic
-              "store_persistence: sweep-staging event plan failed: \{message}"
-          Ok plan =>
-            match (eventLogApplyRecovery
-              dir
-              plan
-              eventLogRetentionSeconds
-              eventFixtureTime)
-              Err message =>
-                panic
-                  "store_persistence: sweep-staging event promote failed: \{message}"
-              Ok () => plantAndSweep dir
+        panic "store_persistence: planting \{label} failed: \{message}"
+      Ok planted =>
+        let () = println "STRAYPLANT \{label} \{planted}"
+        straySurvey label dir
+
+blockShardPath : String -> String
+blockShardPath dir = "\{dir}/blocks/\{shardOf (repoRootCid fixtureRepo)}"
+
+blobShardPath : String -> String
+blobShardPath dir = "\{blobDir dir}/\{shardOf firstBlobCid}"
+
+-- A bytes-file name spelling a valid CID, beside a sidecar of its own, but
+-- carried by a DIRECTORY. Name arithmetic alone reads it as a blob, which is
+-- why `blobFileCount` used to report one the reader skips.
+plantBlobLeafCid : String -> <FileRead "_", FileWrite "_"> Result String String
+plantBlobLeafCid dir =
+  let name = cidName (repoRootCid fixtureRepo)
+  do
+    planted <- plantDir "\{blobShardPath dir}/\{name}"
+    _ <- plantFile "\{blobShardPath dir}/\{name}\{mimeSuffixText}"
+    Ok planted
+
+-- The suffix `shell.blobfile` keeps private; a sidecar this fixture plants has
+-- to spell it the same way or the case is not the case it claims to be.
+mimeSuffixText : String
+mimeSuffixText = ".mime"
+
+{- | Every entry no store in this tree wrote, planted one at a time beside
+   content that is real, at every level any of the three stores lists (#3055).
+
+   Three shapes at each level, because the stores grade an entry on two axes:
+   a stray plain FILE, a stray DIRECTORY whose name is not one the store could
+   have produced, and a stray DIRECTORY whose name is one it could have — the
+   third being the one a name-only rule cannot tell from its own data.
+
+   The route asserts nothing. Each case prints what all four readers answered
+   and, for a refusal, the message; `store_persistence.sh` decides which of
+   those is correct, so that the expected disposition lives beside the prose
+   that states the rule rather than inside the driver. -}
+runStrayEntries : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runStrayEntries root =
+  let () = strayCase root "none" (_ => Ok "nothing")
+  let () = strayCase root "blocks-top-file" (dir =>
+    plantFile "\{dir}/blocks/.DS_Store")
+  let () =
+    strayCase root "blocks-top-dir" (dir => plantDir "\{dir}/blocks/stray-dir")
+  let () = strayCase root "blocks-top-shard" (dir => plantShard "\{dir}/blocks")
+  let () = strayCase root "blocks-leaf-file" (dir =>
+    plantFile "\{blockShardPath dir}/.DS_Store")
+  let () = strayCase root "blocks-leaf-dir" (dir =>
+    plantDir "\{blockShardPath dir}/stray-dir")
+  let () = strayCase root "blocks-leaf-cid" (dir =>
+    plantDir "\{blockShardPath dir}/\{cidName firstBlobCid}")
+  let () = strayCase root "blobs-top-file" (dir =>
+    plantFile "\{blobDir dir}/.DS_Store")
+  let () =
+    strayCase root "blobs-top-dir" (dir => plantDir "\{blobDir dir}/stray-dir")
+  let () = strayCase root "blobs-top-shard" (dir => plantShard (blobDir dir))
+  let () = strayCase root "blobs-leaf-file" (dir =>
+    plantFile "\{blobShardPath dir}/.DS_Store")
+  let () = strayCase root "blobs-leaf-dir" (dir =>
+    plantDir "\{blobShardPath dir}/stray-dir")
+  let () = strayCase root "blobs-leaf-cid" plantBlobLeafCid
+  let () = strayCase root "events-file" (dir =>
+    plantFile "\{dir}/events/entries/.DS_Store")
+  let () = strayCase root "events-dir" (dir =>
+    plantDir "\{dir}/events/entries/stray-dir")
+  let () = strayCase root "events-name" (dir =>
+    plantDir "\{dir}/events/entries/\{eventLogEntryName 9 eventFixtureTime}")
+  println "STRAY-ENTRIES: PASS"
 
 -- ── the genesis quartet ─────────────────────────────────────────────────────
 
@@ -785,9 +968,10 @@ main = match args ()
     runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
   ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
   ["sweep-staging", dir] => runSweepStaging dir
+  ["stray-entries", dir] => runStrayEntries dir
   ["genesis-init", dir] => runGenesisInit dir
   ["genesis-resume", dir] => runGenesisResume dir
   ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|genesis-init|genesis-resume|genesis-guard> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"

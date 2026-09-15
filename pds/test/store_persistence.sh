@@ -20,9 +20,11 @@
 # refuse.
 # Case 11c grades the residue those same crash points leave behind under
 # `.staging`: swept at startup rather than mistaken for corruption (#2572
-# part 2, #3052). Case 12 grades the barriers themselves, which is the one
-# claim building a directory by hand cannot make — it needs the syscall ORDER,
-# not the resulting tree (#2952).
+# part 2, #3052). Case 11d widens that to every OTHER directory the three
+# stores list, and to entries no crash produced at all — what an editor, a
+# backup tool or an operator leaves behind (#3055). Case 12 grades the
+# barriers themselves, which is the one claim building a directory by hand
+# cannot make — it needs the syscall ORDER, not the resulting tree (#2952).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -513,6 +515,120 @@ for HALF in blocks blobs events; do
 done
 echo 'case 11c: crash residue swept from all three .staging directories; a stray subdirectory and legitimate content both untouched'
 
+# ── 11d. an entry no store wrote, at every level any of them lists ─────────
+# Case 11c grades `.staging`, the one directory whose whole contents are
+# residue by construction. This grades every OTHER directory the three stores
+# list: the blocks and blobs shard trees at both their levels, and the event
+# log's entry directory (#3055).
+#
+# Each case builds its own legitimate data directory — the repository, two
+# blobs, one promoted entry — plants exactly ONE entry no write path in this
+# tree can produce, and reports what all four readers then answer. Three
+# shapes at each level, because the stores grade an entry on two axes: a plain
+# FILE, a DIRECTORY whose name is not one the store could have produced, and a
+# DIRECTORY whose name is one it could have — the third being the shape a
+# name-only rule cannot tell apart from the store's own data.
+#
+# Every case reports every reader, not only the one the planted entry sits
+# under, so a disposition that also moved a store the entry never touched
+# fails here rather than somewhere downstream. And where the answer is a
+# refusal, the MESSAGE is graded too: #3055's actual defect is not that a
+# stray entry passes unnoticed but that the refusal it causes gets attributed
+# to something else.
+STRAY="$WORK/stray"
+"$WORK/driver" stray-entries "$STRAY" > "$WORK/stray.out" 2> "$WORK/stray.err"
+require_empty "$WORK/stray.err" stray-entries
+[ "$(tail -1 "$WORK/stray.out")" = 'STRAY-ENTRIES: PASS' ] \
+  || fail 'case 11d: stray-entries route did not pass'
+
+stray_row() {
+  sed -n "s/^STRAY $1 //p" "$WORK/stray.out"
+}
+
+# Every expected row below is built from the row for the case that plants
+# NOTHING, rather than written down: how many blocks the fixture repository
+# holds is its own business, and a hand-typed count would pin it here too.
+BASE_ROW=$(stray_row none)
+[ -n "$BASE_ROW" ] || fail 'case 11d: no baseline survey row'
+# shellcheck disable=SC2086 # the row IS eight space-separated fields; splitting is the read
+set -- $BASE_ROW
+[ "$#" = 8 ] || fail "case 11d: baseline row has $# fields, expected 8: $BASE_ROW"
+BLOCKS_OK=$2
+BLOBS_OK=$4
+COUNT_OK=$6
+EVENTS_OK=$8
+case "$BASE_ROW" in
+  *refused*)
+    fail "case 11d: the unplanted baseline did not read cleanly: $BASE_ROW" ;;
+esac
+# The count and the read must already agree before anything is planted, or the
+# blobs-leaf-cid case below proves nothing.
+[ "$BLOBS_OK" = "$COUNT_OK" ] \
+  || fail "case 11d: blobFileRead and blobFileCount disagree unplanted: $BASE_ROW"
+
+INTACT="blocks $BLOCKS_OK blobs $BLOBS_OK count $COUNT_OK events $EVENTS_OK"
+BLOCKS_REFUSED="blocks refused blobs $BLOBS_OK count $COUNT_OK events $EVENTS_OK"
+BLOBS_REFUSED="blocks $BLOCKS_OK blobs refused count $COUNT_OK events $EVENTS_OK"
+EVENTS_REFUSED="blocks $BLOCKS_OK blobs $BLOBS_OK count $COUNT_OK events refused"
+
+expect_stray() {
+  _got=$(stray_row "$1")
+  [ -n "$_got" ] || fail "case 11d: no survey row for $1"
+  [ "$_got" = "$2" ] || fail "case 11d: $1 answered '$_got', expected '$2'"
+}
+
+expect_named() {
+  _path=$(sed -n "s/^STRAYPLANT $1 //p" "$WORK/stray.out")
+  [ -n "$_path" ] || fail "case 11d: $1 planted nothing"
+  grep "^STRAYMSG $1 $2 " "$WORK/stray.out" | grep -qF "$_path" \
+    || fail "case 11d: $1's refusal does not name $_path"
+}
+
+# The blocks half. A shard is a directory named by two lowercase hex digits
+# and a block is a file inside one named by a CID, so: anything under
+# `blocks/` that is not a directory, and any directory there not named like a
+# shard, is skipped; anything under a shard that is not a file is skipped; and
+# a FILE under a shard whose name does not spell a CID is refused. A directory
+# named exactly like a shard IS a shard as far as this store can tell, so it
+# is graded as one — which is why planting one with a file inside refuses.
+expect_stray blocks-top-file "$INTACT"
+expect_stray blocks-top-dir "$INTACT"
+expect_stray blocks-top-shard "$BLOCKS_REFUSED"
+expect_named blocks-top-shard blocks
+expect_stray blocks-leaf-file "$BLOCKS_REFUSED"
+expect_named blocks-leaf-file blocks
+expect_stray blocks-leaf-dir "$INTACT"
+expect_stray blocks-leaf-cid "$INTACT"
+
+# The blobs half, same layout and therefore the same rule. `blobs-leaf-cid` is
+# the one the two blob readers used to disagree about: a DIRECTORY named like
+# a blob's bytes, beside a sidecar of its own, which `blobFileCount` counted by
+# name arithmetic while `blobFileRead` could never serve it. Both must now pass
+# it over, which is what comparing `count` against `blobs` here asserts.
+expect_stray blobs-top-file "$INTACT"
+expect_stray blobs-top-dir "$INTACT"
+expect_stray blobs-top-shard "$BLOBS_REFUSED"
+expect_named blobs-top-shard blobs
+expect_stray blobs-leaf-file "$BLOBS_REFUSED"
+expect_named blobs-leaf-file blobs
+expect_stray blobs-leaf-dir "$INTACT"
+expect_stray blobs-leaf-cid "$INTACT"
+
+# The event log takes the opposite stance, deliberately. Its directory listing
+# IS its index — a subscriber's cursor is answered from the entry names — so
+# an entry routed around is a hole in a stream nobody can detect, where a
+# skipped block or blob is caught downstream by the content address it is
+# stored under. All three shapes are therefore refused, including the
+# directory whose name spells a valid seq-time pair, which is refused when it
+# is opened rather than when it is listed.
+expect_stray events-file "$EVENTS_REFUSED"
+expect_named events-file events
+expect_stray events-dir "$EVENTS_REFUSED"
+expect_named events-dir events
+expect_stray events-name "$EVENTS_REFUSED"
+expect_named events-name events
+echo 'case 11d: 15 entries no store wrote, one per level and shape; each skipped or refused as its module states, each refusal naming its own path, and no other store disturbed'
+
 # ── 12. every promote is barriered, staged file first and directory after ──
 # The only case here that reads the syscall STREAM rather than the resulting
 # tree, because that is where the claim lives: after a power loss what survives
@@ -685,4 +801,4 @@ done
 echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES"
 
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every promote barriered before and after; key absent'
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after; key absent'

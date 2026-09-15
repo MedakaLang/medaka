@@ -32,13 +32,38 @@
    residue for that reason.
 
    **Residue.** The reader therefore skips, rather than fails on, anything
-   under `blobs/` it cannot account for: an entry that is not a directory (an
-   editor swapfile, a `.DS_Store`), an orphan sidecar naming no bytes file, and
-   a bytes file whose sidecar is missing or unreadable. Each of those loses at
-   most the one blob it belongs to; refusing the whole read would instead make
-   one torn write brick every later startup, with no recovery short of deleting
-   the file by hand. What is NOT residue is a file whose name does not spell a
-   CID: this module did not write it, so it is refused rather than skipped.
+   under `blobs/` it cannot account for: an orphan sidecar naming no bytes
+   file, and a bytes file whose sidecar is missing or unreadable. Each of
+   those loses at most the one blob it belongs to; refusing the whole read
+   would instead make one torn write brick every later startup, with no
+   recovery short of deleting the file by hand.
+
+   **An entry nobody wrote.** The layout above has exactly two shapes: a shard
+   DIRECTORY named by the two lowercase hex digits `blobShardDir` produces,
+   and, inside one, a bytes or sidecar FILE named by the CID hex
+   `blobFilePath` produces. Every listing here — `blobFileRead`'s and
+   `blobFileCount`'s alike — grades an entry on those two axes in that order,
+   which is `pds/shell/blockfile.mdk`'s rule and for its reasons; both
+   predicates that decide it are imported from there rather than restated,
+   since the layout is one layout and two copies could disagree about which
+   directories a store may own.
+
+   An entry whose TYPE contradicts the level it sits at (a plain file where a
+   shard belongs, a directory where a blob's bytes or sidecar belongs), and a
+   directory beneath `blobs/` whose name is not a shard name, are residue an
+   editor, a backup tool or an operator left behind, and are SKIPPED. None of
+   the three can be one of ours, since a blob's shard and file name are both
+   functions of its own content, so skipping them loses no blob — and the
+   alternative is `listDir` on a non-directory or `readFileBytes` on a
+   directory, i.e. a refused startup blamed on an unreadable shard.
+
+   What is NOT residue is a plain FILE under a shard whose name does not spell
+   a CID, sidecar suffix stripped: this module did not write it, so it is
+   refused rather than skipped, naming the path. The asymmetry with the
+   directory case is deliberate — a leaf file is exactly what `writeOne`'s
+   `rename` promotes, so an unparseable name there is a promotion that
+   produced something unreadable, while a directory there is something no
+   write path in this module can produce at all.
 
    **Caps.** Admission is `pds/lib/blob.mdk`'s `admitBlob` and nothing here.
    This module re-checks `checkBlobBytes` only to fail closed on a caller that
@@ -64,6 +89,9 @@ import string.{endsWith, stripSuffix, take}
 import fs.{isDir, mkdirAll}
 import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
 import lib.resource_limits.{checkBlobBytes}
+-- The shard layout is `shell.blockfile`'s, so the two predicates that decide
+-- which entries beneath it a store can own are its too — see `isShardName`.
+import shell.blockfile.{fileLeaves, isShardName}
 
 -- Temporary writes are promoted out of this directory, which is therefore the
 -- one entry under the blob directory that is not a shard.
@@ -153,26 +181,25 @@ sidecarOk path leaf = match stripSuffix mimeSuffix leaf
   Some base => map (_ => ()) (cidForName path base)
 
 readLeaves : String ->
-  String ->
   List String ->
   List (Cid, String, Array Int) ->
   <FileRead "_"> Result String (List (Cid, String, Array Int))
-readLeaves _ _ [] acc = Ok acc
-readLeaves dir shard (leaf :: rest) acc =
-  let path = "\{blobDir dir}/\{shard}/\{leaf}"
+readLeaves _ [] acc = Ok acc
+readLeaves shardPath (leaf :: rest) acc =
+  let path = "\{shardPath}/\{leaf}"
   if endsWith mimeSuffix leaf then match sidecarOk path leaf
     Err message => Err message
-    Ok () => readLeaves dir shard rest acc
+    Ok () => readLeaves shardPath rest acc
   else match cidForName path leaf
     Err message => Err message
     Ok cid => match readFile "\{path}\{mimeSuffix}"
       -- The bytes are here and the type they were stored under is not, so
       -- there is nothing to serve this blob AS. It is skipped as residue; see
       -- the module's "Residue" note for why that is not a failed read.
-      Err _ => readLeaves dir shard rest acc
+      Err _ => readLeaves shardPath rest acc
       Ok mimeType => match readFileBytes path
         Err message => Err "blobfile: \{path}: unreadable blob file: \{message}"
-        Ok bytes => readLeaves dir shard rest ((cid, mimeType, bytes) :: acc)
+        Ok bytes => readLeaves shardPath rest ((cid, mimeType, bytes) :: acc)
 
 readShards : String ->
   List String ->
@@ -180,18 +207,19 @@ readShards : String ->
   <FileRead "_"> Result String (List (Cid, String, Array Int))
 readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
-  if shard == stagingName then
+  let path = "\{blobDir dir}/\{shard}"
+  -- `.staging` is skipped because this module writes it; anything else whose
+  -- name is not a shard name, or that is not a directory at all, is skipped
+  -- because this module could not have written it. See the header's "An entry
+  -- nobody wrote".
+  if shard == stagingName || not (isShardName shard) then
     readShards dir rest acc
-  else match isDir "\{blobDir dir}/\{shard}"
-    -- A shard is a directory; anything else under `blobs/` is residue this
-    -- module did not write, and `listDir` on it would report an unreadable
-    -- shard directory — a refused startup, under a wrong description.
+  else match isDir path
     Ok False => readShards dir rest acc
-    _ => match listDir "\{blobDir dir}/\{shard}"
+    _ => match listDir path
       Err message =>
-        Err
-          "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
-      Ok leaves => match readLeaves dir shard leaves acc
+        Err "blobfile: \{path}: unreadable shard directory: \{message}"
+      Ok leaves => match readLeaves path (fileLeaves path leaves) acc
         Err message => Err message
         Ok next => readShards dir rest next
 
@@ -214,14 +242,20 @@ blobFileRead dir =
       Err "blobfile: \{blobDir dir}: unreadable blob directory: \{message}"
     Ok shards => readShards dir shards []
 
--- Bytes files among one shard's leaves that also have a sidecar present in
--- the SAME listing, i.e. every leaf but the mime sidecars and the bytes
--- files whose sidecar is missing. A shard's directory listing already names
--- every sidecar it has, so checking membership in `all` answers the same
--- question `readLeaves`'s sidecar-open does, without opening any file:
--- `readLeaves` skips a bytes file whose sidecar is missing or unreadable
--- (see the module's "Residue" note), and this count must agree with that or
--- `blobFileCount` reports blobs the server cannot actually serve.
+-- Bytes files among one shard's FILE leaves that also have a sidecar present
+-- in the SAME list, i.e. every leaf but the mime sidecars and the bytes files
+-- whose sidecar is missing. A shard's directory listing already names every
+-- sidecar it has, so checking membership in `all` answers the same question
+-- `readLeaves`'s sidecar-open does, without opening any file: `readLeaves`
+-- skips a bytes file whose sidecar is missing or unreadable (see the module's
+-- "Residue" note), and this count must agree with that or `blobFileCount`
+-- reports blobs the server cannot actually serve.
+--
+-- Name arithmetic alone cannot tell a bytes file from a DIRECTORY named like
+-- one, so this is handed `fileLeaves`' answer rather than the raw listing —
+-- the same list `readLeaves` is handed. Without that, a stray `<cid hex>`
+-- directory beside a `<cid hex>.mime` file counts as a blob here and is
+-- skipped there.
 --
 -- > countLeaves ["a", "a.mime", "b", "b.mime", "c"] ["a", "a.mime", "b", "b.mime", "c"]
 -- 2
@@ -238,15 +272,17 @@ countLeaves all (leaf :: rest) =
 countShards : String -> List String -> <FileRead "_"> Result String Int
 countShards _ [] = Ok 0
 countShards dir (shard :: rest) =
-  if shard == stagingName then
+  let path = "\{blobDir dir}/\{shard}"
+  if shard == stagingName || not (isShardName shard) then
     countShards dir rest
-  else match isDir "\{blobDir dir}/\{shard}"
+  else match isDir path
     Ok False => countShards dir rest
-    _ => match listDir "\{blobDir dir}/\{shard}"
+    _ => match listDir path
       Err message =>
-        Err
-          "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
-      Ok leaves => map (countLeaves leaves leaves + _) (countShards dir rest)
+        Err "blobfile: \{path}: unreadable shard directory: \{message}"
+      Ok leaves =>
+        let files = fileLeaves path leaves
+        map (countLeaves files files + _) (countShards dir rest)
 
 -- Every file left behind under `<dir>/blobs/.staging` by a process that
 -- crashed between staging a file and its `rename`. `.staging` never holds a
@@ -293,8 +329,16 @@ blobFileSweepStaging dir =
    on an interval, and `blobFileRead`'s full verify-by-read pass is too much
    work to repeat that often. A data directory that has never held a blob
    counts as zero, the same convention `blobFileRead` uses — and, like
-   `blobFileRead`, a bytes file whose sidecar is missing is not counted, so
-   this agrees with what `getBlob`/`listBlobs` can actually serve. -}
+   `blobFileRead`, a bytes file whose sidecar is missing is not counted and an
+   entry no write path here could have produced is skipped, so this agrees
+   with what `getBlob`/`listBlobs` can actually serve. It stats each entry it
+   passes over, which is what that agreement costs; it still opens nothing.
+
+   Agreement is about WHICH BLOBS and not about refusing: this never parses a
+   leaf name as a CID, so a file `blobFileRead` refuses over is simply not
+   counted here. That costs nothing, because a server reads the blobs before
+   it serves any and this count is a stats line on an interval — the refusal
+   has already happened somewhere a caller acts on. -}
 export
 blobFileCount : String -> <FileRead "_"> Result String Int
 blobFileCount dir =
