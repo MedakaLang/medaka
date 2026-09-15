@@ -1,0 +1,123 @@
+{- | The compiler's single-stage probe gates, as one runner over a table of
+   rows.
+
+   Six shell gates used to do this, one script per probe, each a near-copy of
+   the same loop: spawn `test/bin/<entry>_main` over a corpus of `.mdk`
+   files, strip the native runtime's trailing `()`, and diff the result
+   against a committed golden sitting beside each fixture. The probe, the
+   corpus and the golden's suffix are the data; the loop is not. The rows
+   here name them:
+
+   | retired gate | probe | corpus | golden |
+   |---|---|---|---|
+   | `diff_compiler_exhaust` | `exhaust_main` | `test/exhaust_fixtures` | `.expected` |
+   | `diff_compiler_fmt` | `fmt_main` | `test/fmt_fixtures` + `test/parse_fixtures` | `.fmt.golden` |
+   | `diff_compiler_lex_files` | `lex_main` | the lexer and twelve stdlib modules | `.lextok.golden` |
+   | `diff_compiler_lint_fix` | `lint_fix_main` | `test/lint_fix_fixtures` | `.fixed` |
+
+   `diff_compiler_lex_files`' corpus is REAL SOURCE, not fixtures: the
+   lexer's own 2,775 lines plus twelve stdlib modules, which exercise
+   whatever real code actually uses (block comments, the full operator set)
+   rather than what a curated corpus remembered to include.
+
+   Two of the six retired scripts are not corpus-and-golden shaped and are
+   not bent into rows — the two tests at the foot of this file:
+
+   - `diff_compiler_new` scaffolded ONE project tree and compared the whole
+     TREE (file list and bytes) against `test/new_golden/myapp`. There is no
+     corpus and no per-fixture golden, and `test/capture_goldens.sh new` is a
+     stale no-op, so a mismatch is reviewed and hand-copied rather than
+     captured.
+   - `diff_compiler_entry_exit_codes` pins #440: five error paths through the
+     emitter probe's `driveModules`, each asserted on the exit code AND on
+     stdout staying empty AND on stderr carrying a diagnostic, plus a control
+     proving those five discriminate. Its inputs are synthesized, three of
+     them being a file that must NOT exist, which no corpus can hold.
+
+   The registry entry keeps `diff_compiler_fmt`'s name so the merged gate
+   inherits that gate's measured cost history rather than arriving uncosted
+   (`gate_cost.baselineKey` reads the `run` path, and `medaka gate balance`
+   hard-refuses on a gate with no cost sample). The five other baseline rows
+   are orphans and are pruned by `test/gate_cost_ingest.sh`'s `--registry`
+   pass. A failure names the RETIRED gate it belongs to, so the shared
+   registry name never hides which property broke.
+
+   Every row also grades what the scripts did not: the probe's exit code and
+   its stderr, not stdout alone (`probe_runner.processFailure`). Runs under
+   `medaka test --native`. -}
+
+import probe_runner.{
+  Row, errorPathFailures, gradeProbeRows, report, scaffoldFailures
+}
+
+-- | The stdlib modules `diff_compiler_lex_files` lexed, in its own order.
+lexCorpus : List String
+lexCorpus = [
+  "compiler/frontend/lexer.mdk",
+  "stdlib/core.mdk",
+  "stdlib/list.mdk",
+  "stdlib/array.mdk",
+  "stdlib/string.mdk",
+  "stdlib/map.mdk",
+  "stdlib/set.mdk",
+  "stdlib/io.mdk",
+  "stdlib/hash_map.mdk",
+  "stdlib/hash_set.mdk",
+  "stdlib/vector.mdk",
+  "stdlib/json.mdk",
+  "stdlib/test.mdk",
+]
+
+rows : List Row
+rows = [
+  Row {
+    gate = "diff_compiler_exhaust",
+    probe = "test/bin/exhaust_main",
+    corpus = ["test/exhaust_fixtures"],
+    prelude = [],
+    goldenSuffix = ".expected",
+    sorted = True,
+    stripUnit = True,
+    fixtures = 6,
+  },
+  Row {
+    gate = "diff_compiler_fmt",
+    probe = "test/bin/fmt_main",
+    corpus = ["test/fmt_fixtures", "test/parse_fixtures"],
+    prelude = [],
+    goldenSuffix = ".fmt.golden",
+    sorted = False,
+    stripUnit = True,
+    fixtures = 85,
+  },
+  Row {
+    gate = "diff_compiler_lex_files",
+    probe = "test/bin/lex_main",
+    corpus = lexCorpus,
+    prelude = [],
+    goldenSuffix = ".lextok.golden",
+    sorted = False,
+    stripUnit = True,
+    fixtures = 13,
+  },
+  Row {
+    gate = "diff_compiler_lint_fix",
+    probe = "test/bin/lint_fix_main",
+    corpus = ["test/lint_fix_fixtures"],
+    prelude = [],
+    goldenSuffix = ".fixed",
+    sorted = False,
+    stripUnit = False,
+    fixtures = 21,
+  },
+]
+
+test "every probe reproduces its corpus's goldens" = gradeProbeRows rows
+
+test "`medaka new`'s scaffold matches its golden tree" =
+  report
+    "scaffold"
+    (scaffoldFailures "test/bin/new_main" "myapp" "test/new_golden/myapp")
+
+test "entry-probe error paths exit nonzero with an empty artifact" =
+  report "error-path" (errorPathFailures "test/bin/llvm_emit_modules_main")

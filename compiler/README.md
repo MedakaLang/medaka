@@ -182,7 +182,7 @@ the stage is done when all pass.
   - **curated fixtures** — the `# TOKENS` section of the snapshot gate,
   `test/diff_compiler_snapshot_frontend_test.mdk`.
   - **All real `.mdk` files** (every stdlib module + this lexer lexing itself)
-    — `sh test/diff_compiler_lex_files.sh`, which diffs against
+    — the `lex_files` row of `test/diff_compiler_fmt_test.mdk`, which diffs against
     `dev/lextok.exe` (the OCaml reference dumper). FLOAT literal *text* is
     normalized away (OCaml `%g` vs `floatToString`: `1.0` → `1` vs `1.`; the
     TFloat value is identical). One more serialization-only nuance: non-ASCII /

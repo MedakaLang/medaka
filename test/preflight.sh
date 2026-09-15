@@ -344,7 +344,7 @@ _refs() {
 # scrape — this codebase is full of human-readable hint strings like
 # `echo "build oracles first: sh test/build_oracles.sh"` that name a script
 # without invoking it; a bare scrape (the same shape as run_gates.sh's stale-
-# oracle `test/bin/...` bug) falsely turned diff_compiler_new.sh into an
+# oracle `test/bin/...` bug) falsely turned the retired diff_compiler_new script into an
 # "indirect consumer" of test/llvm_fixtures via its unrelated
 # `echo "no golden tree ... run sh test/capture_goldens.sh"` error message,
 # ballooning one fixture's consumer set from 3 gates to 42. Caught by testing
@@ -627,7 +627,9 @@ while IFS= read -r f; do
   case "$f" in
     # ── front-end: everything downstream of it is suspect ──
     compiler/frontend/lexer.mdk)
-      add 'diff_compiler_lex*'
+      # The self-lex token-stream rows (the former diff_compiler_lex_files) are
+      # rows of the survivor diff_compiler_fmt, whose name no `lex*` glob reaches.
+      add 'diff_compiler_fmt'
       # parse_main/parse_result_main (the former diff_compiler_parse_errors/
       # _result) are now legs of the survivor diff_compiler_check, whose name
       # the diff_compiler_parse* glob no longer matches — named explicitly.
@@ -677,7 +679,9 @@ while IFS= read -r f; do
       # diff_compiler_check_match's match-exhaustiveness corpus is a leg of
       # the diff_compiler_check sweep; the gate that now carries it is named
       # by the survivor, not by the retired script.
-      add 'diff_compiler_exhaust'; add 'diff_compiler_check' ;;
+      # The guard-exhaustiveness golden rows (the former diff_compiler_exhaust)
+      # are rows of the survivor diff_compiler_fmt.
+      add 'diff_compiler_fmt'; add 'diff_compiler_check' ;;
 
     # ── types ── (also the TYPES snapshot family: typecheck.mdk renders the
     #    `# TYPES` section of test/snapshots/typecheck{,_panic}_fixtures, #81 R5)
@@ -698,7 +702,7 @@ while IFS= read -r f; do
     # cannot see (they compare against captured output, not the spec).
     compiler/types/*)
       add 'diff_compiler_typecheck*'; add 'diff_compiler_snapshot*'
-      add 'diff_compiler_check*'; add 'diff_compiler_exhaust'
+      add 'diff_compiler_check*'; add 'diff_compiler_fmt'
       add 'diff_compiler_diagnostics'; add 'diff_compiler_eval*'
       add 'diff_compiler_engines'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
@@ -910,7 +914,9 @@ while IFS= read -r f; do
       # its covered set from, so a change here moves both of that gate's inputs.
       add 'diff_compiler_cli_reject_floor'
       add 'diff_compiler_analyze_project' ;;
-    compiler/tools/lint*.mdk)      add 'diff_compiler_lint*' ;;
+    # diff_compiler_fmt carries the autofix golden rows (the former
+    # diff_compiler_lint_fix), which no `lint*` glob reaches.
+    compiler/tools/lint*.mdk)      add 'diff_compiler_lint*'; add 'diff_compiler_fmt' ;;
     compiler/tools/fmt.mdk|compiler/tools/printer.mdk) add 'diff_compiler_fmt'; add 'diff_compiler_snapshot*' ;;
     compiler/tools/lsp.mdk)        add 'diff_compiler_lsp*' ;;
     compiler/tools/snapshot.mdk)

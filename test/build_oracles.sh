@@ -153,7 +153,7 @@ fi
 #                           driver/main_autoprint's value-main wrap, so eval honours the
 #                           same auto-print contract `medaka build` and wasm_emit do)
 #   ── Phase 2 §2b front-end gates, goldens captured from dev probes ──
-#   lex_main              — diff_compiler_lex_files.sh / bootstrap_lex.sh / selfcompile_lex.sh
+#   lex_main              — diff_compiler_fmt (the lex_files row of test/diff_compiler_fmt_test.mdk) / bootstrap_lex.sh / selfcompile_lex.sh
 #                           (diff_compiler_lexer.sh MIGRATED to the # TOKENS section of
 #                           test/diff_compiler_snapshot_frontend_test.mdk, #81 R4; lex_main
 #                           survives because those three still drive it)
@@ -195,13 +195,13 @@ fi
 #   check_modules_main      — diff_compiler_check (multi-module leg)
 #   check_all_main          — diff_compiler_selfproc.sh (LEG A)
 #   check_match_main        — diff_compiler_check (match-exhaustiveness leg)
-#   exhaust_main            — diff_compiler_exhaust.sh
+#   exhaust_main            — diff_compiler_fmt (the exhaust row of test/diff_compiler_fmt_test.mdk)
 #   lint_main               — diff_compiler_lint.sh (added by the lint workstream)
 #   diagnostics_main        — diff_compiler_diagnostics.sh
 #   diagnostics_project_main — diff_compiler_analyze_project.sh
 #   ── Phase 2 §2c tooling gates (fmt/new/test/repl/lsp) ──
-#   fmt_main    — diff_compiler_fmt.sh        (native host vs .fmt.golden)
-#   new_main    — diff_compiler_new.sh        (native scaffold tree vs golden tree)
+#   fmt_main    — diff_compiler_fmt (the fmt row of test/diff_compiler_fmt_test.mdk: native host vs .fmt.golden)
+#   new_main    — diff_compiler_fmt (its scaffold block: native scaffold tree vs golden tree)
 #   test_main   — diff_compiler_test.sh       (native test report vs .test.golden)
 #   repl_main   — diff_compiler_repl.sh       (SKIPPED re-root; see capture_goldens.sh)
 #   (lsp_main is NOT a build target: `medaka build lsp_main.mdk` fails the native G1

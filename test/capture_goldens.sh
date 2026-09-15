@@ -46,8 +46,8 @@
 #      say `printer` is valid; it has no case arm and falls through to "unknown
 #      --frozen tag", exit 2):
 #        grep -nE '^    [A-Za-z_]+\)$' test/capture_goldens.sh
-#      — currently `fmt`, `selfproc_legA`, `boot_typecheck`, `llvm_eval`,
-#      `build_construct`, `native_cli`.
+#      — currently `fmt`, `lextok`, `lint_fix`, `selfproc_legA`, `boot_typecheck`,
+#      `llvm_eval`, `build_construct`, `native_cli`.
 # EVERY OTHER corpus this file's comments describe as "FROZEN" (eval, eval_prelude,
 # eval_list, eval_typed_modules, tcmod, tc_probe, diag_analyze, analyze_project,
 # new, build_diff, selfproc's lex/parse/tc probes, …) has NO regenerator here at
@@ -179,7 +179,7 @@ case "${1:-}" in
   --frozen)
     FROZEN_TAG="${2:-}"
     [ -n "$FROZEN_TAG" ] || {
-      echo "usage: sh test/capture_goldens.sh --frozen <fmt|printer|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli> [--only <fixture-or-glob>]"
+      echo "usage: sh test/capture_goldens.sh --frozen <fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli> [--only <fixture-or-glob>]"
       exit 2
     }
     case "${3:-}" in
@@ -261,6 +261,28 @@ if [ -n "$FROZEN_TAG" ]; then
         "$ROOT/test/fmt_fixtures/*.mdk" "$ROOT/test/parse_fixtures/*.mdk"
       if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
         echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/fmt_fixtures/ or test/parse_fixtures/"; exit 2
+      fi ;;
+    lextok)
+      # The self-lex corpus is REAL SOURCE, not a fixture directory: the lexer
+      # itself plus twelve stdlib modules, named one by one here and by the same
+      # list in test/diff_compiler_fmt_test.mdk's `lexCorpus`.  Both sides run
+      # `lex_main <f> | strip_unit`, so a captured golden cannot drift from what
+      # the gate checks (#167).
+      regen_frozen lex_main lextok.golden "" \
+        "$ROOT/compiler/frontend/lexer.mdk" \
+        "$ROOT/stdlib/core.mdk" "$ROOT/stdlib/list.mdk" \
+        "$ROOT/stdlib/array.mdk" "$ROOT/stdlib/string.mdk" \
+        "$ROOT/stdlib/map.mdk" "$ROOT/stdlib/set.mdk" \
+        "$ROOT/stdlib/io.mdk" "$ROOT/stdlib/hash_map.mdk" \
+        "$ROOT/stdlib/hash_set.mdk" "$ROOT/stdlib/vector.mdk" \
+        "$ROOT/stdlib/json.mdk" "$ROOT/stdlib/test.mdk"
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in the self-lex corpus"; exit 2
+      fi ;;
+    lint_fix)
+      regen_frozen lint_fix_main fixed "" "$ROOT/test/lint_fix_fixtures/*.mdk"
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no fixture under test/lint_fix_fixtures/"; exit 2
       fi ;;
     selfproc_legA)
       # Mirrors LEG A of test/diff_compiler_selfproc.sh EXACTLY: one full-closure
@@ -540,7 +562,7 @@ PY
       fi
       ;;
     *)
-      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|printer|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli)"
+      echo "unknown --frozen tag: $FROZEN_TAG (expected fmt|lextok|lint_fix|boot_typecheck|selfproc_legA|llvm_eval|build_construct|native_cli)"
       exit 2 ;;
   esac
   status=$?
@@ -816,13 +838,18 @@ fi
 # parse_result : FROZEN (native canonical; astdump.exe had no native equivalent).
 # Committed .parse_result_oracle files are the reference.
 
-# lex_files : re-cuttable via `CAPTURE=1 sh test/diff_compiler_lex_files.sh` — the
-# gate's own CAPTURE=1 branch writes each .lextok.golden through the IDENTICAL
-# "$RUN" "$f" | strip_unit invocation the gate reads with (single source of
-# truth; #167). Needs only test/bin/lex_main (`sh test/build_oracles.sh
+# lex_files : re-cuttable via `sh test/capture_goldens.sh --frozen lextok` (the
+# arm in the FROZEN_TAG case above), which writes each .lextok.golden through the
+# IDENTICAL "$RUN" "$f" | strip_unit invocation the gate reads with (single source
+# of truth; #167). Needs only test/bin/lex_main (`sh test/build_oracles.sh
 # --build-one lex_main`), NOT $MAIN. Historical note: lextok.exe (OCaml) had no
 # native equivalent, which is why this family was frozen in the first place —
 # the goldens are native-canonical output, not a cross-checked oracle.
+
+# lint_fix : re-cuttable via `sh test/capture_goldens.sh --frozen lint_fix`, the
+# same shape. A fixture whose .fixed equals its .mdk proves the fixer's
+# safe-subset guard declined to touch it, so a regen that "fixes" one of those is
+# a real change to review, not a formatting refresh.
 
 # check_modules / tcmod : FROZEN (native canonical; tc_module_probe.exe had no
 # native equivalent).  Committed oracle.tcmod files are the reference.

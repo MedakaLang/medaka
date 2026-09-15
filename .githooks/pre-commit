@@ -29,7 +29,7 @@
 #   3. CROSS-FILE LINT: one project-wide scan (rule-duplicate-body can't be checked
 #      per-staged-file).
 #   4. SNAPSHOT: `make snapshot-check` — the per-stage snapshot suite, CHECK ONLY.
-#   5. LEXTOK:   `test/diff_compiler_lex_files.sh` — OPPORTUNISTIC: only runs if
+#   5. LEXTOK:   an inline `test/bin/lex_main` compare — OPPORTUNISTIC: only runs if
 #      test/bin/lex_main already exists (this hook never builds an oracle). Scoped to
 #      staged files (from check 1's set) that already have a sibling .lextok.golden.
 #   6. SHOUT DIFF: rejects a commit that ADDS a new shout line to a staged .mdk
@@ -399,8 +399,21 @@ lex_checked=0
 if [ -n "$lex_relevant" ]; then
   if [ -x "$ROOT/test/bin/lex_main" ]; then
     lex_checked=1
-    # shellcheck disable=SC2086
-    lexout="$(sh "$ROOT/test/diff_compiler_lex_files.sh" $lex_relevant 2>&1)"; lexst=$?
+    # The gate that owns this family is test/diff_compiler_fmt_test.mdk, a
+    # `kind = "native"` module over a FIXED corpus — it takes no file arguments
+    # and needs five oracles this hook must not require. So the per-staged-file
+    # compare is spelled here: the same `lex_main <f>` spawn, the same drop of
+    # the runtime's trailing `()`, against the same sibling golden.
+    lexout=""; lexst=0
+    for lf in $lex_relevant; do
+      lex_actual="$("$ROOT/test/bin/lex_main" "$lf" 2>/dev/null | sed '$ s/()$//; ${/^$/d;}')"
+      lex_expected="$(cat "${lf%.mdk}.lextok.golden")"
+      if [ "$lex_actual" != "$lex_expected" ]; then
+        lexout="$lexout
+FAIL $(basename "$lf")"
+        lexst=1
+      fi
+    done
     if [ "$lexst" -ne 0 ]; then
       echo "" >&2
       echo "✗ pre-commit: lextok golden(s) stale (self-lex token-stream snapshot):" >&2
@@ -408,8 +421,7 @@ if [ -n "$lex_relevant" ]; then
       printf '%s\n' "$lexout" | grep -E '^(FAIL|no golden)' | sed 's/^/    /' >&2
       echo "" >&2
       echo "  Recapture:" >&2
-      # shellcheck disable=SC2086
-      echo "      CAPTURE=1 sh test/diff_compiler_lex_files.sh$lex_relevant" >&2
+      echo "      sh test/capture_goldens.sh --frozen lextok" >&2
       echo "  then re-stage the .lextok.golden file(s)." >&2
       echo "  Bypass once:  git commit --no-verify" >&2
       echo "" >&2
@@ -539,7 +551,7 @@ echo "" >&2
 echo "pre-commit: checked this run: $checked." >&2
 echo "pre-commit: NOT checked this run:$notchecked —" >&2
 echo "pre-commit:   if you touched stdlib/ or compiler/, run their gates before you push" >&2
-echo "pre-commit:   (test/diff_compiler_lex_files.sh, test/diff_compiler_test.sh," >&2
+echo "pre-commit:   (test/diff_compiler_fmt_test.mdk, test/diff_compiler_test.sh," >&2
 echo "pre-commit:    test/diff_compiler_selfproc.sh, test/diff_native_cli.sh). This hook's" >&2
 echo "pre-commit:   silence is not evidence those goldens are still current. (#491)" >&2
 

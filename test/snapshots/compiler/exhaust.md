@@ -11,7 +11,7 @@ stages=DESUGAR,MARK
 --
 -- Needs no prelude: the constructor oracle is built from the file's own data
 -- decls plus the syntactic builtins (Bool/List/Unit).  Validated byte-for-byte
--- against `dev/diagdump.exe --exhaust` (test/diff_compiler_exhaust.sh).  The
+-- against `dev/diagdump.exe --exhaust` (test/diff_compiler_fmt_test.mdk).  The
 -- match/clause exhaustiveness (`check_match`) is type-aware and lives in
 -- typecheck, so it is out of scope here.
 

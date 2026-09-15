@@ -4,7 +4,7 @@
 # OCaml-free: native host test/bin/lint_main vs the committed <name>.expected
 # golden (parse → tools.lint.lintToLines → one "severity: [rule] message" per
 # line, sorted, location-stripped).  Native output sorted before compare.
-# Mirror of diff_compiler_exhaust.sh.
+# Mirror of the exhaust row in test/diff_compiler_fmt_test.mdk.
 #
 # Usage:  sh test/diff_compiler_lint.sh
 #         CAPTURE=1 sh test/diff_compiler_lint.sh   # (re)capture goldens

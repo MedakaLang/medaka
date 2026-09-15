@@ -1,0 +1,446 @@
+{- | One runner for the compiler's single-stage PROBE gates.
+
+   A probe gate spawns one `compiler/entries/*_main.mdk` binary over a corpus
+   of `.mdk` files and diffs its stdout against a committed golden sitting
+   beside each fixture. Six shell scripts used to do that, each a near-copy of
+   the same five lines: check the binary is there, define `strip_unit`, loop,
+   compare, count. The loop is not the data — the (probe, corpus, golden
+   suffix) triples are. `Row` below is that data's shape, and
+   `gradeProbeRows` is the loop, written once.
+
+   The table itself lives in the GATE MODULE rather than here, so a row's
+   `test/bin/<name>` spelling sits in the file `test/build_oracles.sh --for`
+   greps to decide which oracles a gate needs (`build_oracles.sh`, the
+   `grep -ohE 'test/bin/[a-z_0-9]+' "$_g"` over each gate's own `run` target).
+   A table held here would be invisible to that derivation and the gate would
+   run against binaries nobody built.
+
+   Two of the six retired scripts are not corpus-and-golden shaped at all and
+   are not bent into rows: `scaffoldFailures` grades a scaffolded project TREE
+   against a committed golden tree, and `errorPathFailures` grades five
+   synthesized error paths on their exit code, their empty stdout and their
+   stderr. They keep their own assertion functions here, beside the sweep,
+   because both are still "spawn a probe and grade what came back" and share
+   its process grading.
+
+   What every row grades that the retired scripts did not: the probe's EXIT
+   CODE and its stderr, not stdout alone. All six piped stderr to `/dev/null`
+   and never read `$?`, so a probe that panicked before printing anything was
+   compared as `""` against an empty golden and reported `ok` — the shape
+   `test/diff_compiler_eval_test.mdk` found already live in its own family.
+   The predicate here is the one `compiler_cli_test_support.binaryRanClean`
+   states of a built binary: exited 0, and no `E-PANIC` on stderr.
+
+   Runs under `medaka test --native`: it spawns binaries and reads corpora,
+   neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint, sweepUnits}
+import fs.{fixtureFiles, isFile, mkdirAll}
+import io.{runVerb}
+import list.{somes, sort}
+import path.{dirname, stem, stripPrefix}
+import string.{contains, endsWith, lines, unlines}
+import test.{Expectation, fail, pass}
+import test_process.{boundedVerb, medakaRoot, scratchDir}
+
+{- | One retired probe gate, as data.
+
+   `probe` and every path in `corpus` and `prelude` are spelled
+   repo-relative and resolved against `medakaRoot` at spawn time, so a gate
+   run from any directory addresses the tree under test rather than the one
+   it was started in.
+
+   - `gate` — the retired script's registry name. A failure names it, so a
+     red row still says which gate's property broke even though several rows
+     now share one registry entry.
+   - `probe` — `test/bin/<entry>`, the binary `test/build_oracles.sh` builds.
+   - `corpus` — the fixtures, as directories (every `.mdk` directly under
+     one) or as individual files, in the order the retired script read them.
+     A directory is the usual shape; `diff_compiler_lex_files` named twelve
+     real source files instead, which is a corpus of files rather than a
+     corpus glob and stays spelled that way.
+   - `prelude` — modules prepended to the probe's argument vector, for a
+     probe whose entry takes the prelude pair before its target.
+   - `goldenSuffix` — appended to the fixture's stem to name its golden
+     sibling (`.expected`, `.fmt.golden`, `.lextok.golden`, `.fixed`).
+   - `sorted` — sort the probe's output lines before comparing, for a probe
+     whose output order is not defined.
+   - `stripUnit` — drop the native runtime's trailing `()` auto-print. Not
+     every probe emits one, and a row that strips unconditionally would eat
+     a fixture's own final `()` line.
+   - `fixtures` — how many fixtures this row graded when it was written. A
+     corpus that shrinks reds rather than passing over fewer rows. -}
+public export data Row = Row {
+  gate : String,
+  probe : String,
+  corpus : List String,
+  prelude : List String,
+  goldenSuffix : String,
+  sorted : Bool,
+  stripUnit : Bool,
+  fixtures : Int,
+}
+
+-- # The corpus
+
+{- | Every fixture of a row's corpus, as absolute paths, in corpus order.
+
+   A corpus entry ending in `.mdk` is one fixture; anything else is a
+   directory whose top-level `.mdk` files are its fixtures, sorted. Only the
+   directory's own level: a corpus with fixture subdirectories belongs to a
+   different shape, not to a row here. -}
+entriesOf : Row -> <FileRead "_", IO> Result String (List String)
+entriesOf r = corpusEntries (map (p => "\{medakaRoot}/\{p}") r.corpus) []
+
+corpusEntries : List String ->
+  List String ->
+  <FileRead "_"> Result String (List String)
+corpusEntries [] acc = Ok acc
+corpusEntries (src :: rest) acc = match sourceEntries src
+  Err e => Err e
+  Ok ps => corpusEntries rest (acc ++ ps)
+
+sourceEntries : String -> <FileRead "_"> Result String (List String)
+sourceEntries src
+  | endsWith ".mdk" src = match isFile src
+    Err e => Err "\{src}: \{e}"
+    Ok False => Err "\{src}: named as a corpus file but is not a file"
+    Ok True => Ok [src]
+  | otherwise = match fixtureFiles src
+    Err e => Err "\{src}: \{e}"
+    Ok paths => match sort (filter (topLevelSource src) paths)
+      [] => Err "\{src}: no top-level .mdk fixtures"
+      fixtures => Ok fixtures
+
+topLevelSource : String -> String -> Bool
+topLevelSource dir p = endsWith ".mdk" p && dirname p == dir
+
+-- | The golden sibling of one fixture: its stem plus the row's suffix.
+goldenPath : Row -> String -> String
+goldenPath r path = "\{dirname path}/\{stem path}\{r.goldenSuffix}"
+
+-- | The short name a failure message calls a fixture by.
+labelOf : String -> String
+labelOf path = stem path
+
+-- # Grading a spawn
+
+{- | How a spawn's exit code and stderr graded, or `None` when they graded
+   clean.
+
+   `code == 0` with no `E-PANIC` on stderr is the same predicate
+   `compiler_cli_test_support.binaryRanClean` asserts of a built binary: a
+   process that printed the right bytes on its way out of a panic has not
+   passed. -}
+processFailure : String -> String -> Int -> String -> Option String
+processFailure probe label code err =
+  if code == 0 && not (contains "E-PANIC" err) then
+    None
+  else
+    Some "\{label}: \{probe} exited \{intToString code}\{stderrTail err}"
+
+stderrTail : String -> String
+stderrTail "" = ""
+stderrTail err = match lines (chompNewlines err)
+  [] => ""
+  l :: _ => " — \{debug l}"
+
+{- | The probe's stdout as this row compares it: the trailing `()`
+   auto-print dropped where the row strips it, the lines sorted where the
+   row sorts them, and trailing newlines chomped either way.
+
+   The chomp is what the retired scripts' `$(…)` did on both sides, and it
+   is deliberately not a trim: a row whose output gained a trailing SPACE
+   must still red. -}
+comparable : Row -> String -> String
+comparable r out =
+  let text = chompNewlines (if r.stripUnit then stripUnitAutoPrint out else out)
+  if r.sorted then chompNewlines (unlines (sort (lines text))) else text
+
+valueFailure : Row -> String -> String -> <FileRead "_", IO> Option String
+valueFailure r path actual = match readFile (goldenPath r path)
+  Err e => Some "\{labelOf path}: no readable golden \{goldenPath r path}: \{e}"
+  Ok raw =>
+    let expected = chompNewlines raw
+    if expected == actual then
+      None
+    else
+      Some "\{labelOf path}: \{diffNote expected actual}"
+
+{- | Where two texts first disagree, as one line of message.
+
+   The whole of both sides would be two formatted source files for the
+   `fmt` row, which is not a message anybody reads. The retired scripts said
+   only `FAIL <name>` and left the reader to re-run the probe by hand; the
+   first differing line says which edit to look at without that round trip.
+
+   > diffNote "a\nb" "a\nc"
+   "line 2: expected \"b\", got \"c\""
+
+   > diffNote "a" "a\nb"
+   "line 2: expected (no line), got \"b\"" -}
+diffNote : String -> String -> String
+diffNote expected actual = firstMismatch 1 (lines expected) (lines actual)
+
+firstMismatch : Int -> List String -> List String -> String
+firstMismatch _ [] [] = "texts differ but no line does — check trailing bytes"
+firstMismatch n (e :: es) (a :: rest)
+  | e == a = firstMismatch (n + 1) es rest
+  | otherwise = "line \{intToString n}: expected \{debug e}, got \{debug a}"
+firstMismatch n [] (a :: _) =
+  "line \{intToString n}: expected (no line), got \{debug a}"
+firstMismatch n (e :: _) [] =
+  "line \{intToString n}: expected \{debug e}, got (no line)"
+
+-- # Grading a row
+
+{- | One row's outcome. `failures` is the whole list rather than the first,
+   so a red run names every disagreement at once instead of the first
+   fixture to break. -}
+data Outcome = Outcome { gate : String, graded : Int, failures : List String }
+
+argsFor : Row -> String -> <IO> List String
+argsFor r path = map (p => "\{medakaRoot}/\{p}") r.prelude ++ [path]
+
+oneFixture : Row -> String -> <Exec "_", FileRead "_", IO> Option String
+oneFixture r path =
+  match boundedVerb "\{medakaRoot}/\{r.probe}" (argsFor r path)
+    Err e => Some "\{labelOf path}: could not spawn \{r.probe}: \{e}"
+    Ok (code, out, err) => match processFailure r.probe (labelOf path) code err
+      Some m => Some m
+      None => valueFailure r path (comparable r out)
+
+gradeRow : String -> Row -> <Exec "_", FileRead "_", IO> Outcome
+gradeRow _ r = match entriesOf r
+  Err e => Outcome { gate = r.gate, graded = 0, failures = [e] }
+  Ok paths =>
+    let found = length paths
+    let counted =
+      if found == r.fixtures then
+        []
+      else
+        [
+          "expected \{intToString r.fixtures} fixtures, found \{intToString found} — see this row's `fixtures` field",
+        ]
+    Outcome {
+      gate = r.gate,
+      graded = found,
+      failures = counted ++ somes (map (oneFixture r) paths),
+    }
+
+rowFailure : Outcome -> Option String
+rowFailure o = match o.failures
+  [] => None
+  fs =>
+    let body = unlines (map (f => "    \{f}") fs)
+    Some
+      "  \{o.gate} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{chompNewlines body}"
+
+summarize : Int -> List String -> Expectation
+summarize _ [] = pass
+summarize graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} probe rows failed:\n\{unlines failures}"
+
+{- | Grades every row: spawns its probe once per fixture, grades the spawn,
+   and compares what it printed against that fixture's golden.
+
+   This is the whole of a migrated gate's body. A gate module adds rows to
+   its own table and calls this; nothing else about a row is code. -}
+export
+gradeProbeRows : List Row -> <Exec "_", FileRead "_", IO> Expectation
+gradeProbeRows rows = sweepUnits rows gradeRow rowFailure summarize
+
+-- # Scratch space
+
+{- | A directory of this test's own, named `name`, under the process's
+   scratch root.
+
+   `test_process.scratchDir` is a top-level nullary, so it is evaluated ONCE
+   per process and every test in a module is handed the same path —
+   including after `sweepUnits` has removed it, which is what it does when
+   it finishes. A test that writes therefore has to make its directory
+   rather than assume one; `mkdirAll` remakes the root on the way and is not
+   an error when it is still there. -}
+ownScratch : String -> <Exec "_", FileWrite "_"> Result String String
+ownScratch name = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/\{name}"
+    map (() => dir) (mkdirAll dir)
+
+-- # The scaffolded tree
+
+{- | Every regular file under `root`, as paths relative to it, sorted.
+
+   `fixtureFiles` walks recursively and carries the anti-vacuity floor, so a
+   scaffolder that produced an empty directory is an `Err` rather than a
+   tree that trivially matches nothing. -}
+treeFiles : String -> <FileRead "_"> Result String (List String)
+treeFiles root = match fixtureFiles root
+  Err e => Err "\{root}: \{e}"
+  Ok paths => Ok (sort (somes (map (stripPrefix root) paths)))
+
+{- | Runs `probe <name>` with its working directory set to `dir`.
+
+   The probe scaffolds into the directory it is started in and takes no
+   output path, so the only way to aim it is to spawn it somewhere else.
+   `sh -c` carries the `cd` because neither `runVerb` nor `env` can portably
+   set a child's working directory ([B-DUAL-PLATFORM]: `env --chdir` is GNU
+   only). -}
+spawnIn : String ->
+  String ->
+  String ->
+  <Exec "_"> Result String (Int, String, String)
+spawnIn dir probe name = boundedVerb "sh" [
+  "-c", "cd \"$1\" && exec \"$2\" \"$3\"", "sh", dir, probe, name
+]
+
+{- | Everything wrong with the project tree `probe` scaffolds under `name`,
+   compared against the committed golden tree `golden`: the file list and
+   every file's bytes, recursively.
+
+   `probe` and `golden` are repo-relative. The scaffold has no regeneration
+   script — `test/capture_goldens.sh new` is a stale no-op — so a mismatch
+   here is reviewed and hand-copied, never captured. -}
+export
+scaffoldFailures : String ->
+  String ->
+  String ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> List String
+scaffoldFailures probe name golden = match ownScratch "new"
+  Err e => ["\{name}: could not make a scratch directory: \{e}"]
+  Ok scratch =>
+    let bin = "\{medakaRoot}/\{probe}"
+    let found = match spawnIn scratch bin name
+      Err e => ["\{name}: could not spawn \{probe}: \{e}"]
+      Ok (code, _, err) => match processFailure probe name code err
+        Some m => [m]
+        None => treeFailures "\{scratch}/\{name}" "\{medakaRoot}/\{golden}"
+    let _ = runVerb "rm" ["-rf", scratch]
+    found
+
+treeFailures : String -> String -> <FileRead "_", IO> List String
+treeFailures got want = match treeFiles want
+  Err e => ["golden tree unreadable: \{e}"]
+  Ok wantFiles => match treeFiles got
+    Err e => ["scaffolded tree unreadable: \{e}"]
+    Ok gotFiles =>
+      let missing =
+        map
+          (f => "\{f}: scaffolded tree has no such file")
+          (only wantFiles gotFiles)
+      let extra =
+        map
+          (f => "\{f}: scaffolded tree has a file the golden does not")
+          (only gotFiles wantFiles)
+      let shared = filter (f => elem f gotFiles) wantFiles
+      missing ++ extra ++ somes (map (fileFailure got want) shared)
+
+only : List String -> List String -> List String
+only these those = filter (f => not (elem f those)) these
+
+fileFailure : String -> String -> String -> <FileRead "_", IO> Option String
+fileFailure got want rel = match readFile "\{want}/\{rel}"
+  Err e => Some "\{rel}: golden unreadable: \{e}"
+  Ok expected => match readFile "\{got}/\{rel}"
+    Err e => Some "\{rel}: scaffolded file unreadable: \{e}"
+    Ok actual =>
+      if expected == actual then
+        None
+      else
+        Some "\{rel}: \{diffNote expected actual}"
+
+-- # Error paths
+
+{- | An error path must do BOTH: exit nonzero, AND not pretend to have
+   produced an artifact.
+
+   Asserting only the exit code would miss the half that bites a harness. A
+   probe's whole output contract is "the artifact on stdout", so a driver
+   that printed a diagnostic and fell through to a 0 exit yields an EMPTY
+   artifact plus SUCCESS (#440) — and the message lands on stderr, which the
+   near-universal `2>/dev/null` idiom hides. -}
+expectFails : String -> String -> List String -> <Exec "_", IO> Option String
+expectFails label probe args = match boundedVerb probe args
+  Err e => Some "\{label}: could not spawn \{probe}: \{e}"
+  Ok (code, out, err) =>
+    if code == 0 then
+      Some
+        "\{label}: exited 0 on an ERROR (a redirecting harness sees empty artifact + success)"
+    else if out /= "" then
+      Some
+        "\{label}: exited \{intToString code} but wrote \{intToString (stringLength out)} bytes to stdout (partial artifact)"
+    else if err == "" then
+      Some
+        "\{label}: exited \{intToString code} but printed NOTHING to stderr (silent failure)"
+    else
+      None
+
+{- | The CONTROL, and the load-bearing half: a probe broken into
+   always-failing would satisfy every `expectFails` above it. -}
+expectEmits : String -> List String -> String -> <Exec "_", IO> Option String
+expectEmits probe args needle = match boundedVerb probe args
+  Err e => Some "valid program: could not spawn \{probe}: \{e}"
+  Ok (code, out, err) =>
+    if code /= 0 then
+      Some "valid program: exited \{intToString code} — \{debug err}"
+    else if out == "" then
+      Some "valid program: exited 0 but emitted NO artifact"
+    else if not (contains needle out) then
+      Some
+        "valid program: emitted \{intToString (stringLength out)} bytes with no \{needle} — not real IR"
+    else
+      None
+
+goodSrc : String
+goodSrc = "main = println \"hi\"\n"
+
+{- | A bare underived-ADT `main`: reaches the emitter driver's
+   `underivedMainDiags` arm, which printed a real typecheck diagnostic and
+   then exited 0 with empty IR. -}
+undispSrc : String
+undispSrc = "data Foo = Foo\n\nmain = Foo\n"
+
+{- | Everything wrong with the five error paths reachable through the
+   emitter probe's `driveModules`, plus the control that proves those five
+   discriminate (#440).
+
+   `probe` is repo-relative. The paths are synthesized rather than committed
+   as fixtures: three of the five are a file that must NOT exist, which a
+   corpus cannot hold. -}
+export
+errorPathFailures : String ->
+  <Exec "_", FileRead "_", FileWrite "_", IO> List String
+errorPathFailures probe = match ownScratch "entry"
+  Err e => ["could not make a scratch directory: \{e}"]
+  Ok scratch =>
+    let bin = "\{medakaRoot}/\{probe}"
+    let good = "\{scratch}/good.mdk"
+    let undisp = "\{scratch}/undisp.mdk"
+    let nope = "\{scratch}/NOPE.mdk"
+    let runtime = "\{medakaRoot}/stdlib/runtime.mdk"
+    let core = "\{medakaRoot}/stdlib/core.mdk"
+    let found = match writeFile good goodSrc
+      Err e => ["could not write \{good}: \{e}"]
+      Ok () => match writeFile undisp undispSrc
+        Err e => ["could not write \{undisp}: \{e}"]
+        Ok () => somes [
+          expectFails "usage/arity (too few args)" bin [good],
+          expectFails "nonexistent runtime.mdk" bin [nope, core, good],
+          expectFails "nonexistent core.mdk" bin [runtime, nope, good],
+          expectFails "nonexistent entry.mdk" bin [runtime, core, nope],
+          expectFails "underived Display main (typecheck diagnostic)" bin [
+            runtime, core, undisp
+          ],
+          expectEmits bin [runtime, core, good] "define i32 @mdk_program_main",
+        ]
+    let _ = runVerb "rm" ["-rf", scratch]
+    found
+
+{- | `findings` as one expectation, named by `what`. -}
+export
+report : String -> List String -> Expectation
+report _ [] = pass
+report what findings =
+  fail "\{intToString (length findings)} \{what} findings:\n\{unlines findings}"
