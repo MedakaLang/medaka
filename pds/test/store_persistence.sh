@@ -20,9 +20,17 @@
 # refuse.
 # Case 11c grades the residue those same crash points leave behind under
 # `.staging`: swept at startup rather than mistaken for corruption (#2572
-# part 2, #3052). Case 12 grades the barriers themselves, which is the one
-# claim building a directory by hand cannot make — it needs the syscall ORDER,
-# not the resulting tree (#2952).
+# part 2, #3052). Case 11d widens that to every OTHER directory the three
+# stores list, and to entries no crash produced at all — what an editor, a
+# backup tool or an operator leaves behind (#3055). Case 12 grades the
+# barriers themselves, which is the one claim building a directory by hand
+# cannot make — it needs the syscall ORDER, not the resulting tree (#2952).
+# Cases 12a, 12b and 12c read the same traces for three orders that rule is
+# deliberately blind to, each within ONE process: which half of a transition
+# reached the disk first (#3057), whether a commit's shard-directory
+# barriers came after its block promotes or in between them (#3058), and
+# whether the blob area's own dentry is barriered on a write that runs no repo
+# half, where the concatenated trace lets another process pay for it.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -513,6 +521,120 @@ for HALF in blocks blobs events; do
 done
 echo 'case 11c: crash residue swept from all three .staging directories; a stray subdirectory and legitimate content both untouched'
 
+# ── 11d. an entry no store wrote, at every level any of them lists ─────────
+# Case 11c grades `.staging`, the one directory whose whole contents are
+# residue by construction. This grades every OTHER directory the three stores
+# list: the blocks and blobs shard trees at both their levels, and the event
+# log's entry directory (#3055).
+#
+# Each case builds its own legitimate data directory — the repository, two
+# blobs, one promoted entry — plants exactly ONE entry no write path in this
+# tree can produce, and reports what all four readers then answer. Three
+# shapes at each level, because the stores grade an entry on two axes: a plain
+# FILE, a DIRECTORY whose name is not one the store could have produced, and a
+# DIRECTORY whose name is one it could have — the third being the shape a
+# name-only rule cannot tell apart from the store's own data.
+#
+# Every case reports every reader, not only the one the planted entry sits
+# under, so a disposition that also moved a store the entry never touched
+# fails here rather than somewhere downstream. And where the answer is a
+# refusal, the MESSAGE is graded too: #3055's actual defect is not that a
+# stray entry passes unnoticed but that the refusal it causes gets attributed
+# to something else.
+STRAY="$WORK/stray"
+"$WORK/driver" stray-entries "$STRAY" > "$WORK/stray.out" 2> "$WORK/stray.err"
+require_empty "$WORK/stray.err" stray-entries
+[ "$(tail -1 "$WORK/stray.out")" = 'STRAY-ENTRIES: PASS' ] \
+  || fail 'case 11d: stray-entries route did not pass'
+
+stray_row() {
+  sed -n "s/^STRAY $1 //p" "$WORK/stray.out"
+}
+
+# Every expected row below is built from the row for the case that plants
+# NOTHING, rather than written down: how many blocks the fixture repository
+# holds is its own business, and a hand-typed count would pin it here too.
+BASE_ROW=$(stray_row none)
+[ -n "$BASE_ROW" ] || fail 'case 11d: no baseline survey row'
+# shellcheck disable=SC2086 # the row IS eight space-separated fields; splitting is the read
+set -- $BASE_ROW
+[ "$#" = 8 ] || fail "case 11d: baseline row has $# fields, expected 8: $BASE_ROW"
+BLOCKS_OK=$2
+BLOBS_OK=$4
+COUNT_OK=$6
+EVENTS_OK=$8
+case "$BASE_ROW" in
+  *refused*)
+    fail "case 11d: the unplanted baseline did not read cleanly: $BASE_ROW" ;;
+esac
+# The count and the read must already agree before anything is planted, or the
+# blobs-leaf-cid case below proves nothing.
+[ "$BLOBS_OK" = "$COUNT_OK" ] \
+  || fail "case 11d: blobFileRead and blobFileCount disagree unplanted: $BASE_ROW"
+
+INTACT="blocks $BLOCKS_OK blobs $BLOBS_OK count $COUNT_OK events $EVENTS_OK"
+BLOCKS_REFUSED="blocks refused blobs $BLOBS_OK count $COUNT_OK events $EVENTS_OK"
+BLOBS_REFUSED="blocks $BLOCKS_OK blobs refused count $COUNT_OK events $EVENTS_OK"
+EVENTS_REFUSED="blocks $BLOCKS_OK blobs $BLOBS_OK count $COUNT_OK events refused"
+
+expect_stray() {
+  _got=$(stray_row "$1")
+  [ -n "$_got" ] || fail "case 11d: no survey row for $1"
+  [ "$_got" = "$2" ] || fail "case 11d: $1 answered '$_got', expected '$2'"
+}
+
+expect_named() {
+  _path=$(sed -n "s/^STRAYPLANT $1 //p" "$WORK/stray.out")
+  [ -n "$_path" ] || fail "case 11d: $1 planted nothing"
+  grep "^STRAYMSG $1 $2 " "$WORK/stray.out" | grep -qF "$_path" \
+    || fail "case 11d: $1's refusal does not name $_path"
+}
+
+# The blocks half. A shard is a directory named by two lowercase hex digits
+# and a block is a file inside one named by a CID, so: anything under
+# `blocks/` that is not a directory, and any directory there not named like a
+# shard, is skipped; anything under a shard that is not a file is skipped; and
+# a FILE under a shard whose name does not spell a CID is refused. A directory
+# named exactly like a shard IS a shard as far as this store can tell, so it
+# is graded as one — which is why planting one with a file inside refuses.
+expect_stray blocks-top-file "$INTACT"
+expect_stray blocks-top-dir "$INTACT"
+expect_stray blocks-top-shard "$BLOCKS_REFUSED"
+expect_named blocks-top-shard blocks
+expect_stray blocks-leaf-file "$BLOCKS_REFUSED"
+expect_named blocks-leaf-file blocks
+expect_stray blocks-leaf-dir "$INTACT"
+expect_stray blocks-leaf-cid "$INTACT"
+
+# The blobs half, same layout and therefore the same rule. `blobs-leaf-cid` is
+# the one the two blob readers used to disagree about: a DIRECTORY named like
+# a blob's bytes, beside a sidecar of its own, which `blobFileCount` counted by
+# name arithmetic while `blobFileRead` could never serve it. Both must now pass
+# it over, which is what comparing `count` against `blobs` here asserts.
+expect_stray blobs-top-file "$INTACT"
+expect_stray blobs-top-dir "$INTACT"
+expect_stray blobs-top-shard "$BLOBS_REFUSED"
+expect_named blobs-top-shard blobs
+expect_stray blobs-leaf-file "$BLOBS_REFUSED"
+expect_named blobs-leaf-file blobs
+expect_stray blobs-leaf-dir "$INTACT"
+expect_stray blobs-leaf-cid "$INTACT"
+
+# The event log takes the opposite stance, deliberately. Its directory listing
+# IS its index — a subscriber's cursor is answered from the entry names — so
+# an entry routed around is a hole in a stream nobody can detect, where a
+# skipped block or blob is caught downstream by the content address it is
+# stored under. All three shapes are therefore refused, including the
+# directory whose name spells a valid seq-time pair, which is refused when it
+# is opened rather than when it is listed.
+expect_stray events-file "$EVENTS_REFUSED"
+expect_named events-file events
+expect_stray events-dir "$EVENTS_REFUSED"
+expect_named events-dir events
+expect_stray events-name "$EVENTS_REFUSED"
+expect_named events-name events
+echo 'case 11d: 15 entries no store wrote, one per level and shape; each skipped or refused as its module states, each refusal naming its own path, and no other store disturbed'
+
 # ── 12. every promote is barriered, staged file first and directory after ──
 # The only case here that reads the syscall STREAM rather than the resulting
 # tree, because that is where the claim lives: after a power loss what survives
@@ -525,6 +647,22 @@ echo 'case 11c: crash residue swept from all three .staging directories; a stray
 #   - an `fsync` of the directory it renames INTO follows it, and follows every
 #     later `rename` into that same directory, so the promotion itself is
 #     durable.
+#
+# A third rule over every `mkdir` that SUCCEEDS: an `fsync` of the directory it
+# created the entry in follows it. A directory is a promotion too — `mkdir`
+# publishes a name in its parent — and a shard whose own entry a power loss
+# takes is every block under it gone, however durable each block's bytes and
+# each block's entry already are (#3056). A `mkdir` that fails EEXIST wrote no
+# entry and owes nothing, which is why the rule reads the return value: the
+# stores create a directory only when it is absent, so the steady-state cost of
+# this is zero and the trace says so.
+#
+# Where that barrier comes from is not required to be the module that created
+# the directory, and two of them deliberately are not: `<data>/blocks` and
+# `<data>/blobs` are created by the two stores and barriered by the `fsync` of
+# the data directory that `shell.persist` performs afterwards. The rule grades
+# that coupling instead of assuming it — reorder the calls and the barrier
+# stops following the creation, and this reports it.
 #
 # The second rule tolerates a writer that promotes a batch and then barriers the
 # distinct directories it touched, which `blockfile.mdk` does: a directory's
@@ -567,15 +705,22 @@ fi
 PHYS=$(cd "$WORK" && pwd -P)
 
 # One normalized event per line, in trace order: `F <path>` per fsync, `R <src>
-# <dst>` per rename. Everything else in the trace — the Boehm collector's
-# SIGPWR/SIGXCPU pair above all — is dropped here rather than by an strace
-# filter, so a syscall the filter forgot shows up as a missing line and not as
-# a wrong verdict.
+# <dst>` per rename, `M <path>` per mkdir that actually created something.
+# Everything else in the trace — the Boehm collector's SIGPWR/SIGXCPU pair
+# above all — is dropped here rather than by an strace filter, so a syscall the
+# filter forgot shows up as a missing line and not as a wrong verdict.
+#
+# `mkdirAll` walks a path from the root down and lets every component that is
+# already there fail EEXIST, so only the `= 0` return is a created directory;
+# the two spellings are matched because which of them glibc issues is its
+# choice and not this tree's.
 normalize_trace() {
   sed -n \
     -e 's/^[0-9][0-9]*  *//' \
     -e 's/^fsync([0-9][0-9]*<\(.*\)>) *= 0$/F \1/p' \
     -e 's/^rename("\([^"]*\)", "\([^"]*\)") *= 0$/R \1 \2/p' \
+    -e 's/^mkdir("\([^"]*\)", [^)]*) *= 0$/M \1/p' \
+    -e 's/^mkdirat([^,]*, "\([^"]*\)", [^)]*) *= 0$/M \1/p' \
     "$1"
 }
 
@@ -585,7 +730,8 @@ normalize_trace() {
 trace_route() {
   _route=$1
   _dir=$2
-  if ! strace -f -y -qq -e signal=none -e trace=fsync,rename,renameat,renameat2 \
+  if ! strace -f -y -qq -e signal=none \
+    -e trace=fsync,rename,renameat,renameat2,mkdir,mkdirat \
     -o "$WORK/trace.$_route" "$WORK/driver" "$_route" "$_dir" \
     > "$WORK/trace.$_route.out" 2> "$WORK/trace.$_route.err"
   then
@@ -594,7 +740,25 @@ trace_route() {
     fail "traced $_route route failed"
   fi
   require_empty "$WORK/trace.$_route.err" "traced $_route"
-  normalize_trace "$WORK/trace.$_route" >> "$WORK/promotes"
+  # Kept per route as well as concatenated: an ORDER claim about two writes
+  # only holds inside ONE process, and `$WORK/promotes` interleaves five.
+  normalize_trace "$WORK/trace.$_route" > "$WORK/events.$_route"
+  cat "$WORK/events.$_route" >> "$WORK/promotes"
+}
+
+# The line number of the first or last normalized event in file $2 matching the
+# regex $3, or the empty string when nothing matches. Line numbers ARE trace
+# order, which is what every order assertion below compares.
+trace_index() {
+  case $1 in
+    first) grep -n -E -- "$3" "$2" | head -1 | cut -d: -f1 ;;
+    last) grep -n -E -- "$3" "$2" | tail -1 | cut -d: -f1 ;;
+    *) fail "trace_index: $1 is not first or last" ;;
+  esac
+}
+
+trace_count() {
+  grep -c -E -- "$2" "$1" || true
 }
 
 : > "$WORK/promotes"
@@ -606,12 +770,119 @@ trace_route prefs-save "$TRACED/repo"
 trace_route credential-save "$TRACED/repo"
 trace_route event-recover-owed "$TRACED/events"
 
+# The earlier generation is persisted BEFORE tracing starts, so the transition
+# route's own trace holds `persistTransition` and nothing else — which is what
+# lets 12a compare two writes without first having to say where the setup ended.
+"$WORK/driver" crash-save-old "$TRACED/transition" > "$WORK/transition.setup" \
+  2> "$WORK/transition.setup.err"
+require_empty "$WORK/transition.setup.err" 'crash-save-old (transition setup)'
+trace_route transition "$TRACED/transition"
+[ "$(tail -1 "$WORK/trace.transition.out")" = 'TRANSITION: PASS' ] \
+  || fail 'the traced transition route did not pass'
+
 [ -s "$WORK/promotes" ] || fail 'the traced routes performed no promote at all'
+
+# ── 12a. the two halves of one transition, in the order a crash needs ──────
+# `persistTransition` runs the BLOB half before the repo half, and nothing in
+# the resulting tree records which ran first: both halves succeed, so only the
+# syscall order can say. The claim is the crash-safety one — a record may name
+# blob bytes and never the reverse — so every blob promote must precede the
+# `head` promote that publishes the commit able to name them. Swap the two
+# calls in `persistTransition` and this is what notices (#3057).
+#
+# Read out of the transition route's OWN trace. `$WORK/promotes` concatenates
+# five processes, and "before" across a process boundary is not this claim.
+#
+# Both order assertions run BEFORE the universal rule below, because a swap
+# also strands `blobs/`'s dentry and the universal rule would otherwise fail
+# first, reporting the consequence instead of the cause.
+TRANS="$WORK/events.transition"
+BLOB_PROMOTED=$(trace_count "$TRANS" '^R [^ ]* [^ ]*/blobs/[0-9a-f][0-9a-f]/')
+[ "$BLOB_PROMOTED" -ge 1 ] \
+  || fail 'case 12a: the transition promoted no blob, so the half order is ungraded'
+LAST_BLOB_AT=$(trace_index last "$TRANS" '^R [^ ]* [^ ]*/blobs/[0-9a-f][0-9a-f]/')
+FIRST_HEAD_AT=$(trace_index first "$TRANS" '^R [^ ]* [^ ]*/head$')
+[ -n "$FIRST_HEAD_AT" ] \
+  || fail 'case 12a: the transition promoted no head, so the half order is ungraded'
+[ "$LAST_BLOB_AT" -lt "$FIRST_HEAD_AT" ] || {
+  sed -n "${FIRST_HEAD_AT}p;${LAST_BLOB_AT}p" "$TRANS" >&2
+  fail "case 12a: the commit was promoted at event $FIRST_HEAD_AT, the last blob at event $LAST_BLOB_AT; a crash between the halves can leave a committed record naming bytes that are not on disk"
+}
+echo "case 12a: $BLOB_PROMOTED blob promote(s), all before the commit's head promote"
+
+# ── 12b. one directory barrier per batch, not one per block ────────────────
+# `blockfile.mdk` promotes every block of a commit and then barriers the
+# DISTINCT shard directories it touched, instead of barriering after each
+# block. The universal rule below tolerates both — an extra fsync breaks
+# nothing it states — so the batching was in fact ungraded, and the
+# pre-batching code passes that rule unchanged (#3058).
+#
+# The discriminator is ORDER, not count. Under batching every block promote
+# precedes every shard-directory barrier within one route; under a per-block
+# barrier the two interleave from the second block onward. A count would not
+# discriminate: a shard name is one digest byte, this fixture holds a handful
+# of blocks, so distinct shards and blocks are equal with high probability and
+# a per-block regression passes any count of them.
+SAVED="$WORK/events.save"
+SAVED_BLOCKS=$(trace_count "$SAVED" '^R [^ ]* [^ ]*/blocks/[0-9a-f][0-9a-f]/')
+[ "$SAVED_BLOCKS" -ge 2 ] \
+  || fail "case 12b: the save route promoted $SAVED_BLOCKS block(s); two are needed for an interleaving to be possible at all"
+LAST_BLOCK_AT=$(trace_index last "$SAVED" '^R [^ ]* [^ ]*/blocks/[0-9a-f][0-9a-f]/')
+FIRST_SHARD_AT=$(trace_index first "$SAVED" '^F [^ ]*/blocks/[0-9a-f][0-9a-f]$')
+[ -n "$FIRST_SHARD_AT" ] || fail 'case 12b: no shard directory was barriered at all'
+[ "$FIRST_SHARD_AT" -gt "$LAST_BLOCK_AT" ] || {
+  sed -n "${FIRST_SHARD_AT}p;${LAST_BLOCK_AT}p" "$SAVED" >&2
+  fail "case 12b: a shard directory was barriered at event $FIRST_SHARD_AT, before the last block promote at event $LAST_BLOCK_AT; the barriers are per block, not per batch"
+}
+echo "case 12b: $SAVED_BLOCKS block promote(s), all before the first shard-directory barrier"
+
+# ── 12c. the blob area's own dentry, on a write that runs no repo half ─────
+# `blobs/` is created by `blobfile.mdk`, and its dentry sits one level up, in
+# the data directory. The universal rule below accepts a barrier from anywhere
+# in `$WORK/promotes`, which concatenates five processes — so a data-directory
+# `fsync` some OTHER route performed discharges this creation there, and the
+# route that writes blobs and nothing else goes ungraded across the boundary
+# that a crash actually respects. Read out of the blob-save route's OWN trace
+# for that reason, like 12a.
+#
+# The route is the one `com.atproto.repo.uploadBlob` takes: it moves blobs and
+# advances no repository, so `persistTransition`'s repo half is skipped and
+# NOTHING outside `blobfile.mdk` barriers anything on it. The barrier has to be
+# there before the blobs the run goes on to publish, or a crash after the
+# client's 200 takes the whole subtree those blobs are under.
+BLOBSAVE="$WORK/events.blob-save"
+MKBLOBS_AT=$(trace_index first "$BLOBSAVE" "^M $TRACED/repo/blobs\$")
+[ -n "$MKBLOBS_AT" ] \
+  || fail 'case 12c: the blob-save route created no blob area, so its dentry is ungraded here'
+DATA_FSYNC_AT=$(trace_index first "$BLOBSAVE" "^F $TRACED/repo\$")
+[ -n "$DATA_FSYNC_AT" ] || {
+  cat "$BLOBSAVE" >&2
+  fail "case 12c: the blob-save route created $TRACED/repo/blobs and never barriered $TRACED/repo; a crash after this write loses the whole blobs subtree, however durable each blob beneath it is"
+}
+[ "$DATA_FSYNC_AT" -gt "$MKBLOBS_AT" ] || {
+  sed -n "${DATA_FSYNC_AT}p;${MKBLOBS_AT}p" "$BLOBSAVE" >&2
+  fail "case 12c: $TRACED/repo was barriered at event $DATA_FSYNC_AT, before the blob area was created at event $MKBLOBS_AT; that barrier carries no dentry that did not exist yet"
+}
+FIRST_PROMOTE_AT=$(trace_index first "$BLOBSAVE" '^R ')
+[ -n "$FIRST_PROMOTE_AT" ] \
+  || fail 'case 12c: the blob-save route promoted nothing, so the ordering is ungraded'
+[ "$DATA_FSYNC_AT" -lt "$FIRST_PROMOTE_AT" ] || {
+  sed -n "${DATA_FSYNC_AT}p;${FIRST_PROMOTE_AT}p" "$BLOBSAVE" >&2
+  fail "case 12c: the first blob was promoted at event $FIRST_PROMOTE_AT, before $TRACED/repo was barriered at event $DATA_FSYNC_AT"
+}
+echo "case 12c: blob area created at event $MKBLOBS_AT and barriered into the data directory at event $DATA_FSYNC_AT, before the first promote at event $FIRST_PROMOTE_AT, with no repo half on the route"
 
 awk '
   { ev[++n] = $0 }
   END {
     for (i = 1; i <= n; i++) {
+      if (substr(ev[i], 1, 2) == "M ") {
+        mk++
+        mkpath[mk] = substr(ev[i], 3)
+        mkpar[mk] = mkpath[mk]
+        sub(/\/[^\/]*$/, "", mkpar[mk])
+        continue
+      }
       if (substr(ev[i], 1, 2) == "F ") {
         path = substr(ev[i], 3)
         # A staged-file barrier is the one whose own rename comes next; every
@@ -619,8 +890,14 @@ awk '
         # is owed.
         if (i < n && substr(ev[i + 1], 1, length(path) + 3) == "R " path " ")
           continue
-        if (path in owed) { delete owed[path]; nowed-- }
-        flushed = 1
+        served = 0
+        for (k = 1; k <= mk; k++)
+          if (!mkdone[k] && mkpar[k] == path) { mkdone[k] = 1; served = 1 }
+        if (path in owed) { delete owed[path]; nowed--; flushed = 1; continue }
+        # A barrier that only discharges a directory CREATION is not the start
+        # of a promote batch, and must not make the next `rename` look like one
+        # that abandoned an owed directory.
+        if (!served) flushed = 1
         continue
       }
       if (substr(ev[i], 1, 2) != "R ") continue
@@ -652,12 +929,19 @@ awk '
       printf "UNBARRIERED DIRECTORY: %s\n  no fsync of %s follows it\n", owed[d], d
       bad++
     }
-    printf "graded %d rename(s), %d unbarriered\n", renames, bad
+    for (k = 1; k <= mk; k++) {
+      if (mkdone[k]) continue
+      printf "UNBARRIERED DIRECTORY CREATION: M %s\n  no fsync of %s follows it\n",
+        mkpath[k], mkpar[k]
+      bad++
+    }
+    printf "graded %d rename(s) and %d directory creation(s), %d unbarriered\n",
+      renames, mk, bad
     exit (bad > 0)
   }
 ' "$WORK/promotes" > "$WORK/promotes.verdict" || {
   cat "$WORK/promotes.verdict" >&2
-  fail 'a rename published a value no barrier had put on disk'
+  fail 'a rename or a mkdir published a name no barrier had put on disk'
 }
 cat "$WORK/promotes.verdict"
 
@@ -684,5 +968,25 @@ do
 done
 echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES"
 
+# The same floor for the directory-creation rule. The stores create a directory
+# only when it is absent, so a traced run over a data directory that already
+# had one would grade the rule against nothing at all and still pass it; these
+# are what say the traced routes really did start from a directory with none of
+# this in it.
+mkdir_count() {
+  grep -c "^M $1\$" "$WORK/promotes" || true
+}
+BLOCK_SHARD_DIRS=$(mkdir_count '.*/blocks/[0-9a-f][0-9a-f]')
+BLOB_SHARD_DIRS=$(mkdir_count '.*/blobs/[0-9a-f][0-9a-f]')
+ENTRY_DIRS=$(mkdir_count '.*/events/entries')
+STAGING_DIRS=$(mkdir_count '.*/\.staging')
+for PAIR in "blockfile shard:$BLOCK_SHARD_DIRS" "blobfile shard:$BLOB_SHARD_DIRS" \
+  "eventlog entry:$ENTRY_DIRS" "staging:$STAGING_DIRS"
+do
+  [ "${PAIR#*:}" -ge 1 ] \
+    || fail "no ${PAIR%:*} directory was created under trace; that creation path is no longer graded"
+done
+echo "barriered directory creations: block shards $BLOCK_SHARD_DIRS, blob shards $BLOB_SHARD_DIRS, entry directories $ENTRY_DIRS, staging directories $STAGING_DIRS"
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every promote barriered before and after; key absent'
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in, with the blob half of one transition promoted before the commit that can name it and every shard barrier of one commit taken after all of its block promotes; key absent'

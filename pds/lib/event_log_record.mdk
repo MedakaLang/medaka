@@ -162,9 +162,16 @@ eventLogEntryName seq timeSeconds =
   "\{padLeft seqWidth '0' (intToString seq)}-\{padLeft timeWidth '0' (intToString timeSeconds)}"
 
 {- | The sequence number and timestamp a stored entry's file name spells, or
-   an error naming what the entry directory held instead. A name that does not
-   parse is never skipped: a log directory holding something nobody wrote is a
-   fact a reader must report, not route around. -}
+   an error naming what the entry directory held instead.
+
+   A name that does not parse is never skipped: a log directory holding
+   something nobody wrote is a fact a reader must report, not route around.
+   This log's directory listing IS its index — a cursor is answered from the
+   names — so an entry routed around is a hole in a stream no subscriber can
+   detect, where a skipped block or blob is caught downstream by the content
+   address it is stored under. The name is also the WHOLE of the question: the
+   caller in `pds/shell/eventlog.mdk` deliberately stats nothing, so a stray
+   plain file and a stray directory reach the same answer here. -}
 export
 eventLogParseEntryName : String -> Result String (Int, Int)
 eventLogParseEntryName name = match split "-" name

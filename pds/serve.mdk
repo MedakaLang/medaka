@@ -21,6 +21,14 @@
    silently exposing the server (`#2757`,
    `docs/design/ATPROTO-PDS-DESIGN.md`).
 
+   One data directory is served by one process. `--data` is locked
+   (`shell.dirlock`) before anything beneath it is read or written, so a second
+   server started over a live directory is refused rather than sweeping the
+   staged files the first one has in flight. A killed process leaves its lock
+   behind — `mkdir(2)` releases nothing on death — so the lock is graded by the
+   holder's heartbeat and not by its existence, and an ordinary restart
+   reclaims an abandoned one on its own. `--force-lock` skips that wait.
+
    The signing key is read here and handed to `lib.repo`, which is the only
    thing that needs it, and to nothing else. It is never printed, and neither is
    the `Store` that transitively holds it.
@@ -74,7 +82,7 @@ import args.{
   value,
 }
 import array as A
-import async.{Async, liftIO, spawn}
+import async.{Async, liftIO, sleep, spawn}
 import fs.{isDir}
 import hex.{decode, encode}
 import io.{isPrivateMode, writeFilePrivate}
@@ -114,6 +122,14 @@ import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
 import shell.blobfile.{blobFileRead, blobFileSweepStaging}
 import shell.crawl.{RelayTarget, makeRelayTarget, requestCrawl}
+import shell.dirlock.{
+  DataLock,
+  LockBeat(..),
+  acquireDataLock,
+  holdDataLock,
+  lockBeatInterval,
+  requireDataLock,
+}
 import shell.egress.{Egress, makeEgress}
 import shell.eventlog.{
   EventLogRecovery(..),
@@ -163,6 +179,9 @@ serveSpec = spec "serve" [
     "ADDR"
     "address to bind, default 127.0.0.1 (loopback); a non-loopback address is refused unless --trusted-proxy is also given",
   switch ["--init"] "create the genesis repository in an empty data directory",
+  switch
+    ["--force-lock"]
+    "take the data directory's single-writer lock even though another process appears to hold it; for a lock left behind by a server that is gone, never for one that is still running",
   switch
     ["--trusted-proxy"]
     "trust this connection's peer to be the reverse proxy in front of it, and read the client identity `X-Forwarded-For` names for rate limiting; without it every request shares one identity bucket",
@@ -727,7 +746,7 @@ openRepo True dir did keyBytes secret =
    after the banner, so that a log still begins by saying which build produced
    everything under it. -}
 configure : Args ->
-  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, List String)
+  <Clock, Env, FileRead "_", FileWrite "_", Rand> Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String)
 configure parsed = do
   did <- required "--did" parsed
   handle <- required "--handle" parsed
@@ -762,6 +781,34 @@ configure parsed = do
   let serving = makeServing trustedProxy egress (Ref 0)
   relay <- configureRelay parsed
   () <- requireDir dir
+  -- The single-writer lock, taken here: after the directory is known to be one
+  -- and before the first thing below that reads or writes anything beneath it.
+  -- Both halves of that position are load-bearing. The sweeps a few lines down
+  -- delete every file under `.staging`, which is residue from a prior crash
+  -- only while no other process is between a write and its `rename`, and
+  -- `openRepo` under `--init` writes a genesis repository; a second server
+  -- refused after either of those has already destroyed what it was refused
+  -- for.
+  (lock, lockOutcome) <- acquireDataLock (flag "--force-lock" parsed) dir
+  -- A beat in front of every step below that WRITES, and one behind every step
+  -- that takes time. The first half is the exclusion itself: a step that
+  -- reaches the disk after this process has lost the directory would be the
+  -- two-writer case the lock exists to prevent, and `requireDataLock` refuses
+  -- the run rather than performing it. The second half is what keeps that from
+  -- happening in the first place — a heartbeat between phases leaves a
+  -- contender one phase's worth of silence to mistake for a dead holder rather
+  -- than the whole of `configure`, which on a large store is many times the
+  -- stale window.
+  --
+  -- Between the phases and no finer: `configure` runs as ONE synchronous step
+  -- (`liftIO (u => configure parsed)`) and `async.liftIO` runs it to
+  -- completion, so a spawned beat cannot interleave with it — MEASURED, a
+  -- 3596ms step with a 100ms beat loop spawned beside it wrote one beat, the
+  -- one before the step began. The phases that are unbounded in store size and
+  -- still uncovered (`repoFromBlocks`, `loadBlobs`) only READ, so the worst a
+  -- store big enough to outlast the window costs is this process's own lock,
+  -- which the next beat reports rather than writing through.
+  () <- requireDataLock lock
   -- `openRepo True` returns `Ok` only down its `initRepo` branch — every other
   -- branch under `--init` refuses a directory that already holds a
   -- repository — so reaching here with this flag set means THIS run created
@@ -775,6 +822,7 @@ configure parsed = do
   -- stale entry left by a PRIOR crash can never be mistaken for output this
   -- start is about to produce (residue this module did not write is
   -- residue, not corruption).
+  () <- requireDataLock lock
   () <- persistSweepStagedBlocks dir
   () <- blobFileSweepStaging dir
   () <- eventLogSweepStaging dir
@@ -794,6 +842,7 @@ configure parsed = do
   -- next run to adopt as its own (#2659).
   suppliedSecret <- suppliedSessionSecret parsed dir
   credentialSource <- planCredential parsed dir
+  () <- requireDataLock lock
   sessionSecret <- establishSessionSecret dir suppliedSecret
   credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
@@ -815,8 +864,12 @@ configure parsed = do
   -- interrupted partway through would have no later start able to finish it
   -- (#3006).
   let nowSeconds = floatToInt (now ())
+  () <- requireDataLock lock
   () <- eventLogApplyRecovery dir recovery eventLogRetentionSeconds nowSeconds
   () <- completeGenesisEvents dir did handle nowSeconds repo
+  -- One more before the scheduler starts, so that the gap `start`'s beat loop
+  -- inherits is the loop's own interval rather than everything above it.
+  () <- requireDataLock lock
   Ok (
     server,
     storeWithPreferences prefs withCredential,
@@ -826,8 +879,10 @@ configure parsed = do
     serving,
     relay,
     statsInterval,
+    lock,
     [
       "serve: config did=\{did} handle=\{handle} hostname=\{hostname} data=\{dir} bind=\{bind} trusted-proxy=\{yesNo (flag "--trusted-proxy" parsed)} appview=\{yesNo (isSome egress)} relay=\{yesNo (isSome relay)}",
+      "serve: data directory lock: \{lockOutcome}",
       "serve: event log recovery: \{recoveryOutcome recovery}",
     ],
   )
@@ -963,13 +1018,51 @@ bound bind server store dir serving relay statsInterval (Ok lis) = defer
     Ok given =>
       announce bind given lis store dir server serving relay statsInterval
 
-start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, List String) ->
+{- | Keep saying, for as long as this process runs, that it is the one holding
+   the data directory. `shell.dirlock` grades a lock by whether this moves, so
+   a process that stops beating is a process the next start is entitled to
+   take the directory from.
+
+   Spawned in the same shape as `announceToRelay` and `shell.server`'s stats
+   loop, and for the same reason: the beat must run concurrently with the
+   accept loop rather than between two requests, so the sleep is `async.sleep`,
+   which parks this one task, and not `time.sleep`, which blocks the thread
+   every other task shares. -}
+lockBeatLoop : DataLock ->
+  Async <Clock, FileRead "_", FileWrite "_", Stderr | e> Unit
+lockBeatLoop lock = defer
+  beat <- liftIO (u => holdDataLock lock)
+  match beat
+    LockLost message => liftIO (u => abort "serve: \{message}")
+    _ => defer
+      () <- liftIO (u => reportBeat beat)
+      () <- sleep lockBeatInterval
+      lockBeatLoop lock
+
+-- A heartbeat this process cannot write is reported and is not fatal: the
+-- server is up and answering, and ending a run over one missed beat would turn
+-- a momentarily full disk into an outage. What it costs is the lock — long
+-- enough without a beat and the next process to start will decide this
+-- directory is unheld and take it, which is the case `lockBeatLoop` ends the
+-- run over and this one does not: one is this server failing to say it is
+-- here, the other is another server already having been told it is not.
+reportBeat : LockBeat -> <Stderr> Unit
+reportBeat LockHeld = ()
+reportBeat (LockBeatFailed message) =
+  ePutStrLn "serve: data directory lock heartbeat failed: \{message}"
+-- Ended by `lockBeatLoop` before it reaches here; stated rather than swept
+-- into a wildcard so that a third outcome added later is a type error here.
+reportBeat (LockLost message) =
+  ePutStrLn "serve: data directory lock lost: \{message}"
+
+start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String) ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
 start (Err message) = liftIO (u => abort "serve: \{message}")
-start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lines)) =
+start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, lines)) =
   defer
     _ <- liftIO (u => banner ())
     _ <- liftIO (u => startupLines lines)
+    _ <- spawn (lockBeatLoop lock)
     listener <- liftIO (u => bindAddress bind port)
     bound bind server store dir serving relay statsInterval listener
 

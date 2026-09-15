@@ -23,13 +23,24 @@
    written to a temporary path with `writeFilePrivate` (so the mode is 0600
    from the moment the bytes land, and stays 0600 across `rename`), `fsync`ed,
    then `rename`d onto the real path, then the containing directory is
-   `fsync`ed. -}
+   `fsync`ed.
+
+   `dir` is the store's root. `blocks/` (`shell.blockfile`) creates itself
+   there and leaves that dentry to the `fsync dir` `persistSave` performs
+   after it, which it can because a block is written through `persistSave` and
+   through nothing else. `blobs/` (`shell.blobfile`) cannot — a blob is also
+   written on its own, with no commit beside it and so no call here at all —
+   and barriers its own dentry. `dir`'s OWN dentry is
+   written into a directory this store does not own, so a creation of `dir`
+   barriers the directory above it — and only a creation, which keeps an
+   operator's directory off the cost of every commit. -}
 
 import array
 import fs.{mkdirAll}
 import hex.{encode}
 import io.{writeFilePrivate}
 import json.{Json, asArray, jArray, parse, stringify}
+import path.{dirname}
 import lib.cid.{Cid, cidFromString, cidToString}
 import lib.credential.{
   CredentialRecord,
@@ -41,6 +52,16 @@ import shell.blockfile.{blockFileRead, blockFileSweepStaging, blockFileWrite}
 
 blocksDir : String -> String
 blocksDir dir = "\{dir}/blocks"
+
+-- The store root, created if it is not there, with the dentry that created
+-- barriered into the directory above. See the header's last paragraph.
+ensureRoot : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureRoot dir =
+  if fileExists dir then
+    Ok ()
+  else do
+    () <- mkdirAll dir
+    fsync (dirname dir)
 
 {- | Remove every block file staged beneath `<dir>/blocks/.staging` and never
    promoted or cleaned up — see `blockFileSweepStaging`'s doc comment for what
@@ -96,14 +117,19 @@ persistHasHead dir = fileExists (headPath dir)
 
 {- | Persist a repository's head commit CID and its complete block graph beneath
    `dir`. The blocks are written first: the head is the last thing to move, so it
-   never names a graph that is not yet on disk. -}
+   never names a graph that is not yet on disk.
+
+   The closing `fsync dir` carries two promotions, not one: the head file's
+   `rename`, and the dentry `blockFileWrite` wrote into `dir` on a store whose
+   `blocks/` did not exist yet. That is why it comes after `blockFileWrite`
+   rather than beside the head write it obviously belongs to. -}
 export
 persistSave : String ->
   Cid ->
   List (Cid, Array Int) ->
   <FileRead "_", FileWrite "_"> Result String Unit
 persistSave dir head blocks = do
-  () <- mkdirAll dir
+  () <- ensureRoot dir
   () <- blockFileWrite (blocksDir dir) blocks
   let staged = "\{headPath dir}.tmp"
   () <- writeFile staged (cidToString head)
@@ -139,7 +165,7 @@ persistPreferences : String ->
   List Json ->
   <FileRead "_", FileWrite "_"> Result String Unit
 persistPreferences dir prefs = do
-  () <- mkdirAll dir
+  () <- ensureRoot dir
   let staged = "\{preferencesPath dir}.tmp"
   () <- writeFile staged (stringify (jArray prefs))
   () <- fsync staged

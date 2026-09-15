@@ -21,9 +21,48 @@
    promote-in-flight state, repaired by writing the same bytes again under the
    same name.
 
+   A DIRECTORY this module creates is barriered the same way, into the
+   directory `mkdirAll` wrote its dentry into: a shard whose own entry a crash
+   loses takes every block beneath it, however durable those blocks' bytes
+   and their entries already are. Only a creation owes that barrier — a
+   directory already on disk wrote no dentry — so a shard costs one fsync
+   once in the life of the store rather than one per block, and a write over
+   shards that all exist pays nothing for this at all. Both directories
+   beneath `dir` are covered by it, the shards and `.staging` alike. What is
+   NOT covered here is `dir`'s own dentry, which sits in the data directory
+   above and is `pds/shell/persist.mdk`'s: `persistSave` barriers that
+   directory after `blockFileWrite` returns, and the order is why `dir` is
+   durable before any block promoted into it is claimed to be.
+
    Nothing here trusts the disk. Bytes read back are returned as raw rows for
    `blockStoreFromBlocks` to verify against their own CIDs; this module never
    claims a row is valid, and never decodes one.
+
+   **An entry nobody wrote.** Two shapes exist beneath `dir` and no others: a
+   shard DIRECTORY named by the two lowercase hex digits `blockShardDir`
+   produces, and, inside one, a block FILE named by the CID hex
+   `blockFilePath` produces. Every listing here grades an entry on those two
+   axes in that order.
+
+   An entry whose TYPE contradicts the level it sits at — a plain file where a
+   shard belongs, a directory where a block belongs — is residue an editor, a
+   backup tool or an operator left behind, and it is SKIPPED. So is a
+   directory beneath `dir` whose name is not a shard name. Skipping any of the
+   three can lose no block, because a block's shard and file name are both
+   functions of its own content: nothing this module wrote can be sitting
+   under a name or a type it could not have produced. The alternative costs
+   more than it buys — `listDir` on a non-directory, or `readFileBytes` on a
+   directory, reports an unreadable shard or an unreadable block, which is a
+   refused startup under a description naming the wrong culprit.
+
+   An entry whose type is right and whose NAME is not — a plain file under a
+   shard that does not spell a CID — is REFUSED, naming the path. That is the
+   one place a block can be promoted to, so a name that does not parse there
+   is a promotion that produced something unreadable rather than something
+   foreign arriving, and reading around it would answer with a repository
+   whose blocks are quietly not all here. `.staging` is neither case: it is a
+   directory this module writes on purpose, and it is skipped by name before
+   either question is asked.
 
    This module is an effectful shell (P14): it holds no protocol state, and its
    signatures carry no `Repo` and no `SecretKey`, so no signing key can reach a
@@ -50,12 +89,24 @@ blockShardDir dir cid = "\{dir}/\{take 2 (encode (cidDigest cid))}"
 blockFilePath : String -> Cid -> String
 blockFilePath dir cid = "\{blockShardDir dir cid}/\{cidKey cid}"
 
+-- One shard directory, created if it is not there, with the dentry that
+-- created barriered into `dir`. See the header's paragraph on directory
+-- barriers for why only a creation owes one.
+ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureShard dir cid =
+  let shard = blockShardDir dir cid
+  if fileExists shard then
+    Ok ()
+  else do
+    () <- mkdirAll shard
+    fsync dir
+
 writeOne : String ->
   Cid ->
   Array Int ->
   <FileRead "_", FileWrite "_"> Result String Unit
 writeOne dir cid bytes = do
-  () <- mkdirAll (blockShardDir dir cid)
+  () <- ensureShard dir cid
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
   () <- writeFileBytes staged bytes
   () <- fsync staged
@@ -84,6 +135,18 @@ fsyncShards (shard :: rest) = match fsync shard
   Err message => Err message
   Ok () => fsyncShards rest
 
+-- `.staging` and, on a store that has none yet, `dir` itself. The dentry for
+-- `.staging` goes into `dir` and is barriered here; the one for `dir` goes
+-- into the data directory above and is `persistSave`'s, per the header.
+ensureStaging : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureStaging dir =
+  let staging = "\{dir}/\{stagingName}"
+  if fileExists staging then
+    Ok ()
+  else do
+    () <- mkdirAll staging
+    fsync dir
+
 {- | Write every row durably beneath `dir`. Writing a block that is already
    present is idempotent: a block's name is its content, so the promoted file
    carries exactly the bytes the old one did. -}
@@ -92,28 +155,62 @@ blockFileWrite : String ->
   List (Cid, Array Int) ->
   <FileRead "_", FileWrite "_"> Result String Unit
 blockFileWrite dir rows = do
-  () <- mkdirAll "\{dir}/\{stagingName}"
+  () <- ensureStaging dir
   shards <- writeRows dir rows []
   fsyncShards shards
 
-cidForName : String -> Result String Cid
-cidForName name = match decode name
-  Err message => Err "blockfile: block file name is not hex: \{message}"
+cidForName : String -> String -> Result String Cid
+cidForName path name = match decode name
+  Err message =>
+    Err "blockfile: \{path}: block file name is not hex: \{message}"
   Ok bytes => match cidFromBytes bytes
-    Err message => Err "blockfile: block file name is not a CID: \{message}"
+    Err message =>
+      Err "blockfile: \{path}: block file name is not a CID: \{message}"
     Ok cid => Ok cid
 
+{- | Whether a name is one `blockShardDir` can produce: the first byte of a
+   multihash digest in lowercase hex, so exactly two lowercase hex digits. The
+   round trip through `encode` is what rules out an odd case or extra length
+   that `decode` alone would accept.
+
+   Exported for `shell.blobfile`, whose shard layout is this one — it stores a
+   different kind of bytes under the same `<shard>/<cid hex>` tree. Two copies
+   of this predicate could disagree about which directories a store is allowed
+   to own, which is the one thing a shared layout cannot afford. -}
+export
+isShardName : String -> Bool
+isShardName name = match decode name
+  Err _ => False
+  Ok bytes => arrayLength bytes == 1 && encode bytes == name
+
+{- | The entries of one shard that are plain files. Every block is promoted
+   into a shard as a leaf FILE (`writeOne`), so a directory among a shard's
+   entries is residue this module could not have written, and dropping it here
+   loses no block. Applied once, for the whole shard, so that every later pass
+   over those leaves is looking at the same set.
+
+   Exported for `shell.blobfile` for `isShardName`'s reason: a blob's bytes
+   and its sidecar are leaf files in the same sense, and the two stores must
+   not disagree about which entries a shard actually holds. -}
+export
+fileLeaves : String -> List String -> <FileRead "_"> List String
+fileLeaves _ [] = []
+fileLeaves shardPath (leaf :: rest) = match isDir "\{shardPath}/\{leaf}"
+  Ok True => fileLeaves shardPath rest
+  _ => leaf :: fileLeaves shardPath rest
+
 readLeaves : String ->
-  String ->
   List String ->
   List (Cid, Array Int) ->
   <FileRead "_"> Result String (List (Cid, Array Int))
-readLeaves _ _ [] acc = Ok acc
-readLeaves dir shard (leaf :: rest) acc = match cidForName leaf
-  Err message => Err message
-  Ok cid => match readFileBytes "\{dir}/\{shard}/\{leaf}"
-    Err message => Err "blockfile: unreadable block file: \{message}"
-    Ok bytes => readLeaves dir shard rest ((cid, bytes) :: acc)
+readLeaves _ [] acc = Ok acc
+readLeaves shardPath (leaf :: rest) acc =
+  let path = "\{shardPath}/\{leaf}"
+  match cidForName path leaf
+    Err message => Err message
+    Ok cid => match readFileBytes path
+      Err message => Err "blockfile: \{path}: unreadable block file: \{message}"
+      Ok bytes => readLeaves shardPath rest ((cid, bytes) :: acc)
 
 readShards : String ->
   List String ->
@@ -121,17 +218,19 @@ readShards : String ->
   <FileRead "_"> Result String (List (Cid, Array Int))
 readShards _ [] acc = Ok acc
 readShards dir (shard :: rest) acc =
-  if shard == stagingName then
+  let path = "\{dir}/\{shard}"
+  -- `.staging` is skipped because this module writes it; anything else whose
+  -- name is not a shard name, or that is not a directory at all, is skipped
+  -- because this module could not have written it. See the header's "An entry
+  -- nobody wrote".
+  if shard == stagingName || not (isShardName shard) then
     readShards dir rest acc
-  else match isDir "\{dir}/\{shard}"
-    -- A shard is a directory; anything else under `dir` is residue this
-    -- module did not write, and `listDir` on it would report an unreadable
-    -- shard directory — a refused startup, under a wrong description.
+  else match isDir path
     Ok False => readShards dir rest acc
-    _ => match listDir "\{dir}/\{shard}"
+    _ => match listDir path
       Err message =>
-        Err "blockfile: \{dir}/\{shard}: unreadable shard directory: \{message}"
-      Ok leaves => match readLeaves dir shard leaves acc
+        Err "blockfile: \{path}: unreadable shard directory: \{message}"
+      Ok leaves => match readLeaves path (fileLeaves path leaves) acc
         Err message => Err message
         Ok next => readShards dir rest next
 
@@ -139,11 +238,10 @@ readShards dir (shard :: rest) acc =
 
    The returned rows are UNVERIFIED bytes off disk paired with the CID their file
    name spells. `blockStoreFromBlocks` is what proves each row's bytes hash to
-   that CID, and a tampered file fails there. An entry under `dir` that is not a
-   directory — an editor swapfile, a `.DS_Store` — is residue this module did
-   not write and is skipped rather than failing the whole read; a directory
-   whose name is not the staging directory is still expected to be a shard, and
-   an unreadable one fails loudly. -}
+   that CID, and a tampered file fails there. An entry this module did not
+   write is skipped or refused by the header's "An entry nobody wrote" rule; a
+   directory that IS named like a shard and cannot be listed still fails
+   loudly, because that is one of ours. -}
 export
 blockFileRead : String -> <FileRead "_"> Result String (List (Cid, Array Int))
 blockFileRead dir = match listDir dir

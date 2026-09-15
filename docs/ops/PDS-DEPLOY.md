@@ -298,6 +298,100 @@ that refuses the connection, times out, or answers with an error is logged to
 stderr and otherwise ignored — it neither blocks startup nor prevents this
 server from answering any other request.
 
+## One writer per data directory
+
+**One `--data` directory is served by exactly one `pdsd` process at a time.**
+Two of them destroy each other's work rather than merely racing: each start
+sweeps every file under the three `.staging` directories, and a file there
+means residue from a prior crash only while no other process is between a
+write and its `rename` — so the second process to start deletes what the
+first one has in flight. The two servers also hold independent in-memory
+copies of state they are both advancing on disk.
+
+Sequential reuse of one directory across a process boundary is normal and
+supported (that is what a restart is). Concurrent reuse is refused: the
+server takes a lock beneath `<data>/.lock` before it reads or writes anything
+else under `--data`, and a second start over a held directory exits nonzero
+naming the lock, having swept nothing, bound nothing, and generated nothing.
+
+```
+serve: data directory /srv/pds/data is already locked by a running server
+(/srv/pds/data/.lock/gen.4, last heartbeat 0s ago). …
+```
+
+`<data>/.lock` is a directory, and it is a container rather than the lock
+itself. What is owned is a **generation** inside it, `<data>/.lock/gen.<n>`,
+and the holder of the directory is whichever process created the
+highest-numbered one; `<data>/.lock/gen.<n>/owner` is that holder's
+heartbeat file. Taking the lock means creating the next number — `mkdir(2)`,
+whose second creation fails rather than succeeding twice — so when several
+starts decide at the same moment that the previous holder is gone, exactly
+one of them creates `gen.<n+1>` and the rest re-read the directory and
+refuse against the winner. Nothing ever removes or renames a name another
+process's claim depends on: the winner deletes the generations below its
+own, best-effort and only once it already holds the directory. A `gen.<n>`
+left behind by a crash is inert, because a generation below the highest is
+not a holder, and a stray file under `<data>/.lock` that no server wrote is
+ignored rather than refused.
+
+The holder writes a heartbeat into its own `owner` file about twice a second,
+and a lock is graded by that heartbeat and not by its existence — `mkdir(2)`
+gives no release on death, so a killed process always leaves its generation
+behind. A holder whose heartbeat has stopped for three seconds is reclaimed
+by the next start on its own, which is why an ordinary `systemctl restart
+pds` needs no flag and costs a few seconds of extra startup. The startup line
+says which happened:
+
+```
+serve: data directory lock: acquired
+serve: data directory lock: reclaimed after 3s with no heartbeat from the previous holder
+serve: data directory lock: taken with --force-lock
+```
+
+`--force-lock` takes the lock immediately, without waiting the window out.
+It is an assertion by you that the recorded holder is gone — after a power
+cut, or over a lock that came back inside a backup. It applies to the holder
+that start *finds*, not to one that appears while it is looking: a forcing
+start that loses the race for a generation falls back to grading whoever won
+it, because you asserted nothing about a server that started a moment ago.
+**Never pass it to get past a server that is still running**; that is the
+exact situation the lock exists to refuse.
+
+You do not need it to get past damaged lock contents. A generation whose
+`owner` file is missing or unreadable is graded exactly as one whose
+heartbeat has stopped — nothing is writing there either way — so an ordinary
+start reclaims it after the window. There is one shape the flag is genuinely
+required for, and it is about residue rather than about a holder: something
+that is not a directory sitting at `<data>/.lock`, which an editor, a
+backup, or an `rsync` can leave there and no server ever writes. That
+refuses every start, naming the path, until it is removed:
+
+```
+serve: data directory /srv/pds/data: /srv/pds/data/.lock is not a directory,
+so it cannot hold this directory's lock … Remove it, or pass --force-lock to
+have this run remove it.
+```
+
+Two limits worth knowing. A holder that stalls for longer than the window —
+swapping, or a startup that spends seconds loading blobs — can have its lock
+reclaimed under it, because nothing on this side can distinguish a stalled
+process from a dead one. What a displaced holder cannot do is go on writing:
+every heartbeat re-reads the directory before it writes, so a process that
+finds a higher generation stops rather than sharing the directory with the
+server that displaced it, and startup beats between its phases for the same
+reason. And the lock protects a directory against processes, not against
+you: an external `cp`, `tar`, or `rsync` takes no lock and is covered by the
+next section instead.
+
+Startup is the one place a refusal can come after work has begun. A start
+refused *at* the lock has done nothing beneath `--data`; a start that is
+displaced later — reclaimed under it by another server while it was in a
+phase too long to beat through — refuses at its next checkpoint, which can
+be after it has swept `.staging` or generated `<data>/session-secret`. It
+still writes nothing further, and it still never runs alongside the server
+that displaced it, but "a refused start leaves nothing behind" is true of
+the first case only.
+
 ## Backup and restore
 
 **Consistency, in one sentence:** take a file-level backup with the server
@@ -316,6 +410,13 @@ account credential (`<data>/credential`), the session-token secret (whichever of
 `--token-secret` or `<data>/session-secret` this deployment uses), and **the
 signing key** (`--key`). Losing the signing key loses the ability to sign any
 future commit for this DID; it is the one file no later work can reconstruct.
+
+An archive taken this way also carries `<data>/.lock` and whatever
+generation was inside it, because they are directories under `--data` like
+any others. That is harmless: nothing is beating the restored heartbeat, so
+the first server started over the restored copy takes the next generation
+after the stale window and says so on its startup line. `--force-lock` skips
+that wait if you would rather not spend it.
 
 **Backup.**
 

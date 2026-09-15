@@ -1,0 +1,390 @@
+{- | A single-writer lock over a PDS data directory.
+
+   Two `pdsd` processes pointed at one `--data` directory destroy each other's
+   work. Each one's startup sweep deletes every file under `.staging`
+   (`shell.blockfile`, `shell.blobfile`, `shell.eventlog`), and those sweeps
+   are correct only while nothing else is mid-promotion: a file under
+   `.staging` means residue from a prior crash exactly when no other process
+   is between a write and its `rename`. Nothing in the on-disk layout made
+   that true, so this module does.
+
+   **The layout.** `<data>/.lock` is a directory that owns nothing: any number
+   of processes may create it, and its existence says only that some server
+   has been here. What is owned is a GENERATION inside it, `.lock/gen.<n>`,
+   and the holder of the directory is whoever created the highest-numbered
+   one. A contender reads the generations, grades the highest one's heartbeat,
+   and — if that heartbeat has stopped — creates the NEXT number.
+
+   **Why a generation and not the lock directory itself.** `makeDir` is
+   `mkdir(2)`: creating one is atomic, and of two processes creating the same
+   name exactly one succeeds. That is the whole primitive a lock needs, and it
+   is exact only while the name is never deleted or moved out from under a
+   winner. Reclaiming an abandoned lock by removing or renaming `.lock`
+   itself gives that guarantee up — the loser's remove can delete the winner's
+   FRESH lock, and then both processes hold one — so nothing here removes or
+   renames a name another process's claim depends on. A takeover only ever
+   creates a name no one has used, which is why a race over an abandoned
+   directory leaves exactly one holder and never zero.
+
+   **Release on death.** `mkdir` gives none — a killed process leaves its
+   generation behind — so the holder writes a HEARTBEAT into its generation
+   and a contender grades the heartbeat rather than the directory's existence.
+   A generation whose heartbeat moves is held; one whose heartbeat has not
+   moved for `lockStaleAfterMillis` is held by nobody. A live holder is
+   therefore detected in about one beat, so an operator who starts a second
+   server gets the refusal immediately; a dead holder costs the next start the
+   stale window, once.
+
+   **What the holder owes.** `holdDataLock` is not a fire-and-forget beat: it
+   also re-reads the generations and reports `LockLost` when a higher one
+   exists. That is what makes the exclusion hold through a startup too slow to
+   beat — a process whose lock was reclaimed under it learns so at its next
+   beat and stops rather than writing into a directory another server now
+   owns. Startup beats between phases (`pds/serve.mdk`), so the gap a
+   contender can exploit is one phase and not the whole of `configure`.
+
+   Two limits an operator should know, both real:
+
+   - `EEXIST` is recognized by matching the host's error STRING, because the
+     file primitives return no typed errno. `stdlib/fs`'s `mkdirAll` already
+     turns on the same distinction.
+   - The window is a bet that a live server writes a twenty-byte file at least
+     once every `lockStaleAfterMillis`. A holder stalled longer than that can
+     have its lock reclaimed under it, and will find out at its next beat.
+     `--force-lock` covers the other direction — taking a lock immediately
+     rather than waiting the window out. -}
+
+import string.{contains, stripPrefix, toInt, trim}
+import time.{Duration, millis, now, sleep}
+
+{- | The lock this process holds: proof that `acquireDataLock` returned, the
+   data directory whose heartbeat this process now owes, and the generation it
+   owes it into. The constructor is not exported, so a value of this type
+   cannot be minted by a caller that never took the lock. -}
+export data DataLock = DataLock String Int
+
+{- | What one heartbeat found. `LockBeatFailed` is a beat this process could
+   not write — a full disk — and costs the lock only if it keeps happening.
+   `LockLost` is a beat this process had no right to write, because another
+   server holds the directory now; it is terminal, and a caller that goes on
+   writing after one is the two-writer case this module exists to prevent. -}
+public export data LockBeat = LockHeld | LockBeatFailed String | LockLost String
+
+{- | How often the holder must refresh its heartbeat. `pds/serve.mdk` spawns
+   the loop that does it, beside the loop that emits the stats line. -}
+export
+lockBeatInterval : Duration
+lockBeatInterval = millis 500
+
+-- A heartbeat that has not moved for this long belongs to no live process.
+-- Six beats rather than two: the margin is against a scheduler that is busy,
+-- not against one that is gone.
+lockStaleAfterMillis : Int
+lockStaleAfterMillis = 3000
+
+-- How often a contender re-reads the holder's heartbeat while waiting the
+-- window out. It bounds how long a REFUSAL takes, not how long a takeover
+-- does, so it is short.
+lockPollMillis : Int
+lockPollMillis = 100
+
+-- How many times a contender that loses the race for a generation reads the
+-- directory again and grades whoever won. Losing means another process
+-- claimed the number first, so the next read finds a holder to grade and the
+-- usual refusal follows; the bound is against a directory being started into
+-- so often that grading never terminates, not against an ordinary race.
+claimAttempts : Int
+claimAttempts = 4
+
+-- | The lock directory beneath a data directory.
+export
+dataLockPath : String -> String
+dataLockPath dir = "\{dir}/.lock"
+
+generationPrefix : String
+generationPrefix = "gen."
+
+-- One generation of the lock: the name exactly one process ever creates.
+generationPath : String -> Int -> String
+generationPath dir n = "\{dataLockPath dir}/\{generationPrefix}\{intToString n}"
+
+ownerName : String
+ownerName = "owner"
+
+ownerPath : String -> Int -> String
+ownerPath dir n = "\{generationPath dir n}/\{ownerName}"
+
+nowMillis : Unit -> <Clock> Int
+nowMillis u = floatToInt (now u * 1000.0)
+
+-- The heartbeat is written and NOT `fsync`ed, unlike every other write this
+-- server makes. It is liveness and not durability: a beat that survived a
+-- power cut would be a beat on behalf of a process the power cut killed.
+writeBeat : String -> Int -> <Clock, FileWrite "_"> Result String Unit
+writeBeat dir n =
+  match writeFile (ownerPath dir n) "\{intToString (nowMillis ())}\n"
+    Ok () => Ok ()
+    Err message => Err (beatFailedMessage dir n message)
+
+{- | The generation numbers the lock directory records, lowest first.
+
+   Everything else under `.lock` is ignored rather than refused. A stray file
+   a backup or an editor left there is not a claim anybody made, and refusing
+   over one would wedge the directory against every future start — which is
+   the opposite of what a lock whose whole job is to be recoverable should
+   do. -}
+generations : String -> <FileRead "_"> Result String (List Int)
+generations dir = match listDir (dataLockPath dir)
+  Err message => Err (unreadableMessage dir message)
+  Ok names => Ok (generationNumbers names)
+
+generationNumbers : List String -> List Int
+generationNumbers [] = []
+generationNumbers (name :: rest) = match stripPrefix generationPrefix name
+  None => generationNumbers rest
+  Some digits => match toInt digits
+    None => generationNumbers rest
+    Some n =>
+      if n < 0 then generationNumbers rest else n :: generationNumbers rest
+
+-- The holder's generation, or `None` for a lock directory nobody has claimed.
+highest : List Int -> Option Int
+highest [] = None
+highest (n :: rest) = match highest rest
+  None => Some n
+  Some best => Some (max n best)
+
+-- The holder's heartbeat file as raw text, with every failure to read it
+-- reported as the empty string. A generation with no readable owner file is a
+-- half-created one, and a contender waits it out exactly as it waits out one
+-- whose beat has stopped — the two are the same claim, that nothing is
+-- writing here.
+ownerText : String -> Int -> <FileRead "_"> String
+ownerText dir n =
+  if not (fileExists (ownerPath dir n)) then
+    ""
+  else match readFile (ownerPath dir n)
+    Err _ => ""
+    Ok text => text
+
+-- Whether the holder's heartbeat moves at all within `remaining`
+-- milliseconds. It returns the moment it does, which is what makes a refusal
+-- cost one beat and not the whole window.
+beatMoves : String -> Int -> String -> Int -> <Clock, FileRead "_"> Bool
+beatMoves dir n seen remaining =
+  if remaining <= 0 then
+    False
+  else
+    let () = sleep (millis lockPollMillis)
+    if ownerText dir n /= seen then
+      True
+    else
+      beatMoves dir n seen (remaining - lockPollMillis)
+
+-- How long ago the recorded holder last beat, for the refusal. An owner file
+-- that does not parse says so rather than reporting a number derived from
+-- nothing.
+beatAge : String -> Int -> String
+beatAge text nowMs = match toInt (trim text)
+  None => "at a time this file does not record"
+  Some beatMs => "\{intToString ((nowMs - beatMs) / 1000)}s ago"
+
+{- | The lock directory, made to exist.
+
+   It carries no ownership, so creating one that is already there is success
+   and two processes doing it at once is ordinary. What is NOT ordinary is
+   something that is not a directory sitting at that path: a server cannot
+   claim a generation inside a plain file, and no start would ever get past
+   it. `--force-lock` removes it, which is the one case where the flag is
+   about residue rather than about a holder. -}
+prepareLockDir : Bool ->
+  String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+prepareLockDir force dir = match makeDir (dataLockPath dir)
+  Ok () => Ok ()
+  Err message =>
+    if not (contains "exists" message) then
+      Err (cannotCreateMessage dir message)
+    else if directoryAt (dataLockPath dir) then
+      Ok ()
+    else if not force then
+      Err (foreignLockMessage dir)
+    else match removeFile (dataLockPath dir)
+      Err removal => Err (cannotRemoveMessage dir removal)
+      Ok () => match makeDir (dataLockPath dir)
+        Err second => Err (cannotCreateMessage dir second)
+        Ok () => Ok ()
+
+directoryAt : String -> <FileRead "_"> Bool
+directoryAt path = match statFile path
+  Err _ => False
+  Ok (_, isDirectory, _, _) => isDirectory
+
+{- | Take the data directory's single-writer lock, or refuse the run.
+
+   `force` is `--force-lock`: take the lock without waiting the stale window
+   out. It is the operator asserting that the recorded holder is gone — after
+   a power cut, or over a lock that came back in a backup. It applies to the
+   holder this run FINDS and not to one that appears while it is looking: a
+   contender that loses the race for a generation falls back to grading
+   whoever won it, because the operator asserted nothing about a server that
+   started a moment ago.
+
+   The second half of the result is what taking it took, for the startup line.
+   A start that adopted a lock another process left behind must say so,
+   because that is also what a start which STOLE one from a stalled holder
+   would look like, and only the operator can tell those apart afterwards. -}
+export
+acquireDataLock : Bool ->
+  String ->
+  <Clock, FileRead "_", FileWrite "_"> Result String (DataLock, String)
+acquireDataLock force dir = do
+  () <- prepareLockDir force dir
+  contend force dir claimAttempts
+
+-- A generation that exists and is being beaten refuses; one that exists and
+-- is not is superseded by the next number up. The verdict costs a beat in the
+-- first case and the window in the second, and nothing can distinguish the
+-- two faster than the holder itself reports.
+contend : Bool ->
+  String ->
+  Int ->
+  <Clock, FileRead "_", FileWrite "_"> Result String (DataLock, String)
+contend force dir attempts =
+  if attempts <= 0 then
+    Err (contendedMessage dir)
+  else do
+    numbers <- generations dir
+    match highest numbers
+      None => claim dir 0 "acquired" attempts
+      Some held =>
+        if force then
+          claim dir (held + 1) "taken with --force-lock" attempts
+        else if beatMoves
+          dir
+          held
+          (ownerText dir held)
+          lockStaleAfterMillis then
+          Err (heldMessage dir held)
+        else
+          claim
+            dir
+            (held + 1)
+            "reclaimed after \{intToString (lockStaleAfterMillis / 1000)}s with no heartbeat from the previous holder"
+            attempts
+
+-- Creating the generation IS taking the lock: of every process that reaches
+-- here with the same number, `mkdir` admits exactly one. A loser reads the
+-- directory again rather than retrying the same number, and grades the winner
+-- with no `force`, since losing means a server started here just now and the
+-- operator asserted nothing about that one.
+claim : String ->
+  Int ->
+  String ->
+  Int ->
+  <Clock, FileRead "_", FileWrite "_"> Result String (DataLock, String)
+claim dir n outcome attempts = match makeDir (generationPath dir n)
+  Err message =>
+    if contains "exists" message then
+      contend False dir (attempts - 1)
+    else
+      Err (cannotClaimMessage dir n message)
+  Ok () => do
+    () <- writeBeat dir n
+    let () = discardOlder dir n
+    Ok (DataLock dir n, outcome)
+
+-- Every generation below the one this process just took, removed so that a
+-- directory restarted a thousand times does not accumulate a thousand
+-- entries. Strictly best-effort and strictly AFTER the claim above succeeded:
+-- no contender's success depends on this running, or on it working, which is
+-- what keeps a cleanup from being able to delete a claim somebody holds.
+discardOlder : String -> Int -> <FileRead "_", FileWrite "_"> Unit
+discardOlder dir n = match listDir (dataLockPath dir)
+  Err _ => ()
+  Ok names => discardEach dir n (generationNumbers names)
+
+discardEach : String -> Int -> List Int -> <FileWrite "_"> Unit
+discardEach _ _ [] = ()
+discardEach dir n (m :: rest) =
+  let () = if m < n then discardGeneration dir m
+  discardEach dir n rest
+
+discardGeneration : String -> Int -> <FileWrite "_"> Unit
+discardGeneration dir m =
+  let _ = removeFile (ownerPath dir m)
+  let _ = removeDir (generationPath dir m)
+  ()
+
+{- | Beat once, and say whether this process still holds the directory.
+
+   The order is load-bearing. The generations are read FIRST, so a process
+   whose lock was reclaimed under it reports the loss instead of writing a
+   heartbeat into a generation the new holder is about to clear away. -}
+export
+holdDataLock : DataLock -> <Clock, FileRead "_", FileWrite "_"> LockBeat
+holdDataLock (DataLock dir n) = match generations dir
+  Err message => LockBeatFailed message
+  Ok numbers => match highest numbers
+    None => LockLost (vanishedMessage dir n)
+    Some held =>
+      if held /= n then
+        LockLost (supersededMessage dir n held)
+      else match writeBeat dir n
+        Ok () => LockHeld
+        Err message => LockBeatFailed message
+
+{- | The same beat, as a refusal: for a caller partway through a startup, where
+   a lock this process no longer holds and a heartbeat it cannot write are both
+   reasons to stop before writing anything else beneath the directory. -}
+export
+requireDataLock : DataLock ->
+  <Clock, FileRead "_", FileWrite "_"> Result String Unit
+requireDataLock lock = match holdDataLock lock
+  LockHeld => Ok ()
+  LockBeatFailed message => Err message
+  LockLost message => Err message
+
+-- ── refusals ────────────────────────────────────────────────────────────────
+-- Every one of these names the path it is about and what to do about it. A
+-- lock refusal an operator cannot act on is an outage with a errno attached.
+
+heldMessage : String -> Int -> <Clock, FileRead "_"> String
+heldMessage dir n =
+  "data directory \{dir} is already locked by a running server (\{generationPath dir n}, last heartbeat \{beatAge (ownerText dir n) (nowMillis ())}). Two servers over one data directory delete each other's staged writes, so this run refuses before reading or writing anything beneath it. Stop the running server, or pass --force-lock if you are certain it is gone."
+
+cannotCreateMessage : String -> String -> String
+cannotCreateMessage dir message =
+  "data directory \{dir}: cannot create the lock directory \{dataLockPath dir} (\{message}); check that \{dir} exists and that this account can write to it, then start again"
+
+foreignLockMessage : String -> String
+foreignLockMessage dir =
+  "data directory \{dir}: \{dataLockPath dir} is not a directory, so it cannot hold this directory's lock — a backup, an editor or an rsync put it there, since no server ever writes anything but a directory at that path. Remove it, or pass --force-lock to have this run remove it."
+
+cannotRemoveMessage : String -> String -> String
+cannotRemoveMessage dir message =
+  "data directory \{dir}: --force-lock cannot remove \{dataLockPath dir} (\{message}); remove it by hand with every server over \{dir} stopped, then start again"
+
+cannotClaimMessage : String -> Int -> String -> String
+cannotClaimMessage dir n message =
+  "data directory \{dir}: cannot create \{generationPath dir n} (\{message}); check that this account can write to \{dataLockPath dir}, then start again"
+
+beatFailedMessage : String -> Int -> String -> String
+beatFailedMessage dir n message =
+  "data directory \{dir}: cannot write the lock heartbeat \{ownerPath dir n} (\{message}); check free space and permissions under \{dir}"
+
+unreadableMessage : String -> String -> String
+unreadableMessage dir message =
+  "data directory \{dir}: cannot read the lock directory \{dataLockPath dir} (\{message}); check its permissions, or remove it with every server over \{dir} stopped"
+
+contendedMessage : String -> String
+contendedMessage dir =
+  "data directory \{dir}: \{intToString claimAttempts} attempts to take \{dataLockPath dir} each lost the race to another server starting at the same moment. Start this one again once the others have settled."
+
+supersededMessage : String -> Int -> Int -> String
+supersededMessage dir mine held =
+  "data directory \{dir}: this process held \{generationPath dir mine}, and \{generationPath dir held} now holds the directory — another server reclaimed it while this one went longer than \{intToString (lockStaleAfterMillis / 1000)}s without a heartbeat. This process must not write anything further beneath \{dir}; the server holding \{generationPath dir held} owns it."
+
+vanishedMessage : String -> Int -> String
+vanishedMessage dir mine =
+  "data directory \{dir}: this process held \{generationPath dir mine}, and \{dataLockPath dir} now records no holder at all — something removed it from under this server. This process must not write anything further beneath \{dir}; stop it and start one server over \{dir}."

@@ -145,6 +145,7 @@ import shell.eventlog.{
   eventLogNextSequence,
   eventLogPromote,
   eventLogStage,
+  eventLogStaged,
 }
 import shell.persist.{persistCredential, persistPreferences, persistSave}
 import shell.subscribe.{runSubscription}
@@ -397,11 +398,17 @@ applyRequest server dir storeRef bytes =
    inside `applyRequest`'s single indivisible sequence, and a suspension
    between any two would let a second connection publish in the gap.
 
-   The BLOB half runs before the repo half, and the order is load-bearing: a
-   record may name blob bytes, never the reverse, so a crash between the two
-   halves must leave at most an unreferenced blob and never a committed record
-   naming bytes that are not on disk. The other two halves reference nothing
-   and are referenced by nothing, so their position is free. -}
+   The BLOB half runs before the repo half, and the order is load-bearing for
+   reference: a record may name blob bytes, never the reverse, so a crash
+   between the two halves must leave at most an unreferenced blob and never a
+   committed record naming bytes that are not on disk. That is the whole of
+   what the order carries. It does not also carry the durability of the blob
+   area's own directory entry: `shell.blobfile` barriers `<dir>/blobs` into
+   `<dir>` itself, which it must, because the repo half here is skipped
+   entirely on a transition that moved no commit. The other two halves
+   reference nothing, are referenced by nothing, and create no directory, so
+   their position is free. -}
+export
 persistTransition : String ->
   String ->
   Int ->
@@ -560,9 +567,33 @@ completeGenesisEvents : String ->
   Repo ->
   <FileRead "_", FileWrite "_"> Result String Unit
 completeGenesisEvents dir did handle nowSeconds repo = do
+  () <- requireRecoveryApplied dir
   resumeAt <- eventLogNextSequence dir
   () <- refuseLostPointer dir resumeAt
   genesisFrom resumeAt dir did handle nowSeconds repo
+
+{- | Refuse to read the log's pointer while a pending entry is still staged.
+
+   `refuseLostPointer` below reads the last-promoted pointer as the whole
+   truth about how far the quartet got, and that reading is true only of a log
+   nothing still owes. A staged entry is a promotion a previous process began
+   and did not finish: its entry file may already be beside the pointer while
+   the pointer still stands where it did, which is exactly the shape
+   `refuseLostPointer` refuses. Applying recovery first is what removes it, so
+   a caller that has not done so gets this refusal rather than a refusal
+   blaming the directory.
+
+   The check lives here, in front of the pointer read it protects, rather than
+   in the caller: a precondition written into the caller moves when the two
+   calls it orders are swapped, which is the one mutation it exists to
+   catch. -}
+requireRecoveryApplied : String -> <FileRead "_"> Result String Unit
+requireRecoveryApplied dir = match eventLogStaged dir
+  Err message => Err message
+  Ok None => Ok ()
+  Ok (Some _) =>
+    Err
+      "\{eventLogDir dir}: an event-log entry is still staged, so startup recovery has not run yet. The genesis events may only be completed after eventLogApplyRecovery has finished or dropped that entry — a pointer read over one describes a log mid-recovery, not a log. This is a startup ordering fault in pds/serve.mdk and not damage to this data directory."
 
 {- | Refuse a log whose last-promoted pointer contradicts the entries beside
    it, rather than treating it as a repository that has emitted nothing.

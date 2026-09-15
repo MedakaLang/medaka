@@ -88,7 +88,9 @@ the shell is native-bound.
   `pds/shell/persist.mdk` persists and reloads the account repository's head
   commit, `pds/shell/blobfile.mdk` does the same for the blob half under a
   `blobs/` directory SIBLING to `blocks/` (a blob is not part of the signed
-  block graph), and `pds/shell/server.mdk` is the accept loop and the
+  block graph), `pds/shell/dirlock.mdk` is the single-writer lock that keeps
+  two processes off one `--data` directory, and `pds/shell/server.mdk` is the
+  accept loop and the
   per-connection HTTP/1.1 lifecycle. The dependency runs one way only: a shell
   module may import `pds/lib/`, and no `pds/lib/` module may ever import
   `pds/shell/` — the pure core performs no I/O (P14), so reconstruction logic

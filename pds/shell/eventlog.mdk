@@ -16,7 +16,16 @@
    step this tree has is `rename` (`pds/shell/persist.mdk`, whose barrier
    discipline this module also follows: every staged file is `fsync`ed before
    the `rename` that publishes it and the containing directory after, so a
-   promotion cannot reach disk ahead of the entry it promotes). So a caller
+   promotion cannot reach disk ahead of the entry it promotes; and a directory
+   this module creates is barriered into the directory `mkdirAll` wrote its
+   dentry into, since an entry directory whose own entry a crash loses takes
+   every event promoted into it). Unlike the two stores next door, the log
+   barriers its OWN top directory into the data directory rather than leaving
+   that to a persist call: those two are written only through
+   `persistTransition`, which always runs a repo half after them, while an
+   event announcing no repository mutation is appended with no commit beside
+   it at all. Only a creation owes a directory barrier either way, so an
+   append over a log already on disk pays nothing for one. So a caller
    STAGES the entry, persists the commit, and then
    PROMOTES it, and every crash point in that sequence is recoverable from
    what survives:
@@ -92,6 +101,31 @@ lastPath dir = "\{eventLogDir dir}/\{lastName}"
 stagingDir : String -> String
 stagingDir dir = "\{eventLogDir dir}/\{stagingName}"
 
+-- The log directory itself, created if it is not there, with the dentry that
+-- created barriered into the data directory. See the header for why the log
+-- owns this one where the two stores next door leave theirs to a persist
+-- call.
+ensureLogDir : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureLogDir dir =
+  if fileExists (eventLogDir dir) then
+    Ok ()
+  else do
+    () <- mkdirAll (eventLogDir dir)
+    fsync dir
+
+-- One directory beneath the log — `entries` or `.staging` — created if it is
+-- not there, with the dentry that created barriered into the log directory.
+ensureUnderLog : String ->
+  String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+ensureUnderLog dir path = do
+  () <- ensureLogDir dir
+  if fileExists path then
+    Ok ()
+  else do
+    () <- mkdirAll path
+    fsync (eventLogDir dir)
+
 -- Write a small pointer file the way `persist.mdk` writes the head pointer:
 -- into the staging directory, then promoted with `rename`, so a reader never
 -- observes a half-written one.
@@ -100,7 +134,7 @@ promoteText : String ->
   String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 promoteText dir name text = do
-  () <- mkdirAll (stagingDir dir)
+  () <- ensureUnderLog dir (stagingDir dir)
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged text
   () <- fsync staged
@@ -175,8 +209,8 @@ writeEntry : String ->
   EventLogEntry ->
   <FileRead "_", FileWrite "_"> Result String Unit
 writeEntry dir entry = do
-  () <- mkdirAll (entriesDir dir)
-  () <- mkdirAll (stagingDir dir)
+  () <- ensureUnderLog dir (entriesDir dir)
+  () <- ensureUnderLog dir (stagingDir dir)
   let name = eventLogEntryName entry.seq entry.timeSeconds
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged (eventLogEncodeEntry entry)
@@ -312,17 +346,45 @@ entryRows : String ->
   List (Int, Int, String) ->
   Result String (List (Int, Int, String))
 entryRows _ [] acc = Ok (reverse acc)
-entryRows dir (name :: rest) acc = match eventLogParseEntryName name
-  Err message => Err message
-  Ok (seq, timeSeconds) => entryRows dir rest ((seq, timeSeconds, name) :: acc)
+entryRows entries (name :: rest) acc = match eventLogParseEntryName name
+  Err message =>
+    Err
+      "\{message}, found in \{entries}. That directory holds promoted log entries and nothing else, and this log reports a name it could not have written rather than reading around it. Move \{entries}/\{name} elsewhere before starting this repository again."
+  Ok (seq, timeSeconds) =>
+    entryRows entries rest ((seq, timeSeconds, name) :: acc)
 
+{- Every promoted entry's name, parsed, in listing order.
+
+   The entry directory is graded BY NAME and by nothing else — no entry is
+   stat'ed and none is opened. That is not an oversight, it is the reason seq
+   and time are in the name at all: `eventLogRead` answers a subscriber's
+   cursor from this listing plus the entries that are actually new, and a
+   `stat` per name would put the whole retention window back on every poll,
+   once per subscriber. So the three dispositions of an entry nobody wrote
+   are:
+
+   - a name this log could not have written, whatever the entry is, is
+     REFUSED here (`lib.event_log_record`'s `eventLogParseEntryName` carries
+     that stance and its reason); a stray plain file and a stray directory
+     are the same answer, because only the name was consulted.
+   - an entry whose name IS one this log could have written but which is not
+     a readable entry file is refused by `readRows`, when it is opened.
+
+   Never skipped, either way: this log's directory listing IS its index, so an
+   entry routed around is a hole in a stream a subscriber cannot detect. The
+   two stores next door (`pds/shell/blockfile.mdk`, `pds/shell/blobfile.mdk`)
+   skip residue instead, and the difference is deliberate — a block or a blob
+   is content-addressed and independently verified downstream, so a skipped
+   one cannot become a wrong answer, while a missing event silently becomes
+   one. -}
 listEntryRows : String -> <FileRead "_"> Result String (List (Int, Int, String))
 listEntryRows dir =
   if not (fileExists (entriesDir dir)) then
     Ok []
   else match listDir (entriesDir dir)
-    Err message => Err "eventlog: unreadable entry directory: \{message}"
-    Ok names => entryRows dir names []
+    Err message =>
+      Err "eventlog: \{entriesDir dir}: unreadable entry directory: \{message}"
+    Ok names => entryRows (entriesDir dir) names []
 
 {- | Whether the log holds any promoted entry at all.
 
@@ -330,7 +392,9 @@ listEntryRows dir =
    pointer, which is the whole of its use: it is the one question
    `eventLogLast` cannot answer, because a caller asking it is checking that
    pointer against what the log actually holds. A log directory that does not
-   exist yet reads as empty, the same way `listEntryRows` reads it.
+   exist yet reads as empty, the same way `listEntryRows` reads it — and, the
+   same way, an entry directory holding a name this log could not have written
+   is an error here rather than a count.
 
    Linear in the live log, so it belongs at startup and not on an append. -}
 export
@@ -347,7 +411,9 @@ dropRows : String ->
 dropRows _ [] dropped = Ok dropped
 dropRows dir ((_, _, name) :: rest) dropped =
   match removeFile "\{entriesDir dir}/\{name}"
-    Err message => Err "eventlog: undeletable expired entry \{name}: \{message}"
+    Err message =>
+      Err
+        "eventlog: \{entriesDir dir}/\{name}: undeletable expired entry: \{message}"
     Ok () => dropRows dir rest (dropped + 1)
 
 {- | Drop every entry the retention window no longer admits, and answer how
@@ -371,7 +437,12 @@ readRows : String ->
 readRows _ [] acc = Ok (reverse acc)
 readRows dir ((seq, timeSeconds, name) :: rest) acc =
   match readFile "\{entriesDir dir}/\{name}"
-    Err message => Err "eventlog: unreadable entry \{name}: \{message}"
+    -- Where an entry whose NAME this log could have written, but which is not
+    -- an entry file at all — a directory spelling a seq-time pair — is
+    -- refused. `listEntryRows` graded the name and deliberately did not stat
+    -- it; this is the open that finds out.
+    Err message =>
+      Err "eventlog: \{entriesDir dir}/\{name}: unreadable entry: \{message}"
     Ok text => match eventLogDecodeEntry text
       Err message => Err message
       Ok entry =>
