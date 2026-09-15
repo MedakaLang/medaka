@@ -25,10 +25,12 @@
 # backup tool or an operator leaves behind (#3055). Case 12 grades the
 # barriers themselves, which is the one claim building a directory by hand
 # cannot make — it needs the syscall ORDER, not the resulting tree (#2952).
-# Cases 12a and 12b read the same traces for two orders that rule is
+# Cases 12a, 12b and 12c read the same traces for three orders that rule is
 # deliberately blind to, each within ONE process: which half of a transition
-# reached the disk first (#3057), and whether a commit's shard-directory
-# barriers came after its block promotes or in between them (#3058).
+# reached the disk first (#3057), whether a commit's shard-directory
+# barriers came after its block promotes or in between them (#3058), and
+# whether the blob area's own dentry is barriered on a write that runs no repo
+# half, where the concatenated trace lets another process pay for it.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -833,6 +835,42 @@ FIRST_SHARD_AT=$(trace_index first "$SAVED" '^F [^ ]*/blocks/[0-9a-f][0-9a-f]$')
   fail "case 12b: a shard directory was barriered at event $FIRST_SHARD_AT, before the last block promote at event $LAST_BLOCK_AT; the barriers are per block, not per batch"
 }
 echo "case 12b: $SAVED_BLOCKS block promote(s), all before the first shard-directory barrier"
+
+# ── 12c. the blob area's own dentry, on a write that runs no repo half ─────
+# `blobs/` is created by `blobfile.mdk`, and its dentry sits one level up, in
+# the data directory. The universal rule below accepts a barrier from anywhere
+# in `$WORK/promotes`, which concatenates five processes — so a data-directory
+# `fsync` some OTHER route performed discharges this creation there, and the
+# route that writes blobs and nothing else goes ungraded across the boundary
+# that a crash actually respects. Read out of the blob-save route's OWN trace
+# for that reason, like 12a.
+#
+# The route is the one `com.atproto.repo.uploadBlob` takes: it moves blobs and
+# advances no repository, so `persistTransition`'s repo half is skipped and
+# NOTHING outside `blobfile.mdk` barriers anything on it. The barrier has to be
+# there before the blobs the run goes on to publish, or a crash after the
+# client's 200 takes the whole subtree those blobs are under.
+BLOBSAVE="$WORK/events.blob-save"
+MKBLOBS_AT=$(trace_index first "$BLOBSAVE" "^M $TRACED/repo/blobs\$")
+[ -n "$MKBLOBS_AT" ] \
+  || fail 'case 12c: the blob-save route created no blob area, so its dentry is ungraded here'
+DATA_FSYNC_AT=$(trace_index first "$BLOBSAVE" "^F $TRACED/repo\$")
+[ -n "$DATA_FSYNC_AT" ] || {
+  cat "$BLOBSAVE" >&2
+  fail "case 12c: the blob-save route created $TRACED/repo/blobs and never barriered $TRACED/repo; a crash after this write loses the whole blobs subtree, however durable each blob beneath it is"
+}
+[ "$DATA_FSYNC_AT" -gt "$MKBLOBS_AT" ] || {
+  sed -n "${DATA_FSYNC_AT}p;${MKBLOBS_AT}p" "$BLOBSAVE" >&2
+  fail "case 12c: $TRACED/repo was barriered at event $DATA_FSYNC_AT, before the blob area was created at event $MKBLOBS_AT; that barrier carries no dentry that did not exist yet"
+}
+FIRST_PROMOTE_AT=$(trace_index first "$BLOBSAVE" '^R ')
+[ -n "$FIRST_PROMOTE_AT" ] \
+  || fail 'case 12c: the blob-save route promoted nothing, so the ordering is ungraded'
+[ "$DATA_FSYNC_AT" -lt "$FIRST_PROMOTE_AT" ] || {
+  sed -n "${DATA_FSYNC_AT}p;${FIRST_PROMOTE_AT}p" "$BLOBSAVE" >&2
+  fail "case 12c: the first blob was promoted at event $FIRST_PROMOTE_AT, before $TRACED/repo was barriered at event $DATA_FSYNC_AT"
+}
+echo "case 12c: blob area created at event $MKBLOBS_AT and barriered into the data directory at event $DATA_FSYNC_AT, before the first promote at event $FIRST_PROMOTE_AT, with no repo half on the route"
 
 awk '
   { ev[++n] = $0 }

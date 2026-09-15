@@ -36,13 +36,15 @@
    rule and for its reason — a shard whose own entry a crash loses takes every
    blob beneath it, however durable those blobs' bytes already are. Only a
    creation owes it, so a shard costs one fsync once in the life of the store
-   and not one per blob. `blobs/` itself is the one exception, and
-   deliberately: its dentry sits in the data directory, which belongs to
-   `pds/shell/persist.mdk`, and every write here reaches disk through
-   `persistTransition`'s blob half, which the repo half always follows — and
-   the repo half barriers the data directory. That coupling is why the blob
-   half runs FIRST, and it is a second reason for an order
-   `persistTransition` already states one reason for.
+   and not one per blob. `blobs/` itself is no exception, though its dentry
+   sits in the data directory rather than beneath this module's own: the log
+   next door barriers its top directory the same way and for the same reason
+   (`pds/shell/eventlog.mdk`). A blob-only write — `com.atproto.repo.uploadBlob`
+   is one — advances no repository, so no persist call runs on it at all, and a
+   `blobs/` whose barrier came from the repo half would be a directory a power
+   loss takes with every blob under it. Leaving it to a caller would make the
+   durability of this whole area depend on which OTHER half of a transition
+   happened to run beside it.
 
    **Residue.** The reader therefore skips, rather than fails on, anything
    under `blobs/` it cannot account for: an orphan sidecar naming no bytes
@@ -139,10 +141,23 @@ admitted bytes = match checkBlobBytes (arrayLength bytes)
       "blobfile: refusing to persist a blob pds/lib/blob.mdk would not have admitted: \{message}"
   Ok () => Ok ()
 
+-- The blob area itself, created if it is not there, with the dentry that
+-- created barriered into the data directory. Every path that writes beneath
+-- `blobs/` runs this first, so no caller has to supply the barrier. See the
+-- header's "Directory barriers".
+ensureBlobsDir : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureBlobsDir dir =
+  if fileExists (blobDir dir) then
+    Ok ()
+  else do
+    () <- mkdirAll (blobDir dir)
+    fsync dir
+
 -- One shard directory, created if it is not there, with the dentry that
 -- created barriered into `blobs/`. See the header's "Directory barriers".
 ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureShard dir cid =
+ensureShard dir cid = do
+  () <- ensureBlobsDir dir
   let shard = blobShardDir dir cid
   if fileExists shard then
     Ok ()
@@ -168,12 +183,13 @@ writeOne dir cid mimeType bytes = do
   () <- rename staged (blobFilePath dir cid)
   fsync (blobShardDir dir cid)
 
--- `.staging` and, on a data directory with no blob area yet, `blobs/` itself.
--- The dentry for `.staging` goes into `blobs/` and is barriered here; the one
--- for `blobs/` goes into the data directory and is the repo half's, per the
--- header's "Directory barriers".
+-- The staging directory, created if it is not there, with the dentry that
+-- created barriered into `blobs/` — which `ensureBlobsDir` has already put on
+-- disk, so the two dentries are barriered into their own parents rather than
+-- one `mkdirAll` publishing both and only the inner one being ordered.
 ensureStaging : String -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureStaging dir =
+ensureStaging dir = do
+  () <- ensureBlobsDir dir
   let staging = "\{blobDir dir}/\{stagingName}"
   if fileExists staging then
     Ok ()

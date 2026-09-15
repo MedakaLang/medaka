@@ -399,17 +399,15 @@ applyRequest server dir storeRef bytes =
    between any two would let a second connection publish in the gap.
 
    The BLOB half runs before the repo half, and the order is load-bearing for
-   two separate reasons. The first is reference: a record may name blob bytes,
-   never the reverse, so a crash between the two halves must leave at most an
-   unreferenced blob and never a committed record naming bytes that are not on
-   disk. The second is durability of the blob area's own directory entry:
-   `blobFileWrite` creates `<dir>/blobs` and barriers everything it then
-   writes beneath it, but the dentry for `blobs/` itself sits in `<dir>`,
-   which is `shell.persist`'s to barrier — and `persistSave`, in the repo half
-   that follows, is what barriers it. Swap the two halves and `blobs/` is a
-   directory a power loss can take with every blob under it. The other two
-   halves reference nothing, are referenced by nothing, and create no
-   directory, so their position is free. -}
+   reference: a record may name blob bytes, never the reverse, so a crash
+   between the two halves must leave at most an unreferenced blob and never a
+   committed record naming bytes that are not on disk. That is the whole of
+   what the order carries. It does not also carry the durability of the blob
+   area's own directory entry: `shell.blobfile` barriers `<dir>/blobs` into
+   `<dir>` itself, which it must, because the repo half here is skipped
+   entirely on a transition that moved no commit. The other two halves
+   reference nothing, are referenced by nothing, and create no directory, so
+   their position is free. -}
 export
 persistTransition : String ->
   String ->

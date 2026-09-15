@@ -25,10 +25,12 @@
    then `rename`d onto the real path, then the containing directory is
    `fsync`ed.
 
-   `dir` is the store's root, and the barriers of every directory written
-   directly into it are this module's: `blocks/` (`shell.blockfile`) and
-   `blobs/` (`shell.blobfile`) create themselves there and leave that dentry
-   to the `fsync dir` `persistSave` performs after them. `dir`'s OWN dentry is
+   `dir` is the store's root. `blocks/` (`shell.blockfile`) creates itself
+   there and leaves that dentry to the `fsync dir` `persistSave` performs
+   after it, which it can because a block is written through `persistSave` and
+   through nothing else. `blobs/` (`shell.blobfile`) cannot — a blob is also
+   written on its own, with no commit beside it and so no call here at all —
+   and barriers its own dentry. `dir`'s OWN dentry is
    written into a directory this store does not own, so a creation of `dir`
    barriers the directory above it — and only a creation, which keeps an
    operator's directory off the cost of every commit. -}
