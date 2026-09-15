@@ -277,8 +277,30 @@ if [ -n "$FROZEN_TAG" ]; then
         "$ROOT/stdlib/io.mdk" "$ROOT/stdlib/hash_map.mdk" \
         "$ROOT/stdlib/hash_set.mdk" "$ROOT/stdlib/vector.mdk" \
         "$ROOT/stdlib/json.mdk" "$ROOT/stdlib/test.mdk"
+      # Fallback for --only <name> outside the fixed 13-module gate corpus above:
+      # the pre-commit hook (check 5) enforces every TRACKED `.lextok.golden`
+      # sibling, not just the 13 the diff_compiler_fmt gate's lexCorpus checks, so
+      # a name outside those 13 must still be reachable. Search the whole tree for
+      # a tracked `<name>.mdk` with a `.lextok.golden` sibling and regenerate it
+      # through the same regen_frozen/lex_main capture used above — never a second
+      # copy of the capture logic.
       if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
-        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in the self-lex corpus"; exit 2
+        fallback_srcs=""
+        fallback_n=0
+        for g in $(git -C "$ROOT" ls-files '*.lextok.golden'); do
+          src="$ROOT/${g%.lextok.golden}.mdk"
+          [ -f "$src" ] || continue
+          only_match "$(basename "$src" .mdk)" || continue
+          fallback_srcs="$fallback_srcs $src"
+          fallback_n=$((fallback_n+1))
+        done
+        if [ "$fallback_n" -gt 1 ]; then
+          echo "wrote 0 goldens — --only '$ONLY_FILTER' matched $fallback_n tracked .lextok.golden siblings; refusing to guess"; exit 2
+        fi
+        [ "$fallback_n" -eq 1 ] && regen_frozen lex_main lextok.golden "" $fallback_srcs
+      fi
+      if [ -n "$ONLY_FILTER" ] && [ "$fwrote" -eq 0 ]; then
+        echo "wrote 0 goldens — --only '$ONLY_FILTER' matched no module in the self-lex corpus or any tracked .lextok.golden sibling"; exit 2
       fi ;;
     lint_fix)
       regen_frozen lint_fix_main fixed "" "$ROOT/test/lint_fix_fixtures/*.mdk"

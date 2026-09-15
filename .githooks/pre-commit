@@ -404,13 +404,14 @@ if [ -n "$lex_relevant" ]; then
     # and needs five oracles this hook must not require. So the per-staged-file
     # compare is spelled here: the same `lex_main <f>` spawn, the same drop of
     # the runtime's trailing `()`, against the same sibling golden.
-    lexout=""; lexst=0
+    lexout=""; lexst=0; lexfail_names=""
     for lf in $lex_relevant; do
       lex_actual="$("$ROOT/test/bin/lex_main" "$lf" 2>/dev/null | sed '$ s/()$//; ${/^$/d;}')"
       lex_expected="$(cat "${lf%.mdk}.lextok.golden")"
       if [ "$lex_actual" != "$lex_expected" ]; then
         lexout="$lexout
 FAIL $(basename "$lf")"
+        lexfail_names="$lexfail_names $(basename "$lf" .mdk)"
         lexst=1
       fi
     done
@@ -420,8 +421,11 @@ FAIL $(basename "$lf")"
       echo "" >&2
       printf '%s\n' "$lexout" | grep -E '^(FAIL|no golden)' | sed 's/^/    /' >&2
       echo "" >&2
-      echo "  Recapture:" >&2
-      echo "      sh test/capture_goldens.sh --frozen lextok" >&2
+      echo "  Recapture (per module — the bare form only reaches the fixed 13-module gate" >&2
+      echo "  corpus, which may not include the module(s) above):" >&2
+      for lfn in $lexfail_names; do
+        echo "      sh test/capture_goldens.sh --frozen lextok --only $lfn" >&2
+      done
       echo "  then re-stage the .lextok.golden file(s)." >&2
       echo "  Bypass once:  git commit --no-verify" >&2
       echo "" >&2
