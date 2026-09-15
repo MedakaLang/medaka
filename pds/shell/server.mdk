@@ -71,7 +71,11 @@ import lib.ratelimit.{
   step,
 }
 import hex.{encode}
-import lib.event_log_record.{EventLogEntry(..), eventLogRetentionSeconds}
+import lib.event_log_record.{
+  EventLogEntry(..),
+  eventLogFirstSeq,
+  eventLogRetentionSeconds,
+}
 import lib.blockstore.{blockStoreSize}
 import lib.repo.{
   Repo,
@@ -135,7 +139,9 @@ import net_async as A
 import shell.blobfile.{blobFileCount, blobFileWrite}
 import shell.egress.{Egress, egressAppviews, egressCall, egressMintToken}
 import shell.eventlog.{
+  eventLogDir,
   eventLogDiscardStaged,
+  eventLogHasEntries,
   eventLogNextSequence,
   eventLogPromote,
   eventLogStage,
@@ -537,7 +543,15 @@ stageCommitEvent dir did nowSeconds before after = do
 
    Nothing can interleave: this runs inside `configure`, before the listener
    is bound, so there is no connection through which a write could reach the
-   log until all four are promoted. -}
+   log until all four are promoted.
+
+   How far the sequence got is read from one pointer file, so that pointer is
+   checked against the entries it indexes before any of the four is emitted
+   again: a pointer that says NOTHING was ever promoted, over an entry
+   directory that is not empty, describes a repository whose pointer was lost
+   rather than a fresh one, and re-minting the quartet there would publish a
+   second identity, account, commit and sync beside the first, which no
+   subscriber can reconcile. Such a start refuses instead. -}
 export
 completeGenesisEvents : String ->
   String ->
@@ -547,7 +561,34 @@ completeGenesisEvents : String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 completeGenesisEvents dir did handle nowSeconds repo = do
   resumeAt <- eventLogNextSequence dir
+  () <- refuseLostPointer dir resumeAt
   genesisFrom resumeAt dir did handle nowSeconds repo
+
+{- | Refuse a log whose last-promoted pointer contradicts the entries beside
+   it, rather than treating it as a repository that has emitted nothing.
+
+   Checked in one direction only. A retention sweep unlinks entry files and
+   leaves the pointer where it stood, so a pointer standing over an empty
+   entry directory is ordinary and says nothing is wrong; the reverse — no
+   pointer at all over entries that exist — is reachable by no sequence
+   `shell.eventlog` writes, because a promotion writes the entry first and the
+   pointer second and the staged copy it leaves behind makes the pair run
+   again.
+
+   Deciding only, like `eventLogPlanRecovery`: naming what an operator has to
+   look at is the whole of the answer, because which of the two files is the
+   damaged one is not something this process can know. -}
+refuseLostPointer : String -> Int -> <FileRead "_"> Result String Unit
+refuseLostPointer dir resumeAt =
+  if resumeAt /= eventLogFirstSeq then
+    Ok ()
+  else match eventLogHasEntries dir
+    Err message => Err message
+    Ok False => Ok ()
+    Ok True =>
+      let log = eventLogDir dir
+      Err
+        "serve: \{log}: the last-promoted pointer records no promoted event, but the entry directory is not empty. Emitting the genesis events here would announce a second identity, account, commit and sync over history that already holds them. Compare \{log}/.last against \{log}/entries before starting this repository again."
 
 {- | The genesis events from `step` onward, where `step` is the sequence
    number the next promoted event will take.

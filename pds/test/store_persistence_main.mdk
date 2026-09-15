@@ -628,6 +628,32 @@ runGenesisResume dir = match reload dir
       Err message => panic "store_persistence: genesis emit failed: \{message}"
       Ok () => genesisSurvey dir
 
+-- A LATER start than the one that created the repository, which is what makes
+-- the entry count a real claim: an entry's file name carries its timestamp,
+-- so a quartet re-minted at the creation's own second would overwrite the
+-- four files it duplicates and leave the same four names behind.
+genesisSecondStartTime : Int
+genesisSecondStartTime = eventFixtureTime + 3600
+
+{- | The same start as `genesis-resume`, but reporting the refusal instead of
+   panicking on it: a log whose last-promoted pointer is gone while its
+   entries remain must be refused, and a route that dies on `Err` cannot tell
+   a refusal apart from a crash. -}
+runGenesisGuard : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runGenesisGuard dir = match reload dir
+  Err message => panic "store_persistence: genesis reload failed: \{message}"
+  Ok repo =>
+    match (completeGenesisEvents
+      dir
+      accountDid
+      genesisHandle
+      genesisSecondStartTime
+      repo)
+      Err message => println "GENESIS-GUARD: ERR \{message}"
+      Ok () =>
+        let () = genesisSurvey dir
+        println "GENESIS-GUARD: OK"
+
 {- | The repository's creation: the commit persisted first, then the four
    events emitted over it.
 
@@ -663,6 +689,7 @@ main = match args ()
   ["sweep-staging", dir] => runSweepStaging dir
   ["genesis-init", dir] => runGenesisInit dir
   ["genesis-resume", dir] => runGenesisResume dir
+  ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan|event-recover-unanchored|genesis-init|genesis-resume> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|event-recover-owed|event-recover-orphan|event-recover-unanchored|genesis-init|genesis-resume|genesis-guard> <dir>"

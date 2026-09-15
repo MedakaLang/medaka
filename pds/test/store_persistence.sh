@@ -14,7 +14,10 @@
 # publishes, so every state those cases build stays reachable and each must
 # still serve the previous value or refuse. Case 11b is that same claim for a
 # creation interrupted partway through the four events it emits: the state is
-# built by winding a finished log back, and the next start has to finish it.
+# built by winding a finished log back, and the next start has to finish it —
+# except for the one wound-back state no crash can produce, a lost
+# last-promoted pointer over entries that remain, where the next start has to
+# refuse.
 # Case 11c grades the residue those same crash points leave behind under
 # `.staging`: swept at startup rather than mistaken for corruption (#2572
 # part 2, #3052). Case 12 grades the barriers themselves, which is the one
@@ -425,6 +428,38 @@ for N in 0 1 2 3; do
 done
 echo 'genesis quartet finished from 0, 1, 2 and 3 promoted events, and adds nothing once whole'
 
+# The other shape those same two files can take, which is NOT a crash point
+# and must not be resumed as one: the last-promoted pointer gone while the
+# entries it indexed remain. No sequence this tree writes reaches it — a
+# promotion writes the entry first and the pointer second, and leaves the
+# staged copy behind so the pair runs again — so it means the pointer alone
+# was lost, and the entries are real history. Resuming there reads "nothing
+# was ever promoted" and re-mints the whole quartet beside the original one,
+# which is a stream serving two #identity, #account, #commit and #sync events
+# a subscriber cannot reconcile. N=0 above is the shape this must NOT fire on:
+# no pointer AND no entries is an ordinary fresh creation, and it still
+# completes the quartet.
+GENLOST="$WORK/genesis-lost-pointer"
+"$WORK/driver" genesis-init "$GENLOST" > "$WORK/genesis-lost.init" \
+  2> "$WORK/genesis-lost.err"
+require_empty "$WORK/genesis-lost.err" 'genesis-init (lost pointer)'
+cmp "$WORK/genesis-ref.out" "$WORK/genesis-lost.init" \
+  || fail 'case 11b: two uninterrupted creations left different logs'
+rm -f "$GENLOST/events/.last"
+"$WORK/driver" genesis-guard "$GENLOST" > "$WORK/genesis-lost.out" \
+  2> "$WORK/genesis-lost.err"
+require_empty "$WORK/genesis-lost.err" 'genesis-guard (lost pointer)'
+grep -q '^GENESIS-GUARD: ERR ' "$WORK/genesis-lost.out" || {
+  cat "$WORK/genesis-lost.out" >&2
+  fail 'a lost last-promoted pointer over surviving entries was resumed instead of refused'
+}
+REMAIN=$(ls "$GENLOST/events/entries" | wc -l | tr -d ' ')
+[ "$REMAIN" = 4 ] \
+  || fail "case 11b: the refused start left $REMAIN entries where it found 4"
+[ ! -e "$GENLOST/events/.last" ] \
+  || fail 'case 11b: the refused start wrote the pointer it refused over'
+sed -n 's/^GENESIS-GUARD: ERR /lost pointer refused: /p' "$WORK/genesis-lost.out"
+
 # ── 11c. `.staging` residue is swept at startup, never treated as corruption ──
 # A crash between `writeFileBytes staged`/`writeFile staged` and its `rename`
 # leaves a file behind in one of the three `.staging` directories, and nothing
@@ -631,4 +666,4 @@ done
 echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES"
 
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again; every promote barriered before and after; key absent'
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every promote barriered before and after; key absent'

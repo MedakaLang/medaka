@@ -321,6 +321,22 @@ listEntryRows dir =
     Err message => Err "eventlog: unreadable entry directory: \{message}"
     Ok names => entryRows dir names []
 
+{- | Whether the log holds any promoted entry at all.
+
+   Answered by listing the entries rather than by reading the last-promoted
+   pointer, which is the whole of its use: it is the one question
+   `eventLogLast` cannot answer, because a caller asking it is checking that
+   pointer against what the log actually holds. A log directory that does not
+   exist yet reads as empty, the same way `listEntryRows` reads it.
+
+   Linear in the live log, so it belongs at startup and not on an append. -}
+export
+eventLogHasEntries : String -> <FileRead "_"> Result String Bool
+eventLogHasEntries dir = match listEntryRows dir
+  Err message => Err message
+  Ok [] => Ok False
+  Ok _ => Ok True
+
 dropRows : String ->
   List (Int, Int, String) ->
   Int ->
