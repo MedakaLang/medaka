@@ -248,6 +248,43 @@ countShards dir (shard :: rest) =
           "blobfile: \{blobDir dir}/\{shard}: unreadable shard directory: \{message}"
       Ok leaves => map (countLeaves leaves leaves + _) (countShards dir rest)
 
+-- Every file left behind under `<dir>/blobs/.staging` by a process that
+-- crashed between staging a file and its `rename`. `.staging` never holds a
+-- subdirectory in this module's write path (`writeOne` stages the sidecar
+-- and the bytes as two leaf files, never a directory), so a plain
+-- `removeFile` per entry is enough.
+removeStagingResidue : String ->
+  List String ->
+  <FileWrite "_"> Result String Unit
+removeStagingResidue _ [] = Ok ()
+removeStagingResidue dir (leaf :: rest) = match removeFile "\{dir}/\{leaf}"
+  Err message =>
+    Err "blobfile: \{dir}/\{leaf}: undeletable staging residue: \{message}"
+  Ok () => removeStagingResidue dir rest
+
+{- | Remove every file staged beneath `<dir>/blobs/.staging` and never
+   promoted or cleaned up — the residue a crash between staging a sidecar or
+   bytes file and its `rename` leaves behind. Nothing else in this module
+   ever removes from `.staging`, so this is the only place stale entries go
+   away.
+
+   Meant to be called once, at startup, before the listener binds
+   (`pds/serve.mdk`'s `configure`): that is the only window in which a file
+   under `.staging` unambiguously means residue from a prior crash rather
+   than a promotion this process has in flight. A data directory that has
+   never staged a blob reads as nothing to sweep, not as a failure. -}
+export
+blobFileSweepStaging : String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+blobFileSweepStaging dir =
+  let staging = "\{blobDir dir}/\{stagingName}"
+  if not (fileExists staging) then
+    Ok ()
+  else match listDir staging
+    Err message =>
+      Err "blobfile: \{staging}: unreadable staging directory: \{message}"
+    Ok leaves => removeStagingResidue staging leaves
+
 {- | How many blobs are persisted beneath `<dir>/blobs`, without reading any
    of their bytes: `pds/shell/server.mdk`'s periodic stats line wants a count
    on an interval, and `blobFileRead`'s full verify-by-read pass is too much

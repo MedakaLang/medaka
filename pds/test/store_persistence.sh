@@ -15,9 +15,11 @@
 # still serve the previous value or refuse. Case 11b is that same claim for a
 # creation interrupted partway through the four events it emits: the state is
 # built by winding a finished log back, and the next start has to finish it.
-# Case 12 grades the barriers themselves, which is the one claim building a
-# directory by hand cannot make — it needs the syscall ORDER, not the resulting
-# tree (#2952).
+# Case 11c grades the residue those same crash points leave behind under
+# `.staging`: swept at startup rather than mistaken for corruption (#2572
+# part 2, #3052). Case 12 grades the barriers themselves, which is the one
+# claim building a directory by hand cannot make — it needs the syscall ORDER,
+# not the resulting tree (#2952).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -422,6 +424,42 @@ for N in 0 1 2 3; do
     || fail "case 11b: a start after the quartet was finished moved the counter"
 done
 echo 'genesis quartet finished from 0, 1, 2 and 3 promoted events, and adds nothing once whole'
+
+# ── 11c. `.staging` residue is swept at startup, never treated as corruption ──
+# A crash between `writeFileBytes staged`/`writeFile staged` and its `rename`
+# leaves a file behind in one of the three `.staging` directories, and nothing
+# else in the tree ever removes one. The `sweep-staging` route plants exactly
+# that residue beside content it ALSO persists legitimately (a repository, two
+# blobs, one promoted event entry), then runs the same three sweeps
+# `pds/serve.mdk`'s `configure` runs before the listener binds (#2572 part 2,
+# #3052). The claim is two-sided: every planted residue file is gone
+# afterward, and the legitimate content it sat beside is not.
+"$WORK/driver" sweep-staging "$WORK/sweep-staging" \
+  > "$WORK/sweep-staging.out" 2> "$WORK/sweep-staging.err"
+require_empty "$WORK/sweep-staging.err" sweep-staging
+[ "$(tail -1 "$WORK/sweep-staging.out")" = 'SWEEP-STAGING: PASS' ] \
+  || fail 'case 11c: sweep-staging route did not pass'
+grep -q '^SWEEP residue-block absent$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: staged block residue survived the sweep'
+grep -q '^SWEEP residue-blob absent$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: staged blob residue survived the sweep'
+grep -q '^SWEEP residue-event absent$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: staged event residue survived the sweep'
+grep -q '^SWEEP records 3$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: the sweep disturbed the legitimately persisted repository'
+grep -q '^SWEEP blobs 2$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: the sweep disturbed a legitimately persisted blob'
+grep -q '^SWEEP entries 1$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: the sweep disturbed the legitimately promoted event entry'
+# Every `.staging` directory the sweeps touched must itself still be there —
+# swept means emptied, not removed.
+for HALF in blocks blobs events; do
+  [ -d "$WORK/sweep-staging/$HALF/.staging" ] \
+    || fail "case 11c: the sweep removed the $HALF/.staging directory itself"
+  [ -z "$(ls -A "$WORK/sweep-staging/$HALF/.staging")" ] \
+    || fail "case 11c: $HALF/.staging still holds a file after the sweep"
+done
+echo 'case 11c: crash residue swept from all three .staging directories, legitimate content untouched'
 
 # ── 12. every promote is barriered, staged file first and directory after ──
 # The only case here that reads the syscall STREAM rather than the resulting

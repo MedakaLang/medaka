@@ -62,19 +62,21 @@ import sha256.{sha256}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.tid.{Tid, tidParse}
-import shell.blobfile.{blobFileRead, blobFileWrite}
+import shell.blobfile.{blobFileRead, blobFileSweepStaging, blobFileWrite}
 import shell.eventlog.{
   eventLogApplyRecovery,
   eventLogPlanRecovery,
   eventLogRead,
   eventLogStage,
   eventLogStaged,
+  eventLogSweepStaging,
 }
 import shell.persist.{
   persistLoad,
   persistLoadPreferences,
   persistPreferences,
   persistSave,
+  persistSweepStagedBlocks,
 }
 import shell.server.{completeGenesisEvents}
 
@@ -471,6 +473,116 @@ frameFor : Option String -> String
 frameFor None = "a2626f7001617469236964656e74697479"
 frameFor (Some _) = "a1"
 
+-- ── the crash-residue sweeps (#2572 part 2, #3052) ──────────────────────────
+
+presentLabel : Bool -> String
+presentLabel True = "present"
+presentLabel False = "absent"
+
+-- What the three sweeps left `dir` holding: whether each planted residue file
+-- is still there (it must not be), and the state of the legitimate content the
+-- residue sat beside (it must be untouched) — the same repository, blob and
+-- event summaries the other routes already print, so the gate can compare
+-- them against what `save`/`blob-save`/an applied recovery produced.
+reportSweep : String -> String -> String -> String -> <IO, FileRead "_"> Unit
+reportSweep dir blockResidue blobResidue eventResidue =
+  let () =
+    println "SWEEP residue-block \{presentLabel (fileExists blockResidue)}"
+  let () = println "SWEEP residue-blob \{presentLabel (fileExists blobResidue)}"
+  let () =
+    println "SWEEP residue-event \{presentLabel (fileExists eventResidue)}"
+  match reload dir
+    Err message =>
+      panic "store_persistence: sweep-staging reload failed: \{message}"
+    Ok repo =>
+      let () = summary "SWEEP" repo
+      match verifiedBlobs dir
+        Err message =>
+          panic
+            "store_persistence: sweep-staging blob reload failed: \{message}"
+        Ok rows =>
+          let () = println "SWEEP blobs \{intToString (length rows)}"
+          match eventLogRead dir 0
+            Err message =>
+              panic
+                "store_persistence: sweep-staging event reload failed: \{message}"
+            Ok entries =>
+              let () = println "SWEEP entries \{intToString (length entries)}"
+              println "SWEEP-STAGING: PASS"
+
+-- Run the same three sweeps `pds/serve.mdk`'s `configure` runs at startup,
+-- then report what is left.
+sweepAndReport : String ->
+  String ->
+  String ->
+  String ->
+  <IO, FileRead "_", FileWrite "_"> Unit
+sweepAndReport dir blockResidue blobResidue eventResidue =
+  match persistSweepStagedBlocks dir
+    Err message =>
+      panic "store_persistence: block staging sweep failed: \{message}"
+    Ok () => match blobFileSweepStaging dir
+      Err message =>
+        panic "store_persistence: blob staging sweep failed: \{message}"
+      Ok () => match eventLogSweepStaging dir
+        Err message =>
+          panic "store_persistence: event staging sweep failed: \{message}"
+        Ok () => reportSweep dir blockResidue blobResidue eventResidue
+
+-- Plant one file directly under each of the three `.staging` directories —
+-- the residue a crash between a `writeFileBytes`/`writeFile` and its `rename`
+-- leaves behind — beside content this route already persisted legitimately.
+plantAndSweep : String -> <IO, FileRead "_", FileWrite "_"> Unit
+plantAndSweep dir =
+  let blockResidue = "\{dir}/blocks/.staging/crash-residue"
+  let blobResidue = "\{dir}/blobs/.staging/crash-residue"
+  let eventResidue = "\{dir}/events/.staging/crash-residue"
+  match writeFile blockResidue "residue"
+    Err message =>
+      panic "store_persistence: planting block residue failed: \{message}"
+    Ok () => match writeFile blobResidue "residue"
+      Err message =>
+        panic "store_persistence: planting blob residue failed: \{message}"
+      Ok () => match writeFile eventResidue "residue"
+        Err message =>
+          panic "store_persistence: planting event residue failed: \{message}"
+        Ok () => sweepAndReport dir blockResidue blobResidue eventResidue
+
+{- | Persist a repository, blobs and one promoted event entry — the
+   legitimate content a normal, uninterrupted run leaves behind — then plant
+   residue in all three `.staging` directories and run the sweeps
+   `pds/serve.mdk`'s `configure` runs before the listener binds. The residue
+   must be gone afterward; the legitimate content it sat beside must not be,
+   since a sweep that cannot tell staged residue from a directory it should
+   never touch is not the sweep #2572 part 2 asked for. -}
+runSweepStaging : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runSweepStaging dir =
+  let repo = fixtureRepo
+  match persistSave dir (repoCommitCid (repoLatestCommit repo)) (blocksOf repo)
+    Err message =>
+      panic "store_persistence: sweep-staging save failed: \{message}"
+    Ok () => match blobFileWrite dir blobFixtures
+      Err message =>
+        panic "store_persistence: sweep-staging blob save failed: \{message}"
+      Ok () => match eventLogStage dir (eventFixture None (frameFor None))
+        Err message =>
+          panic
+            "store_persistence: sweep-staging event stage failed: \{message}"
+        Ok () => match eventLogPlanRecovery dir None
+          Err message =>
+            panic
+              "store_persistence: sweep-staging event plan failed: \{message}"
+          Ok plan =>
+            match (eventLogApplyRecovery
+              dir
+              plan
+              eventLogRetentionSeconds
+              eventFixtureTime)
+              Err message =>
+                panic
+                  "store_persistence: sweep-staging event promote failed: \{message}"
+              Ok () => plantAndSweep dir
+
 -- ── the genesis quartet ─────────────────────────────────────────────────────
 
 -- The handle the genesis `#identity` event announces. Fixed like every other
@@ -548,6 +660,7 @@ main = match args ()
   ["event-recover-orphan", dir] =>
     runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
   ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
+  ["sweep-staging", dir] => runSweepStaging dir
   ["genesis-init", dir] => runGenesisInit dir
   ["genesis-resume", dir] => runGenesisResume dir
   _ =>

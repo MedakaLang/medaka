@@ -112,13 +112,14 @@ import lib.store.{
 }
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
-import shell.blobfile.{blobFileRead}
+import shell.blobfile.{blobFileRead, blobFileSweepStaging}
 import shell.crawl.{RelayTarget, makeRelayTarget, requestCrawl}
 import shell.egress.{Egress, makeEgress}
 import shell.eventlog.{
   EventLogRecovery(..),
   eventLogApplyRecovery,
   eventLogPlanRecovery,
+  eventLogSweepStaging,
 }
 import shell.keygen.{keygenRefusePath, keygenSigningKey, keygenTokenSecret}
 import shell.persist.{
@@ -128,6 +129,7 @@ import shell.persist.{
   persistLoad,
   persistLoadPreferences,
   persistSave,
+  persistSweepStagedBlocks,
 }
 import shell.server.{
   Serving,
@@ -766,6 +768,16 @@ configure parsed = do
   -- the genesis repository.
   let created = flag "--init" parsed
   repo <- openRepo created dir did keyBytes secret
+  -- A crash between staging a file and its `rename` leaves it behind in one
+  -- of the three `.staging` directories; nothing else in the tree ever
+  -- removes one. Swept here, once the data/repository directories are known
+  -- to exist and before anything below reads or writes the event log, so a
+  -- stale entry left by a PRIOR crash can never be mistaken for output this
+  -- start is about to produce (residue this module did not write is
+  -- residue, not corruption).
+  () <- persistSweepStagedBlocks dir
+  () <- blobFileSweepStaging dir
+  () <- eventLogSweepStaging dir
   -- A previous process may have died between persisting a commit and
   -- appending the event announcing it. The staged entry anchors to the commit
   -- it announces, so the repository just loaded is what decides whether it is

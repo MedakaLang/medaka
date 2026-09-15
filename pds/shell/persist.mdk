@@ -34,10 +34,18 @@ import lib.credential.{
   credentialIterations,
   credentialSalt,
 }
-import shell.blockfile.{blockFileRead, blockFileWrite}
+import shell.blockfile.{blockFileRead, blockFileSweepStaging, blockFileWrite}
 
 blocksDir : String -> String
 blocksDir dir = "\{dir}/blocks"
+
+{- | Remove every block file staged beneath `<dir>/blocks/.staging` and never
+   promoted or cleaned up — see `blockFileSweepStaging`'s doc comment for what
+   this is and the one window it is safe to call in. -}
+export
+persistSweepStagedBlocks : String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistSweepStagedBlocks dir = blockFileSweepStaging (blocksDir dir)
 
 -- | Where the account's password credential is kept beneath `dir`.
 export
