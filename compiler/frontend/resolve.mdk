@@ -83,6 +83,7 @@ import support.util.{
   dedup,
   dedupBy,
 }
+import test.{expectTrue}
 
 -- ── Errors ──────────────────────────────────────────────────────────────
 -- Stage B (WS-4 / F6): every ctor carries a trailing `Option Loc` — the source
@@ -1101,6 +1102,20 @@ storeSugPool : Ref (Option (List SugCand)) -> List SugCand -> List SugCand
 storeSugPool cell pool =
   cell := Some pool
   pool
+
+-- Directly observes the #2800 claim: a freshly built `Env` carries no pool
+-- yet, and one fuzzy lookup materializes it.
+test "the value pool memo is empty until the first fuzzy lookup, then holds one" =
+  let env = buildEnv [] [] [] []
+  let beforeLookup = isNone !env.sugValuesMemo
+  let _ = suggestNameFuzzy env (Scope [] omEmpty) "widgetish"
+  expectTrue (beforeLookup && isSome !env.sugValuesMemo)
+
+test "the type pool memo is empty until the first fuzzy lookup, then holds one" =
+  let env = buildEnv [] [] [] []
+  let beforeLookup = isNone !env.sugTypesMemo
+  let _ = suggestTypeFuzzy env "widgetish"
+  expectTrue (beforeLookup && isSome !env.sugTypesMemo)
 
 sugCandOf : String -> SugCand
 sugCandOf n =
