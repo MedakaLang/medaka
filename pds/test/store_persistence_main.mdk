@@ -36,6 +36,7 @@
    four, and requires the result to be the log an uninterrupted creation
    leaves. -}
 
+import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
 import string.{toUtf8}
@@ -480,17 +481,32 @@ presentLabel True = "present"
 presentLabel False = "absent"
 
 -- What the three sweeps left `dir` holding: whether each planted residue file
--- is still there (it must not be), and the state of the legitimate content the
--- residue sat beside (it must be untouched) — the same repository, blob and
--- event summaries the other routes already print, so the gate can compare
--- them against what `save`/`blob-save`/an applied recovery produced.
-reportSweep : String -> String -> String -> String -> <IO, FileRead "_"> Unit
-reportSweep dir blockResidue blobResidue eventResidue =
+-- is still there (it must not be), whether each planted stray SUBDIRECTORY
+-- and its own inner file are still there (they must be — a sweep tolerates,
+-- never recurses into, an entry it did not write), and the state of the
+-- legitimate content the residue sat beside (it must be untouched) — the
+-- same repository, blob and event summaries the other routes already print,
+-- so the gate can compare them against what `save`/`blob-save`/an applied
+-- recovery produced.
+reportSweep : String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, FileRead "_"> Unit
+reportSweep dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFile strayEventFile =
   let () =
     println "SWEEP residue-block \{presentLabel (fileExists blockResidue)}"
   let () = println "SWEEP residue-blob \{presentLabel (fileExists blobResidue)}"
   let () =
     println "SWEEP residue-event \{presentLabel (fileExists eventResidue)}"
+  let () =
+    println "SWEEP stray-block \{presentLabel (fileExists strayBlockFile)}"
+  let () = println "SWEEP stray-blob \{presentLabel (fileExists strayBlobFile)}"
+  let () =
+    println "SWEEP stray-event \{presentLabel (fileExists strayEventFile)}"
   match reload dir
     Err message =>
       panic "store_persistence: sweep-staging reload failed: \{message}"
@@ -516,8 +532,11 @@ sweepAndReport : String ->
   String ->
   String ->
   String ->
+  String ->
+  String ->
+  String ->
   <IO, FileRead "_", FileWrite "_"> Unit
-sweepAndReport dir blockResidue blobResidue eventResidue =
+sweepAndReport dir blockResidue blobResidue eventResidue strayBlockFile strayBlobFile strayEventFile =
   match persistSweepStagedBlocks dir
     Err message =>
       panic "store_persistence: block staging sweep failed: \{message}"
@@ -527,16 +546,33 @@ sweepAndReport dir blockResidue blobResidue eventResidue =
       Ok () => match eventLogSweepStaging dir
         Err message =>
           panic "store_persistence: event staging sweep failed: \{message}"
-        Ok () => reportSweep dir blockResidue blobResidue eventResidue
+        Ok () =>
+          reportSweep
+            dir
+            blockResidue
+            blobResidue
+            eventResidue
+            strayBlockFile
+            strayBlobFile
+            strayEventFile
 
 -- Plant one file directly under each of the three `.staging` directories —
 -- the residue a crash between a `writeFileBytes`/`writeFile` and its `rename`
 -- leaves behind — beside content this route already persisted legitimately.
+-- Also plant a stray SUBDIRECTORY (with a file of its own inside) under each
+-- `.staging` — residue this process did not write, which the sweep must
+-- skip rather than fail on or recurse into (F5, #3053).
 plantAndSweep : String -> <IO, FileRead "_", FileWrite "_"> Unit
 plantAndSweep dir =
   let blockResidue = "\{dir}/blocks/.staging/crash-residue"
   let blobResidue = "\{dir}/blobs/.staging/crash-residue"
   let eventResidue = "\{dir}/events/.staging/crash-residue"
+  let strayBlockDir = "\{dir}/blocks/.staging/stray-dir"
+  let strayBlobDir = "\{dir}/blobs/.staging/stray-dir"
+  let strayEventDir = "\{dir}/events/.staging/stray-dir"
+  let strayBlockFile = "\{strayBlockDir}/inner"
+  let strayBlobFile = "\{strayBlobDir}/inner"
+  let strayEventFile = "\{strayEventDir}/inner"
   match writeFile blockResidue "residue"
     Err message =>
       panic "store_persistence: planting block residue failed: \{message}"
@@ -546,7 +582,39 @@ plantAndSweep dir =
       Ok () => match writeFile eventResidue "residue"
         Err message =>
           panic "store_persistence: planting event residue failed: \{message}"
-        Ok () => sweepAndReport dir blockResidue blobResidue eventResidue
+        Ok () => match mkdirAll strayBlockDir
+          Err message =>
+            panic
+              "store_persistence: planting stray block dir failed: \{message}"
+          Ok () => match mkdirAll strayBlobDir
+            Err message =>
+              panic
+                "store_persistence: planting stray blob dir failed: \{message}"
+            Ok () => match mkdirAll strayEventDir
+              Err message =>
+                panic
+                  "store_persistence: planting stray event dir failed: \{message}"
+              Ok () => match writeFile strayBlockFile "stray"
+                Err message =>
+                  panic
+                    "store_persistence: planting stray block file failed: \{message}"
+                Ok () => match writeFile strayBlobFile "stray"
+                  Err message =>
+                    panic
+                      "store_persistence: planting stray blob file failed: \{message}"
+                  Ok () => match writeFile strayEventFile "stray"
+                    Err message =>
+                      panic
+                        "store_persistence: planting stray event file failed: \{message}"
+                    Ok () =>
+                      sweepAndReport
+                        dir
+                        blockResidue
+                        blobResidue
+                        eventResidue
+                        strayBlockFile
+                        strayBlobFile
+                        strayEventFile
 
 {- | Persist a repository, blobs and one promoted event entry — the
    legitimate content a normal, uninterrupted run leaves behind — then plant

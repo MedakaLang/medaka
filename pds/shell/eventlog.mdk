@@ -47,7 +47,7 @@
    This module is an effectful shell (P14): it holds no protocol state, and
    its signatures carry no `Repo` and no `SecretKey`. -}
 
-import fs.{mkdirAll}
+import fs.{isDir, mkdirAll}
 import list.{reverse}
 import string.{toInt}
 import lib.event_log_record.{
@@ -270,16 +270,19 @@ eventLogApplyRecovery dir EventLogOrphaned _ _ = eventLogDiscardStaged dir
 -- Every file left behind under `<dir>/events/.staging` by a process that
 -- crashed between staging a file and its `rename`. `.staging` holds only
 -- leaf files in every caller of `promoteText`/`writeEntry` — an entry file,
--- or the `.staged`/`.last` pointer — never a subdirectory, so a plain
--- `removeFile` per entry is enough.
+-- or the `.staged`/`.last` pointer, never a subdirectory — but this sweep
+-- also tolerates residue it did not write — a stray subdirectory is skipped
+-- rather than passed to `removeFile`, which fails on a directory.
 removeStagingResidue : String ->
   List String ->
-  <FileWrite "_"> Result String Unit
+  <FileRead "_", FileWrite "_"> Result String Unit
 removeStagingResidue _ [] = Ok ()
-removeStagingResidue dir (name :: rest) = match removeFile "\{dir}/\{name}"
-  Err message =>
-    Err "eventlog: \{dir}/\{name}: undeletable staging residue: \{message}"
-  Ok () => removeStagingResidue dir rest
+removeStagingResidue dir (name :: rest) = match isDir "\{dir}/\{name}"
+  Ok True => removeStagingResidue dir rest
+  _ => match removeFile "\{dir}/\{name}"
+    Err message =>
+      Err "eventlog: \{dir}/\{name}: undeletable staging residue: \{message}"
+    Ok () => removeStagingResidue dir rest
 
 {- | Remove every file staged beneath `<dir>/events/.staging` and never
    promoted or cleaned up — the residue a crash between staging an entry or a

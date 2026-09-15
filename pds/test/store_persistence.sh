@@ -467,8 +467,12 @@ sed -n 's/^GENESIS-GUARD: ERR /lost pointer refused: /p' "$WORK/genesis-lost.out
 # that residue beside content it ALSO persists legitimately (a repository, two
 # blobs, one promoted event entry), then runs the same three sweeps
 # `pds/serve.mdk`'s `configure` runs before the listener binds (#2572 part 2,
-# #3052). The claim is two-sided: every planted residue file is gone
-# afterward, and the legitimate content it sat beside is not.
+# #3052). It also plants a stray SUBDIRECTORY (with a file of its own inside)
+# under each `.staging` — residue an operator or an external process left
+# behind, which this process never wrote and must not fail to sweep over
+# (F5). The claim is three-sided: every planted plain-file residue is gone
+# afterward, every stray subdirectory (and its inner file) is untouched, and
+# the legitimate content it all sat beside is not.
 "$WORK/driver" sweep-staging "$WORK/sweep-staging" \
   > "$WORK/sweep-staging.out" 2> "$WORK/sweep-staging.err"
 require_empty "$WORK/sweep-staging.err" sweep-staging
@@ -480,6 +484,12 @@ grep -q '^SWEEP residue-blob absent$' "$WORK/sweep-staging.out" \
   || fail 'case 11c: staged blob residue survived the sweep'
 grep -q '^SWEEP residue-event absent$' "$WORK/sweep-staging.out" \
   || fail 'case 11c: staged event residue survived the sweep'
+grep -q '^SWEEP stray-block present$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: a stray blocks/.staging subdirectory did not survive the sweep'
+grep -q '^SWEEP stray-blob present$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: a stray blobs/.staging subdirectory did not survive the sweep'
+grep -q '^SWEEP stray-event present$' "$WORK/sweep-staging.out" \
+  || fail 'case 11c: a stray events/.staging subdirectory did not survive the sweep'
 grep -q '^SWEEP records 3$' "$WORK/sweep-staging.out" \
   || fail 'case 11c: the sweep disturbed the legitimately persisted repository'
 grep -q '^SWEEP blobs 2$' "$WORK/sweep-staging.out" \
@@ -487,14 +497,21 @@ grep -q '^SWEEP blobs 2$' "$WORK/sweep-staging.out" \
 grep -q '^SWEEP entries 1$' "$WORK/sweep-staging.out" \
   || fail 'case 11c: the sweep disturbed the legitimately promoted event entry'
 # Every `.staging` directory the sweeps touched must itself still be there —
-# swept means emptied, not removed.
+# swept means the plain-file residue emptied out, not the directory removed —
+# and the only thing left inside is the stray subdirectory the sweep must not
+# have touched.
 for HALF in blocks blobs events; do
   [ -d "$WORK/sweep-staging/$HALF/.staging" ] \
     || fail "case 11c: the sweep removed the $HALF/.staging directory itself"
-  [ -z "$(ls -A "$WORK/sweep-staging/$HALF/.staging")" ] \
-    || fail "case 11c: $HALF/.staging still holds a file after the sweep"
+  LEFT=$(ls -A "$WORK/sweep-staging/$HALF/.staging")
+  [ "$LEFT" = 'stray-dir' ] \
+    || fail "case 11c: $HALF/.staging holds '$LEFT' after the sweep, expected only stray-dir"
+  [ -d "$WORK/sweep-staging/$HALF/.staging/stray-dir" ] \
+    || fail "case 11c: $HALF/.staging/stray-dir is no longer a directory after the sweep"
+  [ -f "$WORK/sweep-staging/$HALF/.staging/stray-dir/inner" ] \
+    || fail "case 11c: $HALF/.staging/stray-dir/inner did not survive the sweep"
 done
-echo 'case 11c: crash residue swept from all three .staging directories, legitimate content untouched'
+echo 'case 11c: crash residue swept from all three .staging directories; a stray subdirectory and legitimate content both untouched'
 
 # ── 12. every promote is barriered, staged file first and directory after ──
 # The only case here that reads the syscall STREAM rather than the resulting

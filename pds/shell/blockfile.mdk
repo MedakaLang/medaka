@@ -152,16 +152,20 @@ blockFileRead dir = match listDir dir
 
 -- Every file left behind under `<dir>/.staging` by a process that crashed
 -- between staging a file and its `rename`. `.staging` never holds a
--- subdirectory in this module's write path (`writeOne` stages a leaf file
--- directly), so a plain `removeFile` per entry is enough.
+-- subdirectory in this module's own write path (`writeOne` stages a leaf
+-- file directly), but this sweep also tolerates residue it did not write —
+-- a stray subdirectory is skipped rather than passed to `removeFile`, which
+-- fails on a directory.
 removeStagingResidue : String ->
   List String ->
-  <FileWrite "_"> Result String Unit
+  <FileRead "_", FileWrite "_"> Result String Unit
 removeStagingResidue _ [] = Ok ()
-removeStagingResidue dir (leaf :: rest) = match removeFile "\{dir}/\{leaf}"
-  Err message =>
-    Err "blockfile: \{dir}/\{leaf}: undeletable staging residue: \{message}"
-  Ok () => removeStagingResidue dir rest
+removeStagingResidue dir (leaf :: rest) = match isDir "\{dir}/\{leaf}"
+  Ok True => removeStagingResidue dir rest
+  _ => match removeFile "\{dir}/\{leaf}"
+    Err message =>
+      Err "blockfile: \{dir}/\{leaf}: undeletable staging residue: \{message}"
+    Ok () => removeStagingResidue dir rest
 
 {- | Remove every file staged beneath `<dir>/.staging` and never promoted or
    cleaned up — the residue a crash between `writeFileBytes staged` and its
