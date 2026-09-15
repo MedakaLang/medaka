@@ -21,6 +21,19 @@
    promote-in-flight state, repaired by writing the same bytes again under the
    same name.
 
+   A DIRECTORY this module creates is barriered the same way, into the
+   directory `mkdirAll` wrote its dentry into: a shard whose own entry a crash
+   loses takes every block beneath it, however durable those blocks' bytes
+   and their entries already are. Only a creation owes that barrier — a
+   directory already on disk wrote no dentry — so a shard costs one fsync
+   once in the life of the store rather than one per block, and a write over
+   shards that all exist pays nothing for this at all. Both directories
+   beneath `dir` are covered by it, the shards and `.staging` alike. What is
+   NOT covered here is `dir`'s own dentry, which sits in the data directory
+   above and is `pds/shell/persist.mdk`'s: `persistSave` barriers that
+   directory after `blockFileWrite` returns, and the order is why `dir` is
+   durable before any block promoted into it is claimed to be.
+
    Nothing here trusts the disk. Bytes read back are returned as raw rows for
    `blockStoreFromBlocks` to verify against their own CIDs; this module never
    claims a row is valid, and never decodes one.
@@ -76,12 +89,24 @@ blockShardDir dir cid = "\{dir}/\{take 2 (encode (cidDigest cid))}"
 blockFilePath : String -> Cid -> String
 blockFilePath dir cid = "\{blockShardDir dir cid}/\{cidKey cid}"
 
+-- One shard directory, created if it is not there, with the dentry that
+-- created barriered into `dir`. See the header's paragraph on directory
+-- barriers for why only a creation owes one.
+ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureShard dir cid =
+  let shard = blockShardDir dir cid
+  if fileExists shard then
+    Ok ()
+  else do
+    () <- mkdirAll shard
+    fsync dir
+
 writeOne : String ->
   Cid ->
   Array Int ->
   <FileRead "_", FileWrite "_"> Result String Unit
 writeOne dir cid bytes = do
-  () <- mkdirAll (blockShardDir dir cid)
+  () <- ensureShard dir cid
   let staged = "\{dir}/\{stagingName}/\{cidKey cid}"
   () <- writeFileBytes staged bytes
   () <- fsync staged
@@ -110,6 +135,18 @@ fsyncShards (shard :: rest) = match fsync shard
   Err message => Err message
   Ok () => fsyncShards rest
 
+-- `.staging` and, on a store that has none yet, `dir` itself. The dentry for
+-- `.staging` goes into `dir` and is barriered here; the one for `dir` goes
+-- into the data directory above and is `persistSave`'s, per the header.
+ensureStaging : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureStaging dir =
+  let staging = "\{dir}/\{stagingName}"
+  if fileExists staging then
+    Ok ()
+  else do
+    () <- mkdirAll staging
+    fsync dir
+
 {- | Write every row durably beneath `dir`. Writing a block that is already
    present is idempotent: a block's name is its content, so the promoted file
    carries exactly the bytes the old one did. -}
@@ -118,7 +155,7 @@ blockFileWrite : String ->
   List (Cid, Array Int) ->
   <FileRead "_", FileWrite "_"> Result String Unit
 blockFileWrite dir rows = do
-  () <- mkdirAll "\{dir}/\{stagingName}"
+  () <- ensureStaging dir
   shards <- writeRows dir rows []
   fsyncShards shards
 

@@ -16,7 +16,16 @@
    step this tree has is `rename` (`pds/shell/persist.mdk`, whose barrier
    discipline this module also follows: every staged file is `fsync`ed before
    the `rename` that publishes it and the containing directory after, so a
-   promotion cannot reach disk ahead of the entry it promotes). So a caller
+   promotion cannot reach disk ahead of the entry it promotes; and a directory
+   this module creates is barriered into the directory `mkdirAll` wrote its
+   dentry into, since an entry directory whose own entry a crash loses takes
+   every event promoted into it). Unlike the two stores next door, the log
+   barriers its OWN top directory into the data directory rather than leaving
+   that to a persist call: those two are written only through
+   `persistTransition`, which always runs a repo half after them, while an
+   event announcing no repository mutation is appended with no commit beside
+   it at all. Only a creation owes a directory barrier either way, so an
+   append over a log already on disk pays nothing for one. So a caller
    STAGES the entry, persists the commit, and then
    PROMOTES it, and every crash point in that sequence is recoverable from
    what survives:
@@ -92,6 +101,31 @@ lastPath dir = "\{eventLogDir dir}/\{lastName}"
 stagingDir : String -> String
 stagingDir dir = "\{eventLogDir dir}/\{stagingName}"
 
+-- The log directory itself, created if it is not there, with the dentry that
+-- created barriered into the data directory. See the header for why the log
+-- owns this one where the two stores next door leave theirs to a persist
+-- call.
+ensureLogDir : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureLogDir dir =
+  if fileExists (eventLogDir dir) then
+    Ok ()
+  else do
+    () <- mkdirAll (eventLogDir dir)
+    fsync dir
+
+-- One directory beneath the log — `entries` or `.staging` — created if it is
+-- not there, with the dentry that created barriered into the log directory.
+ensureUnderLog : String ->
+  String ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+ensureUnderLog dir path = do
+  () <- ensureLogDir dir
+  if fileExists path then
+    Ok ()
+  else do
+    () <- mkdirAll path
+    fsync (eventLogDir dir)
+
 -- Write a small pointer file the way `persist.mdk` writes the head pointer:
 -- into the staging directory, then promoted with `rename`, so a reader never
 -- observes a half-written one.
@@ -100,7 +134,7 @@ promoteText : String ->
   String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 promoteText dir name text = do
-  () <- mkdirAll (stagingDir dir)
+  () <- ensureUnderLog dir (stagingDir dir)
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged text
   () <- fsync staged
@@ -175,8 +209,8 @@ writeEntry : String ->
   EventLogEntry ->
   <FileRead "_", FileWrite "_"> Result String Unit
 writeEntry dir entry = do
-  () <- mkdirAll (entriesDir dir)
-  () <- mkdirAll (stagingDir dir)
+  () <- ensureUnderLog dir (entriesDir dir)
+  () <- ensureUnderLog dir (stagingDir dir)
   let name = eventLogEntryName entry.seq entry.timeSeconds
   let staged = "\{stagingDir dir}/\{name}"
   () <- writeFile staged (eventLogEncodeEntry entry)

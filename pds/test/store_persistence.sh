@@ -642,6 +642,22 @@ echo 'case 11d: 15 entries no store wrote, one per level and shape; each skipped
 #     later `rename` into that same directory, so the promotion itself is
 #     durable.
 #
+# A third rule over every `mkdir` that SUCCEEDS: an `fsync` of the directory it
+# created the entry in follows it. A directory is a promotion too — `mkdir`
+# publishes a name in its parent — and a shard whose own entry a power loss
+# takes is every block under it gone, however durable each block's bytes and
+# each block's entry already are (#3056). A `mkdir` that fails EEXIST wrote no
+# entry and owes nothing, which is why the rule reads the return value: the
+# stores create a directory only when it is absent, so the steady-state cost of
+# this is zero and the trace says so.
+#
+# Where that barrier comes from is not required to be the module that created
+# the directory, and two of them deliberately are not: `<data>/blocks` and
+# `<data>/blobs` are created by the two stores and barriered by the `fsync` of
+# the data directory that `shell.persist` performs afterwards. The rule grades
+# that coupling instead of assuming it — reorder the calls and the barrier
+# stops following the creation, and this reports it.
+#
 # The second rule tolerates a writer that promotes a batch and then barriers the
 # distinct directories it touched, which `blockfile.mdk` does: a directory's
 # barrier may be deferred past promotes into other directories. What it does not
@@ -683,15 +699,22 @@ fi
 PHYS=$(cd "$WORK" && pwd -P)
 
 # One normalized event per line, in trace order: `F <path>` per fsync, `R <src>
-# <dst>` per rename. Everything else in the trace — the Boehm collector's
-# SIGPWR/SIGXCPU pair above all — is dropped here rather than by an strace
-# filter, so a syscall the filter forgot shows up as a missing line and not as
-# a wrong verdict.
+# <dst>` per rename, `M <path>` per mkdir that actually created something.
+# Everything else in the trace — the Boehm collector's SIGPWR/SIGXCPU pair
+# above all — is dropped here rather than by an strace filter, so a syscall the
+# filter forgot shows up as a missing line and not as a wrong verdict.
+#
+# `mkdirAll` walks a path from the root down and lets every component that is
+# already there fail EEXIST, so only the `= 0` return is a created directory;
+# the two spellings are matched because which of them glibc issues is its
+# choice and not this tree's.
 normalize_trace() {
   sed -n \
     -e 's/^[0-9][0-9]*  *//' \
     -e 's/^fsync([0-9][0-9]*<\(.*\)>) *= 0$/F \1/p' \
     -e 's/^rename("\([^"]*\)", "\([^"]*\)") *= 0$/R \1 \2/p' \
+    -e 's/^mkdir("\([^"]*\)", [^)]*) *= 0$/M \1/p' \
+    -e 's/^mkdirat([^,]*, "\([^"]*\)", [^)]*) *= 0$/M \1/p' \
     "$1"
 }
 
@@ -701,7 +724,8 @@ normalize_trace() {
 trace_route() {
   _route=$1
   _dir=$2
-  if ! strace -f -y -qq -e signal=none -e trace=fsync,rename,renameat,renameat2 \
+  if ! strace -f -y -qq -e signal=none \
+    -e trace=fsync,rename,renameat,renameat2,mkdir,mkdirat \
     -o "$WORK/trace.$_route" "$WORK/driver" "$_route" "$_dir" \
     > "$WORK/trace.$_route.out" 2> "$WORK/trace.$_route.err"
   then
@@ -728,6 +752,13 @@ awk '
   { ev[++n] = $0 }
   END {
     for (i = 1; i <= n; i++) {
+      if (substr(ev[i], 1, 2) == "M ") {
+        mk++
+        mkpath[mk] = substr(ev[i], 3)
+        mkpar[mk] = mkpath[mk]
+        sub(/\/[^\/]*$/, "", mkpar[mk])
+        continue
+      }
       if (substr(ev[i], 1, 2) == "F ") {
         path = substr(ev[i], 3)
         # A staged-file barrier is the one whose own rename comes next; every
@@ -735,8 +766,14 @@ awk '
         # is owed.
         if (i < n && substr(ev[i + 1], 1, length(path) + 3) == "R " path " ")
           continue
-        if (path in owed) { delete owed[path]; nowed-- }
-        flushed = 1
+        served = 0
+        for (k = 1; k <= mk; k++)
+          if (!mkdone[k] && mkpar[k] == path) { mkdone[k] = 1; served = 1 }
+        if (path in owed) { delete owed[path]; nowed--; flushed = 1; continue }
+        # A barrier that only discharges a directory CREATION is not the start
+        # of a promote batch, and must not make the next `rename` look like one
+        # that abandoned an owed directory.
+        if (!served) flushed = 1
         continue
       }
       if (substr(ev[i], 1, 2) != "R ") continue
@@ -768,12 +805,19 @@ awk '
       printf "UNBARRIERED DIRECTORY: %s\n  no fsync of %s follows it\n", owed[d], d
       bad++
     }
-    printf "graded %d rename(s), %d unbarriered\n", renames, bad
+    for (k = 1; k <= mk; k++) {
+      if (mkdone[k]) continue
+      printf "UNBARRIERED DIRECTORY CREATION: M %s\n  no fsync of %s follows it\n",
+        mkpath[k], mkpar[k]
+      bad++
+    }
+    printf "graded %d rename(s) and %d directory creation(s), %d unbarriered\n",
+      renames, mk, bad
     exit (bad > 0)
   }
 ' "$WORK/promotes" > "$WORK/promotes.verdict" || {
   cat "$WORK/promotes.verdict" >&2
-  fail 'a rename published a value no barrier had put on disk'
+  fail 'a rename or a mkdir published a name no barrier had put on disk'
 }
 cat "$WORK/promotes.verdict"
 
@@ -800,5 +844,25 @@ do
 done
 echo "barriered promotes: blocks $BLOCK_PROMOTES, blob sidecars $BLOB_MIME_PROMOTES, blob bytes $BLOB_BYTE_PROMOTES, log entries $ENTRY_PROMOTES, log pointers $POINTER_PROMOTES, head $HEAD_PROMOTES, preferences $PREFS_PROMOTES, credential $CREDENTIAL_PROMOTES"
 
+# The same floor for the directory-creation rule. The stores create a directory
+# only when it is absent, so a traced run over a data directory that already
+# had one would grade the rule against nothing at all and still pass it; these
+# are what say the traced routes really did start from a directory with none of
+# this in it.
+mkdir_count() {
+  grep -c "^M $1\$" "$WORK/promotes" || true
+}
+BLOCK_SHARD_DIRS=$(mkdir_count '.*/blocks/[0-9a-f][0-9a-f]')
+BLOB_SHARD_DIRS=$(mkdir_count '.*/blobs/[0-9a-f][0-9a-f]')
+ENTRY_DIRS=$(mkdir_count '.*/events/entries')
+STAGING_DIRS=$(mkdir_count '.*/\.staging')
+for PAIR in "blockfile shard:$BLOCK_SHARD_DIRS" "blobfile shard:$BLOB_SHARD_DIRS" \
+  "eventlog entry:$ENTRY_DIRS" "staging:$STAGING_DIRS"
+do
+  [ "${PAIR#*:}" -ge 1 ] \
+    || fail "no ${PAIR%:*} directory was created under trace; that creation path is no longer graded"
+done
+echo "barriered directory creations: block shards $BLOCK_SHARD_DIRS, blob shards $BLOB_SHARD_DIRS, entry directories $ENTRY_DIRS, staging directories $STAGING_DIRS"
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after; key absent'
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in; key absent'
