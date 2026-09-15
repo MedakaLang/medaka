@@ -1,0 +1,66 @@
+{- | One contender in a race for a data directory's single-writer lock.
+
+   `pds/shell/dirlock.mdk`'s whole claim is that a crowd of servers started at
+   once over a directory whose holder is gone leaves EXACTLY ONE holder — never
+   two, which is the corruption the lock exists to prevent, and never zero,
+   which is a directory no restart can recover. Neither number is visible from
+   a single process, so this driver is one contender and `pds/test/
+   serve_e2e.sh` counts the lines a round of them prints.
+
+   A whole `pdsd` would do as a contender, but it would also read a repository
+   and bind a socket, so a round of eight would grade the lock through several
+   seconds of unrelated startup. This reaches the lock and nothing else.
+
+   Each contender prints one of:
+
+       HELD                -- this process took the lock
+       LOST <message>      -- it took the lock and another process took it away
+       REFUSED <message>   -- it did not take the lock
+
+   and keeps beating for `holdMillis` before that final verdict, so that a
+   contender which lost the race sees a heartbeat MOVING rather than a winner
+   that has already exited — which is what makes a round a race and not a
+   sequence of takeovers. -}
+
+import shell.dirlock.{
+  DataLock,
+  LockBeat(..),
+  acquireDataLock,
+  holdDataLock,
+}
+import string.{toInt}
+import time.{millis, sleep}
+
+-- Beat until the deadline, and report whether the lock survived to it.
+beatUntil : DataLock -> Int -> <Clock, FileRead "_", FileWrite "_"> LockBeat
+beatUntil lock remaining =
+  if remaining <= 0 then
+    LockHeld
+  else match holdDataLock lock
+    LockLost message => LockLost message
+    _ =>
+      let () = sleep (millis beatMillis)
+      beatUntil lock (remaining - beatMillis)
+
+beatMillis : Int
+beatMillis = 100
+
+run : String -> Bool -> Int -> <IO, Clock, FileRead "_", FileWrite "_"> Unit
+run dir force holdMillis = match acquireDataLock force dir
+  Err message => println "REFUSED \{message}"
+  Ok (lock, _) =>
+    let () = println "HELD"
+    match beatUntil lock holdMillis
+      LockLost message => println "LOST \{message}"
+      _ => ()
+
+mustInt : String -> Int
+mustInt text = match toInt text
+  Some value => value
+  None => panic "dirlock_race: malformed integer: \{text}"
+
+main : <IO, Clock, Env, FileRead "_", FileWrite "_"> Unit
+main = match args ()
+  [dir, "force", holdText] => run dir True (mustInt holdText)
+  [dir, "wait", holdText] => run dir False (mustInt holdText)
+  _ => panic "usage: dirlock_race_main <dir> <force|wait> <holdMillis>"

@@ -124,9 +124,11 @@ import shell.blobfile.{blobFileRead, blobFileSweepStaging}
 import shell.crawl.{RelayTarget, makeRelayTarget, requestCrawl}
 import shell.dirlock.{
   DataLock,
+  LockBeat(..),
   acquireDataLock,
+  holdDataLock,
   lockBeatInterval,
-  refreshDataLock,
+  requireDataLock,
 }
 import shell.egress.{Egress, makeEgress}
 import shell.eventlog.{
@@ -788,6 +790,25 @@ configure parsed = do
   -- refused after either of those has already destroyed what it was refused
   -- for.
   (lock, lockOutcome) <- acquireDataLock (flag "--force-lock" parsed) dir
+  -- A beat in front of every step below that WRITES, and one behind every step
+  -- that takes time. The first half is the exclusion itself: a step that
+  -- reaches the disk after this process has lost the directory would be the
+  -- two-writer case the lock exists to prevent, and `requireDataLock` refuses
+  -- the run rather than performing it. The second half is what keeps that from
+  -- happening in the first place — a heartbeat between phases leaves a
+  -- contender one phase's worth of silence to mistake for a dead holder rather
+  -- than the whole of `configure`, which on a large store is many times the
+  -- stale window.
+  --
+  -- Between the phases and no finer: `configure` runs as ONE synchronous step
+  -- (`liftIO (u => configure parsed)`) and `async.liftIO` runs it to
+  -- completion, so a spawned beat cannot interleave with it — MEASURED, a
+  -- 3596ms step with a 100ms beat loop spawned beside it wrote one beat, the
+  -- one before the step began. The phases that are unbounded in store size and
+  -- still uncovered (`repoFromBlocks`, `loadBlobs`) only READ, so the worst a
+  -- store big enough to outlast the window costs is this process's own lock,
+  -- which the next beat reports rather than writing through.
+  () <- requireDataLock lock
   -- `openRepo True` returns `Ok` only down its `initRepo` branch — every other
   -- branch under `--init` refuses a directory that already holds a
   -- repository — so reaching here with this flag set means THIS run created
@@ -801,6 +822,7 @@ configure parsed = do
   -- stale entry left by a PRIOR crash can never be mistaken for output this
   -- start is about to produce (residue this module did not write is
   -- residue, not corruption).
+  () <- requireDataLock lock
   () <- persistSweepStagedBlocks dir
   () <- blobFileSweepStaging dir
   () <- eventLogSweepStaging dir
@@ -820,6 +842,7 @@ configure parsed = do
   -- next run to adopt as its own (#2659).
   suppliedSecret <- suppliedSessionSecret parsed dir
   credentialSource <- planCredential parsed dir
+  () <- requireDataLock lock
   sessionSecret <- establishSessionSecret dir suppliedSecret
   credential <- establishCredential dir credentialSource
   withBlobs <- loadBlobs (storeFromRepo repo) dir
@@ -841,13 +864,12 @@ configure parsed = do
   -- interrupted partway through would have no later start able to finish it
   -- (#3006).
   let nowSeconds = floatToInt (now ())
+  () <- requireDataLock lock
   () <- eventLogApplyRecovery dir recovery eventLogRetentionSeconds nowSeconds
   () <- completeGenesisEvents dir did handle nowSeconds repo
-  -- One beat before the scheduler starts, because nothing between the
-  -- acquisition above and `start`'s beat loop writes one: a startup that spent
-  -- longer than the stale window loading blobs would otherwise hand the next
-  -- process to arrive a lock that looks abandoned.
-  () <- refreshDataLock lock
+  -- One more before the scheduler starts, so that the gap `start`'s beat loop
+  -- inherits is the loop's own interval rather than everything above it.
+  () <- requireDataLock lock
   Ok (
     server,
     storeWithPreferences prefs withCredential,
@@ -1006,21 +1028,32 @@ bound bind server store dir serving relay statsInterval (Ok lis) = defer
    accept loop rather than between two requests, so the sleep is `async.sleep`,
    which parks this one task, and not `time.sleep`, which blocks the thread
    every other task shares. -}
-lockBeatLoop : DataLock -> Async <Clock, FileWrite "_", Stderr | e> Unit
+lockBeatLoop : DataLock ->
+  Async <Clock, FileRead "_", FileWrite "_", Stderr | e> Unit
 lockBeatLoop lock = defer
-  () <- liftIO (u => reportBeat (refreshDataLock lock))
-  () <- sleep lockBeatInterval
-  lockBeatLoop lock
+  beat <- liftIO (u => holdDataLock lock)
+  match beat
+    LockLost message => liftIO (u => abort "serve: \{message}")
+    _ => defer
+      () <- liftIO (u => reportBeat beat)
+      () <- sleep lockBeatInterval
+      lockBeatLoop lock
 
 -- A heartbeat this process cannot write is reported and is not fatal: the
 -- server is up and answering, and ending a run over one missed beat would turn
 -- a momentarily full disk into an outage. What it costs is the lock — long
 -- enough without a beat and the next process to start will decide this
--- directory is unheld and take it.
-reportBeat : Result String Unit -> <Stderr> Unit
-reportBeat (Ok ()) = ()
-reportBeat (Err message) =
+-- directory is unheld and take it, which is the case `lockBeatLoop` ends the
+-- run over and this one does not: one is this server failing to say it is
+-- here, the other is another server already having been told it is not.
+reportBeat : LockBeat -> <Stderr> Unit
+reportBeat LockHeld = ()
+reportBeat (LockBeatFailed message) =
   ePutStrLn "serve: data directory lock heartbeat failed: \{message}"
+-- Ended by `lockBeatLoop` before it reaches here; stated rather than swept
+-- into a wildcard so that a third outcome added later is a type error here.
+reportBeat (LockLost message) =
+  ePutStrLn "serve: data directory lock lost: \{message}"
 
 start : Result String (Server, Store, String, Int, String, Serving, Option RelayTarget, Duration, DataLock, List String) ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
