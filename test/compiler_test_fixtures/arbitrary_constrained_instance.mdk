@@ -5,7 +5,7 @@
 -- it would need the runner to build the leading dictionary, which needs
 -- constraint entailment it has no access to, so it reports instead.
 --
--- Asserted on CONTENT by test/diff_compiler_test.sh, not on a golden: the
+-- Asserted on CONTENT by test/diff_compiler_fmt_test.mdk, not on a golden: the
 -- diagnostic is a panic, and the wrong answer (a structural `Node …`
 -- counterexample) also exits nonzero.
 

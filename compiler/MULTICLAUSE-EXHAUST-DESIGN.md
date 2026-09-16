@@ -324,7 +324,7 @@ source edit there drifts the seed. Bite 1 must run `sh test/refresh_seed.sh`
   constructor coverage of a multi-clause *function*), e.g.
   `multiclause_gap_color.mdk` = the §1 `f Red/f Green` over `data Color`, plus
   an **imported-ADT exhaustive** negative control to lock in the (A) fix
-  (must stay silent). Validated by `sh test/diff_compiler_exhaust.sh`
+  (must stay silent). Validated by the `exhaust` row of `test/diff_compiler_fmt_test.mdk`
   (native `exhaust_main` vs `.expected`). Mirror the message shape already in
   `test/check_match_fixtures/color_partial.expected`.
 - **Tree stays clean after triage:** a gate that runs the full-oracle exhaust

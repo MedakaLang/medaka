@@ -1,5 +1,5 @@
 # META
-source_lines=47029
+source_lines=47028
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -25881,20 +25881,19 @@ intercalateComma (x :: rest) = "'\{x}', \{intercalateComma rest}"
 -- why the abstention arm needs a POSITIVE control -- a shape whose edge MUST still be
 -- followed -- rather than only a negative one.
 --
--- 🚨 CITE FIXTURES THAT EXIST, AND CHECK THE GATE CONSUMES THEM.  This sentence named
--- `test/typecheck_error_fixtures/cyclic_superinterface_modules/` until adversarial
--- review, and that path was wrong TWICE OVER: no such directory, and
--- `diff_compiler_typecheck_errors.sh` iterates `"$FIXDIR"/*.mdk` -- FILES -- so a
--- directory fixture there could not be consumed even if someone created one.  No gate
--- catches this: `make docs-links` and `make agent-doc-symbols` do not scan compiler
--- comments.  It matters more than a typo because this is the one sentence answering
--- "is the abstention arm covered?", and a citation like that gets relayed into the
--- next unit's design as an established fact.  The real controls, both verified to
--- reject on this binary:
+-- Cite fixtures that exist, and check what actually consumes them.  The gate
+-- for this arm is `test/diff_compiler_fmt_test.mdk`'s `typecheckErrorFailures`,
+-- which walks its fixture directory RECURSIVELY via `fixtureFiles` -- so a
+-- directory-nested fixture IS discovered and consumed.  No gate catches a wrong
+-- citation here: `make docs-links` and `make agent-doc-symbols` do not scan
+-- compiler comments.  It matters more than a typo because this is the one
+-- sentence answering "is the abstention arm covered?", and a citation like
+-- that gets relayed into the next unit's design as an established fact.  The
+-- real controls, both verified to reject on this binary:
 --   * MULTI-MODULE: `test/analyze_project_fixtures/1557_a35c_cycle_masked_by_samespelled/`
---     (consumed by `diff_compiler_analyze_project.sh`) -- its edge must resolve BY
---     IDENTITY for the fixture to pass at all, so an abstention that swallowed a real
---     edge reds it.
+--     (consumed by `test/diff_compiler_fmt_test.mdk`'s `analyzeProjectFixtureFailures`)
+--     -- its edge must resolve BY IDENTITY for the fixture to pass at all, so
+--     an abstention that swallowed a real edge reds it.
 --   * FLAT: `test/dict_fixtures/s3-w1-cyclic-superinterface-rejected.mdk` (no imports)
 --     and `test/typecheck_error_fixtures/cyclic_superinterface.mdk`.
 -- The negative direction -- an edge that must NOT be followed -- is

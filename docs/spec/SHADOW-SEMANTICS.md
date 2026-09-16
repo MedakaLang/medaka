@@ -596,8 +596,9 @@ Given an occurrence of bare name `N` in module `M`:
   >
   > ✅ **One gated fixture already requires a chain to propagate, one path over.**
   > `test/analyze_project_fixtures/1272_wildcard_reexport_method_scope/` — enrolled
-  > by directory glob, not an allow-list (`test/diff_compiler_analyze_project.sh`
-  > iterates `"$FIXDIR"/*/`) — pins `T-NO-IMPL` *"No impl of MSIB for Blob"* on a
+  > by directory glob, not an allow-list (`test/diff_compiler_fmt_test.mdk`'s
+  > `analyzeProjectFixtureFailures` iterates via `fixtureDirs`) — pins
+  > `T-NO-IMPL` *"No impl of MSIB for Blob"* on a
   > program where `msmth` reaches the root module **only** through `msmid`'s
   > `export import msifb.{MSIB, msmth}`: this note's `M`/`P`/`Q` shape at one hop.
   > Failing closed there was the S0 that fixture exists to pin.

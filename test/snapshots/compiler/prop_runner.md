@@ -1,5 +1,5 @@
 # META
-source_lines=1245
+source_lines=1246
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted property-test runner.
@@ -16,7 +16,8 @@ stages=DESUGAR,MARK
 -- separate SplitMix64 generator for the program's own `random*` calls.  A
 -- PASSING prop's output (`OK (100 tests)`) is RNG-independent, so it matches
 -- `medaka test`.  A FAILING prop's shrunk counterexample is RNG-dependent and
--- diverges across all three runners — see the report in test/diff_compiler_test.sh.
+-- diverges across all three runners — see the report in
+-- test/diff_compiler_fmt_test.mdk's `testGoldenFailure`.
 
 import frontend.ast.{
   Decl,

@@ -307,6 +307,38 @@ Owner's calls the waves surface rather than decide: retire the `bootstrap_*` lad
 executable history; whether `diff_compiler_test.sh`'s OCaml-era goldens still prove
 anything.
 
+**The engine is a wave-3 precondition, not a detail.** A stage called as a library runs
+under whichever engine `medaka test` was given, and the two engines answer differently.
+Under the interpreter — `medaka test`'s default — two independent walls stop a
+corpus-driven stage call. The capability policy binds no filesystem extern, so a `test`
+body that reads a fixture is refused before it runs, with the remedy named in the
+diagnostic. And the tree-walking evaluator has no tail-call optimisation, so a stage call
+over a real-sized corpus dies at `E-STACK-OVERFLOW … evaluator call depth exceeded 25000`
+(measured: `tokenize` over 2,800 synthetic lines, 2.95 s, site
+`compiler/frontend/lexer.mdk:375:26`). Under `--native` both walls are absent: `tokenize`
+over `compiler/frontend/lexer.mdk` (2,775 lines) and `parser.mdk` (5,664 lines) pass, and
+`runCheck` seeded with the real `stdlib/runtime.mdk` + `stdlib/core.mdk` prelude passes —
+the shape the inventory recorded as unable to run under eval at all. `kind = "native"` rows
+are safe by construction: `gateInvocation` (`compiler/tools/gate_cmd.mdk`) spawns
+`medaka test --native --json`, so the interpreter arm is unreachable from the registry. The
+exposure is every other call site — a wave-3 `*_test.mdk` also named in the Makefile's
+`test:` target, or run by hand, takes the interpreter default. Each such call site states
+`--native`, as `stdlib/fs.mdk`, `stdlib/test_process.mdk` and `compiler/tools/lint_test.mdk`
+already do.
+
+**Wave 3 moves when the closure build is paid, not how much.** `medaka test --native`
+compiles the test module's whole import closure on every invocation, with no build cache.
+Measured, trivial one-assertion bodies: `frontend.lexer` closure 3.6 s, `frontend.parser`
+8.8 s, `tools.check` 40.3 s — against 37.2 s for
+`medaka build compiler/entries/check_main.mdk`, the probe such a row retires. The compile
+cost is therefore not new; what changes is that `build_oracles.sh` pays it once per tree
+state and `run_gates.sh` reuses the binary, whereas a native gate-test pays it once per gate
+run. All `test` blocks in one module share one build (2 blocks 43.7 s against 1 block
+40.3 s), which is the mechanism behind wave 1's cutting rule — one `_test.mdk` per corpus or
+area, never one per script — and it binds harder in wave 3, where the closures are the
+compiler's own deep ones. A wave-3 PR that splits a heavy-closure family across files
+multiplies a 40-second build by the file count.
+
 **Parity-plus-red rule for every migration PR.** Old script and new gate-test pass on the
 same tree once — and the new gate is shown RED on one deliberate break the old gate caught
 (a mutated fixture, a corrupted golden, a `did_key_all_engines.sh`-style mutation row),

@@ -1,5 +1,5 @@
 # META
-source_lines=3179
+source_lines=3180
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1667,6 +1667,7 @@ gradeEvidenceMarkers = [
   "expectVerbExitStartsWith",
   "expectSpawnFails",
   "expectSpawnOk",
+  "processFailure",
   "Code /=",
   "Code ==",
   "code /=",
@@ -3504,7 +3505,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "rawSpawnMarkers" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "rawSpawnMarkers" () (EListLit (ELit (LString "runVerb")) (ELit (LString "runCommandOk")) (ELit (LString "boundedVerb")) (ELit (LString "boundedVerbSeconds")) (ELit (LString "boundedInTree")) (ELit (LString "runMedaka")) (ELit (LString "checkRunBuild"))))
 (DTypeSig false "gradeEvidenceMarkers" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "gradeEvidenceMarkers" () (EListLit (ELit (LString "binaryRanClean")) (ELit (LString "verdictOf")) (ELit (LString "expectCheckAccept")) (ELit (LString "expectCheckReject")) (ELit (LString "expectVerbExitStartsWith")) (ELit (LString "expectSpawnFails")) (ELit (LString "expectSpawnOk")) (ELit (LString "Code /=")) (ELit (LString "Code ==")) (ELit (LString "code /=")) (ELit (LString "code ==")) (ELit (LString "Code}")) (ELit (LString "code}"))))
+(DFunDef false "gradeEvidenceMarkers" () (EListLit (ELit (LString "binaryRanClean")) (ELit (LString "verdictOf")) (ELit (LString "expectCheckAccept")) (ELit (LString "expectCheckReject")) (ELit (LString "expectVerbExitStartsWith")) (ELit (LString "expectSpawnFails")) (ELit (LString "expectSpawnOk")) (ELit (LString "processFailure")) (ELit (LString "Code /=")) (ELit (LString "Code ==")) (ELit (LString "code /=")) (ELit (LString "code ==")) (ELit (LString "Code}")) (ELit (LString "code}"))))
 (DTypeSig false "anyMarker" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "anyMarker" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyMarker" ((PCons (PVar "m") (PVar "ms")) (PVar "src")) (EBinOp "||" (EApp (EApp (EVar "strContains") (EVar "m")) (EVar "src")) (EApp (EApp (EVar "anyMarker") (EVar "ms")) (EVar "src"))))
@@ -4173,7 +4174,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "rawSpawnMarkers" (TyApp (TyCon "List") (TyCon "String")))
 (DFunDef false "rawSpawnMarkers" () (EListLit (ELit (LString "runVerb")) (ELit (LString "runCommandOk")) (ELit (LString "boundedVerb")) (ELit (LString "boundedVerbSeconds")) (ELit (LString "boundedInTree")) (ELit (LString "runMedaka")) (ELit (LString "checkRunBuild"))))
 (DTypeSig false "gradeEvidenceMarkers" (TyApp (TyCon "List") (TyCon "String")))
-(DFunDef false "gradeEvidenceMarkers" () (EListLit (ELit (LString "binaryRanClean")) (ELit (LString "verdictOf")) (ELit (LString "expectCheckAccept")) (ELit (LString "expectCheckReject")) (ELit (LString "expectVerbExitStartsWith")) (ELit (LString "expectSpawnFails")) (ELit (LString "expectSpawnOk")) (ELit (LString "Code /=")) (ELit (LString "Code ==")) (ELit (LString "code /=")) (ELit (LString "code ==")) (ELit (LString "Code}")) (ELit (LString "code}"))))
+(DFunDef false "gradeEvidenceMarkers" () (EListLit (ELit (LString "binaryRanClean")) (ELit (LString "verdictOf")) (ELit (LString "expectCheckAccept")) (ELit (LString "expectCheckReject")) (ELit (LString "expectVerbExitStartsWith")) (ELit (LString "expectSpawnFails")) (ELit (LString "expectSpawnOk")) (ELit (LString "processFailure")) (ELit (LString "Code /=")) (ELit (LString "Code ==")) (ELit (LString "code /=")) (ELit (LString "code ==")) (ELit (LString "Code}")) (ELit (LString "code}"))))
 (DTypeSig false "anyMarker" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "anyMarker" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyMarker" ((PCons (PVar "m") (PVar "ms")) (PVar "src")) (EBinOp "||" (EApp (EApp (EVar "strContains") (EVar "m")) (EVar "src")) (EApp (EApp (EVar "anyMarker") (EVar "ms")) (EVar "src"))))

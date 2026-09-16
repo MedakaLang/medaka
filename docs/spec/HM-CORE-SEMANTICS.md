@@ -93,7 +93,8 @@ gates each member on `memberClauseIsValue` → `isNonexpansive` and nothing else
 `test/typecheck_error_fixtures/value_restriction.mdk`, `value_restriction_scc.mdk` and
 `value_restriction_sig_pointfree.mdk`, `value_restriction_sig_expansive.mdk` (clause 4) and
 `value_restriction_sig_variable_ok.mdk` (the positive control: a bare variable under a
-constrained signature generalizes), gate `test/diff_compiler_typecheck_errors.sh`; the
+constrained signature generalizes), gate `test/diff_compiler_fmt_test.mdk`'s
+`typecheckErrorFailures`; the
 eta-expanded `test/build_diff_fixtures/{pointfree_caf,sum_twocstr}.mdk` and
 `test/ported/test_eval_ported.mdk` (`myMax`) are the retired shape's former fixtures.
 
