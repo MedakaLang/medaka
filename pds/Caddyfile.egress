@@ -19,7 +19,20 @@
 # Run this alongside the inbound Caddyfile (pds/Caddyfile) under its own
 # systemd unit (pds/pds-egress.service) — see docs/ops/PDS-DEPLOY.md.
 
+# A global options block, and the `admin off` in it is REQUIRED, not tidiness.
+# Caddy binds an admin API on 127.0.0.1:2019 by default, and this proxy is
+# specified to run ALONGSIDE the inbound Caddy (pds/Caddyfile) on the same box
+# under its own unit. Two Caddy processes both claiming that port means the
+# second one to start dies with `listen tcp 127.0.0.1:2019: bind: address
+# already in use` and its unit restart-loops. Nothing here needs an admin API:
+# the config is a fixed file loaded at start, never reconfigured at runtime.
+{
+	admin off
+}
+
 http://127.0.0.1:3128 {
+	bind 127.0.0.1
+
 	reverse_proxy https://api.bsky.app {
 		header_up Host api.bsky.app
 
@@ -37,6 +50,8 @@ http://127.0.0.1:3128 {
 }
 
 http://127.0.0.1:3129 {
+	bind 127.0.0.1
+
 	reverse_proxy https://relay.example.com {
 		header_up Host relay.example.com
 
@@ -54,6 +69,8 @@ http://127.0.0.1:3129 {
 }
 
 http://127.0.0.1:3130 {
+	bind 127.0.0.1
+
 	reverse_proxy https://api.bsky.chat {
 		header_up Host api.bsky.chat
 
