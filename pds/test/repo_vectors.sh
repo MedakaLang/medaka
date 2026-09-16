@@ -283,17 +283,44 @@ grep -F -q 'GENESIS-COMMIT-CAR-ROOTS: PASS' "$WORK/activation.out" || fail "the 
 grep -F -q 'GENESIS-COMMIT-CAR-BLOCKS: PASS' "$WORK/activation.out" || fail "the genesis #commit's CAR does not carry the empty MST root beside the commit"
 [ "$(tail -1 "$WORK/activation.out")" = 'TOTAL: PASS' ] || fail 'activation-event driver did not end in TOTAL: PASS'
 
-# ── the two sync READS, byte for byte against the official CARs ─────────────
+# ── the sync READS, against the official CARs ───────────────────────────────
 # `com.atproto.sync.getRecord` and `com.atproto.sync.getBlocks`, driven through
 # the real protocol seam against a repository this driver REBUILDS from the
-# corpus's own signing key, record and revision — the `FIXTURE` line is that
+# corpus's own signing key, records and revision — the `FIXTURE` line is that
 # rebuild's commit CID checked against the pinned one, and everything after it
 # is meaningless if it fails, so it is asserted first and separately.
 #
-# The absent case is the discriminator this gate exists for: a missing record
-# is answered 200 with a covering proof of NON-membership, not refused, and its
-# CAR is the present answer's blocks minus the record's. A route that refused
-# instead would satisfy every "record not found" intuition and break backfill.
+# The absent case is one discriminator this gate exists for: a missing record
+# is answered 200 with a proof of NON-membership, not refused. A route that
+# refused instead would satisfy every "record not found" intuition and break
+# backfill.
+#
+# ── WHY getRecord IS NOT ASSERTED BYTE FOR BYTE (#3007) ──────────────────────
+#
+# The official `repo.getRecords` reaches `MST.cidsForPath`: the root-down
+# DESCENT PATH to the key, carrying the record CID inline. This server answers
+# `mstCoveringProofBlocks`, which also covers the key's lexical neighbors and
+# walks leaf-up. So our answer is a SUPERSET of the reference's, in a different
+# order, wherever the key sits below the root — and the pinned image's own
+# consumer surface (`verifyProofs`/`verifyRecords`) accepts both identically.
+# Asserting byte-identity here would red on a conformant answer.
+#
+# What is asserted instead, per probe, is derived from the four axes the driver
+# reports on the four-node fixture rather than assumed:
+#
+#   probe                   CONTAIN  SET-EQUAL  ORDER  CAR-BYTES
+#   GETRECORD-PRESENT-D0      yes       yes      no       no
+#   GETRECORD-PRESENT-D1..D3  yes       no       no       no
+#   GETRECORD-ABSENT-BELOW    yes       yes      no       no
+#   GETRECORD-ABSENT-MID      yes       yes      no       no
+#
+# CONTAIN — every block the official CAR names is in ours — is asserted on all
+# six, because an OMISSION is the direction that makes a proof unsound. SET
+# equality is asserted on the three where it holds, so the weaker check is not
+# spread over probes that do not need it. ORDER and byte-identity are asserted
+# nowhere for getRecord: neither holds on any probe, and normalizing our
+# emission to manufacture one would be changing the answer to fit the test.
+# `getBlocks` is untouched by all of this and stays byte-identical.
 SYNC_READS_DRIVER="$ROOT/pds/test/sync_car_shapes_main.mdk"
 SYNC_READS_ROW=$(grep -c 'pds_sync_car_shapes_corpus.txt' "$WORK/activation-files" || true)
 [ "$SYNC_READS_ROW" = 1 ] || fail 'expected exactly one ledger-owned sync-read CAR corpus'
@@ -308,9 +335,24 @@ fi
 require_empty "$WORK/syncreads.err" 'sync reads'
 
 grep -F -q 'FIXTURE: PASS' "$WORK/syncreads.out" || fail 'the rebuilt sync-read fixture is not the pinned repository'
-grep -F -q 'GETRECORD-PRESENT: PASS' "$WORK/syncreads.out" || fail 'sync.getRecord on a present key is not byte-identical to the official CAR'
-grep -F -q 'GETRECORD-ABSENT: PASS' "$WORK/syncreads.out" || fail 'sync.getRecord on an absent key is not the official covering proof'
-grep -F -q 'GETRECORD-ABSENT-BLOCKS: PASS' "$WORK/syncreads.out" || fail "the absent answer's block set is not the pinned one"
+
+# A probe the driver stopped emitting would otherwise pass this section by
+# being absent from it, so the count is asserted before the grades are.
+SYNC_PROBES=$(grep -c -e '-BLOCKS-CONTAIN: ' "$WORK/syncreads.out" || true)
+[ "$SYNC_PROBES" = 6 ] || fail "expected six sync.getRecord probes, driver graded $SYNC_PROBES"
+
+for tag in GETRECORD-PRESENT-D0 GETRECORD-PRESENT-D1 GETRECORD-PRESENT-D2 \
+  GETRECORD-PRESENT-D3 GETRECORD-ABSENT-BELOW GETRECORD-ABSENT-MID; do
+  grep -F -q "$tag: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag did not answer a 200 CAR"
+  grep -F -q "$tag-ROOT: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag is not rooted at the pinned commit"
+  grep -F -q "$tag-BLOCKS-CONTAIN: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag omits a block the official CAR names"
+done
+
+# The three probes where our answer is not merely a superset but the same set.
+for tag in GETRECORD-PRESENT-D0 GETRECORD-ABSENT-BELOW GETRECORD-ABSENT-MID; do
+  grep -F -q "$tag-BLOCKS-EQUAL: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag no longer answers the official block SET"
+done
+
 grep -F -q 'GETBLOCKS-PRESENT: PASS' "$WORK/syncreads.out" || fail 'sync.getBlocks is not byte-identical to the official CAR'
 # The empty roots list, read out of the header this server EMITTED: `lib.car`'s
 # decoder refuses a rootless CAR, so no round trip can make this claim.
@@ -320,7 +362,7 @@ grep -F -q 'GETBLOCKS-PARTLY-MISSING: PASS' "$WORK/syncreads.out" || fail 'sync.
 
 if [ ! -x "$WASM_EMITTER" ] || ! command -v node >/dev/null 2>&1 || ! command -v wasm-tools >/dev/null 2>&1; then
   [ "${MEDAKA_REQUIRE_WASM:-0}" != 1 ] || fail 'Wasm is required but emitter/node/wasm-tools is unavailable'
-  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch, the three blob routes , the seven #commit firehose events, the three activation-event frames and the four sync-read CAR shapes on native; Wasm unavailable'
+  echo 'PASS: repo — full official transcript, focused representative, applyWrites batch, the three blob routes , the seven #commit firehose events, the three activation-event frames and the eight sync-read CAR shapes on native; Wasm unavailable'
   exit 0
 fi
 
@@ -339,4 +381,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders; the #identity, #account and #sync activation frames byte-identical to the official bodies; sync.getRecord present/absent and sync.getBlocks present/partly-missing byte-identical to the official CAR shapes'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders; the #identity, #account and #sync activation frames byte-identical to the official bodies; six sync.getRecord probes over a four-node MST containing every block the official CAR names (three of them its exact set), and sync.getBlocks present/partly-missing byte-identical to the official CAR shapes'

@@ -3,10 +3,10 @@
 // The shell wrapper installs the exact package outside the source tree and
 // passes its node_modules directory here.
 
-import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
+import { exactDepth, mine } from './mst_depth.mjs'
 
 const [moduleRoot, output, proofOutput] = process.argv.slice(2)
 if (!moduleRoot || !output || !proofOutput) {
@@ -17,27 +17,6 @@ const repo = await import(pathToFileURL(resolve(moduleRoot, '@atproto/repo/dist/
 const lexData = await import(pathToFileURL(resolve(moduleRoot, '@atproto/lex-data/dist/index.js')).href)
 const { MST, MemoryBlockstore, mstUtil } = repo
 const { cidForCbor } = lexData
-
-const exactDepth = (key) => {
-  const digest = createHash('sha256').update(Buffer.from(key, 'utf8')).digest()
-  let zeros = 0
-  for (const byte of digest) {
-    if (byte === 0) {
-      zeros += 8
-      continue
-    }
-    zeros += Math.clz32(byte) - 24
-    break
-  }
-  return Math.floor(zeros / 2)
-}
-
-const mine = (prefix, depth) => {
-  for (let i = 0; ; i++) {
-    const key = `${prefix}${i}`
-    if (exactDepth(key) === depth) return key
-  }
-}
 
 const hex = (bytes) => Buffer.from(bytes).toString('hex')
 const keyHex = (key) => Buffer.from(key, 'utf8').toString('hex')
