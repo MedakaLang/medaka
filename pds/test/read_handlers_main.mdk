@@ -23,9 +23,15 @@
    Compiled engines only, for the reason `pds/test/repo_vectors.sh`'s header
    gives at length: the writes have to sign, and one `repoInit` under the
    tree-walking interpreter does not complete in 600s. The repository-free
-   half of this slice's surface — the two well-knowns, `resolveHandle`, and
-   every read's unconfigured-store refusal — is graded on all three engines by
-   `pds/test/read_routes_all_engines.sh` instead. -}
+   half of this slice's surface — `resolveHandle`, every read's
+   unconfigured-store refusal, and the well-knowns a `did:key` account answers
+   with — is graded on all three engines by
+   `pds/test/read_routes_all_engines.sh` instead.
+
+   `/.well-known/did.json` is graded in both places because its answer depends
+   on the account's DID method. The document this host owes a resolver of its
+   OWN `did:web` carries the repository's signing key, so that arm needs a
+   repository and is graded here, against the corpus's key. -}
 
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
@@ -46,6 +52,7 @@ import lib.server_core.{
 import lib.store.{
   Store,
   sessionFingerprint,
+  storeEmpty,
   storeFromRepo,
   storeRepo,
   storeSessionOpen,
@@ -167,6 +174,12 @@ procedureRequest did nsid body =
 queryRequest : String -> Array Int
 queryRequest target =
   toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
+
+-- | A GET at a bare path. The well-knowns are not XRPC, so they are reached
+-- without the `/xrpc/` prefix `queryRequest` adds.
+pathRequest : String -> Array Int
+pathRequest target =
+  toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
 
 -- ── response inspection ─────────────────────────────────────────────────────
 
@@ -332,6 +345,96 @@ didKeyMultibaseOf did = match stripPrefix "did:key:" did
   Some multibase => multibase
   None => panic "read_handlers: corpus DID is not a did:key: \{did}"
 
+-- ── /.well-known/did.json ───────────────────────────────────────────────────
+
+-- | The account DID that makes this host's own `did:web` and the hosted
+-- account one DID subject.
+didWebAccountDid : String
+didWebAccountDid = "did:web:\{accountHostText}"
+
+hasField : String -> Json -> Bool
+hasField name value = match get name value
+  Some _ => True
+  None => False
+
+textOf : Json -> String
+textOf (JString text) = text
+textOf _ = "<not-a-string>"
+
+firstEntry : String -> Json -> Json
+firstEntry name value = match get name value
+  Some (JArray items) => if arrayLength items == 0 then JNull else items[0]
+  _ => JNull
+
+-- | The three status digits of a response, read off the status line.
+responseStatus : Array Int -> String
+responseStatus bytes =
+  stringSlice 9 12 (fromUtf8 (arrayMakeWith 12 (i => bytes[i])))
+
+wellKnownDidJsonBytes : Server -> Store -> Array Int
+wellKnownDidJsonBytes server store =
+  let (_, responseBytes) =
+    handleBytes server testContext store (pathRequest "/.well-known/did.json")
+  responseBytes
+
+{- | What a resolver gets from `/.well-known/did.json`, in the three
+   configurations that decide it.
+
+   The first cell is `@atproto/identity`'s two extractors spelled out as
+   properties: `ensureAtprotoKey` (which `verifySignature` calls) looks the
+   `#atproto` verification method up by that fragment and reads its
+   `publicKeyMultibase`, and `ensureAtpDocument` additionally requires an
+   `alsoKnownAs` entry naming the handle. A document answering this URL
+   without both resolves that DID to something no relay can verify a commit
+   for and no appview can confirm a handle from (#3087).
+
+   The expected multibase is spelled from the CORPUS's own DID — the `did:key`
+   of the secret key the transcript signs with — for the same reason
+   `describeRepo`'s expectation is: that is the key which actually signed
+   these commits, so the equality says the document hands a verifier the
+   signing key rather than agreeing with whatever the handler emitted.
+
+   The other two cells are the arms that must NOT move. A `did:key` account
+   names a subject resolved elsewhere even with a repository configured, and a
+   server whose repository is not configured yet has no key to publish and
+   must still answer `200` rather than fail. -}
+wellKnownCells : String -> Server -> Store -> <IO> Int
+wellKnownCells did keyServer store =
+  let webServer = mustServer (mustAccount didWebAccountDid)
+  let served = responseJson (wellKnownDidJsonBytes webServer store)
+  let method = firstEntry "verificationMethod" served
+  let alsoKnownAs = textOf (firstEntry "alsoKnownAs" served)
+  let cellAccount =
+    check
+      "wellknown-did-web-serves-account-document"
+      (fieldText "id" served == didWebAccountDid
+        && alsoKnownAs == "at://\{accountHandleText}"
+        && fieldText "id" method == "\{didWebAccountDid}#atproto"
+        && fieldText "type" method == "Multikey"
+        && fieldText "controller" method == didWebAccountDid
+        && fieldText "publicKeyMultibase" method == didKeyMultibaseOf did)
+      "id=\{fieldText "id" served} alsoKnownAs=\{alsoKnownAs} method=\{stringify method}"
+  let fallbackBytes = wellKnownDidJsonBytes keyServer store
+  let fallback = responseJson fallbackBytes
+  let cellFallback =
+    check
+      "wellknown-did-key-keeps-server-document"
+      (responseStatus fallbackBytes == "200"
+        && fieldText "id" fallback == didWebAccountDid
+        && not (hasField "verificationMethod" fallback)
+        && not (hasField "alsoKnownAs" fallback))
+      "status=\{responseStatus fallbackBytes} body=\{stringify fallback}"
+  let bareBytes = wellKnownDidJsonBytes webServer storeEmpty
+  let bare = responseJson bareBytes
+  let cellUnconfigured =
+    check
+      "wellknown-did-web-unconfigured-still-answers"
+      (responseStatus bareBytes == "200"
+        && fieldText "id" bare == didWebAccountDid
+        && not (hasField "verificationMethod" bare))
+      "status=\{responseStatus bareBytes} body=\{stringify bare}"
+  cellAccount + cellFallback + cellUnconfigured
+
 runReads : String ->
   Server ->
   Store ->
@@ -483,6 +586,7 @@ runReads did server mid final recordBCid commitCid commitRev carHex =
       "listRecords-reverse-limit-cursor"
       (rkeysOf ascPage1 == uriA && fieldText "cursor" ascPage1 == "medaka-a")
       "uris=\{rkeysOf ascPage1} cursor=\{fieldText "cursor" ascPage1}"
+  let cellsWellKnown = wellKnownCells did server final
   let cells =
     cellGetRecord
       + cellDeleted
@@ -501,8 +605,9 @@ runReads did server mid final recordBCid commitCid commitRev carHex =
       + cellAfterLast
       + cellGhostCursor
       + cellAscendingPage
-  let () = println "reads: \{intToString cells}/17 corpus-graded read routes"
-  if cells == 17 then
+      + cellsWellKnown
+  let () = println "reads: \{intToString cells}/20 corpus-graded read routes"
+  if cells == 20 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

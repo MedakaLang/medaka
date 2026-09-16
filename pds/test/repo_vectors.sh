@@ -131,9 +131,13 @@ grep -F -q 'cells: 4/4 state-preserving rejections' "$WORK/handlers.out" || fail
 # comparing every answer against the corpus's own rows. sync.getRepo's body is
 # checked THREE ways: response bytes == repoExportCar's bytes == the corpus CAR
 # row, so a wrong pair cannot satisfy it. Compiled engines only, same reason as
-# the arm above; the repository-FREE half of these routes (the two well-knowns,
-# resolveHandle, and every unconfigured-store refusal) runs on all three
-# engines in pds/test/read_routes_all_engines.sh.
+# the arm above; the repository-FREE half of these routes (resolveHandle, every
+# unconfigured-store refusal, and /.well-known/did.json under a did:key
+# account) runs on all three engines in pds/test/read_routes_all_engines.sh.
+# The did:web arm of /.well-known/did.json is here instead, because the
+# document that URL owes a resolver of THIS host's own did:web carries the
+# repository's signing key, and a repository is what the eval arm cannot
+# afford.
 READS_DRIVER="$ROOT/pds/test/read_handlers_main.mdk"
 if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$READS_DRIVER" -o "$WORK/reads" > "$WORK/reads-build.log" 2>&1; then
   cat "$WORK/reads-build.log" >&2
@@ -147,7 +151,9 @@ grep -F -q 'setup: 4/4 transcript writes replayed through the seam' "$WORK/reads
 grep -F -q 'READ sync-getRepo-car-bytes PASS' "$WORK/reads.out" || fail 'read handlers missed the three-way CAR byte equality'
 grep -F -q 'READ sync-getLatestCommit PASS' "$WORK/reads.out" || fail 'read handlers missed the pinned latest commit'
 grep -F -q 'READ getRecord-deleted-medaka-a PASS error=RecordNotFound' "$WORK/reads.out" || fail 'read handlers missed the deleted-record refusal'
-grep -F -q 'reads: 17/17 corpus-graded read routes' "$WORK/reads.out" || fail 'read-handler route count is incomplete'
+grep -F -q 'READ wellknown-did-web-serves-account-document PASS' "$WORK/reads.out" || fail 'read handlers missed the did:web well-known account document'
+grep -F -q 'READ wellknown-did-key-keeps-server-document PASS' "$WORK/reads.out" || fail 'read handlers missed the did:key well-known fallback'
+grep -F -q 'reads: 20/20 corpus-graded read routes' "$WORK/reads.out" || fail 'read-handler route count is incomplete'
 [ "$(tail -1 "$WORK/reads.out")" = 'TOTAL: PASS' ] || fail 'read-handler driver did not end in TOTAL: PASS'
 
 # ── the applyWrites batch: N operations, ONE signed commit ──────────────────
@@ -389,4 +395,4 @@ require_empty "$WORK/wasm-rep.err" 'wasm representative'
 strip_exit_trailer "$WORK/wasm-rep-raw.out" "$WORK/wasm-rep.out"
 cmp "$WORK/native-rep.out" "$WORK/wasm-rep.out" || fail 'native and Wasm normalized representative output differ'
 
-echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 17 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders; the #identity, #account and #sync activation frames byte-identical to the official bodies; six sync.getRecord probes over a four-node MST containing every block the official CAR names (three of them its exact set), and sync.getBlocks present/partly-missing byte-identical to the official CAR shapes'
+echo 'PASS: repo — full official TIDs/records/MST/commits/signatures/CAR and the 27 focused rejection routes, native == Wasm on both; 19 hostile routes; 4 handler-layer transcript steps + 4 state-preserving rejections; 20 corpus-graded read routes; 4 official-atproto applyWrites batch checks + 3 batch state-preservation properties; 3 official-atproto blob checks + 4 corpus-graded blob route reads; 7 #commit firehose events byte-identical to the official bytes in both pinned block orders; the #identity, #account and #sync activation frames byte-identical to the official bodies; six sync.getRecord probes over a four-node MST containing every block the official CAR names (three of them its exact set), and sync.getBlocks present/partly-missing byte-identical to the official CAR shapes'
