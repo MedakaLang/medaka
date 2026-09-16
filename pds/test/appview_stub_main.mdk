@@ -29,13 +29,13 @@
 
    Four modes:
 
-     appview_stub_main answer PORT LOGFILE STATUS
-     appview_stub_main linger PORT LOGFILE STATUS
-     appview_stub_main stall PORT
-     appview_stub_main deaf PORT
+     appview_stub_main answer <port> <logfile> <status>
+     appview_stub_main linger <port> <logfile> <status>
+     appview_stub_main stall <port>
+     appview_stub_main deaf <port>
 
    `answer` serves one call at a time — read, log, reply, close — which is all
-   a sequential gate needs, and replies with `STATUS` so a case can prove the
+   a sequential gate needs, and replies with `<status>` so a case can prove the
    upstream's own status code is relayed rather than replaced. `linger`
    answers identically and then holds the connection open instead of closing
    it, which separates "the response is complete" from "the peer has finished
