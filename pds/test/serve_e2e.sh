@@ -2268,6 +2268,67 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/servehol.err" 'case 46 (post-run)'
 
+# 46a. AN UPSTREAM THAT ANSWERS AND DOES NOT CLOSE (#3097). Case 46's upstream
+#    never answers and its 502 is correct. This one answers COMPLETELY and then
+#    holds the socket open, which is what the first live deployment's egress
+#    proxy did on roughly one proxied read in three hundred. A reader whose only
+#    terminator is the peer's close cannot tell those two upstreams apart: it
+#    spends the whole outbound silence budget waiting on a response already in
+#    its own buffer, and the client is answered 502 over an appview answer that
+#    arrived seconds earlier.
+#
+#    Graded on the STATUS the client sees — the stub's own, not a 502 — so no
+#    timing threshold has to be chosen for a box under unknown load.
+"$WORK/appview" linger 0 "$WORK/linger.log" "$STUB_STATUS" \
+  >"$WORK/linger.out" 2>"$WORK/linger.err" &
+STUB_LINGER_PID=$!
+STUB_PIDS="$STUB_PIDS $STUB_LINGER_PID"
+LINGERPORT=$(wait_for_stub_port "$WORK/linger.out" "$STUB_LINGER_PID") || {
+  cat "$WORK/linger.err" >&2
+  fail 'case 46a: the lingering stub appview did not report readiness'
+}
+
+DATALNG="$WORK/data-proxy-linger"
+mkdir -p "$DATALNG"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATALNG" --port 0 --init \
+  --appview-did "$APPVIEW_DID" --egress-port "$LINGERPORT" \
+  >"$WORK/servelng.out" 2>"$WORK/servelng.err" &
+SERVER_PID=$!
+PORTLNG=$(wait_for_port "$WORK/servelng.out") || {
+  cat "$WORK/servelng.err" >&2
+  fail 'case 46a: the lingering-upstream server did not report readiness'
+}
+require_empty "$WORK/servelng.err" 'case 46a startup'
+
+LNGLOGIN=$(client login "$PORTLNG" "$HANDLE" "$PASSWORD") \
+  || fail 'case 46a: login against the lingering-upstream server'
+LNGACCESS=${LNGLOGIN%% *}
+
+client proxy-read "$PORTLNG" "$LNGACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  "$STUB_STATUS" '"appview":"stub"' \
+  || fail 'case 46a: an upstream that answered and did not close was not relayed to the client'
+grep -F -q "call aud=$APPVIEW_DID lxm=app.bsky.feed.getTimeline iss=$DID" \
+  "$WORK/linger.log" || {
+  cat "$WORK/linger.log" >&2
+  fail 'case 46a: the lingering upstream never saw the forwarded call'
+}
+
+# A SECOND call over a second connection: a reader that stops at a response's
+# end must leave nothing behind it, and a first call that succeeded by
+# abandoning its connection would be this same defect wearing a success.
+client proxy-read "$PORTLNG" "$LNGACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  "$STUB_STATUS" '"appview":"stub"' \
+  || fail 'case 46a: a second proxied read against the same lingering upstream was not relayed'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servelng.err" 'case 46a (post-run)'
+
 # ── eighth --data dir: a proxy that cannot be reached at all (F3) ───────────
 # Case 46's upstream ACCEPTS and then says nothing, so the PDS's own connect
 # completed and only its reads had to park. The dial itself is the other half,
