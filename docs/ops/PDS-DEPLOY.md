@@ -449,7 +449,7 @@ that wait if you would rather not spend it.
 
 ```sh
 systemctl stop pds
-tar -cpf /backup/pds-$(date +%Y%m%dT%H%M%S).tar -C /srv/pds data secrets
+tar -cpf /backup/pds-$(date +%Y%m%dT%H%M%S).tar -C /opt/pds data secrets
 systemctl start pds
 ```
 
@@ -471,10 +471,10 @@ bring the secrets back with it:
 
 ```sh
 systemctl stop pds
-mkdir -p /srv/pds-restored
-tar -xpf /backup/pds-<stamp>.tar -C /srv/pds-restored
-chmod 0600 /srv/pds-restored/secrets/key.hex \
-  /srv/pds-restored/secrets/token.hex /srv/pds-restored/data/credential
+mkdir -p /opt/pds-restored
+tar -xpf /backup/pds-<stamp>.tar -C /opt/pds-restored
+chmod 0600 /opt/pds-restored/secrets/key.hex \
+  /opt/pds-restored/secrets/token.hex /opt/pds-restored/data/credential
 ```
 
 Then start `pds serve` against the restored paths (`--data`, `--key`,
@@ -493,6 +493,111 @@ This procedure is rehearsed by a gate, not only written down: case 33 of
 separate `--data` directory, starts a server on the restored copy, and requires
 that server's `getRepo` export to byte-match the original's, both blobs to come
 back under their declared media types, and a new signed write to be accepted.
+
+## Scheduled encrypted backups
+
+The manual procedure above is what `pds/backup.sh` automates, driven by
+`pds/pds-backup.service` + `pds/pds-backup.timer` (daily, 04:00, randomized).
+It follows the same consistency rule for the same reason: it **stops the
+server** to take the archive. This box has no snapshot facility to use instead
+— plain ext4, no LVM, no btrfs — so the stop is the only correct option
+available, not a preference. The outage is the archive only: the server is
+started again before the upload runs, and `backup.sh`'s `trap` restarts it on
+*any* exit, so a failed archive or a failed upload cannot leave the deployment
+down.
+
+Two dependencies, neither in the base system, both refused by name if absent:
+
+```sh
+apt install age rclone
+```
+
+`age` encrypts to a **public** key whose private half must never be on this
+box; `rclone` handles the S3-compatible upload to Cloudflare R2.
+
+```sh
+age-keygen -o ~/pds-backup-key.txt          # ON YOUR LAPTOP, not the server
+grep 'public key' ~/pds-backup-key.txt      # the recipient string for below
+```
+
+Put the private half in your password manager and delete nothing else from
+that file until you have. **A backup this box can decrypt is a backup a box
+compromise can decrypt**, which is the whole of criterion B16.
+
+Configure `rclone` for R2 (`rclone config`, `s3` provider `Cloudflare`) into a
+file only root can read, then write `/etc/pds/backup.env`:
+
+```sh
+install -d -m 0700 /etc/pds
+cat >/etc/pds/backup.env <<'EOF'
+PDS_ROOT=/opt/pds
+PDS_UNIT=pds.service
+AGE_RECIPIENT=age1...
+RCLONE_CONFIG_PATH=/etc/pds/rclone.conf
+RCLONE_REMOTE=r2:medaka-pds-backups
+EOF
+chmod 0600 /etc/pds/backup.env /etc/pds/rclone.conf
+install -m 0755 pds/backup.sh /opt/pds/backup.sh
+cp pds/pds-backup.service pds/pds-backup.timer /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now pds-backup.timer
+```
+
+Set an R2 lifecycle rule to expire old objects rather than pruning from the
+script: the box holds write credentials, and a box compromise that can also
+delete history is a worse position than one that can only add to it.
+
+🚨 **This box cannot verify its own backups are restorable.** It holds no
+private key, by design, so nothing here can decrypt what it just wrote.
+`backup.sh` checks that the archive is non-empty and that the uploaded object's
+size matches the local one — that is all it can honestly claim. **The restore
+drill (criterion D5) is a manual exercise on a machine that holds the private
+key, and it is the only thing that proves a backup is good.** Run it before the
+first real post, and on a stated interval after.
+
+## Down-detection: two mechanisms, deliberately
+
+Criterion E5 wants a down or crash-looping service to reach you within minutes.
+Two units do it, and they are not redundant — they fail in opposite directions:
+
+| Unit | Catches | Blind to |
+|---|---|---|
+| `pds-alert@.service`, via `OnFailure=` on `pds.service` | a crash loop that exhausts `StartLimitBurst`, within seconds | a single crash that restarted cleanly (journal only); anything that stops the whole box |
+| `pds-healthping.service` + `.timer` | a dead box, a severed network, a wedged-but-running process — the external service alerts when pings stop | nothing, but it is as slow as its grace period |
+
+The ping is gated on `/xrpc/_health` answering, so it means "this server
+answered a request end to end" rather than "a timer fired". `curl -f` is what
+makes that true; without it a 500 is still an exit-0 fetch.
+
+`Persistent=` is set on the backup timer and deliberately absent from the
+healthping timer. A missed backup should run late — the point is to have an
+archive. A missed liveness ping must never be replayed: a catch-up ping at boot
+would report health for exactly the window the box spent switched off.
+
+```sh
+cat >/etc/pds/alert.env <<'EOF'
+NTFY_URL=https://ntfy.sh/your-secret-topic-name
+HEALTHCHECK_URL=https://hc-ping.com/your-uuid
+PDS_PORT=8080
+EOF
+chmod 0600 /etc/pds/alert.env
+cp pds/pds-alert@.service pds/pds-healthping.service pds/pds-healthping.timer \
+  /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now pds-healthping.timer
+```
+
+Set the dead-man's switch's grace period to a small multiple of the five-minute
+interval — fifteen minutes is a reasonable pairing.
+
+**Test it before trusting it**, which is what E5 actually asks for:
+
+```sh
+systemctl start pds-alert@pds.service     # the push path alone
+kill -9 $(systemctl show -p MainPID --value pds); sleep 40
+systemctl status pds                      # restarted, or failed after the burst
+```
+
+Paste the notification you received on #1697 — that, not the unit existing, is
+what closes the criterion.
 
 ## Upgrade note: pre-existing secrets at a wider mode
 

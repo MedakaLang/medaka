@@ -1,0 +1,61 @@
+# pds/pds-alert@.service — the push half of criterion E5. A templated unit, so
+# `OnFailure=pds-alert@%n.service` on any unit passes that unit's own name in
+# and one alert unit serves them all.
+#
+# ── WHAT THIS DOES AND DOES NOT CATCH ────────────────────────────────────────
+#
+# systemd runs `OnFailure=` when a unit enters the FAILED state. With
+# `Restart=on-failure` and `StartLimitBurst=5` on pds.service, that happens
+# when systemd gives up after the burst — NOT on each crash that restarts
+# successfully. So:
+#
+#   * a crash loop that exhausts the burst  -> alerts here, within seconds;
+#   * a single crash that restarts cleanly  -> NO alert, journal only;
+#   * a wedged-but-running process, a dead
+#     box, a severed network                -> NOTHING here can alert, because
+#                                              nothing on the box runs.
+#
+# The last two rows are why pds-healthping.timer exists beside this one and why
+# the design is two mechanisms rather than one: they fail in opposite
+# directions. Do not delete either on the grounds that the other covers it.
+#
+# The notification body is deliberately thin — the unit name and an instruction
+# to read the journal. Piping journal text into a third-party push service
+# would put whatever a diagnostic happens to contain into someone else's logs,
+# and pds/lib/accesslog.mdk's whole allow-list design exists to keep that from
+# happening by accident.
+
+[Unit]
+Description=Push a failure notification for %I
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pds/alert.env
+ExecStart=/usr/bin/curl -fsS --max-time 20 \
+	-H "Title: PDS alert: %I failed" \
+	-H "Priority: high" \
+	-H "Tags: rotating_light" \
+	-d "systemd reports %I in the failed state on this box. Check: journalctl -u %I -n 200" \
+	"${NTFY_URL}"
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/pds
+UMask=0077
+IPAddressAllow=127.0.0.1
+IPAddressDeny=localhost
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+MemoryMax=64M
+TasksMax=16
+LimitNOFILE=1024
+CPUWeight=10

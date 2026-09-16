@@ -1,0 +1,25 @@
+# pds/pds-healthping.timer — the schedule for pds-healthping.service.
+#
+# Every five minutes. The external dead-man's switch's own grace period should
+# be set to a small multiple of this (fifteen minutes is a reasonable pairing),
+# so one missed ping from a momentary blip does not page, but a real outage
+# does within a quarter of an hour.
+#
+# Persistent= is deliberately ABSENT — the opposite of pds-backup.timer. A
+# missed backup should run late, because the point is to have an archive. A
+# missed liveness ping must NEVER be replayed later: a ping sent at boot for a
+# window the box spent switched off would report health for exactly the outage
+# the switch exists to detect. That is the [W-QUIETER] shape and it would make
+# this mechanism worse than not having it.
+
+[Unit]
+Description=Five-minute health-gated dead-man's-switch ping
+Requires=pds-healthping.service
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
