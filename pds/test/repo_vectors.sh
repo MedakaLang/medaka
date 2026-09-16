@@ -308,22 +308,26 @@ grep -F -q 'GENESIS-COMMIT-CAR-BLOCKS: PASS' "$WORK/activation.out" || fail "the
 # consumer surface (`verifyProofs`/`verifyRecords`) accepts both identically.
 # Asserting byte-identity here would red on a conformant answer.
 #
-# What is asserted instead, per probe, is derived from the four axes the driver
-# reports on the four-node fixture rather than assumed:
+# What is asserted instead, per probe, is derived from the five axes the
+# driver reports on the four-node fixture rather than assumed:
 #
-#   probe                   CONTAIN  SET-EQUAL  ORDER  CAR-BYTES
-#   GETRECORD-PRESENT-D0      yes       yes      no       no
-#   GETRECORD-PRESENT-D1..D3  yes       no       no       no
-#   GETRECORD-ABSENT-BELOW    yes       yes      no       no
-#   GETRECORD-ABSENT-MID      yes       yes      no       no
+#   probe                   CONTAIN  BOUNDED  SET-EQUAL  ORDER  CAR-BYTES
+#   GETRECORD-PRESENT-D0      yes      yes       yes      no       no
+#   GETRECORD-PRESENT-D1..D3  yes      yes       no       no       no
+#   GETRECORD-ABSENT-BELOW    yes      yes       yes      no       no
+#   GETRECORD-ABSENT-MID      yes      yes       yes      no       no
 #
 # CONTAIN — every block the official CAR names is in ours — is asserted on all
-# six, because an OMISSION is the direction that makes a proof unsound. SET
-# equality is asserted on the three where it holds, so the weaker check is not
-# spread over probes that do not need it. ORDER and byte-identity are asserted
-# nowhere for getRecord: neither holds on any probe, and normalizing our
-# emission to manufacture one would be changing the answer to fit the test.
-# `getBlocks` is untouched by all of this and stays byte-identical.
+# six, because an OMISSION is the direction that makes a proof unsound. BOUNDED
+# — our answer is no larger than the size measured on this fixture — is
+# asserted on all six too: CONTAIN alone never caps the answer from above, so
+# a regression that widened every probe to "the whole block store" would still
+# satisfy CONTAIN and pass silently without it. SET equality is asserted on
+# the three where it holds, so the weaker check is not spread over probes that
+# do not need it. ORDER and byte-identity are asserted nowhere for getRecord:
+# neither holds on any probe, and normalizing our emission to manufacture one
+# would be changing the answer to fit the test. `getBlocks` is untouched by
+# all of this and stays byte-identical.
 SYNC_READS_DRIVER="$ROOT/pds/test/sync_car_shapes_main.mdk"
 SYNC_READS_ROW=$(grep -c 'pds_sync_car_shapes_corpus.txt' "$WORK/activation-files" || true)
 [ "$SYNC_READS_ROW" = 1 ] || fail 'expected exactly one ledger-owned sync-read CAR corpus'
@@ -349,6 +353,7 @@ for tag in GETRECORD-PRESENT-D0 GETRECORD-PRESENT-D1 GETRECORD-PRESENT-D2 \
   grep -F -q "$tag: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag did not answer a 200 CAR"
   grep -F -q "$tag-ROOT: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag is not rooted at the pinned commit"
   grep -F -q "$tag-BLOCKS-CONTAIN: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag omits a block the official CAR names"
+  grep -F -q "$tag-BLOCKS-BOUNDED: PASS" "$WORK/syncreads.out" || fail "sync.getRecord $tag answered more blocks than the pinned ceiling"
 done
 
 # The three probes where our answer is not merely a superset but the same set.

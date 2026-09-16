@@ -109,6 +109,30 @@ recordProbeTags = [
   "GETRECORD-ABSENT-MID",
 ]
 
+{- | The covering-proof block count this server answers per probe, measured
+   on this fixture as of this commit (#3007 round-2 hardening).
+
+   Not derivable from `pds_sync_car_shapes_corpus.txt`: the corpus is
+   generated exclusively by calling the pinned official image's own
+   `@atproto/repo` routines (`gen_sync_event_corpus.mjs`'s own header), and
+   that image has no routine that computes THIS server's
+   `mstCoveringProofBlocks` answer — there is no reference oracle for "how
+   many blocks does our covering proof include" to pin as a corpus row. A
+   hard-coded ceiling here is a regression guard, not a claim these counts
+   are minimal or the only correct answer: a widening to "every block in
+   the store" (10 in this fixture) must red this bound; a change that
+   legitimately grows the covering proof (e.g. a taller mined fixture) is
+   expected to need this table updated alongside it. -}
+maxRecordBlocks : String -> Int
+maxRecordBlocks "GETRECORD-PRESENT-D0" = 6
+maxRecordBlocks "GETRECORD-PRESENT-D1" = 6
+maxRecordBlocks "GETRECORD-PRESENT-D2" = 5
+maxRecordBlocks "GETRECORD-PRESENT-D3" = 4
+maxRecordBlocks "GETRECORD-ABSENT-BELOW" = 5
+maxRecordBlocks "GETRECORD-ABSENT-MID" = 4
+maxRecordBlocks tag =
+  panic "sync_car_shapes: no pinned block-count ceiling for \{tag}"
+
 accountHandleText : String
 accountHandleText = "medaka.example"
 
@@ -324,14 +348,18 @@ rkeyOf path = match split "/" path
   _ => panic "sync_car_shapes: record path is not collection/rkey: \{path}"
 
 {- | The emitted CAR's own root and block list against the corpus's rows for
-   this tag, on four separate axes.
+   this tag, on five separate axes.
 
    CONTAIN is the one that is claimed. A block the reference names and this
    server leaves out is an unsound proof — the reader cannot walk to the key —
    whereas a block the reference does not name is sibling context the
-   reference's own `verifyProofs`/`verifyRecords` ignore. EQUAL, ORDER and
-   BYTES are the stronger claims, reported so the gate can assert each where
-   it holds rather than dropping to containment everywhere. -}
+   reference's own `verifyProofs`/`verifyRecords` ignore. BOUNDED is claimed
+   alongside it: containment alone never caps the answer from above, so an
+   unbounded covering proof (up to and including the whole block store) would
+   still satisfy CONTAIN silently (#3007 round-2 hardening) — BOUNDED is what
+   makes that direction visible. EQUAL, ORDER and BYTES are the stronger
+   claims, reported so the gate can assert each where it holds rather than
+   dropping to containment everywhere. -}
 gradeDecoded : List (String, String) -> String -> Array Int -> <IO> Bool
 gradeDecoded rows tag body = match carDecode body
   Err message =>
@@ -345,6 +373,7 @@ gradeDecoded rows tag body = match carDecode body
     let missing = filter (cid => not (elem cid blocks)) pinned
     let rootOk = roots == [rowValue rows "\{tag}-ROOT"]
     let containOk = missing == []
+    let boundedOk = length blocks <= maxRecordBlocks tag
     let bytesOk = encode body == rowValue rows "\{tag}-CAR"
     let () = println "\{tag}-ROOT: \{gradeWord rootOk} \{join "," roots}"
     let () =
@@ -352,10 +381,13 @@ gradeDecoded rows tag body = match carDecode body
         "\{tag}-BLOCKS-CONTAIN: \{gradeWord containOk} pinned=\{intToString (length pinned)} ours=\{intToString (length blocks)} absent-from-ours=\{join "," missing}"
     let () =
       println
+        "\{tag}-BLOCKS-BOUNDED: \{gradeWord boundedOk} ours=\{intToString (length blocks)} max=\{intToString (maxRecordBlocks tag)}"
+    let () =
+      println
         "\{tag}-BLOCKS-EQUAL: \{gradeWord (sort blocks == sort pinned)} \{join "," blocks}"
     let () = println "\{tag}-BLOCKS-ORDER: \{gradeWord (blocks == pinned)}"
     let () = println "\{tag}-CAR-BYTES: \{gradeWord bytesOk}"
-    rootOk && containOk
+    rootOk && containOk && boundedOk
 
 blocksTarget : String -> List String -> String
 blocksTarget did cids =
