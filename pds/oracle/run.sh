@@ -195,8 +195,16 @@ cmd_up() {
   docker rm -f "$PDS_ORACLE_CONTAINER" >/dev/null 2>&1 || true
 
   ref="${PDS_ORACLE_IMAGE_REPO}@${PDS_ORACLE_IMAGE_DIGEST}"
+  # Published on LOOPBACK, not on every interface. `docker run -p 3999:3999`
+  # binds 0.0.0.0, and a docker publish is DNAT'd in PREROUTING and traversed
+  # in FORWARD, so it does NOT pass through the INPUT chain a host firewall
+  # usually filters on — the container is reachable from the internet even on
+  # a box whose INPUT policy would have dropped it. This is the official
+  # Bluesky PDS running on sample credentials with an admin password in its
+  # env file; every consumer here reaches it as `http://localhost:<port>`
+  # (cmd_check, and the line printed below), so nothing needs the wider bind.
   cid="$(docker run -d --name "$PDS_ORACLE_CONTAINER" \
-    -p "$PDS_ORACLE_PORT:$PDS_ORACLE_PORT" \
+    -p "127.0.0.1:$PDS_ORACLE_PORT:$PDS_ORACLE_PORT" \
     -v "$PDS_ORACLE_HOME:/pds" \
     --env-file "$env_file" \
     "$ref")"
