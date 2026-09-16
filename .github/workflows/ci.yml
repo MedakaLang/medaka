@@ -822,7 +822,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/constant_time_reductions' 'pds/test/ecdsa_vectors' 'pds/test/mst_vectors' 'sqlite/test/index_write_oracle' 'diff_compiler_check' 'diff_compiler_argtag_matrix' 'diff_compiler_eval' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_ir_scaling' 'diff_compiler_lint' 'diff_compiler_lint_baseline' 'diff_compiler_llvm_ffi' 'diff_compiler_selfproc' 'diff_compiler_test_native' 'diff_native_cli' 'diff_native_stack' 'diff_async' 'selfcompile_emit' 'selfcompile_lex' 'diff_compiler_guide_render'"
+            pattern: "'pds/test/constant_time_reductions' 'pds/test/ecdsa_vectors' 'pds/test/mst_vectors' 'pds/test/signing_parity' 'sqlite/test/index_write_oracle' 'diff_compiler_check' 'diff_compiler_argtag_matrix' 'diff_compiler_eval' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_ir_scaling' 'diff_compiler_lint' 'diff_compiler_lint_baseline' 'diff_compiler_llvm_ffi' 'diff_compiler_selfproc' 'diff_compiler_test_native' 'diff_native_cli' 'diff_native_stack' 'diff_async' 'selfcompile_emit' 'selfcompile_lex' 'diff_compiler_guide_render'"
             wasm_arm: "1"
           - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
