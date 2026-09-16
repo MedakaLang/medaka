@@ -121,8 +121,8 @@ require_empty "$WORK/handlers.err" 'record handlers'
 
 grep -F -q 'transcript: 4/4 handler-layer steps matched the pinned corpus' "$WORK/handlers.out" || fail 'handler-layer transcript count is incomplete'
 grep -F -q 'CELL swap-commit-mismatch PASS error=InvalidSwap' "$WORK/handlers.out" || fail 'handler layer missed the swapCommit CAS rejection'
-grep -F -q 'CELL validate-true-refused PASS error=InvalidRequest' "$WORK/handlers.out" || fail 'handler layer missed the validate:true refusal'
-grep -F -q 'cells: 4/4 state-preserving rejections' "$WORK/handlers.out" || fail 'handler-layer state-preservation count is incomplete'
+grep -F -q 'CELL validate-true-accepted PASS validationStatus=unknown state=advanced' "$WORK/handlers.out" || fail 'handler layer missed the admitted validate:true write'
+grep -F -q 'cells: 4/4 (3 state-preserving rejections + 1 admitted validate flag)' "$WORK/handlers.out" || fail 'handler-layer state-preservation count is incomplete'
 [ "$(tail -1 "$WORK/handlers.out")" = 'TOTAL: PASS' ] || fail 'record-handler driver did not end in TOTAL: PASS'
 
 # ── P4-D: the SAME transcript, READ BACK through the read/sync handlers ──────

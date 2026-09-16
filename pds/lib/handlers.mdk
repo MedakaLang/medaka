@@ -374,18 +374,28 @@ optionalString name body = match get name body
     Err (invalidRequest "Request field '\{name}' must be a string, not null")
   Some _ => Err (invalidRequest "Request field '\{name}' must be a string")
 
-{- | `validate: true` asks for lexicon record validation, which this server
-   does not implement. Honoring it silently would report a validation that
-   never happened, so it is refused outright; `validate: false` and an absent
-   field both mean "store the record as given", which is what happens. -}
-requireNoLexiconValidation : Json -> Result Response Unit
-requireNoLexiconValidation body = match get "validate" body
+{- | `validate` is admitted in all three of its spellings and changes nothing
+   about what this server does: the record is stored as given, and the write's
+   `validationStatus` reports `"unknown"` either way.
+
+   This server implements no lexicon validation, so `true` cannot be HONORED in
+   the sense of performing the check. It was refused outright until 2026-09-16,
+   on the reasoning that accepting it would report a validation that never
+   happened. That reasoning does not survive contact with `writeOutput` and
+   `batchResult`, which never claim one: `validationStatus` is `"unknown"` on
+   every write this server accepts, so a client is TOLD the record was stored
+   ungraded. Refusing bought no honesty the response was not already
+   delivering, and it cost the entire client bar — the official Bluesky app
+   sends `validate: true` on `applyWrites`, so posting and editing a profile
+   both failed `400` against a live server (ruling, Val, 2026-09-16;
+   `docs/ops/PDS-LAUNCH-PLAN.md` §5).
+
+   A non-boolean is still refused, because that is a malformed request rather
+   than a request for something this server cannot do. -}
+admitValidateFlag : Json -> Result Response Unit
+admitValidateFlag body = match get "validate" body
   None => Ok ()
-  Some (JBool False) => Ok ()
-  Some (JBool True) =>
-    Err
-      (invalidRequest
-        "Lexicon record validation is not implemented; 'validate: true' cannot be honored")
+  Some (JBool _) => Ok ()
   Some _ => Err (invalidRequest "Request field 'validate' must be a boolean")
 
 requireConfiguredRepo : Store -> Result Response Repo
@@ -562,11 +572,13 @@ commitJson commit = jObject [
 ]
 
 {- | `validationStatus` is always `"unknown"`, and that is not a placeholder.
-   `requireNoLexiconValidation` REFUSES `validate: true` outright, so every
-   write this server accepts is one it stored without grading against a
-   lexicon. `"valid"` would claim a check that never ran; omitting the field
-   would leave a client unable to tell an unvalidated write from a validated
-   one. -}
+   This server grades no record against a lexicon, whatever `validate` asked
+   for — `admitValidateFlag` admits every boolean spelling of it and performs
+   no check for any of them. `"valid"` would claim a check that never ran;
+   omitting the field would leave a client unable to tell an unvalidated write
+   from a validated one. This field is the whole reason accepting
+   `validate: true` is honest rather than a silent lie, so it must not be
+   changed to `"valid"` without a validator behind it. -}
 writeOutput : Account -> String -> String -> Cid -> RepoCommit -> Json
 writeOutput account collection rkey recordCid commit = jObject [
   ("uri", JString "at://\{accountDid account}/\{collection}/\{rkey}"),
@@ -596,7 +608,7 @@ applyCreateRecord account store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
-  () <- requireNoLexiconValidation body
+  () <- admitValidateFlag body
   collection <- requiredString "collection" body
   record <- requireRecord body
   rev <- nextRevision repo
@@ -624,7 +636,7 @@ applyPutRecord account store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
-  () <- requireNoLexiconValidation body
+  () <- admitValidateFlag body
   collection <- requiredString "collection" body
   rkey <- requiredString "rkey" body
   record <- requireRecord body
@@ -814,7 +826,7 @@ applyBatchWrites account store body = do
   () <- requireObject body
   repo <- requireConfiguredRepo store
   () <- requireHostedRepo account body
-  () <- requireNoLexiconValidation body
+  () <- admitValidateFlag body
   elements <- requireWrites body
   rev <- nextRevision repo
   let did = accountDid account

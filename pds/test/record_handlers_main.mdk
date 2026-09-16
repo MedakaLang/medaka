@@ -9,10 +9,13 @@
    corpus's pinned value for that step, so the handler layer is graded against
    the official atproto oracle rather than against itself.
 
-   It then grades the three state-preservation properties the record layer
-   owes: a mismatched `swapCommit` is `InvalidSwap` and leaves the `Store`
-   byte-identical, `validate: true` is refused outright, and an unknown
-   collection or a malformed body leaves the `Store` byte-identical. -}
+   It then grades the state-preservation properties the record layer owes: a
+   mismatched `swapCommit` is `InvalidSwap` and leaves the `Store`
+   byte-identical, and an unknown collection or a malformed body does the
+   same. Beside them, the one cell that must ADVANCE the store: `validate:
+   true` is admitted, the record is written, and the response reports
+   `validationStatus: "unknown"` — this server grades nothing against a
+   lexicon and says so rather than claiming a check it never ran. -}
 
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode}
@@ -261,6 +264,45 @@ storeFingerprint store = match storeRepo store
   Some repo =>
     "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
 
+{- | `validate: true` is ADMITTED and changes nothing: the record is stored and
+   the response reports `validationStatus: "unknown"`, because this server
+   grades nothing against a lexicon (ruling, Val, 2026-09-16).
+
+   Both halves are asserted, and the second is the one that matters. A server
+   that accepted the flag and then claimed `"valid"` would be lying about a
+   check it never ran, which is exactly what refusing the flag used to prevent.
+   Asserting only "the write succeeded" would pass against that server. -}
+acceptValidateCell : String ->
+  String ->
+  String ->
+  Server ->
+  Store ->
+  String ->
+  <IO> Int
+acceptValidateCell label did nsid server store body =
+  let before = storeFingerprint store
+  let (next, responseBytes) =
+    handleBytes server testContext store (procedureRequest did nsid body)
+  let value = responseJson responseBytes
+  let after = storeFingerprint next
+  let status = fieldText "validationStatus" value
+  let uri = fieldText "uri" value
+  -- `fieldText` renders an absent field as `<missing:NAME>`, so "no error" is
+  -- that sentinel and never the empty string.
+  let code = fieldText "error" value
+  if code == "<missing:error>"
+    && status == "unknown"
+    && startsWith "at://" uri
+    && before /= after then
+    let () =
+      println "CELL \{label} PASS validationStatus=\{status} state=advanced"
+    1
+  else
+    let () =
+      println
+        "CELL \{label} FAIL error=\{code} validationStatus=\{status} uri=\{uri} before=\{before} after=\{after}"
+    0
+
 rejectCell : String ->
   String ->
   String ->
@@ -334,9 +376,8 @@ runCells did server store record =
       store
       (swapCommitBody did "medaka-c" record)
   let validate =
-    rejectCell
-      "validate-true-refused"
-      "InvalidRequest"
+    acceptValidateCell
+      "validate-true-accepted"
       did
       create
       server
@@ -361,7 +402,9 @@ runCells did server store record =
       store
       "{\"repo\": "
   let cells = swap + validate + unknown + malformed
-  let () = println "cells: \{intToString cells}/4 state-preserving rejections"
+  let () =
+    println
+      "cells: \{intToString cells}/4 (3 state-preserving rejections + 1 admitted validate flag)"
   if cells == 4 then
     println "CELLS: PASS"
   else
