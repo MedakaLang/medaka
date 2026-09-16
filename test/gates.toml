@@ -1546,7 +1546,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_argtag_matrix"
 area = "soundness"
-shard = "gates_3"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2971,7 +2971,7 @@ toolchain = []
 [[gate]]
 name = "pr_helper_test"
 area = "infra"
-shard = "gates_4"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
