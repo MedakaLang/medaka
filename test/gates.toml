@@ -456,21 +456,6 @@ corpus = []
 toolchain = []
 
 [[gate]]
-name = "pds/nightly/signing_parity"
-area = "engines"
-shard = "other-job"
-project = "pds"
-tiers = ["nightly"]
-cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "pds/nightly/signing_parity.sh"
-oracles = []
-sources = []
-corpus = []
-toolchain = ["wasm-tools", "node>=24"]
-
-[[gate]]
 name = "pds/test/atsyntax_vectors"
 area = "engines"
 shard = "gates_2"
@@ -872,6 +857,21 @@ oracles = []
 sources = ["pds/*"]
 corpus = []
 toolchain = []
+
+[[gate]]
+name = "pds/test/signing_parity"
+area = "engines"
+shard = "gates_3"
+project = "pds"
+tiers = ["merge", "nightly/SIGNING_DEEP=1"]
+cost = "medium"
+kind = "exec"
+migration = "native-wrap"
+run = "pds/test/signing_parity.sh"
+oracles = []
+sources = ["pds/*"]
+corpus = []
+toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
 name = "pds/test/store_persistence"

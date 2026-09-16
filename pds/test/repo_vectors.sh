@@ -36,10 +36,13 @@
 # The eval interpreter's own agreement on this transcript is a breadth arm, not
 # a soundness arm — the native==Wasm differential and the 19 hostile-route
 # rejections both stay here in the queue — so it moved to
-# pds/nightly/repo_vectors_eval_engine.sh under #2181's charter clause, in the
-# shape #1962 set for pds/nightly/signing_parity. It is STRONGER there than it
-# was here: it now `cmp`s the interpreter's bytes against the native binary's
-# instead of grepping four counts out of them.
+# pds/nightly/repo_vectors_eval_engine.sh under #2181's charter clause. It is
+# STRONGER there than it was here: it now `cmp`s the interpreter's bytes against
+# the native binary's instead of grepping four counts out of them.
+#
+# pds/test/signing_parity.sh demotes its own eval arm on this same axis (#1962),
+# but in place, behind SIGNING_DEEP — the two shapes are written up in
+# pds/README.md § CI classification policy.
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}

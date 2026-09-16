@@ -204,7 +204,7 @@ note.
 | G1 | For the `did:web` account: the consequence "box lost = identity lost" is written and accepted for G-QUIET, with the mitigations D5 and B16 in place before the first real post. | G-QUIET | missing | #2962 |
 | G2 | For the `did:plc` account: rotation keys generated and held off-box before any PLC operation; a rehearsed procedure re-points the DID back to bsky.social or to a restored instance, run against an isolated PLC. | G-MIGRATE | missing | #2609 |
 | G3 | Handle verification for the real account (`_atproto` DNS TXT or `/.well-known/atproto-did`) rehearsed on the fresh account first. | G-QUIET | partial — the well-known is served; never resolved by a real relay | #2940 |
-| G4 | The nightly signing-parity gate (`pds/nightly/signing_parity.sh`) is confirmed green against the exact commit deployed, every deploy. | G-QUIET | procedural | #1962 |
+| G4 | The nightly signing-parity run (`pds/test/signing_parity.sh` with `SIGNING_DEEP=1`) is confirmed green against the exact commit deployed, every deploy. | G-QUIET | procedural | #1962 |
 
 ### 2.H Launch operations
 

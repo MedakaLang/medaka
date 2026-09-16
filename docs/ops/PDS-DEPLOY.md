@@ -489,6 +489,8 @@ world-readable is a leaked secret, not merely a permission bug.
   `com.atproto.sync.subscribeRepos` is a real event stream, backed by the
   bounded on-disk event log (P12). Nothing further for this procedure to do
   beyond what "Discovery: announcing to a relay" above already covers.
-- **`#1962` (signing-parity oracle is nightly-only)** — confirm that nightly
-  job is green immediately before a real deploy; this procedure does not
-  re-run it.
+- **`#1962` (the signing-parity oracle's deep arms are nightly-only)** — the
+  merge tier covers sampled native==Wasm parity and the 322-row corpus
+  natively; the eval and interpreted-WasmGC arms run only under
+  `SIGNING_DEEP=1` in the nightly job. Confirm that job green immediately
+  before a real deploy; this procedure does not re-run it.
