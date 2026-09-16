@@ -31,6 +31,21 @@ pds.example.com {
 	}
 
 	reverse_proxy 127.0.0.1:8080 {
+		# Caddy prints "Unnecessary header_up X-Forwarded-For" on every load of
+		# this file. That warning is accurate for the Caddy in Debian trixie
+		# (2.6.2) and it must not be acted on. MEASURED on 2.6.2, both arms, a
+		# client sending `X-Forwarded-For: 1.2.3.4` through this proxy: with and
+		# without this line, the upstream sees the real remote host and the
+		# client's value is discarded. So today this line is a PIN, not the
+		# mechanism.
+		#
+		# Keep it, for two reasons. It states the property `--trusted-proxy`
+		# depends on — the last hop is this proxy's observation, never the
+		# client's claim (pds/README.md, "Pass --trusted-proxy only when") —
+		# rather than leaving it inherited from a default. And Caddy 2.7 adds a
+		# `trusted_proxies` server option that changes what that default does;
+		# 2.6.2 rejects the option outright, so the day someone upgrades Caddy
+		# and configures it is the day this line starts carrying weight.
 		header_up X-Forwarded-For {remote_host}
 
 		transport http {
