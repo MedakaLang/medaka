@@ -1,0 +1,6 @@
+-- x18's interface module: the `isEven`-named interface lives HERE, not in the
+-- entry module, so the entry's view of the name arrives through an import
+-- clause rather than an own declaration. Zero impls anywhere, as in x2. See
+-- main.mdk.
+export interface Parity c where
+  isEven : c -> Bool
