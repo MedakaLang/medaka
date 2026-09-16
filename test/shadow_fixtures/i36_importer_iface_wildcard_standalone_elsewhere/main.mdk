@@ -1,4 +1,4 @@
--- The WILDCARD spelling of `i30`: `import ifc.*` binds the interface and its method
+-- The WILDCARD spelling of `i35`: `import ifc.*` binds the interface and its method
 -- and nothing else, so the answer must be the member list's, 20.
 import ifc.*
 import sh.{BoxS(..)}
