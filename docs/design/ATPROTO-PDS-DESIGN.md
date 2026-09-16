@@ -19,8 +19,9 @@ states the procedure's consistency rule and `docs/ops/PDS-DEPLOY.md`
 and grading the server that starts on it. Still open, tracked separately rather
 than blocking that act: `#2572` (the block store never collects unreferenced
 blocks, and a stray non-directory file under the store directory hard-fails
-startup), `#2773`/`#2774` (perf), and `#1962` (the signing-parity oracle is
-nightly-only — confirm it green immediately before a deploy). The firehose
+startup), `#2773`/`#2774` (perf), and `#1962` (the signing-parity oracle's eval and
+interpreted-WasmGC arms are nightly-only — confirm that job green immediately
+before a deploy). The firehose
 (`#2608`, Phase 5) is no longer open — see §7 Q3. Multi-repository support stays out of scope
 through 0.1.0 by design (§0, P14).
 

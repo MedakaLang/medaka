@@ -28,8 +28,12 @@
 # native==Wasm differential over the official atproto vectors, the 19
 # hostile-route rejections, and now all 43 representative routes — is still in
 # the queue. What moved here is a BREADTH arm: a third engine's agreement, which
-# is the shape the charter licenses to be demoted, and the shape #1962 set when
-# pds/nightly/signing_parity was evicted from the `sqlite` shard for cost.
+# is the shape the charter licenses to be demoted. pds/test/signing_parity.sh
+# demotes the same thing on the same axis (#1962) — its eval and interpreted-
+# WasmGC arms are 82% and 16% of its cost — but keeps them in the gate behind
+# SIGNING_DEEP rather than splitting a second script out. That split is what
+# earns this file its place: the eval arm is a stronger check here than it was
+# in repo_vectors.sh, which is not true of merely gating it off.
 #
 # It is a STRONGER check here than it was in the queue. In repo_vectors.sh the
 # eval arm was graded by grepping four count lines out of its stdout; here its

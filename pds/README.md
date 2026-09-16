@@ -169,10 +169,30 @@ Three things are specific to `pds/` and are NOT in the general policy:
   (`pds/oracle/`, `pds/tools/`) and needs a `test/CI-COVERAGE-TOOLS.txt` row keyed
   by its REPO-RELATIVE PATH MINUS `.sh`, not its basename.
 * **Too expensive for the PR path** is not a TOOLS or EXCEPTIONS case — the gate
-  still asserts something and can fail. Move it OUT of `pds/test/` into
-  `pds/nightly/`, and name it literally in a `.github/workflows/nightly.yml`
-  job. `pds/nightly/signing_parity.sh` (#1962) is the first instance: its full
-  native+Wasm ECDSA corpus run alone added ~20 minutes to the `sqlite` shard.
+  still asserts something and can fail. Profile it arm by arm first, because the
+  answer decides which of two shapes applies, and in both pds instances so far
+  the cost turned out to be the ENGINE (one `medaka run`, or an interpreted
+  WasmGC pass) rather than the assertions or the corpus size.
+  * **Split it in place** when the gate has an affordable arm. It stays under
+    `pds/test/` with an ordinary `shard`, an env var gates the expensive arm,
+    and `tiers` declares both runs — `["merge", "nightly/<VAR>=1"]`.
+    `pds/test/signing_parity.sh` (#1962) is the instance: `SIGNING_DEEP=1`
+    selects the eval and interpreted-WasmGC arms (82% and 16% of its ~1430s),
+    leaving sampled native==Wasm parity and the whole 322-row corpus natively
+    on the merge tier for ~31s. The tree's general precedent for this shape is
+    `diff_compiler_perf_scaling` and its `nightly/PERF_DEEP=1`.
+  * **Move the whole gate out** when no arm is affordable, or when the
+    expensive arm is better expressed as its own check. It goes to
+    `pds/nightly/` with `tiers = ["nightly"]` and `shard = "other-job"`.
+    `pds/nightly/repo_vectors_eval_engine.sh` (#2208) is the instance: the
+    1091.56s eval arm left `pds/test/repo_vectors.sh` and became a stronger
+    standalone differential, `cmp`ing the interpreter's bytes against native.
+
+  Either way, name the script literally in a `.github/workflows/nightly.yml`
+  job — that literal repo-relative path is what
+  `test/diff_compiler_ci_shard_coverage.sh` counts as covered, and the step's
+  non-neutral `env:` keys are what `test/diff_compiler_tier_drift.sh` reads
+  back as the registry's `nightly/<VAR>=<value>` token.
 
 ## Vector provenance (G5)
 

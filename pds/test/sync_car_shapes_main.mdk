@@ -4,19 +4,20 @@
    Grades `pds/test/vectors/pds_sync_car_shapes_corpus.txt` — CARs the pinned
    official image's own `@atproto/repo` produced through the exact primitives
    `getRecord.js`/`getBlocks.js` call — against what this server's two routes
-   answer, byte for byte, through the real protocol seam (`handleBytes`).
+   answer, through the real protocol seam (`handleBytes`).
 
    ── WHAT THE CORPUS SUPPLIES, AND WHAT IT DOES NOT ──────────────────────────
 
-   The corpus rows are ANSWERS. The repository they were computed over is the
-   fixture, and it is rebuilt here rather than lifted out of them: a signing
-   key, a record and a revision go into `repoInitFromKeyBytes`/`repoCreate`,
-   and the commit CID that falls out is asserted against the corpus's own
-   `GETRECORD-PRESENT-ROOT` before anything else is graded. That assertion is
-   what makes the key, the record path and the revision self-validating —
-   every one of them is wrong if the commit CID is — and it is the reason the
-   secret and the path below can be named here without being hand-derived
-   claims.
+   The corpus rows are ANSWERS, except for the fixture rows and each probe's
+   own `-PATH`, which are the QUESTION. The repository is rebuilt here from
+   `FIXTURE-RECORD-PATHS`/`FIXTURE-RECORD-CBORS` rather than lifted out of an
+   answer: those and a signing key go through
+   `repoInitFromKeyBytes`/`repoApplyWrites`, and the commit CID that falls out
+   is asserted against the corpus's own `GETRECORD-PRESENT-D0-ROOT` before
+   anything else is graded. That assertion is what makes the key, the record
+   paths and the revision self-validating — every one of them is wrong if the
+   commit CID is — and it is the reason the secret below can be named here
+   without being a hand-derived claim.
 
    Rebuilding also makes the answers discriminating. The reconstructed
    repository's block store holds the genesis commit and the empty tree's node
@@ -24,12 +25,23 @@
    store instead of the blocks the question asks for would fail every shape
    rather than passing three of them.
 
-   ── THE FOUR SHAPES ─────────────────────────────────────────────────────────
+   ── THE SHAPES ──────────────────────────────────────────────────────────────
 
-   `GETRECORD-PRESENT` and `GETRECORD-ABSENT` are the same question asked of a
-   key the repository holds and one it never held. BOTH are 200: the absent
-   answer is a covering proof of non-membership, and the row set states that
-   directly — it is the present answer's blocks minus the record's.
+   The four `GETRECORD-PRESENT-D*` probes ask about keys the repository holds,
+   one per MST layer; `GETRECORD-ABSENT-BELOW` and `GETRECORD-ABSENT-MID` ask
+   about keys it never held, at two different positions in the key order. All
+   six are 200: an absent answer is a covering proof of non-membership, never
+   a refusal.
+
+   What is CLAIMED against the reference's block list is containment plus the
+   CAR root, and the set/order/byte lines are reported beside it for
+   `pds/test/repo_vectors.sh` to assert per probe. The reference reaches
+   `MST.cidsForPath` — the root-down descent path — while this server answers
+   `mstCoveringProofBlocks`, which covers the key's lexical neighbors too and
+   walks leaf-up. That is a superset in a different order wherever the tree is
+   deeper than the key, so a blanket byte-identity claim here would be false
+   about a conformant answer; an OMISSION, the direction that makes a proof
+   unsound, is what containment pins.
 
    `GETBLOCKS-PRESENT`'s CAR names NO root, which is the one shape in this
    file `lib.car`'s repository profile does not admit on the way back in, so
@@ -44,7 +56,7 @@
 import array.{sliceClamped}
 import hex.{decode, encode}
 import io.{readLines}
-import list.{lookup}
+import list.{lookup, sort, zip}
 import string.{contains, fromUtf8, join, split, startsWith, toLower, toUtf8}
 import lib.car.{carBlocks, carDecode, carRoots}
 import lib.cid.{Cid, cidToString}
@@ -52,8 +64,9 @@ import lib.dagcbor.{DagCbor(..), dagCborDecode}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.repo.{
   Repo,
+  RepoWrite(..),
+  repoApplyWrites,
   repoCommitCid,
-  repoCreate,
   repoInitFromKeyBytes,
   repoLatestCommit,
   repoMutationState,
@@ -68,14 +81,12 @@ import lib.server_core.{
 import lib.store.{Store, storeFromRepo}
 import lib.tid.{Tid, tidClockId, tidEncode, tidMicros, tidParse}
 
-{- | The fixture the corpus was computed over, from
-   `pds/tools/gen_sync_event_corpus.mjs`: an exportable secp256k1 secret of
-   one, a record written at `presentPath`, and a key at `absentPath` that was
-   never written.
+{- | The secret every row in this corpus was signed with
+   (`pds/tools/gen_sync_event_corpus.mjs`): an exportable secp256k1 key of one.
 
-   None of the three is taken on trust. A wrong secret signs a different
-   commit, a wrong present path builds a different MST, and either shows up as
-   the `FIXTURE` row below failing before a single shape is graded. -}
+   It is not taken on trust. A wrong secret signs a different commit, and so
+   does a wrong record path or a wrong revision; all three show up as the
+   `FIXTURE` row below failing before a single shape is graded. -}
 fixtureSecretHex : String
 fixtureSecretHex =
   "0000000000000000000000000000000000000000000000000000000000000001"
@@ -83,14 +94,20 @@ fixtureSecretHex =
 fixtureCollection : String
 fixtureCollection = "app.bsky.feed.post"
 
-presentRkey : String
-presentRkey = "medaka-present"
-
-absentRkey : String
-absentRkey = "medaka-absent"
-
-presentPath : String
-presentPath = "\{fixtureCollection}/\{presentRkey}"
+{- | The six `getRecord` probes, in the order they are graded. Each one names
+   the key it asked about in its own `-PATH` corpus row, so the tags are all
+   this file has to know: four keys the repository holds, mined onto MST
+   layers 0 through 3, and two it never held — one sorting below every present
+   key, one between two of them. -}
+recordProbeTags : List String
+recordProbeTags = [
+  "GETRECORD-PRESENT-D0",
+  "GETRECORD-PRESENT-D1",
+  "GETRECORD-PRESENT-D2",
+  "GETRECORD-PRESENT-D3",
+  "GETRECORD-ABSENT-BELOW",
+  "GETRECORD-ABSENT-MID",
+]
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -164,23 +181,30 @@ mustServer account = match pdsServer account serverLinksEmpty "test-driver"
   Ok server => server
   Err message => panic "sync_car_shapes: server setup failed: \{message}"
 
-{- | The repository the corpus was computed over: one record, written at the
-   corpus's own revision.
+{- | The repository the corpus was computed over: its four records, written at
+   the corpus's own revision.
+
+   All four land under ONE commit, through `repoApplyWrites`, because the
+   reference built its tree with four `MST.add`s and signed once. Four
+   `repoCreate`s would mint four commits and advance the revision four times,
+   so the commit this driver compared would be over the right tree at the
+   wrong revision.
 
    The genesis revision is one microsecond before it, on the same clock id,
-   because `repoCreate` requires a strictly greater revision and the corpus
-   pins the one the record's commit carries. The genesis commit and the empty
-   tree's node stay in the block store afterwards, which is what makes a route
-   that over-answers visible here. -}
-fixtureRepo : String -> DagCbor -> Tid -> Repo
-fixtureRepo did record rev =
+   because a mutation requires a strictly greater revision and the corpus pins
+   the one the record commit carries. The genesis commit and the empty tree's
+   node stay in the block store afterwards, which is what makes a route that
+   over-answers visible here. -}
+fixtureRepo : String -> List (Array Int, DagCbor) -> Tid -> Repo
+fixtureRepo did records rev =
   let genesis = match tidEncode (tidMicros rev - 1) (tidClockId rev)
     Ok tid => tid
     Err message => panic "sync_car_shapes: genesis TID: \{message}"
   let empty = match repoInitFromKeyBytes did (mustHex fixtureSecretHex) genesis
     Ok repo => repo
     Err message => panic "sync_car_shapes: repository init failed: \{message}"
-  match repoCreate (toUtf8 presentPath) record rev empty
+  let writes = map ((path, record) => RepoWriteCreate path record) records
+  match repoApplyWrites writes rev empty
     Ok mutation => repoMutationState mutation
     Err message => panic "sync_car_shapes: fixture write failed: \{message}"
 
@@ -254,33 +278,60 @@ emittedRootCount bytes =
 
 -- ── grading ─────────────────────────────────────────────────────────────────
 
-{- | One `getRecord` shape: the response is a 200 CAR whose bytes are the
-   pinned bytes, and — asserted separately, so an encoder that merely agrees
-   with itself cannot pass — whose root and block CIDs are the pinned lists.
-   The block CIDs come from re-decoding what this server emitted. -}
+-- | Every probe in `recordProbeTags`, all of them graded even after one fails,
+-- so one divergence does not hide the rest.
+gradeRecordProbes : Server ->
+  Store ->
+  String ->
+  List (String, String) ->
+  List String ->
+  <IO> Bool
+gradeRecordProbes _ _ _ _ [] = True
+gradeRecordProbes server store did rows (tag :: rest) =
+  let here = gradeRecordShape server store did rows tag
+  let later = gradeRecordProbes server store did rows rest
+  here && later
+
+{- | One `getRecord` probe, asked about the key its own `-PATH` row names.
+
+   The CLAIM is the framing, the CAR root, and containment of the reference's
+   block list. Set equality, emission order and byte identity are reported
+   beside it but not claimed here, because whether each holds depends on where
+   the key sits in the tree — `pds/test/repo_vectors.sh` asserts the ones that
+   actually hold, per probe. -}
 gradeRecordShape : Server ->
   Store ->
   String ->
   List (String, String) ->
   String ->
-  String ->
   <IO> Bool
-gradeRecordShape server store did rows tag rkey =
+gradeRecordShape server store did rows tag =
+  let rkey = rkeyOf (rowValue rows "\{tag}-PATH")
   let target =
     "com.atproto.sync.getRecord?did=\{did}&collection=\{fixtureCollection}&rkey=\{rkey}"
   let response = call server store target
   let status = responseStatus response
   let body = responseBody response
-  let bytesOk = encode body == rowValue rows "\{tag}-CAR"
   let framed = status == "200" && hasCarMediaType response
-  let () =
-    println
-      "\{tag}: \{gradeWord (framed && bytesOk)} status=\{status} car bytes byte-identical to the pinned CAR: \{gradeWord bytesOk}"
+  let () = println "\{tag}: \{gradeWord framed} status=\{status} rkey=\{rkey}"
   let shaped = gradeDecoded rows tag body
-  framed && bytesOk && shaped
+  framed && shaped
 
--- | The emitted CAR's own root and block lists against the corpus's two
--- CID rows for this tag.
+-- | The rkey half of a `collection/rkey` record path.
+rkeyOf : String -> String
+rkeyOf path = match split "/" path
+  [_, rkey] => rkey
+  _ => panic "sync_car_shapes: record path is not collection/rkey: \{path}"
+
+{- | The emitted CAR's own root and block list against the corpus's rows for
+   this tag, on four separate axes.
+
+   CONTAIN is the one that is claimed. A block the reference names and this
+   server leaves out is an unsound proof — the reader cannot walk to the key —
+   whereas a block the reference does not name is sibling context the
+   reference's own `verifyProofs`/`verifyRecords` ignore. EQUAL, ORDER and
+   BYTES are the stronger claims, reported so the gate can assert each where
+   it holds rather than dropping to containment everywhere. -}
 gradeDecoded : List (String, String) -> String -> Array Int -> <IO> Bool
 gradeDecoded rows tag body = match carDecode body
   Err message =>
@@ -290,11 +341,21 @@ gradeDecoded rows tag body = match carDecode body
   Ok car =>
     let roots = map cidToString (carRoots car)
     let blocks = map ((cid, _) => cidToString cid) (carBlocks car)
+    let pinned = rowCids rows "\{tag}-BLOCKS"
+    let missing = filter (cid => not (elem cid blocks)) pinned
     let rootOk = roots == [rowValue rows "\{tag}-ROOT"]
-    let blockOk = blocks == rowCids rows "\{tag}-BLOCKS"
+    let containOk = missing == []
+    let bytesOk = encode body == rowValue rows "\{tag}-CAR"
     let () = println "\{tag}-ROOT: \{gradeWord rootOk} \{join "," roots}"
-    let () = println "\{tag}-BLOCKS: \{gradeWord blockOk} \{join "," blocks}"
-    rootOk && blockOk
+    let () =
+      println
+        "\{tag}-BLOCKS-CONTAIN: \{gradeWord containOk} pinned=\{intToString (length pinned)} ours=\{intToString (length blocks)} absent-from-ours=\{join "," missing}"
+    let () =
+      println
+        "\{tag}-BLOCKS-EQUAL: \{gradeWord (sort blocks == sort pinned)} \{join "," blocks}"
+    let () = println "\{tag}-BLOCKS-ORDER: \{gradeWord (blocks == pinned)}"
+    let () = println "\{tag}-CAR-BYTES: \{gradeWord bytesOk}"
+    rootOk && containOk
 
 blocksTarget : String -> List String -> String
 blocksTarget did cids =
@@ -350,30 +411,37 @@ gradeBlocksMissing server store did rows =
       "GETBLOCKS-PARTLY-MISSING: \{gradeWord (statusOk && bodyOk)} status=\{status} body=\{body}"
   statusOk && bodyOk
 
-{- | The corpus's own repository, rebuilt, with its DID and revision read off
-   the commit block the `GETRECORD-PRESENT` CAR is rooted at and its record
-   read off the one block the ABSENT answer does not carry. -}
+{- | The corpus's own repository, rebuilt from the two `FIXTURE-RECORD-*` rows,
+   with its DID and revision read off the commit block the
+   `GETRECORD-PRESENT-D0` CAR is rooted at. -}
 fixtureFromCorpus : List (String, String) -> (String, Repo, String)
 fixtureFromCorpus rows =
-  let car = match carDecode (mustHex (rowValue rows "GETRECORD-PRESENT-CAR"))
+  let car = match carDecode (mustHex (rowValue rows "GETRECORD-PRESENT-D0-CAR"))
     Ok value => value
     Err message => panic "sync_car_shapes: corpus CAR: \{message}"
   let commitCid = match carRoots car
     [root] => root
     _ => panic "sync_car_shapes: corpus CAR does not name exactly one root"
-  let blocks = carBlocks car
-  let commit = mustCbor (blockBytes commitCid blocks)
-  let recordCid =
-    soleAddition
-      (rowCids rows "GETRECORD-PRESENT-BLOCKS")
-      (rowCids rows "GETRECORD-ABSENT-BLOCKS")
-  let record = mustCbor (namedBlockBytes recordCid blocks)
+  let commit = mustCbor (blockBytes commitCid (carBlocks car))
   let did = textOf commit "did"
   (
     did,
-    fixtureRepo did record (mustTid (textOf commit "rev")),
+    fixtureRepo did (fixtureWrites rows) (mustTid (textOf commit "rev")),
     cidToString commitCid,
   )
+
+-- | The fixture's records, paired with the paths they were written at. The two
+-- rows are parallel lists in write order, so a length disagreement is a
+-- malformed corpus rather than a quietly truncated repository.
+fixtureWrites : List (String, String) -> List (Array Int, DagCbor)
+fixtureWrites rows =
+  let paths = split "," (rowValue rows "FIXTURE-RECORD-PATHS")
+  let records = split "," (rowValue rows "FIXTURE-RECORD-CBORS")
+  if length paths /= length records then
+    panic
+      "sync_car_shapes: corpus names \{intToString (length paths)} fixture paths and \{intToString (length records)} records"
+  else
+    zip (map toUtf8 paths) (map (text => mustCbor (mustHex text)) records)
 
 blockBytes : Cid -> List (Cid, Array Int) -> Array Int
 blockBytes wanted blocks = namedBlockBytes (cidToString wanted) blocks
@@ -383,16 +451,6 @@ namedBlockBytes wanted [] =
   panic "sync_car_shapes: corpus CAR does not carry block \{wanted}"
 namedBlockBytes wanted ((cid, bytes) :: rest) =
   if cidToString cid == wanted then bytes else namedBlockBytes wanted rest
-
--- | The one CID the present answer carries and the absent answer does not:
--- the record block, named by the difference rather than by its position.
-soleAddition : List String -> List String -> String
-soleAddition present absent =
-  match filter (cid => not (elem cid absent)) present
-    [cid] => cid
-    extra =>
-      panic
-        "sync_car_shapes: present minus absent is \{intToString (length extra)} blocks, expected 1"
 
 main : <IO, Env, FileRead "_"> Unit
 main = match args ()
@@ -411,13 +469,10 @@ main = match args ()
       else
         let store = storeFromRepo repo
         let server = mustServer (mustAccount did)
-        let present =
-          gradeRecordShape server store did rows "GETRECORD-PRESENT" presentRkey
-        let absent =
-          gradeRecordShape server store did rows "GETRECORD-ABSENT" absentRkey
+        let records = gradeRecordProbes server store did rows recordProbeTags
         let blocks = gradeBlocksPresent server store did rows
         let missing = gradeBlocksMissing server store did rows
-        println (if present && absent && blocks && missing then
+        println (if records && blocks && missing then
           "TOTAL: PASS"
         else
           "TOTAL: FAIL")

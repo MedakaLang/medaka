@@ -204,13 +204,13 @@ note.
 | G1 | For the `did:web` account: the consequence "box lost = identity lost" is written and accepted for G-QUIET, with the mitigations D5 and B16 in place before the first real post. | G-QUIET | missing | #2962 |
 | G2 | For the `did:plc` account: rotation keys generated and held off-box before any PLC operation; a rehearsed procedure re-points the DID back to bsky.social or to a restored instance, run against an isolated PLC. | G-MIGRATE | missing | #2609 |
 | G3 | Handle verification for the real account (`_atproto` DNS TXT or `/.well-known/atproto-did`) rehearsed on the fresh account first. | G-QUIET | partial — the well-known is served; never resolved by a real relay | #2940 |
-| G4 | The nightly signing-parity gate (`pds/nightly/signing_parity.sh`) is confirmed green against the exact commit deployed, every deploy. | G-QUIET | procedural | #1962 |
+| G4 | The nightly signing-parity run (`pds/test/signing_parity.sh` with `SIGNING_DEEP=1`) is confirmed green against the exact commit deployed, every deploy. | G-QUIET | procedural | #1962 |
 
 ### 2.H Launch operations
 
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
-| H1 | A launch runbook: the commit is tagged, the binary's provenance (D3) matches the tag, the gates that must be green are named and derived (not listed), the soak's start and its S0/S1-reset rule are written, and the rollback is the D3 command. | G-QUIET | missing | #2972 |
+| H1 | A launch runbook: the commit is tagged, the binary's provenance (D3) matches the tag, the gates that must be green are named and derived (not listed), the soak's start and its S0/S1-reset rule are written, and the rollback is the D3 command. | G-QUIET | drafted — [`PDS-RUNBOOK.md`](PDS-RUNBOOK.md); closes only once followed step by step for a real deploy | #2972 |
 | H2 | The announcement text is drafted with its honest footnotes (§6) before the soak ends, and reviewed against the tree as it stands on the day. | G-ANNOUNCE | missing | #2972 |
 | H3 | An incident procedure: who does what when the service is down at an hour Val is asleep; the answer may be "it stays down until morning" but it is written. | G-ANNOUNCE | missing | #2972 |
 
