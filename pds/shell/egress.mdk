@@ -53,6 +53,7 @@ import lib.httpclient.{
   makeRequestHeader,
   parseResponse,
   responseBody,
+  responseBoundaryWithin,
   responseHeaders,
   responseReason,
   responseStatus,
@@ -252,8 +253,18 @@ decodeUpstream buffer = match parseResponse buffer
         (relayedAnswerFields (responseHeaders response) relayedResponseFields)
         (responseBody response))
 
--- Read until the peer closes, which is what `connection: close` asked it to
--- do: the parser needs a complete response and cannot be handed a prefix.
+{- | Read until the response is complete: either the bytes so far already
+   frame one (`responseBoundaryWithin`) or the peer closed, which is what
+   `connection: close` asked it to do. The parser needs a complete response
+   and cannot be handed a prefix, so nothing here decides where a response
+   ends — `lib.httpclient` owns that, and the close remains the terminator
+   for a response that declared no length of its own.
+
+   A peer that has answered completely and then holds the socket open is not
+   a peer with nothing to say: waiting on its close spends
+   `upstreamSilenceTimeout` and reports a read failure over an answer already
+   in hand (#3097). The boundary is what ends such an exchange, and the
+   silence budget is left to the peer that really has stopped. -}
 collectUpstream : Wait ->
   Connection ->
   Vector Int ->
@@ -278,13 +289,14 @@ collectStep deadline conn acc (Ok bytes) =
     deferPure (decodeUpstream (V.toArray acc))
   else
     let () = V.pushArray bytes acc
-    let (_, collected) = V.rawParts acc
+    let (backing, collected) = V.rawParts acc
     if collected > maxHttpClientWireBytes then
       deferPure
         (Err
           "egress: upstream response exceeds the \{intToString maxHttpClientWireBytes}-byte wire ceiling")
-    else
-      collectUpstream deadline conn acc
+    else match responseBoundaryWithin backing collected
+      Some _ => deferPure (decodeUpstream (V.toArray acc))
+      None => collectUpstream deadline conn acc
 
 exchange : Connection ->
   Array Int ->

@@ -27,15 +27,19 @@
    driver is an observer, and an observer that refused a call could hide a
    defect behind its own refusal.
 
-   Three modes:
+   Four modes:
 
-     appview_stub_main answer PORT LOGFILE STATUS
-     appview_stub_main stall PORT
-     appview_stub_main deaf PORT
+     appview_stub_main answer <port> <logfile> <status>
+     appview_stub_main linger <port> <logfile> <status>
+     appview_stub_main stall <port>
+     appview_stub_main deaf <port>
 
    `answer` serves one call at a time — read, log, reply, close — which is all
-   a sequential gate needs, and replies with `STATUS` so a case can prove the
-   upstream's own status code is relayed rather than replaced. `stall` accepts
+   a sequential gate needs, and replies with `<status>` so a case can prove the
+   upstream's own status code is relayed rather than replaced. `linger`
+   answers identically and then holds the connection open instead of closing
+   it, which separates "the response is complete" from "the peer has finished
+   with the socket" — two events a reader can confuse for one. `stall` accepts
    and never answers: it is the head-of-line-blocking case's upstream, and the
    claim under test there is about the PDS's scheduler, not about this driver.
    `deaf` never accepts at all and fills its own accept queue until the kernel
@@ -266,6 +270,26 @@ stallCall conn = match recvAll conn
   Err _ => Ok ()
   Ok _ => Ok ()
 
+{- | Answers in full, like `answer`, and then does not close: it reads on until
+   the PEER closes, so the connection stays open behind a complete response.
+
+   This is the upstream a real deployment produced (#3097) and the one a
+   caller that waits for the close cannot tell from an upstream with nothing
+   to say — a complete answer is in the client's hands, and the socket says
+   nothing more will arrive only when it eventually shuts. Holding until the
+   peer closes rather than for a fixed span keeps this mode free of a clock
+   and leaves the timing entirely to the PDS: how long it takes to answer is
+   the measurement. -}
+lingerCall : String ->
+  Int ->
+  Connection ->
+  <FileWrite "_", Net "_"> Result String Unit
+lingerCall path status conn =
+  let answered = answerCall path status conn
+  match recvAll conn
+    Err _ => answered
+    Ok _ => answered
+
 -- Announces the bound port and hands it back, so a mode that needs the port
 -- itself does not ask for it a second time and risk naming a different one in
 -- its own output than the gate read from this line.
@@ -381,12 +405,14 @@ mustStatus text = match toInt text
 
 usage : String
 usage =
-  "usage: appview_stub_main <answer PORT LOGFILE STATUS|stall PORT|deaf PORT>"
+  "usage: appview_stub_main <answer PORT LOGFILE STATUS|linger PORT LOGFILE STATUS|stall PORT|deaf PORT>"
 
 main : <Clock, IO, Env, Net "_"> Unit
 main = match args ()
   ["answer", port, path, status] =>
     serve (mustPort port) (answerCall path (mustStatus status))
+  ["linger", port, path, status] =>
+    serve (mustPort port) (lingerCall path (mustStatus status))
   ["stall", port] => serve (mustPort port) stallCall
   ["deaf", port] => deaf (mustPort port)
   _ => panic usage
