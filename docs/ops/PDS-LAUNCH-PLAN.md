@@ -85,7 +85,9 @@ what a client and a relay expect.
 Out of scope for every gate, by decision: OAuth (#2610, L2), the read-only web
 view (#2607), email verification and password reset (single owner, offline
 rotation), app passwords (#2658, ruled out), invite codes and admin routes,
-multi-account, lexicon validation (`validate: true` refused, deliberate).
+multi-account. Lexicon validation is NOT implemented, but `validate: true` is
+accepted rather than refused as of ruling **R5** below — the refusal blocked the
+official app entirely.
 
 ### 2.B Security
 
@@ -271,7 +273,7 @@ original list at all.
 four open S1s (#2773, #2950, #2951, #3048) all sit in item 7 and none of them
 blocks the deploy — do not let them delay G-QUIET.
 
-## 5. Rulings taken (Val, 2026-09-12)
+## 5. Rulings taken (Val; R1-R4 2026-09-12, R5 2026-09-16)
 
 | # | Ruling | Where it is recorded |
 |---|---|---|
@@ -279,6 +281,7 @@ blocks the deploy — do not let them delay G-QUIET.
 | **R2** | **"Box lost = identity lost" is accepted for the `did:web` account** through G-QUIET and G-ANNOUNCE, given the custody criteria (D5/B16). It is the price of L1's ordering and it expires at G-MIGRATE, where off-box rotation keys invert it. | #2962, #2609 |
 | **R3** | **The KDF residual is accepted.** 3000 PBKDF2 iterations stand for a single-owner server whose password never leaves its owner; the attacker who holds the credential file also holds the signing key, so a higher work factor buys nothing against the threat that reaches the file. Revisit on a second account or a custody split. | comment on #2659 |
 | **R4** | **The read-derived S0/S1 candidates are filed now** at their candidate severities with `needs-repro`; the sprint that reproduces them relabels or closes. An unfiled S0 candidate is the shape #518 sat in. | #2946, #2947, #2952 |
+| **R5** | **`validate: true` is ACCEPTED, not refused** (2026-09-16, taken against a live server). This tree implements no lexicon validation and the flag was refused outright, on the reasoning that accepting it would report a validation that never happened. That reasoning does not survive `writeOutput`/`batchResult`, which report `validationStatus: "unknown"` on **every** write — a client is already told the record was stored ungraded, so the refusal bought no honesty the response was not already delivering. It cost the client bar instead: the official Bluesky app sends `validate: true` on `applyWrites`, so posting and editing a profile both returned `400` from the first live deploy. **L2 makes that app the bar, so the two decisions could not both stand.** Implementing validation is the follow-up, due before G-ANNOUNCE. | #3098, `admitValidateFlag` |
 
 ## 6. What "written entirely in Medaka" will mean, honestly
 
