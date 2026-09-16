@@ -1487,9 +1487,20 @@ applyGetRepoStatus account store params = do
 {- | The blocks that prove what this repository says about ONE record key,
    rooted at the commit that says it.
 
-   Three parts, in this order, which is the reference implementation's:
-   the signed commit block, the MST covering proof for the key, then the
-   record block — IF the key is present.
+   Three parts: the signed commit block, the MST covering proof for the key,
+   then the record block — IF the key is present.
+
+   That is a verified-admissible SUPERSET of what the reference answers, not a
+   copy of it. The reference's `repo.getRecords` reaches `MST.cidsForPath`, the
+   root-down descent path with the record CID inline; the covering proof also
+   covers the key's lexical neighbors, and it is assembled leaf-up. So this
+   answer can name blocks the reference's does not, and names them in a
+   different order, while never omitting one the reference does — omission is
+   the direction that would make the proof unsound, and the gate
+   (`pds/test/repo_vectors.sh`) asserts against it on every probe. The
+   reference's own `verifyProofs`/`verifyRecords` accept both answers
+   identically, which is what makes the difference admissible (#3007). Order is
+   not part of the claim.
 
    A key the repository does not hold is answered, not refused. The covering
    proof for an absent key is the same set of nodes as for a present one

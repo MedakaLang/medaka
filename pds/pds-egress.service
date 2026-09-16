@@ -1,0 +1,76 @@
+# pds/pds-egress.service — a systemd unit template for the loopback egress
+# Caddy instance (pds/Caddyfile.egress).
+#
+# This is a SEPARATE unit from pds/pds.service, not a second site block
+# reloaded into the same Caddy process, because the two have opposite
+# network shapes: pds.service (and the inbound Caddy in front of it) only
+# ever needs loopback plus whatever public inbound traffic Caddy terminates
+# TLS for, while this unit is the one place in the deployment that needs
+# outbound internet reach at all. Keeping that reach on its own unit means
+# the IP rules below stay here, and pds/pds.service keeps its strict
+# `IPAddressDeny=any` + `IPAddressAllow=localhost` loopback-only pair.
+#
+# What the IPAddress* block below is, and is not: systemd's filter matches
+# addresses, never names. A hostname in `IPAddressAllow=` is rejected when
+# the unit loads ("Invalid address prefix ... ignoring assignment"), so
+# this unit cannot name api.bsky.app, api.bsky.chat, or the relay, and a
+# unit that tries is silently running with that line absent. This block is
+# therefore an SSRF guard, not a destination allow-list: it denies the
+# private, link-local, and CGNAT ranges that a redirect or a tampered
+# upstream could otherwise pivot into, and leaves the public internet
+# reachable. The destination allow-list is pds/Caddyfile.egress's fixed
+# 1:1 port-to-host mapping.
+#
+# systemd checks the allow list first and an allow match wins outright —
+# there is no longest-prefix comparison between the two lists — and grants
+# anything that matches neither list. Hence there is deliberately no
+# `IPAddressAllow=any` here: one would allow-match every packet and make
+# every deny line below dead. The single allow entry is 127.0.0.1, which
+# wins over the broader `IPAddressDeny=localhost` under it and so keeps the
+# loopback ports `pds serve` dials reachable while the rest of 127.0.0.0/8
+# and ::1 stay denied.
+#
+# Replace the placeholders (WorkingDirectory, `--config`'s path, User/Group)
+# before installing. Copy to /etc/systemd/system/pds-egress.service, then:
+#   systemctl daemon-reload && systemctl enable --now pds-egress
+
+[Unit]
+Description=Medaka atproto PDS egress proxy (Caddy)
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/opt/pds
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=pds-egress
+Group=pds-egress
+WorkingDirectory=/opt/pds
+ExecStart=/usr/bin/caddy run --config /opt/pds/Caddyfile.egress --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+PrivateTmp=true
+ReadWritePaths=/var/log/caddy
+CapabilityBoundingSet=
+UMask=0077
+IPAddressAllow=127.0.0.1
+IPAddressDeny=localhost
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+MemoryMax=256M
+TasksMax=128
+LimitNOFILE=65536
+CPUWeight=20
+
+[Install]
+WantedBy=multi-user.target

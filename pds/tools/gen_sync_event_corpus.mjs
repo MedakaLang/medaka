@@ -22,6 +22,7 @@
 import { createHash } from 'node:crypto'
 import { writeFile } from 'node:fs/promises'
 import { pathToFileURL } from 'node:url'
+import { mine } from './mst_depth.mjs'
 
 const [output] = process.argv.slice(2)
 if (!output) throw new Error('usage: gen_sync_event_corpus.mjs <output-dir>')
@@ -88,7 +89,7 @@ brow('#   a repository\'s FIRST commit over a brand-new EMPTY repo (zero records
 brow('#   relevantBlocks is what the #commit frame\'s `blocks` field carries, and for an empty repo')
 brow('#   that is TWO blocks: the empty MST root node and the signed commit. A genesis CAR of the')
 brow('#   commit alone does not verify -- the reader has no node for the data root it names. Not')
-brow('#   the same case as the SYNC fixture above, whose repo already holds one record.')
+brow('#   the same case as the SYNC fixture above, whose repo already holds four records.')
 brow('#')
 brow('# `seq`/`time` are NOT part of any row: neither builder sets them (F1); they are spliced in')
 brow('# only by subscribeRepos.js, a shape fact already pinned and not re-derived by this tool.')
@@ -117,18 +118,44 @@ bodyRow('IDENTITY-NO-HANDLE', identityNoHandle)
 bodyRow('ACCOUNT-ACTIVE', accountActive)
 bodyRow('ACCOUNT-INACTIVE', accountInactive)
 
-// The sync event needs a real signed commit -- build the smallest possible
-// repo (one record) with the pinned image's own MST/signCommit, exactly the
-// primitives getFullRepo/getRecords use, then call syncEvtDataFromCommit the
-// same way Sequencer.sequenceAccountCreation does.
+// The sync event needs a real signed commit -- build the repository with the
+// pinned image's own MST/signCommit, exactly the primitives
+// getFullRepo/getRecords use, then call syncEvtDataFromCommit the same way
+// Sequencer.sequenceAccountCreation does.
+//
+// FOUR records, not one. A one-record repository's MST is a single node, and a
+// single node makes every candidate read routine -- the descent path
+// cidsForPath, the covering proof, the whole tree -- return the same block set,
+// so the CAR-shape rows below could not tell them apart. The four keys are
+// MINED to sit on MST layers 0/1/2/3 (mst_depth.mjs; a key's layer is a
+// property of sha256(key), not a choice), which is the shallowest tree in which
+// a getRecord answer names a real descent path.
+const fixturePaths = [
+  mine('app.bsky.feed.post/medaka-depth-0-', 0),
+  mine('app.bsky.feed.post/medaka-depth-1-', 1),
+  mine('app.bsky.feed.post/medaka-depth-2-', 2),
+  mine('app.bsky.feed.post/medaka-depth-3-', 3),
+]
+// Distinct per key, so a route that answered a different record's block than
+// the one asked for would name a different CID rather than the same one.
+const fixtureRecordFor = (path) => ({
+  $type: 'app.bsky.feed.post',
+  text: `record at ${path}`,
+  createdAt: '2026-09-01T00:00:00.000Z',
+})
+
 const storage = new MemoryBlockstore()
 let tree = await MST.create(storage)
-const presentPath = 'app.bsky.feed.post/medaka-present'
-const presentRecord = { $type: 'app.bsky.feed.post', text: 'present record', createdAt: '2026-09-01T00:00:00.000Z' }
-const presentBytes = cbor.encode(presentRecord)
-const presentCid = await lexData.cidForCbor(presentBytes)
-tree = await tree.add(presentPath, presentCid)
-await storage.putBlock(presentCid, presentBytes)
+const fixtureCids = []
+const fixtureRecordHex = []
+for (const path of fixturePaths) {
+  const bytes = cbor.encode(fixtureRecordFor(path))
+  const cid = await lexData.cidForCbor(bytes)
+  tree = await tree.add(path, cid)
+  await storage.putBlock(cid, bytes)
+  fixtureCids.push(cid)
+  fixtureRecordHex.push(hex(bytes))
+}
 
 const { root, blocks: unstoredBlocks } = await tree.getUnstoredBlocks()
 await storage.putMany(unstoredBlocks)
@@ -147,7 +174,7 @@ const commitData = {
   since: null,
   newBlocks: unstoredBlocks,
   relevantBlocks: relevantBlocks.blocks,
-  ops: [{ action: 'create', path: presentPath, cid: presentCid }],
+  ops: fixturePaths.map((path, i) => ({ action: 'create', path, cid: fixtureCids[i] })),
   prevData: undefined,
 }
 const syncData = syncEvtDataFromCommit(commitData)
@@ -166,7 +193,7 @@ brow('SYNC-CAR-BLOCKS', [...syncBlocks.entries()].map((e) => e.cid.toString()).j
 // way (blocksToCarFile, rooted at the commit), so the row set below is the
 // genesis CAR's shape read off the reference rather than reasoned about.
 //
-// Its own revision, distinct from the one-record fixture's above, so a driver
+// Its own revision, distinct from the four-record fixture's above, so a driver
 // that rebuilt the wrong repository could not match by reusing the other rev.
 const genesisRev = '3lhz6x6h6h622'
 const genesisCommit = await repo.Repo.formatInitCommit(new MemoryBlockstore(), did, keypair, [], genesisRev)
@@ -194,12 +221,27 @@ const crow = (...cells) => carLines.push(cells.join('\t'))
 crow('# Generated only by pds/tools/gen_sync_event_corpus.mjs; see pds/tools/gen_sync_event_corpus.sh.')
 crow('# CAR shapes from the pinned image\'s own @atproto/repo (getRecords, blocksToCarStream) and')
 crow('# @atproto/xrpc-server (InvalidRequestError) -- the exact primitives getRecord.js/getBlocks.js')
-crow('# call. Repo: one record at PRESENT-PATH; ABSENT-PATH was never written.')
+crow('# call. Repo: the four FIXTURE-RECORD-PATHS records, on MST layers 0/1/2/3; the two absent')
+crow('# probe keys below were never written.')
 crow('#')
-crow('# GETRECORD-PRESENT / GETRECORD-ABSENT: repo.getRecords(storage, commitCid, [path]) CAR bytes')
-crow('#   for an existing vs. a never-written path. Both succeed (200); ABSENT is a covering proof')
-crow('#   of non-membership, never an error -- getRecord.js only throws when the repo has no root')
-crow('#   at all, which this corpus does not exercise.')
+crow('# FIXTURE-RECORD-PATHS / FIXTURE-RECORD-CBORS: the repository this corpus was computed over,')
+crow('#   as parallel comma-separated lists in write order -- the only INPUT rows here. A consumer')
+crow('#   rebuilds the repository from them and checks the commit CID it gets against')
+crow('#   GETRECORD-PRESENT-D0-ROOT before grading a single answer.')
+crow('# GETRECORD-PRESENT-D0..D3 / GETRECORD-ABSENT-BELOW / GETRECORD-ABSENT-MID: each probe names')
+crow('#   the key it asked about in its own -PATH row, so a consumer takes the QUESTION from here')
+crow('#   and supplies only the answer.')
+crow('#   repo.getRecords(storage, commitCid, [path]) CAR bytes, one probe per MST layer plus two')
+crow('#   keys that were never written -- one sorting below every present key and one between two')
+crow('#   of them. All six succeed (200); the absent answers are covering proofs of non-membership,')
+crow('#   never an error -- getRecord.js only throws when the repo has no root at all, which this')
+crow('#   corpus does not exercise.')
+crow('#   getRecords reaches MST.cidsForPath: the root-down DESCENT PATH to the key, carrying the')
+crow('#   record CID inline when the key is present. It is NOT getCoveringProof, which is a separate')
+crow('#   routine nothing on this call path reaches. A server answering with a covering proof')
+crow('#   answers a SUPERSET of these blocks in a different order; what a consumer can claim')
+crow('#   against these rows is therefore containment, not byte-identity, wherever the two shapes')
+crow('#   diverge -- see pds/test/repo_vectors.sh, which derives that split per probe.')
 crow('# GETBLOCKS-PRESENT: blocksToCarStream(null, blocks) for every stored CID -- ROOTS is the')
 crow('#   EMPTY list (getBlocks never sets a CAR root), unlike GETRECORD\'s single commit root.')
 crow('# GETBLOCKS-PARTLY-MISSING: same call, one requested CID absent from storage -- ALL-OR-')
@@ -218,14 +260,26 @@ const carOf = async (chunks) => {
 const recordCar = async (tag, rkey) => {
   const carBytes = await carOf(repo.getRecords(storage, commitCid, [{ collection: 'app.bsky.feed.post', rkey }]))
   const { root, blocks } = await repo.readCarWithRoot(carBytes)
+  crow(`${tag}-PATH`, `app.bsky.feed.post/${rkey}`)
   crow(`${tag}-ROOT`, root.toString())
   crow(`${tag}-BLOCKS`, [...blocks.entries()].map((e) => e.cid.toString()).join(','))
   crow(`${tag}-CAR`, hex(carBytes))
 }
-await recordCar('GETRECORD-PRESENT', 'medaka-present')
-await recordCar('GETRECORD-ABSENT', 'medaka-absent')
+const rkeyOf = (path) => path.slice(path.indexOf('/') + 1)
+crow('FIXTURE-RECORD-PATHS', fixturePaths.join(','))
+crow('FIXTURE-RECORD-CBORS', fixtureRecordHex.join(','))
 
-const allCids = [...(await storage.getBlocks([commitCid, presentCid])).blocks.entries()].map((e) => e.cid)
+for (let i = 0; i < fixturePaths.length; i++) {
+  await recordCar(`GETRECORD-PRESENT-D${i}`, rkeyOf(fixturePaths[i]))
+}
+// Two never-written keys at different positions in the key order, because an
+// absent read's descent path depends on where the key WOULD have gone: one
+// sorting below every present key, one landing between the layer-1 and layer-2
+// keys. `${...}zz` cannot collide with a mined key, whose suffix is decimal.
+await recordCar('GETRECORD-ABSENT-BELOW', 'medaka-absent')
+await recordCar('GETRECORD-ABSENT-MID', `${rkeyOf(fixturePaths[1])}zz`)
+
+const allCids = [...(await storage.getBlocks([commitCid, fixtureCids[0]])).blocks.entries()].map((e) => e.cid)
 const gotPresent = await storage.getBlocks(allCids)
 if (gotPresent.missing.length > 0) throw new Error('unexpected missing blocks in getBlocks-present case')
 const presentCarBytes = await carOf(repo.blocksToCarStream(null, gotPresent.blocks))
@@ -252,5 +306,6 @@ await writeFile(`${output}/pds_sync_car_shapes_corpus.txt`, carLines.join('\n') 
 console.log(
   `sync event bodies: 4 events + 1 sync (${syncBlocks.entries().length} car block) + ` +
     `1 genesis commit (${genesisBlocks.entries().length} car blocks); ` +
-    `car shapes: 2 getRecord + 2 getBlocks (partial refusal status=${refusal.statusCode})`,
+    `car shapes: ${fixturePaths.length + 2} getRecord over a ${fixturePaths.length}-record repo + ` +
+    `2 getBlocks (partial refusal status=${refusal.statusCode})`,
 )

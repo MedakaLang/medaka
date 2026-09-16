@@ -48,7 +48,6 @@
 | `mq/test/check.sh` | CLI-CONTRACT | native | N | NO | NATIVE-KIND-RUNNER | 138 | 18 | WRAP: spawns ./medaka + diffs, module does the same |
 | `parsec/test/check.sh` | CLI-CONTRACT | native | N | NO | NATIVE-KIND-RUNNER | 1201 | 25 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/nightly/repo_vectors_eval_engine.sh` | DIFFERENTIAL | multiple (eval vs native) | N | NO | NATIVE-KIND-RUNNER | — | 92 | WRAP: spawns ./medaka + diffs, module does the same |
-| `pds/nightly/signing_parity.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | — | 96 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `pds/test/atsyntax_vectors_test.mdk` | GOLDEN | native | N | YES | — | 3352 | 88 | DONE: was `atsyntax_vectors.sh`, now one `vector_runner` row |
 | `pds/test/car_vectors.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 10759 | 108 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `pds/test/constant_time_parity.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 228782 | 78 | WRAP: spawns ./medaka + diffs, module does the same [node] |
@@ -72,6 +71,7 @@
 | `pds/test/secp256k1_point_vectors.sh` | DIFFERENTIAL | multiple (eval/native) | N | NO | NATIVE-KIND-RUNNER | 200484 | 17 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/serve_e2e.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 44227 | 233 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/sha256_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native) | N | YES | — | 16052 | 115 | DONE: was `sha256_vectors.sh`, now one `vector_runner` row |
+| `pds/test/signing_parity.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | — | 96 | WRAP: spawns ./medaka + diffs, module does the same [node] |
 | `pds/test/store_persistence.sh` | PROJECT-SUITE | native | N | NO | NATIVE-KIND-RUNNER | 7958 | 102 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/trust_boundary_guards.sh` | OTHER | interpreter (eval only, deliberately) | N | NO | NATIVE-KIND-RUNNER | 3052 | 125 | WRAP: spawns ./medaka + diffs, module does the same |
 | `sqlite/test/aggregate_oracle.sh` | DIFFERENTIAL | native | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 4491 | 71 | WRAP: spawns ./medaka + diffs, module does the same [sqlite3] |

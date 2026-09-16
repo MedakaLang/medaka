@@ -1,0 +1,71 @@
+# pds/Caddyfile.egress — a template for the loopback egress reverse proxy
+# that `pds serve`'s appview-proxying (`--egress-port`, `--proxy-audience`)
+# and relay-announce (`--relay-port`) features dial out through.
+#
+# `pds serve` never dials the internet itself (docs/ops/PDS-DEPLOY.md,
+# "Appview proxying" and "Discovery: announcing to a relay") — it only ever
+# calls `127.0.0.1:<port>`. This file is the other half of that: one site
+# block per port, each reverse-proxying to exactly ONE real-world upstream
+# host. There is no header, variable, or other request-time input that picks
+# the upstream — the port a request arrives on IS the routing decision, made
+# once, here, by an operator editing this file, not by anything a caller
+# sends. That fixed 1:1 mapping is the allow-list.
+#
+# Replace `relay.example.com` with the real relay host before use (the
+# appview and chat hosts below are Bluesky's own and rarely need to change).
+# Each port here must match the corresponding `pds serve` flag:
+# `--egress-port` / a `--proxy-audience` row's port / `--relay-port`.
+#
+# Run this alongside the inbound Caddyfile (pds/Caddyfile) under its own
+# systemd unit (pds/pds-egress.service) — see docs/ops/PDS-DEPLOY.md.
+
+http://127.0.0.1:3128 {
+	reverse_proxy https://api.bsky.app {
+		header_up Host api.bsky.app
+
+		transport http {
+			tls
+			read_timeout 30s
+			write_timeout 30s
+			dial_timeout 5s
+		}
+	}
+
+	log {
+		output file /var/log/caddy/pds-egress-access.log
+	}
+}
+
+http://127.0.0.1:3129 {
+	reverse_proxy https://relay.example.com {
+		header_up Host relay.example.com
+
+		transport http {
+			tls
+			read_timeout 30s
+			write_timeout 30s
+			dial_timeout 5s
+		}
+	}
+
+	log {
+		output file /var/log/caddy/pds-egress-access.log
+	}
+}
+
+http://127.0.0.1:3130 {
+	reverse_proxy https://api.bsky.chat {
+		header_up Host api.bsky.chat
+
+		transport http {
+			tls
+			read_timeout 30s
+			write_timeout 30s
+			dial_timeout 5s
+		}
+	}
+
+	log {
+		output file /var/log/caddy/pds-egress-access.log
+	}
+}

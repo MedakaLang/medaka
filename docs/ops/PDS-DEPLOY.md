@@ -106,7 +106,30 @@ never sets it against anything but Caddy on the same box.
    port with the one `--port` bound, then reload Caddy. Caddy obtains and
    renews the certificate on its own (P5).
 
-8. **Verify against the live origin, never an exit code**
+8. **Install the egress proxy** (`pds/Caddyfile.egress` +
+   `pds/pds-egress.service`) — only needed if any of "Appview proxying" or
+   "Discovery: announcing to a relay" below are in use; skip this step
+   otherwise. `pds serve` never dials the internet itself: every
+   `--egress-port`/`--proxy-audience`/`--relay-port` value is a loopback
+   port with nothing listening on it until this step. Replace
+   `relay.example.com` in `pds/Caddyfile.egress` with the real relay host,
+   copy it to `/opt/pds/Caddyfile.egress`, copy `pds/pds-egress.service` to
+   `/etc/systemd/system/pds-egress.service` and replace its placeholders,
+   then:
+
+   ```sh
+   useradd --system --no-create-home --shell /usr/sbin/nologin pds-egress
+   systemctl daemon-reload && systemctl enable --now pds-egress
+   ```
+
+   This is a second Caddy instance under its own unit, not a second site
+   block reloaded into the inbound Caddy from step 7 — see the comment
+   header of `pds/pds-egress.service` for why. `pds/pds.service`'s own
+   `IPAddressAllow` stays loopback-only (it never needs to change): the PDS
+   process only ever reaches `127.0.0.1:<port>`, and reaching the real
+   appview/chat/relay host is entirely this proxy's job.
+
+9. **Verify against the live origin, never an exit code**
    (`[WEB-PREVIEW-SILENT]`, `AGENTS.md`):
 
    ```sh
@@ -489,6 +512,8 @@ world-readable is a leaked secret, not merely a permission bug.
   `com.atproto.sync.subscribeRepos` is a real event stream, backed by the
   bounded on-disk event log (P12). Nothing further for this procedure to do
   beyond what "Discovery: announcing to a relay" above already covers.
-- **`#1962` (signing-parity oracle is nightly-only)** — confirm that nightly
-  job is green immediately before a real deploy; this procedure does not
-  re-run it.
+- **`#1962` (the signing-parity oracle's deep arms are nightly-only)** — the
+  merge tier covers sampled native==Wasm parity and the 322-row corpus
+  natively; the eval and interpreted-WasmGC arms run only under
+  `SIGNING_DEEP=1` in the nightly job. Confirm that job green immediately
+  before a real deploy; this procedure does not re-run it.
