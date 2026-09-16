@@ -197,6 +197,8 @@ blanket-allow:^IPAddressAllow=any$
 # docs/ops/PDS-DEPLOY.md for the port roster (3128 appview, 3129 relay,
 # 3130 chat, all reused unchanged here).
 EGRESS_CADDY_DIRECTIVES='
+admin-off:^\tadmin off$
+bind-loopback-appview:^\tbind 127\.0\.0\.1$
 listen-appview:^http://127\.0\.0\.1:3128[ \t]*\{
 listen-relay:^http://127\.0\.0\.1:3129[ \t]*\{
 listen-chat:^http://127\.0\.0\.1:3130[ \t]*\{
@@ -495,6 +497,31 @@ if hits=$(check_directives "$SCRATCH_SERVICE" "$SERVICE_DIRECTIVES") \
 fi
 echo 'mutation control: a stripped OnFailure= on pds.service correctly caught'
 rm -f "$SCRATCH_SERVICE"
+
+# Violation 9: strip `bind 127.0.0.1` from the egress Caddyfile. This is the
+# one that shipped: without it Caddy binds the WILDCARD interface, and the
+# three fixed upstreams become a relay to Bluesky's hosts that anyone on the
+# internet can drive from this box's IP. Measured on the first real deploy —
+# `curl http://<public-ip>:3128/` answered 200 until the directive was added.
+SCRATCH_EGRESS_CADDY="$WORK/Caddyfile.egress"
+grep -v '^	bind 127\.0\.0\.1$' "$EGRESS_CADDYFILE" >"$SCRATCH_EGRESS_CADDY"
+if hits=$(check_directives "$SCRATCH_EGRESS_CADDY" "$EGRESS_CADDY_DIRECTIVES") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: a wildcard-bound egress listener was not caught'
+fi
+echo 'mutation control: a wildcard-bound egress listener correctly caught'
+rm -f "$SCRATCH_EGRESS_CADDY"
+
+# Violation 10: strip `admin off`. Caddy then claims 127.0.0.1:2019, which the
+# inbound Caddy already holds, and this unit restart-loops on every start.
+SCRATCH_EGRESS_CADDY="$WORK/Caddyfile.egress"
+grep -v '^	admin off$' "$EGRESS_CADDYFILE" >"$SCRATCH_EGRESS_CADDY"
+if hits=$(check_directives "$SCRATCH_EGRESS_CADDY" "$EGRESS_CADDY_DIRECTIVES") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: an egress config without `admin off` was not caught'
+fi
+echo 'mutation control: an egress config without `admin off` correctly caught'
+rm -f "$SCRATCH_EGRESS_CADDY"
 
 # Confirm the real tree is untouched and still green after every mutation.
 service_hits=$(check_directives "$SERVICE" "$SERVICE_DIRECTIVES")
