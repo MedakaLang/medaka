@@ -31,6 +31,11 @@ Wants=network-online.target
 RequiresMountsFor=/opt/pds
 StartLimitIntervalSec=60
 StartLimitBurst=5
+# Fires when systemd gives up after the burst above — a crash LOOP, not a
+# single crash that restarted cleanly. pds-alert@.service's header states
+# exactly what that does and does not catch, and why pds-healthping.timer
+# exists beside it rather than instead of it.
+OnFailure=pds-alert@%n.service
 
 [Service]
 Type=simple

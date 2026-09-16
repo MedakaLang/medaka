@@ -1,0 +1,23 @@
+# pds/pds-backup.timer — the schedule for pds-backup.service.
+#
+# Daily, in the small hours, with a randomized delay so the archive's brief
+# stop of `pds` does not land at the same wall-clock second every day.
+#
+# Persistent=true matters here and deliberately does NOT appear on
+# pds-healthping.timer: if the box was off at 04:00, a backup that never ran
+# should run at the next boot, because the point is to have an archive. A
+# dead-man's-switch ping that never ran must NOT be replayed later — replaying
+# it would report health for a window the box spent switched off.
+
+[Unit]
+Description=Daily encrypted off-box backup of the Medaka PDS
+Requires=pds-backup.service
+
+[Timer]
+OnCalendar=*-*-* 04:00:00
+RandomizedDelaySec=1800
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

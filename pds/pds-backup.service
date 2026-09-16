@@ -1,0 +1,54 @@
+# pds/pds-backup.service — one run of pds/backup.sh. Driven by
+# pds-backup.timer; see docs/ops/PDS-DEPLOY.md § "Scheduled encrypted backups".
+#
+# This unit runs as ROOT and that is deliberate: it must read `0600` secrets
+# owned by the `pds` user, and it must `systemctl stop`/`start` the service to
+# take a consistent archive (the consistency rule in
+# docs/ops/PDS-DEPLOY.md § "Backup and restore"). Both are root-only. It is
+# hardened everywhere that does not conflict with those two needs.
+#
+# It CANNOT carry `IPAddressDeny=any` the way pds.service does: its whole job
+# is to put an archive off the box. The narrowing available here is the
+# egress-by-allow-list one pds-egress.service uses — deny the private ranges
+# an SSRF would aim at, leave the public internet reachable.
+#
+# OnFailure= is set: a backup that silently stops running is the failure mode
+# this whole unit exists to prevent, so a failed run pushes a notification
+# exactly as a failed `pds` does.
+
+[Unit]
+Description=Encrypted off-box backup of the Medaka PDS
+After=network-online.target
+Wants=network-online.target
+RequiresMountsFor=/opt/pds
+OnFailure=pds-alert@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/pds/backup.sh
+# A backup that has not finished in fifteen minutes is wedged, not slow: the
+# archive is local and the upload is one object. Failing here re-runs on the
+# next timer rather than holding a stopped server (backup.sh's own trap has
+# already restarted it) or overlapping the next run.
+TimeoutStartSec=900
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+PrivateTmp=true
+ReadWritePaths=/opt/pds/data
+ReadOnlyPaths=/opt/pds/secrets /etc/pds
+UMask=0077
+IPAddressAllow=127.0.0.1
+IPAddressDeny=localhost
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+MemoryMax=512M
+TasksMax=64
+LimitNOFILE=4096
+CPUWeight=10

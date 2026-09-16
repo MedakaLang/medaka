@@ -427,6 +427,23 @@ pds/oracle/run                runs the official ghcr.io/bluesky-social/pds conta
                                pull/fetch; asserts nothing about the compiler. No CI job
                                invokes it. See docs/ops/PDS-ORACLE.md.
 
+# ── pds deployment runtime (#2962 — run by systemd ON A DEPLOYED BOX, never in
+#    CI, and DESTRUCTIVE if it were) ──
+pds/backup                     takes one encrypted off-box backup: STOPS the pds service, tars
+                               <root>/data and <root>/secrets, encrypts to an age recipient, and
+                               uploads to the configured rclone remote. Driven by
+                               pds-backup.timer on a deployed box. It is ledgered here rather
+                               than left to be discovered because the gate universe is every
+                               tracked .sh in the tree (test/preflight.sh's _gate_candidates),
+                               so an unledgered copy of this file would be EXECUTED by
+                               `make preflight` — stopping a live service and writing to
+                               someone's object store on a docs-only diff. That is not
+                               hypothetical: playground/deploy_cloudflare.sh was missing its
+                               entry and preflight ran a live production deploy. Its config,
+                               its shape, and the age/rclone dependencies it refuses without
+                               are graded by pds/test/deploy_config_lint.sh, which reads the
+                               units and the script as text and never runs them.
+
 # ── sourced libraries (never executed; `sh <file>` is a no-op) ──
 test/lib_scratch               shell library, not a script: sourced by run_gates / build_oracles /
                                preflight to point TMPDIR off the RAM-backed /tmp tmpfs (and to warn

@@ -18,6 +18,11 @@ SERVICE="$ROOT/pds/pds.service"
 CADDYFILE="$ROOT/pds/Caddyfile"
 EGRESS_SERVICE="$ROOT/pds/pds-egress.service"
 EGRESS_CADDYFILE="$ROOT/pds/Caddyfile.egress"
+BACKUP_SERVICE="$ROOT/pds/pds-backup.service"
+BACKUP_TIMER="$ROOT/pds/pds-backup.timer"
+HEALTHPING_SERVICE="$ROOT/pds/pds-healthping.service"
+HEALTHPING_TIMER="$ROOT/pds/pds-healthping.timer"
+ALERT_SERVICE="$ROOT/pds/pds-alert@.service"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-deploy-config.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
 
@@ -45,6 +50,96 @@ ProtectHome:^ProtectHome=
 PrivateDevices:^PrivateDevices=true
 UMask:^UMask=
 RequiresMountsFor:^RequiresMountsFor=
+OnFailure-alert:^OnFailure=pds-alert@%n\.service$
+'
+
+# The three observability/custody units (#2967 E5/E6, #2962 D5/B16) reach the
+# public internet by design, so none of them can carry pds.service's
+# `IPAddressDeny=any`. What they CAN carry is the egress-by-allow-list
+# narrowing pds-egress.service already uses: deny the private, link-local and
+# CGNAT ranges an SSRF would aim at, and leave the public internet reachable.
+# This roster is the shared floor for all three.
+OUTBOUND_UNIT_DIRECTIVES='
+NoNewPrivileges:^NoNewPrivileges=true
+ProtectSystem:^ProtectSystem=strict
+ProtectHome:^ProtectHome=
+PrivateDevices:^PrivateDevices=true
+PrivateTmp:^PrivateTmp=true
+UMask:^UMask=
+MemoryMax:^MemoryMax=
+TasksMax:^TasksMax=
+LimitNOFILE:^LimitNOFILE=
+CPUWeight-or-Nice:^(CPUWeight|Nice)=
+IPAddressAllow-loopback:^IPAddressAllow=127\.0\.0\.1$
+IPAddressDeny-loopback-rest:^IPAddressDeny=localhost$
+IPAddressDeny-private-10:^IPAddressDeny=10\.0\.0\.0/8$
+IPAddressDeny-private-172:^IPAddressDeny=172\.16\.0\.0/12$
+IPAddressDeny-private-192:^IPAddressDeny=192\.168\.0\.0/16$
+IPAddressDeny-link-local:^IPAddressDeny=169\.254\.0\.0/16$
+IPAddressDeny-cgnat:^IPAddressDeny=100\.64\.0\.0/10$
+IPAddressDeny-unique-local-v6:^IPAddressDeny=fc00::/7$
+IPAddressDeny-link-local-v6:^IPAddressDeny=fe80::/10$
+'
+
+# Same reason as EGRESS_SERVICE_FORBIDDEN: systemd consults the allow list
+# first and an allow match wins outright, so one `IPAddressAllow=any` leaves
+# every deny line above dead while the roster check still passes.
+OUTBOUND_UNIT_FORBIDDEN='
+blanket-allow:^IPAddressAllow=any$
+'
+
+# The backup unit's own additions on top of that floor. TimeoutStartSec is
+# required because a wedged backup holds nothing useful and must yield to the
+# next timer; OnFailure is required because a backup that quietly stops running
+# is the exact failure this unit exists to prevent.
+BACKUP_SERVICE_DIRECTIVES='
+Type-oneshot:^Type=oneshot
+ExecStart-script:^ExecStart=/opt/pds/backup\.sh$
+TimeoutStartSec:^TimeoutStartSec=
+OnFailure-alert:^OnFailure=pds-alert@%n\.service$
+'
+
+# Persistent= on the backup timer and its ABSENCE on the healthping timer are
+# both load-bearing and opposite, so each is pinned in its own direction: a
+# missed backup must run late, a missed liveness ping must never be replayed
+# (replaying one reports health for a window the box spent switched off).
+BACKUP_TIMER_DIRECTIVES='
+OnCalendar:^OnCalendar=
+Persistent:^Persistent=true$
+RandomizedDelay:^RandomizedDelaySec=
+WantedBy:^WantedBy=timers\.target$
+'
+
+HEALTHPING_TIMER_DIRECTIVES='
+OnUnitActiveSec:^OnUnitActiveSec=
+OnBootSec:^OnBootSec=
+WantedBy:^WantedBy=timers\.target$
+'
+
+HEALTHPING_TIMER_FORBIDDEN='
+persistent-replay:^Persistent=true$
+'
+
+# `curl -f` is what makes the ping conditional on a HEALTHY answer rather than
+# on a reachable socket: without it a 500 is still an exit-0 fetch and the
+# dead-man'"'"'s switch would be fed by a server failing every request.
+HEALTHPING_SERVICE_DIRECTIVES='
+Type-oneshot:^Type=oneshot
+EnvironmentFile:^EnvironmentFile=/etc/pds/alert\.env$
+health-route-probed:/xrpc/_health
+curl-fail-on-http-error:curl -fsS
+'
+
+# The alert unit must not carry OnFailure= — it IS the OnFailure target, and a
+# self-referential one would loop.
+ALERT_SERVICE_DIRECTIVES='
+Type-oneshot:^Type=oneshot
+EnvironmentFile:^EnvironmentFile=/etc/pds/alert\.env$
+curl-fail-on-http-error:curl -fsS
+'
+
+ALERT_SERVICE_FORBIDDEN='
+self-referential-onfailure:^OnFailure=
 '
 
 CADDY_DIRECTIVES='
@@ -190,7 +285,64 @@ if [ -n "$egress_caddy_forbidden" ]; then
   fail 'pds/Caddyfile.egress has a dynamic/header-driven upstream'
 fi
 
-echo 'deploy config clean: pds.service, Caddyfile, pds-egress.service, and Caddyfile.egress carry every required hardening directive'
+# ── the three outbound units (#2967 E5/E6, #2962 D5/B16) ───────────────────
+
+for _unit_path in "$BACKUP_SERVICE" "$HEALTHPING_SERVICE" "$ALERT_SERVICE"; do
+  _hits=$(check_directives "$_unit_path" "$OUTBOUND_UNIT_DIRECTIVES")
+  if [ -n "$_hits" ]; then
+    echo "$_hits" >&2
+    fail "$(basename "$_unit_path") is missing a required hardening directive"
+  fi
+  _forbidden=$(check_forbidden "$_unit_path" "$OUTBOUND_UNIT_FORBIDDEN")
+  if [ -n "$_forbidden" ]; then
+    echo "$_forbidden" >&2
+    fail "$(basename "$_unit_path") has a blanket IPAddressAllow that voids its deny list"
+  fi
+done
+
+backup_hits=$(check_directives "$BACKUP_SERVICE" "$BACKUP_SERVICE_DIRECTIVES")
+if [ -n "$backup_hits" ]; then
+  echo "$backup_hits" >&2
+  fail 'pds/pds-backup.service is missing a required directive'
+fi
+
+backup_timer_hits=$(check_directives "$BACKUP_TIMER" "$BACKUP_TIMER_DIRECTIVES")
+if [ -n "$backup_timer_hits" ]; then
+  echo "$backup_timer_hits" >&2
+  fail 'pds/pds-backup.timer is missing a required directive'
+fi
+
+healthping_hits=$(check_directives "$HEALTHPING_SERVICE" "$HEALTHPING_SERVICE_DIRECTIVES")
+if [ -n "$healthping_hits" ]; then
+  echo "$healthping_hits" >&2
+  fail 'pds/pds-healthping.service is missing a required directive'
+fi
+
+healthping_timer_hits=$(check_directives "$HEALTHPING_TIMER" "$HEALTHPING_TIMER_DIRECTIVES")
+if [ -n "$healthping_timer_hits" ]; then
+  echo "$healthping_timer_hits" >&2
+  fail 'pds/pds-healthping.timer is missing a required directive'
+fi
+
+healthping_timer_forbidden=$(check_forbidden "$HEALTHPING_TIMER" "$HEALTHPING_TIMER_FORBIDDEN")
+if [ -n "$healthping_timer_forbidden" ]; then
+  echo "$healthping_timer_forbidden" >&2
+  fail 'pds/pds-healthping.timer replays missed pings, which reports health for an outage'
+fi
+
+alert_hits=$(check_directives "$ALERT_SERVICE" "$ALERT_SERVICE_DIRECTIVES")
+if [ -n "$alert_hits" ]; then
+  echo "$alert_hits" >&2
+  fail 'pds/pds-alert@.service is missing a required directive'
+fi
+
+alert_forbidden=$(check_forbidden "$ALERT_SERVICE" "$ALERT_SERVICE_FORBIDDEN")
+if [ -n "$alert_forbidden" ]; then
+  echo "$alert_forbidden" >&2
+  fail 'pds/pds-alert@.service has a self-referential OnFailure'
+fi
+
+echo 'deploy config clean: pds.service, Caddyfile, pds-egress.service, Caddyfile.egress, and the backup/healthping/alert units carry every required hardening directive'
 
 # ── mutation control: prove each side can fail ──────────────────────────────
 
@@ -291,6 +443,59 @@ fi
 echo 'mutation control: a stripped egress upstream (chat) correctly caught'
 rm -f "$SCRATCH_EGRESS_CADDY"
 
+# Violation 9: drop a denied range from the backup unit. The three outbound
+# units share one roster, so this also proves that roster is wired to them.
+SCRATCH_BACKUP="$WORK/pds-backup.service"
+grep -v '^IPAddressDeny=169\.254\.0\.0/16$' "$BACKUP_SERVICE" >"$SCRATCH_BACKUP"
+if hits=$(check_directives "$SCRATCH_BACKUP" "$OUTBOUND_UNIT_DIRECTIVES") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: a dropped backup IPAddressDeny range (169.254.0.0/16) was not caught'
+fi
+echo 'mutation control: a dropped backup IPAddressDeny range (169.254.0.0/16) correctly caught'
+rm -f "$SCRATCH_BACKUP"
+
+# Violation 10: add Persistent=true to the healthping timer. The directive
+# roster still passes on this copy — nothing was removed — which is exactly
+# why the forbidden-direction check exists. A replayed liveness ping reports
+# health for a window the box spent switched off.
+SCRATCH_HEALTHPING_TIMER="$WORK/pds-healthping.timer"
+cp "$HEALTHPING_TIMER" "$SCRATCH_HEALTHPING_TIMER"
+printf 'Persistent=true\n' >>"$SCRATCH_HEALTHPING_TIMER"
+if hits=$(check_forbidden "$SCRATCH_HEALTHPING_TIMER" "$HEALTHPING_TIMER_FORBIDDEN") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: a replaying healthping timer (Persistent=true) was not caught'
+fi
+if roster=$(check_directives "$SCRATCH_HEALTHPING_TIMER" "$HEALTHPING_TIMER_DIRECTIVES") \
+  && [ -n "$roster" ]; then
+  fail 'mutation control: the Persistent=true copy was expected to pass the directive roster'
+fi
+echo 'mutation control: a replaying healthping timer (Persistent=true) correctly caught'
+rm -f "$SCRATCH_HEALTHPING_TIMER"
+
+# Violation 11: drop `-f` from the healthping probe. The unit still runs and
+# still pings; it just starts feeding the dead-man's switch from a server that
+# is answering every request with an error.
+SCRATCH_HEALTHPING="$WORK/pds-healthping.service"
+sed 's/curl -fsS/curl -sS/g' "$HEALTHPING_SERVICE" >"$SCRATCH_HEALTHPING"
+if hits=$(check_directives "$SCRATCH_HEALTHPING" "$HEALTHPING_SERVICE_DIRECTIVES") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: a healthping probe that ignores HTTP errors was not caught'
+fi
+echo 'mutation control: a healthping probe that ignores HTTP errors correctly caught'
+rm -f "$SCRATCH_HEALTHPING"
+
+# Violation 12: strip OnFailure from pds.service. Nothing else about the unit
+# changes, and the service still runs — the only thing lost is the alert, which
+# is the failure mode this whole pair of units exists to close.
+SCRATCH_SERVICE="$WORK/pds.service"
+grep -v '^OnFailure=' "$SERVICE" >"$SCRATCH_SERVICE"
+if hits=$(check_directives "$SCRATCH_SERVICE" "$SERVICE_DIRECTIVES") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: a stripped OnFailure= on pds.service was not caught'
+fi
+echo 'mutation control: a stripped OnFailure= on pds.service correctly caught'
+rm -f "$SCRATCH_SERVICE"
+
 # Confirm the real tree is untouched and still green after every mutation.
 service_hits=$(check_directives "$SERVICE" "$SERVICE_DIRECTIVES")
 caddy_hits=$(check_directives "$CADDYFILE" "$CADDY_DIRECTIVES")
@@ -298,9 +503,14 @@ egress_service_hits=$(check_directives "$EGRESS_SERVICE" "$EGRESS_SERVICE_DIRECT
 egress_service_forbidden=$(check_forbidden "$EGRESS_SERVICE" "$EGRESS_SERVICE_FORBIDDEN")
 egress_caddy_hits=$(check_directives "$EGRESS_CADDYFILE" "$EGRESS_CADDY_DIRECTIVES")
 egress_caddy_forbidden=$(check_forbidden "$EGRESS_CADDYFILE" "$EGRESS_CADDY_FORBIDDEN")
+backup_hits=$(check_directives "$BACKUP_SERVICE" "$OUTBOUND_UNIT_DIRECTIVES")
+healthping_timer_forbidden=$(check_forbidden "$HEALTHPING_TIMER" "$HEALTHPING_TIMER_FORBIDDEN")
+healthping_hits=$(check_directives "$HEALTHPING_SERVICE" "$HEALTHPING_SERVICE_DIRECTIVES")
 if [ -n "$service_hits" ] || [ -n "$caddy_hits" ] || [ -n "$egress_service_hits" ] \
   || [ -n "$egress_service_forbidden" ] \
-  || [ -n "$egress_caddy_hits" ] || [ -n "$egress_caddy_forbidden" ]; then
+  || [ -n "$egress_caddy_hits" ] || [ -n "$egress_caddy_forbidden" ] \
+  || [ -n "$backup_hits" ] || [ -n "$healthping_timer_forbidden" ] \
+  || [ -n "$healthping_hits" ]; then
   fail 'the real tree is no longer clean after the mutation control'
 fi
 echo 'real tree confirmed unaffected by the mutation control'

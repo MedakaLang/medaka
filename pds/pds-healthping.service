@@ -1,0 +1,54 @@
+# pds/pds-healthping.service — the dead-man's-switch half of criterion E5.
+#
+# Probes the PDS's own health route and, ONLY on success, pings an external
+# dead-man's-switch URL. The external service alerts when the pings stop.
+#
+# ── WHY THE PING IS CONDITIONAL ──────────────────────────────────────────────
+#
+# An unconditional ping would report "this timer fired", which is a fact about
+# systemd, not about the PDS. Gating it on `/xrpc/_health` makes the ping mean
+# "this server answered a request end to end", which is the claim the external
+# alert is actually standing in for. `curl -f` is load-bearing: without it a
+# 500 or a 404 is still an exit-0 fetch, and the switch would be fed by a
+# server that is failing every request.
+#
+# ── WHY THIS CATCHES WHAT pds-alert@ CANNOT ──────────────────────────────────
+#
+# pds-alert@ runs ON this box, so it reports nothing when the box is off, the
+# network is severed, or the process is wedged but not failed. In all three
+# the pings simply stop and the external service notices. That is the whole
+# point of a dead-man's switch and the reason it is worth a second mechanism.
+#
+# Correspondingly there is NO OnFailure= here. This unit failing is the normal,
+# expected signal when the PDS is down; routing it to a push as well would
+# mean an alert every interval for the whole outage.
+
+[Unit]
+Description=Health-gated dead-man's-switch ping for the Medaka PDS
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/pds/alert.env
+ExecStart=/bin/sh -c 'curl -fsS --max-time 10 -o /dev/null "http://127.0.0.1:${PDS_PORT}/xrpc/_health" && exec curl -fsS --max-time 20 -o /dev/null "${HEALTHCHECK_URL}"'
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateDevices=true
+PrivateTmp=true
+ReadOnlyPaths=/etc/pds
+UMask=0077
+IPAddressAllow=127.0.0.1
+IPAddressDeny=localhost
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+MemoryMax=64M
+TasksMax=16
+LimitNOFILE=1024
+CPUWeight=10

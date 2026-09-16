@@ -154,6 +154,45 @@ asleep or otherwise unavailable:
 - Any S0/S1 found during recovery restarts the soak clock (step 4) once the
   fix is deployed, not once the service is merely back up.
 
+## 6a. Assume breach: the box is compromised
+
+Criterion B16 (`PDS-LAUNCH-PLAN.md` §2.B) asks for this in writing, per
+identity kind, before the first real post. It is a different incident class
+from §6: there, the service is down and the question is how to restore it;
+here, the service may be running perfectly and the question is what an
+attacker now holds.
+
+**What is on the box, and what holding it means.** The signing key
+(`/opt/pds/secrets/key.hex`), the session-token secret, and the account
+credential. An attacker with all three can sign commits as this DID, mint
+sessions, and answer as this server. The backup *recipient* public key is
+there too and is not a secret; the age private key is not on the box, so
+archives already written stay unreadable.
+
+**For a `did:web` account — the G-QUIET and G-ANNOUNCE identity — there is no
+key rotation.** The DID document lives on this host, so whoever controls the
+host controls the identity; that is ruling **R2**, accepted with its price
+stated. Recovery is therefore not "rotate the key", it is:
+
+1. Take the host off the internet — remove the DNS record first, since that
+   stops the world reaching it even while you still can.
+2. Stand up a new account on a **new hostname** from the last good backup, and
+   treat the old DID as burned. The old handle can be re-pointed at the new
+   DID; the old DID cannot be reclaimed from an attacker who holds the box.
+3. Say so publicly. A PDS whose key is compromised can sign anything, so silence
+   about a known breach is the one response that is actually dishonest.
+
+**For the `did:plc` account — G-MIGRATE and after — this inverts**, which is
+the whole reason L1 orders the identities as it does. Rotation keys are held
+off-box (criterion G2), so a PLC operation signed with them re-points the DID
+at a restored instance and the identity survives the host. That procedure is
+#2609's, rehearsed twice before it is ever needed.
+
+**In both cases the backups are the recovery path and the archives are safe**,
+because the age private key is in a password manager and never on the host
+(`PDS-DEPLOY.md` § "Scheduled encrypted backups"). Restore to a *new* box: the
+old one is evidence and is not trustworthy again without a rebuild.
+
 ## 7. The compiler-upgrade procedure
 
 This is separate from a PDS-code upgrade (redeploying `pds/serve.mdk` against
