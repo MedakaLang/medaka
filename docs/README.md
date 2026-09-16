@@ -94,6 +94,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`DISTRIBUTION-DESIGN.md`](ops/DISTRIBUTION-DESIGN.md) | DISTRIBUTION-DESIGN.md — shipping a native `medaka` binary to strangers | PARTIAL |
 | [`GATE-REGISTRY-DESIGN.md`](ops/GATE-REGISTRY-DESIGN.md) | GATE-REGISTRY-DESIGN.md — the gate registry format and `medaka gate` driver | LANDED |
 | [`MCP.md`](ops/MCP.md) | MCP.md — `medaka mcp`, the LSP-for-agents | IMPLEMENTED |
+| [`PDS-CONFORMANCE-WALKTHROUGH.md`](ops/PDS-CONFORMANCE-WALKTHROUGH.md) | PDS-CONFORMANCE-WALKTHROUGH.md — criterion A8, run by hand from the official app | written ahead of the first G-QUIET deploy |
 | [`PDS-DEPLOY.md`](ops/PDS-DEPLOY.md) | PDS-DEPLOY.md — deploying `pds serve` behind Caddy under systemd | IMPLEMENTED, not yet DEPLOYED |
 | [`PDS-LAUNCH-PLAN.md`](ops/PDS-LAUNCH-PLAN.md) | PDS-LAUNCH-PLAN.md — the road to "this account runs on a PDS written in Medaka" | OPEN |
 | [`PDS-ORACLE.md`](ops/PDS-ORACLE.md) | PDS-ORACLE.md — running the official Bluesky PDS locally as the Phase 0/1 oracle | IMPLEMENTED |
