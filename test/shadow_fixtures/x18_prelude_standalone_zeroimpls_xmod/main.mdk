@@ -1,0 +1,35 @@
+-- X18 (S1-PRELUDE, cross-module) x2 with the colliding interface moved into an
+-- IMPORTED module. `isEven` is a prelude standalone (core.mdk `export isEven :
+-- Int -> Bool`); the interface method of that name is declared in `parityx`,
+-- there is no impl of `Parity` anywhere, and the receiver 7 sits inside the
+-- prelude standalone's domain.
+--
+-- The axis x1/x2/x3 cannot see: all three declare the colliding interface in
+-- the ENTRY module, so the entry's own-declaration rung is the only one they
+-- exercise. Own-declaration and imported are different rungs of the entry's
+-- method table (`ownMethodIdent` vs `methodCandImported`,
+-- compiler/types/typecheck.mdk), which is the same distinction x17 pins for the
+-- auto-print wrap. A regression keyed on the own-declaration rung alone would
+-- grade x1 and x2 green and still admit the prelude standalone here.
+--
+-- Ruled reading (S1-PRELUDE (a), 2026-08-10, #1375 item 2): the prelude is not
+-- in S1's left operand, so this is not a shadow, the bare name denotes the
+-- interface method, and ordinary dispatch finds no impl. Located reject on
+-- check, run and build alike. Under the rejected importer reading the prelude
+-- standalone is admitted as an importer shadow, no impl sits at the receiver's
+-- head, so it falls back to the standalone, accepts, and prints False.
+--
+-- Zero impls is load-bearing, inherited from x2: with no impl to consult, the
+-- only thing that can produce this reject is the interface method having taken
+-- the name outright, which is what S1-PRELUDE (a) states.
+--
+-- Value hand-derived from the ruling, not captured, for the reason x1 records:
+-- the execution arms are known to disagree on neighbouring cells of this same
+-- collision (#1492; the run-vs-binary split at matrix row 49, filed as #1497),
+-- so no arm could serve as an oracle here.
+--
+-- Filed as the unmeasured multi-module variant in #2052; measured 2026-09-15 at
+-- main 0bb8592c6, which rejects on all three verbs.
+import parityx.{Parity, isEven}
+
+main = println (isEven 7)

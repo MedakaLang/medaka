@@ -962,6 +962,16 @@ table = [
     pinned = "7\n",
   },
   Row {
+    entry = "x18_prelude_standalone_zeroimpls_xmod/main.mdk",
+    label =
+      "X18 (S1-PRELUDE, cross-module) x2 with the colliding `Parity` interface moved into an imported module -- the entry declares nothing and sees `isEven` only through `import parityx.{Parity, isEven}`. The axis x1/x2/x3 cannot reach: all three declare the colliding interface in the entry, so they exercise only the own-declaration rung of the entry`s method table, and own-declaration and imported are different rungs (ownMethodIdent vs methodCandImported) -- the same distinction x17 pins for the auto-print wrap. A regression keyed on the own-declaration rung alone grades x1 and x2 green and still admits the prelude standalone here. Zero impls anywhere, inherited from x2, so the only thing that can produce this reject is the interface method having taken the name outright. Under the rejected importer reading the prelude standalone is admitted as an importer shadow, no impl sits at the receiver`s head, so it falls back to the standalone, accepts, and prints False. Value hand-derived from the ruling, not captured, for the reason x1 records: the execution arms are known to disagree on neighbouring cells of this same collision (#1492, and the run-vs-binary split at matrix row 49 filed as #1497), so no arm could serve as an oracle. Filed as the unmeasured multi-module variant in #2052 and measured 2026-09-15 at main 0bb8592c6, which rejects on check, run and build alike",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
     entry = "i29_importer_selective_import_displaced/main.mdk",
     label =
       "I29 (#2738) an interface method nameable by its TYPE name displaces a SELECTIVELY IMPORTED standalone of a DIFFERENT scheme. The i3 topology with the standalone`s domain widened to cover the receiver, so both candidates typecheck and the displacement is observable only as a value plus a diagnostic. RESOLUTION IS UNCHANGED AND CONFORMANT -- S1 makes `peek` an importer shadow (S1-NS (a)(i), the TYPE arm: `import peekable.{Peekable}` names the interface), S2`s importer arm finds `impl Peekable Box` at the receiver`s head, so it dispatches: `peek=7`, not `peek=(\"box\", 7)`. What was S0 is the SILENCE: the user wrote the strongest statement the language offers about which `peek` is meant and got the other one at exit 0 on check, run and build alike. VALUES AND VERDICTS DERIVED FROM S1/S2 AND FROM THE RULING BEFORE THE BINARY WAS BUILT, per [W-QUIETER] in reverse. Also asserts `W-IMPORT-METHOD-SHADOW` fires on check/run/build stderr alike",
