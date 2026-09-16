@@ -95,32 +95,33 @@ reports "invalid handle" for at least four distinct upstream causes.
 | **A5** | `curl -sS 'https://<hostname>/xrpc/com.atproto.identity.resolveHandle?handle=<handle>'` | The account's DID, as JSON this time. A 400 here and a correct A2 together mean the handle string the app will send differs from the one the account was created with. |
 | **A6** | Re-read terminal 1 | Six access-log lines, one per check above, each `status=200`. A2 and A3 log `path=/.well-known/...`; A1 logs `path=/xrpc/_health`. |
 
-> **A3 is the highest-risk step in this document, and it is deliberately not
-> phrased as a pass/fail.**
+> **A3 was the open question in the first draft of this document. It has since
+> been measured, and the answer was "broken" — #3087.**
 >
 > `/.well-known/did.json` is served by `wellKnownResponse`
 > (`pds/lib/handlers.mdk`) from `didWebDocument`, which describes **the server**:
-> it carries `id`, `@context` and one `service` entry, and it carries **no
-> `verificationMethod` and no `alsoKnownAs`**. The hosted account's own
-> document — the one that does carry the `#atproto` verification method built
-> from the repo signing key, and the `alsoKnownAs` handle binding — is
-> `accountDidDocument`, and it is reachable **only** inside
-> `com.atproto.repo.describeRepo`'s `didDoc` field. The two are distinct on
-> purpose (#2476 ruled that emitting one under the other's name would be a
-> right-looking wrong answer).
+> `id`, `@context`, one `service` entry, and **no `verificationMethod`, no
+> `alsoKnownAs`**. The hosted account's own document — the one carrying the
+> `#atproto` verification method built from the repo signing key, and the
+> `alsoKnownAs` handle binding — is `accountDidDocument`, reachable **only**
+> inside `com.atproto.repo.describeRepo`'s `didDoc` field. The split is
+> deliberate (#2476) and correct for a `did:plc:` account.
 >
-> That separation is sound when the account DID is a `did:plc:`. **It has never
-> been exercised when the account DID is `did:web:<hostname>`**, which is
-> exactly what `PDS-DEPLOY.md` step 3 prescribes and what L1 makes the first
-> launch identity. In that configuration a relay resolving the account's DID
-> fetches this very URL and gets a document with no signing key in it.
+> With the account DID set to `did:web:<hostname>` — what `PDS-DEPLOY.md` step 3
+> prescribes and what L1 makes the first launch identity — the two subjects are
+> the same entity, and a consumer resolving that DID fetches this URL. Fed to
+> `@atproto/identity`'s own extractors, the served document passes the schema
+> check and its `id` matches, then yields `signingKey: undefined` and
+> `handle: undefined`; `ensureAtprotoKey`, which is what `verifySignature`
+> calls, throws. No relay can verify a commit and no appview can confirm the
+> handle.
 >
-> **So: record what A3 returns, then go to C1 and C2 and see whether the relay
-> and the appview accept the repo anyway.** Whether they need the verification
-> method at this URL is a fact about the network, not about this tree, and
-> nobody here has measured it. If C1 or C2 fails, A3 is the first suspect and
-> the finding is an S1 against `didWebDocument`'s well-known arm. If C1 and C2
-> both pass, write that down too — it retires a real open question.
+> **So A3 is a pass/fail step and it pins #3087.** Expected once the fix lands:
+> a document carrying `alsoKnownAs: ["at://<handle>"]` and a
+> `verificationMethod[0].publicKeyMultibase` equal to the `did:key` suffix
+> `pdsd keygen` printed. **Anything else is a FAIL and the deploy stops** —
+> before this was measured, a run would have shown every Part B step green and
+> C2 silently empty. Do not deploy against a binary that predates #3087's fix.
 
 ## Part B — the app walkthrough
 
@@ -154,9 +155,10 @@ and they are why the walkthrough exists.
 | **C2** | A fresh appview fetch of the profile succeeds | From a browser **not logged in as either account**, load the profile on `bsky.app` by handle. The posts from B2, B3 and B5 are there. This is the end-to-end proof: it means the relay read the firehose, validated the commit signatures, and the appview indexed the result. |
 | **C3** | Re-read the whole journal for the run | No `serve: persist failed` line, no `serve: relay announce failed` line, and no access-log line with a 5xx status anywhere in the run. |
 
-C2 failing while B2 succeeded is the interesting case, and it is the one A3's
-note is about: it means this server accepted and stored the write but the
-network would not take it.
+C2 failing while B2 succeeded is the interesting case: it means this server
+accepted and stored the write but the network would not take it. #3087 is the
+known instance of that shape and A3 is where it surfaces first — if A3 failed,
+expect C2 to fail too and fix A3 rather than investigating here.
 
 ## 3. Steps that are expected not to work, and are not failures
 
