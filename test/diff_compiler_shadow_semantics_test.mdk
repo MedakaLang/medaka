@@ -842,9 +842,9 @@ table = [
     pinned = "99\n",
   },
   Row {
-    entry = "i29_importer_wildcard_binds_method_name/main.mdk",
+    entry = "i34_importer_wildcard_binds_method_name/main.mdk",
     label =
-      "I29 (#2809) S1`s STANDALONE operand at a WILDCARD import, and THE CORPUS CONTAINED NO WILDCARD IMPORT AT ALL before this cell (derive it with a grep for a wildcard import over test/shadow_fixtures/ -- it returned 0 files). `main` writes `import list.*`, which binds every name `list` exports; `length` is not among them, and the standalone `length` that does exist is `own`s, imported here only for `ol`. So `length` is not a shadow in `main` and the occurrence DISPATCHES: 3. The admission filter used to answer a wildcard `binds every name`, unconditionally -- inert while the shadow row carried `<owner>__length` (a define that always existed) and a LINK ERROR once the row carried the bare `length`: `use of undefined value @mdk_length`, `build` exit 1 on a program `check` and `run` both accept and get right. `ol` is printed first so the cell also pins that `own`s own definer shadow still resolves to its standalone: 2",
+      "I34 (#2809) S1`s STANDALONE operand at a WILDCARD import, and THE CORPUS CONTAINED NO WILDCARD IMPORT AT ALL before this cell (derive it with a grep for a wildcard import over test/shadow_fixtures/ -- it returned 0 files). `main` writes `import list.*`, which binds every name `list` exports; `length` is not among them, and the standalone `length` that does exist is `own`s, imported here only for `ol`. So `length` is not a shadow in `main` and the occurrence DISPATCHES: 3. The admission filter used to answer a wildcard `binds every name`, unconditionally -- inert while the shadow row carried `<owner>__length` (a define that always existed) and a LINK ERROR once the row carried the bare `length`: `use of undefined value @mdk_length`, `build` exit 1 on a program `check` and `run` both accept and get right. `ol` is printed first so the cell also pins that `own`s own definer shadow still resolves to its standalone: 2",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -852,9 +852,9 @@ table = [
     pinned = "2\n3\n",
   },
   Row {
-    entry = "i30_importer_iface_member_standalone_elsewhere/main.mdk",
+    entry = "i35_importer_iface_member_standalone_elsewhere/main.mdk",
     label =
-      "I30 (#2809) the MEMBER-LIST half of the same rule, and the one that shows binding the name is not the same fact as importing the standalone: `import ifc.{Sizeable, size}` binds `size` to the interface METHOD, while the standalone `size` belongs to `sh`, from which `main` imports only the constructor. Neither defined in nor imported into `main`, so it dispatches to `impl Sizeable BoxS`: 20. Graded by VALUE, not by exit code -- the regression this pins replaced a dispatch (`@mdk_impl_BoxS_size`) with a DIRECT call (`@mdk_size`) at a call site where that symbol is not in scope, so the failure mode is a link error on this graph and a wrong value on any graph where the symbol happens to resolve",
+      "I35 (#2809) the MEMBER-LIST half of the same rule, and the one that shows binding the name is not the same fact as importing the standalone: `import ifc.{Sizeable, size}` binds `size` to the interface METHOD, while the standalone `size` belongs to `sh`, from which `main` imports only the constructor. Neither defined in nor imported into `main`, so it dispatches to `impl Sizeable BoxS`: 20. Graded by VALUE, not by exit code -- the regression this pins replaced a dispatch (`@mdk_impl_BoxS_size`) with a DIRECT call (`@mdk_size`) at a call site where that symbol is not in scope, so the failure mode is a link error on this graph and a wrong value on any graph where the symbol happens to resolve",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
@@ -862,9 +862,9 @@ table = [
     pinned = "20\n",
   },
   Row {
-    entry = "i31_importer_iface_wildcard_standalone_elsewhere/main.mdk",
+    entry = "i36_importer_iface_wildcard_standalone_elsewhere/main.mdk",
     label =
-      "I31 (#2809) the CONTROL for the row above, graded as its own row: byte-identical but for `import ifc.*` in place of the member list. The two import forms take DIFFERENT arms of the admission filter, so a fix that closes only one leaves the other open -- which is exactly the shape the wildcard`s fail-open arm had. Whatever the answer is, the two rows must agree",
+      "I36 (#2809) the CONTROL for the row above, graded as its own row: byte-identical but for `import ifc.*` in place of the member list. The two import forms take DIFFERENT arms of the admission filter, so a fix that closes only one leaves the other open -- which is exactly the shape the wildcard`s fail-open arm had. Whatever the answer is, the two rows must agree",
     expCheck = "ACCEPT",
     expRun = "ACCEPT",
     expBuild = "ACCEPT",
