@@ -539,20 +539,29 @@ as a query endpoint is: GET only (405 otherwise), no request body framing (400
 otherwise). Every OTHER path outside `/xrpc/` still 404s with
 `NotFound`/`XRPC route not found`, unchanged.
 
-`/.well-known/did.json` serves **this PDS's own did:web document**, keyed by the
-hostname `makeAccount` admitted — it describes the SERVER's atproto service
-endpoint, not the hosted account, whose own document is
-`describeRepo`'s `didDoc` instead. `/.well-known/atproto-did` serves the
+`/.well-known/did.json` serves **the document its own DID subject owes a
+resolver**, which depends on the account's DID method. When the account DID is
+`did:web:<this hostname>`, the server and the hosted account are the same
+subject and this URL is where that DID resolves, so it serves the ACCOUNT's
+document — the one `describeRepo` reports as `didDoc`, carrying the repository
+signing key under `#atproto` and an `alsoKnownAs` naming the handle. Under any
+other DID method the two subjects are distinct, and it serves this PDS's own
+did:web document, keyed by the hostname `makeAccount` admitted, which describes
+the SERVER's atproto service endpoint and carries no key.
+`/.well-known/atproto-did` serves the
 hosted account's DID as bare `text/plain; charset=utf-8`, with no trailing
 newline.
 
 `pds/test/read_routes_all_engines.sh` grades the repository-FREE half of all of
-this — both well-knowns, `resolveHandle` in full, every read's
-unconfigured-store `RepoNotFound` refusal, and the non-XRPC 404 control — on
-eval, native, and real Wasm with a direct-red mutation, seventeen named cells.
-It is repository-free deliberately: nothing in it signs, which is what makes an
-eval arm affordable at all (see "The Store is secret-bearing" for the 600s
-measurement).
+this — both well-knowns as a `did:key` account answers them, `resolveHandle` in
+full, every read's unconfigured-store `RepoNotFound` refusal, and the non-XRPC
+404 control — on eval, native, and real Wasm with a direct-red mutation,
+seventeen named cells. It is repository-free deliberately: nothing in it signs,
+which is what makes an eval arm affordable at all (see "The Store is
+secret-bearing" for the 600s measurement). The `did:web` arm of
+`/.well-known/did.json` publishes the repository's signing key, so it is graded
+where a repository exists: `pds/test/read_handlers_main.mdk`, under
+`pds/test/repo_vectors.sh`.
 
 ### Where the revision comes from (there is no clock)
 
