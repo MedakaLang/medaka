@@ -57,10 +57,12 @@ X-Forwarded-For:header_up X-Forwarded-For
 '
 
 # The egress unit needs the same hardening class as pds.service (D1), plus
-# an IPAddressAllow roster naming loopback (inbound from the PDS process)
-# AND the three real upstream hosts (outbound) — narrower than "any", the
-# same all-or-none reasoning `check_directives`' single-pattern-per-line
-# style already applies to `pds.service`.
+# the network-layer SSRF guard its header comment describes: systemd's
+# IPAddress* filter matches addresses and never hostnames, so this roster
+# pins the private/link-local/CGNAT ranges the unit must deny, not a list
+# of upstream hosts (those live in Caddyfile.egress's fixed port-to-host
+# mapping, below). The one allow entry is 127.0.0.1, narrower than the
+# `IPAddressDeny=localhost` beside it because an allow match wins outright.
 EGRESS_SERVICE_DIRECTIVES='
 NoNewPrivileges:^NoNewPrivileges=true
 ProtectSystem:^ProtectSystem=strict
@@ -70,16 +72,29 @@ CPUWeight-or-Nice:^(CPUWeight|Nice)=
 TasksMax:^TasksMax=
 LimitNOFILE:^LimitNOFILE=
 StartLimitBurst:^StartLimitBurst=
-IPAddressDeny:^IPAddressDeny=any
-IPAddressAllow-loopback:^IPAddressAllow=localhost$
-IPAddressAllow-appview:^IPAddressAllow=api\.bsky\.app$
-IPAddressAllow-chat:^IPAddressAllow=api\.bsky\.chat$
-IPAddressAllow-relay:^IPAddressAllow=relay\.example\.com$
+IPAddressAllow-loopback:^IPAddressAllow=127\.0\.0\.1$
+IPAddressDeny-loopback-rest:^IPAddressDeny=localhost$
+IPAddressDeny-private-10:^IPAddressDeny=10\.0\.0\.0/8$
+IPAddressDeny-private-172:^IPAddressDeny=172\.16\.0\.0/12$
+IPAddressDeny-private-192:^IPAddressDeny=192\.168\.0\.0/16$
+IPAddressDeny-link-local:^IPAddressDeny=169\.254\.0\.0/16$
+IPAddressDeny-cgnat:^IPAddressDeny=100\.64\.0\.0/10$
+IPAddressDeny-unique-local-v6:^IPAddressDeny=fc00::/7$
+IPAddressDeny-link-local-v6:^IPAddressDeny=fe80::/10$
 CapabilityBoundingSet:^CapabilityBoundingSet=
 ProtectHome:^ProtectHome=
 PrivateDevices:^PrivateDevices=true
 UMask:^UMask=
 RequiresMountsFor:^RequiresMountsFor=
+'
+
+# The other half of that guard, and the reason it is a forbidden-construct
+# check rather than a required directive: systemd consults the allow list
+# first and an allow match wins outright, so a single `IPAddressAllow=any`
+# would match every packet and leave every deny line above dead while the
+# roster check still passed.
+EGRESS_SERVICE_FORBIDDEN='
+blanket-allow:^IPAddressAllow=any$
 '
 
 # Each egress site block must reverse-proxy to a fixed real-world host, on
@@ -91,6 +106,7 @@ listen-appview:^http://127\.0\.0\.1:3128[ \t]*\{
 listen-relay:^http://127\.0\.0\.1:3129[ \t]*\{
 listen-chat:^http://127\.0\.0\.1:3130[ \t]*\{
 upstream-appview:reverse_proxy https://api\.bsky\.app
+upstream-relay:reverse_proxy https://relay\.example\.com
 upstream-chat:reverse_proxy https://api\.bsky\.chat
 timeout:(read_timeout|write_timeout|dial_timeout|timeouts)
 log:^[ \t]*log[ \t]*\{
@@ -156,6 +172,12 @@ if [ -n "$egress_service_hits" ]; then
   fail 'pds/pds-egress.service is missing a required hardening directive'
 fi
 
+egress_service_forbidden=$(check_forbidden "$EGRESS_SERVICE" "$EGRESS_SERVICE_FORBIDDEN")
+if [ -n "$egress_service_forbidden" ]; then
+  echo "$egress_service_forbidden" >&2
+  fail 'pds/pds-egress.service has a blanket IPAddressAllow that voids its deny list'
+fi
+
 egress_caddy_hits=$(check_directives "$EGRESS_CADDYFILE" "$EGRESS_CADDY_DIRECTIVES")
 if [ -n "$egress_caddy_hits" ]; then
   echo "$egress_caddy_hits" >&2
@@ -215,21 +237,37 @@ fi
 echo 'mutation control: a stripped Caddy directive (max_size) correctly caught'
 rm -f "$SCRATCH_CADDY"
 
-# Violation 5: widen the egress unit's allow-list to "any" (a stripped
-# IPAddressAllow-relay/-chat/-appview roster collapsed into a single
-# wildcard line) — the exact regression §3 of the packet calls out.
+# Violation 5: drop a single denied range (172.16.0.0/12) from an otherwise
+# correct copy of the egress unit — the smallest hole someone can open in
+# the SSRF guard, and one that leaves every other directive intact.
 SCRATCH_EGRESS_SERVICE="$WORK/pds-egress.service"
-grep -Ev '^IPAddressAllow=(api\.bsky\.app|api\.bsky\.chat|relay\.example\.com)$' \
-  "$EGRESS_SERVICE" >"$SCRATCH_EGRESS_SERVICE"
-printf 'IPAddressAllow=any\n' >>"$SCRATCH_EGRESS_SERVICE"
+grep -v '^IPAddressDeny=172\.16\.0\.0/12$' "$EGRESS_SERVICE" >"$SCRATCH_EGRESS_SERVICE"
 if hits=$(check_directives "$SCRATCH_EGRESS_SERVICE" "$EGRESS_SERVICE_DIRECTIVES") \
   && [ -z "$hits" ]; then
-  fail 'mutation control: a widened egress IPAddressAllow (any) was not caught'
+  fail 'mutation control: a dropped egress IPAddressDeny range (172.16.0.0/12) was not caught'
 fi
-echo 'mutation control: a widened egress IPAddressAllow (any) correctly caught'
+echo 'mutation control: a dropped egress IPAddressDeny range (172.16.0.0/12) correctly caught'
 rm -f "$SCRATCH_EGRESS_SERVICE"
 
-# Violation 6: replace one fixed egress upstream with a dynamic,
+# Violation 6: add a blanket IPAddressAllow to an otherwise correct copy of
+# the egress unit. The directive roster still passes on this copy — every
+# deny line is still present — which is why the forbidden-direction check
+# exists and is what this control proves.
+SCRATCH_EGRESS_SERVICE="$WORK/pds-egress.service"
+cp "$EGRESS_SERVICE" "$SCRATCH_EGRESS_SERVICE"
+printf 'IPAddressAllow=any\n' >>"$SCRATCH_EGRESS_SERVICE"
+if hits=$(check_forbidden "$SCRATCH_EGRESS_SERVICE" "$EGRESS_SERVICE_FORBIDDEN") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: a blanket egress IPAddressAllow (any) was not caught'
+fi
+if roster=$(check_directives "$SCRATCH_EGRESS_SERVICE" "$EGRESS_SERVICE_DIRECTIVES") \
+  && [ -n "$roster" ]; then
+  fail 'mutation control: the blanket-allow copy was expected to pass the directive roster'
+fi
+echo 'mutation control: a blanket egress IPAddressAllow (any) correctly caught'
+rm -f "$SCRATCH_EGRESS_SERVICE"
+
+# Violation 7: replace one fixed egress upstream with a dynamic,
 # header-driven target — the allow-list-by-fixed-mapping property itself.
 SCRATCH_EGRESS_CADDY="$WORK/Caddyfile.egress"
 sed 's#reverse_proxy https://api\.bsky\.app#reverse_proxy {http.request.header.X-Upstream}#' \
@@ -241,7 +279,7 @@ fi
 echo 'mutation control: a dynamic/header-driven egress upstream correctly caught'
 rm -f "$SCRATCH_EGRESS_CADDY"
 
-# Violation 7: strip a required egress site block's fixed-host directive
+# Violation 8: strip a required egress site block's fixed-host directive
 # (chat), to show the directive check is not accidentally satisfied by the
 # appview/relay blocks alone.
 SCRATCH_EGRESS_CADDY="$WORK/Caddyfile.egress"
@@ -257,9 +295,11 @@ rm -f "$SCRATCH_EGRESS_CADDY"
 service_hits=$(check_directives "$SERVICE" "$SERVICE_DIRECTIVES")
 caddy_hits=$(check_directives "$CADDYFILE" "$CADDY_DIRECTIVES")
 egress_service_hits=$(check_directives "$EGRESS_SERVICE" "$EGRESS_SERVICE_DIRECTIVES")
+egress_service_forbidden=$(check_forbidden "$EGRESS_SERVICE" "$EGRESS_SERVICE_FORBIDDEN")
 egress_caddy_hits=$(check_directives "$EGRESS_CADDYFILE" "$EGRESS_CADDY_DIRECTIVES")
 egress_caddy_forbidden=$(check_forbidden "$EGRESS_CADDYFILE" "$EGRESS_CADDY_FORBIDDEN")
 if [ -n "$service_hits" ] || [ -n "$caddy_hits" ] || [ -n "$egress_service_hits" ] \
+  || [ -n "$egress_service_forbidden" ] \
   || [ -n "$egress_caddy_hits" ] || [ -n "$egress_caddy_forbidden" ]; then
   fail 'the real tree is no longer clean after the mutation control'
 fi
