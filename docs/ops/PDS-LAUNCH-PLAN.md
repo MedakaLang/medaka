@@ -210,7 +210,7 @@ note.
 
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
-| H1 | A launch runbook: the commit is tagged, the binary's provenance (D3) matches the tag, the gates that must be green are named and derived (not listed), the soak's start and its S0/S1-reset rule are written, and the rollback is the D3 command. | G-QUIET | missing | #2972 |
+| H1 | A launch runbook: the commit is tagged, the binary's provenance (D3) matches the tag, the gates that must be green are named and derived (not listed), the soak's start and its S0/S1-reset rule are written, and the rollback is the D3 command. | G-QUIET | drafted — [`PDS-RUNBOOK.md`](PDS-RUNBOOK.md); closes only once followed step by step for a real deploy | #2972 |
 | H2 | The announcement text is drafted with its honest footnotes (§6) before the soak ends, and reviewed against the tree as it stands on the day. | G-ANNOUNCE | missing | #2972 |
 | H3 | An incident procedure: who does what when the service is down at an hour Val is asleep; the answer may be "it stays down until morning" but it is written. | G-ANNOUNCE | missing | #2972 |
 
