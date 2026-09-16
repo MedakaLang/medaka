@@ -294,11 +294,15 @@ Two operator-visible consequences:
   limiting"), because one inbound request becomes one outbound request. The
   shared request allowance does not bound it.
 
-Which methods a header may name is not configurable: it is derived from the
-official PDS's own route registration and is **default-deny** — see
-`docs/design/ATPROTO-PDS-DESIGN.md` § 4.5, "What a header is allowed to ask
-for". A method this server answers itself is answered, not forwarded, even
-when a header asks for it.
+Which methods a header may name is not configurable, and it is the one axis
+that is **default-allow**: any `app.bsky.*` or `chat.bsky.*` method this
+server does not register locally is forwarded, so the appview's method list
+stays the appview's to grow. Anything outside those two namespaces is refused
+with nothing signed. The **audience** axis is the default-deny one, and it is
+the axis the flags above configure — see `docs/design/ATPROTO-PDS-DESIGN.md`
+§ 4.5, "What a header is allowed to ask for", for why the two are not
+symmetric. A method this server answers itself is answered, not forwarded,
+even when a header asks for it.
 
 ## Discovery: announcing to a relay (optional, off by default)
 
