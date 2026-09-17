@@ -163,10 +163,6 @@ import driver.diagnostics.{
   cjFixJson,
   mkDiag,
   checkJsonFile,
-  checkJsonFileParts,
-  CheckJson(..),
-  ppCheckJson,
-  cjFoldIntoFile,
   readFileSafe,
   diagIsError,
   diagIsWarn,
@@ -198,6 +194,9 @@ import json.{
   jArray,
   stringify,
 }
+-- Module-qualified alias, alongside the selective import above: `json.parse`
+-- would otherwise collide with `frontend.parser.parse`, already bound bare.
+import json as Json2
 import types.typecheck.{
   elaborateModules,
   resetTypeErrorsSticky,
@@ -923,7 +922,7 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc =
 -- project-root prefix from a triple's `file` so an imported module resolved
 -- through the absolute `stdlibDir` root doesn't leak the worktree layout into
 -- the envelope, matching `check --json`'s own multi-module normalization
--- (diagnostics.mdk's `checkJsonFileParts`, ~:2478-2482; #2798 review S2).
+-- (diagnostics.mdk's `checkJsonFile`'s multi-module arm; #2798 review S2).
 relDiagTriple : String ->
   (String, String, List Diag) ->
   (String, String, List Diag)
@@ -1412,14 +1411,71 @@ cjBuildFailedJson target msg = cjAllToJson [
   (target, "", [Diag SevError "R-BUILD-FAILED" msg None None None]),
 ]
 
--- `medaka build --json`: front-end gate via `checkJsonFile` (BYTE-IDENTICAL
--- structured diagnostics to `check --json` on the same file — same code, same
--- envelope), then, only if clean, the real emit+clang build. A build-stage
--- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
--- plain rendered error text; a clean build prints the (empty-diagnostics)
--- gate JSON as its success marker, mirroring `check --json`'s clean output —
--- no separate "built X -> Y" prose on this channel, so a machine consumer sees
--- exactly one shape regardless of outcome.
+-- #2874: fold build-STAGE notes (a failed `--keep-ir` copy, #2243) into an
+-- already-rendered JSON envelope STRING — the emit child now owns the
+-- graph's only typecheck, so this process no longer runs its own pass over
+-- the graph to build a structured value to fold into directly; it only has
+-- the child's rendered text. The common case
+-- (`notes == []`, every build without a `--keep-ir` failure) returns
+-- `envelopeText` untouched — no re-parse. The rare case re-parses the
+-- envelope generically, appends the notes' diagnostics into the entry file's
+-- `diagnostics` array, and re-serializes. An envelope this process itself
+-- just rendered always re-parses; a parse failure degrades to the
+-- unmodified text rather than losing the whole build's diagnostics.
+-- `entryKeys` carries BOTH spellings the child may have used for the entry's
+-- own path — verbatim (single-module, `checkJsonSingleParts` parity) or
+-- root-relative (multi-module, `relDiagPath`) — since the parent does not
+-- reload the graph just to know which arm the child took.
+cjFoldNotesIntoText : List String -> List Diag -> String -> String
+cjFoldNotesIntoText _ [] envelopeText = envelopeText
+cjFoldNotesIntoText entryKeys notes envelopeText =
+  match Json2.parse envelopeText
+    Err _ => envelopeText
+    Ok j => stringify (cjInjectNotesJson entryKeys notes j)
+
+cjInjectNotesJson : List String -> List Diag -> Json -> Json
+cjInjectNotesJson entryKeys notes (JObject pairs) =
+  jObject (map (cjInjectField entryKeys notes) (toList pairs))
+cjInjectNotesJson _ _ j = j
+
+cjInjectField : List String -> List Diag -> (String, Json) -> (String, Json)
+cjInjectField entryKeys notes ("files", JArray files) =
+  ("files", jArray (map (cjInjectFile entryKeys notes) (toList files)))
+cjInjectField _ _ kv = kv
+
+cjInjectFile : List String -> List Diag -> Json -> Json
+cjInjectFile entryKeys notes (JObject fpairs) =
+  if cjIsEntryFile entryKeys (toList fpairs) then
+    JObject (arrayFromList (map (cjInjectDiags notes) (toList fpairs)))
+  else
+    JObject fpairs
+cjInjectFile _ _ j = j
+
+cjIsEntryFile : List String -> List (String, Json) -> Bool
+cjIsEntryFile entryKeys fpairs = match lookupAssoc "file" fpairs
+  Some (JString f) => contains f entryKeys
+  _ => False
+
+cjInjectDiags : List Diag -> (String, Json) -> (String, Json)
+cjInjectDiags notes ("diagnostics", JArray ds) =
+  ("diagnostics", jArray (toList ds ++ map (d => cjDiagnostic "" "" d) notes))
+cjInjectDiags _ kv = kv
+
+-- `medaka build --json`: the FULL diagnostic verdict now comes from the emit
+-- child's own envelope (ruling 3 — the child is the build's only typecheck,
+-- #2874), not from a parent-side re-typecheck of the same graph (this
+-- function used to run one before this change). `quietEmitStderr = True`
+-- tells `runBuild` to render that
+-- envelope on the child's stderr (`--json`, entry_support.mdk's
+-- `driveModulesLocated`) instead of human lines, and to carry it back on
+-- `rep.emitterStderr` on the clean/warnings-only path (`rep.status` on the
+-- reject path, via the existing `emitDiagExitCode` forwarding). A build-stage
+-- failure (emitter/clang) still becomes a `cjBuildFailedJson` envelope; the
+-- discriminator is the child's own reject-vs-failure shape: a reject's
+-- `status` is the bare envelope text (no "error: " preamble is ever
+-- prepended to it — see `buildErr (dropTrailingNewline emitErr)` in
+-- `build_cmd.mdk`), so `startsWith "{"` distinguishes it from every other
+-- `buildErr` call site, all of which DO prepend one.
 runBuildJsonCmd : Args ->
   Bool ->
   String ->
@@ -1440,53 +1496,40 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
         Err msg =>
           let _ = println (cjBuildFailedJson input msg)
           exit 1
-        Ok rsrc => match readPreludeFile corePath
+        Ok _ => match readPreludeFile corePath
           Err msg =>
             let _ = println (cjBuildFailedJson input msg)
             exit 1
-          Ok csrc =>
-            let (cj, hasErr) =
-              checkJsonFileParts allowInternal rsrc csrc input stdlibDir
-            if hasErr then
-              let _ = println (ppCheckJson cj)
-              exit 1
-            else
-              let medaka = envOr "MEDAKA" "medaka"
-              let cc = envOr "CC" "clang"
-              let keepIrCli = flag "--keep-ir" a
-              let stampBuild = flag "--stamp-build" a
-              let outPath = match outOpt
-                Some o => o
-                None => defaultOutPath target input
-              -- `quietEmitStderr = True`: this route has already rendered every
-              -- diagnostic into the stdout envelope above (`checkJsonFileParts`),
-              -- so forwarding the child's human copy would report one diagnostic
-              -- twice on two channels. A FAILING emit still carries the child's
-              -- text, through `ppBuildReport rep` into `cjBuildFailedJson` below.
-              match (runBuild
-                root
-                medaka
-                cc
-                target
-                input
-                outPath
-                keepIrCli
-                True
-                stampBuild)
-                -- #2243: the build's own notes (a failed `--keep-ir` copy)
-                -- join the entry file's `diagnostics` array rather than
-                -- vanishing with the status line this channel never prints.
-                -- `CjRendered` is the hand-built parse-error envelope, which
-                -- only ever arrives with `hasErr` set — unreachable here.
-                Ok rep => match cj
-                  CjRendered json => println json
-                  CjParts entry triples =>
-                    println
-                      (cjAllToJson (cjFoldIntoFile entry rep.notes triples))
-                -- A build-stage FAILURE already carried its notes: they are
-                -- part of the rendered message, exactly as the plain CLI
-                -- prints them, inside the one R-BUILD-FAILED diagnostic.
-                Err rep =>
+          Ok _ =>
+            let medaka = envOr "MEDAKA" "medaka"
+            let cc = envOr "CC" "clang"
+            let keepIrCli = flag "--keep-ir" a
+            let stampBuild = flag "--stamp-build" a
+            let outPath = match outOpt
+              Some o => o
+              None => defaultOutPath target input
+            let entryKeys = [input, relDiagPath root input]
+            match (runBuild
+              root
+              medaka
+              cc
+              target
+              input
+              outPath
+              keepIrCli
+              True
+              stampBuild)
+              -- #2243: the build's own notes (a failed `--keep-ir` copy) join
+              -- the entry file's `diagnostics` array rather than vanishing
+              -- with the status line this channel never prints.
+              Ok rep =>
+                println
+                  (cjFoldNotesIntoText entryKeys rep.notes rep.emitterStderr)
+              Err rep =>
+                if startsWith "{" rep.status then
+                  let _ = println rep.status
+                  exit 1
+                else
                   let _ = println (cjBuildFailedJson input (ppBuildReport rep))
                   exit 1
 

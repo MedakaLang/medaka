@@ -2479,6 +2479,118 @@ cjFoldIntoFile path extra ((p, s, ds) :: rest)
   | p == path = (p, s, ds ++ extra) :: rest
   | otherwise = (p, s, ds) :: cjFoldIntoFile path extra rest
 
+-- ── #2874: the JSON-rendering twin of `emitGateDiags`, for `medaka build
+-- --json`'s child process ─────────────────────────────────────────────────
+-- Since ruling 3 this process is the build's only typecheck; before this it
+-- was the PARENT (`checkJsonFileParts`) that re-typechecked the graph to build
+-- the `{"files":[...]}` envelope.  Same `typecheckDiagsFold` triples
+-- `emitGateDiags` renders as human lines, folded into a `CheckJson` instead —
+-- the shape `checkJsonFileParts`'s multi-module arm already builds (`CjParts`,
+-- `relDiagTriple`, `cjFoldIntoFile` for the #1236 main-shape warning).  `root`
+-- relativizes each path exactly as that arm did.
+-- `entryPath` is the caller's own `entryPathOf modsWithPath` (a private helper
+-- of `entry_support.mdk`, the sole caller) — taken as a parameter rather than
+-- re-derived here so this function owns no duplicate of that walk.
+export
+emitGateDiagsJson : List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  String ->
+  String ->
+  <IO> (CheckJson, Bool)
+emitGateDiagsJson modsWithPath rtD coreD modsD perMod root entryPath =
+  let triples0 =
+    map
+      readDiagSrc
+      (typecheckDiagsFold
+        rtD
+        coreD
+        modsWithPath
+        modsD
+        perMod
+        (seedAll (map midPath modsWithPath) []))
+  let hasErr = anyList tripleHasErrD triples0
+  -- `checkJsonFileParts` only relativizes on its MULTI-module arm
+  -- (`checkJsonSingleParts` echoes `target` verbatim, exactly as passed on
+  -- argv) — a single-module graph here must match that, or a no-import
+  -- fixture's envelope disagrees with `check --json`'s own on the same file
+  -- (#1078's own parity gate).
+  let single = match modsWithPath
+    [_] => True
+    _ => False
+  let relTriples =
+    if single then triples0 else map (relDiagTriple root) triples0
+  let entryKey = if single then entryPath else relDiagPath root entryPath
+  let mainWarns = if hasErr then [] else mainShapeWarnsFor modsWithPath
+  (CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples), hasErr)
+
+tripleHasErrD : (String, String, List Diag) -> Bool
+tripleHasErrD (_, _, diags) = anyList diagIsError diags
+
+mainShapeWarnsFor : List (String, String, List Decl) -> List Diag
+mainShapeWarnsFor mods = match lastModTriple mods
+  None => []
+  Some (_, _, decls) => mainShapeWarnings [] [] [] decls
+
+-- Every module's path, seeded with an empty diagnostics bucket and its own
+-- source — the same seeding `emitGateDiagsJson` folds diagnostics into, reused
+-- by `emitWrapDiags`'s JSON path so a clean wrap-check still reports the whole
+-- graph's file set, not just the entry.
+export
+seededTriplesJson : List (String, String, List Decl) ->
+  String ->
+  <IO> List (String, String, List Diag)
+seededTriplesJson modsWithPath root =
+  map
+    (relDiagTriple root)
+    (map readDiagSrc (seedAll (map midPath modsWithPath) []))
+
+-- Fold the elaboration's sticky residual (#2544 M4) into an already-seeded
+-- triple set, keyed by each diagnostic's own module id via `pathMap` (the
+-- loader's modId → path map) — a residual diagnostic can name ANY module in
+-- the graph, not only the entry.  A mid absent from `pathMap` (should not
+-- happen; the emit driver's own `pathMap` is total over the loaded graph)
+-- silently drops that entry rather than fabricate a file for it.  Mirrors
+-- `residualOrGeneric`'s empty-residual fallback with a structured `Diag`
+-- instead of prose, folded into the entry's own bucket so the envelope still
+-- has somewhere to put it.
+export
+foldResidualJson : List (String, String) ->
+  String ->
+  String ->
+  List (String, TcDiag) ->
+  List (String, String, List Diag) ->
+  List (String, String, List Diag)
+foldResidualJson _ _ entryKey [] triples =
+  cjFoldIntoFile entryKey [residualGenericDiag] triples
+foldResidualJson pathMap root entryKey ((mid, d) :: rest) triples =
+  match lookupAssoc mid pathMap
+    None => foldResidualJson pathMap root entryKey rest triples
+    Some path =>
+      foldResidualJson
+        pathMap
+        root
+        entryKey
+        rest
+        (cjFoldIntoFile (relDiagPath root path) [diagOfTypeError d] triples)
+
+-- The structured counterpart of `residualOrGeneric`'s no-located-diagnostic
+-- fallback text (#1812): an elaboration armed `hadTypeErrors` with no
+-- diagnostic the residual carries a `Loc` for.
+residualGenericDiag : Diag
+residualGenericDiag =
+  Diag
+    SevError
+    "R-BUILD-FAILED"
+    ("type error detected during elaboration (the run/build type pass); no"
+      ++ " located diagnostic is available for it, and `medaka check` may not"
+      ++ " report this program at all — see issue #1812")
+    None
+    None
+    None
+
 -- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
 -- `medaka run` evaluates top-level bindings and checks `main` EXISTS but never
 -- APPLIES it: a `main` that isn't a zero-arg Unit-typed value silently no-ops

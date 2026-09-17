@@ -14,7 +14,7 @@ import types.typecheck.{TcDiag}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 export import support.util.{rootsOrDefault}
-import support.util.{splitLast}
+import support.util.{contains, filterList, splitLast}
 import types.typecheck.{
   elaborateOne,
   elaborateModules,
@@ -25,10 +25,16 @@ import types.typecheck.{
 }
 import support.path.{dirOf}
 import driver.diagnostics.{
+  CheckJson(..),
   emitDiagExitCode,
   emitGateDiags,
+  emitGateDiagsJson,
+  foldResidualJson,
+  ppCheckJson,
+  relDiagPath,
   renderTcDiags,
   residualOrGeneric,
+  seededTriplesJson,
 }
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp}
 import driver.loader.{
@@ -166,13 +172,35 @@ driveModules runEmit = driveModulesLocated (_ => runEmit)
 -- triples as well — the emit drivers do, because since the parent `medaka build`
 -- process stopped typechecking they own the located diagnostics for the build
 -- and need each module's own file to render against.
+-- `--json` (#2874): a trailing, optional flag the parent (`build_cmd`'s
+-- `runBuildNativeRootsGo`, JSON mode only) appends AFTER the roots.  Stripped
+-- from `rest` before the `runtimeP :: coreP :: entry :: roots` match runs, so
+-- the existing positional shape is undisturbed for every non-JSON caller.
+-- Arms `jsonEmitRef`/`jsonRootRef` for `emitFullGate`/`emitResidualGate`/
+-- `emitWrapDiags` below to read.
 export
 driveModulesLocated : (List (String, String, List Decl) -> List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit) ->
   <IO> Unit
 driveModulesLocated runEmit = match args ()
-  runtimeP :: coreP :: entry :: roots =>
+  runtimeP :: coreP :: entry :: rest =>
+    let jsonMode = contains "--json" rest
+    let roots = filterList (/= "--json") rest
+    jsonEmitRef := jsonMode
+    jsonRootRef := dirOf (dirOf coreP)
     driveModulesGo runEmit runtimeP coreP entry (rootsOrDefault entry roots)
   _ => failWith usageModules
+
+jsonEmitRef : Ref Bool
+jsonEmitRef = Ref False
+
+jsonRootRef : Ref String
+jsonRootRef = Ref ""
+
+jsonEmitArmed : Unit -> Bool
+jsonEmitArmed _ = !jsonEmitRef
+
+jsonRootOf : Unit -> String
+jsonRootOf _ = !jsonRootRef
 
 -- Kept as a local one-liner in each of its three call sites (here,
 -- tools/test_cmd.mdk, driver/medaka_cli.mdk) rather than lifted into
@@ -287,6 +315,33 @@ emitResidualGate pathMap target residual =
     let _ = ePutStrLn (residualOrGeneric pathMap target residual)
     exit emitDiagExitCode
 
+-- JSON-mode counterpart of `emitResidualGate`: `cj` is the front-end's own
+-- clean envelope (no errLines) `emitFullGateJson` already built — reused
+-- rather than rebuilt, so a residual-free build prints EXACTLY that envelope
+-- and a residual-bearing one overrides it in place before printing, keeping
+-- exactly one JSON document on stderr whether or not #1812's residual
+-- divergence fires.
+emitResidualGateJson : List (String, String) ->
+  String ->
+  String ->
+  List (String, TcDiag) ->
+  CheckJson ->
+  <IO> Unit
+emitResidualGateJson pathMap root entryKey residual cj =
+  if hadTypeErrors () then
+    let triples = match cj
+      CjParts _ ts => ts
+      CjRendered _ => []
+    let _ =
+      ePutStrLn
+        (ppCheckJson
+          (CjParts
+            entryKey
+            (foldResidualJson pathMap root entryKey residual triples)))
+    exit emitDiagExitCode
+  else
+    ePutStrLn (ppCheckJson cj)
+
 -- The whole diagnostic verdict for a build, rendered as `medaka check` renders
 -- it: this process is the only one that typechecks the graph, so the warnings go
 -- out even when the build goes on to succeed and an error stops it before the
@@ -300,21 +355,58 @@ emitFullGate : List (String, String, List Decl) ->
   List (String, TcDiag) ->
   <IO> Unit
 emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
-  let (errLines, warnLines) =
-    emitGateDiags runtimeDecls coreDecls modsWithPath modules perMod
+  if jsonEmitArmed () then
+    emitFullGateJson modsWithPath runtimeDecls coreDecls modules perMod residual
+  else
+    let (errLines, warnLines) =
+      emitGateDiags runtimeDecls coreDecls modsWithPath modules perMod
+    let pathMap = map modIdToPath modsWithPath
+    match errLines
+      -- Warnings ride the CLEAN path only, which is what `check` does with the same
+      -- diagnostics: once a program has an error the errors are the whole report.
+      -- Printing both made a rejecting `build` louder than `medaka check` on the
+      -- same file, and louder than this same `build` was before the child owned the
+      -- verdict.
+      [] =>
+        let _ = map ePutStrLn warnLines
+        emitResidualGate pathMap (entryPathOf modsWithPath) residual
+      _ =>
+        let _ = map ePutStrLn errLines
+        exit emitDiagExitCode
+
+-- #2874: the same verdict as `emitFullGate`, rendered as a `CheckJson`
+-- envelope on stderr instead of human lines — see `emitGateDiagsJson`'s
+-- comment for the shape (`checkJsonFileParts`'s, moved into this process now
+-- that ruling 3 made it the build's only typecheck). Threads its clean-branch
+-- envelope into `emitResidualGateJson` so the residual gate can override it in
+-- place rather than print a second document.
+emitFullGateJson : List (String, String, List Decl) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List (String, (List TcDiag, List TcDiag)) ->
+  List (String, TcDiag) ->
+  <IO> Unit
+emitFullGateJson modsWithPath runtimeDecls coreDecls modules perMod residual =
+  let root = jsonRootOf ()
   let pathMap = map modIdToPath modsWithPath
-  match errLines
-    -- Warnings ride the CLEAN path only, which is what `check` does with the same
-    -- diagnostics: once a program has an error the errors are the whole report.
-    -- Printing both made a rejecting `build` louder than `medaka check` on the
-    -- same file, and louder than this same `build` was before the child owned the
-    -- verdict.
-    [] =>
-      let _ = map ePutStrLn warnLines
-      emitResidualGate pathMap (entryPathOf modsWithPath) residual
-    _ =>
-      let _ = map ePutStrLn errLines
-      exit emitDiagExitCode
+  let (cj, hasErr) =
+    emitGateDiagsJson
+      modsWithPath
+      runtimeDecls
+      coreDecls
+      modules
+      perMod
+      root
+      (entryPathOf modsWithPath)
+  if hasErr then
+    let _ = ePutStrLn (ppCheckJson cj)
+    exit emitDiagExitCode
+  else
+    let entryKey = match cj
+      CjParts k _ => k
+      CjRendered _ => ""
+    emitResidualGateJson pathMap root entryKey residual cj
 
 -- The auto-print / async wrap re-checks the WRAPPED program, and its diagnostics
 -- are about the user's own `main`.  They go out through the same located face as
@@ -323,11 +415,30 @@ emitFullGate modsWithPath runtimeDecls coreDecls modules perMod residual =
 -- `medaka check` gives them for the identical program.
 emitWrapDiags : List (String, String, List Decl) -> List TcDiag -> <IO> Unit
 emitWrapDiags modsWithPath ds =
+  if jsonEmitArmed () then
+    emitWrapDiagsJson modsWithPath ds
+  else
+    let mid = entryMidOf modsWithPath
+    let _ =
+      map
+        ePutStrLn
+        (renderTcDiags (map modIdToPath modsWithPath) (map (d => (mid, d)) ds))
+    exit emitDiagExitCode
+
+-- JSON-mode counterpart of `emitWrapDiags`: the wrapped re-check's diagnostics
+-- (never empty at this call site — the `[] =>` arm of both callers takes the
+-- clean path instead) folded into the entry's bucket of a fully-seeded triple
+-- set, so the envelope still names every file in the graph, not only the entry.
+emitWrapDiagsJson : List (String, String, List Decl) -> List TcDiag -> <IO> Unit
+emitWrapDiagsJson modsWithPath ds =
+  let root = jsonRootOf ()
   let mid = entryMidOf modsWithPath
-  let _ =
-    map
-      ePutStrLn
-      (renderTcDiags (map modIdToPath modsWithPath) (map (d => (mid, d)) ds))
+  let pathMap = map modIdToPath modsWithPath
+  let entryKey = relDiagPath root (entryPathOf modsWithPath)
+  let base = seededTriplesJson modsWithPath root
+  let triples =
+    foldResidualJson pathMap root entryKey (map (d => (mid, d)) ds) base
+  let _ = ePutStrLn (ppCheckJson (CjParts entryKey triples))
   exit emitDiagExitCode
 
 -- The entry module's path, for the residual's fallback text.  The loader is
