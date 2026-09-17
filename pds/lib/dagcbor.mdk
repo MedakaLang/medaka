@@ -31,6 +31,7 @@ import byteparser.{
 import list.{reverse, sortBy}
 import string.{fromUtf8, toUtf8}
 import lib.cid.{Cid, cidFromBytes, cidToBytes}
+import lib.resource_limits.{checkDagCborDepth, maxDagCborDepth}
 
 -- | The exact atproto data-model value subset admitted by this codec.
 public export data DagCbor =
@@ -42,14 +43,6 @@ public export data DagCbor =
   | DcArray (List DagCbor)
   | DcMap (List (String, DagCbor))
   | DcLink Cid
-
-{- | The nesting ceiling both directions of this codec enforce. It is a
-   ceiling on the DECODER's recursion, so the encoder must refuse the same
-   values: bytes this module produced but cannot read back would be a record
-   committed to a repository that no read path can ever return. -}
-export
-maxDepth : Int
-maxDepth = 128
 
 validBytes : Array Int -> Int -> Bool
 validBytes bytes i =
@@ -100,11 +93,9 @@ compareKeyBytes left right i =
    same nesting levels: a value's children are emitted one level below it, a
    map key counts as a child alongside its value, and a tag-42 link is a leaf. -}
 emitValue : DagCbor -> Int -> Builder -> Result String Unit
-emitValue value depth out =
-  if depth > maxDepth then
-    Err "dagcbor: nesting depth exceeds \{intToString maxDepth}"
-  else
-    emitValueAt value depth out
+emitValue value depth out = match checkDagCborDepth depth
+  Err _ => Err "dagcbor: nesting depth exceeds \{intToString maxDagCborDepth}"
+  Ok () => emitValueAt value depth out
 
 emitValueAt : DagCbor -> Int -> Builder -> Result String Unit
 emitValueAt DcNull _ out =
@@ -218,8 +209,8 @@ readArgument _ pos _ = BErr "dagcbor: reserved additional-information value" pos
 
 parseValueAt : Array Int -> Int -> Int -> BResult DagCbor
 parseValueAt input pos depth =
-  if depth > maxDepth then
-    BErr "dagcbor: nesting depth exceeds \{intToString maxDepth}" pos
+  if depth > maxDagCborDepth then
+    BErr "dagcbor: nesting depth exceeds \{intToString maxDagCborDepth}" pos
   else if pos >= arrayLength input then
     BErr "dagcbor: truncated value" pos
   else

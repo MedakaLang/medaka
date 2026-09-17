@@ -72,6 +72,14 @@ export
 maxMstTraversalDepth : Int
 maxMstTraversalDepth = 128
 
+{- | The nesting ceiling both directions of `pds/lib/dagcbor.mdk` enforce. It
+   is a ceiling on the decoder's recursion, so the encoder must refuse the
+   same values: bytes that module produced but cannot read back would be a
+   record committed to a repository that no read path can ever return. -}
+export
+maxDagCborDepth : Int
+maxDagCborDepth = 128
+
 export
 checkCarBytes : Int -> Result String Unit
 checkCarBytes size =
@@ -125,6 +133,14 @@ checkMstTraversalDepth : Int -> Result String Unit
 checkMstTraversalDepth depth =
   if depth > maxMstTraversalDepth then
     Err "mst: traversal depth exceeds 128 resource limit"
+  else
+    Ok ()
+
+export
+checkDagCborDepth : Int -> Result String Unit
+checkDagCborDepth depth =
+  if depth > maxDagCborDepth then
+    Err "dagcbor: nesting depth exceeds 128 resource limit"
   else
     Ok ()
 
