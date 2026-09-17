@@ -1,123 +1,39 @@
--- The SHARED ROUTE-WORD MINT — Stage B / Phase 3′ (ARCH B-2, #1113).
+-- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
+-- word in the tree, imported by `types/typecheck.mdk`, `eval/eval.mdk` and
+-- `ir/core_ir_lower.mdk`; the two mirrors it replaced (`eval.implKeyOf`'s private
+-- `ppTyK` printer family, `typecheck.implKeyTc`'s hand-spelled body) are deleted.
 --
--- 🚨 THE TICKET IN THIS HEADER USED TO READ #1182 AND THAT WAS WRONG — nine
--- instances of the same mis-citation propagated from one packet sentence, and a
--- reader greps the HEADER, so it is corrected here rather than only in the body.
--- Qualifying the route word does NOT fix #1182: that bug is
--- `ieCandidatesForMethod`'s candidate key — method-name membership plus a head
--- match, with NO interface component — which is UPSTREAM of this word; the row is
--- already chosen wrong before anything here is minted. And on #1182's own repro
--- the word does not even move: it is a SINGLE FILE, so `ifaceIdentity` answers
--- `""`, `ifaceWordOf` falls back to the bare name, and the output is byte-
--- identical to the pre-bite word. What this mint closes is the residual of the
--- #1047/#1265 family — #1047 (two modules declaring same-SPELLED interfaces) is
--- CLOSED, and #1265's own title records what was left: *"#1264 fixed only the
--- interface-NAME half"*, i.e. the TABLES were qualified and the ROUTE WORD was
--- not.  That word is what this module mints.
+-- The design doc's two-component `RKey` carrier (identity + word) was refused:
+-- `Route` crosses into `ir/`, `backend/` and `eval/`, where the only namespaces
+-- are `String` symbol names and `hashName`'d i64 dict words, so no reading site
+-- can consume a separate identity component. The identity lives INSIDE the word
+-- instead (content-derived, see `ifaceWordOf`), and `data Route`
+-- (`frontend/ast.mdk`) is unchanged.
 --
--- 🚨 THAT STAGING IS OVER. `B-2.2-e` + `B-2.2-b1` WIRED THE CALLERS UP: this
--- module is now imported by `types/typecheck.mdk` (the caller side of the
--- dict-word seam), `eval/eval.mdk` and `ir/core_ir_lower.mdk` (the definition
--- side), and it is the ONLY mint of an impl route word in the tree. The two
--- mirrors it replaced — `eval.implKeyOf` with its private `ppTyK` printer family,
--- and `typecheck.implKeyTc`'s hand-spelled body — are DELETED. Everything below
--- that reads as "available and applied nowhere" describes `a`'s landing and is
--- annotated where it is now false.
+-- See compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "9.6 The subsumption
+-- enumeration — derived by SHAPE, not by prefix" for why this mint lives in its
+-- own module rather than an existing one.
 --
--- ⚠️ THE DESIGN DOC IS WRONG FOR THIS BITE, DELIBERATELY.
--- `.claude/sprint-b/design/D1-phase3-routes.md` §`B-2.2-a` says to change
--- `RKey`'s field to a two-component carrier (identity + word). That was
--- REFUSED in Phase 0 on a consumer-side derivation — `DECISIONS.md`
--- RUN-P3-019. The short form: `Route` crosses out of `types/` into `ir/`,
--- `backend/` and `eval/`, where the only namespaces that exist are `String`
--- symbol names and `hashName`'d i64 dict words; all 15 reading sites need the
--- WORD and none can consume an identity. So the identity belongs INSIDE the
--- word (content-derived), which is what `ifaceWordOf` does below.
--- `data Route` (`frontend/ast.mdk`) is unchanged and must stay so.
---
--- ── Why its OWN module, rather than an existing one ────────────────────────
--- Each of the four candidates was rejected for a reason that is a property of
--- the tree, not a preference:
---   * `types/typecheck.mdk` — `eval/eval.mdk` and `ir/core_ir_lower.mdk`
---     cannot import it, so siting the mint there would make it a THIRD
---     mirrored copy beside `implKeyTc` and `implKeyOf` — the P0-9 shape the
---     later bites exist to DELETE.
---   * `compiler/support/util.mdk` — `test/preflight.sh` maps
---     `compiler/support/*` onto its `mark_full` blast-radius arm, i.e. the
---     whole-suite run on every touch, forever.
---   * `compiler/frontend/ast.mdk` — imports NOTHING today
---     (`grep -Hn '^import' compiler/frontend/ast.mdk` → zero hits); the mint
---     needs `joinWith`/`escStr` from `support/util.mdk`, which would give the
---     zero-import base module its first import.
---   * inlining at each caller — that is the status quo this bite removes.
--- NO CYCLE: `frontend/ast.mdk` imports nothing, and `support/util.mdk` imports
--- only `support.ordmap`, `support.opcount`, `list`, `string` — not
--- `frontend.ast`. So `types/route_key.mdk` sits strictly BELOW `eval`,
--- `typecheck` and `core_ir_lower`, which is what lets all three reach it.
--- `compiler/types/registry.mdk` is the precedent for a new `types/` module
--- with exactly this import shape.
---
--- ── ⚠️ HISTORICAL, and no longer the verification story ───────────────────
--- The paragraph below was `a`'s: with the callers wired up this module is in
--- `medaka_cli.mdk`'s import closure, so `make medaka`, `make check-self` and
--- `test/typecheck_compiler_source.sh` all cover it now, and every gate that
--- grades a route word grades it. **Keep the `Makefile` `test:` line anyway** —
--- it is the only thing that RUNS the doctests below, which are the compatibility
--- pins (byte-identity with the pre-fold word on the absent-origin arm).
---
--- 🚨 "NO CALL SITES" ALSO MEANS "IN NO GATE" UNLESS SAID OTHERWISE, and that
--- is measured, not feared: `compiler/types/registry.mdk`'s header records the
--- 2026-08-03 measurement that a module outside every entry's import closure is
--- invisible to `make medaka`, to `make check-self`, and to
--- `test/typecheck_compiler_source.sh` (pass 1 walks
--- `compiler/driver/medaka_cli.mdk`, pass 2 covers `compiler/entries/*.mdk`;
--- this file is in neither) — with a deliberately broken body injected, both
--- reported PASS. So `Makefile`'s `test:` target names this module explicitly,
--- exactly as it names `registry.mdk`: `medaka test <file>` TYPECHECKS the file
--- before running its doctests, which puts both halves inside the required
--- `inlang` check. A later bite that lands a call-site-free module and forgets
--- that line has shipped unverified code with every gate green.
+-- `Makefile`'s `test:` target names this module explicitly (as it names
+-- `registry.mdk`), so `medaka test <file>` typechecks it and runs its doctests
+-- (the compatibility pins: byte-identity with the pre-fold word on the
+-- absent-origin arm) -- a module outside every entry's import closure is
+-- otherwise invisible to `make medaka`, `make check-self` and
+-- `test/typecheck_compiler_source.sh`.
 --
 -- ── What the three exports are ────────────────────────────────────────────
--- `implRouteKeyWord` is BYTE-IDENTICAL to today's `implKeyTc`
--- (`types/typecheck.mdk`) and `implKeyOf` (`eval/eval.mdk`) whenever the
--- origin is absent, and carries `module::Iface` in place of the bare
--- interface name when it is not. ⚠️ That substitution is NOT #1182's fix — see
--- the header for the full retraction. It closes the ROUTE-WORD residual of the
--- #1047/#1265 family (two same-SPELLED interfaces in different modules
--- collapsing onto one word). `B-2.2-b1` APPLIES it, at
--- `keyForSite`/`keyForSiteByIface`.
+-- `implRouteKeyWord` builds the route word for an impl: `<iface word>|<type args,
+-- space-joined>|<method name or empty>`. The interface word is qualified when
+-- origin is known (e.g., "b::Speak"), or the bare name when origin is absent.
 --
--- `routeWordFor` is `core_ir_lower.declRouteKey`'s body and the
--- `if ieHeadCollidesBy… then implKeyTc … else headKeyNameOr …` shape of
--- `keyForSite`/`keyForSiteByIface` (`types/typecheck.mdk`), unified — the
--- caller supplies the collision verdict and the bare head tag, both of which
--- are computed from tables this module cannot see.
+-- `routeWordFor` supplies the collision verdict: unique head yields the bare tag
+-- verbatim; colliding head yields the canonical impl word (see above).
 --
--- `rkTy`/`rkTyFunArg`/`rkTyAtom` are ONE prec-2 `Ty` printer, the eventual
--- single replacement for the mirrored `ppTyAtom` (`types/typecheck.mdk`) and
--- `ppTyAtomK` (`eval/eval.mdk`).
---
--- 🚨 THE TWO ORIGINALS ARE NOW DELETED (`B-2.2-e`), AND THEY DIVERGED OFF THE
--- REACHABLE SUBSET, so the collapse WIDENED eval's words. The divergence, kept
--- because it is what the fold changed and a future reader needs to know which
--- direction it moved:
---   * `TyEffect effs tail t` — typecheck prints `<row> t`; eval prints `t`,
---     dropping the row entirely.
---   * `TyConstrained cs t`   — typecheck prints `cs => t`; eval prints `t`.
---   * `TyRow`                — both print `<row>`; these agree.
--- `rkTy` is based on typecheck's `ppTy`/`ppTyAtom`, the MORE COMPLETE of the
--- two, so adopting it at eval's callers WIDENED eval's words for the two rows
--- above: two impls differing only in an effect row or a constraint no longer
--- collapse onto one `implKeyOf` word there.
--- ✅ MEASURED SAFE, and this is the derivation rather than the assertion: a
--- program that could OBSERVE the collapse does not typecheck. `impl Sz Int`
--- beside `impl Sz (<Stdout> Int)` — and `impl Sz a` beside `impl Sz (Eq a => a)`
--- — are both rejected by coherence at exit 1 on `check` AND `run`, with a
--- diagnostic that STRIPS the row itself (*"Overlapping impls of Sz: Int and Int
--- can match the same type"*). So no accepted program has two impls differing
--- only on that axis, and the widening cannot separate two words that any
--- accepted program's routes depended on being equal.
+-- `rkTy`/`rkTyFunArg`/`rkTyAtom` are one prec-2 `Ty` printer. It matches
+-- `types/typecheck.mdk`'s version, not `eval/eval.mdk`'s, because the latter is
+-- incomplete on effect rows and constraints. This widens eval's words for
+-- programs differing only on effect row or constraint, which is safe: no
+-- accepted program has two impls that differ only on those axes.
 
 -- `constraintUnresolved` is reached ONLY from the `TyConstrained` doctests
 -- below (it is `Constraint`'s one legal mint for an unstamped occurrence).

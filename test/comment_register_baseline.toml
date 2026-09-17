@@ -137,7 +137,7 @@ count = 15
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
 class = "shout"
-count = 10
+count = 8
 
 [[entry]]
 file = "compiler/driver/loader.mdk"
@@ -157,12 +157,12 @@ count = 8
 [[entry]]
 file = "compiler/driver/main_autoprint.mdk"
 class = "emoji"
-count = 3
+count = 2
 
 [[entry]]
 file = "compiler/driver/main_autoprint.mdk"
 class = "shout"
-count = 5
+count = 3
 
 [[entry]]
 file = "compiler/driver/medaka_cli.mdk"
@@ -242,12 +242,12 @@ count = 1
 [[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 class = "emoji"
-count = 24
+count = 20
 
 [[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 class = "shout"
-count = 19
+count = 14
 
 [[entry]]
 file = "compiler/entries/playground_main.mdk"
@@ -292,12 +292,12 @@ count = 1
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "emoji"
-count = 33
+count = 27
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "shout"
-count = 45
+count = 37
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"
@@ -410,11 +410,6 @@ class = "shout"
 count = 1
 
 [[entry]]
-file = "compiler/ir/core_ir_eval.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
 file = "compiler/ir/core_ir_lower.mdk"
 class = "ruling"
 count = 1
@@ -497,7 +492,7 @@ count = 7
 [[entry]]
 file = "compiler/tools/gate_pack.mdk"
 class = "shout"
-count = 42
+count = 39
 
 [[entry]]
 file = "compiler/tools/gate_registry.mdk"
@@ -662,12 +657,12 @@ count = 19
 [[entry]]
 file = "compiler/types/route_key.mdk"
 class = "emoji"
-count = 15
+count = 8
 
 [[entry]]
 file = "compiler/types/route_key.mdk"
 class = "shout"
-count = 16
+count = 11
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -702,7 +697,7 @@ count = 6
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 747
+count = 743
 
 [[entry]]
 file = "stdlib/args.mdk"

@@ -3511,6 +3511,25 @@ running counter that `ieFileRowByHead` appends to, so every `ieHeadRows` bucket 
 ascending by construction and the tie-break at a no-unique-minimum goal is
 graph-global declaration order.
 
+**`route_key.mdk` is its own module rather than folded into an existing one**:
+`types/typecheck.mdk` cannot be imported by `eval/eval.mdk` or
+`ir/core_ir_lower.mdk`, so siting the mint there would recreate the mirrored-copy
+shape this fold removes; `support/util.mdk` is preflight's `mark_full` blast
+radius (every touch runs the whole suite); `frontend/ast.mdk` imports nothing
+today and gains its first import for no other reason. Sitting strictly below
+`eval`, `typecheck` and `core_ir_lower` (it imports only `frontend.ast` and
+`support.util`, neither of which imports it back) is what lets all three reach
+the one mint.
+
+**The two sides' head-tag projections (`typecheck.headTyNode`, this file's
+`headTycon`) must agree on every `Ty` shape, not just the ones tried first**: both
+now peel `TyEffect` and `TyConstrained` the same way and both answer
+`route_key.funHeadTag` for an arrow. A partial agreement (peeling only one of the
+two wrapper shapes) is silently wrong at `run`'s exit 0, not loud at any verb —
+the divergence surfaces only as a declaration-order-dependent dict pick, so a
+fixture pinning ONE wrapper shape does not bound the class; both known wrapper
+shapes need their own fixture (`test/dict_fixtures/`).
+
 ### 9.7 `IE` is a program-global table: naming its key's scope, and proving it
 
 `AGENTS.md` names the program-global table as the most expensive shape in this

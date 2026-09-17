@@ -34,6 +34,19 @@ the other. This is exactly how the P0-9 cross-module ctor-collision fix shipped 
 modules inherits it (e.g. `map`'s arity-5 `Bin` vs `set`'s arity-4 `Bin` collapse into one cell).
 The fix shape is a per-module **local** ctor frame that shadows the global.
 
+**A specific instance of this hazard: sharing an implementation does not share the
+state it reads.** `ceval`'s `CMethod`/`CDict` arms (`ir/core_ir_eval.mdk`) call
+`eval.mdk`'s `applyMethodDicts`, the single shared implementation for dict-forwarding
+on an impl method that declares no `requires` of its own. Calling the same function
+from both drivers was not sufficient on its own: `applyMethodDicts` also consults
+`methodReqCountRef`, a table that only `eval.mdk`'s own drivers used to fill, so a
+lookup from the `core_ir_eval.mdk` side always found it empty and took the wrong
+branch — an impl method with a `requires` clause dispatched correctly under `medaka
+run` and panicked under the Core IR interpreter, with the shared function unchanged
+either way. `installDispatchTables` is what makes the two agree: it derives both
+dispatch tables from one decl list and installs them together, so no driver can
+populate one table and leave the other's reader empty.
+
 ## [T-GLOBAL-TABLE] 2026-07-24 program-global-table incident
 
 On 2026-07-24 alone, this shape was the root cause of an S0, an S1, and a def-site regression

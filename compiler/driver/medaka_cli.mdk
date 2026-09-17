@@ -2294,9 +2294,9 @@ runBuildModes a = match flagValue "--emit-rt-obj" a
     -- plain-text arm (`runBuildPlainCmd`) is the pre-#1078 body, unchanged.
     None => if flag "--json" a then runBuildJsonEntry a else runBuildPlainCmd a
 
--- The pre-#1078 plain-text `medaka build` body (parse args → typecheck gate →
--- emit+clang), split out of `runBuildCmd` so the `--json` dispatch above
--- doesn't have to interleave two argument-parsing arms at one indent level.
+-- The plain-text `medaka build` body (parse args -> typecheck gate ->
+-- emit+clang), kept separate from `runBuildJsonEntry` to avoid interleaving
+-- argument-parsing dispatch at the same indent level.
 runBuildPlainCmd : Args -> <IO> Unit
 runBuildPlainCmd a =
   let perfOn = perfEnabled ()

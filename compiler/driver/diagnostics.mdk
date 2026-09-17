@@ -2298,69 +2298,16 @@ export
 coherenceWarnCode : String
 coherenceWarnCode = "W-INCOMPARABLE-IMPLS"
 
--- #1499 / D1.  The predicate above is now a MEMBERSHIP TEST over a short
--- allowlist, not a single-literal test — and the three measured objections
--- recorded above do NOT reach the second member.  `W-PRELUDE-METHOD-SHADOW` has
--- no oracle at all (a pure name-set intersection, so it cannot be false), fires
--- at most ONCE PER COLLIDING INTERFACE-METHOD DECLARATION, and measures zero
--- occurrences across compiler/, stdlib/ and sqlite/ — so both the (2) spew and
--- (3) render costs are bounded by the collision count rather than by the module
--- graph.  This list is the decision, taken deliberately; it is not a place to
--- park codes, and every addition owes the same three measurements.
---
--- #2400 / F4 (2026-09-01): THIS LIST IS NOW THE MULTI-MODULE ALLOWLIST ONLY.
--- The SINGLE-FILE / single-module arms of `run` and `build` bypass it entirely via
--- `allWarnTriples` (`filter diagIsWarn`), matching what `checkRoute`'s single-file
--- arm already does with the identical `diags` value.  The split is deliberate, not
--- an oversight: objections (2) and (3) above are properties of the module graph and
--- do not reach a single-file program (measured — see `allWarnTriples`'s note), while
--- on a graph the #1185 phantom is still ~99% of the channel.  So the multi-module
--- side stays here, BLOCKED ON #1185, and collapsing the two arms back together is a
--- decision that waits on #1185's constructor oracle becoming scrutinee-typed.
--- #2738 / D2.  The third member owes the same three measurements, and they answer the
--- same way as the second's.  (1) It is not a demotion of anything loud: the path it
--- covers returned NOTHING on any verb, so `run`/`build` going silent about it is what
--- is being repaired, not preserved.  (2) No oracle, so no false positive is
--- representable: it is a name-set intersection filtered by a comparison of two DECLARED
--- signatures, and it fires at most once per import MEMBER, not per occurrence —
--- measured TWICE over this file's whole module closure (`eval/eval.mdk`'s `add` and
--- `sub`, each importing a `U64` standalone that `Num`'s method of the same name
--- displaces), against the #1185 phantom's 1249 lines on the same command.  (3) The
--- render cost is therefore bounded by the collision count, not by the module graph,
--- exactly as for `W-PRELUDE-METHOD-SHADOW`.
---
--- The count is not zero: unlike `W-PRELUDE-METHOD-SHADOW`, this code DOES fire on the
--- compiler's own source today.  Those sites are live members of the class, not false
--- positives, and they are the derived worklist the drain half of #2769 consumes.  Do
--- not re-copy the number out of this comment — re-derive it, since the set moves with
--- the tree (it was three until `map.toList` was deleted and `types/registry.mdk`
--- switched to `map.{entries}`):
---
---     ./medaka check compiler/driver/medaka_cli.mdk 2>&1 | grep -c 'is shadowed in module'
---
--- #3027 / D3.  The fourth member owes the same three measurements, and they answer
--- the same way as the second's (`W-PRELUDE-METHOD-SHADOW`), not the third's: like
--- that one, it fires on NOTHING in `compiler/` or `stdlib/` today, so its count is a
--- census of `test/`-only fixtures, not a worklist. (1) It is not a demotion of
--- anything loud: `openGoalCommitWarnCode` (`types/typecheck.mdk`) was silent on
--- EVERY verb before ruling 1 gave it a code at all, so `run`/`build` catching up to
--- `check` here is a repair, exactly `W-IMPORT-METHOD-SHADOW`'s shape. (2) Its oracle
--- is `pickMostSpecificEntry`'s no-unique-minimum arm — a COMMITMENT point reached at
--- most once per open, ⊑-incomparable goal, not the #1185 phantom's graph-wide
--- constructor-universe oracle — so a false positive is not representable the way
--- #1185 is; see `openGoalCommitWarnCode`'s own comment for the "ungated it fires
--- twice in the whole tree" measurement this reconfirms. Re-derive, do not quote:
---
---     make t4-census
---
--- which at this writing finds 3 WILD sites total, all under `test/` (0 under
--- `stdlib/`) -- the two pre-existing #1183-class fixtures plus this member's
--- own multi-module regression pin. The census's own positive-control corpus
--- (`test/t4_census_fixtures/`, 3 sites) is reported separately, not folded
--- into the wild total, so an empty wild census stays a reachable answer.
--- (3) The render cost is therefore bounded by the (small, test-only) site
--- count, not by the module graph, exactly as for the second and third
--- members.
+-- These four warning codes are on the allowlist because they satisfy three
+-- measurements: (1) oracle properties and false-positive rates are bounded,
+-- (2) occurrence frequency is bounded (not graph-wide), and (3) render cost
+-- is bounded by collision/site count, not module-graph size. This list is
+-- not a place to park codes; every addition owes the same three measurements.
+-- The single-file and single-module arms of `run` and `build` bypass this
+-- allowlist entirely via `allWarnTriples`, matching the single-file arm's
+-- behavior in `checkRoute`. This split is deliberate: the three measurement
+-- properties above are properties of the module graph and do not reach a
+-- single-file program.
 export
 runBuildWarnCodes : List String
 runBuildWarnCodes = [

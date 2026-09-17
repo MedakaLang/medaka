@@ -229,39 +229,13 @@ wrapCall callee body = EApp (EVar callee) body
 -- exactly the same entry-module report the non-wrapped check would.  Returns
 -- the type-error `TcDiag`s for the caller to render.
 --
--- ⚠️ THIS CALL WAS PINNED TO THE `Flat` ARM (#2049) AND THE PIN IS NOW DISCHARGED —
--- do not re-derive the S0 from this comment, it describes a FIXED defect.
--- S-migrate-check-route (E-1 #1115) first pointed this at `checkOneDiags` and that was
--- an S0: this is not an ordinary `check` front door, it is a re-check run BETWEEN the
--- two emit elaborations of `runEmitWith` (`entries/entry_support.mdk`), so whatever
--- global state it leaves behind is read by the emit elaboration that follows it.  On
--- `medaka build` of
---
---     data A = A { p : Int, k : Int }
---     main =
---       let a = A { p = 10, k = 5 }
---       a.k
---
--- the `Module` arm produced `@mdk_core__println(i64 0, %t)` (SIGSEGV 139) where the
--- `Flat` arm produced `@mdk_core__println(ptr @mdk_dc_0, %t)` (prints `5`), IR
--- otherwise byte-identical.
---
--- THE LEAKED REF IS `driverState.matchOracle`, isolated by S-emit-interleave-leak:
--- `elaborateModules` never seeded it, so the emit elaboration read this re-check's
--- residue; the `Module` arm writes identity-keyed (`TkIdent`) rows under the ENTRY
--- MODULE'S OWN id — exactly the key the emit driver's `oGetCtors` readers mint — while
--- the `Flat` arm's rows are `TkBare` and always missed.  The hit is against rows built
--- from the UN-MANGLED tree, so `ctorSiblingWithholdingName` false-rejected `a.k`
--- (`Field 'k' is not declared by every constructor of 'A'`), `Display` could not ground,
--- and the emitter wrote a null dict word — silently, since the emit driver discards
--- `hadTypeErrors`.  The DISCRIMINATOR was the module id, not the arm: passing a rootId
--- other than `mid` (`"__user__"`, any constant) made the same `Module`-arm call emit
--- byte-identical IR, because the stale rows then keyed somewhere the reader never looks.
--- Fixed at the seam, not here: `elaborateModules` seeds the oracle itself — an empty
--- one before its core pass, and each user module's own (`seedCheckRun`, through
--- `checkModuleFullDiags`) before that module is inferred — so its readers never see
--- rows an interleaved check of any arm left behind.  The mechanism is documented at
--- the `matchOracle` write in `elaborateModules` (`compiler/types/typecheck.mdk`).
+-- This is a re-check run BETWEEN the two emit elaborations of `runEmitWith`
+-- (`entries/entry_support.mdk`), so any global state it leaves behind is read by
+-- the emit elaboration that follows it — `elaborateModules` seeds
+-- `driverState.matchOracle` itself before each module is inferred so this
+-- re-check's residue is never read back; do not attempt a fix here for a
+-- resurfacing symptom, the seeding is the mechanism (see the `matchOracle`
+-- write in `elaborateModules`, `compiler/types/typecheck.mdk`).
 export
 underivedMainDiags : List Decl ->
   List Decl ->

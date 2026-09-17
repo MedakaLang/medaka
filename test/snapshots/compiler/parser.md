@@ -1,5 +1,5 @@
 # META
-source_lines=5664
+source_lines=5651
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted Medaka parser.  A monadic
@@ -4780,23 +4780,10 @@ parseWithPositions src = match parseWithPositionsOpt src
   Some r => r
   None => panic "parse error"
 
--- Historically: `parseWithPositions` PLUS real per-expression `ELoc` locations
--- (#649), via a SEPARATE `tokenizeWithOffsetPairs` pass + `setLocState` primed
--- ahead of deferring to `parseWithPositions` — because plain
--- `parseWithPositions` (→ `parseWithPositionsOpt`) never called `setLocState`
--- itself, so every `located` atom in its returned tree carried `located`'s
--- zero-loc placeholder, NOT a real span. That gap is what let `medaka lint`'s
--- `exprRuleFindings` driver collapse every finding onto the decl's location
--- instead of the specific sub-expression's own.
---
--- #331 increment 3 / I6 unifies the two entries: `parseWithPositionsOpt` now
--- primes `setLocState` itself (using the SAME offset pairs it already
--- computes for the decl/child name-span finders), so `parseWithPositions`
--- already returns real expression `ELoc`s. This function is now a plain alias
--- kept for its existing callers (`compiler/tools/lint.mdk`'s
--- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s
--- `lintFileFresh`) — no separate tokenize pass, no separate `setLocState`
--- call; the double-tokenize this used to cost is gone.
+-- Backward-compatibility alias kept for callers in `compiler/tools/lint.mdk`'s
+-- `lintFileDiagTriple` and `compiler/driver/medaka_cli.mdk`'s `lintFileFresh`. See
+-- compiler/SOURCE-POSITION-DESIGN.md § "Increment 3 — unify the parse entry points
+-- (I6)" for why the dual-tokenize design this replaced existed and was retired.
 export
 parseWithPositionsLocated : String -> (List Decl, Positions)
 parseWithPositionsLocated src = parseWithPositions src
