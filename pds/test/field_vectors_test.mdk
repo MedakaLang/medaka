@@ -8,19 +8,33 @@
    `pds/test/VECTOR-PROVENANCE.txt`; the generator is
    `pds/tools/gen_field_corpus.sh` (a TOOL, not a gate: it needs network).
 
-   Both arms print `counted: <checked>/<total> rows ok, <skipped> skipped
+   Every arm prints `counted: <checked>/<total> rows ok, <skipped> skipped
    (stride <n>)` — a shape that does not contain a `<n> ok,` substring, so
    `Row`'s generic `countFloor` cannot parse it (the word before " ok," is
    "rows", not a number). The exact line is pinned as a `needs` substring
    instead: the corpus and the stride are both fixed, so the count is
    deterministic, and this is the same "raise it when vectors are added"
    discipline `countFloor` gives elsewhere, expressed with the field
-   `Row` already has. -}
+   `Row` already has.
+
+   The Wasm arm sweeps the same full corpus as the native one, so it carries
+   the same pinned line. It is the arm that can be absent from a host: it
+   needs the Wasm emitter, `node` and `wasm-tools`, and is skipped without
+   them unless `MEDAKA_REQUIRE_WASM=1`. -}
 
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
 }
 import test.{Expectation}
+
+fullCorpusArm : Engine -> Arm
+fullCorpusArm e = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = ["counted: 944/944 rows ok, 0 skipped (stride 1)"],
+  lastLine = Some "TOTAL: PASS",
+}
 
 row : Row
 row = Row {
@@ -38,16 +52,11 @@ row = Row {
       needs = ["counted: 135/135 rows ok, 809 skipped (stride 7)"],
       lastLine = Some "TOTAL: PASS",
     },
-    Arm {
-      engine = NativeEngine,
-      driverArgs = [],
-      countFloor = None,
-      needs = ["counted: 944/944 rows ok, 0 skipped (stride 1)"],
-      lastLine = Some "TOTAL: PASS",
-    },
+    fullCorpusArm NativeEngine,
+    fullCorpusArm WasmEngine,
   ],
   parity = False,
 }
 
-test "field vectors: eval (bounded, stride 7) and native (full corpus) reproduce the ledgered corpus" =
+test "field vectors: eval (bounded, stride 7), native and Wasm (full corpus) reproduce the ledgered corpus" =
   expectRow row
