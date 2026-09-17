@@ -26,8 +26,17 @@ pds.example.com {
 		max_size 5242880
 	}
 
+	# `stderr`, not a file, so systemd captures this into the journal beside
+	# `pds.service`'s own lines (criterion E7: retained and readable BESIDE the
+	# PDS log). A request that crosses the proxy boundary is then one query --
+	# `journalctl -u caddy -u pds` -- on one timeline, which is what
+	# docs/ops/PDS-RUNBOOK.md's incident procedure asks an operator to read.
+	# Writing a file instead costs a manual timestamp join at exactly the hour
+	# nobody wants to do one. The price is Caddy's own rotation, which journald
+	# replaces, and journald's rate limiting, which can drop lines under a
+	# burst -- see `RateLimitBurst` if that ever matters here.
 	log {
-		output file /var/log/caddy/pds-access.log
+		output stderr
 	}
 
 	reverse_proxy 127.0.0.1:8080 {

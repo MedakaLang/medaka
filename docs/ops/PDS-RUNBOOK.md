@@ -132,9 +132,25 @@ ln -sfn /opt/pds/releases/<previous-stamp> /opt/pds/current
 systemctl restart pds
 ```
 
-Re-run step 2 (provenance match) against the rolled-back commit before
+**Wait for readiness before step 2.** `systemctl is-active` goes green the
+instant systemd forks; this server needs ~4–5 s more before it is listening,
+and probing in that window reports a working rollback as a failed one — which
+is exactly what the first D3 rehearsal did (`#3106`). The signal is the
+server's own line:
+
+```sh
+t0=$(date +%s); systemctl restart pds
+until journalctl -u pds --since "@$t0" | grep -q 'serve: listening on'; do sleep 1; done
+```
+
+Then re-run step 2 (provenance match) against the rolled-back commit before
 considering the rollback complete — a rollback that doesn't verify its own
 target is the same defect this whole check exists to catch.
+
+**Rehearsed 2026-09-17**, both directions, on the live deployment: rolled back
+to the previous stamp, confirmed the older binary served and the repo head was
+unchanged, rolled forward, provenance matched each way. D3's "run once" clause
+is discharged; the transcript is on #1697.
 
 ## 6. Incident procedure
 

@@ -44,8 +44,11 @@ http://127.0.0.1:3128 {
 		}
 	}
 
+	# stderr for the same reason pds/Caddyfile uses it: this unit's journal is
+	# where an outbound call is correlated against the PDS's own line for the
+	# inbound call that caused it.
 	log {
-		output file /var/log/caddy/pds-egress-access.log
+		output stderr
 	}
 }
 
@@ -63,8 +66,11 @@ http://127.0.0.1:3129 {
 		}
 	}
 
+	# stderr for the same reason pds/Caddyfile uses it: this unit's journal is
+	# where an outbound call is correlated against the PDS's own line for the
+	# inbound call that caused it.
 	log {
-		output file /var/log/caddy/pds-egress-access.log
+		output stderr
 	}
 }
 
@@ -82,7 +88,10 @@ http://127.0.0.1:3130 {
 		}
 	}
 
+	# stderr for the same reason pds/Caddyfile uses it: this unit's journal is
+	# where an outbound call is correlated against the PDS's own line for the
+	# inbound call that caused it.
 	log {
-		output file /var/log/caddy/pds-egress-access.log
+		output stderr
 	}
 }
