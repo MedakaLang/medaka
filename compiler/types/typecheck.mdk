@@ -23154,13 +23154,12 @@ innerDefaultMethod m =
 isCompareMethod : String -> Bool
 isCompareMethod m = contains m ["eq", "lt", "gt", "lte", "gte"]
 
--- THE POPULATION MOVED AND NOTHING ELSE DID, deliberately — this is the same shape
--- as `B-2.1-g` and it keeps that bite's discipline:
---   • KEY STRENGTH is unchanged.  Both sides still project through `dispHeadTab`
---     (`headTabEq`), i.e. the head tycon SPELLING, exactly as `tag2 == tag`
+-- Only the population moved; the discipline `B-2.1-g` established stays intact:
+--   • Key strength is unchanged.  Both sides still project through `dispHeadTab`
+--     (`headTabEq`), i.e. the head tycon spelling, exactly as `tag2 == tag`
 --     compared two `headTyconNameTy`/`headTyconNameMono` names.  A structural
 --     `HeadKey` compare here would re-open #1111 — see `headTabIs`'s note.
---   • THE `requires`-ONLY FILTER IS KEPT (`implRowHasReqs`).  `ImplBuckets` was
+--   • The `requires`-only filter is kept (`implRowHasReqs`).  `ImplBuckets` was
 --     built by `implEntryOf`, whose `match reqs [] => []` arm drops every impl with
 --     no context, so the predecessor could only ever answer True for a
 --     `requires`-carrying impl.  Dropping that filter is a SECOND, independent
@@ -25261,7 +25260,7 @@ exportsCtorIdentFor n ident ((cn, _, ci) :: rest)
 -- `anyUsePathBindsCtor` are SHARED with unit 1, because a record's name IS its
 -- constructor and a named-field variant is keyed by its constructor; only the candidate
 -- ROW type differs (RecordInfo instead of Scheme), so only the two projections below are
--- new. IT MUST NOT RE-DECIDE AMBIGUITY, for the same reason as unit 1: two witnesses
+-- new. It must not re-decide ambiguity, for the same reason as unit 1: two witnesses
 -- decline to the floor rather than picking one, so a genuinely ambiguous import stays
 -- resolve's to reject. Scaffolding with a named deleter, same as unit 1: this is a
 -- further implementation of a fact `resolve.mdk` derives; #1288 owns the consolidation.
@@ -26896,8 +26895,8 @@ tyStructEqList (t1 :: ts1) (t2 :: ts2) =
   tyStructEq t1 t2 && tyStructEqList ts1 ts2
 tyStructEqList _ _ = False
 
--- The three selection legs (CHECKER, ROUTER, METHOD-keyed) are coupled and must all
--- be updated together; repointing only two produces a SEGFAULT (the impl gains a
+-- The three selection legs (checker, router, method-keyed) are coupled and must all
+-- be updated together; repointing only two produces a segfault (the impl gains a
 -- dict param but the element-route leg still selects from the prefix). See
 -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "9.6 The subsumption enumeration —
 -- derived by SHAPE, not by prefix" for the measured failure and the three legs named.
