@@ -904,6 +904,7 @@ The two that must reach you before you load it — both silent:
 | **debug-pipeline** | Parse/typecheck/eval failure or a wrong value; first choice for [T-DISPATCH-LOADER]. Also carries the probe/flag catalogue and the two-arm differential recipe. |
 | **gates** | A gate or CI shard went red and you need to know what it proved; or you're adding a fixture, a golden, or a gate. |
 | **write-tests** | Asked to "write tests"/"add unit tests" for a module — picks the vehicle (doctest / prop / `*_test.mdk` sibling / gate) before you write one. |
+| **jev-judgments** | Testing Jev (TypeSafe) against a class of fix candidates, adding or changing a question in `scripts/jev/`, or building a Jev-backed tool from `docs/design/JEV-DESIGN.md`'s roadmap — the enumerate / sample / label / ask / measure / iterate loop, and how to move a question's signal. Never a gate. |
 | **harden-typechecker** | Typechecker-*internal*: `type_error`, constraint/coherence/unification. |
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
 | **benchmark-emitter** | `compiler/backend/*` change to measure, or a suspicious fixpoint failure. |

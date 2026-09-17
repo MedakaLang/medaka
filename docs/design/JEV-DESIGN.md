@@ -207,6 +207,10 @@ Explored and declined for now:
 
 ## 6. Evaluation discipline
 
+The procedure, and the tips for moving a question's signal, are the
+`jev-judgments` skill (`.claude/skills/jev-judgments/SKILL.md`). This section
+records the rules it enforces.
+
 - The corpus is `scripts/jev/eval_corpus.json`: 100 comment blocks and 60
   declarations with their text inline, one reader's labels, and the regex
   census classes for the baseline comparison. #3124 adds a second reader.
