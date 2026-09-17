@@ -2,8 +2,9 @@
 
 **Status:** PROPOSED, 2026-09-16. The census half is built (`scripts/jev/`);
 the roadmap is filed as epic #3117 with milestones J-CENSUS, J-REVIEW, and
-J-NATIVE. Tracking is on the issues; this document is the design and the
-measured record.
+J-NATIVE. J-NATIVE is parked as of 2026-09-17 and section 5.1 says on what
+condition it unparks. Tracking is on the issues; this document is the design
+and the measured record.
 
 ## 1. The niche
 
@@ -190,7 +191,9 @@ and the measurement plan.
 | Issue hygiene (#3129) | J-REVIEW | severity Choice, repro-presence Noul, title-body contradiction Noul, duplicate pairing | hand triage; #983's shape |
 | Diagnostic rubric conformance (#3130) | J-REVIEW | Score per message against `compiler/ERROR-QUALITY.md` | the pending diag-census (#2302) |
 | Renamed reimplementations and non-verbatim duplicates (#3131) | J-REVIEW | candidate pairing by signature, Choice with a none option | what `rule-stdlib-reimpl` and `rule-duplicate-body` structurally miss (#2248, #2651, #2885) |
-| Native Medaka client (#3132) | J-NATIVE | one POST over `stdlib/http.mdk` and `stdlib/json.mdk` | the Python dependency; proposal first per the stdlib rule |
+
+The native Medaka client (#3132, milestone J-NATIVE) was a row in this table
+until 2026-09-17 and is now parked; section 5.1 replaces it.
 
 Explored and declined for now:
 
@@ -204,6 +207,53 @@ Explored and declined for now:
   reasoning over semantics, not a calibrated judgment over text. Route to the
   reviewer; do not pretend a Noul answers it.
 - **Anything as a required check.** Principle 2.
+
+### 5.1 Parked: the native Medaka client (#3132)
+
+Parked 2026-09-17 by Val's ruling. Not declined: it unparks only if TLS is
+prioritized on its own merits. Nothing here is a reason to build TLS.
+
+**The transport was never the cost.** The endpoint is one POST to
+`/v1/systemone` with a bearer key, JSON in and out, no streaming, no
+pagination, no signing; the failure statuses are 401, 422, 429, and 529. The
+client half of `scripts/jev/jev_census.py` is about 100 of its 514 lines, and
+`stdlib/json.mdk` is already the right shape, floats and integers kept apart.
+
+**The cost is TLS, and Medaka has none.** There is no TLS library in
+`runtime/medaka_rt.c` and nothing above raw TCP in `stdlib/runtime.mdk`. No
+program in the tree performs an outbound HTTP request end to end; the only
+connect-send-receive path is the fixture `test/net_fixtures/net_loopback.mdk`.
+The HTTP half is also thinner than it looks from the outside: `stdlib/http.mdk`
+parses requests and builds responses, which is the server direction, so the
+client codec is `pds/lib/httpclient.mdk`, and moving that out of the PDS
+manifest needs the stdlib proposal path.
+
+Four ways past TLS, recorded so the survey is not redone:
+
+1. A loopback TLS terminator, the pattern `pds/Caddyfile.egress` already
+   establishes: dial `127.0.0.1` and let a reverse proxy hold the certificate.
+   No new code, and the Python dependency becomes a Caddy dependency.
+2. `runCommand` over `curl`, about twenty lines, working today.
+3. A C shim over libcurl reached through `[foreign-libraries]`. `String ->
+   String` is in the FFI v1 crossable set, but function pointers and structs
+   are not, so libcurl cannot be bound directly, `mdk_` names are reserved, and
+   `test/diff_compiler_llvm_ffi.sh` is the only gate that links C.
+4. TLS 1.3 in Medaka. The primitives are not the hard part; X.509 chain
+   validation is, and no gate here can prove it correct.
+
+**Why Python is the cheaper side of the trade.** Section 7 already quarantines
+the dependency: the tool is not a gate candidate, always exits 0, and is never
+enrolled in `test/gates.toml`. The hundred lines a native client would own are
+the ones TypeSafe changes underneath us, and principle 5's retry behavior is
+the SDK's.
+
+**The half that needs no client.** The interesting part of J-NATIVE was never
+the transport but enumerating candidates from the real AST instead of line
+regexes: the current enumerator finds a declaration by matching an identifier
+at column zero and counts `match` occurrences, which bounds the census's
+recall. A `medaka lint`-style enumerator emitting candidates as JSON for the
+Python half to consume needs no TLS, no client, and no stdlib proposal. It
+belongs on its own issue if enumerator recall ever becomes the limiting factor.
 
 ## 6. Evaluation discipline
 
@@ -235,4 +285,5 @@ records the rules it enforces.
 - Source leaves the box. The repo is public; keep the census off anything
   that is not.
 - A `.py` under `scripts/` is not a gate candidate; a `.sh` anywhere is
-  (`[WEB-SH-IS-A-GATE]`). Keep the tool in Python until J-NATIVE.
+  (`[WEB-SH-IS-A-GATE]`). The tool stays in Python; section 5.1 says why, and
+  on what condition that would change.
