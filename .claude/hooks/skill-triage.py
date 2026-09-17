@@ -118,7 +118,12 @@ write_tests = re.search(
     prompt, re.IGNORECASE,
 )
 
-if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug and not write_tests:
+# Jev-shaped task: testing or tuning TypeSafe/Jev questions, or building a
+# Jev-backed tool. The loop and the question-tuning tips live in the
+# `jev-judgments` skill; nothing else routes there.
+jev = re.search(r"\bjev\b|\btypesafe\b|\bsystem ?one\b", prompt, re.IGNORECASE)
+
+if not roadmap and not stdlib and not mcp and not sprint and not gates and not debug and not write_tests and not jev:
     sys.exit(0)
 
 if roadmap:
@@ -232,6 +237,19 @@ if debug:
         "differential recipe. AGENTS.md keeps only the three traps that turn "
         "a wrong answer into a right-looking one ([D-JSON-HOLE], "
         "[D-BUILD-PIPE], [D-TWO-ARM-STDLIB]).\n"
+        "Triage reminder, not a directive."
+    )
+
+if jev:
+    print(
+        "Skill triage (Jev/TypeSafe task detected): load jev-judgments before "
+        "writing a question or reading a ranking -- it carries the loop "
+        "(enumerate in code, sample with a seed, write the label rule, label "
+        "by reading everything, ask batched+cached, read AUC then calibration "
+        "then the baseline, split or re-state on disagreement, ship with "
+        "numbers) and the state/question tuning tips. Tool: scripts/jev/ "
+        "(make jev-census, make jev-eval); design: docs/design/JEV-DESIGN.md; "
+        "epic #3117. Never a gate; Jev never generates the fix.\n"
         "Triage reminder, not a directive."
     )
 
