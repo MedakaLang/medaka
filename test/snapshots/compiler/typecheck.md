@@ -1,5 +1,5 @@
 # META
-source_lines=46170
+source_lines=46172
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -25978,7 +25978,9 @@ setLocalPinDisabled off = driverState.value.localPinDisabledRef := off
 -- exporting an interface that declares the same method name, with a
 -- headless impl each, compile and run at exit 0 through that branch. No
 -- reproducible defect has been found from this shape; do not "fix" it on
--- the strength of this note without a reproduction.
+-- the strength of this note without a reproduction. Tracked as #3164
+-- (ieCountHeadByMethod cross-module method-name collision), which carries
+-- the measurement and the question that would settle it.
 implMethodNameTc : ImplMethod -> String
 implMethodNameTc (ImplMethod n _ _) = n
 
