@@ -3270,9 +3270,16 @@ recoveredShadowSym name tagRef =
 -- rebuilds over its whole `prog`, already O(N)).
 --   * interface-method name SET (buildDefinerShadows / buildStandaloneShadows)
 --   * top-level funDef name SET (buildStandaloneShadows' importedFns)
---   * interface name -> REQUIRED-method names (checkImplCompleteness'
---     ifaceRequiredMethods). Interface names are globally unique, so
---     last-write-wins omInsert == first-match scan.
+--     (Do not add an impl KEY-BUCKET accumulator beside this list: all three
+--     boolean existence reads read the graph-global `bodyImplEnvRef` instead
+--     (`ieImplExistsForHead`), and a cumulative topological PREFIX is the wrong
+--     universe for that test -- see `docs/spec/SHADOW-SEMANTICS.md`'s
+--     graph-global-vs-prefix distinction.)
+--   * interface name -> REQUIRED-method names, read via checkImplCompletenessMap's
+--     ceRequiredAt lookup on CE (typecheck.mdk:23989/6924). Interface names are
+--     NOT globally unique across modules (only within one) -- the correction,
+--     and the #1258 defect it fixed, are recorded at
+--     compiler/TYPECHECK-TARGET-ARCHITECTURE.md:3499.
 --   * interface-method NAME -> (iface name, iface typarams, declared method
 --     Ty). Method names are NOT globally unique (two interfaces may each
 --     declare the same method). The Module arm OVERLAYS this map for
@@ -3295,7 +3302,10 @@ recoveredShadowSym name tagRef =
 --   * concrete-head impls: keyed by (interface, receiver-head), each bucket
 --     in forward declaration order
 --   * headless-receiver impls (TyVar / function / empty receiver): keyed by
---     iface, match ANY receiver
+--     iface, match ANY receiver. Almost always empty (`impl Foo a` -- the
+--     overlapping-impls / parse fixtures are the only corpus sources), but
+--     MUST be kept: dropping them would change `implMatches` from True to
+--     False on such a program.
 --   * iface name -> SET of its impls' concrete head tags (headless, arrow-
 --     and effect-headed impls excluded — this is the acceptance census, not
 --     a dispatch table)
@@ -11518,7 +11528,8 @@ rowArgOf etbl (TyRow labels tail _) =
 -- diagnosed here rather than silently coerced. Mirrors the use-site check in
 -- `fromAstTypeE`'s `TyRow` arm; `pureRow` stays the inert continuation so inference
 -- proceeds, exactly as `fromAstTypeE` continues with `TCon "Unit"`. See
--- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "D-1. Index invariance + row-arm fixes".
+-- compiler/TYPECHECK-TARGET-ARCHITECTURE.md, Stage D, bullet "D-1. Index invariance +
+-- row-arm fixes" (§6, line 2765 -- a bolded bullet, not a heading).
 rowArgOf _ ty =
   let _ =
     pushTypeErrorOnceAt
@@ -25963,6 +25974,14 @@ setLocalPinDisabled off = driverState.value.localPinDisabledRef := off
 -- `implMethodNameTc` and its callers route through the graph-global `IE`
 -- (`ieSelectRowByIface`); a headless impl's own `requires` is discharged the
 -- same way, through `selectReqImpl` with the iface known.
+--
+-- There is a SECOND SET beyond the registrars (who writes a bucket): the
+-- READERS that index a single head bucket DIRECTLY, without the headless
+-- union `ieCandidatesFor*` applies -- `ieImplExistsForHead`,
+-- `ieCountHeadByIface`/`ieHeadCollidesByIface`, and
+-- `ieCountHeadByMethod`/`ieHeadCollidesByMethod`. Audit this set as a SET,
+-- not one member at a time -- [T-GLOBAL-TABLE]'s discipline for any table a
+-- new AST constructor or a new bucket population could reach.
 --
 -- `ieCountHeadByMethod`/`ieHeadCollidesByMethod` key on method NAME across
 -- the headless bucket of every interface. Two interfaces declaring the same

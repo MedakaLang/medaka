@@ -3224,13 +3224,10 @@ runTestJsonCmd engines cases filterOpt target =
               props
               tests
               typecheckSkipped))
-      if cliTestReportOk typeError runs props tests then
-        Ok ()
-      else
-        Err "test failed"
+      Ok (cliTestReportOk typeError runs props tests)
   match r
     Err e => dieMsg e
-    Ok v => v
+    Ok ok => if ok then () else exit 1
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
 -- files (SAME walk as lint/fmt), then run+aggregate.  C3

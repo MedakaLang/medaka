@@ -1,5 +1,5 @@
 # META
-source_lines=557
+source_lines=558
 stages=DESUGAR,MARK
 # SOURCE
 -- The SHARED ROUTE-WORD MINT (ARCH B-2, #1113) — the only mint of an impl route
@@ -30,8 +30,9 @@ stages=DESUGAR,MARK
 -- space-joined>|<method name or empty>`. The interface word is qualified when
 -- origin is known (e.g., "b::Speak"), or the bare name when origin is absent.
 --
--- `routeWordFor` supplies the collision verdict: unique head yields the bare tag
--- verbatim; colliding head yields the canonical impl word (see above).
+-- `routeWordFor` consumes the collision verdict and the bare head tag, both
+-- computed from tables this module cannot see: unique head yields the bare
+-- tag verbatim; colliding head yields the canonical impl word (see above).
 --
 -- `rkTy`/`rkTyFunArg`/`rkTyAtom` are one prec-2 `Ty` printer. It matches
 -- `types/typecheck.mdk`'s version, not `eval/eval.mdk`'s, because the latter is

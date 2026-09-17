@@ -292,12 +292,12 @@ count = 1
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "emoji"
-count = 27
+count = 26
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "shout"
-count = 37
+count = 36
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"

@@ -8,10 +8,12 @@
 -- single: elaborateModules on test file; graph: elaborateModules on loader graph),
 -- reading back the DECL trees they elaborate.  A hand-picked probe cannot re-encode
 -- the assumptions it exists to test; pairwise disagreement exposes defects without
--- knowing the right answer.
+-- knowing the right answer.  Incident history (F1/F2, #1110): .claude/dossier/pipeline.md.
 --
--- OUTPUT FORMAT: an agreement table, so uniform wrong answers (both arms claim the
--- same wrong id) are not mistaken for correctness. The asymmetry is deliberate: the
+-- OUTPUT FORMAT: an agreement table. Pairwise agreement rests on at least one arm
+-- being right; where the arms share an input, that premise fails and a uniform
+-- wrong answer leaves no disagreement to expose -- every verdict stays AGREE and
+-- the table is byte-identical. The asymmetry is deliberate: the
 -- flat path is silent (`OriginUnresolved`) where it has no loader-derived module id,
 -- rather than inventing one. "One arm silent, the other claims" is L-ONLY/R-ONLY and
 -- is fine; "both claim, differently" is CONFLICT and is the defect class. HEAD SPREAD

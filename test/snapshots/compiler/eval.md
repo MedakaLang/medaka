@@ -1,5 +1,5 @@
 # META
-source_lines=4868
+source_lines=4879
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -671,6 +671,24 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 -- two tag projections had to converge see
 -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "9.6 The subsumption enumeration —
 -- derived by SHAPE, not by prefix".
+--
+-- A wrapper type does not decide whether its body has a head; only the body
+-- does -- `TyConstrained` peeling was once measured benign on `Eq a => a` and
+-- false on the neighbouring `Eq a => Int`. The three divergences fixed here did
+-- not fail the same way, and treating them as one class erases the worst cell
+-- each one had:
+--   * #1618 -- `check` wrong at exit 0, `run` correct, `build` exit 1 with no
+--     binary.
+--   * #1630 -- same three cells at one impl; with a second impl of the same
+--     interface, `run` is WRONG AT EXIT 0 and declaration-order-dependent
+--     (silent wrongness). Pinned at
+--     `test/dict_fixtures/s3-constrained-headed-impl-vs-plain-sibling.mdk`.
+--   * #1617 -- `run` wrong and declaration-order-dependent at exit 0 (the same
+--     silent shape); `build` does not produce a panicking binary either --
+--     `emitTagMatch`'s empty-constructor arm panics the emitter in `Strict`
+--     mode, so `medaka build` exits 1 with no binary.
+-- Do not read this enumeration as closed even now -- it is what has been found
+-- so far, not a proof that no fourth shape exists.
 --
 -- Native Gap C: an ARITY-DISTINGUISHED tuple dispatch/impl-tag (`__tuple2__`,
 -- `__tuple3__`, …).  Each tuple arity gets its OWN impl group / lifted define and
@@ -4327,21 +4345,14 @@ modExportCells (ModExports cells _) = cells
 -- newtypes and differ only in that the mangler additionally filters reserved-ness
 -- (irrelevant here) and recurses through `DAttrib` (where this index, like
 -- `expTypeCtorsDirect`, has no arm — #1228, above).
---     🚨 THAT CONVERGENCE DID NOT CLOSE #1305, AND THIS BLOCK USED TO CLAIM THE
--- CAUSE THAT WOULD HAVE.  It said *"Its newtype arm is why `medaka build` mis-binds
--- the shape above where `run` gets it right (filed as #1305)"*.  The arm was removed
--- and #1305 STILL REPRODUCES, so the newtype arm was the mechanism of the symptom,
--- not the cause of the disagreement.  The cause is one layer up and is not a backend
--- fact at all: `resolve` binds the name from the newtype's module (`expCtorsDirect` /
--- `expTypeCtorsDirect` are gated on `newtypePub`, which `export newtype` SETS) while
--- `types.typecheck.publicDataDecls` has no `DNewtype` arm and resolves the IDENTITY
--- from its bare-name data universe to a DIFFERENT module.  No import-driven mangler
--- can agree with both at once, which is why removing the arm moved the observable
--- (the built binary's `E-NONEXHAUSTIVE-MATCH` became a build-time `E-PANIC`) without
--- settling anything.  Current pinned observation:
--- `test/must_fail_fixtures/1305-newtype-ctor-import-native-divergence/claim.txt`.
---     Copying the emitter here would still have imported a bug into the
--- interpreters — just not that one.
+--     This mangler/typecheck convergence (2026-08-07) removed the newtype arm but
+-- did not settle #1305 by itself: measured on #1305's own shape (`export newtype NT
+-- = Wrap Int`; `import nmod.{NT(..), unwrapNT}`), `check`/`run`/`build` all three
+-- now exit 1 with a byte-identical located diagnostic ("'NT' exports no
+-- constructors: a `newtype`'s constructor is always module-private…") and no binary
+-- is produced (#1305 closed 2026-08-23).  Whether a newtype constructor should ever
+-- be exportable is a separate, still-open question — tracked as a CONTRACT-DEPENDENCY
+-- at `compiler/EMITTER-ARCH-BUG-FIT.md` §3.3 — and this block does not answer it.
 export
 ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls
