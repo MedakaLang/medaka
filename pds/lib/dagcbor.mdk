@@ -31,7 +31,7 @@ import byteparser.{
 import list.{reverse, sortBy}
 import string.{fromUtf8, toUtf8}
 import lib.cid.{Cid, cidFromBytes, cidToBytes}
-import lib.resource_limits.{checkDagCborDepth, maxDagCborDepth}
+import lib.resource_limits.{checkDagCborDepth}
 
 -- | The exact atproto data-model value subset admitted by this codec.
 public export data DagCbor =
@@ -94,7 +94,7 @@ compareKeyBytes left right i =
    map key counts as a child alongside its value, and a tag-42 link is a leaf. -}
 emitValue : DagCbor -> Int -> Builder -> Result String Unit
 emitValue value depth out = match checkDagCborDepth depth
-  Err _ => Err "dagcbor: nesting depth exceeds \{intToString maxDagCborDepth}"
+  Err e => Err e
   Ok () => emitValueAt value depth out
 
 emitValueAt : DagCbor -> Int -> Builder -> Result String Unit
@@ -208,16 +208,16 @@ readArgument _ pos 31 =
 readArgument _ pos _ = BErr "dagcbor: reserved additional-information value" pos
 
 parseValueAt : Array Int -> Int -> Int -> BResult DagCbor
-parseValueAt input pos depth =
-  if depth > maxDagCborDepth then
-    BErr "dagcbor: nesting depth exceeds \{intToString maxDagCborDepth}" pos
-  else if pos >= arrayLength input then
-    BErr "dagcbor: truncated value" pos
-  else
-    let initial = input[pos]
-    let major = shiftRight initial 5
-    let additional = bitAnd initial 31
-    parseMajor input (pos + 1) depth major additional
+parseValueAt input pos depth = match checkDagCborDepth depth
+  Err e => BErr e pos
+  Ok () =>
+    if pos >= arrayLength input then
+      BErr "dagcbor: truncated value" pos
+    else
+      let initial = input[pos]
+      let major = shiftRight initial 5
+      let additional = bitAnd initial 31
+      parseMajor input (pos + 1) depth major additional
 
 parseMajor : Array Int -> Int -> Int -> Int -> Int -> BResult DagCbor
 parseMajor input pos _ 0 additional = match readArgument input pos additional

@@ -153,7 +153,10 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
     -- The check belongs here and not in the minimality arm below: a value
     -- above the representable range can be perfectly minimal, so diagnosing
     -- it as "non-minimal" would name the wrong defect. Deleting this arm
-    -- does not make the value decode, it only misreports it.
+    -- does not make the value decode: a negative `value` would reach the
+    -- minimality arm's `uvarintEncode value` call below, which panics on
+    -- its own `n < 0` guard -- turning this function's `Err` into a process
+    -- abort, exactly the promise its `Result` signature exists to keep.
     if value < 0 then
       Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
     else

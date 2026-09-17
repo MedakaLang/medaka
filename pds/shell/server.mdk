@@ -800,6 +800,8 @@ persistRepo dir repo = do
   blocks <- repoExportBlocks repo
   persistSave dir (repoCommitCid (repoLatestCommit repo)) blocks
 
+-- ── rate limiting ───────────────────────────────────────────────────────────
+
 -- One rate-limit decision, taken against every class this request must
 -- clear: `ConnectionsClass` only on a connection's first framed request (a
 -- kept-alive connection is "opened" once, not once per pipelined request),
@@ -811,8 +813,6 @@ persistRepo dir repo = do
 data RateLimitAdmission =
   | RequestAdmitted RateLimitState
   | RequestRefused RateLimitState RateLimitClass
-
--- ── rate limiting ───────────────────────────────────────────────────────────
 
 -- | What every request that reached the framer clears, whatever it routes to
 -- and whether or not it parsed.

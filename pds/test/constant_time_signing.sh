@@ -56,8 +56,8 @@ write_source_manifest() {
 
 expected_internal_source_manifest() {
   cat <<'EOF'
-3840689225 26477  pds/lib/field.mdk
-3405910906 31981  pds/lib/scalar.mdk
+2128618670 25697  pds/lib/field.mdk
+1518600487 31160  pds/lib/scalar.mdk
 1728882051 12086  stdlib/sha256.mdk
 4205512882 5228  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
@@ -68,8 +68,8 @@ EOF
 
 expected_public_source_manifest() {
   cat <<'EOF'
-3840689225 26477  pds/lib/field.mdk
-3405910906 31981  pds/lib/scalar.mdk
+2128618670 25697  pds/lib/field.mdk
+1518600487 31160  pds/lib/scalar.mdk
 1728882051 12086  stdlib/sha256.mdk
 4205512882 5228  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk

@@ -4,10 +4,10 @@ The phase-by-phase record of how this project was built: what each phase and
 slice delivered, under which issue, and which claims this project used to make
 that have since been retired.
 
-Nothing here states what holds now. `pds/README.md` does that, organized by
-subject — when the two disagree, the README is the one that is wrong, and
-fixing the README is the work. This file exists so that the README does not
-have to carry a chronology in order to keep the provenance.
+This file is not the place to check what holds now — `pds/README.md`, organized
+by subject, is that place. When the two disagree, the README is the one that
+is wrong, and fixing the README is the work. This file exists so that the
+README does not have to carry a chronology in order to keep the provenance.
 
 The design that the phases implement is
 `docs/design/ATPROTO-PDS-DESIGN.md` (its §0 holds the locked decisions the

@@ -710,18 +710,8 @@ class = "shout"
 count = 1
 
 [[entry]]
-file = "pds/lib/base58.mdk"
-class = "emoji"
-count = 1
-
-[[entry]]
 file = "pds/lib/event_log_record.mdk"
 class = "shout"
-count = 1
-
-[[entry]]
-file = "pds/lib/field.mdk"
-class = "emoji"
 count = 1
 
 [[entry]]
@@ -745,29 +735,14 @@ class = "history"
 count = 1
 
 [[entry]]
-file = "pds/lib/multiformats.mdk"
-class = "emoji"
-count = 3
-
-[[entry]]
-file = "pds/lib/multiformats.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
 file = "pds/lib/proxy.mdk"
 class = "shout"
 count = 2
 
 [[entry]]
 file = "pds/lib/scalar.mdk"
-class = "emoji"
-count = 4
-
-[[entry]]
-file = "pds/lib/scalar.mdk"
 class = "shout"
-count = 7
+count = 2
 
 [[entry]]
 file = "pds/shell/egress.mdk"
