@@ -418,7 +418,9 @@ expectAtLeast what floor (Ok n) =
 -- Each control prepends one import line to `pds/lib/sign.mdk`'s real
 -- content IN MEMORY and re-runs the cross-reference over the result. The
 -- source tree is never written to, and the assertion below that the real
--- file still holds none of the four injected lines is what the retired
+-- file still holds none of the three breach injections (the fourth
+-- control, the ordinary-alias case, is expected to be ACCEPTED rather
+-- than found, so it is not part of that list) is what the retired
 -- script's byte-for-byte restore check becomes.
 
 signRel : String

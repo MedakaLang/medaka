@@ -46,7 +46,7 @@ Seven reports, scratch-only; the load-bearing numbers, each with its source repo
 | `strip_unit` definitions | 41 inline copies in **7 semantically distinct variants** under one name | A |
 | Shape | GOLDEN 93 · DIFFERENTIAL 74 · RATCHET 29 · PERF 14 · CLI 14 · TRUST-ANCHOR 14 · other 50 | A |
 | Subject engine | native 125 · multiple 60 · interpreter 33 · wasm 8 · none 62 | A |
-| Registry `kind = "native"` entries | **32 of 256**; `gate run` dispatches it to `medaka test --native --json` (`gateInvocation`, `gate_cmd.mdk:689`) | A, I |
+| Registry `kind = "native"` entries | **35 of 197** registry rows (re-derive: `medaka gate list --json`); `gate run` dispatches it to `medaka test --native --json` (`gateInvocation`, `gate_cmd.mdk:687`) | A, I |
 | New shell scripts, last 60 days | 174 files in 163 commits: **135 registered gates**, 16 ledgered tools, 12 censuses, 11 helpers/fixtures. Native side: 75 commits adding `test`/`prop` decls, 26 new `*_test.mdk` files. On gates alone, ~2:1 shell to native by commit | E, review |
 | Shell-adding commits stating why shell | 1 of 163. This measures the absence of a convention that did not exist, against a vehicle that could not run the subject; it is not a measured cause | E |
 | Measured gates / modeled cost | 222 / 5,387 s (~90 CPU-min); top-10 = 58%; 130 gates < 5 s = 3.9% | C, D |
