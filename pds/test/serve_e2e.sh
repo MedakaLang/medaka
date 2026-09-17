@@ -1097,6 +1097,27 @@ if grep -F 'serve: listening on' "$WORK/serve25b.out" >/dev/null 2>&1; then
   fail 'case 25b: the listener bound before the credential file was graded'
 fi
 
+# 25c. a --did did:web that names this server's own --hostname in different
+#    case is refused BEFORE the listener binds (#3091): `wellKnownDidJson`'s
+#    fallback arm would otherwise keep serving the SERVER document forever,
+#    with no signing key and no `alsoKnownAs`, which no relay or appview can
+#    use to verify this account.
+DATA25C="$WORK/data25c"
+mkdir -p "$DATA25C"
+run_until_exit "$WORK/serve25c.out" "$WORK/serve25c.err" \
+  --did "did:web:PDS.Test" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --password-file "$WORK/password" \
+  --data "$DATA25C" --port 0 --init
+[ "$RC" -ne 0 ] || fail 'case 25c: a case-mismatched did:web was accepted'
+grep -F -e "did:web:PDS.Test and --hostname $HOSTNAME name the same did:web host in different case" \
+  "$WORK/serve25c.err" >/dev/null \
+  || fail 'case 25c: the refusal did not name the mismatch'
+grep -F -e "e.g. --did did:web:$HOSTNAME" "$WORK/serve25c.err" >/dev/null \
+  || fail 'case 25c: the refusal did not name the remedy'
+if grep -F 'serve: listening on' "$WORK/serve25c.out" >/dev/null 2>&1; then
+  fail 'case 25c: the listener bound before the did:web hostname case was graded'
+fi
+
 # 26. a configuration rejected for a bad SUPPLIED secret leaves no GENERATED
 #    one on disk (#2659 item 4). The password file is empty, so the run is
 #    refused; before the fix the session secret had already been generated and

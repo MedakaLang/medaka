@@ -106,7 +106,9 @@ import lib.repo.{
   repoInitFromKeyBytes,
   repoLatestCommit,
 }
-import lib.server_core.{Server, accountHostname, makeAccount, serverAccount}
+import lib.server_core.{
+  Server, accountDid, accountHostname, makeAccount, serverAccount
+}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.cid.{Cid, cidToString}
 import lib.event_log_record.{eventLogRetentionSeconds}
@@ -155,7 +157,9 @@ import shell.server.{
   makeServing,
   runServer,
 }
-import string.{drop, indexOf, lines, stripSuffix, take, toInt, trim}
+import string.{
+  drop, indexOf, lines, startsWith, stripSuffix, take, toInt, toLower, trim
+}
 import time.{Duration, millis, now}
 
 serveSpec : ArgSpec
@@ -297,6 +301,37 @@ requireTrustedBind bind (TrustedProxy trusted) =
   else
     Err
       "refusing to bind \{bind}: a non-loopback bind requires --trusted-proxy (see docs/ops/PDS-DEPLOY.md)"
+
+{- | Refuse a `--did` that names this server's own `did:web` hostname but
+   disagrees with it only by case (`#3091`).
+
+   `wellKnownDidJson` (`lib.handlers`) decides which document `/.well-known/
+   did.json` serves by comparing the configured DID against `did:web:
+   \{hostname}` EXACTLY, because a DID is case-sensitive and the reference
+   resolver's own `validateDidDoc` compares `doc.id` the same way. A `--did`
+   that spells the hostname in different case takes that comparison's
+   fallback arm and keeps serving the SERVER document forever — no signing
+   key, no `alsoKnownAs` — which no relay or appview can use to verify this
+   account, and which the Bluesky relay's own `NormalizeDID` (lowercasing
+   `did:web:`) would resolve to a DIFFERENT identity than this exact-match
+   server sees. This refuses that configuration at startup instead of
+   serving it.
+
+   A `--did` naming a genuinely different `did:web` host is a different,
+   deliberate configuration — that account's identity is resolved at ITS
+   host's `/.well-known/did.json`, not this one's, and this server already
+   serves the (correct) server document for it. Only case-insensitive
+   equality without exact equality is refused. -}
+requireDidHostnameCase : String -> String -> Result String Unit
+requireDidHostnameCase did hostname =
+  let ownDid = "did:web:\{hostname}"
+  if not (startsWith "did:web:" did) || did == ownDid then
+    Ok ()
+  else if toLower did == toLower ownDid then
+    Err
+      "refusing to start: --did \{did} and --hostname \{hostname} name the same did:web host in different case; the well-known document is served by an exact match, so this configuration would silently keep serving the server document instead of this account's — match the case exactly (e.g. --did \{ownDid})"
+  else
+    Ok ()
 
 -- Port 0 is accepted for `--port` because the kernel picks a free one there.
 -- An egress port is a port this process must REACH, so 0 names nothing; the
@@ -762,6 +797,7 @@ configure parsed = do
   -- (#2659 item 4).
   () <- requireTrustedBind bind trustedProxy
   account <- makeAccount did handle hostname
+  () <- requireDidHostnameCase (accountDid account) (accountHostname account)
   let links =
     makeServerLinks
       (flagValue "--privacy-policy-url" parsed)

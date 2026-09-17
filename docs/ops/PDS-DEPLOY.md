@@ -92,9 +92,11 @@ never sets it against anything but Caddy on the same box.
 
    ⚠️ **The account DID must match `did:web:<hostname>` exactly, including
    case.** The comparison that decides whether `/.well-known/did.json` serves
-   the account's document or the server's is exact (`wellKnownDidJson`), so
-   `did:web:PDS.Example.com` against `--hostname pds.example.com` silently
-   takes the server-document arm and publishes no signing key — see `#3091`.
+   the account's document or the server's is exact (`wellKnownDidJson`), and
+   is deliberately not folded — a `did:web:PDS.Example.com` account with
+   `--hostname pds.example.com` is refused at startup rather than silently
+   taking the server-document arm (`requireDidHostnameCase`, `pds/serve.mdk`;
+   `#3091`).
 
 4. **Write the account password to a file, never an argument** — an
    argument is visible in `ps` output to every account on the box:
