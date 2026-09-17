@@ -16,7 +16,9 @@
    have a roster row or a reasoned `exempt` row — a file that has neither
    fails this gate rather than going uncounted. -}
 
+import io.{readLines}
 import list.{lookup, somes}
+import string.{indexOf, stripPrefix}
 import test.{Expectation(..)}
 import test_process.{
   missingTestFiles,
@@ -122,6 +124,9 @@ excluded = []
 
 rosterNames : List String
 rosterNames = map fst suites
+
+excludedNames : List String
+excludedNames = map fst excluded
 
 {- | The files under `pds/test/` that match `*_test.mdk` but are not suites
    this gate grades, each paired with the reason it is not one.
@@ -418,3 +423,54 @@ test "every `excluded` row names a rostered suite" = match danglingExclusions
       "`excluded` names file(s) with no `suites` row: \{debug extras}"
       "no dangling exclusions"
       "\{debug extras}"
+
+{- # Roster/assertion lockstep
+
+   `results` is a shared memoized binding computed for every non-excluded
+   `suites` row regardless of whether anything ever asserts on it (see the
+   doc comment on `results` above): a row with no dedicated `test` block
+   still gets spawned, and its verdict is silently discarded. The roster
+   closure checks above only prove the FILE is named somewhere; they say
+   nothing about whether a `test` block exists for it. This closes that
+   gap by reading this file's own source rather than hand-maintaining a
+   second list next to the `test` blocks, which would just relocate the
+   bug from "no check" to "two lists that can drift". -}
+
+-- | The `<name>` in a line `test "pds/test/<name>.mdk executed >= …" = …`
+-- written by this file for a roster row's floor assertion, or `None` for
+-- any other line.
+checkedNameOf : String -> Option String
+checkedNameOf line = match stripPrefix "test \"pds/test/" line
+  None => None
+  Some rest => map (i => stringSlice 0 i rest) (indexOf ".mdk executed >=" rest)
+
+{- | The names that have their own `test "pds/test/<name>.mdk executed >=
+   …"` block in this file, from a static scan of the file's own source
+   text — never a `medaka test --json` self-spawn, which would recurse
+   into re-spawning every suite this file already spawns (see the doc
+   comment on `results` above). -}
+checkedNames : <IO> Result String (List String)
+checkedNames =
+  map
+    (ls => somes (map checkedNameOf ls))
+    (readLines (underRoot "pds/test/inlang_test_oracle_test.mdk"))
+
+-- | Rostered, non-excluded names with no matching `test` block.
+uncheckedRows : <IO> Result String (List String)
+uncheckedRows =
+  map
+    (checked =>
+      filter
+        (n => not (elem n excludedNames) && not (elem n checked))
+        rosterNames)
+    checkedNames
+
+test "every `suites` row has a matching `test` block (or is `excluded`)" =
+  match uncheckedRows
+    Err e => Fail e "no unchecked rows" "read failed"
+    Ok [] => Pass "no unchecked rows" "no unchecked rows"
+    Ok extras =>
+      Fail
+        "suites row(s) with no matching `test \"pds/test/<name>.mdk executed >= …\"` block: \{debug extras} — `results` is computed for them but never turned into an assertion (#2997)"
+        "no unchecked rows"
+        "\{debug extras}"
