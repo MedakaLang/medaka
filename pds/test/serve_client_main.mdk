@@ -1583,6 +1583,191 @@ runProxyRead port token service path want marker =
         report "PROXYREAD" True "status=\{intToString status}"
 
 -- | The same proxied read, graded on the allow-origin header instead of the
+-- # The admission queue (#3100)
+
+{- | Opens `count` connections and sends a proxied read on every one of them,
+   reading NONE of the answers.
+
+   Sending before reading is what makes the fan-out concurrent: a driver that
+   read each answer before making the next call would hand the server one call
+   at a time whatever it asked for, and every ceiling case would pass against a
+   server with no ceiling at all. The connections come back open, so the caller
+   decides when — or whether — the answers are collected. -}
+openProxyCalls : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  List Connection ->
+  <Net "_"> List Connection
+openProxyCalls port token service path remaining acc =
+  if remaining <= 0 then
+    acc
+  else
+    let conn = mustConnect port
+    let () = mustSend conn (proxyRequest "" token service path)
+    openProxyCalls port token service path (remaining - 1) (conn :: acc)
+
+closeProxyCalls : List Connection -> <Net "_"> Unit
+closeProxyCalls [] = ()
+closeProxyCalls (conn :: rest) =
+  let () = ignoreResult (close conn)
+  closeProxyCalls rest
+
+-- | What one fan-out answer was. `FanoutUnexpected` covers a read that failed
+-- and any status that is neither the upstream's own answer nor the refusal the
+-- admission queue issues, which are the only two a case here has a claim about.
+data FanoutAnswer = FanoutServed | FanoutRefused | FanoutUnexpected Int
+
+gradeFanout : Int -> Result String (Int, Array Int, Array Int) -> FanoutAnswer
+gradeFanout _ (Err _) = FanoutUnexpected 0
+gradeFanout upstream (Ok (status, body, _)) =
+  if status == upstream then
+    FanoutServed
+  else if status == 503 && contains "ProxyLimitExceeded" (fromUtf8 body) then
+    FanoutRefused
+  else
+    FanoutUnexpected status
+
+{- | Collects every answer, tallied rather than listed: which CONNECTION got
+   which answer is the scheduler's business, and a case asserting on it would
+   pin an order nothing promises.
+
+   The last unexpected status comes out beside the counts, since a tally alone
+   reports that a case failed without reporting what arrived instead; a read
+   that produced no status at all shows as `0`. -}
+countFanout : Int ->
+  List Connection ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  <Net "_"> (Int, Int, Int, Int)
+countFanout _ [] served refused unexpected odd =
+  (served, refused, unexpected, odd)
+countFanout upstream (conn :: rest) served refused unexpected odd =
+  let answer = gradeFanout upstream (readResponse conn [||])
+  let () = ignoreResult (close conn)
+  match answer
+    FanoutServed =>
+      countFanout upstream rest (served + 1) refused unexpected odd
+    FanoutRefused =>
+      countFanout upstream rest served (refused + 1) unexpected odd
+    FanoutUnexpected status =>
+      countFanout upstream rest served refused (unexpected + 1) status
+
+{- | A concurrent fan-out of `count` proxied reads, graded on how many were
+   served.
+
+   This is the shape #3100 is about: one client opening its first screen issues
+   a handful of proxied reads at once, and a server that refuses the ones past
+   its in-flight ceiling renders that screen with holes in it.
+
+   `upstream` is the stub appview's own status, and a call counts as served
+   only by carrying it — not by carrying 200, which a PDS composing an answer
+   of its own around a forwarded body could also produce. `wantServed` is how
+   many must carry it; anything else has to be the admission queue's 503, and
+   any third outcome fails the case rather than being counted as a refusal. -}
+runProxyFanout : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  Int ->
+  <IO, Net "_"> Unit
+runProxyFanout port token service path count upstream wantServed =
+  let conns = openProxyCalls port token service path count []
+  let (served, refused, unexpected, odd) = countFanout upstream conns 0 0 0 0
+  report
+    "PROXYFANOUT"
+    (served == wantServed && unexpected == 0)
+    "sent=\{intToString count} \{intToString upstream}=\{intToString served} 503=\{intToString refused} other=\{intToString unexpected} (last other status \{intToString odd}; wanted \{intToString upstream}=\{intToString wantServed})"
+
+{- | How long the server is given to have received and decided on the calls
+   `runProxyOverload` leaves outstanding before it asks for one more.
+
+   The sends have all been made when it starts, so this waits on the server's
+   own accept-and-admit work and not on a network. Generous by three orders of
+   magnitude against that, and still far below the deadline a QUEUED call waits
+   out — which is the interval the probes after it have to be distinguished
+   from. -}
+overloadSettle : Duration
+overloadSettle = millis 500
+
+timedProxyRead : Int ->
+  String ->
+  String ->
+  String ->
+  <Net "_", Clock> (Int, String, Float)
+timedProxyRead port token service path =
+  let conn = mustConnect port
+  let () = mustSend conn (proxyRequest "" token service path)
+  let t0 = monotonic ()
+  let result = readResponse conn [||]
+  let elapsed = elapsedSince t0
+  let () = ignoreResult (close conn)
+  match result
+    Err message => (0, "read failed: \{message}", elapsed)
+    Ok (status, body, _) => (status, fromUtf8 body, elapsed)
+
+probeRefusals : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  Bool ->
+  String ->
+  <Net "_", Clock> (Bool, String)
+probeRefusals port token service path remaining maxMs ok detail =
+  if remaining <= 0 then
+    (ok, detail)
+  else
+    let (status, bodyText, elapsed) = timedProxyRead port token service path
+    let ms = elapsed * 1000.0
+    let refused = status == 503 && contains "ProxyLimitExceeded" bodyText
+    probeRefusals
+      port
+      token
+      service
+      path
+      (remaining - 1)
+      maxMs
+      (ok && refused && ms <= intToFloat maxMs)
+      "\{detail} \{intToString status}@\{floatToString ms}ms"
+
+{- | The overload control: `held` proxied reads are sent and left outstanding,
+   filling the in-flight ceiling and the admission queue behind it, and then
+   `probes` further reads are made one at a time and TIMED.
+
+   Every probe must be refused, and refused PROMPTLY. A queue that answered an
+   overloaded server's callers by making each of them wait out the whole
+   admission deadline before refusing them anyway would have moved the 503
+   rather than removed it, and a status-only assertion cannot tell that apart
+   from a refusal issued at once. `maxMs` is the budget a refusal has to arrive
+   inside; what makes it a discriminator is that it is far below the deadline a
+   QUEUED call waits out. -}
+runProxyOverload : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Int ->
+  Int ->
+  <IO, Net "_", Clock> Unit
+runProxyOverload port token service path held probes maxMs =
+  let conns = openProxyCalls port token service path held []
+  let () = sleep overloadSettle
+  let (ok, detail) = probeRefusals port token service path probes maxMs True ""
+  let () =
+    report
+      "PROXYOVERLOAD"
+      ok
+      "held=\{intToString held} probes:\{detail} (each wanted 503 ProxyLimitExceeded within \{intToString maxMs}ms)"
+  closeProxyCalls conns
+
+-- | The same proxied read, graded on the allow-origin header instead of the
 -- body — the one response `lib.server_core`'s `handle` never sees, so it is
 -- the exit that most needs its own check that the header still reaches it.
 runProxyReadCors : Int ->
@@ -1795,7 +1980,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -1873,6 +2058,24 @@ main = match args ()
     runProxyRead (mustPort port) token service path (mustStatus want) marker
   ["proxy-read-cors", port, token, service, path, want] =>
     runProxyReadCors (mustPort port) token service path (mustStatus want)
+  ["proxy-fanout", port, token, service, path, count, upstream, wantServed] =>
+    runProxyFanout
+      (mustPort port)
+      token
+      service
+      path
+      (mustCount count)
+      (mustStatus upstream)
+      (mustCount wantServed)
+  ["proxy-overload", port, token, service, path, held, probes, maxMs] =>
+    runProxyOverload
+      (mustPort port)
+      token
+      service
+      path
+      (mustCount held)
+      (mustCount probes)
+      (mustCount maxMs)
   ["put-preferences-cors", port, token, want] =>
     runPutPreferencesCors (mustPort port) token (mustStatus want)
   ["preflight", port, path, named, want, wantAllowed] =>
