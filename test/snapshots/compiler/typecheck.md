@@ -1,5 +1,5 @@
 # META
-source_lines=47093
+source_lines=47097
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -33,10 +33,10 @@ stages=DESUGAR,MARK
 -- `GOutTrees` promotes (inferred-constraint user fns join the dict-name set).  So
 -- acceptance under one selection is still not proof about the other for a program that
 -- promotes an inferred-constraint fn across modules; its consequence for the gate over
--- this compiler's own source is #1811.  `renameAliasedMethods` used to be the second
--- such difference and is not any more: it runs on both selections, because half (b) of
--- it decides which declaration a bare method name binds to, so skipping it on one
--- selection made that selection typecheck a different program
+-- this compiler's own source is #1811.  `renameAliasedMethods` is NOT a second such
+-- difference: it runs on both selections, because half (b) of it decides which
+-- declaration a bare method name binds to, so skipping it on one selection would make
+-- that selection typecheck a different program
 -- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
 -- permuted accepting twin).
 --
@@ -18162,7 +18162,7 @@ shadowStandaloneDictsWithSp mscheme name sym ats =
 -- receiver does turn out to have an impl, stampRLocalOrFallback simply discards these
 -- slots and the route dispatches as before.
 --
--- ⚠️ [name] is the BARE name and [key] the binding symbol (mangled on the emit path).
+-- [name] is the BARE name and [key] the binding symbol (mangled on the emit path).
 -- Both are needed: the tables below are keyed by the binding, while the definer/importer
 -- classifier `isDefinerShadow` reads `definerShadowNamesRef`, which holds bare names on
 -- every path.  Passing [key] to that classifier makes it silently answer False for every
@@ -18188,6 +18188,10 @@ shadowStandaloneDictSlotsAt mscheme name key xt =
 --
 -- Scoped to the definer-shadow case only: one bare name with two bindings is the missing
 -- per-occurrence discriminator #1898/#1899 name, and this does not re-key anything.
+--
+-- [P-NO-MARK-PASS]: [key] is only ever mangled post-mark-pass, which no production verb
+-- runs, so [name] and [key] coincide on every reachable caller today — the [name]/[key]
+-- split above is correct by construction but currently unwitnessable by any gate.
 shadowDeclaredFor : String -> String -> CDeclared
 shadowDeclaredFor name key
   | isDefinerShadow name = localDeclaredConstraintFor key
