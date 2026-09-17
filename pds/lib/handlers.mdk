@@ -1753,7 +1753,12 @@ didWebDocument account = jObject [
    above, is where the case-insensitive half of that rule lives). It is also
    total: a hostname reaches `Account` only through `makeAccount`, which grades
    it with `validateHandle` — ASCII domain labels — so no `Account` can carry
-   the port a `did:web` identifier would have to percent-encode.
+   the port a `did:web` identifier would have to percent-encode. A `--did`
+   that names this server's own hostname but disagrees with it only by case
+   never reaches this function at all: `pds.serve`'s `requireDidHostnameCase`
+   refuses that configuration at startup (`#3091`), so the arm below still
+   sees the fallback exactly as often as before — for every non-`did:web`
+   method, and for a `did:web` naming a genuinely different host.
 
    A server with no configured repository has no signing key to publish and
    serves the server document whatever its DID says. This route answers `200`
