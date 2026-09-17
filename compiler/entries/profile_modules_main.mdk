@@ -1,7 +1,7 @@
 -- Multi-module per-stage timing driver for the self-hosted front-end.
 -- Times each pipeline stage individually over a representative multi-module entry,
--- breaking the `elaborate` composite from perf_main.mdk into separate mark and
--- typecheck phases.
+-- breaking the `elaborate` composite into separate mark and typecheck
+-- phases.
 --
 --   MEDAKA_PERF=1 medaka run compiler/entries/profile_modules_main.mdk \
 --       stdlib/runtime.mdk stdlib/core.mdk compiler/entries/all_modules_entry.mdk compiler

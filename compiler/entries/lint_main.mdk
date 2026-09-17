@@ -2,8 +2,9 @@
 -- not interpreted:
 --
 --   FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one lint_main
---   MEDAKA_ROOT="$ROOT" test/bin/lint_main <source.mdk>   # what diff_compiler_lint.sh
---   runs — the gate exports MEDAKA_ROOT before invoking the binary. A bare
+--   MEDAKA_ROOT="$ROOT" test/bin/lint_main <source.mdk>   # what the `diff_compiler_lint`
+--   row of test/diff_compiler_fmt_test.mdk runs — MEDAKA_ROOT is exported before invoking
+--   the binary. A bare
 --   invocation without MEDAKA_ROOT set silently reports NOTHING (the stdlib
 --   reference index builds empty), it does not error.
 --

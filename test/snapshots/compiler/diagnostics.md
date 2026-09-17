@@ -2,7 +2,7 @@
 source_lines=2831
 stages=DESUGAR,MARK
 # SOURCE
--- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
+-- compiler/driver/diagnostics.mdk — structured error pipeline (Phase A.4)
 --
 -- Runs all pipeline stages accumulating diagnostics
 -- WITHOUT exit-on-first-error, returning a structured List Diag.

@@ -1,5 +1,5 @@
 # META
-source_lines=4869
+source_lines=4868
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -78,10 +78,9 @@ import support.opcount.{opBump}
 -- `frontend.ast` / `support.util` / `support.ordmap` and nothing in that closure
 -- imports eval.mdk (no cycle) — verified by grep before adding this import.
 import backend.private_mangle.{mangleCtorCollisions}
--- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
--- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
--- pipeline and does not import eval.mdk (no cycle) — verified by grep before
--- adding this import.
+-- Reused JSON diagnostic shaping for `medaka run --json`. diagnostics.mdk sits
+-- above frontend/types in the pipeline and does not import eval.mdk (no
+-- cycle) — verified by grep before adding this import.
 import driver.diagnostics.{
   Diag(..),
   Severity(..),

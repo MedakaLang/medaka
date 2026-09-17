@@ -2,8 +2,8 @@
 source_lines=4289
 stages=DESUGAR,MARK
 # SOURCE
--- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
--- Slice 0+1).  Compiled natively (`medaka build compiler/medaka_cli.mdk -o
+-- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
+-- Slice 0+1).  Compiled natively (`medaka build compiler/driver/medaka_cli.mdk -o
 -- ./medaka`) this is a Medaka CLI replacing bin/main.ml's check/fmt/new
 -- subcommands with no OCaml at runtime.
 --
@@ -13,7 +13,7 @@ stages=DESUGAR,MARK
 --   ./medaka help | --help | -h   usage
 --
 -- Stdlib paths (runtime.mdk / core.mdk) resolve from MEDAKA_ROOT, mirroring
--- compiler/build_cmd.mdk's envOr — compiler has no getcwd/executable_name
+-- compiler/driver/build_cmd.mdk's envOr — compiler has no getcwd/executable_name
 -- extern.  The implemented subcommands are exactly the dispatch arms below
 -- (check/fmt/new/build/run/test/repl/lsp/doc/check-policy/manifest/gate); any other
 -- subcommand falls through to the catch-all, which prints "not yet in native

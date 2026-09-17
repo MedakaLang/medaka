@@ -1,4 +1,4 @@
--- compiler/test_cmd.mdk — `medaka test` logic (doctests + property tests),
+-- compiler/tools/test_cmd.mdk — `medaka test` logic (doctests + property tests),
 -- factored out of test_main.mdk so BOTH the interpreted driver (test_main.mdk)
 -- and the native CLI (medaka_cli.mdk's runTestCmd) share one implementation.
 --
@@ -1028,7 +1028,7 @@ singleRootId roots target =
 -- equivalent return-position dict-set via its own `moduleDictNames`.  The
 -- `medaka test stdlib/core.mdk` canary guards the neq-hang.
 
--- Mirror of compiler/resolve.mdk's
+-- Mirror of compiler/frontend/resolve.mdk's
 -- programIsCore: the prelude is the unique program declaring BOTH the
 -- `Ordering` data type and the `Foldable` interface.
 programIsCore : List Decl -> Bool

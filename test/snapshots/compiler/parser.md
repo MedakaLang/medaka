@@ -7,8 +7,8 @@ stages=DESUGAR,MARK
 -- (`DeferredMappable`/`DeferredApplicative`/`DeferredThenable` impls) with
 -- `defer`-notation, and
 -- combinators (`many`/`sepBy1`/`choice`/`chainl1`).  Precedence is the stratified
--- ladder from parser.mly, one function per level.  Validated by the structural
--- dump against `dev/astdump.exe` (see test/diff_compiler_parse.sh).
+-- ladder from parser.mly, one function per level.  Validated by the
+-- `parse_fixtures` family (test/diff_compiler_snapshot_frontend_test.mdk).
 --
 -- (Chosen over the direct recursive-descent version after Phase 136 unblocked
 -- recursive polymorphic combinators and a perf comparison showed monadic

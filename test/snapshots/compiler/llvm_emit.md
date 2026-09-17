@@ -288,8 +288,8 @@ import backend.emit_support.{
 -- A MEASUREMENT scaffold for STAGE D4 (compiler/EMITTER-GAPS.md). Strict by default:
 -- every gap site below still `panic`s, exactly as
 -- before, so normal emit output and all four diff_compiler_* gates stay
--- byte-identical. The D4 gaps probe (llvm_emit_gaps_main.mdk) emits in Record mode to
--- COLLECT every gap in one pass instead of aborting on the first: each gap is
+-- byte-identical. A D4 gaps probe emits in Record mode to COLLECT every gap
+-- in one pass instead of aborting on the first: each gap is
 -- recorded as "<binding>\t<reason>" and the offending construct returns a benign
 -- placeholder so emission of the rest of the program proceeds.  The placeholder
 -- poisons only that one sub-expression's output (which the probe discards — it

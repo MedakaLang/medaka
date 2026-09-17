@@ -16,8 +16,8 @@
 -- This is SAFE precisely because the harness byte-diffs the native token stream
 -- against the interpreter: if any gap the lexer ACTUALLY reaches got a "0"
 -- placeholder, the output diverges and the diff FAILS.  A passing diff therefore
--- proves every placeholder was dead code.  (We reuse llvm_emit_gaps_main.mdk's
--- recording mechanism — emitProgramRecord — but keep the REAL emission path, not the
+-- proves every placeholder was dead code.  (We reuse the same recording
+-- mechanism — emitProgramRecord — but keep the REAL emission path, not the
 -- measure-only emitProgramGaps.)
 --
 --   medaka run compiler/entries/llvm_bootstrap_lex_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]

@@ -1,4 +1,4 @@
--- The INTERPRETER arm of the 3-engine differential gate (test/diff_engines.sh,
+-- The INTERPRETER arm of the 3-engine differential gate (test/diff_compiler_engines.sh,
 -- TESTING-DESIGN.md §4.4).
 --
 --   medaka run compiler/entries/eval_autoprint_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]

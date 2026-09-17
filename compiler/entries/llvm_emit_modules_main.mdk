@@ -1,10 +1,10 @@
 -- MULTI-MODULE LLVM emit driver — the emit analog of eval_typed_modules_main.mdk
 -- and the multi-module counterpart of llvm_emit_typed_main.mdk.  It is the
 -- emitting half of the multi-module emit+RUN gate (test/diff_compiler_llvm_modules.sh),
--- the validation foundation for the whole-compiler native push: where
--- llvm_emit_gaps_main.mdk only MEASURES emittability of the multi-module path
--- (emitProgramGaps), this driver runs the REAL emitter (emitProgram) so the
--- gate can link + run + byte-diff the oracle.
+-- the validation foundation for the whole-compiler native push: where a
+-- MEASURE-only pass over the multi-module path uses `emitProgramGaps`, this
+-- driver runs the REAL emitter (emitProgram) so the gate can link + run +
+-- byte-diff the oracle.
 --
 --   medaka run compiler/entries/llvm_emit_modules_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 --
@@ -173,7 +173,7 @@ emitTail runtimeDecls coreD modules2 =
 -- (core.mdk's maximum/minimum/clamp → the open max/min gap) no longer aborts the
 -- whole build.  CONSERVATIVE + SOUND: all impls/interfaces (dynamic-dispatch
 -- targets) are retained whole; only unreachable DFunDefs are removed.  Order-
--- preserving ⇒ IR stays byte-stable.  See compiler/dce.mdk.
+-- preserving ⇒ IR stays byte-stable.  See compiler/ir/dce.mdk.
 
 -- Dict-name wiring mirrored from llvm_emit_typed_main.mdk: coreD is the
 -- elaborated prelude, allDecls the whole program.  THIS `let _` is itself inert

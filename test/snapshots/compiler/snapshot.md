@@ -363,8 +363,8 @@ blockOf ls = "\{joinNl ls}\n"
 -- content.
 --
 -- This is not hypothetical; it is why the rule is here.  The migration's own
--- byte-identity check (test/migrate_verify.sh) caught the blanket normalizer red-handed
--- on TWO of the compiler's own sources:
+-- byte-identity check caught the blanket normalizer red-handed on TWO of the
+-- compiler's own sources:
 --
 --   • driver/build_cmd.mdk holds the literal mktemp template "/tmp/medaka_build_XXXXXX",
 --     which normalized to `(ELit (LString "<TMP>"))` in its PARSE/DESUGAR/MARK dumps —

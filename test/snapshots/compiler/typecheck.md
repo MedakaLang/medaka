@@ -3808,7 +3808,7 @@ declEnvVisibleAt cur entryOrd = entryOrd <= cur
 -- open: with candidacy graph-global and existence prefix-scoped, an `impl Sup T` in
 -- a topologically LATER module satisfies dispatch in the very module where
 -- `checkSuperImpls` reports the same impl missing — one program, two channels, one
--- of them wrong.  ⚖️ OWNER RULING (Val, 2026-08-12, sprint `DECISIONS.md` RUN-055,
+-- of them wrong.  ⚖️ OWNER RULING (Val, 2026-08-12, RUN-055,
 -- finding SA-3): WIDEN the existence check to match candidacy.  `ieRowsVisibleAt`
 -- now reads THIS predicate, so both `IE` reads answer at the same scope and the
 -- diagnostic cannot contradict the engine.
@@ -5855,7 +5855,7 @@ buildImplEnvGo (m :: rest) ia =
 -- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, `lint`'s policy pass,
 -- `snapshot`, and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries via
 -- `elaborateDict` — never calls it, so `declEnvsRef.deImpls` is `emptyImplEnv` there.
--- That emptiness is the hazard DECISIONS.md RUN-B-017 probe 3 MEASURED: FLAT is
+-- That emptiness is the hazard RUN-B-017 probe 3 MEASURED: FLAT is
 -- already whole-program and already CORRECT on #1564's shape (it accepts and prints
 -- `wrap(int)` where the four-module program rejects), so a later bite that repoints
 -- the evidence reader onto an EMPTY Flat `IE` is a correct→broken regression on the
@@ -6100,7 +6100,7 @@ ieFileRow (r@(ImplRow _ _ ir _ _ _)) env =
 -- B-2.1-d) is *the checker's
 -- hottest selector*, and answering it graph-globally by SCANNING `ieRows` cost
 -- `check-self` 21.5 s -> 25.1 s (+17%) — an O(rows) scan per goal, the exact
--- `List`-as-a-map shape `compiler/AGENTS.md` forbids (DECISIONS.md RUN-B-023,
+-- `List`-as-a-map shape `compiler/AGENTS.md` forbids (RUN-B-023,
 -- which is why this bite exists and precedes the repoint).
 --
 -- ⚠️ ASCENDING BY `instRefSeq`, BY CONSTRUCTION, AND THAT IS LOAD-BEARING.  Both
@@ -6117,7 +6117,7 @@ ieFileRow (r@(ImplRow _ _ ir _ _ _)) env =
 -- finalize step, which is precisely the second-maintainer hazard `ieAddRows`'s
 -- header forbids for `ieUnivSnaps` ("do not add a second maintainer, and do not
 -- insert without one").  The cost is per-BUCKET, not per-population — this is not
--- `ieRows`' `++ [r]` — and it is measured, not asserted: see DEBT.md B-2.1-a3.
+-- `ieRows`' `++ [r]` — and it is measured, not asserted (B-2.1-a3).
 ieFileRowByHead : ImplRow -> ImplEnv -> ImplEnv
 ieFileRowByHead (r@(ImplRow _ _ _ tys _ _)) env = ImplEnv { env |
   ieByHead = mregAppendK (headBucketKey (univReceiverTag tys)) r env.ieByHead,
@@ -6226,7 +6226,7 @@ ieSnapAt cur ((o, u) :: rest) acc
 -- delete" died when A-3.6 (#1558) SPLIT the predicate instead of deleting it; the
 -- successor claim — that this read "stayed on `declEnvVisibleAt`", because a
 -- decl-time EXISTENCE query is not I5's subject — is retired by ⚖️ OWNER RULING
--- (Val, 2026-08-12, sprint `DECISIONS.md` RUN-055, finding SA-3).  The two-scope
+-- (Val, 2026-08-12, RUN-055, finding SA-3).  The two-scope
 -- arrangement was measured to make the diagnostic contradict the engine inside ONE
 -- program (an `impl Sup T` in a topologically LATER module dispatches while this
 -- check calls it missing), so this read now takes `ieCandidacyVisibleAt` — the same
@@ -31502,8 +31502,8 @@ checkOneCallObligation deferNonGround univ iface occs loc scope =
     -- declared, and a conditional two-parameter instance whose `requires` fails
     -- (`No impl of Tag for Color`, i.e. `checkNestedReqs` still runs — via the joint goal).
     -- Measured firings across `stdlib/list.mdk` and `compiler/driver/medaka_cli.mdk`: 0.
-    -- Regression: test/dict_fixtures/s-nary-truncated-goal-not-ambiguous.mdk (accept) and
-    -- s-nary-truncated-goal-joint-rejects.mdk (reject).
+    -- Regression: test/dict_fixtures/s-nary-truncated-goal-not-ambiguous (accept) and
+    -- s-nary-truncated-goal-joint-rejects (reject).
     -- ⚡ PERF (#1974): the truncation gate and the match test below read THE SAME two
     -- buckets, so they are answered from ONE pair of lookups (`oblCallVerdict`) rather
     -- than the two-then-two the separate `oblGoalIsTruncated` / `implMatchesArgsU` calls
@@ -31668,7 +31668,7 @@ checkUndeterminedObligation univ iface occ loc scope
   | iface.irName == "Num" = ()  -- RULE 4a: Num → literal defaulting, never ambiguity (a SPELLING test — see checkOneCallObligation)
   | isSome (activeDictVarOf occ scope) = ()  -- forwarded enclosing-dict slot (fold-in)
   | anyIn (monoUnboundIds occ) perRun.value.poisonedVars.value = ()  -- Chunk A: primary mismatch already explained this var
-  -- RULE 2 (#838 I2, DESIGN.md §2.4): every free var of this predicate is QUANTIFIED by
+  -- RULE 2 (#838 I2): every free var of this predicate is QUANTIFIED by
   -- some enclosing scheme (`deferrableVarIds`, populated from `schemeIds` at each
   -- generalized group close) ⇒ it is `deferredToCaller` — the constraint is forwarded
   -- and re-checked at each concrete use, so DEFER here.  It is what checkOneImplObligation
@@ -39207,7 +39207,7 @@ checkMatchToLines runtimeDecls prog =
       prog
   joinNl (map tcMsg (reverseL driverState.value.matchWarnings.value))
 
--- ── diagnostics entry point (compiler/diagnostics.mdk bridge) ────────────
+-- ── diagnostics entry point (compiler/driver/diagnostics.mdk bridge) ────────────
 -- Run the full typecheck pass (runtime-seeded) over [prog] and return the
 -- accumulated errors and non-exhaustive-match warnings as `TcDiag`s — each
 -- carrying its own code, span (B.10.2b / S4), message, and optional help/fix —

@@ -2,8 +2,8 @@
 -- (`batchEntryDummy` is an intentional unreferenced placeholder — this file
 -- exists only to force-import every compiler module into one closure.)
 --
--- Synthetic entry for the batch typecheck harness
--- (test/diff_compiler_check_modules_batch.sh).  It imports one name from every
+-- Synthetic entry for the batch typecheck harness, LEG A of
+-- test/diff_compiler_selfproc.sh.  It imports one name from every
 -- compiler module so that `loadProgram` pulls them ALL into a single union
 -- closure — then one check_all_main.mdk run emits every module's schemes in one
 -- process instead of several.  The imports exist only to force the closure; the

@@ -260,7 +260,6 @@ REF	test/README.md	GATE-REGISTRY-DESIGN.md §9 (S-4, #2200) cites this as one of
 # subject of the sentence, so correcting it would destroy the sentence.
 REF	compiler/llvm_emit.mdk	the pre-restructure path is the WORKED EXAMPLE in test/check_doc_links.sh's own WHY-THIS-EXISTS header ("compiler/llvm_emit.mdk -> compiler/backend/llvm_emit.mdk"); the rename IS what that gate exists to catch
 REF	test/diff_compiler_roundtrip.sh	test/check_doc_links.sh's ORPHAN-check rationale narrates the docs-cleanup PR that removed the last citation of this deleted gate — the path being dead is the point of the paragraph
-REF	test/migrate_verify.sh	compiler/tools/snapshot.mdk narrates the migration's own byte-identity check catching a blanket normalizer red-handed; the checker was a one-off migration script, deleted with the migration
 REF	test/diff_compiler_check_modules_batch.sh	test/preflight.sh and compiler/entries/all_modules_entry.mdk both narrate #337, in which this gate's deletion (00afa27d) aborted preflight for agents who had never heard of it
 REF	test/construct_fixtures/let_else.mdk	test/check_removed_constructs.sh narrates this fixture going stale as the reason it now scans the whole tracked *.mdk tree; the fixture was removed with let-else
 REF	test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides/main.mdk	drained must-fail pin; test/dict_fixtures/s3-nary-requires-multi-entry-swapped.mdk records which pin its control was cut from
@@ -278,18 +277,8 @@ REF	test/must_fail_fixtures/1376-value-only-import-record-floor/claim.txt	draine
 # compiler source, which moves its own compiler-family snapshot
 # golden ([T-SNAPSHOT-SELF]) — so they are inventoried here and drain in a
 # docs-cleanup pass that blesses the snapshots in the same commit.
-REF	compiler/build_cmd.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/driver/build_cmd.mdk
-REF	compiler/dce.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/ir/dce.mdk
-REF	compiler/diagnostics.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/driver/diagnostics.mdk
-REF	compiler/lexer.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/lexer.mdk
-REF	compiler/lsp.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/tools/lsp.mdk
-REF	compiler/medaka_cli.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/driver/medaka_cli.mdk
 REF	compiler/parser.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/frontend/parser.mdk
-REF	compiler/test_cmd.mdk	TODO(docs-cleanup): stale path from the compiler subfolder restructure; now compiler/tools/test_cmd.mdk
 REF	test/diff_compiler_parse.sh	TODO(docs-cleanup): the single parse gate was split; today it is test/diff_compiler_parse_result.sh + parse_errors.sh + parse_error_loc.sh, and three source comments still send a reader to the old name
-REF	test/diff_compiler_mark.sh	TODO(docs-cleanup): no mark gate exists — markWithPrelude is off every production verb (AGENTS.md [P-NO-MARK-PASS]); compiler/frontend/marker.mdk still cites it as its validation
-REF	test/diff_engines.sh	TODO(docs-cleanup): now test/diff_compiler_engines.sh; compiler/entries/eval_autoprint_main.mdk still names the old script as the gate it is the interpreter arm of
-REF	test/dict_fixtures/s-nary-truncated-goal-not-ambiguous.mdk	TODO(docs-cleanup): compiler/types/typecheck.mdk cites this fixture as the regression for a truncated-goal accept; no such fixture is in test/dict_fixtures/ today
 REF	test/llvm_fixtures/record_owner_narrowing_flat.mdk	TODO(docs-cleanup): test/analyze_project_fixtures/record_ctor_sibling_blocks_narrowing/main_rejects.mdk names it as its flat-layout companion; no such fixture is in test/llvm_fixtures/ today
 REF	sqlite/lib/plan.mdk	TODO(docs-cleanup): sqlite/findings/seek-plan.md records that this module was specified but never created (it would have closed a lib.plan -> lib.select -> lib.plan import cycle); the finding is a CLOSED RECORD, so the citation is arguably history rather than debt
 REF	sqlite/test/inlang_test_oracle.sh	migrated to a `kind = "native"` gate module in #2592 (sqlite/test/inlang_test_oracle_test.mdk); docs/ops/TESTING-INVENTORY.md's dated 2026-09-03 survey snapshot and sqlite/findings/inlang-test-suite.md's CLOSED RECORD both record the gate as it existed as a script — legitimate history

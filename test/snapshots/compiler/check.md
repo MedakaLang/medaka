@@ -24,7 +24,7 @@ stages=DESUGAR,MARK
 -- `withTarget` driver lives in `compiler/entries/check_main.mdk` so two private `main`s
 -- (this driver's + the native CLI dispatcher's) don't collide under
 -- private_mangle.  This module exposes only `runCheck` + its helpers, so it
--- composes cleanly into compiler/medaka_cli.mdk and the batch/modules harnesses.
+-- composes cleanly into compiler/driver/medaka_cli.mdk and the batch/modules harnesses.
 
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
@@ -47,7 +47,7 @@ import types.typecheck.{
 
 -- exported so the batch typecheck harness's synthetic entry can pull this
 -- module into a single union closure (does not change its inferred schemes),
--- and so compiler/entries/check_main.mdk + compiler/medaka_cli.mdk can drive it.
+-- and so compiler/entries/check_main.mdk + compiler/driver/medaka_cli.mdk can drive it.
 export
 runCheck : String -> String -> String -> String
 runCheck rsrc csrc tsrc = runCheckFromDecls rsrc csrc (parse tsrc)
