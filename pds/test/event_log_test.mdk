@@ -233,9 +233,7 @@ test "a sweep is due on every interval-th entry and on no other" =
    binding is memoized, so every case below names a subdirectory of the same
    `mktemp -d` rather than spawning its own. -}
 scratch : <Exec "_", IO> String
-scratch = match scratchDir
-  Ok dir => dir
-  Err message => panic "event_log_test: mktemp -d failed: \{message}"
+scratch = resultOrPanic "event_log_test: mktemp -d failed" scratchDir
 
 caseDir : String -> <Exec "_", FileRead "_", FileWrite "_", IO> String
 caseDir name =
@@ -520,17 +518,17 @@ test "an append leaves every entry already in the log untouched" =
 -- # A real commit's event, end to end
 
 mustTid : Int -> Tid
-mustTid micros = match tidEncode micros 7
-  Ok tid => tid
-  Err message => panic "event_log_test: TID setup failed: \{message}"
+mustTid micros =
+  resultOrPanic "event_log_test: TID setup failed" (tidEncode micros 7)
 
 testDid : String
 testDid = "did:plc:medakaeventlog"
 
 genesis : Repo
-genesis = match repoInitFromKeyBytes testDid (arrayMake 32 1) (mustTid 1000000)
-  Ok repo => repo
-  Err message => panic "event_log_test: repo init failed: \{message}"
+genesis =
+  resultOrPanic
+    "event_log_test: repo init failed"
+    (repoInitFromKeyBytes testDid (arrayMake 32 1) (mustTid 1000000))
 
 written : Repo
 written =
@@ -569,9 +567,8 @@ frameHeaderValue : DagCbor
 frameHeaderValue = DcMap [("op", DcInt 1), ("t", DcString "#commit")]
 
 mustEncode : DagCbor -> Array Int
-mustEncode value = match dagCborEncode value
-  Ok bytes => bytes
-  Err message => panic "event_log_test: header encode failed: \{message}"
+mustEncode value =
+  resultOrPanic "event_log_test: header encode failed" (dagCborEncode value)
 
 frameHeaderBytes : Array Int
 frameHeaderBytes = mustEncode frameHeaderValue

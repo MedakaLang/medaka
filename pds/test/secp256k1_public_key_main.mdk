@@ -142,9 +142,8 @@ didRows rows =
     rows
 
 hexBytes : String -> Array Int
-hexBytes text = match decode text
-  Err message => panic "public-key driver: corpus field is not hex: \{message}"
-  Ok bytes => bytes
+hexBytes text =
+  resultOrPanic "public-key driver: corpus field is not hex" (decode text)
 
 {- | Every official row, graded through the exact composition `pds keygen`
    prints: the secret's compressed public key and the `did:key` naming it. -}

@@ -30,14 +30,10 @@ data ProofRow = ProofRow (List (Array Int)) (List String)
 data ProofCase = ProofCase String Mst (Option Cid) Int (List ProofRow)
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "mst_vectors: malformed hex: \{message}"
+mustHex text = resultOrPanic "mst_vectors: malformed hex" (decode text)
 
 mustCid : String -> Cid
-mustCid text = match cidFromString text
-  Ok cid => cid
-  Err message => panic "mst_vectors: malformed CID: \{message}"
+mustCid text = resultOrPanic "mst_vectors: malformed CID" (cidFromString text)
 
 mustTree : Result String Mst -> Mst
 mustTree (Ok tree) = tree
@@ -173,9 +169,10 @@ rejectContains label _ (Ok _) =
   0
 
 mustNode : DagCbor -> Array Int
-mustNode value = match dagCborEncode value
-  Ok bytes => bytes
-  Err message => panic "mst_vectors: hostile node encoding failed: \{message}"
+mustNode value =
+  resultOrPanic
+    "mst_vectors: hostile node encoding failed"
+    (dagCborEncode value)
 
 entryValueWithTree : Array Int -> Int -> Cid -> DagCbor -> DagCbor
 entryValueWithTree key prefix value tree = DcMap [

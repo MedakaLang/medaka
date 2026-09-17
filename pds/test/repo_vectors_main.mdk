@@ -47,39 +47,30 @@ import lib.tid.{
 }
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "repo_vectors: malformed hex: \{message}"
+mustHex text = resultOrPanic "repo_vectors: malformed hex" (decode text)
 
 mustCid : String -> Cid
-mustCid text = match cidFromString text
-  Ok cid => cid
-  Err message => panic "repo_vectors: malformed CID: \{message}"
+mustCid text = resultOrPanic "repo_vectors: malformed CID" (cidFromString text)
 
 mustInt : String -> Int
-mustInt text = match toInt text
-  Some value => value
-  None => panic "repo_vectors: malformed integer"
+mustInt text = optionOrPanic "repo_vectors: malformed integer" (toInt text)
 
 mustTid : String -> Tid
-mustTid text = match tidParse text
-  Ok tid => tid
-  Err message => panic "repo_vectors: malformed TID: \{message}"
+mustTid text = resultOrPanic "repo_vectors: malformed TID" (tidParse text)
 
 mustSecret : String -> SecretKey
-mustSecret text = match secretKeyFromBytes (mustHex text)
-  Ok key => key
-  Err message => panic "repo_vectors: malformed secret: \{message}"
+mustSecret text =
+  resultOrPanic
+    "repo_vectors: malformed secret"
+    (secretKeyFromBytes (mustHex text))
 
 mustRecord : String -> DagCbor
-mustRecord text = match dagCborDecode (mustHex text)
-  Ok value => value
-  Err message => panic "repo_vectors: malformed record: \{message}"
+mustRecord text =
+  resultOrPanic "repo_vectors: malformed record" (dagCborDecode (mustHex text))
 
 mustEncode : DagCbor -> Array Int
-mustEncode value = match dagCborEncode value
-  Ok bytes => bytes
-  Err message => panic "repo_vectors: test encoding failed: \{message}"
+mustEncode value =
+  resultOrPanic "repo_vectors: test encoding failed" (dagCborEncode value)
 
 mustRepo : Result String Repo -> Repo
 mustRepo (Ok repo) = repo
@@ -275,9 +266,10 @@ setField name value ((key, old) :: rest) =
     (key, old) :: setField name value rest
 
 mustPut : Cid -> Array Int -> BlockStore -> BlockStore
-mustPut cid bytes store = match blockStorePut cid bytes store
-  Ok next => next
-  Err message => panic "repo_vectors: test block insertion failed: \{message}"
+mustPut cid bytes store =
+  resultOrPanic
+    "repo_vectors: test block insertion failed"
+    (blockStorePut cid bytes store)
 
 testCommitFields : String -> Cid -> List (String, DagCbor)
 testCommitFields did dataCid = [

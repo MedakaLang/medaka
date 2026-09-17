@@ -38,14 +38,16 @@ password : String
 password = "s-blob-routes-test-password"
 
 account : Account
-account = match makeAccount accountDidText accountHandleText accountHostText
-  Ok made => made
-  Err message => panic "blob_routes_test: account: \{message}"
+account =
+  resultOrPanic
+    "blob_routes_test: account"
+    (makeAccount accountDidText accountHandleText accountHostText)
 
 server : Server
-server = match pdsServer account serverLinksEmpty "test-driver"
-  Ok made => made
-  Err message => panic "blob_routes_test: server: \{message}"
+server =
+  resultOrPanic
+    "blob_routes_test: server"
+    (pdsServer account serverLinksEmpty "test-driver")
 
 testSecret : Array Int
 testSecret = arrayMakeWith 32 (i => (i * 7 + 1) % 256)

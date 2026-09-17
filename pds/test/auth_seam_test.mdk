@@ -99,9 +99,10 @@ testContext : RequestContext
 testContext = RequestContext { nowSeconds = testInstant, nonce = testNonce }
 
 account : Account
-account = match makeAccount accountDidText "alice.example" accountHostText
-  Ok value => value
-  Err message => panic "auth_seam_test: account setup failed: \{message}"
+account =
+  resultOrPanic
+    "auth_seam_test: account setup failed"
+    (makeAccount accountDidText "alice.example" accountHostText)
 
 -- ── the synthetic subject ───────────────────────────────────────────────────
 
@@ -129,14 +130,16 @@ syntheticRegistry = match makeRegistry [
   Err message => panic "auth_seam_test: registry setup failed: \{message}"
 
 mustResponse : String -> Response
-mustResponse body = match makeResponse 200 "OK" [textHeader] (toUtf8 body)
-  Ok response => response
-  Err message => panic "auth_seam_test: response setup failed: \{message}"
+mustResponse body =
+  resultOrPanic
+    "auth_seam_test: response setup failed"
+    (makeResponse 200 "OK" [textHeader] (toUtf8 body))
 
 textHeader : Header
-textHeader = match makeHeader "content-type" (toUtf8 "text/plain")
-  Ok header => header
-  Err message => panic "auth_seam_test: header setup failed: \{message}"
+textHeader =
+  resultOrPanic
+    "auth_seam_test: header setup failed"
+    (makeHeader "content-type" (toUtf8 "text/plain"))
 
 {- | Reports the `AuthOutcome` the seam resolved, so a public route reached
    with a good token is distinguishable from one reached with none. Reaching
@@ -155,9 +158,10 @@ syntheticServer = makeServer account syntheticRegistry syntheticHandler
    verifies against it and none is a credential on it: a good signature inside
    its window is not on its own a session. -}
 secretOnlyStore : Store
-secretOnlyStore = match storeWithServerSecret testSecret storeEmpty
-  Ok store => store
-  Err message => panic "auth_seam_test: session secret setup failed: \{message}"
+secretOnlyStore =
+  resultOrPanic
+    "auth_seam_test: session secret setup failed"
+    (storeWithServerSecret testSecret storeEmpty)
 
 -- The same store with `goodToken`/`goodRefreshToken`'s session open, which is
 -- what makes those two credentials rather than merely well-formed tokens.
@@ -459,14 +463,14 @@ test "a public route is not closed by an unusable token" =
 -- ── the real registry ───────────────────────────────────────────────────────
 
 pdsServerValue : Server
-pdsServerValue = match pdsServer account serverLinksEmpty "test-driver"
-  Ok server => server
-  Err message => panic "auth_seam_test: pdsServer setup failed: \{message}"
+pdsServerValue =
+  resultOrPanic
+    "auth_seam_test: pdsServer setup failed"
+    (pdsServer account serverLinksEmpty "test-driver")
 
 realRegistry : Registry
-realRegistry = match pdsRegistry
-  Ok registry => registry
-  Err message => panic "auth_seam_test: pdsRegistry setup failed: \{message}"
+realRegistry =
+  resultOrPanic "auth_seam_test: pdsRegistry setup failed" pdsRegistry
 
 nsidsWith : AuthPolicy -> List String
 nsidsWith wanted =

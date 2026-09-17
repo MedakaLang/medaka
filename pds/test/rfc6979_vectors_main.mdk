@@ -22,14 +22,13 @@ oneBytes = [|
 |]
 
 bytes : String -> Array Int
-bytes value = match decode value
-  Ok decoded => decoded
-  Err message => panic "rfc6979_vectors: malformed hex: \{message}"
+bytes value = resultOrPanic "rfc6979_vectors: malformed hex" (decode value)
 
 scalar : String -> Sc
-scalar value = match scFromBytes (bytes value)
-  Ok parsed => parsed
-  Err message => panic "rfc6979_vectors: invalid secret key: \{message}"
+scalar value =
+  resultOrPanic
+    "rfc6979_vectors: invalid secret key"
+    (scFromBytes (bytes value))
 
 bump : Array Int -> Int -> Unit
 bump counts i = A.setInPlace i (1 + counts[i]) counts

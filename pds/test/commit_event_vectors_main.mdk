@@ -96,19 +96,13 @@ data Grade = Grade {
 }
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "commit_event: malformed hex: \{message}"
+mustHex text = resultOrPanic "commit_event: malformed hex" (decode text)
 
 mustCid : String -> Cid
-mustCid text = match cidFromString text
-  Ok cid => cid
-  Err message => panic "commit_event: malformed CID: \{message}"
+mustCid text = resultOrPanic "commit_event: malformed CID" (cidFromString text)
 
 mustTid : String -> Tid
-mustTid text = match tidParse text
-  Ok tid => tid
-  Err message => panic "commit_event: malformed TID: \{message}"
+mustTid text = resultOrPanic "commit_event: malformed TID" (tidParse text)
 
 mustBlocks : Result String (List (Cid, Array Int)) -> List (Cid, Array Int)
 mustBlocks (Ok blocks) = blocks
@@ -120,9 +114,8 @@ mustCar (Ok bytes) = bytes
 mustCar (Err message) = panic "commit_event: CAR encoding failed: \{message}"
 
 mustInt : String -> Int
-mustInt text = match toInt text
-  Some value => value
-  None => panic "commit_event: malformed integer: \{text}"
+mustInt text =
+  optionOrPanic "commit_event: malformed integer: \{text}" (toInt text)
 
 optionalHex : String -> Option (Array Int)
 optionalHex "-" = None

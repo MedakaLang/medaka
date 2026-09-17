@@ -41,14 +41,16 @@ password : String
 password = "s-sessions-test-password"
 
 account : Account
-account = match makeAccount accountDidText accountHandleText accountHostText
-  Ok made => made
-  Err message => panic "session_routes_test: account: \{message}"
+account =
+  resultOrPanic
+    "session_routes_test: account"
+    (makeAccount accountDidText accountHandleText accountHostText)
 
 server : Server
-server = match pdsServer account serverLinksEmpty "test-driver"
-  Ok made => made
-  Err message => panic "session_routes_test: server: \{message}"
+server =
+  resultOrPanic
+    "session_routes_test: server"
+    (pdsServer account serverLinksEmpty "test-driver")
 
 -- A fixed session secret. The seam only ever compares a MAC against it, so a
 -- fixture value is as good as an entropy-drawn one here; the real server
@@ -82,9 +84,10 @@ configuredStore = match storeWithServerSecret testSecret storeEmpty
 -- | The same store with no credential at all, which is what a server that was
 -- never given a password would hold.
 credentiallessStore : Store
-credentiallessStore = match storeWithServerSecret testSecret storeEmpty
-  Ok withSecret => withSecret
-  Err message => panic "session_routes_test: session secret: \{message}"
+credentiallessStore =
+  resultOrPanic
+    "session_routes_test: session secret"
+    (storeWithServerSecret testSecret storeEmpty)
 
 testInstant : Int
 testInstant = 1700000000

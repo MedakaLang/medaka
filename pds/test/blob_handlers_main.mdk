@@ -74,14 +74,16 @@ testContext = RequestContext {
 }
 
 account : Account
-account = match makeAccount accountDidText accountHandleText accountHostText
-  Ok made => made
-  Err message => panic "blob_handlers: account setup failed: \{message}"
+account =
+  resultOrPanic
+    "blob_handlers: account setup failed"
+    (makeAccount accountDidText accountHandleText accountHostText)
 
 server : Server
-server = match pdsServer account serverLinksEmpty "test-driver"
-  Ok made => made
-  Err message => panic "blob_handlers: server setup failed: \{message}"
+server =
+  resultOrPanic
+    "blob_handlers: server setup failed"
+    (pdsServer account serverLinksEmpty "test-driver")
 
 accessToken : String
 accessToken =
@@ -194,9 +196,7 @@ listedCids bytes = match parse (bodyText bytes)
 -- ── corpus rows ─────────────────────────────────────────────────────────────
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "blob_handlers: malformed hex: \{message}"
+mustHex text = resultOrPanic "blob_handlers: malformed hex" (decode text)
 
 field : Int -> List String -> String
 field _ [] = panic "blob_handlers: corpus row is too short"

@@ -55,9 +55,8 @@ run dir force holdMillis = match acquireDataLock force dir
       _ => ()
 
 mustInt : String -> Int
-mustInt text = match toInt text
-  Some value => value
-  None => panic "dirlock_race: malformed integer: \{text}"
+mustInt text =
+  optionOrPanic "dirlock_race: malformed integer: \{text}" (toInt text)
 
 main : <IO, Clock, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()

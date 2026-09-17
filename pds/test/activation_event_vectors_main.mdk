@@ -74,27 +74,21 @@ syncHeaderHex : String
 syncHeaderHex = "a26174652373796e63626f7001"
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "activation_event: malformed hex: \{message}"
+mustHex text = resultOrPanic "activation_event: malformed hex" (decode text)
 
 mustCbor : String -> DagCbor
 mustCbor text = mustCborBytes (mustHex text)
 
 mustCborBytes : Array Int -> DagCbor
-mustCborBytes bytes = match dagCborDecode bytes
-  Ok value => value
-  Err message => panic "activation_event: undecodable body: \{message}"
+mustCborBytes bytes =
+  resultOrPanic "activation_event: undecodable body" (dagCborDecode bytes)
 
 mustCar : Array Int -> Car
-mustCar bytes = match carDecode bytes
-  Ok car => car
-  Err message => panic "activation_event: undecodable corpus CAR: \{message}"
+mustCar bytes =
+  resultOrPanic "activation_event: undecodable corpus CAR" (carDecode bytes)
 
 mustTid : String -> Tid
-mustTid text = match tidParse text
-  Ok tid => tid
-  Err message => panic "activation_event: malformed TID: \{message}"
+mustTid text = resultOrPanic "activation_event: malformed TID" (tidParse text)
 
 field : DagCbor -> String -> Option DagCbor
 field (DcMap fields) name = lookup name fields
@@ -130,9 +124,8 @@ parseRows (line :: rest) acc =
     _ => panic "activation_event: unrecognized corpus row: \{line}"
 
 rowValue : List (String, String) -> String -> String
-rowValue rows tag = match lookup tag rows
-  Some value => value
-  None => panic "activation_event: corpus has no \{tag} row"
+rowValue rows tag =
+  optionOrPanic "activation_event: corpus has no \{tag} row" (lookup tag rows)
 
 gradeWord : Bool -> String
 gradeWord True = "PASS"

@@ -152,9 +152,10 @@ bearerToken request =
 -- ── the answer ──────────────────────────────────────────────────────────────
 
 mustJsonHeader : Header
-mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
-  Ok header => header
-  Err message => panic "appview_stub: header error: \{message}"
+mustJsonHeader =
+  resultOrPanic
+    "appview_stub: header error"
+    (makeHeader "content-type" (toUtf8 "application/json"))
 
 {- | A repository revision this driver invents. Nothing interprets the value;
    what a case asserts on is that a field only the upstream could have set
@@ -163,9 +164,10 @@ stubRepoRev : String
 stubRepoRev = "3lstubrev0000"
 
 mustRepoRevHeader : Header
-mustRepoRevHeader = match makeHeader "atproto-repo-rev" (toUtf8 stubRepoRev)
-  Ok header => header
-  Err message => panic "appview_stub: header error: \{message}"
+mustRepoRevHeader =
+  resultOrPanic
+    "appview_stub: header error"
+    (makeHeader "atproto-repo-rev" (toUtf8 stubRepoRev))
 
 {- | The stub's answer, echoing the audience and method the credential it was
    handed actually named.
@@ -459,19 +461,14 @@ flushHeld ((conn, bytes) :: rest) =
   flushHeld rest
 
 mustPort : String -> Int
-mustPort text = match toInt text
-  Some port => port
-  None => panic "appview_stub: not a port: \{text}"
+mustPort text = optionOrPanic "appview_stub: not a port: \{text}" (toInt text)
 
 mustStatus : String -> Int
-mustStatus text = match toInt text
-  Some status => status
-  None => panic "appview_stub: not a status code: \{text}"
+mustStatus text =
+  optionOrPanic "appview_stub: not a status code: \{text}" (toInt text)
 
 mustCount : String -> Int
-mustCount text = match toInt text
-  Some count => count
-  None => panic "appview_stub: not a count: \{text}"
+mustCount text = optionOrPanic "appview_stub: not a count: \{text}" (toInt text)
 
 usage : String
 usage =

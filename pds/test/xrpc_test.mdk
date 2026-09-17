@@ -47,9 +47,8 @@ appendBytes left right =
     if i < leftSize then left[i] else right[i - leftSize])
 
 mustRequest : Array Int -> Request
-mustRequest bytes = match parseRequest bytes
-  Ok request => request
-  Err message => panic "xrpc_test: request setup failed: \{message}"
+mustRequest bytes =
+  resultOrPanic "xrpc_test: request setup failed" (parseRequest bytes)
 
 noBodyRequest : String -> String -> Request
 noBodyRequest method target =

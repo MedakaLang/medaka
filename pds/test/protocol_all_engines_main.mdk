@@ -47,9 +47,10 @@ import lib.xrpc.{
 }
 
 mustHeader : String -> String -> Header
-mustHeader name value = match makeHeader name (toUtf8 value)
-  Ok header => header
-  Err message => panic "protocol_all_engines: header setup failed: \{message}"
+mustHeader name value =
+  resultOrPanic
+    "protocol_all_engines: header setup failed"
+    (makeHeader name (toUtf8 value))
 
 mustResponse : Int -> String -> String -> Response
 mustResponse status reason body =

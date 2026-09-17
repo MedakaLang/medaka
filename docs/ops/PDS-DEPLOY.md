@@ -581,11 +581,51 @@ Put the private half in your password manager and delete nothing else from
 that file until you have. **A backup this box can decrypt is a backup a box
 compromise can decrypt**, which is the whole of criterion B16.
 
-Configure `rclone` for R2 (`rclone config`, `s3` provider `Cloudflare`) into a
-file only root can read, then write `/etc/pds/backup.env`:
+Write the `rclone` config directly rather than using `rclone config` — the
+interactive provider list is long enough to scroll off a terminal, and the file
+is four lines:
 
 ```sh
 install -d -m 0700 /etc/pds
+cat >/etc/pds/rclone.conf <<'EOF'
+[r2]
+type = s3
+provider = Cloudflare
+access_key_id = <from the R2 API token>
+secret_access_key = <from the R2 API token>
+endpoint = https://<account-id>.r2.cloudflarestorage.com
+region = auto
+no_check_bucket = true
+no_head = true
+EOF
+chmod 0600 /etc/pds/rclone.conf
+```
+
+🚨 **The last two lines are required for R2, and each was paid for.** R2 does
+not implement the bucket-creation probe rclone makes by default
+(`no_check_bucket`), nor the **versioned `HEAD`** rclone issues after an upload
+to verify integrity — R2 answers that one `501 Not Implemented` and rclone
+silently retries without it (`no_head`). Omit them and every backup still
+succeeds, after burning a failed round trip and logging errors that look like a
+real fault. Dropping rclone's own integrity check is safe here **because
+`pds/backup.sh` performs its own**, comparing the uploaded object's byte count
+against the local archive.
+
+The credentials come from **R2 → Manage R2 API Tokens → Create API Token**, with
+*Object Read & Write* scoped to the one bucket. That page shows the access key,
+the secret (**once**), and the endpoint. R2 API tokens are not the same thing as
+the general Cloudflare API tokens under My Profile, which will not work here.
+
+⚠️ **A bucket-scoped token asked about the wrong bucket returns a blanket
+`403 AccessDenied` on read, write AND delete** — indistinguishable from bad
+credentials, and the first place to look when a correct-looking token is
+refused. Check the bucket name character by character before suspecting the key.
+`rclone lsd r2:` listing *no* buckets is expected and correct for such a token;
+probe the bucket itself instead.
+
+Then write `/etc/pds/backup.env`:
+
+```sh
 cat >/etc/pds/backup.env <<'EOF'
 PDS_ROOT=/opt/pds
 PDS_UNIT=pds.service
@@ -593,7 +633,7 @@ AGE_RECIPIENT=age1...
 RCLONE_CONFIG_PATH=/etc/pds/rclone.conf
 RCLONE_REMOTE=r2:medaka-pds-backups
 EOF
-chmod 0600 /etc/pds/backup.env /etc/pds/rclone.conf
+chmod 0600 /etc/pds/backup.env
 install -m 0755 pds/backup.sh /opt/pds/backup.sh
 cp pds/pds-backup.service pds/pds-backup.timer /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now pds-backup.timer

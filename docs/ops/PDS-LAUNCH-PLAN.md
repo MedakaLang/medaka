@@ -40,8 +40,38 @@ Companion docs: [`ATPROTO-PDS-DESIGN.md`](../design/ATPROTO-PDS-DESIGN.md)
 
 The soak duration between G-QUIET and G-ANNOUNCE, and between G-ANNOUNCE and
 G-MIGRATE, is a number Val sets when each earlier gate closes, not a number
-this document guesses now. The plan's only rule is that a soak is counted from
-the last S0/S1 fix deployed, not from first boot.
+this document guesses now.
+
+**A soak has TWO clocks, and only one of them is a calendar.**
+
+- **The calendar clock** — the stated duration. It is counted from the **last
+  S0/S1 fix deployed**, not from first boot, and an S2 or below does not reset
+  it. Deploying during a soak is therefore permitted, and always was.
+- **The uninterrupted-run clock** — time since the last restart, *any* restart,
+  for any reason. It is reset by a deploy, a config change, a crash, or a
+  reboot, regardless of severity.
+
+The second clock is the one nobody wrote down, and it is the one that carries
+the soak's actual value. These properties are unreachable without it, and each
+has been **structurally unexercisable** up to the moment a soak begins, because
+deploy cadence kept restarting the server:
+
+| property | needs an uninterrupted run of |
+|---|---|
+| refresh-token rotation against a live token | **> 2h** (`accessTokenSeconds`) |
+| the event-log retention sweep, and a relay reconnecting past it (#3005) | **> 72h** (`eventLogRetentionSeconds`) |
+| RSS drift with a readable trend (C7) | days |
+
+⚠️ **A soak that runs its full calendar week while being deployed to daily
+proves uptime, not the three things uptime was standing in for.** So:
+
+> **At least one window of ≥72h with no restart must fall inside the soak**
+> before its gate may close. Deploys during a soak are batched rather than
+> shipped one at a time, and each is recorded on #1697 with its date and the
+> severities it carried.
+
+Ruling: Val, 2026-09-17, on starting the G-QUIET soak while G-ANNOUNCE work
+continues.
 
 ## 2. Acceptance criteria
 

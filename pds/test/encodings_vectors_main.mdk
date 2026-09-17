@@ -48,9 +48,7 @@ bytesToIntBEGo bytes i acc =
     bytesToIntBEGo bytes (i + 1) (acc * 256 + bytes[i])
 
 mustDecodeHex : String -> Array Int
-mustDecodeHex s = match decode s
-  Ok bytes => bytes
-  Err msg => panic "encodings_vectors: bad hex '\{s}': \{msg}"
+mustDecodeHex s = resultOrPanic "encodings_vectors: bad hex '\{s}'" (decode s)
 
 -- A `0x`-prefixed (or bare) hex field -> Int, e.g. "0x1200" -> 4608.
 hexFieldToInt : String -> Int
@@ -74,9 +72,8 @@ fieldCount : String -> String -> Int
 fieldCount sep line = length (split sep line)
 
 mustParseInt : String -> Int
-mustParseInt s = match toInt s
-  Some n => n
-  None => panic "encodings_vectors: not an integer: \{s}"
+mustParseInt s =
+  optionOrPanic "encodings_vectors: not an integer: \{s}" (toInt s)
 
 -- ── reporting ────────────────────────────────────────────────────────────
 

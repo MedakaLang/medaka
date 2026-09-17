@@ -55,3 +55,7 @@ _build/
 # `make dist` / scripts/make_dist.sh output tarball. Regenerable; dist/linux-spike/
 # is separate, tracked, historical source and is unaffected by this pattern.
 /dist/*.tar.gz
+
+# scripts/jev response cache (Jev API answers keyed by content hash). Regenerable;
+# a miss just re-asks the model. Never commit: it is derived from an external API.
+/.jev-cache/

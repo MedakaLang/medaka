@@ -20,9 +20,8 @@ oneBytes = [|
 |]
 
 secretOne : Sc
-secretOne = match scFromBytes oneBytes
-  Ok scalar => scalar
-  Err message => panic "rfc6979_test: fixed scalar rejected: \{message}"
+secretOne =
+  resultOrPanic "rfc6979_test: fixed scalar rejected" (scFromBytes oneBytes)
 
 test "fixed-key HMAC is deterministic, 32 bytes, and does not mutate inputs" =
   let key = arrayMake 32 0x0b
