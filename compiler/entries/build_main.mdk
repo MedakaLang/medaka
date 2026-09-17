@@ -1,6 +1,6 @@
 -- compiler/entries/build_main.mdk — driver for the self-hosted `medaka build`
 -- (Stage 4 Phase B.11).  Parses `<entry.mdk> [-o <out>]` from args and invokes
--- compiler/build_cmd.mdk to emit + clang a native binary.
+-- compiler/driver/build_cmd.mdk to emit + clang a native binary.
 --
 --   MEDAKA=<exe> MEDAKA_ROOT=<repo-root> \
 --     medaka run compiler/entries/build_main.mdk <entry.mdk> [-o <out>]

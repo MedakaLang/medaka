@@ -910,7 +910,7 @@ buildUnitRenameMap mid exportsPerUnit decls =
 -- (`test/shadow_fixtures/i1_importer_local_iface/`): there the standalone stays
 -- reachable and a no-impl receiver FALLS BACK to it, so its `prov__size` entry must
 -- survive or the fallback call site loses its symbol.  Dropping both halves reds six
--- importer assertions in `diff_compiler_shadow_semantics.sh` (measured).
+-- importer assertions in `test/diff_compiler_shadow_semantics_test.mdk` (measured).
 --
 -- The entry is DROPPED, not redirected: per rule 4 at the top of this file, method
 -- names have their own emitter naming (impl keys), and this pass must leave the

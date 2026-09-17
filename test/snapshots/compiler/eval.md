@@ -1,5 +1,5 @@
 # META
-source_lines=4897
+source_lines=4879
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted eval stage — Stage-1 capstone, the tree-walking
@@ -78,10 +78,9 @@ import support.opcount.{opBump}
 -- `frontend.ast` / `support.util` / `support.ordmap` and nothing in that closure
 -- imports eval.mdk (no cycle) — verified by grep before adding this import.
 import backend.private_mangle.{mangleCtorCollisions}
--- Reused JSON diagnostic shaping for `medaka run --json` (RUNTIME-DIAGNOSTIC-
--- CHANNEL-DESIGN.md Fork C). diagnostics.mdk sits above frontend/types in the
--- pipeline and does not import eval.mdk (no cycle) — verified by grep before
--- adding this import.
+-- Reused JSON diagnostic shaping for `medaka run --json`. diagnostics.mdk sits
+-- above frontend/types in the pipeline and does not import eval.mdk (no
+-- cycle) — verified by grep before adding this import.
 import driver.diagnostics.{
   Diag(..),
   Severity(..),
@@ -648,59 +647,49 @@ export
 tyvarsInArgs : List Ty -> Int
 tyvarsInArgs ts = sumInts (map countTyvars ts)
 
--- 🚨 B-2.2-e: `implKeyOf` AND ITS PRIVATE `ppTyK` PRINTER FAMILY ARE DELETED HERE.
--- Both were mirrors of `types/typecheck.mdk`'s `implKeyTc`/`ppTyAtom` — the P0-9
--- shape — and the mint now lives once, in `types/route_key.mdk`, which BOTH sides
--- of the dict-word seam call (`implRouteKeyWord`).  Their callers in this file are
--- `declImplIfaceIdRow` and `implMethodEntry`; `ir/core_ir_lower.mdk` imports the
--- mint directly rather than any `implKeyOf` from here.
+-- `implKeyOf` and its private `ppTyK` printer family are deleted here. Both were
+-- mirrors of `types/typecheck.mdk`'s `implKeyTc`/`ppTyAtom`, and the mint now lives
+-- once, in `types/route_key.mdk`, which both sides of the dict-word seam call
+-- (`implRouteKeyWord`). Their callers in this file are `declImplIfaceIdRow` and
+-- `implMethodEntry`; `ir/core_ir_lower.mdk` imports the mint directly rather than
+-- any `implKeyOf` from here.
 --
--- ⚠️ THE FOLD IS NOT COSMETIC ON THIS SIDE — the deleted printer was the LESS
--- complete of the two: `ppTyK` stripped `TyEffect` (`<Stdout> Int` → `Int`) and
+-- The fold is not cosmetic on this side: the deleted printer was the less
+-- complete of the two — `ppTyK` stripped `TyEffect` (`<Stdout> Int` → `Int`) and
 -- `TyConstrained` (`Eq a => a` → `a`), while `route_key.rkTy` (typecheck's printer)
--- renders both.  So an impl head written with an effect row or a constraint now
--- gets a DIFFERENT — and wider — word here than it did.  MEASURED that no accepted
--- program can observe the widening as a collapse: two impls differing only in an
--- effect row or a constraint are rejected by coherence before either word is minted
--- (`impl Sz Int` + `impl Sz (<Stdout> Int)` → *"Overlapping impls of Sz: Int and
--- Int can match the same type"*, exit 1 on check AND run — note the diagnostic
--- strips the row too).  What the fold DOES change for a LONE effect-headed impl is
--- that this side finally spells the word typecheck was already stamping.
--- ⚠️ THIS PARAGRAPH ONCE LISTED THREE SURVIVING TAG DIVERGENCES; ALL THREE ARE
--- NOW CLOSED.  It said `headTycon` (below) strips `TyEffect` AND `TyConstrained`
--- while `typecheck.headTyconTy` "answers `None` for both, and for a function
--- head".  The effect arm was #1618, the function head was #1617, and the
--- constraint arm was #1630.  All three are fixed by giving the two sides the
--- SAME arms: `typecheck.headTyNode` now peels `TyEffect` and `TyConstrained`,
--- and both sides answer `route_key.funHeadTag` for an arrow.
+-- renders both. So an impl head written with an effect row or a constraint now
+-- gets a different, wider word here than it did. No accepted program can observe
+-- the widening as a collapse: two impls differing only in an effect row or a
+-- constraint are rejected by coherence before either word is minted (`impl Sz
+-- Int` + `impl Sz (<Stdout> Int)` → "Overlapping impls of Sz: Int and Int can
+-- match the same type", exit 1 on check and run — the diagnostic strips the row
+-- too).
 --
--- ⚠️ THE THREE DID NOT FAIL THE SAME WAY, AND FOLDING THEM INTO ONE SENTENCE
--- ("checks and runs, cannot be built") ERASES THE WORST CELL EACH ONE HAD.
--- Derived from the in-tree records, not from memory:
---   * #1618 — `check` 0, `run` CORRECT, `build` **exit 1, NO BINARY**.
---   * #1630 — same three cells AT ONE IMPL.  Add a second impl of the same
---     interface and `run` is WRONG AT EXIT 0 (measured on a peel-reverted base
---     arm: `impl Sz (Eq a => Box Int)` beside `impl Sz (Box Bool)` printed 26 in
---     one declaration order and 28 in the other, spec answer 27) — so the class
---     reaches SILENT WRONGNESS and #1630's S1 is a grading of its REPORTED
---     shape.  Pinned at `test/dict_fixtures/s3-constrained-headed-impl-vs-plain-
---     sibling.mdk`.
---   * #1617 — `run` was WRONG and DECLARATION-ORDER-DEPENDENT at exit 0 (the
---     same silent shape), and its `build` did NOT produce a panicking binary
---     either: `emitTagMatch`'s empty-constructor arm goes through `gapStr`,
---     which in `Strict` mode `panic`s the EMITTER (`backend/llvm_emit.mdk`), so
---     `medaka build` exits 1 with no binary.  In-tree records: the #1617 row and
---     the arm-set ledger in `test/diff_compiler_dict_semantics.sh` (both cells),
---     that fixture's own header, and `PLAN.md`'s slice-7 entry for the build
---     cell.
+-- The two sides also share the head-tag projection now (`typecheck.headTyNode`
+-- peels `TyEffect` and `TyConstrained` the same way this side does, and both
+-- answer `route_key.funHeadTag` for an arrow), for the fuller history of why the
+-- two tag projections had to converge see
+-- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "9.6 The subsumption enumeration —
+-- derived by SHAPE, not by prefix".
 --
--- 🚨 #1630 IS ALSO THE CASE AGAINST BOUNDING A CLASS FROM ONE EXAMPLE.  This
--- paragraph declared `TyConstrained` "measured benign … peeling it yields a
--- headless body", which was true of the ONE shape anybody tried (`Eq a => a`)
--- and false of the neighbouring one (`Eq a => Int`).  A wrapper does not decide
--- whether its body has a head; only the body does.  ⚠️ Do not read the census as
--- closed even now — it is what has been enumerated so far.  `e` unified the
--- printers (the WORD); #1617/#1618/#1630 unified the head projections (the TAG).
+-- A wrapper type does not decide whether its body has a head; only the body
+-- does -- `TyConstrained` peeling was once measured benign on `Eq a => a` and
+-- false on the neighbouring `Eq a => Int`. The three divergences fixed here did
+-- not fail the same way, and treating them as one class erases the worst cell
+-- each one had:
+--   * #1618 -- `check` wrong at exit 0, `run` correct, `build` exit 1 with no
+--     binary.
+--   * #1630 -- same three cells at one impl; with a second impl of the same
+--     interface, `run` is wrong at exit 0 and declaration-order-dependent
+--     (silent wrongness). Pinned at
+--     `test/dict_fixtures/s3-constrained-headed-impl-vs-plain-sibling.mdk`.
+--   * #1617 -- `run` wrong and declaration-order-dependent at exit 0 (the same
+--     silent shape); `build` does not produce a panicking binary either --
+--     `emitTagMatch`'s empty-constructor arm panics the emitter in `Strict`
+--     mode, so `medaka build` exits 1 with no binary.
+-- Do not read this enumeration as closed even now -- it is what has been found
+-- so far, not a proof that no fourth shape exists.
+--
 -- Native Gap C: an ARITY-DISTINGUISHED tuple dispatch/impl-tag (`__tuple2__`,
 -- `__tuple3__`, …).  Each tuple arity gets its OWN impl group / lifted define and
 -- its own runtime dispatch tag, so the 2-/3-/4-/5-tuple `Eq`/`Ord`/`Debug` impls
@@ -4356,21 +4345,14 @@ modExportCells (ModExports cells _) = cells
 -- newtypes and differ only in that the mangler additionally filters reserved-ness
 -- (irrelevant here) and recurses through `DAttrib` (where this index, like
 -- `expTypeCtorsDirect`, has no arm — #1228, above).
---     🚨 THAT CONVERGENCE DID NOT CLOSE #1305, AND THIS BLOCK USED TO CLAIM THE
--- CAUSE THAT WOULD HAVE.  It said *"Its newtype arm is why `medaka build` mis-binds
--- the shape above where `run` gets it right (filed as #1305)"*.  The arm was removed
--- and #1305 STILL REPRODUCES, so the newtype arm was the mechanism of the symptom,
--- not the cause of the disagreement.  The cause is one layer up and is not a backend
--- fact at all: `resolve` binds the name from the newtype's module (`expCtorsDirect` /
--- `expTypeCtorsDirect` are gated on `newtypePub`, which `export newtype` SETS) while
--- `types.typecheck.publicDataDecls` has no `DNewtype` arm and resolves the IDENTITY
--- from its bare-name data universe to a DIFFERENT module.  No import-driven mangler
--- can agree with both at once, which is why removing the arm moved the observable
--- (the built binary's `E-NONEXHAUSTIVE-MATCH` became a build-time `E-PANIC`) without
--- settling anything.  Current pinned observation:
--- `test/must_fail_fixtures/1305-newtype-ctor-import-native-divergence/claim.txt`.
---     Copying the emitter here would still have imported a bug into the
--- interpreters — just not that one.
+--     This mangler/typecheck convergence (2026-08-07) removed the newtype arm but
+-- did not settle #1305 by itself: measured on #1305's own shape (`export newtype NT
+-- = Wrap Int`; `import nmod.{NT(..), unwrapNT}`), `check`/`run`/`build` all three
+-- now exit 1 with a byte-identical located diagnostic ("'NT' exports no
+-- constructors: a `newtype`'s constructor is always module-private…") and no binary
+-- is produced (#1305 closed 2026-08-23).  Whether a newtype constructor should ever
+-- be exportable is a separate, still-open question — tracked as a CONTRACT-DEPENDENCY
+-- at `compiler/EMITTER-ARCH-BUG-FIT.md` §3.3 — and this block does not answer it.
 export
 ctorsByTypeOf : List Decl -> List (String, List String)
 ctorsByTypeOf decls = flatMap ctorNamesOfDecl decls

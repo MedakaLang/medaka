@@ -46,17 +46,19 @@ main = match args ()
   _ => failWith usageModules
 
 run : String -> String -> String -> List String -> <IO> Unit
-run runtimeP coreP entry roots = match readFile runtimeP
-  Err e => failWith e
-  Ok rsrc => match readFile coreP
+run runtimeP coreP entry roots =
+  let r = do
+    rsrc <- readFile runtimeP
+    csrc <- readFile coreP
+    mods <- loadProgram entry roots
+    Ok
+      (runElab
+        (desugar (parse rsrc))
+        (desugar (parse csrc))
+        (map desugarPair mods))
+  match r
     Err e => failWith e
-    Ok csrc => match loadProgram entry roots
-      Err e => failWith e
-      Ok mods =>
-        runElab
-          (desugar (parse rsrc))
-          (desugar (parse csrc))
-          (map desugarPair mods)
+    Ok v => v
 
 runElab : List Decl -> List Decl -> List (String, List Decl) -> <IO> Unit
 runElab runtimeDecls coreDecls modules =

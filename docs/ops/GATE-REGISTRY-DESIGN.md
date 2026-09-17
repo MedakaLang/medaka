@@ -1057,6 +1057,42 @@ says at a glance how far the typical row sits from the pole. It is **not** a com
 of the floor — a median is a property of the suite, and mixing one back in would
 restore the perversity.
 
+### 13a. Quantizing costs was tried and measured away
+
+Every gate in the committed baseline is scored off as few as one or two samples, so
+an ordinary re-ingest's measurement noise (a slow runner, a GC pause, cache warmth)
+changes `medianMs` by a percent or two — enough to flip which of two near-tied gates
+sorts first, or which row a gate newly clears the least-loaded threshold for, moving
+the assignment even though nothing about the suite changed. Measured on the baseline
+perturbed by ±2% per gate (alternating sign, deterministic — ordinary jitter's rough
+magnitude): 113 of 202 gates' derived `shard` differed from the unperturbed run.
+
+The obvious fix is to quantize `medianMs` into a bucket before it becomes `cms`, so
+two nearly-tied costs collapse to the same scheduling value. Tried in two shapes,
+both measured worse than doing nothing:
+
+- **Percentage-of-value bucketing** (snap to the nearest multiple of 5% of the value
+  itself): 188 of 202 bucketed values changed under the same perturbation, because
+  jittering the value also jitters the bucket width, so the grid moves under the
+  noise instead of absorbing it.
+- **Fixed geometric grid** (1ms, growing by a constant ratio), swept at
+  3/5/8/10/15/20/30/50 percent against the same 202-gate registry and two
+  independent perturbation seeds: real shard-assignment churn was non-monotonic in
+  the ratio and, at every ratio tried, was sometimes better and sometimes worse than
+  doing nothing — a fix whose effect depends on which noise draw you get is not
+  damping noise, it is fitting one.
+
+The reason is structural, not a bad ratio choice: the packer places each candidate
+on the row with strictly the least cumulative load, across only eight rows.
+Bucketing an individual gate's cost narrows that gate's own tie window, but the
+quantity the packer actually compares — the running sum of many gates' costs on each
+row — still drifts by the sum of many individual snap-to-bucket roundings, and a
+handful of milliseconds is routinely enough to flip which row is "least loaded" at a
+given step; once one placement flips, every later placement on that row's history
+can cascade. So the emitted assignment stays a pure function of the raw `medianMs`,
+and the honest response to "ordinary noise moves gates" is thin-evidence visibility,
+not a damped score.
+
 ## 14. The budget governor: `medaka gate budget` (#2180, S-5)
 
 A three-clause, cheap, text-only governor, intended to become required

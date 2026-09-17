@@ -4,8 +4,8 @@
 --   medaka run compiler/entries/parse_main.mdk <source.mdk>
 --
 -- reads <source.mdk>, parses it, and prints the canonical structural
--- S-expression of the AST (one decl per line) — the same format as
--- dev/astdump.exe, so the two can be diffed (test/diff_compiler_parse.sh).
+-- S-expression of the AST (one decl per line) — the shape the `parse_fixtures`
+-- family pins (test/diff_compiler_snapshot_frontend_test.mdk).
 
 import frontend.parser.{parse}
 import ir.sexp.{programToSexp}

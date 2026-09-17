@@ -19,7 +19,7 @@ stages=DESUGAR,MARK
 --
 -- This module is pure extraction + the run plumbing (Example/RunResult types,
 -- buildDetailsFrom, hasUseDecls); the comment side channel comes from
--- compiler/lexer.mdk (`collectComments`), the run drivers (single/multi) from
+-- compiler/frontend/lexer.mdk (`collectComments`), the run drivers (single/multi) from
 -- compiler/tools/test_cmd.mdk.
 
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}

@@ -49,3 +49,28 @@ Mappable for Array"*.
 Also for the record on import forms: an alias-qualified name (`import map as M` → `M.get`)
 works for **values only** — an alias-qualified name in *type* position is a parse error, so
 types must be imported by name (`import map.{Map}`), never through the alias.
+
+## `compiler/entries/origin_agreement_main.mdk` — F1/F2, two S0s through 12/12 green CI (#1110)
+
+The `Ty` constructor `TyCon` carries a `TyConOrigin` stamped by resolve, in its
+`tyConOrigin` field, and so do the four type-declaration nodes — `DData`, `DNewtype`,
+`DTypeAlias` and `DInterface`, through `dataOrigin`, `newtypeOrigin`, `tyAliasOrigin`
+and `ifaceOrigin`. Nothing in the compiler read any of them before #1110, which made
+every identity fact the compiler minted unobservable — and two defects shipped through
+12/12 green CI on exactly that:
+
+- **F1** — the flat driver stamped `mod:__user__` for a file's own declarations while the
+  emitter's graph path stamped the real loader id, inside one process.
+- **F2** — on prelude-flattened paths the prelude's own types (`Option`, `Result`,
+  `Ordering`) were attributed to the user's module.
+
+Neither is catchable by a probe that calls the stampers directly — `stampFlatTyOrigins` was
+correct for its own arguments in both cases; the bug was a caller (a hardcoded literal at one
+of three call sites for F1, an empty prelude list for F2). A repro: `data A = A { p, k }`
+SIGSEGVs on `Module`, prints `5` on `Flat`, with byte-identical IR between the two — the
+disagreement is invisible unless something reads the origin stamps back and compares arms.
+`origin_agreement_main.mdk` is that something: it drives the three real elaboration entry
+points (flat/single/graph) rather than hand-picking arguments, and reports an agreement
+table rather than the origins themselves, because a golden of the origins would churn on
+every module added and would not have caught F1 (each arm's claim was individually
+plausible; only the disagreement was wrong).

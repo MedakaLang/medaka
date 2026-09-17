@@ -831,6 +831,17 @@ tracked as #1082, gated on this clause).
   the multi-type use with a located diagnostic; declining to generalize is not an
   admissible approximation of this clause, it is a different and unsound rule.**
 
+**Implementation note (`registerLocalScheme`, `compiler/types/typecheck.mdk`).**
+Local-scheme obligations are registered everywhere a local generalizes, not only
+inside IMPL/DEFAULT bodies (#827/#838 I2). An earlier `inRigidityBodyRef` gate scoped
+registration to the W3 channel because registering universally re-routed constraints
+through the ambiguity machinery — an `Ord`-constrained `where`-helper's use tripped
+`Ambiguous instance` instead of deferring, and a top-level `where` helper's orphaned
+constraint (`f x = go x where go n = n + 1` typing `f : a -> a`, `f "abc"` panicking
+at run) was the resulting S0. I2's uniform deferral (`checkUndeterminedObligation`
+RULE 2, `deferrableVarIds`) now defers a generalizable var into the enclosing scheme
+instead of rejecting, so the gate is safe to leave open.
+
 ### 4.2 Obligation deferral: which predicates defer, and where a deferred one is discharged
 
 §4's rules say *what* evidence a term needs. They do not say *when* an implementation
@@ -1647,6 +1658,25 @@ an implementation matter.
   naive schedule would have. Reading T4 as licence to revisit a settled commitment
   reinstates alternative (ii) and is not what it says.
 
+- **T4 implemented, ambiguous-overlap case (`#2548` ruling 1).** The no-unique-minimum
+  arm of `pickMostSpecificEntry` (`compiler/types/typecheck.mdk`,
+  `reportOverlapForIface`) commits to the first-declared candidate. At a **closed**
+  goal that commitment is a hard reject (`T-AMBIGUOUS-INSTANCE`). At a goal still
+  carrying an unbound metavariable, T4 says defer rather than decide — but there is no
+  later re-visit of this arm to decide it at, so the ruling is to make the commitment
+  **audible** (`W-OPEN-GOAL-COMMITTED`) rather than silent, without promoting it to a
+  reject: the open half of the `s6-2-t{3,4}` pair
+  (`test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk`) is a program the spec
+  accepts, and rejecting it here would be an over-rejection ahead of a spec decision.
+  This warning path is **ungated on when the arm is reached** — gating it to fire only
+  while the stampers run made it fire on nothing (selection for this site happens
+  during inference, not the stamper pass), which measures the pass rather than the
+  program. The arm is a commitment point, not a deferral point: `pickMostSpecificEntry`
+  already returns `Some e` and the caller uses that impl, so the first-declared pick
+  is final whenever the arm is reached at all. It is registered on `driver/
+  diagnostics.mdk`'s `runBuildWarnCodes` allowlist (`#3027`/D3), so it surfaces on
+  `check` and on every `run`/`build` arm.
+
 ### 6.3 Defaulting for numeric literals
 
 An integer literal elaborates as a `Num`-constrained value, so a program with no
@@ -2315,6 +2345,30 @@ module-qualified identity.
   only understands built-in representations satisfies I7's identity requirement while
   violating §5 and §9's type preservation — accepting a program it cannot run. That
   is a distinct defect from the one I7 rules out, and closing I7 does not close it.
+
+- **I8 — Widening a SPELLING filter is not the same move as deciding a declaration BY
+  spelling.** `applyMethodScopeOverrides`' member filter (`compiler/types/
+  typecheck.mdk`) was widened to admit an INTERFACE-name import (`import zmodI.{IZ,
+  zf}` witnesses `IZ`, not just a method name) because SHADOW-SEMANTICS S2-DECL clause
+  (c) admits a declaration `I` in module `M` iff `I` is nameable in `M` — an
+  interface-name question the member filter's method-name-only test could not see,
+  which fell through to a bare-name last-write-wins floor decided by module-processing
+  order. Widening the FIRST conjunct (the member filter, inherently a spelling
+  question — an import member list is a list of spellings) is safe only because the
+  SECOND, identity, conjunct (`depExportsMethodIdent`) is unchanged and still pins
+  which declaration is witnessed: a same-named interface in another module still fails
+  it, because its `Ident` does not appear in the importing module's export row.
+  Deciding a declaration by a bare interface-name compare IN the identity conjunct
+  (rather than widening candidacy in the spelling conjunct) is the distinct, unsafe
+  move I4 already rules out — interface names are not globally unique — and is what a
+  prior implementation attempt did, producing a same-name-collision defect.
+
+  The floor a widened member filter falls back to is not always harmless: whether a
+  fallback to "0 or ≥2 candidates → floor" is safe depends on which admission rung is
+  falling back. A rung whose "exactly one candidate" case is the CORRECT answer must
+  not treat "back to two candidates" as equivalent to "never admitted a candidate at
+  all" — collapsing those is a silent wrong-declaration defect, not a conservative
+  fallback, on any ladder with more than one admission rung.
 
 ---
 

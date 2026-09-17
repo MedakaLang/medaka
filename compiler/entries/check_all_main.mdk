@@ -1,9 +1,9 @@
 -- Batch multi-module typecheck front-end: like check_modules_main.mdk, but
 -- loads <entry.mdk> + its transitive imports and prints EVERY module's bindings
 -- (each section preceded by `## MODULE <mid>`), not just the entry's.  One
--- full-closure run thus covers every module in the closure at once; the batch
--- harness (diff_compiler_check_modules_batch.sh) splits on the marker and diffs
--- each section against its per-module oracle.
+-- full-closure run thus covers every module in the closure at once; LEG A of
+-- test/diff_compiler_selfproc.sh splits on the marker and diffs each section
+-- against its per-module oracle.
 --
 --   medaka run compiler/entries/check_all_main.mdk <runtime.mdk> <core.mdk> <entry.mdk> [root ...]
 

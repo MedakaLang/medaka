@@ -1,5 +1,5 @@
 # META
-source_lines=1810
+source_lines=1804
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/build_cmd.mdk — `medaka build`, self-hosted
@@ -1781,12 +1781,6 @@ emitRtObj cc root outObjPath = match probeClang cc
   None => buildErr (clangMissingError cc)
   Some _ => emitRtObjGo cc root outObjPath
 
--- The original body, unmoved — split out only so the up-front probe above
--- doesn't force reindenting this whole function under a match arm (same
--- shape as runBuildNativeRoots/runBuildNativeRootsGo above; #2514 review F-3
--- — this entry point had libgcMissingError's dedup but not probeClang's,
--- so it still printed the raw "clang failed compiling runtime object /
--- No such file or directory" pair when clang was absent).
 emitRtObjGo : String -> String -> String -> <IO> Result BuildReport BuildReport
 emitRtObjGo cc root outObjPath = match makeTempDir ()
   Err e =>

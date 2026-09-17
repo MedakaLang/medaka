@@ -2603,7 +2603,7 @@ tokenize s =
   map fst (layoutWithOffsets src len)
 
 -- Tokenize and return each token paired with the 1-based source line of its
--- char offset.  The position side-channel (`compiler/parser.mdk`) consults the
+-- char offset.  The position side-channel (`compiler/frontend/parser.mdk`) consults the
 -- line array to record per-decl / per-variant source lines.  The Token stream
 -- (`map fst`) is byte-identical to `tokenize`.
 export

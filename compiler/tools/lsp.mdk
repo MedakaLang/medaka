@@ -5,7 +5,7 @@
 --  drags tools.fmt + io into that entry's graph and trips a pre-existing
 --  multi-module flat-union conflation.  The duplication is deliberate; see the
 --  note atop playground_main.mdk.)
--- compiler/lsp.mdk — self-hosted Language Server (Stage 4 Phase B.10)
+-- compiler/tools/lsp.mdk — self-hosted Language Server (Stage 4 Phase B.10)
 --
 -- Slices B.10.0 + B.10.1:
 --   B.10.0 — JSON-RPC-over-stdio skeleton: Content-Length framing, the

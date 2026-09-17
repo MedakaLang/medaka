@@ -28,8 +28,9 @@
 -- this is a measurement tool, not a pipeline validator).
 --
 -- For min-of-N timings use test/profile_compiler.sh, which runs this driver N
--- times and reports per-stage minimums.  Complements perf_main.mdk (which
--- times the full multi-module loader path with elaborate as a single phase).
+-- times and reports per-stage minimums.  Complements
+-- compiler/entries/profile_modules_main.mdk (which times the full
+-- multi-module loader path).
 
 import frontend.ast.{Decl}
 import ir.core_ir.{CProgram}

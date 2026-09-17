@@ -7,8 +7,9 @@
 -- via core_ir_sexp.cprogramToSexp.  The output is the frozen, lossless
 -- representation of the Core IR — every CVar carries its Addr, every CMethod/
 -- CDict carries its resolved Route — serving as:
---   1. The snapshot golden for diff_compiler_core_ir_sexp.sh (catches accidental
---      lowering or serializer drift).
+--   1. The same serializer the `core_ir` stage of `medaka snapshot` pins over
+--      test/eval_fixtures (test/diff_compiler_snapshot_frontend_test.mdk),
+--      catching accidental lowering or serializer drift.
 --   2. The input for a future round-trip deserializer gate.
 
 import frontend.parser.{parse}

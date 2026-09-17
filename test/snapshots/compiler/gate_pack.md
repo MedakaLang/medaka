@@ -1,5 +1,5 @@
 # META
-source_lines=2342
+source_lines=2283
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_pack.mdk — the gate SCHEDULER: `medaka gate balance`'s bin packing and
@@ -329,68 +329,9 @@ balMarginPct = 5
 balStabPct : Int
 balStabPct = 5
 
--- ── Quantizing noisy costs — TRIED AND MEASURED AWAY (S-4, #2178/#2207) ─────
---
--- EVERY GATE IN THE COMMITTED BASELINE IS SCORED OFF AS FEW AS ONE OR TWO
--- SAMPLES.  `balSortCands`'s order and `balAdd`'s per-row makespan are both a
--- direct function of `Cand.cms`, so an ordinary re-ingest's measurement noise
--- (a slow runner, a GC pause, cache warmth) changes `cms` by a percent or
--- two and can flip which of two near-tied gates sorts first, or which row a
--- gate newly clears the least-loaded threshold for — moving the ASSIGNMENT
--- even though nothing about the SUITE changed. Measured on this baseline
--- perturbed by +/-2% per gate (alternating sign, deterministic — ordinary
--- jitter's rough magnitude): 113 of 202 gates' derived `shard` differed from
--- the unperturbed run.
---
--- The obvious fix is to quantize `medianMs` into a bucket before it becomes
--- `cms`, so two nearly-tied costs collapse to the same scheduling value.
--- THIS WAS TRIED, IN TWO SHAPES, AND MEASURED TO NOT WORK — recorded here so
--- the next reader does not re-attempt it blind:
---
---   (a) bucket width = a percentage of the value ITSELF (snap `ms` to the
---       nearest multiple of `5% of ms`). Measured WORSE than no bucketing:
---       188 of 202 bucketed values changed under the same perturbation,
---       because jittering `ms` also jitters the bucket width, so the grid
---       moves under the noise instead of absorbing it.
---
---   (b) a FIXED geometric grid (1ms, growing by a constant ratio) — immune
---       to (a)'s flaw, since the grid's boundaries do not depend on the
---       noisy reading. Swept the ratio at 3/5/8/10/15/20/30/50 percent
---       against the SAME 202-gate registry and TWO INDEPENDENT perturbation
---       seeds (opposite-parity sign assignment, plus a name-hashed wobble on
---       the second). Real shard-assignment churn (not bucketed-value churn)
---       was NON-MONOTONIC in the ratio and, at every ratio tried, was
---       sometimes BETTER and sometimes WORSE than doing nothing: seed 1 went
---       113 (unbucketed) -> {107, 89, 122, 117, 76, 74, 157, 151} across the
---       eight ratios; seed 2's own unbucketed number (71, different from
---       seed 1's because the two seeds are different perturbations) went to
---       78 at the ratio (20%) that looked best on seed 1. Two seeds, same
---       ratio, opposite direction of effect: a fix that helps or hurts
---       depending on which noise draw you happen to get is not damping
---       noise, it is fitting one.
---
--- The reason is structural, not a bad ratio choice: `balPick` places each
--- candidate on the row with STRICTLY the least CUMULATIVE load, across only
--- eight rows. Bucketing an individual gate's cost narrows that gate's OWN
--- tie window, but the quantity `balPick` actually compares — the running sum
--- of many gates' costs on each row — still drifts by the sum of many
--- individual snap-to-bucket roundings, and a handful of milliseconds is
--- routinely enough to flip which of eight rows is "least loaded" at a given
--- step. Once one placement flips, every later placement on that row's
--- history can cascade. Bucketing the INPUT does not control the quantity the
--- packer is actually sensitive to, so it cannot be the fix; a real
--- discussion of the LPT packer's sensitivity to cumulative-load ties is a
--- separate, larger question than this slice's cost-quantization mandate.
---
--- So the emitted assignment stays a pure function of the raw `medianMs` —
--- `cms` below is unchanged from before this note — and the honest response
--- to "ordinary noise moves gates" is Step 4's thin-evidence visibility
--- (`balThinLine`), not a damped score. The alternative (i) the contract also
--- named — widen the estimate for `samples < N` gates — was considered too,
--- and is moot the same way bucketing's target was: the committed baseline is
--- at a uniform sample count per gate right now (see `GateCost.samples`; as of
--- S-1-baseline-autoadvance that count is 3, capped at `maxSamples` = 9 as
--- fresh ingests land), so there is no under-sampled subset to widen.
+-- Do not quantize costs. Use raw `medianMs` as `cms`.
+-- See docs/ops/GATE-REGISTRY-DESIGN.md § "13a. Quantizing costs was tried and
+-- measured away" for the stability analysis and the two quantization shapes tried.
 
 -- A gate needs the Wasm arm when its toolchain names `wasm-tools` or a `node`
 -- version.  Per the sprint contract §4.4, `sqlite3` and `valgrind` are

@@ -14,7 +14,7 @@ stages=DESUGAR,MARK
 -- target program, mirroring the reference's `[Prelude.program; prog]`.  The
 -- bottom-up traversal engine is reused from desugar (mapProg).
 --
--- Validated byte-for-byte against `dev/astdump.exe --mark` (test/diff_compiler_mark.sh).
+-- Validated by the `parse_fixtures` family's `mark` stage (test/diff_compiler_snapshot_frontend_test.mdk).
 -- NOTE: the prelude-shadowing logic (Phase 78a/78b) is not yet ported — it is
 -- added incrementally for the corpus files that shadow prelude names.
 

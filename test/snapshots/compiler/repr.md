@@ -520,7 +520,7 @@ dedupCells [] = []
 dedupCells (c :: cs) =
   c :: dedupCells (filterList (d => effvarId d /= effvarId c) cs)
 
--- #838 I1 (DESIGN.md §2.2): the unified obligation record.  `pred.args` is the
+-- #838 I1: the unified obligation record.  `pred.args` is the
 -- ALREADY-PROJECTED dispatch/argument vector — exactly the call channel's existing
 -- shape (contrast the impl channel's un-projected method type, out of scope this
 -- increment).  `originId` is the #837 binding id of the binding this obligation was

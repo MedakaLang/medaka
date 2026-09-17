@@ -2,7 +2,7 @@
 -- leg (Leg C of test/diff_compiler_selfproc.sh).
 --
 -- It exercises a REAL self-hosted stage that uses the Parser MONAD — the parser
--- (compiler/parser.mdk) — by parsing an embedded Medaka snippet and rendering
+-- (compiler/frontend/parser.mdk) — by parsing an embedded Medaka snippet and rendering
 -- the canonical AST S-expression (the same `programToSexp` form parse_main.mdk
 -- emits).  The harness runs this probe TWO ways and diffs:
 --   * the reference eval_modules oracle:  medaka run compiler/entries/selfproc_parse_probe.mdk

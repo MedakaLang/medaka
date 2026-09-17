@@ -52,27 +52,27 @@ main = match args ()
 -- interface/method spellings and adds U, so both semantic inputs and physical
 -- caches/counters materially differ between emissions.
 emitIsolation : String -> String -> String -> <IO> Unit
-emitIsolation runtimePath pPath pPlusUPath = match readFile runtimePath
-  Err msg => failWith msg
-  Ok runtimeSrc => match readFile pPath
+emitIsolation runtimePath pPath pPlusUPath =
+  let r = do
+    runtimeSrc <- readFile runtimePath
+    pSrc <- readFile pPath
+    pPlusUSrc <- readFile pPlusUPath
+    let runtimeDecls = desugar (parse runtimeSrc)
+    let pDecls = desugar (parse pSrc)
+    let pPlusUDecls = desugar (parse pPlusUSrc)
+    let p1 = runEmit runtimeDecls [] pDecls
+    let pPlusU = runEmit runtimeDecls [] pPlusUDecls
+    let p2 = runEmit runtimeDecls [] pDecls
+    if p1 /= p2 then
+      Err
+        "LLVM emission isolation failure: P changed after same-process P+U emission"
+    else if p1 == pPlusU then
+      Err "LLVM emission isolation failure: P+U did not produce distinct LLVM"
+    else
+      Ok (putStr "LLVM_EMIT_ISOLATION_OK\n")
+  match r
     Err msg => failWith msg
-    Ok pSrc => match readFile pPlusUPath
-      Err msg => failWith msg
-      Ok pPlusUSrc =>
-        let runtimeDecls = desugar (parse runtimeSrc)
-        let pDecls = desugar (parse pSrc)
-        let pPlusUDecls = desugar (parse pPlusUSrc)
-        let p1 = runEmit runtimeDecls [] pDecls
-        let pPlusU = runEmit runtimeDecls [] pPlusUDecls
-        let p2 = runEmit runtimeDecls [] pDecls
-        if p1 /= p2 then
-          failWith
-            "LLVM emission isolation failure: P changed after same-process P+U emission"
-        else if p1 == pPlusU then
-          failWith
-            "LLVM emission isolation failure: P+U did not produce distinct LLVM"
-        else
-          putStr "LLVM_EMIT_ISOLATION_OK\n"
+    Ok v => v
 
 -- Record then strict-emit the same unsupported Core node in ONE process. The
 -- record marker reaches stdout before the strict panic; the shell control asserts

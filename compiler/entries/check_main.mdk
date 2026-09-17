@@ -1,4 +1,4 @@
--- Thin driver for the composed self-hosted front-end (compiler/check.mdk).
+-- Thin driver for the composed self-hosted front-end (compiler/tools/check.mdk).
 -- The `main` + readFile plumbing was split out of check.mdk (Phase C Slice 0)
 -- so check.mdk is LOGIC-ONLY (exports runCheck) and its `main` no longer
 -- collides with the native CLI dispatcher's `main` under private_mangle.

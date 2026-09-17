@@ -1,7 +1,7 @@
 -- Self-processing EVAL probe for the bootstrap milestone harness
 -- (test/diff_compiler_selfproc.sh, the "runs itself" leg).
 --
--- It exercises a REAL self-hosted stage module — the lexer (compiler/lexer.mdk)
+-- It exercises a REAL self-hosted stage module — the lexer (compiler/frontend/lexer.mdk)
 -- — by tokenizing an embedded Medaka snippet and rendering the canonical token
 -- stream (the same `tokenToString` form lex_main.mdk emits).  The harness runs
 -- this probe TWO ways and diffs:
