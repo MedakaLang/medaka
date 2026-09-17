@@ -164,6 +164,8 @@ import time.{Duration, formatIso, fromEpochSeconds, monotonic, now, seconds}
 import vector.{Vector(..)}
 import vector as V
 
+-- ── timeouts, ceilings and the listener ─────────────────────────────────────
+
 {- | How long a connection in the BODY phase may go without delivering a new
    byte before it is closed (#2815).
 
@@ -392,6 +394,8 @@ headerTimeout = seconds 5
 export
 bindAddress : String -> Int -> <Net "_"> Result String Listener
 bindAddress addr port = listen addr port
+
+-- ── applying a request and persisting the store ─────────────────────────────
 
 -- This response never reaches `lib.server_core`'s `handle`, so the
 -- allow-origin header every response carries is added here rather than
@@ -808,6 +812,8 @@ data RateLimitAdmission =
   | RequestAdmitted RateLimitState
   | RequestRefused RateLimitState RateLimitClass
 
+-- ── rate limiting ───────────────────────────────────────────────────────────
+
 -- | What every request that reached the framer clears, whatever it routes to
 -- and whether or not it parsed.
 baseClasses : Bool -> List RateLimitClass
@@ -946,6 +952,8 @@ applyRateLimit limiterRef identity classes nowSeconds =
           (rateLimitFailureWithHeaders
             (classMessage cls)
             (rateLimitHeaderList next identity cls nowSeconds)))
+
+-- ── connection, subscription and proxy censuses ─────────────────────────────
 
 {- | The two budgets one request is under at once: the header section's, and
    the whole request's. They travel as a pair rather than as two `Wait`
@@ -1152,6 +1160,8 @@ retireConnection active slot =
   let () = releaseUnframed slot
   active := !active - 1
 
+-- ── the read buffer ─────────────────────────────────────────────────────────
+
 {- | A connection's accumulated read bytes: `Vector Int`'s own backing array
    with spare capacity, and how many of its bytes are live. Appending a
    chunk (`readBufferAppend`) copies only the chunk, doubling the backing
@@ -1221,6 +1231,8 @@ export
 readBufferLive : ReadBuffer -> Array Int
 readBufferLive buf = sliceClamped 0 (readBufferLen buf) (readBufferBacking buf)
 
+-- ── the serving context ─────────────────────────────────────────────────────
+
 {- | The deployment facts that are fixed for the life of the listener, travelling
    as one value because they travel together through every function below.
 
@@ -1255,6 +1267,8 @@ servingEgress (Serving _ egress _) = egress
 
 servingProxyCensus : Serving -> ProxyCensus
 servingProxyCensus (Serving _ _ census) = census
+
+-- ── the stats line ──────────────────────────────────────────────────────────
 
 -- | One sample of the process-wide stats line, read off whatever the
 -- refs/store hold at the moment it runs and written to stdout. `dir`'s blob
@@ -1314,6 +1328,8 @@ statsLoop dir storeRef active unframed subs interval = defer
   () <- liftIO (u => emitStats dir storeRef active unframed subs)
   () <- sleep interval
   statsLoop dir storeRef active unframed subs interval
+
+-- ── the accept and connection loops ─────────────────────────────────────────
 
 -- | Accept connections until the listener fails or is closed, running each on
 -- its own task, never more than `maxConcurrentConnections` at a time.
@@ -1637,6 +1653,8 @@ endOfStream : ReadBuffer -> Result String Unit
 endOfStream buf =
   if readBufferIsEmpty buf then Ok () else Err "connection closed mid-request"
 
+-- ── answering one request, and logging it ───────────────────────────────────
+
 {- | The CORS preflight answer this buffer is owed, or `None` when it is not a
    preflight. A buffer that did not parse is never one, for the reason it is
    never an upgrade: there is no `Request` to grade.
@@ -1935,6 +1953,8 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
                     trace
                     response
 
+-- ── the appview-proxy path ──────────────────────────────────────────────────
+
 {- | Whether this request asked to be proxied, asked of the pure core
    (`lib.server_core`'s `classifyProxy`) after the upgrade question and before
    `applyRequest`.
@@ -2187,6 +2207,8 @@ proxyAnswerBytes (Ok answer) = match proxyUpstreamResponse answer
   Err _ => serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
   Ok response => serializeResponse response
 
+-- ── the subscription upgrade path ───────────────────────────────────────────
+
 {- | Whether this request is a subscription upgrade, asked of the pure core
    (`lib.server_core`'s `classifyUpgrade`) before `applyRequest` is called.
 
@@ -2303,6 +2325,8 @@ subscriptionCeilingResponse =
     "Service Unavailable"
     "SubscriptionLimitExceeded"
     "too many event-stream subscriptions are open on this server"
+
+-- ── sending a response ──────────────────────────────────────────────────────
 
 sendAndContinue : Server ->
   String ->

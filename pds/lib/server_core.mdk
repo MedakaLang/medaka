@@ -71,6 +71,8 @@ import lib.xrpc.{
   xrpcFailureResponse,
 }
 
+-- ── the configured server and what a request carries ────────────────────────
+
 {- | Everything about a request that is not in the request bytes, because
    nothing in `pds/lib` declares an effect row and so nothing here can read it
    for itself: the shell reads both and passes them in
@@ -179,6 +181,8 @@ makeServer account registry handler = Server account registry handler
 export
 serverAccount : Server -> Account
 serverAccount (Server account _ _) = account
+
+-- ── resolving a credential ──────────────────────────────────────────────────
 
 {- | What the request's credential resolved to.
 
@@ -309,6 +313,8 @@ refusalFor _ =
     "Unauthorized"
     "InvalidToken"
     "Token could not be verified"
+
+-- ── routing one framed request ──────────────────────────────────────────────
 
 {- | Route an already framed request, refusing an unauthenticated call to a
    gated route BEFORE the handler runs.
@@ -1081,6 +1087,8 @@ classifyServiceAuth (Server account registry _) context table store request =
                 Ok claims => ServiceAuthMinted claims
             refused => ServiceAuthRefused (refusalFor refused)
         _ => NotServiceAuth
+
+-- ── framing raw bytes into a request ────────────────────────────────────────
 
 malformedHttpResponse : Response
 malformedHttpResponse =

@@ -55,7 +55,7 @@ base58btcAlphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
    is ~49. 1024 is roughly 17x the largest artifact in this tree and 20x the
    protocol values.
 
-   ⚠️ Deliberate asymmetry: `base58btcEncode` is NOT bounded (its input is an
+   Deliberate asymmetry: `base58btcEncode` is not bounded (its input is an
    `Array Int` built by first-party code, so it is not a trust boundary), so
    encoding more than ~750 bytes produces a string this decoder will refuse.
    That is intended — the guard is about hostile input, not round-trip

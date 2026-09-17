@@ -1,14 +1,15 @@
 {- multiformats.mdk — unsigned-varint (LEB128), multicodec prefix constants,
    and multibase `z`-prefixed base58btc and `b`-prefixed lowercase base32.
 
-   ⚠️ COLLISION WARNING [#1701's named trap]. This is the multiformats
+   This name collides with other varints in this tree, and the schemes are
+   not interchangeable. This is the multiformats
    unsigned-varint (unsigned LEB128): 7 bits per byte **starting with the
    LEAST significant**, continuation flag in the high bit, **minimally
    encoded** (a non-minimal encoding MUST be rejected), practical maximum 9
    bytes / 63 bits (multiformats/unsigned-varint README.md, pinned commit
    dd184f1ce89c81808503bb719b5fcb13844d08f3).
 
-   ⚠️ THIS IMPLEMENTATION'S CEILING IS LOWER THAN THE SPEC'S. The citation
+   This implementation's ceiling is lower than the spec's. The citation
    above is faithful: upstream permits 63 payload bits, i.e. the whole range
    `[0, 2^63-1]`. Medaka's `Int` is a 63-bit SIGNED fixnum whose maximum is
    `intMaxBound = 2^62 - 1 = 4611686018427387903`, so the spec-legal values
@@ -84,7 +85,7 @@ uvarintEncode n =
     -- so this panics — same in-family precedent as
     -- `pds/lib/field.mdk`'s `feFromBytesReduce`.
     --
-    -- ⚠️ `uvarintDecode` must never REACH this panic: it is `Result`-typed,
+    -- `uvarintDecode` must never reach this panic: it is `Result`-typed,
     -- and turning a correct `Err` into a process abort would break its own
     -- type-level promise. That is what its explicit `value < 0` arm is for.
     panic
@@ -149,13 +150,10 @@ uvarintDecode bytes = match uvarintDecodeGo bytes 0 (arrayLength bytes) 0 0
     -- value is >= 2^62 — so `value < 0` is a total, exact discriminator for
     -- "out of representable range", not a heuristic.
     --
-    -- This used to be an INCIDENTAL catch and no longer is. Previously the
-    -- wrapped negative fell through to `uvarintEncode`, whose `n < 128` test
-    -- is true for negatives, so the re-encode came back 1 byte long and the
-    -- minimality check below rejected it — a correct rejection reached by
-    -- accident, and reported with the wrong diagnosis ("non-minimal") for
-    -- what is in fact a perfectly minimal encoding of an unrepresentable
-    -- value. It is now stated where it happens.
+    -- The check belongs here and not in the minimality arm below: a value
+    -- above the representable range can be perfectly minimal, so diagnosing
+    -- it as "non-minimal" would name the wrong defect. Deleting this arm
+    -- does not make the value decode, it only misreports it.
     if value < 0 then
       Err "uvarint: value exceeds the representable Int range (max 2^62-1)"
     else

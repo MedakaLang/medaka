@@ -33,6 +33,8 @@ import lib.resource_limits.{
 }
 import sha256.{sha256}
 
+-- ── types ───────────────────────────────────────────────────────────────────
+
 data MstEntry = MstEntry (Array Int) Cid Int
 
 -- | An immutable MST with cached canonical root and built node structure.
@@ -71,6 +73,8 @@ data Reuse = FreshBuild | ReuseFrom (Array Int) OldShape
 data DecodedEntry = DecodedEntry (Array Int) Cid (Option Cid)
 
 data DecodedNode = DecodedNode (Option Cid) (List DecodedEntry)
+
+-- ── key bytes and key depth ─────────────────────────────────────────────────
 
 validBytes : Array Int -> Int -> Bool
 validBytes bytes i =
@@ -141,6 +145,8 @@ mstKeyDepth key =
     Err "mst: key element outside byte range 0..255"
   else
     Ok (leadingZeroBits (sha256 key) 0 / 2)
+
+-- ── building a tree ─────────────────────────────────────────────────────────
 
 entryCompare : MstEntry -> MstEntry -> Ordering
 entryCompare (MstEntry left _ _) (MstEntry right _ _) = bytesCompare left right
@@ -352,6 +358,8 @@ rebuildAround key (Mst before _ _ node) entries =
   else
     buildAt FreshBuild entries layer
 
+-- ── the tree API ────────────────────────────────────────────────────────────
+
 -- | The one canonical empty repository tree.
 export
 mstEmpty : Mst
@@ -465,6 +473,8 @@ copyBlocks ((cid, bytes) :: rest) = (cid, arrayCopy bytes) :: copyBlocks rest
 export
 mstNodeBlocks : Mst -> List (Cid, Array Int)
 mstNodeBlocks (Mst _ _ _ node) = copyBlocks (nodeBlocks node)
+
+-- ── decoding one node ───────────────────────────────────────────────────────
 
 decodeOptionalLink : String -> DagCbor -> Result String (Option Cid)
 decodeOptionalLink _ DcNull = Ok None
@@ -588,6 +598,8 @@ mstValidateNodeBytes expected isRoot bytes = do
   node <- decodeNode bytes
   _ <- validateNodeEntries node
   validateDecoded expected isRoot node
+
+-- ── validating a block set ──────────────────────────────────────────────────
 
 cidKey : Cid -> String
 cidKey cid = encode (cidToBytes cid)
@@ -875,6 +887,8 @@ mstFromBlocks root blocks = do
     Ok tree
   else
     Err "mst: rebuilt tree root does not match the supplied root"
+
+-- ── covering proofs ─────────────────────────────────────────────────────────
 
 entryLeafAtOrAbove : Array Int -> NodeEntry -> Bool
 entryLeafAtOrAbove key (NodeLeaf candidate _) = bytesCompare candidate key /= Lt
