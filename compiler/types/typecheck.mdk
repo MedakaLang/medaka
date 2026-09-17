@@ -45123,8 +45123,12 @@ checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
     checkModulesEntryFullK preludeKey runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
 
--- `checkOneDiags` for a SYNTHETIC program — one this driver derived from the user's
--- rather than one the user wrote — with `mainSchemeRef` SAVED AND RESTORED across it.
+-- `checkModulesEntryFullK` for a SYNTHETIC program graph — one this driver derived
+-- from the user's rather than one the user wrote — with `mainSchemeRef` SAVED AND
+-- RESTORED across it.  General over any module-list shape (`checkModulesEntryFullK`
+-- already is: it harvests only the graph's terminal/entry module's own report, one
+-- or many modules alike), so a single caller serves both the single-file and the
+-- multi-module case.
 --
 -- WHY THIS EXISTS.  `checkModulesEntryFullSplit` records the entry module's `main`
 -- scheme in `mainSchemeRef` (#2155, see the SET-OR-CLEAR comment there), which is the
@@ -45142,19 +45146,18 @@ checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
 -- prelude typecheck (S-3, #2234) is what makes the residue observable, so the two
 -- changes must travel together — with the save/restore alone, deleting the elaborate
 -- silently DELETED the `W-MAIN-SHAPE` warning on `medaka build` and on
--- `medaka check --json` (measured: 8 warning sites before, 6 after, both single-file;
--- multi-module is unaffected because `underivedMainDiags` only matches a singleton
--- module list and returns [] otherwise).
+-- `medaka check --json` (measured: 8 warning sites before, 6 after, both single-file).
 export
 checkOneDiagsSynthetic : List Decl ->
   List Decl ->
-  (String, List Decl) ->
+  List (String, List Decl) ->
   (List TcDiag, List TcDiag)
-checkOneDiagsSynthetic runtimeDecls coreDecls prog =
+checkOneDiagsSynthetic runtimeDecls coreDecls modules =
   let savedMain = driverState.value.mainSchemeRef.value
-  let res = checkOneDiags runtimeDecls coreDecls prog
+  let (_, errs, warns) =
+    checkModulesEntryFullK None runtimeDecls coreDecls modules
   driverState.value.mainSchemeRef := savedMain
-  res
+  (errs, warns)
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
 -- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,

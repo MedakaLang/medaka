@@ -1640,7 +1640,44 @@ typecheckDiagsFold runtimeP coreP mods modPairs tcByMid buckets =
   -- displaced function's own signature lives there, not here), which is exactly the
   -- operand the flat path cannot have.
   let shadowGraph = ("core", runtimeP ++ coreP) :: modPairs
-  foldModuleTc shadowPool shadowGraph oracleDecls modPairs mods tcByMid buckets
+  -- AUTO-PRINT visibility, multi-module peer of `analyzeFinish`'s flat-path wiring
+  -- (composite-main design §10, #2873): the graph's terminal (entry) module gets
+  -- the same auto-print Display-obligation re-check the flat path already runs,
+  -- computed once here (not per module — `shouldAutoPrintMain`/`underivedMainDiags`
+  -- read the WHOLE graph) and folded in only at the entry module below.
+  let autoPrintDiags = multiModuleAutoPrintDiags runtimeP coreP modPairs
+  foldModuleTc
+    shadowPool
+    shadowGraph
+    oracleDecls
+    modPairs
+    mods
+    tcByMid
+    autoPrintDiags
+    buckets
+
+-- Multi-module sibling of `autoPrintObligationDiags` (the flat half, above): the
+-- same auto-print Display obligation, over the graph's own module-list shape
+-- instead of a synthesized singleton.  `shouldAutoPrintMain`, `autoPrintWrapModules`
+-- and `underivedMainDiags` are already general over any module-list shape, so this
+-- differs from the flat wrapper only in taking `modPairs` (dependency-first, entry
+-- last) rather than `[("__main__", desugared)]`.  Unfiltered — the caller
+-- (`foldModuleTc`) drops any duplicate of the entry module's own tc diagnostics,
+-- the same job `filterNewDiags` does for the flat path.
+multiModuleAutoPrintDiags : List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  List Diag
+multiModuleAutoPrintDiags runtimeP coreP modPairs =
+  if shouldAutoPrintMain coreP modPairs then
+    map
+      diagOfTypeError
+      (underivedMainDiags
+        runtimeP
+        (autoPrintPinCore coreP)
+        (autoPrintWrapModules modPairs))
+  else
+    []
 
 -- Resolve a graph the caller has already loaded, bucketing each module's errors
 -- by its file.  The shared prefix of `projectDiagsLoaded` and
@@ -1859,10 +1896,11 @@ foldModuleTc : OrdMap Unit ->
   List (String, List Decl) ->
   List (String, String, List Decl) ->
   List (String, (List TcDiag, List TcDiag)) ->
+  List Diag ->
   List (String, List Diag) ->
   List (String, List Diag)
-foldModuleTc _ _ _ _ [] _ buckets = buckets
-foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid buckets =
+foldModuleTc _ _ _ _ [] _ _ buckets = buckets
+foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: rest) tcByMid autoPrintDiags buckets =
   let (tcErrs, tcWarns) = lookupTcDiags mid tcByMid
   let existing = match lookupBucket path buckets
     Some ds => ds
@@ -1894,6 +1932,15 @@ foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: r
     map
       (importShadowWarnToDiag mid)
       (importedStandaloneShadows shadowGraph (lookupDesugaredMod mid modPairs))
+  -- #2873: the auto-print Display obligation belongs to the TERMINAL (entry)
+  -- module only (`rest == []`) — `multiModuleAutoPrintDiags` (typecheckDiagsFold)
+  -- already computed it once for the whole graph; filter out anything that
+  -- duplicates this module's own tc diagnostics, the same job `filterNewDiags`
+  -- does for the flat path.
+  let ownTcDiags = errDiags ++ warnDiags
+  let autoPrintHere = match rest
+    [] => filterNewDiags ownTcDiags autoPrintDiags
+    _ => []
   let buckets2 =
     pushDiags
       path
@@ -1902,9 +1949,18 @@ foldModuleTc shadowPool shadowGraph oracleDecls modPairs ((mid, path, prog) :: r
         ++ shadowDiags
         ++ importShadowDiags
         ++ errDiags
-        ++ warnDiags)
+        ++ warnDiags
+        ++ autoPrintHere)
       buckets
-  foldModuleTc shadowPool shadowGraph oracleDecls modPairs rest tcByMid buckets2
+  foldModuleTc
+    shadowPool
+    shadowGraph
+    oracleDecls
+    modPairs
+    rest
+    tcByMid
+    autoPrintDiags
+    buckets2
 
 lookupTcDiags : String ->
   List (String, (List TcDiag, List TcDiag)) ->

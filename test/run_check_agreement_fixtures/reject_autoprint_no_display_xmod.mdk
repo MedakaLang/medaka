@@ -1,0 +1,9 @@
+-- #2873: a bare non-Unit VALUE `main` whose inferred type has no `Display`
+-- impl, imported from another module. `check`/`run`/`build` must all reject
+-- it by the same auto-print Display-obligation diagnostic — `check` used to
+-- exit 0 and `run` used to exit 1 with no diagnostic at all (only the
+-- unrelated main-must-be-Unit warning), learning of the obligation only from
+-- an eval-time crash.
+import lib.autoprint_foo.{Foo(..)}
+
+main = Foo 1
