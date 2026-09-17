@@ -67,8 +67,10 @@ Edit the question in `jev_census.py`, then:
 make jev-eval        # re-measures against scripts/jev/eval_corpus.json
 ```
 
-`eval_corpus.json` holds 160 hand-labeled items with their text stored inline,
+`eval_corpus.json` holds 166 hand-labeled items with their text stored inline,
 so the corpus does not drift with the tree. The numbers it prints are
-agreement with one labeler's judgment; the design doc records the numbers
+agreement with the corpus labels — one labeler's judgment for the original
+items, and for the 6 added in 2026-09 an adjudication against the question
+text (see `_about`); the design doc records the numbers
 each shipped question set had, so a change can be compared. Pass
 `--no-language-notes` to `jev_eval.py` to rerun the novel-language control.

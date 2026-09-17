@@ -118,6 +118,15 @@ is 0.66 accurate, and the 0.84 it reaches at confidence 0.7 is bought by
 discarding 71% of its rows. Use the binary actionable split to rank, and let a
 reader decide convert versus partial.
 
+**Read that 0.66 against its majority-class baseline, not against 1.0.** The
+labels are skewed: `leave` is 38 of the original 60 rows and 39 of the full 65,
+so a constant answer of `leave` — a model that reads nothing — scores **0.633**
+and **0.600** on the same rows. The question's measured accuracy is within a
+couple of points of answering without looking. That is the real argument for
+not running it unattended, and it is stronger than the one above; the earlier
+draft of this paragraph printed 0.67 / 0.66 bare, which reads far better than
+it is.
+
 **Confidence does not separate the confident wrong answers.** Two rows in the
 corpus are there to pin this. `D063` (`compiler/tools/lsp.mdk:815 typeAtPoint`)
 is called `convert` at 0.82, above every other disagreement in the do half; the
@@ -132,7 +141,7 @@ not look at.**
 
 `C100` (`compiler/entries/profile_main.mdk:1`) pins the same point for the
 comment half from the other side: all four register questions answer it
-correctly (register 0.69, history 0.13, offsite 0.28, reviewer 0.08) and the
+correctly (register 0.71, history 0.13, offsite 0.28, reviewer 0.08) and the
 comment is still provably false -- it cites `perf_main.mdk`, which has zero
 hits in `git ls-files`. That is not a miss. **A dead path is orthogonal to
 every question in the set**, which is why it is checked mechanically instead.
@@ -317,8 +326,10 @@ The procedure, and the tips for moving a question's signal, are the
 `jev-judgments` skill (`.claude/skills/jev-judgments/SKILL.md`). This section
 records the rules it enforces.
 
-- The corpus is `scripts/jev/eval_corpus.json`: 100 comment blocks and 60
-  declarations with their text inline, one reader's labels, and the regex
+- The corpus is `scripts/jev/eval_corpus.json`: 101 comment blocks and 65
+  declarations with their text inline, their labels (see section 2 — the
+  original items are one reader's judgment, the 6 added later were adjudicated
+  against the question text), and the regex
   census classes for the baseline comparison. #3124 adds a second reader.
 - `make jev-eval` prints, per Noul: precision and recall at 0.5 and at the
   best threshold, AUC, and a five-bucket calibration table; per Score: mean
@@ -360,15 +371,23 @@ an estimate of what will.
 ### 8.1 What the claim covers, and what it does not
 
 The claim is: **on the comment-register and do-syntax classes — the ones
-section 2 measures at AUC 0.95 to 0.99 — Jev's ranking plus a cheap reader
-locates work worth doing, and the cheap reader's KIND judgment is usually
-right.** In that scope, and only there.
+section 2 measures well, at original-sample AUC 0.94 to 0.99 on the binary
+questions — a cheap reader's KIND judgment is usually right, and Jev's ranking
+produces a worklist worth working through.** In that scope, and only there.
+
+Two precisions on that sentence, because the first draft of it was loose in
+both. The `register` column that did the ranking is a **Score**, measured by
+rank correlation (0.82) and mean level error, **not** an AUC; the AUCs belong
+to the binary tie-break questions. And section 2's own rule is to quote the
+original-sample figure for an accuracy claim, which is what is quoted here.
 
 It does **not** cover:
 
 - the `reviewer` question (AUC 0.91, precision 0.54 at the natural threshold);
 - the retired `mismatch` question, which is not measured at all;
-- the three-way `convert / partial / leave` choice, 0.66 accurate;
+- the three-way `convert / partial / leave` choice, 0.66 accurate against a
+  0.633 majority-class baseline (section 2.2) — that is, barely above
+  answering `leave` every time;
 - **any claim that the cheap hand's DESTINATIONS can be trusted.** They could
   not be, and that is the section's main finding.
 
@@ -449,8 +468,14 @@ measurement. The standing escalation rule — cheap model to a stronger one afte
 two failed rounds — never fired, and **would have been the wrong remedy**: the
 defect was not capability.
 
-This is the asymmetry the whole section turns on. **A wrong edit is caught by a
-gate. A refusal touches no file and is caught by nothing** — it produces a
+This is the asymmetry the whole section turns on, **inside the half of this
+sprint that had gates at all**: the twelve do-conversions (N = 12), where the
+build, `diff_native_cli` and the snapshot would have caught a wrong edit. The
+comment half had no such gate — section 8.3's own premise — so there the
+asymmetry collapses and neither failure is caught. The refusal evidence is a
+single episode (N = 1), which is an anecdote, not a rate. With that scoping:
+**a wrong edit is caught by a gate where one exists. A refusal touches no file
+and is caught by nothing anywhere** — it produces a
 confident artifact, costs a full dispatch, and is indistinguishable from a
 correct refusal unless somebody re-derives the claim. The cost here was one
 worktree, one cold build, and roughly ten minutes; the correction was cheap
@@ -470,25 +495,57 @@ Verdicts of what was applied, against the cheap model's proposal (N = 52):
 **Read by population, because the aggregate hides the finding.**
 
 - **KIND — what a block IS (delete / recast / relocate), or what a declaration
-  should become.** Held on 50 of 52. The two losses were both owner rulings at
-  a check-in, not reader errors. The cheap model classifies well.
-- **DESTINATION — where relocated prose should go.** Held badly. Every
-  `materially changed` and every relocate-row `minor` above is a destination
-  failure, not a kind failure. Of the sites where a specific *heading* was
+  should become.** Held on **49 of 52**. Two losses were owner rulings at a
+  check-in rather than reader errors; the third, `c20`, was a **reader error**,
+  and it was the most consequential site in the set — the reader proposed
+  `delete` on a block that carried a live soundness hazard (section 8.5). The
+  cheap model classifies well, and the one time it did not, nothing mechanical
+  would have noticed.
+
+  An earlier draft of this section said "50 of 52, both losses owner rulings".
+  That was wrong on both clauses and was caught by review reading section 8.2's
+  own table against the sentence, which is the only way it could have been
+  caught.
+- **DESTINATION — where relocated prose should go.** Held badly. **Seven of
+  the eight** `materially changed` rows above are destination failures, as is
+  every relocate-row `minor`; the eighth (`c20`) is the kind failure noted
+  above, not a destination one. Of the sites where a specific *heading* was
   named, most were wrong on read: the heading existed and was about something
   else.
-- **Two anchor populations, independently about 75% accurate.** The cheap
-  readers' own anchors: on the first slice, 3 of 3 relocation anchors were
-  wrong or unverifiable. Anchors pre-verified by a careful human reader before
-  dispatch: 17 verified, **4 later overturned** by writers who opened the
-  destination — the same 24% error rate. **Verifying that a heading EXISTS is
-  not verifying that it FITS**, and the human made exactly the error he had
-  warned the cheap readers against.
-- **The ranking separated, it did not order.** All 40 comment sites scored
-  register 2.2 to 2.6 — a 0.4-wide band. The instrument said "these forty are
-  all about equally bad", and it was right to; what was found inside them
-  ranged from two dead lines to a live soundness note. **Use the score to pick
-  the worklist, not to order it.**
+- **Two anchor populations, and only one of them carries a rate.** The cheap
+  readers' own anchors: on the first slice, **3 of 3** relocation anchors were
+  wrong or unverifiable — 0 for 3, which at N = 3 bounds nothing. Anchors
+  pre-verified by a careful reader before dispatch: 17 verified, **4 later
+  overturned** (13/17 = 76%) by writers who opened the destination. Only the
+  second population supports a figure; an earlier draft asserted "both
+  independently about 75% accurate", which read a 0-for-3 as agreeing with a
+  76% and gave the pair a spurious precision. What both populations do support,
+  qualitatively, is the finding: **verifying that a heading EXISTS is not
+  verifying that it FITS** — and the pre-verifying reader made exactly the
+  error they had warned the cheap readers against.
+- **The ranking did not order — and a blind control says it may not separate
+  either.** All 40 comment sites scored register 2.2 to 2.6, a 0.4-wide band:
+  the instrument said "these forty are all about equally bad", and it was right
+  to, since what was found inside them ranged from two dead lines to a live
+  soundness note. So the score does not order.
+
+  Whether it *separates* is the question a worklist actually rests on, and the
+  sprint ran a blind control to ask it: 10 blocks, 5 drawn at register >= 2.0
+  and 5 at register <= 0.8, line-matched pair-by-pair within +/-3 lines, read
+  by agents who were not told which arm a block came from. **Drain rate: HIGH
+  5/5, LOW 4/5.** A reader handed the register rule finds something to change
+  in nine blocks out of ten, including four the census ranked among the
+  cleanest in the tree. On this evidence the verdict is close to **constant**
+  across the score range, and the 39/40 agreement on the anchored half is
+  therefore not evidence that the census picked the right 40 blocks.
+
+  N = 10 bounds this and does not settle it. But it points the other way from
+  the rest of this section, so it is reported here rather than left in the
+  sprint's own notes: **use the score to pick a worklist you are willing to
+  work through, not to believe the blocks you did not pick are clean.** The
+  sharpest instance is in section 8.5's own footnote — the blind arm turned up
+  a provably dead path at register **0.71**, 138 places below the worklist's
+  floor.
 
 ### 8.5 What a gate would and would not have caught
 
@@ -507,7 +564,7 @@ comment drain mechanical, and the reason section 3's "never a gate" principle
 covers this workflow too.
 
 The mirror case: a comment header that **all four register questions score
-correctly as fine** (register 0.69, history 0.13, offsite 0.28, reviewer 0.08)
+correctly as fine** (register 0.71, history 0.13, offsite 0.28, reviewer 0.08)
 and that cites a file which has zero hits in `git ls-files`. In-register and
 provably false at the same time. A dead path is orthogonal to every question in
 the set, so it is checked mechanically instead — it is the one part of the
