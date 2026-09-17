@@ -1,6 +1,6 @@
 {- | #2481 #2604 #2611 #2964 — the `pds/lib` ⇄ `pds/shell` boundary and the
    secret-containment properties that share its source, migrated from the
-   retired `pds/test/lib_boundary.sh` under #3148.
+   retired shell gate of the same name under #3148.
 
    Five source-shape checks, each a fold over a file's lines:
 

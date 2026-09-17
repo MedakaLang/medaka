@@ -10,16 +10,15 @@
    by construction, which is exactly why those rows exist).
 
    ── Why this representation is NOT `pds/lib/field.mdk`'s ─────────────
-   Deliberate, per the sprint contract and #1700's own scope section: this
-   module shares NO code with `field.mdk` and does not import it. Scalar
-   operations run a few times per signature, not thousands, so this is
-   correctness-first code and the simplest representation that is easy to
-   argue about wins. 16 x 2^16 gives a uniform limb width (no 26/22 seam),
-   26 bits of headroom (below), and a trivial byte serialization — each limb
-   is exactly two of the 32 big-endian bytes.
+   Deliberate: this module shares no code with `field.mdk` and does not
+   import it. Scalar operations run a few times per signature, not thousands,
+   so this is correctness-first code and the simplest representation that is
+   easy to argue about wins. 16 x 2^16 gives a uniform limb width (no 26/22
+   seam), 26 bits of headroom (below), and a trivial byte serialization —
+   each limb is exactly two of the 32 big-endian bytes.
 
-   🚨 **`field.mdk`'s reduction DOES NOT TRANSFER, and this is the single
-   most important structural difference.** The field prime's complement
+   **`field.mdk`'s reduction does not transfer, and that is the single most
+   important structural difference.** The field prime's complement
    `2^256 - p = 2^32 + 977` is ~33 bits, which is what makes a SINGLE fold
    pass fully reduce there. The group order's complement
 
@@ -90,9 +89,9 @@
                          the whole operation.
      HEADROOM            2^62 / 2^36.0001 = 2^25.9999 — about **26 bits clear**.
 
-   ── 🚨 THE BOUND IS NOT A TRIPWIRE. Read this before skipping a reduce ─
-   With 26 bits of headroom, a MISSED REDUCTION DOES NOT OVERFLOW AND DOES
-   NOT FAIL FAST. Feed `scMul` limbs of up to 2^17 (one doubling past the
+   ── The bound is not a tripwire: read before skipping a reduce ───────
+   With 26 bits of headroom, a missed reduction neither overflows nor fails
+   fast. Feed `scMul` limbs of up to 2^17 (one doubling past the
    invariant) and the worst column is `16 * (2^17)^2 = 2^38` — still 24 bits
    clear of 2^62. The wrong answer therefore surfaces several operations
    later, with no visible relationship to the site that caused it.
@@ -120,7 +119,8 @@
    not arise.
 
    ── Constant-time boundary ───────────────────────────────────────────
-   The native reduction path implements #1724's fixed-control contract:
+   The native reduction path implements the fixed-control contract in
+   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`:
    exactly four fold/carry rounds and an unconditional arithmetic
    subtract-and-select. `scInverse`'s exponent ladder is also fixed-shape;
    its exponent is a public compile-time constant.
@@ -133,17 +133,6 @@
    Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
    outside this native constant-time claim. -}
 
--- Writes here are still on `Array.setInPlace` rather than the `arr[i] := v` sugar the
--- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
--- comment is a note to whoever migrates them, not a warning against it.
---
--- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
--- a direct call, same as `Array.setInPlace`). It was an INLINING asymmetry: `setIndex`'s
--- out-of-bounds branch interpolated a message, which put it past LLVM's inline
--- threshold, so it never inlined into the hot loops where `Array.setInPlace` did --
--- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
--- spellings now inline. Migrating these three modules is mechanical and wanted;
--- re-measure when you do, and delete this comment.
 import array as A
 
 -- ── Constants ────────────────────────────────────────────────────────
@@ -596,7 +585,7 @@ scSelectGo bit a b out i =
 --   valid — so atproto (like Bitcoin) requires the LOW half: `s <=
 --   floor(n/2)`. This predicate is the test a signer/verifier applies.
 --
---   🚨 THE NORMALIZATION ITSELF (negate-if-high) IS NOT IN THIS MODULE.
+--   The normalization itself (negate-if-high) is not in this module.
 --   Whether to replace `s` by `n - s`, and how the result is encoded, is a
 --   signature-encoding decision that needs `r`, `s` and the wire format; the
 --   signing slice owns it. Do not add a `scNormalizeLow`/`scCondNegate` here.
@@ -748,7 +737,7 @@ mulAccumRow a b w i j =
 --   square-and-multiply over the fixed 256-bit exponent, most-significant
 --   bit first.
 --
---   🚨 `scInverse scZero` IS `scZero`. THIS IS A TOTAL FUNCTION and 0 has no
+--   `scInverse scZero` is `scZero`. This is a total function and 0 has no
 --   true inverse: the value 0 is returned for the input 0. That matches
 --   `libsecp256k1` — `secp256k1_scalar_inverse` is built directly on
 --   `secp256k1_modinv32`, whose header states "If x is zero, the result will

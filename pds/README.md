@@ -1,39 +1,40 @@
 # pds/
 
-The self-hosted atproto PDS (Personal Data Server) written in Medaka. Phases
-0–3 and Phase 4 of the umbrella design (#1697) are landed in this tree, short
-of deployment: the pure core
-covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
+The self-hosted atproto PDS (Personal Data Server) written in Medaka. The pure
+core covers strict secp256k1 signing and `did:key`, canonical DAG-CBOR/CIDs, the
 atproto MST, verified CAR/block storage, signed repository transitions, strict
 HTTP/1.1 framing, structural XRPC routing, explicit immutable handler state, and
 the nine atproto record/sync/identity endpoints, `applyWrites` as one signed
 commit, the blob routes (`uploadBlob`/`getBlob`/`listBlobs`) with on-disk
 persistence, the four session endpoints
 (`com.atproto.server.{createSession, refreshSession, deleteSession,
-getSession}`), plus the two well-known paths.
-Phase 3's socket shell (#2481, #2525) serves that core over a TCP listener:
-`pds/serve.mdk` admits a configuration, rehydrates or initializes the account
-repository, and hands `pds/shell/server.mdk`'s accept loop a listener and the
-shared `Ref Store`. `pds/test/serve_e2e.sh` grades it end to end (queries,
-pipelining, keep-alive, a chunked-transfer write, every one of the nine XRPC
-NSIDs and both well-knowns driven over the socket, a malformed request, an
-over-cap body, the idle-connection timeout, and restart-and-resume across a
-process boundary), and `pds/test/lib_boundary_test.mdk` proves the `pds/lib` ⇄
-`pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, every
-`pds/lib` export explicitly signed, and no such signature effect-bearing —
-the signature check is what stops an unannotated export from carrying an
-inferred effect row past the effect check). The bind address is `--bind`,
-defaulting to `127.0.0.1`; a non-loopback value is refused unless
-`--trusted-proxy` also asserts that a reverse proxy terminates TLS in front of
-this process (`requireTrustedBind`, #2757), because nothing here terminates
-TLS itself.
-Authentication now gates the writes and the three session routes that need
-it — the five record/blob writes and `getSession` require a valid access
-token, `refreshSession`/`deleteSession` require a valid refresh token, and
-`createSession` is the public login that issues both — while the eight
-reads, `resolveHandle`, and the two well-knowns stay public. See
-`docs/ops/PDS-DEPLOY.md` for what exposing this server past localhost requires
-and `docs/design/ATPROTO-PDS-DESIGN.md` for the full design.
+getSession}`), plus the two well-known paths. What is not here is deployment.
+
+`pds/serve.mdk` serves that core over a TCP listener: it admits a configuration,
+rehydrates or initializes the account repository, and hands
+`pds/shell/server.mdk`'s accept loop a listener and the shared `Ref Store`.
+`pds/test/serve_e2e.sh` grades it end to end (queries, pipelining, keep-alive, a
+chunked-transfer write, every one of the nine XRPC NSIDs and both well-knowns
+driven over the socket, a malformed request, an over-cap body, the
+idle-connection timeout, and restart-and-resume across a process boundary), and
+`pds/test/lib_boundary_test.mdk` proves the `pds/lib` ⇄ `pds/shell` boundary holds (no
+`pds/lib` import of `pds/shell`, every `pds/lib` export explicitly signed, and no
+such signature effect-bearing — the signature check is what stops an unannotated
+export from carrying an inferred effect row past the effect check). The bind
+address is `--bind`, defaulting to `127.0.0.1`; a non-loopback value is refused
+unless `--trusted-proxy` also asserts that a reverse proxy terminates TLS in
+front of this process (`requireTrustedBind`), because nothing here terminates TLS
+itself.
+
+Authentication gates the writes and the three session routes that need it — the
+five record/blob writes and `getSession` require a valid access token,
+`refreshSession`/`deleteSession` require a valid refresh token, and
+`createSession` is the public login that issues both — while the eight reads,
+`resolveHandle`, and the two well-knowns stay public.
+
+See `docs/ops/PDS-DEPLOY.md` for what exposing this server past localhost
+requires, `docs/design/ATPROTO-PDS-DESIGN.md` for the full design, and
+`pds/HISTORY.md` for how the tree got here.
 
 ## Architecture overview
 
@@ -48,10 +49,13 @@ A stranger arriving fresh gets the most out of these in this order:
 3. **`docs/ops/PDS-DEPLOY.md`** — how to run it: the systemd unit, Caddy in
    front of it, secrets, backup/restore, and the versioned-binary rollback
    procedure. This is the operator's document, not the reader-of-code's.
-4. **The build-log sections further down this file** (`## Phase N …` and the
-   per-slice sections alongside them, e.g. "Encodings", "secp256k1 field
-   arithmetic", "Rate limiting") — the slice-by-slice build log, each with
-   its own gate and provenance.
+4. **The subject sections further down this file** — the protocol core, the
+   endpoints, storage and state, rate limiting, the cryptographic primitives,
+   the answer keys they are graded against, and the CI classification policy.
+   Each carries the gate that holds it up.
+5. **`pds/HISTORY.md`** — the phase-by-phase build log: which phase and which
+   issue each of those landed under, and which claims about this tree have since
+   been retired. It states nothing about what holds now; this file does.
 
 The shape in one sentence: a pure core (`pds/lib/`) that performs no I/O
 (P14) is driven by a thin native shell (`pds/shell/`, `pds/serve.mdk`) that
@@ -130,122 +134,385 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA="$MEDAKA_ROOT/medaka" \
 Requires a built native `medaka` binary. No oracle build needed — `medaka
 test` runs the interpreter directly.
 
-The focused Phase-2 parity gate additionally requires the local Wasm modules
+The focused protocol parity gate additionally requires the local Wasm modules
 emitter, Node, and `wasm-tools` and refuses to degrade to two engines:
 
 ```sh
 MEDAKA_REQUIRE_WASM=1 sh pds/test/protocol_all_engines.sh
 ```
 
-## CI classification policy
+## Data model
 
-**The policy itself is not restated here.** It lives in `AGENTS.md`
-[W-PROJECT-BY-MANIFEST] (a `medaka.toml` outside `compiler/`/`test/` makes a
-project; it needs a floor gate under `<project>/test/` and a `shard` field in
-`test/gates.toml`, whose real placement `medaka gate balance` + `make gen-ci`
-derive from measured cost; `test/preflight.sh` derives its arm from the manifest
-and needs no edit; `test/diff_compiler_project_enrolment.sh` re-derives and
-compares all three on every run). This block used to duplicate it, and the copy
-had already gone stale — it named the `sqlite` shard as pds's only home, while
-`pds/test/*` has since been split across four shards by cost (#1929).
+The four data-model vector gates grade external answer corpora on all production
+engines. DAG-CBOR/CID, MST, and CAR run the same full checks on eval, native,
+and Wasm. Repository signing is intentionally split to fit required CI: eval
+grades an exact initialization plus first CREATE transition—including commit
+and CAR bytes—and all semantic boundary controls; native and Wasm grade the
+complete five-operation official-reference transcript. The dedicated `pds` CI
+row requires its Wasm prerequisites, so a missing third engine is a failure.
 
-Three things are specific to `pds/` and are NOT in the general policy:
+## The protocol core
 
-* **Depth.** This bullet used to say shard globs do not cross `/`, so a script
-  in a subdirectory of `pds/test/` was enrolled by nothing. **That is no longer
-  how enrolment works and the claim is retired** (re-derived 2026-09-01 against
-  the current tree, per P4-D): since the #2178 CI re-architecture there are no
-  shard globs at all. `.github/workflows/ci.yml` names gates one by one, and
-  `test/diff_compiler_ci_shard_coverage.sh` classifies a gate by the
-  REPO-RELATIVE STEM of its `test/gates.toml` `run` field
-  (`tracked = {p[:-3] …}` over `git ls-files '*.sh'`, matched against
-  `by_stem[run[:-3]]`) — a path of any depth. What still enrols a script is a
-  `[[gate]]` row with a valid `shard`; what still leaves one unreachable is the
-  absence of one. Depth is not the axis. Keeping scripts directly under
-  `pds/test/` is still the convention every existing gate follows, but it is a
-  convention, not a coverage requirement.
-* **Non-gates.** A script that proves nothing about the compiler — an oracle
-  run/compose script, a corpus-extraction script — must live OUTSIDE `pds/test/`
-  (`pds/oracle/`, `pds/tools/`) and needs a `test/CI-COVERAGE-TOOLS.txt` row keyed
-  by its REPO-RELATIVE PATH MINUS `.sh`, not its basename.
-* **Too expensive for the PR path** is not a TOOLS or EXCEPTIONS case — the gate
-  still asserts something and can fail. Profile it arm by arm first, because the
-  answer decides which of two shapes applies, and in both pds instances so far
-  the cost turned out to be the ENGINE (one `medaka run`, or an interpreted
-  WasmGC pass) rather than the assertions or the corpus size.
-  * **Split it in place** when the gate has an affordable arm. It stays under
-    `pds/test/` with an ordinary `shard`, an env var gates the expensive arm,
-    and `tiers` declares both runs — `["merge", "nightly/<VAR>=1"]`.
-    `pds/test/signing_parity.sh` (#1962) is the instance: `SIGNING_DEEP=1`
-    selects the eval and interpreted-WasmGC arms (82% and 16% of its ~1430s),
-    leaving sampled native==Wasm parity and the whole 322-row corpus natively
-    on the merge tier for ~31s. The tree's general precedent for this shape is
-    `diff_compiler_perf_scaling` and its `nightly/PERF_DEEP=1`.
-  * **Move the whole gate out** when no arm is affordable, or when the
-    expensive arm is better expressed as its own check. It goes to
-    `pds/nightly/` with `tiers = ["nightly"]` and `shard = "other-job"`.
-    `pds/nightly/repo_vectors_eval_engine.sh` (#2208) is the instance: the
-    1091.56s eval arm left `pds/test/repo_vectors.sh` and became a stronger
-    standalone differential, `cmp`ing the interpreter's bytes against native.
+`stdlib/http.mdk` accepts one complete buffered HTTP/1.1 request with strict
+duplicate-aware framing and exposes typed malformed versus resource-excess
+failure classes without diagnostic-string inspection. Responses serialize
+deterministically. `pds/lib/xrpc.mdk` turns framed requests into typed query or
+procedure calls, preserving ordered parameters on both, and owns the canonical
+JSON error envelope. `uploadBlob`-shape input is a wildcard raw MIME body, not
+multipart, so its media type never selects JSON or text decoding. NSID authority
+identity is case-insensitive while method names remain case-sensitive.
 
-  Either way, name the script literally in a `.github/workflows/nightly.yml`
-  job — that literal repo-relative path is what
-  `test/diff_compiler_ci_shard_coverage.sh` counts as covered, and the step's
-  non-neutral `env:` keys are what `test/diff_compiler_tier_drift.sh` reads
-  back as the registry's `nightly/<VAR>=<value>` token.
+`pds/lib/store.mdk` is an opaque immutable wrapper around the verified
+`BlockStore` plus the configured account's repository (see "The Store is
+secret-bearing"). `pds/lib/server_core.mdk` configures an account
+and a registry plus injected pure handler and exposes `handle : Server -> Store -> Request -> (Store, Response)`
+and the raw-byte `handleBytes` composition. Protocol failures return the input
+store; successful writes return a successor. Neither module imports file,
+socket, runtime-I/O, or async code.
 
-## Vector provenance (G5)
+The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
+100 KiB, and raw/blob bodies at 5 MiB, with separate bounded line, field,
+trailer, and chunk counts. `pds/test/protocol_all_engines.sh` requires exact
+eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
+native direct-red mutation of a repaired raw-input assertion.
 
-`pds/test/VECTOR-PROVENANCE.txt` is the mechanism for G5 (see
-`docs/design/ATPROTO-PDS-DESIGN.md` §5): **no golden is ever captured from our
-own implementation** in Phases 0–1, because on a protocol where correctness is
-defined by other people's implementations, a self-captured golden is not weak
-evidence but *anti*-evidence. The gate is `pds/test/vector_provenance.sh` — it
-runs a six-scenario self-test in a `mktemp -d` on every invocation, then checks
-the real tree. It is enrolled by name in the `types` CI shard (`pds/test/*` was split
-across four shards by cost in #1929 — derive the current home, do not trust a shard
-name written down here: `grep -n 'pds/test' .github/workflows/ci.yml`).
+`pds/lib/server_core.mdk`'s `Account` — the repository owner's DID, the owner's
+handle, and this PDS's hostname — is admitted by `pds/lib/atsyntax.mdk`'s
+validators, which are the ones graded against the official atproto interop
+corpora. (`pds/lib/repo.mdk` still carries its own older, divergent
+`validateDid`, which wrongly accepts digits in a DID method; record admission
+does not go through it.) The account is configuration on the `Server`, not an
+argument on the `handle`/`handleBytes` composition seam.
 
-**Enumeration rule (what needs a row):** every regular file under `pds/test/`
-at ANY depth, EXCEPT `*.sh`, `*.mdk`, and the ledger itself — no allowlist, no
-filename convention. **Corollary: put prose in `pds/README.md`, never under
-`pds/test/`** — a `.md` dropped in `pds/test/` needs a row too, since it isn't
-excluded.
+## Endpoints
 
-**Adding a row when you add a corpus:** every vector file needs exactly one
-`[vector]` stanza in `pds/test/VECTOR-PROVENANCE.txt`, added in the SAME COMMIT
-as the corpus file. See that file's own header for the full schema (required
-keys per provenance kind) and two worked examples.
+### Record writes
 
-**The two provenance kinds, one paragraph each** (full policy, including which
-implementation/artifact class each consumer slice may use, is in the ledger's
-own header — that copy is canonical; this is a pointer):
-- **published-artifact** — the answer key is a document (e.g. FIPS PUB 180-4,
-  a published base58btc vector list). The row records the artifact, its URL,
-  its digest (or `UNAVAILABLE` + a note), and how the values were extracted.
-- **reference-impl** — the answer key is a program (e.g. libsecp256k1 for
-  `field.mdk`/`scalar.mdk`, recording design decision P10). The row names an
-  `[impl]` stanza pinning repo + version + commit; the FIRST slice to extract
-  writes that pin, every later slice reuses it, and the gate reds on a second
-  `[impl]` stanza pinning the same id to a different commit.
+`pds/lib/handlers.mdk` implements `com.atproto.repo.createRecord`,
+`com.atproto.repo.putRecord`, `com.atproto.repo.deleteRecord`, and
+`com.atproto.repo.applyWrites` as real handlers: lexicon-shaped JSON in (`pds/lib/lexjson.mdk` maps the `record` field
+to and from DAG-CBOR), the `lib.repo` transition in the middle, lexicon-shaped
+JSON out. `swapCommit` and `swapRecord` are honored as compare-and-swap
+preconditions and fail with `InvalidSwap`. `swapRecord` is three-valued: absent
+means no check, an explicit `null` asserts the record is ABSENT, and a CID
+string asserts it is exactly that record.
 
-**What the ledger does NOT prove:** it never fetches `source-url` and never
-verifies `source-sha256` (no network in the shard) — that column is an audit
-anchor for a human reviewer, not a checked one. See the ledger header's
-DOES-NOT-PROVE block for the full statement, including the residual gap
-(expected values as inline literals in a `_test.mdk`, or a `.mdk` data module,
-are invisible to this enumeration by construction).
+`com.atproto.repo.applyWrites` is the batch counterpart, and the reason it
+exists is that it signs exactly ONE commit: N operations advance the repository
+by one revision, not N, so a client that needs several records to appear
+together never publishes a half-written repository to a relay reading the
+commit log. `pds/lib/repo.mdk`'s `repoApplyWrites` threads every edit through a
+single MST and blockstore and signs once at the end. The batch is
+all-or-nothing — the first failing operation aborts before anything is signed,
+so a rejected batch leaves the repository at its prior commit — and an empty
+`writes` array is accepted as a genuine no-op that returns the current commit
+rather than signing a vacuous one. A `create` element that names no `rkey`
+takes the next TID in the same sequence the revision came from, so several
+rkey-less creates in one batch cannot collide on the revision's own spelling.
+`pds/test/batch_handlers_main.mdk` grades the batch commit against
+`pds/test/vectors/repo_batch_reference_corpus.txt`, generated by the same
+pinned official `@atproto/repo` that answers for the single-write transcript.
 
-**Run the gate locally:**
+`pds/test/record_handlers_main.mdk` replays the provenance-pinned reference
+transcript (`pds/test/vectors/repo_reference_corpus.txt`) through `handleBytes`
+end to end and compares every `uri`, record `cid`, `commit.cid`, and
+`commit.rev` against the corpus's pinned values. It runs as an arm of
+`pds/test/repo_vectors.sh`.
 
-```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/vector_provenance.sh
+### Reads, sync, and identity
+
+`pds/lib/handlers.mdk` also implements the six read routes. None of them can
+transition the `Store`: `readHandled` returns a bare `Response`, so the read
+half is structurally incapable of writing, and `pdsHandler` returns the input
+`Store` for every one of them.
+
+| Route | Answer | Refusals |
+|---|---|---|
+| `com.atproto.repo.getRecord` | `{uri, cid, value}` | `RecordNotFound` when absent, or when an explicit `cid` parameter names a different record |
+| `com.atproto.repo.listRecords` | `{records, cursor?}` | — |
+| `com.atproto.repo.describeRepo` | `{did, handle, didDoc, collections, handleIsCorrect}` | `RepoNotFound` |
+| `com.atproto.sync.getRepo` | the repository CAR, `application/vnd.ipld.car` | `since` is refused, not ignored |
+| `com.atproto.sync.getLatestCommit` | `{cid, rev}` | `RepoNotFound` |
+| `com.atproto.identity.resolveHandle` | `{did}` | `HandleNotFound`; needs no repository |
+
+`listRecords` implements atproto's `limit` (1–100, default 50), `reverse`
+(`false` — descending record key, newest first — is the default; `true` is
+ascending), and `cursor`. A `cursor` is emitted ONLY when a further page
+exists, so a client that gets none knows it has seen the whole collection.
+
+`sync.getRepo`'s body is `pds/lib/repo.mdk`'s `repoExportCar` verbatim, not a
+second CAR emission. `pds/test/read_handlers_main.mdk` grades that three ways at
+once — response bytes == `repoExportCar`'s bytes == the pinned corpus `CAR` row
+(557 bytes for the reference transcript's final state) — because either
+equality alone could be satisfied by a wrong pair. It runs as an arm of
+`pds/test/repo_vectors.sh`, beside the write-side replay.
+
+### The well-known route class
+
+`/.well-known/did.json` and `/.well-known/atproto-did` are not XRPC methods and
+have no NSID, so `pds/lib/xrpc.mdk` routes them as their own explicitly-typed
+class (`WellKnown`), reached through the same `routeRequest`/`handle` seam and
+the same `Store` as every other path — not beside it. They are graded exactly
+as a query endpoint is: GET only (405 otherwise), no request body framing (400
+otherwise). Every OTHER path outside `/xrpc/` still 404s with
+`NotFound`/`XRPC route not found`, unchanged.
+
+`/.well-known/did.json` serves **the document its own DID subject owes a
+resolver**, which depends on the account's DID method. When the account DID is
+`did:web:<this hostname>`, the server and the hosted account are the same
+subject and this URL is where that DID resolves, so it serves the ACCOUNT's
+document — the one `describeRepo` reports as `didDoc`, carrying the repository
+signing key under `#atproto` and an `alsoKnownAs` naming the handle. Under any
+other DID method the two subjects are distinct, and it serves this PDS's own
+did:web document, keyed by the hostname `makeAccount` admitted, which describes
+the SERVER's atproto service endpoint and carries no key.
+`/.well-known/atproto-did` serves the
+hosted account's DID as bare `text/plain; charset=utf-8`, with no trailing
+newline.
+
+`pds/test/read_routes_all_engines.sh` grades the repository-FREE half of all of
+this — both well-knowns as a `did:key` account answers them, `resolveHandle` in
+full, every read's unconfigured-store `RepoNotFound` refusal, and the non-XRPC
+404 control — on eval, native, and real Wasm with a direct-red mutation,
+seventeen named cells. It is repository-free deliberately: nothing in it signs,
+which is what makes an eval arm affordable at all (see "The Store is
+secret-bearing" for the 600s measurement). The `did:web` arm of
+`/.well-known/did.json` publishes the repository's signing key, so it is graded
+where a repository exists: `pds/test/read_handlers_main.mdk`, under
+`pds/test/repo_vectors.sh`.
+
+### Blob routes
+
+`pds/lib/handlers.mdk` implements the blob half:
+`com.atproto.repo.uploadBlob` (a write — it joins `recordHandled` rather than
+the read half because it is the only route besides the four record writes
+that can return a successor `Store`), `com.atproto.sync.getBlob`, and
+`com.atproto.sync.listBlobs`.
+
+| Route | Answer | Refusals |
+|---|---|---|
+| `com.atproto.repo.uploadBlob` | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
+| `com.atproto.sync.getBlob` | the raw bytes, with the declared MIME `content-type` | `BlobNotFound` when absent |
+| `com.atproto.sync.listBlobs` | `{cids, cursor?}` | `since` is refused, not ignored, the same policy `getRepo` uses |
+
+`pds/lib/blob.mdk`'s `admitBlob` is the single admission point: it computes the
+blob's CID (`cidForRaw`), and enforces `maxBlobBytes` (5 MiB) per blob and
+`maxAccountBlobBytes` (100 MiB) per account before any byte reaches storage.
+Blobs are independent of the repository half — `getBlob`/`listBlobs` answer on
+an unconfigured server too, and `uploadBlob` needs only a session, not a
+repository.
+
+`pds/test/blob_handlers_main.mdk`
+grades the three routes end to end against an EXTERNAL answer key: it uploads
+every row of `pds/test/vectors/blob_reference_corpus.txt` through the real
+`uploadBlob` route and compares the response's CID and whole `blob` ref JSON
+against the pinned official `@atproto/lex-data`'s own columns, then reads each
+row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors.sh`,
+which takes the corpus path from the provenance ledger rather than naming it).
+`pds/test/blob_routes_test.mdk` carries the routes' remaining in-process
+behavior — the refusals, the MIME-shape rejection, and cursor pagination —
+where an expected CID is our own `blobCid`'s and proves plumbing, not content
+addressing.
+
+### Consequences shipped, deliberately
+
+- **Auth is enforced in the pure core, not the shell.** `handleBytes` resolves
+  the caller's credential and refuses an `AuthenticatedRoute`/`RefreshRoute`
+  call via `refusalFor` before the handler ever runs — there is no unguarded
+  path from `handleBytes` to a repository write. What is NOT enforced is
+  everything downstream of an authenticated caller: no per-client rate
+  limiting (#2612), no bound on read-path cost relative to repo size (#2478),
+  and framing itself is O(n²) under one trickling client (#2571) — those, not
+  a missing auth check, are what keep this core unsafe to expose on a network
+  as it stands.
+- **No lexicon validation.** The record body is admitted as atproto data, not
+  validated against a lexicon schema. `validate: true` is therefore REFUSED
+  with an explicit error rather than accepted and quietly ignored; `validate:
+  false` and an absent field both mean "store the record as given", which is
+  what happens.
+- **One account per server.** `Server` carries exactly one `Account` and
+  `Store` exactly one `Repo`. A `repo` field naming anything but that account's
+  DID or handle is `RepoNotFound`. `resolveHandle` resolves exactly the one
+  handle that server hosts and nothing else, and `describeRepo`'s
+  `handleIsCorrect` is `true` by that same construction — `makeAccount`
+  admitted the DID/handle pair and `resolveHandle` answers from it — not by a
+  bidirectional resolution this core cannot perform.
+- **`describeRepo`'s `didDoc` is synthesized, not resolved.** There is no DID
+  resolver in the pure core, so the document is built from state this server
+  actually holds: `id`/`alsoKnownAs`/`serviceEndpoint` from configuration, and
+  a `#atproto` `Multikey` verification method whose `publicKeyMultibase` is
+  `repoPublicKey`'s — the key that signed the commits this server serves, so a
+  verifier can check a commit signature against it. When `--did` names a
+  `did:plc:` or `did:web:` whose real document lives elsewhere, this one
+  restates the operator's own configuration rather than that document.
+- **No `since` on `sync.getRepo`.** Incremental sync is not implemented, so the
+  parameter is REFUSED rather than ignored: answering the whole-repository
+  question when a narrower one was asked would return something plausible and
+  wrong.
+
+## Storage and state
+
+### The Store is secret-bearing
+
+`pds/lib/store.mdk`'s `Store` has two halves: the verified blob
+`BlockStore` (`storeGet`/`storePut`/`storeSize`, and `storeSize`
+counts only that half), and the configured account's `Repo`.
+
+**A `Store` built by `storeFromRepo` transitively owns the account's secp256k1
+signing secret**, because `Repo` must own it to sign every commit. Nothing in
+`store.mdk` exposes the key and `Store`'s representation is private, but a
+caller that logs, serializes, or copies a `Store` is copying the signing key.
+The socket shell must treat a `Store` as key material.
+
+The repository half is `Option`-shaped and starts `None`: `storeEmpty` is a
+store with no account configured. That is not a hedge, it is a measured
+requirement. Protocol composition (framing, routing, media negotiation) is
+tested with no account at all by `pds/test/protocol_all_engines.sh`, whose eval
+arm runs the tree-walking interpreter; one `repoInit` under that interpreter did
+not finish in 600s on this box, so making `storeEmpty` sign would have moved a
+seconds-long merge-queue gate into the >10-minute band that #2208 removed from
+this project. A record write against an unconfigured store is refused with
+`RepoNotFound`, never silently accepted.
+
+### Where the revision comes from (there is no clock)
+
+`repoCreate`/`repoUpdate`/`repoDelete` each require an explicit, strictly
+monotonic `Tid`, but the pinned lexicon input has no `rev` or `tid` field for a
+caller to supply one, and nothing in the pure core may read a clock. The
+revision is therefore derived from the repository's OWN latest commit:
+
+```
+next = tidNext prior (tidMicros prior) (tidClockId prior)
 ```
 
-No `medaka` binary needed — the gate only enumerates files, hashes them, and
-parses text.
+`tidNext` returns the proposal when it is strictly newer than `prior` and
+otherwise advances `prior` by exactly one microsecond under the proposed clock
+id. The proposal here IS the prior timestamp, so the second arm always fires:
+every write advances the repository revision by one microsecond and keeps the
+clock id the repository was initialized with. The whole revision sequence is a
+pure function of the initializing `Tid`, which is why it reproduces the
+reference transcript's revisions exactly — initialized at `3ke6kg3wk222b`
+(micros `1700000000000000`, clock id `7`), then `…232b`, `…242b`, `…252b`,
+`…262b` — and therefore reproduces that transcript's record CIDs, `rev`s, and
+commit CIDs byte for byte.
 
-## Encodings (S-encodings, #1701)
+`createRecord` with no `rkey` uses that same derived revision's canonical
+thirteen-character TID spelling as the record key, which is what a real PDS
+does with its clock, and is deterministic here for the same reason.
+
+### Blob persistence on disk
+
+Persistence is `pds/shell/blobfile.mdk`, mirroring `blockfile.mdk`'s
+stage-then-rename discipline: one file per blob under `<data>/blobs`, sharded
+like the block store, plus a `.mime` sidecar recording the declared MIME
+type (bytes alone don't carry it) — the sidecar is promoted before the bytes,
+so a reader keying on the bytes file ordinarily sees a blob only once its
+declared type is already there. Each staged file is `fsync`ed before its own
+`rename` and the shard once after the pair, so neither promotion outruns the
+bytes it publishes; one directory barrier makes the two renames durable
+together rather than in order, so sidecar-before-bytes remains a preference
+rather than a guarantee, and the reader skips whatever it cannot
+account for — a stray non-directory entry, an orphan sidecar, a bytes file
+whose sidecar is gone, and a sidecar whose text is not a MIME type at all —
+losing at most the one blob involved rather than refusing every later startup.
+Nothing collects an unreferenced blob (#2572 tracks that as a
+protocol-design question, not a filesystem one).
+
+`pds/test/serve_e2e.sh` and `pds/test/store_persistence.sh` extend their
+socket/restart coverage to blobs:
+upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
+tampered blob file is rejected at load; an oversize blob is refused with zero
+files written to disk; and each of the four kinds of residue above is skipped
+by a server that starts and still serves every undamaged blob.
+
+## Rate limiting and `--trusted-proxy`
+
+`pds/shell/server.mdk` refuses a request with `429 Too Many Requests` once
+its caller's identity exceeds one of five independent per-window allowances
+(`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
+`maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
+`maxRepoExportsPerWindow`, all placeholders pending real traffic data,
+refilled every `rateLimitWindowSeconds`). `maxRepoExportsPerWindow` covers
+`com.atproto.sync.getRepo` alone: its response is a whole-repository CAR
+bounded only by `maxCarBytes`, so the request count that bounds every other
+read says nothing about the bytes this one emits. The refusal carries `error: "RateLimitExceeded"`
+and the three IETF `RateLimit-*` response headers naming the exceeded
+class's own limit, remaining count, and seconds to reset — never a blended
+figure across classes. This is layered UNDER Caddy (see
+`docs/design/ATPROTO-PDS-DESIGN.md` § "Rate limiting: what Caddy does and
+what this process does"), which owns the blunt, identity-blind ceiling in
+front of it; this process is the only layer that knows which caller is
+asking and what kind of request it made.
+
+**Pass `--trusted-proxy` only when this process's peer genuinely is your
+reverse proxy** — Caddy, in the deployment this design targets — configured
+to set `X-Forwarded-For` itself and to strip any such header an inbound
+client tried to supply. With the flag, each caller is identified by the
+last hop of that header, so two different visitors get two different
+budgets. **This is an operator assertion, not something the flag causes to
+be checked**: this runtime has no way to confirm a TCP peer's identity
+(no `getpeername`-equivalent), so passing the flag without a proxy in front
+that actually sanitizes the header lets any direct client forge
+`X-Forwarded-For` and either claim another identity's remaining budget or
+spend it down on that identity's behalf. Without the flag (the default),
+every caller — proxied or not — shares one `"direct"` identity bucket. That
+is the right default for a loopback-bound process with nothing in front of
+it yet, but it is not a *safe* one to leave in place, and the difference
+matters: with a single bucket, all five ceilings stop being per-client and
+become process-wide, so the first caller to reach one refuses **every other
+caller** until the window turns. Exposing this server past loopback without
+deciding this flag first hands the WHOLE deployment's allowance to a single
+requester's mistake or abuse, not just one visitor's — and there is no way
+to fix that from inside this process, since identifying an unproxied caller
+requires its peer address, which this runtime cannot obtain. Treat
+`--trusted-proxy` as part of exposing the server, not as a later tuning
+step.
+
+### What the shipped Caddyfile does about the header
+
+`pds/Caddyfile`'s `reverse_proxy` block carries one line that this flag
+depends on:
+
+```
+header_up X-Forwarded-For {remote_host}
+```
+
+`header_up` **sets** the field to the connecting peer as Caddy saw it,
+replacing whatever the client sent. Without that line Caddy appends instead,
+which leaves the field as `<whatever the client wrote>, <real peer>` — still
+readable, because this server takes the *last* hop, but it means a client
+chooses the entire prefix. Setting it removes the ambiguity at the one place
+that can: the hop nearest this process.
+
+### Ceilings on the header itself
+
+`X-Forwarded-For` arrives from outside, so it has two ceilings of its own
+(`pds/lib/resource_limits.mdk`):
+
+| Ceiling | Value | What it bounds |
+|---|---|---|
+| `maxXffHeaderBytes` | 4096 | the raw field, in **bytes on the wire** — checked before the value is decoded or split |
+| `maxXffTokens` | 64 | comma-separated hops, checked on the split's result |
+
+A field that violates either is **refused** — `400 Bad Request`,
+`error: "InvalidRequest"` — and not demoted to the shared `direct` bucket.
+Demotion would be a fresh allowance rather than a penalty: `direct` is a
+different bucket, so a caller whose own budget was spent could pad a header
+it writes itself and go on being served. The request is still charged to
+`direct` before it is refused, for the same reason an unparseable request is:
+answering it costs a parse and a response, and an uncharged failure is a work
+channel with no ceiling.
+
+A real proxy chain is a handful of short hops, so neither ceiling is
+reachable by one.
+
+## Cryptographic primitives
+
+Every module in this section is pure `pds/lib/` code graded against an answer
+key nobody here wrote — see "Vector provenance" for the rule that makes that
+non-negotiable.
+
+### Encodings
 
 `pds/lib/base58.mdk` (base58btc encode/decode) and `pds/lib/multiformats.mdk`
 (unsigned-varint / LEB128, multicodec prefix constants, multibase `z`
@@ -290,7 +557,7 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/e
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
-## secp256k1 field arithmetic (S-field, #1699)
+### secp256k1 field arithmetic
 
 `pds/lib/field.mdk` is arithmetic modulo `p = 2^256 - 2^32 - 977` on **10
 limbs in base 2^26** (limbs 0..8 hold 26 bits, limb 9 holds 22). That layout
@@ -308,18 +575,18 @@ GENERATED from `libsecp256k1` — never captured from our own implementation
 `pds/test/VECTOR-PROVENANCE.txt`; that file's POLICY block is canonical and is
 not restated here.
 
-**The pin is sprint-wide.** The `[impl] libsecp256k1` stanza pins one
-repo + version + commit for the whole sprint: `pds/lib/scalar.mdk` will reuse
-the same `id`, and the provenance gate REDS on a second `[impl]` stanza
-pinning that id to a different commit. The `commit:` value is the **peeled**
-commit of the annotated tag (`git rev-parse 'v0.8.0^{commit}'`) — a bare
-`rev-parse`/`ls-remote` on an annotated tag returns the tag OBJECT's sha, and
-nothing downstream can tell the two apart.
+**The pin is shared.** The `[impl] libsecp256k1` stanza pins one
+repo + version + commit for every corpus derived from it: `pds/lib/scalar.mdk`'s
+corpus reuses the same `id`, and the provenance gate REDS on a second `[impl]`
+stanza pinning that id to a different commit. The `commit:` value is the
+**peeled** commit of the annotated tag (`git rev-parse 'v0.8.0^{commit}'`) — a
+bare `rev-parse`/`ls-remote` on an annotated tag returns the tag OBJECT's sha,
+and nothing downstream can tell the two apart.
 
 **Regenerating the corpus.** `pds/tools/gen_field_corpus.sh` is a **TOOL, not
 a gate** — it needs network and a C compiler, is never run in CI, and lives
-outside `pds/test/` for exactly that reason (see the classification policy
-above); its row is in `test/CI-COVERAGE-TOOLS.txt`. The input set and the pair
+outside `pds/test/` for exactly that reason (see "CI classification policy"
+below); its row is in `test/CI-COVERAGE-TOOLS.txt`. The input set and the pair
 list live in committed source (`pds/tools/field_corpus_driver.c`), so the only
 run-time parameter is the output path:
 
@@ -335,9 +602,207 @@ MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/f
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
 ```
 
-## Oracle (S-oracle-standup, #1707)
+### secp256k1 scalar arithmetic
 
-Phase 1 uses two reproducible **library** routes. The committed lockfile under
+`pds/lib/scalar.mdk` is arithmetic modulo the secp256k1 **group order**
+`n = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141`
+(SEC 2 v2 §2.4.1) — the ring ECDSA's `k`, `r` and `s` live in. It exports
+`scAdd`/`scSub`/`scMul`/`scNegate`/`scInverse`, canonical 32-byte
+serialization, and `scIsHigh`.
+
+**It deliberately shares no code with `pds/lib/field.mdk`.** The field module
+mirrors `libsecp256k1`'s 10×2^26 layout because design decision P10 wants
+element-by-element cross-checkability of the subtlest arithmetic in the
+project. Scalar operations run a *few times per signature, not thousands*, so
+this module optimises for being easy to argue about instead: **16 limbs of
+2^16**, uniform width, 26 bits of headroom against Medaka's silently-wrapping
+63-bit `Int`.
+
+**The field's reduction does not transfer, and that is the reason the two
+modules are separate rather than shared.** `2^256 − p` is `2^32 + 977`, ~33
+bits, which is what makes the field's fixed three-round carry/fold schedule
+fully reduce under its conservative raw-limb bound. `2^256 −
+n = 0x14551231950b75fc4402da1732fc9bebf` is **129 bits**: one fold of a
+512-bit product lands below 2^385, not below 2^256. `scalar.mdk` therefore
+runs exactly **four** fold/carry rounds, including zero high halves, and then
+makes one unconditional arithmetic subtract-and-select. Read the module header
+before changing anything in it — it carries that argument and the headroom
+derivation.
+
+**The answer key.** `pds/test/vectors/scalar_reference_corpus.txt` (1028 rows:
+`red`/`neg`/`inv`/`high`/`ovf` over 52 inputs, `mul`/`add`/`sub` over 256
+pairs) is GENERATED from `libsecp256k1` — never captured from our own
+implementation (G5). `ovf` rows pin the `>= n` rejection boundary
+(`scFromBytes`); `high` rows pin the strict low-S predicate. Its provenance row
+is in `pds/test/VECTOR-PROVENANCE.txt`, under the same `[impl] libsecp256k1`
+stanza the field corpus is pinned by; there is no second `[impl]` stanza.
+
+**Regenerating the corpus.** `pds/tools/gen_scalar_corpus.sh` is a **TOOL, not
+a gate** — network + a C compiler, never run in CI, lives outside `pds/test/`
+for that reason; its row is in `test/CI-COVERAGE-TOOLS.txt`. The input set and
+the pair list live in committed source
+(`pds/tools/scalar_corpus_driver.c`), so the only run-time parameter is the
+output path:
+
+```sh
+sh pds/tools/gen_scalar_corpus.sh /tmp/x
+cmp /tmp/x pds/test/vectors/scalar_reference_corpus.txt   # must be byte-identical
+```
+
+**`scIsHigh` is the predicate, not the normalization.** It answers
+`s > floor(n/2)`, which is what atproto requires; replacing `s` by `n - s` is a
+signature-encoding decision that needs `r`, `s` and the wire format, so
+`pds/lib/sign.mdk` owns it and `scalar.mdk` deliberately exports no
+`scNormalizeLow`/`scCondNegate`.
+
+The fixed-control building blocks sit beside those public `Bool` helpers
+without changing them: `feZeroBit`/`feEqualBit`/`feSelect`/`feNegateCt` and
+`scZeroBit`/`scEqualBit`/`scSelect`/`scNegateCt`/`scHighBit`. Their arithmetic
+bits, selection, and negation paths are enrolled in
+`pds/test/constant_time_reductions.sh`'s closed source, emitted-IR, and linked
+native controls, which certify those helpers alone; the point and signing call
+graphs are audited by `pds/test/constant_time_signing.sh` instead.
+
+**Run the gates locally:**
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/scalar_vectors_test.mdk
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
+```
+
+### secp256k1 points
+
+`pds/lib/secp256k1.mdk` carries opaque affine and Jacobian point carriers,
+the SEC 2 generator, canonical infinity `(0, 1, 0)`, and the contract's
+compute-and-select complete addition/doubling formulas. Its in-language suite
+checks the infinity, equal, opposite, and ordinary-generator paths while also
+asserting that every infinity result uses the canonical coordinates.
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
+```
+
+### secp256k1 public keys
+
+`pds/lib/sign.mdk` is the only consumer-facing key boundary. It exports
+opaque `SecretKey` and `PublicKey` values plus
+`secretKeyFromBytes`, `publicKeyFromCompressed`, `publicKeyCompressed`, and
+`publicKeyForSecret`. PDS consumers must not import `lib.secp256k1` directly.
+
+The producer runs the accepted fixed 256-round MSB-first ladder: every round
+computes one complete addition and both complete doublings before coordinate
+selection. Secret affine conversion performs one field inverse; compressed
+encoding is exactly 33 bytes. Public decoding accepts only prefixes `0x02` and
+`0x03`, canonical x coordinates, and square curve RHS values.
+
+`pds/test/secp256k1_public_key_checks.mdk` documents the seven focused checks:
+compressed G/2G/3G, keys for small and leading-zero secret scalars, both parity
+prefixes, and malformed wire rejection. The existing assertion driver runs them
+natively because the generic interpreter roster would put four complete
+256-round ladders on its hot path:
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/secp256k1_public_key_test.mdk
+```
+
+### secp256k1 signatures
+
+`pds/lib/sign.mdk` completes that eight-function consumer boundary with an
+opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
+two-candidate RFC 6979 signing, and public verification. `signDigest` accepts
+only a 32-byte SHA-256 digest whose elements are in `0..255`; compact parsing
+rejects zero, out-of-range, and high-S components.
+
+Production receives only the fixed signer's aggregate validity bit and opaque
+selected signature. Nonce and intermediate scalar observations remain on the
+internal corpus-test routes in `lib.secp256k1`.
+
+`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises all
+eight public APIs, and roots the native P15 audit at `signDigest` and
+`publicKeyForSecret`. The separate internal carrier remains only for injected
+candidate-1/exhaustion and raw negative evidence.
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/ecdsa_vectors_test.mdk
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/opaque_field_scalar_test.mdk
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
+```
+
+### secp256k1 did:key
+
+`pds/lib/did_key.mdk` exposes only the public signing boundary's opaque
+`PublicKey`. Encoding prepends the minimal `secp256k1-pub` multicodec bytes
+`0xe7 0x01` to the exact 33-byte compressed SEC 1 key, encodes that payload as
+base58btc multibase, and prepends the lower-case `did:key:` method. Decoding
+requires those exact layers and delegates SEC 1 validation to `lib.sign`.
+
+The 16-row answer key comes directly from the pinned official-PDS
+`Secp256k1Keypair.did()` implementation. Its offline checker binds each row to
+the same fixed private input and compressed public key already established by
+the official-PDS signing corpus. The all-engine gate also rejects 14 named
+malformed method, multibase, multicodec, length, and curve cases and proves
+five disposable behavior mutations turn it red.
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \
+  sh pds/test/did_key_all_engines.sh
+```
+
+## Vector provenance
+
+`pds/test/VECTOR-PROVENANCE.txt` is the mechanism for G5 (see
+`docs/design/ATPROTO-PDS-DESIGN.md` §5): **no golden is ever captured from our
+own implementation** in Phases 0–1, because on a protocol where correctness is
+defined by other people's implementations, a self-captured golden is not weak
+evidence but *anti*-evidence. The gate is `pds/test/vector_provenance.sh` — it
+runs a six-scenario self-test in a `mktemp -d` on every invocation, then checks
+the real tree. It is enrolled by name in a CI shard (`pds/test/*` is split
+across several shards by cost — derive the current home, do not trust a shard
+name written down here: `grep -n 'pds/test' .github/workflows/ci.yml`).
+
+**Enumeration rule (what needs a row):** every regular file under `pds/test/`
+at ANY depth, EXCEPT `*.sh`, `*.mdk`, and the ledger itself — no allowlist, no
+filename convention. **Corollary: put prose in `pds/README.md`, never under
+`pds/test/`** — a `.md` dropped in `pds/test/` needs a row too, since it isn't
+excluded.
+
+**Adding a row when you add a corpus:** every vector file needs exactly one
+`[vector]` stanza in `pds/test/VECTOR-PROVENANCE.txt`, added in the SAME COMMIT
+as the corpus file. See that file's own header for the full schema (required
+keys per provenance kind) and two worked examples.
+
+**The two provenance kinds, one paragraph each** (full policy, including which
+implementation/artifact class each consumer slice may use, is in the ledger's
+own header — that copy is canonical; this is a pointer):
+- **published-artifact** — the answer key is a document (e.g. FIPS PUB 180-4,
+  a published base58btc vector list). The row records the artifact, its URL,
+  its digest (or `UNAVAILABLE` + a note), and how the values were extracted.
+- **reference-impl** — the answer key is a program (e.g. libsecp256k1 for
+  `field.mdk`/`scalar.mdk`, recording design decision P10). The row names an
+  `[impl]` stanza pinning repo + version + commit; the FIRST slice to extract
+  writes that pin, every later slice reuses it, and the gate reds on a second
+  `[impl]` stanza pinning the same id to a different commit.
+
+**What the ledger does NOT prove:** it never fetches `source-url` and never
+verifies `source-sha256` (no network in the shard) — that column is an audit
+anchor for a human reviewer, not a checked one. See the ledger header's
+DOES-NOT-PROVE block for the full statement, including the residual gap
+(expected values as inline literals in a `_test.mdk`, or a `.mdk` data module,
+are invisible to this enumeration by construction).
+
+**Run the gate locally:**
+
+```sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/vector_provenance.sh
+```
+
+No `medaka` binary needed — the gate only enumerates files, hashes them, and
+parses text.
+
+## Oracle
+
+Two reproducible **library** routes answer for the data model. The committed
+lockfile under
 `pds/tools/atproto_reference/` pins the complete npm graph used by the corpus
 generators (`@atproto/repo@0.10.12` and `@atproto/crypto@0.5.4`), while
 `pds/tools/check_pds_phase1_image.sh` regenerates the MST, CAR, and repo corpora
@@ -348,7 +813,7 @@ does not start the service or perform XRPC.
 `pds/oracle/` is the separate live-service harness, with a documented no-Docker
 fallback. Its safety guard deliberately disables account creation against the
 public PLC directory because that would make a permanent `did:plc` write. A
-true live-service repo transcript is therefore not claimed by Phase 1. The full
+true live-service repo transcript is therefore not claimed. The full
 manual procedure and limitation live in `docs/ops/PDS-ORACLE.md`; no CI job
 provisions it.
 
@@ -424,507 +889,60 @@ because the CI coverage census enumerates `.sh` files and this is a `.mjs` —
 wrapping it in a shell driver would put it in scope and would then need a
 `test/CI-COVERAGE-TOOLS.txt` row.
 
-## Phase 1 data model (#2136)
-
-The four Phase 1 vector gates grade external answer corpora on all production
-engines. DAG-CBOR/CID, MST, and CAR run the same full checks on eval, native,
-and Wasm. Repository signing is intentionally split to fit required CI: eval
-grades an exact initialization plus first CREATE transition—including commit
-and CAR bytes—and all semantic boundary controls; native and Wasm grade the
-complete five-operation official-reference transcript. The dedicated `pds` CI
-row requires its Wasm prerequisites, so a missing third engine is a failure.
-
-## Phase 2 protocol core (#2192)
-
-`stdlib/http.mdk` accepts one complete buffered HTTP/1.1 request with strict
-duplicate-aware framing and exposes typed malformed versus resource-excess
-failure classes without diagnostic-string inspection. Responses serialize
-deterministically. `pds/lib/xrpc.mdk` turns framed requests into typed query or
-procedure calls, preserving ordered parameters on both, and owns the canonical
-JSON error envelope. `uploadBlob`-shape input is a wildcard raw MIME body, not
-multipart, so its media type never selects JSON or text decoding. NSID authority
-identity is case-insensitive while method names remain case-sensitive.
-
-`pds/lib/store.mdk` is an opaque immutable wrapper around the verified
-`BlockStore` (Phase 4 adds the configured account's repository beside it — see
-"The Store is secret-bearing"). `pds/lib/server_core.mdk` configures an account
-and a registry plus injected pure handler and exposes `handle : Server -> Store -> Request -> (Store, Response)`
-and the raw-byte `handleBytes` composition. Protocol failures return the input
-store; successful writes return a successor. Neither module imports file,
-socket, runtime-I/O, or async code.
-
-The buffered policy caps combined headers at 64 KiB, JSON at 150 KiB, text at
-100 KiB, and raw/blob bodies at 5 MiB, with separate bounded line, field,
-trailer, and chunk counts. `pds/test/protocol_all_engines.sh` requires exact
-eval/native/Wasm agreement on fourteen hand-authored protocol cells and runs a
-native direct-red mutation of a repaired raw-input assertion.
-
-## Phase 4 record writes (#1697, pure half)
-
-`pds/lib/handlers.mdk` implements `com.atproto.repo.createRecord`,
-`com.atproto.repo.putRecord`, `com.atproto.repo.deleteRecord`, and
-`com.atproto.repo.applyWrites` as real handlers: lexicon-shaped JSON in (`pds/lib/lexjson.mdk` maps the `record` field
-to and from DAG-CBOR), the `lib.repo` transition in the middle, lexicon-shaped
-JSON out. `swapCommit` and `swapRecord` are honored as compare-and-swap
-preconditions and fail with `InvalidSwap`. `swapRecord` is three-valued: absent
-means no check, an explicit `null` asserts the record is ABSENT, and a CID
-string asserts it is exactly that record.
-
-`com.atproto.repo.applyWrites` is the batch counterpart, and the reason it
-exists is that it signs exactly ONE commit: N operations advance the repository
-by one revision, not N, so a client that needs several records to appear
-together never publishes a half-written repository to a relay reading the
-commit log. `pds/lib/repo.mdk`'s `repoApplyWrites` threads every edit through a
-single MST and blockstore and signs once at the end. The batch is
-all-or-nothing — the first failing operation aborts before anything is signed,
-so a rejected batch leaves the repository at its prior commit — and an empty
-`writes` array is accepted as a genuine no-op that returns the current commit
-rather than signing a vacuous one. A `create` element that names no `rkey`
-takes the next TID in the same sequence the revision came from, so several
-rkey-less creates in one batch cannot collide on the revision's own spelling.
-`pds/test/batch_handlers_main.mdk` grades the batch commit against
-`pds/test/vectors/repo_batch_reference_corpus.txt`, generated by the same
-pinned official `@atproto/repo` that answers for the single-write transcript.
-
-`pds/lib/server_core.mdk` gains an `Account` — the repository owner's DID, the
-owner's handle, and this PDS's hostname — admitted by `pds/lib/atsyntax.mdk`'s
-validators, which are the ones graded against the official atproto interop
-corpora. (`pds/lib/repo.mdk` still carries its own older, divergent
-`validateDid`, which wrongly accepts digits in a DID method; record admission
-does not go through it.) `Handler`, `handle`, and `handleBytes` keep their
-Phase-2 shapes — the account is configuration on the `Server`, not a new
-argument on the composition seam.
-
-`pds/test/record_handlers_main.mdk` replays the provenance-pinned Phase-1
-transcript (`pds/test/vectors/repo_reference_corpus.txt`) through `handleBytes`
-end to end and compares every `uri`, record `cid`, `commit.cid`, and
-`commit.rev` against the corpus's pinned values. It runs as an arm of
-`pds/test/repo_vectors.sh`.
-
-## Phase 4 reads, sync, identity, and the two well-knowns (#1697, pure half)
-
-`pds/lib/handlers.mdk` also implements the six read routes. None of them can
-transition the `Store`: `readHandled` returns a bare `Response`, so the read
-half is structurally incapable of writing, and `pdsHandler` returns the input
-`Store` for every one of them.
-
-| Route | Answer | Refusals |
-|---|---|---|
-| `com.atproto.repo.getRecord` | `{uri, cid, value}` | `RecordNotFound` when absent, or when an explicit `cid` parameter names a different record |
-| `com.atproto.repo.listRecords` | `{records, cursor?}` | — |
-| `com.atproto.repo.describeRepo` | `{did, handle, didDoc, collections, handleIsCorrect}` | `RepoNotFound` |
-| `com.atproto.sync.getRepo` | the repository CAR, `application/vnd.ipld.car` | `since` is refused, not ignored |
-| `com.atproto.sync.getLatestCommit` | `{cid, rev}` | `RepoNotFound` |
-| `com.atproto.identity.resolveHandle` | `{did}` | `HandleNotFound`; needs no repository |
-
-`listRecords` implements atproto's `limit` (1–100, default 50), `reverse`
-(`false` — descending record key, newest first — is the default; `true` is
-ascending), and `cursor`. A `cursor` is emitted ONLY when a further page
-exists, so a client that gets none knows it has seen the whole collection.
-
-`sync.getRepo`'s body is `pds/lib/repo.mdk`'s `repoExportCar` verbatim, not a
-second CAR emission. `pds/test/read_handlers_main.mdk` grades that three ways at
-once — response bytes == `repoExportCar`'s bytes == the pinned corpus `CAR` row
-(557 bytes for the reference transcript's final state) — because either
-equality alone could be satisfied by a wrong pair. It runs as an arm of
-`pds/test/repo_vectors.sh`, beside the write-side replay.
-
-### The well-known route class
-
-`/.well-known/did.json` and `/.well-known/atproto-did` are not XRPC methods and
-have no NSID, so `pds/lib/xrpc.mdk` routes them as their own explicitly-typed
-class (`WellKnown`), reached through the same `routeRequest`/`handle` seam and
-the same `Store` as every other path — not beside it. They are graded exactly
-as a query endpoint is: GET only (405 otherwise), no request body framing (400
-otherwise). Every OTHER path outside `/xrpc/` still 404s with
-`NotFound`/`XRPC route not found`, unchanged.
-
-`/.well-known/did.json` serves **the document its own DID subject owes a
-resolver**, which depends on the account's DID method. When the account DID is
-`did:web:<this hostname>`, the server and the hosted account are the same
-subject and this URL is where that DID resolves, so it serves the ACCOUNT's
-document — the one `describeRepo` reports as `didDoc`, carrying the repository
-signing key under `#atproto` and an `alsoKnownAs` naming the handle. Under any
-other DID method the two subjects are distinct, and it serves this PDS's own
-did:web document, keyed by the hostname `makeAccount` admitted, which describes
-the SERVER's atproto service endpoint and carries no key.
-`/.well-known/atproto-did` serves the
-hosted account's DID as bare `text/plain; charset=utf-8`, with no trailing
-newline.
-
-`pds/test/read_routes_all_engines.sh` grades the repository-FREE half of all of
-this — both well-knowns as a `did:key` account answers them, `resolveHandle` in
-full, every read's unconfigured-store `RepoNotFound` refusal, and the non-XRPC
-404 control — on eval, native, and real Wasm with a direct-red mutation,
-seventeen named cells. It is repository-free deliberately: nothing in it signs,
-which is what makes an eval arm affordable at all (see "The Store is
-secret-bearing" for the 600s measurement). The `did:web` arm of
-`/.well-known/did.json` publishes the repository's signing key, so it is graded
-where a repository exists: `pds/test/read_handlers_main.mdk`, under
-`pds/test/repo_vectors.sh`.
-
-### Where the revision comes from (there is no clock)
-
-`repoCreate`/`repoUpdate`/`repoDelete` each require an explicit, strictly
-monotonic `Tid`, but the pinned lexicon input has no `rev` or `tid` field for a
-caller to supply one, and nothing in the pure core may read a clock. The
-revision is therefore derived from the repository's OWN latest commit:
-
-```
-next = tidNext prior (tidMicros prior) (tidClockId prior)
-```
-
-`tidNext` returns the proposal when it is strictly newer than `prior` and
-otherwise advances `prior` by exactly one microsecond under the proposed clock
-id. The proposal here IS the prior timestamp, so the second arm always fires:
-every write advances the repository revision by one microsecond and keeps the
-clock id the repository was initialized with. The whole revision sequence is a
-pure function of the initializing `Tid`, which is why it reproduces the Phase-1
-reference transcript's revisions exactly — initialized at `3ke6kg3wk222b`
-(micros `1700000000000000`, clock id `7`), then `…232b`, `…242b`, `…252b`,
-`…262b` — and therefore reproduces that transcript's record CIDs, `rev`s, and
-commit CIDs byte for byte.
-
-`createRecord` with no `rkey` uses that same derived revision's canonical
-thirteen-character TID spelling as the record key, which is what a real PDS
-does with its clock, and is deterministic here for the same reason.
-
-### The Store is secret-bearing
-
-`pds/lib/store.mdk`'s `Store` has two halves: the Phase-2 verified blob
-`BlockStore` (`storeGet`/`storePut`/`storeSize`, unchanged, and `storeSize`
-counts only that half), and the configured account's `Repo`.
-
-**A `Store` built by `storeFromRepo` transitively owns the account's secp256k1
-signing secret**, because `Repo` must own it to sign every commit. Nothing in
-`store.mdk` exposes the key and `Store`'s representation is private, but a
-caller that logs, serializes, or copies a `Store` is copying the signing key.
-Phase 3's socket shell must treat a `Store` as key material.
-
-The repository half is `Option`-shaped and starts `None`: `storeEmpty` is a
-store with no account configured. That is not a hedge, it is a measured
-requirement. Protocol composition (framing, routing, media negotiation) is
-tested with no account at all by `pds/test/protocol_all_engines.sh`, whose eval
-arm runs the tree-walking interpreter; one `repoInit` under that interpreter did
-not finish in 600s on this box, so making `storeEmpty` sign would have moved a
-seconds-long merge-queue gate into the >10-minute band that #2208 removed from
-this project. A record write against an unconfigured store is refused with
-`RepoNotFound`, never silently accepted.
-
-### Consequences shipped, deliberately
-
-- **Auth is enforced in the pure core, not the shell.** `handleBytes` resolves
-  the caller's credential and refuses an `AuthenticatedRoute`/`RefreshRoute`
-  call via `refusalFor` before the handler ever runs — there is no unguarded
-  path from `handleBytes` to a repository write. What is NOT enforced is
-  everything downstream of an authenticated caller: no per-client rate
-  limiting (#2612), no bound on read-path cost relative to repo size (#2478),
-  and framing itself is O(n²) under one trickling client (#2571) — those, not
-  a missing auth check, are what keep this core unsafe to expose on a network
-  as it stands.
-- **No lexicon validation.** The record body is admitted as atproto data, not
-  validated against a lexicon schema. `validate: true` is therefore REFUSED
-  with an explicit error rather than accepted and quietly ignored; `validate:
-  false` and an absent field both mean "store the record as given", which is
-  what happens.
-- **One account per server.** `Server` carries exactly one `Account` and
-  `Store` exactly one `Repo`. A `repo` field naming anything but that account's
-  DID or handle is `RepoNotFound`. `resolveHandle` resolves exactly the one
-  handle that server hosts and nothing else, and `describeRepo`'s
-  `handleIsCorrect` is `true` by that same construction — `makeAccount`
-  admitted the DID/handle pair and `resolveHandle` answers from it — not by a
-  bidirectional resolution this core cannot perform.
-- **`describeRepo`'s `didDoc` is synthesized, not resolved.** There is no DID
-  resolver in the pure core, so the document is built from state this server
-  actually holds: `id`/`alsoKnownAs`/`serviceEndpoint` from configuration, and
-  a `#atproto` `Multikey` verification method whose `publicKeyMultibase` is
-  `repoPublicKey`'s — the key that signed the commits this server serves, so a
-  verifier can check a commit signature against it. When `--did` names a
-  `did:plc:` or `did:web:` whose real document lives elsewhere, this one
-  restates the operator's own configuration rather than that document.
-- **No `since` on `sync.getRepo`.** Incremental sync is not implemented, so the
-  parameter is REFUSED rather than ignored: answering the whole-repository
-  question when a narrower one was asked would return something plausible and
-  wrong.
-
-## Phase 4 blob routes and persistence (#1697, #2605)
-
-`pds/lib/handlers.mdk` implements the blob half of Phase 4:
-`com.atproto.repo.uploadBlob` (a write — it joins `recordHandled` rather than
-the read half because it is the only route besides the four record writes
-that can return a successor `Store`), `com.atproto.sync.getBlob`, and
-`com.atproto.sync.listBlobs`.
-
-| Route | Answer | Refusals |
-|---|---|---|
-| `com.atproto.repo.uploadBlob` | `{blob}` (a blob-ref: CID, MIME type, size) | admission failure (oversize, per `admitBlob`) |
-| `com.atproto.sync.getBlob` | the raw bytes, with the declared MIME `content-type` | `BlobNotFound` when absent |
-| `com.atproto.sync.listBlobs` | `{cids, cursor?}` | `since` is refused, not ignored, the same policy `getRepo` uses |
-
-`pds/lib/blob.mdk`'s `admitBlob` is the single admission point: it computes the
-blob's CID (`cidForRaw`), and enforces `maxBlobBytes` (5 MiB) per blob and
-`maxAccountBlobBytes` (100 MiB) per account before any byte reaches storage.
-Blobs are independent of the repository half — `getBlob`/`listBlobs` answer on
-an unconfigured server too, and `uploadBlob` needs only a session, not a
-repository.
-
-Persistence is `pds/shell/blobfile.mdk`, mirroring `blockfile.mdk`'s
-stage-then-rename discipline: one file per blob under `<data>/blobs`, sharded
-like the block store, plus a `.mime` sidecar recording the declared MIME
-type (bytes alone don't carry it) — the sidecar is promoted before the bytes,
-so a reader keying on the bytes file ordinarily sees a blob only once its
-declared type is already there. Each staged file is `fsync`ed before its own
-`rename` and the shard once after the pair, so neither promotion outruns the
-bytes it publishes; one directory barrier makes the two renames durable
-together rather than in order, so sidecar-before-bytes remains a preference
-rather than a guarantee, and the reader skips whatever it cannot
-account for — a stray non-directory entry, an orphan sidecar, a bytes file
-whose sidecar is gone, and a sidecar whose text is not a MIME type at all —
-losing at most the one blob involved rather than refusing every later startup.
-Nothing collects an unreferenced blob (#2572 tracks that as a
-protocol-design question, not a filesystem one). `pds/test/blob_handlers_main.mdk`
-grades the three routes end to end against an EXTERNAL answer key: it uploads
-every row of `pds/test/vectors/blob_reference_corpus.txt` through the real
-`uploadBlob` route and compares the response's CID and whole `blob` ref JSON
-against the pinned official `@atproto/lex-data`'s own columns, then reads each
-row back through `getBlob` and `listBlobs` (run by `pds/test/repo_vectors.sh`,
-which takes the corpus path from the provenance ledger rather than naming it).
-`pds/test/blob_routes_test.mdk` carries the routes' remaining in-process
-behavior — the refusals, the MIME-shape rejection, and cursor pagination —
-where an expected CID is our own `blobCid`'s and proves plumbing, not content
-addressing. `pds/test/serve_e2e.sh` and `pds/test/
-store_persistence.sh` extend their existing socket/restart coverage to blobs:
-upload over the socket, restart, `getBlob` returns identical bytes and MIME; a
-tampered blob file is rejected at load; an oversize blob is refused with zero
-files written to disk; and each of the four kinds of residue above is skipped
-by a server that starts and still serves every undamaged blob.
-
-## Rate limiting and `--trusted-proxy` (#2612)
-
-`pds/shell/server.mdk` refuses a request with `429 Too Many Requests` once
-its caller's identity exceeds one of five independent per-window allowances
-(`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
-`maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
-`maxRepoExportsPerWindow`, all placeholders pending real traffic data,
-refilled every `rateLimitWindowSeconds`). `maxRepoExportsPerWindow` covers
-`com.atproto.sync.getRepo` alone: its response is a whole-repository CAR
-bounded only by `maxCarBytes`, so the request count that bounds every other
-read says nothing about the bytes this one emits. The refusal carries `error: "RateLimitExceeded"`
-and the three IETF `RateLimit-*` response headers naming the exceeded
-class's own limit, remaining count, and seconds to reset — never a blended
-figure across classes. This is layered UNDER Caddy (see
-`docs/design/ATPROTO-PDS-DESIGN.md` § "Rate limiting: what Caddy does and
-what this process does"), which owns the blunt, identity-blind ceiling in
-front of it; this process is the only layer that knows which caller is
-asking and what kind of request it made.
-
-**Pass `--trusted-proxy` only when this process's peer genuinely is your
-reverse proxy** — Caddy, in the deployment this design targets — configured
-to set `X-Forwarded-For` itself and to strip any such header an inbound
-client tried to supply. With the flag, each caller is identified by the
-last hop of that header, so two different visitors get two different
-budgets. **This is an operator assertion, not something the flag causes to
-be checked**: this runtime has no way to confirm a TCP peer's identity
-(no `getpeername`-equivalent), so passing the flag without a proxy in front
-that actually sanitizes the header lets any direct client forge
-`X-Forwarded-For` and either claim another identity's remaining budget or
-spend it down on that identity's behalf. Without the flag (the default),
-every caller — proxied or not — shares one `"direct"` identity bucket. That
-is the right default for a loopback-bound process with nothing in front of
-it yet, but it is not a *safe* one to leave in place, and the difference
-matters: with a single bucket, all five ceilings stop being per-client and
-become process-wide, so the first caller to reach one refuses **every other
-caller** until the window turns. Exposing this server past loopback without
-deciding this flag first hands the WHOLE deployment's allowance to a single
-requester's mistake or abuse, not just one visitor's — and there is no way
-to fix that from inside this process, since identifying an unproxied caller
-requires its peer address, which this runtime cannot obtain (#2757). Treat
-`--trusted-proxy` as part of exposing the server, not as a later tuning
-step.
-
-### What the shipped Caddyfile does about the header (#2949)
-
-`pds/Caddyfile`'s `reverse_proxy` block carries one line that this flag
-depends on:
-
-```
-header_up X-Forwarded-For {remote_host}
-```
-
-`header_up` **sets** the field to the connecting peer as Caddy saw it,
-replacing whatever the client sent. Without that line Caddy appends instead,
-which leaves the field as `<whatever the client wrote>, <real peer>` — still
-readable, because this server takes the *last* hop, but it means a client
-chooses the entire prefix. Setting it removes the ambiguity at the one place
-that can: the hop nearest this process.
-
-### Ceilings on the header itself
-
-`X-Forwarded-For` arrives from outside, so it has two ceilings of its own
-(`pds/lib/resource_limits.mdk`):
-
-| Ceiling | Value | What it bounds |
-|---|---|---|
-| `maxXffHeaderBytes` | 4096 | the raw field, in **bytes on the wire** — checked before the value is decoded or split |
-| `maxXffTokens` | 64 | comma-separated hops, checked on the split's result |
-
-A field that violates either is **refused** — `400 Bad Request`,
-`error: "InvalidRequest"` — and not demoted to the shared `direct` bucket.
-Demotion would be a fresh allowance rather than a penalty: `direct` is a
-different bucket, so a caller whose own budget was spent could pad a header
-it writes itself and go on being served. The request is still charged to
-`direct` before it is refused, for the same reason an unparseable request is:
-answering it costs a parse and a response, and an uncharged failure is a work
-channel with no ceiling.
-
-A real proxy chain is a handful of short hops, so neither ceiling is
-reachable by one.
-
-## secp256k1 scalar arithmetic (S-scalar, #1700)
-
-`pds/lib/scalar.mdk` is arithmetic modulo the secp256k1 **group order**
-`n = 0xfffffffffffffffffffffffffffffffebaaedce6af48a03bbfd25e8cd0364141`
-(SEC 2 v2 §2.4.1) — the ring ECDSA's `k`, `r` and `s` live in. It exports
-`scAdd`/`scSub`/`scMul`/`scNegate`/`scInverse`, canonical 32-byte
-serialization, and `scIsHigh`.
-
-**It deliberately shares no code with `pds/lib/field.mdk`.** The field module
-mirrors `libsecp256k1`'s 10×2^26 layout because design decision P10 wants
-element-by-element cross-checkability of the subtlest arithmetic in the
-project. Scalar operations run a *few times per signature, not thousands*, so
-this module optimises for being easy to argue about instead: **16 limbs of
-2^16**, uniform width, 26 bits of headroom against Medaka's silently-wrapping
-63-bit `Int`.
-
-🚨 **The field's reduction does not transfer, and that is the reason the two
-modules are separate rather than shared.** `2^256 − p` is `2^32 + 977`, ~33
-bits, which is what makes the field's fixed three-round carry/fold schedule
-fully reduce under its conservative raw-limb bound. `2^256 −
-n = 0x14551231950b75fc4402da1732fc9bebf` is **129 bits**: one fold of a
-512-bit product lands below 2^385, not below 2^256. `scalar.mdk` therefore
-runs exactly **four** fold/carry rounds, including zero high halves, and then
-makes one unconditional arithmetic subtract-and-select. Read the module header
-before changing anything in it — it carries that argument and the headroom
-derivation.
-
-**The answer key.** `pds/test/vectors/scalar_reference_corpus.txt` (1028 rows:
-`red`/`neg`/`inv`/`high`/`ovf` over 52 inputs, `mul`/`add`/`sub` over 256
-pairs) is GENERATED from `libsecp256k1` — never captured from our own
-implementation (G5). `ovf` rows pin the `>= n` rejection boundary
-(`scFromBytes`); `high` rows pin the strict low-S predicate. Its provenance row
-is in `pds/test/VECTOR-PROVENANCE.txt`.
-
-**The pin is the SAME sprint-wide `[impl] libsecp256k1` stanza** `S-field`
-wrote; this slice reuses it and adds no second `[impl]` stanza.
-
-**Regenerating the corpus.** `pds/tools/gen_scalar_corpus.sh` is a **TOOL, not
-a gate** — network + a C compiler, never run in CI, lives outside `pds/test/`
-for that reason; its row is in `test/CI-COVERAGE-TOOLS.txt`. The input set and
-the pair list live in committed source
-(`pds/tools/scalar_corpus_driver.c`), so the only run-time parameter is the
-output path:
-
-```sh
-sh pds/tools/gen_scalar_corpus.sh /tmp/x
-cmp /tmp/x pds/test/vectors/scalar_reference_corpus.txt   # must be byte-identical
-```
-
-**`scIsHigh` lands WITHOUT its ECDSA consumer.** It is the low-S predicate
-(`s > floor(n/2)`) that atproto requires; the *normalization* — negate-if-high
-— is a signature-encoding decision needing `r`, `s` and the wire format, and
-belongs to next sprint's signing slice. There is deliberately no
-`scNormalizeLow` here.
-
-The accepted signing contract's first implementation step adds separate
-fixed-control building blocks without changing those public Bool helpers:
-`feZeroBit`/`feEqualBit`/`feSelect`/`feNegateCt` and
-`scZeroBit`/`scEqualBit`/`scSelect`/`scNegateCt`/`scHighBit`. Their arithmetic
-bits, selection, and negation paths are enrolled in
-`pds/test/constant_time_reductions.sh`'s closed source, emitted-IR, and linked
-native controls. This certifies those helpers, not the still-unwritten point
-or signing call graph.
-
-**Run the gates locally:**
-
-```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/scalar_vectors_test.mdk
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
-```
-
-## secp256k1 points (S-point-core, #1700)
-
-`pds/lib/secp256k1.mdk` introduces opaque affine and Jacobian point carriers,
-the SEC 2 generator, canonical infinity `(0, 1, 0)`, and the contract's
-compute-and-select complete addition/doubling formulas. Its in-language suite
-checks the infinity, equal, opposite, and ordinary-generator paths while also
-asserting that every infinity result uses the canonical coordinates.
-
-```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/inlang_test_oracle_test.mdk
-```
-
-## secp256k1 public keys (S-public-key, #1700 step 2)
-
-`pds/lib/sign.mdk` is the only consumer-facing key boundary. It now exports
-opaque `SecretKey` and `PublicKey` values plus
-`secretKeyFromBytes`, `publicKeyFromCompressed`, `publicKeyCompressed`, and
-`publicKeyForSecret`. PDS consumers must not import `lib.secp256k1` directly.
-
-The producer runs the accepted fixed 256-round MSB-first ladder: every round
-computes one complete addition and both complete doublings before coordinate
-selection. Secret affine conversion performs one field inverse; compressed
-encoding is exactly 33 bytes. Public decoding accepts only prefixes `0x02` and
-`0x03`, canonical x coordinates, and square curve RHS values.
-
-`pds/test/secp256k1_public_key_checks.mdk` documents the seven focused checks:
-compressed G/2G/3G, keys for small and leading-zero secret scalars, both parity
-prefixes, and malformed wire rejection. The existing assertion driver runs them
-natively because the generic interpreter roster would put four complete
-256-round ladders on its hot path:
-
-```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/secp256k1_public_key_test.mdk
-```
-
-## secp256k1 signatures (S-signing-contract, #1700 step 4)
-
-`pds/lib/sign.mdk` now completes the eight-function consumer boundary with an
-opaque `Signature`, exact 64-byte P1363 compact parsing/serialization, fixed
-two-candidate RFC 6979 signing, and public verification. `signDigest` accepts
-only a 32-byte SHA-256 digest whose elements are in `0..255`; compact parsing
-rejects zero, out-of-range, and high-S components.
-
-Production receives only the fixed signer's aggregate validity bit and opaque
-selected signature. Nonce and intermediate scalar observations remain on the
-internal corpus-test routes in `lib.secp256k1`.
-
-`constant_time_signing_public_main.mdk` imports only `lib.sign`, exercises all
-eight public APIs, and roots the native P15 audit at `signDigest` and
-`publicKeyForSecret`. The separate internal carrier remains only for injected
-candidate-1/exhaustion and raw negative evidence.
-
-```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/ecdsa_vectors_test.mdk
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/opaque_field_scalar_test.mdk
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
-```
-
-## secp256k1 did:key (#1701)
-
-`pds/lib/did_key.mdk` exposes only the public signing boundary's opaque
-`PublicKey`. Encoding prepends the minimal `secp256k1-pub` multicodec bytes
-`0xe7 0x01` to the exact 33-byte compressed SEC 1 key, encodes that payload as
-base58btc multibase, and prepends the lower-case `did:key:` method. Decoding
-requires those exact layers and delegates SEC 1 validation to `lib.sign`.
-
-The 16-row answer key comes directly from the pinned official-PDS
-`Secp256k1Keypair.did()` implementation. Its offline checker binds each row to
-the same fixed private input and compressed public key already established by
-the official-PDS signing corpus. The all-engine gate also rejects 14 named
-malformed method, multibase, multicodec, length, and curve cases and proves
-five disposable behavior mutations turn it red.
-
-```sh
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" MEDAKA_REQUIRE_WASM=1 \
-  sh pds/test/did_key_all_engines.sh
-```
+## CI classification policy
+
+**The policy itself is not restated here.** It lives in `AGENTS.md`
+[W-PROJECT-BY-MANIFEST] (a `medaka.toml` outside `compiler/`/`test/` makes a
+project; it needs a floor gate under `<project>/test/` and a `shard` field in
+`test/gates.toml`, whose real placement `medaka gate balance` + `make gen-ci`
+derive from measured cost; `test/preflight.sh` derives its arm from the manifest
+and needs no edit; `test/diff_compiler_project_enrolment.sh` re-derives and
+compares all three on every run).
+
+Three things are specific to `pds/` and are NOT in the general policy:
+
+* **Depth is not the axis.** `.github/workflows/ci.yml` names gates one by one,
+  and `test/diff_compiler_ci_shard_coverage.sh` classifies a gate by the
+  REPO-RELATIVE STEM of its `test/gates.toml` `run` field
+  (`tracked = {p[:-3] …}` over `git ls-files '*.sh'`, matched against
+  `by_stem[run[:-3]]`) — a path of any depth. What enrols a script is a
+  `[[gate]]` row with a valid `shard`; what leaves one unreachable is the
+  absence of one. Keeping scripts directly under `pds/test/` is the convention
+  every existing gate follows, but it is a convention, not a coverage
+  requirement.
+* **Non-gates.** A script that proves nothing about the compiler — an oracle
+  run/compose script, a corpus-extraction script — must live OUTSIDE `pds/test/`
+  (`pds/oracle/`, `pds/tools/`) and needs a `test/CI-COVERAGE-TOOLS.txt` row keyed
+  by its REPO-RELATIVE PATH MINUS `.sh`, not its basename.
+* **Too expensive for the PR path** is not a TOOLS or EXCEPTIONS case — the gate
+  still asserts something and can fail. Profile it arm by arm first, because the
+  answer decides which of two shapes applies, and in both pds instances so far
+  the cost turned out to be the ENGINE (one `medaka run`, or an interpreted
+  WasmGC pass) rather than the assertions or the corpus size.
+  * **Split it in place** when the gate has an affordable arm. It stays under
+    `pds/test/` with an ordinary `shard`, an env var gates the expensive arm,
+    and `tiers` declares both runs — `["merge", "nightly/<VAR>=1"]`.
+    `pds/test/signing_parity.sh` is the instance: `SIGNING_DEEP=1`
+    selects the eval and interpreted-WasmGC arms (82% and 16% of its ~1430s),
+    leaving sampled native==Wasm parity and the whole 322-row corpus natively
+    on the merge tier for ~31s. The tree's general precedent for this shape is
+    `diff_compiler_perf_scaling` and its `nightly/PERF_DEEP=1`.
+  * **Move the whole gate out** when no arm is affordable, or when the
+    expensive arm is better expressed as its own check. It goes to
+    `pds/nightly/` with `tiers = ["nightly"]` and `shard = "other-job"`.
+    `pds/nightly/repo_vectors_eval_engine.sh` is the instance: the
+    1091.56s eval arm left `pds/test/repo_vectors.sh` and became a stronger
+    standalone differential, `cmp`ing the interpreter's bytes against native.
+
+  Either way, name the script literally in a `.github/workflows/nightly.yml`
+  job — that literal repo-relative path is what
+  `test/diff_compiler_ci_shard_coverage.sh` counts as covered, and the step's
+  non-neutral `env:` keys are what `test/diff_compiler_tier_drift.sh` reads
+  back as the registry's `nightly/<VAR>=<value>` token.
+
+## Project history
+
+`pds/HISTORY.md` is the build log: what each phase and slice delivered, under
+which issue, and which claims this file used to make that have since been
+retired. Nothing there is load-bearing for reading the code — it is the record
+of how the tree arrived at what the sections above describe.

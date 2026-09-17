@@ -48,6 +48,8 @@ import lib.sign.{
 }
 import lib.tid.{Tid, tidCompare, tidParse, tidToString}
 
+-- ── types ───────────────────────────────────────────────────────────────────
+
 -- | Immutable metadata for one signed repository commit.
 export data RepoCommit =
   | RepoCommit Tid Cid Cid (Array Int) (Array Int) Signature
@@ -68,6 +70,8 @@ public export data RepoWrite =
   | RepoWriteCreate (Array Int) DagCbor
   | RepoWriteUpdate (Array Int) DagCbor
   | RepoWriteDelete (Array Int)
+
+-- ── identifier and path validation ──────────────────────────────────────────
 
 -- A repository path arrives as `Array Int`, whose elements are not
 -- necessarily bytes; this admits only 0..255.
@@ -212,6 +216,8 @@ validateRecord : DagCbor -> Result String Unit
 validateRecord (DcMap _) = Ok ()
 validateRecord _ = Err "repo: record must be a DAG-CBOR map"
 
+-- ── commit encoding and signing ─────────────────────────────────────────────
+
 unsignedValue : String -> Cid -> Tid -> DagCbor
 unsignedValue did dataCid rev = DcMap [
   ("did", DcString did),
@@ -261,6 +267,8 @@ buildCommit did secret rev tree store = do
     RepoCommit rev (mstRootCid tree) commitCid unsigned signed signature,
     complete,
   )
+
+-- ── constructing a repository ───────────────────────────────────────────────
 
 -- | Initialize an empty repository at an explicit deterministic revision.
 export
@@ -327,6 +335,8 @@ repoFromBlocks did secret commitCid blocks = do
   match blockStoreGet commitCid store
     None => Err "repo: missing persisted commit block"
     Some signed => rehydrate did secret commitCid signed store
+
+-- ── reading a repository ────────────────────────────────────────────────────
 
 repoCommitRev : RepoCommit -> Tid
 repoCommitRev (RepoCommit rev _ _ _ _ _) = rev
@@ -402,6 +412,8 @@ repoRecordCid : Array Int -> Repo -> Result String (Option Cid)
 repoRecordCid path (Repo _ _ _ tree _ _) = do
   () <- validatePath path
   Ok (mstLookup path tree)
+
+-- ── writes ──────────────────────────────────────────────────────────────────
 
 ensureNewer : Tid -> RepoCommit -> Result String Unit
 ensureNewer next prior =
@@ -561,6 +573,8 @@ export
 repoMutationCommit : RepoMutation -> RepoCommit
 repoMutationCommit (RepoMutation _ commit) = commit
 
+-- ── reading records ─────────────────────────────────────────────────────────
+
 decodeAt : Cid -> BlockStore -> Result String DagCbor
 decodeAt cid store = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
@@ -605,6 +619,8 @@ listRecords [] _ acc = Ok (reverse acc)
 listRecords ((path, cid) :: rest) store acc = match decodeAt cid store
   Err message => Err message
   Ok value => listRecords rest store ((path, cid, value) :: acc)
+
+-- ── exporting the block graph ───────────────────────────────────────────────
 
 {- | CIDs in first-seen order, carrying their own membership index.
 
@@ -746,6 +762,8 @@ export
 repoExportBlocks : Repo -> Result String (List (Cid, Array Int))
 repoExportBlocks (Repo _ _ _ tree store (RepoCommit _ _ commitCid _ signed _)) =
   map fst (repoExportGraph commitCid signed (mstRootCid tree) store)
+
+-- ── verifying a signed commit ───────────────────────────────────────────────
 
 hasField : String -> List (String, DagCbor) -> Bool
 hasField _ [] = False

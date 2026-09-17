@@ -297,12 +297,6 @@ storeSessionsPrune : Int -> Store -> Store
 storeSessionsPrune now (Store blocks repo (Auth secret credential sessions) prefs) =
   Store blocks repo (Auth secret credential (unexpired now sessions)) prefs
 
--- | How many sessions are open. Nothing in the protocol reads this; it is what
--- a test asserts a rotation or a close against.
-export
-storeSessionCount : Store -> Int
-storeSessionCount (Store _ _ (Auth _ _ sessions) _) = length sessions
-
 -- | Number of distinct verified blocks in the blob half. The repository half
 -- keeps its own blocks and is not counted here.
 export

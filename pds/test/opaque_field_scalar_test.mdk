@@ -1,6 +1,6 @@
 {- | #1723 — the opaque-type boundary around `Fe` and `Sc`, and the
    deployment boundary around the `ForTest` exports that exist to poke at
-   them, migrated from the retired `pds/test/opaque_field_scalar.sh` under
+   them, migrated from the retired shell gate of the same name under
    #3148.
 
    `Fe` and `Sc` hold mutable arrays, so opacity is what stops a caller from
