@@ -1481,6 +1481,7 @@ locEq : Loc -> Loc -> Bool
 locGoalKey : Option Loc -> String
 locSameFileAs : Option Loc -> Option Loc -> Bool
 locSameFileAsError : Option Loc -> Bool
+localDeclaredConstraintFor : String -> CDeclared
 localPinIds : Int -> Int -> List Int
 localPinPairs : Int -> Int -> List (Int, String)
 lookupAxisOrTop : String -> List (String, Param) -> Param -> Param
@@ -2253,13 +2254,15 @@ setNumlitFloats : Unit -> Unit
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setStdlibOwnership : Bool -> List String -> Unit
 shadowBareName : List (String, String) -> String -> String
+shadowDeclaredFor : String -> String -> CDeclared
+shadowDeclaredIds : String -> String -> List Int
 shadowDomainForAt : TcEnv -> String -> String -> Int -> Option Mono
 shadowIfaceLabel : IfaceRef -> String
 shadowSpineNodesAt : String -> Expr -> Option (List Expr)
 shadowSpineNodesAtImporter : String -> Expr -> Option (List Expr)
 shadowStandaloneDictSlots : List CSlot -> List (List Mono) -> List (Int, Mono) -> ShadowDicts
-shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> ShadowDicts
-shadowStandaloneDictSlotsSp : Option Scheme -> String -> List Mono -> ShadowDicts
+shadowStandaloneDictSlotsAt : Option Scheme -> String -> String -> Mono -> ShadowDicts
+shadowStandaloneDictSlotsSp : Option Scheme -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneDictsSp : TcEnv -> String -> String -> List Mono -> ShadowDicts
 shadowStandaloneDictsWith : Option Scheme -> String -> String -> Mono -> ShadowDicts
 shadowStandaloneDictsWithSp : Option Scheme -> String -> String -> List Mono -> ShadowDicts

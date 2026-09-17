@@ -1,0 +1,15 @@
+-- #2722, the VALUE-POSITION half.  Same two-bindings-one-name setup as
+-- `shadow2722_shadow.mdk`, except the standalone is never an application head: it is
+-- handed to `map` as a value.  That reaches the dict-slot resolver through a different
+-- entry point (`recordRLocalSite`, whose own header names `map size [1,2,3]` as the
+-- shape it exists for), so the applied-head row cannot stand in for this one.
+--
+-- As there, the selective import of `size` is the load-bearing line: without it the
+-- identical program already answers [2, 3, 4].
+import lib.shadow2722_iface.{Sizeable, size, Box(..)}
+
+export size : Num n => n -> n
+size v = v + 1
+
+export useIt : List Int -> List Int
+useIt xs = map size xs
