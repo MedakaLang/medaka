@@ -2,8 +2,8 @@
 """Re-measure jev_census.py's questions against the hand-labeled corpus.
 
 Run this after changing any question in jev_census.py. It asks the model the
-current questions over scripts/jev/eval_corpus.json (160 items whose text is
-stored in the corpus, so the tree can drift underneath) and prints precision,
+current questions over scripts/jev/eval_corpus.json (every item carries its
+own text, so the tree can drift underneath) and prints precision,
 recall, AUC, calibration by probability bucket, Score rank correlation, and
 Choice accuracy at confidence tiers, next to the regex census's own numbers
 on the same sample. Numbers are agreement with one labeler's judgment, not

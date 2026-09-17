@@ -1,5 +1,5 @@
 {
- "_about": "Hand-labeled evaluation corpus for scripts/jev (2026-09-16). Labels are one reader's judgment after reading each item in full; they are the baseline the model is measured against, not ground truth. Items carry their own text so the corpus does not drift with the tree; 'origin' is provenance only.",
+ "_about": "Hand-labeled evaluation corpus for scripts/jev (2026-09-16). Labels are one reader's judgment after reading each item in full; they are the baseline the model is measured against, not ground truth. Items carry their own text so the corpus does not drift with the tree; 'origin' is provenance only. Rows D060-D064 and C100 were added 2026-09-17 by the sprint the-finding-was-the-expensive-part and have a DIFFERENT provenance: each was adjudicated against the question text in jev_census.py by the front seat, after both the census and its reader disagreed, because that sprint's finding is that neither is ground truth. Their per-row `note` says who was right.",
  "comments": [
   {
    "id": "C000",
@@ -1630,6 +1630,24 @@
     "offsite": "y",
     "register": 3
    }
+  },
+  {
+   "id": "C100",
+   "origin": "compiler/entries/profile_main.mdk:1",
+   "lines": 32,
+   "labels": {
+    "history": "n",
+    "reviewer": "n",
+    "mismatch": "n",
+    "offsite": "n",
+    "register": 0
+   },
+   "note": "in-register AND provably wrong: cites `perf_main.mdk`, which has zero hits in `git ls-files`. NOT a census miss -- the low score is correct on all four questions asked. The dead-path class is orthogonal to all four register questions, which is why it needed a separate mechanical sweep (S-7) rather than a worklist floor. Found unaided by the blind control at register 0.71.",
+   "comment": "-- Single-file per-stage timing driver for the self-hosted front-end.\n-- Times each pipeline stage individually so the cost of each is visible\n-- rather than buried in a composite (e.g. elaborate = mark + typecheck).\n--\n--   MEDAKA_PERF=1 medaka run compiler/entries/profile_main.mdk \\\n--       stdlib/runtime.mdk stdlib/core.mdk <target.mdk>\n--\n-- Stages timed:\n--   parse-prelude   parse + desugar runtime.mdk + core.mdk (fixed setup cost)\n--   parse           lex + parse the target file  (internal: tokenize then parse)\n--   desugar         lower surface sugar in the target AST\n--   resolve         name resolution (resolveToLines; raw prelude, desugared target)\n--   mark            method-reference marking (markWithPrelude; desugared core)\n--   typecheck       HM type inference (checkOneToLinesWithRuntime; desugared runtime+core)\n--   elaborate       install* dict-route table builders + elaborateDict (issue #882)\n--   dce             dead-code filter over the elaborated program (dceFilter; #882)\n--   mangle          universal per-module private-name de-collision (mangleUnits; #882)\n--                   ADDITIVE: run standalone for measurement and DISCARDED — it does\n--                   NOT feed lower/emit, so those stages stay byte-unchanged.\n--   lower           Core IR lowering (lowerProgramEmit over the elaborated program)\n--   emit            LLVM text IR emission (emitProgram over the Core IR)\n--   wasm-emit       WasmGC text WAT emission (wasm_emit.emitProgram over the SAME Core IR)\n--                   ⚠️ OPT-IN: only runs under MEDAKA_PERF_WASM=1 (see wasmStage).\n--                   It is ~10x llvm_emit, so it is priced per-shape by the gate rather\n--                   than paid on every invocation.\n--\n-- Without MEDAKA_PERF set the driver exits silently (no useful stdout output —\n-- this is a measurement tool, not a pipeline validator).\n--\n-- For min-of-N timings use test/profile_compiler.sh, which runs this driver N\n-- times and reports per-stage minimums.  Complements perf_main.mdk (which\n-- times the full multi-module loader path with elaborate as a single phase).",
+   "code_after": "\nimport frontend.ast.{Decl}\nimport ir.core_ir.{CProgram}\nimport frontend.parser.{parse, parseWithPositions}\nimport tools.lint.{lintProgram, allRules, emptyStdlibIndex}\nimport frontend.desugar.{desugar}\nimport frontend.resolve.{resolveToLines}\nimport frontend.marker.{markWithPrelude}\nimport types.typecheck.{\n  checkOneToLinesWithRuntime,\n  elaborateDict,\n  constrainedSigNames,\n  preludeReturnPosDictNames,\n  preludeArgPosDictNames,\n  mainTypeIsUnit,\n  mainTypeIsFloat,",
+   "regex_census": [
+    "emoji"
+   ]
   }
  ],
  "do": [
@@ -2476,6 +2494,81 @@
     "recommend": "partial",
     "gain": 3
    }
+  },
+  {
+   "id": "D060",
+   "origin": "compiler/tools/gate_pack.mdk:2317",
+   "name": "budgetOutput",
+   "lines": 26,
+   "source": "budgetOutput regPath regSrc baseSrc commitMessage = match parseRegistry regSrc\n  Err m => Err \"medaka gate budget: \\{m}\"\n  Ok gates => match parseShards regSrc\n    Err m => Err \"medaka gate budget: \\{m}\"\n    Ok shs => match parseCostBaseline baseSrc\n      Err m => Err \"medaka gate budget: \\{m}\"\n      Ok base => match parseCostRuns baseSrc\n        Err m => Err \"medaka gate budget: \\{m}\"\n        Ok runs => match balUnknownRows shs gates\n          u :: us =>\n            Err\n              \"medaka gate budget: \\{regPath}: gate(s) name a shard with no [[shard]] row: \\{joinSpace (u :: us)}\\n\"\n          [] =>\n            let uncosted = budgetUncosted base gates\n            let overClass = budgetOverClassGates base gates\n            let orphans = budgetOrphanNames base gates\n            match budgetPoleFactor gates shs base runs\n              Err m => Err \"medaka gate budget: \\{m}\\n\"\n              Ok poleFactorOpt =>\n                budgetReport\n                  base\n                  commitMessage\n                  uncosted\n                  overClass\n                  poleFactorOpt\n                  orphans",
+   "labels": {
+    "uniform_chain": "y",
+    "verbatim_chain": "y",
+    "meaning_change": "n",
+    "recommend": "partial",
+    "gain": 2
+   },
+   "note": "four levels share a verbatim `Err m => Err \"medaka gate budget: {m}\"`; the `balUnknownRows` list match and the newline-suffixed tail must stay explicit. census said convert, reader said partial, front seat agrees with the reader"
+  },
+  {
+   "id": "D061",
+   "origin": "stdlib/fs.mdk:131",
+   "name": "fixtureFiles",
+   "lines": 6,
+   "source": "fixtureFiles root = match walkDir root\n  Err e => Err e\n  Ok paths => match filesOnly paths\n    Err e => Err e\n    Ok [] => Err \"\\{root}: no fixture files found\"\n    Ok fs => Ok fs",
+   "labels": {
+    "uniform_chain": "y",
+    "verbatim_chain": "y",
+    "meaning_change": "n",
+    "recommend": "convert",
+    "gain": 2
+   },
+   "note": "two verbatim `Err e => Err e` levels; the `Ok []` anti-vacuity floor is a post-check, not a differing failure arm, and stays MORE visible inline than as one arm of four. census right, reader said leave"
+  },
+  {
+   "id": "D062",
+   "origin": "compiler/tools/gate_cmd.mdk:297",
+   "name": "listOutput",
+   "lines": 15,
+   "source": "listOutput argv = match parseListArgs argv\n  Err m => Err m\n  Ok a => match parseSelectors a.selectors []\n    Err m => Err \"medaka gate list: \\{m}\"\n    Ok sels =>\n      let path = registryPath a.registry\n      match readFile path\n        Err m => Err \"medaka gate list: cannot read registry: \\{m}\"\n        Ok src =>\n          if a.shards then\n            shardsOutput a.json a.selectors src\n          else match parseRegistry src\n            Err m => Err \"medaka gate list: \\{m}\"\n            Ok gates =>\n              selectionOutput a.json a.selectors (selectGates sels gates) path",
+   "labels": {
+    "uniform_chain": "y",
+    "verbatim_chain": "n",
+    "meaning_change": "n",
+    "recommend": "partial",
+    "gain": 2
+   },
+   "note": "three levels differ only in message text, which the uniform_chain criteria explicitly admits ('modulo ... message text'); the mid-ladder `if a.shards` breaks the chain. census said partial and was right; reader said leave"
+  },
+  {
+   "id": "D063",
+   "origin": "compiler/tools/lsp.mdk:815",
+   "name": "typeAtPoint",
+   "lines": 14,
+   "source": "typeAtPoint runtimeSrc coreSrc filePath src line col =\n  match identifierAt src line col\n    None => None\n    Some name =>\n      let uri = uriOfPath filePath\n      let docs = docsPut uri src emptyDocs\n      match hoverEnvFor runtimeSrc coreSrc uri src docs\n        None => None\n        Some env => match hoverSchemeAt name src line col env\n          None => None\n          Some (sch, isLocal) =>\n            let pfx = sigLeadingEff name (unwrapDecls (parseResult src))\n            Some\n              (stringConcat [name, \" : \", pfx, ppHoverScheme isLocal name sch])",
+   "labels": {
+    "uniform_chain": "y",
+    "verbatim_chain": "y",
+    "meaning_change": "y",
+    "recommend": "leave",
+    "gain": 2
+   },
+   "note": "the chain IS uniform (three verbatim `None => None`) and converting is still wrong: the source carries `lint-disable-next-line rule-bind-chain-to-do` and a four-line reason, the pure/IO ordering is load-bearing, and the last arm does real work. census said convert at 0.96/0.94"
+  },
+  {
+   "id": "D064",
+   "origin": "stdlib/fs.mdk:162",
+   "name": "fixtureDirs",
+   "lines": 6,
+   "source": "fixtureDirs root = match listDir root\n  Err e => Err e\n  Ok names => match dirsOnly (map (joinPath root) names)\n    Err e => Err e\n    Ok [] => Err \"\\{root}: no fixture directories found\"\n    Ok ds => Ok ds",
+   "labels": {
+    "uniform_chain": "y",
+    "verbatim_chain": "y",
+    "meaning_change": "n",
+    "recommend": "convert",
+    "gain": 2
+   },
+   "note": "structural twin of D061 (fixtureFiles); same labels by construction. the two readers gave it the same recommendation but CONTRADICTED each other on the structured two-level-default question over identical code"
   }
  ]
 }
