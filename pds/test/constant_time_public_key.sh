@@ -24,8 +24,8 @@ source_closure_ok() {
   tree=$1
   [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '3175129806 3842' ] || return 1
   [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1691956410 24617' ] || return 1
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '3405910906 31981' ] || return 1
-  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '3840689225 26477' ] || return 1
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '1518600487 31160' ] || return 1
+  [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2128618670 25697' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
   grep -F -q 'let added = pointAddComplete r0 r1' "$tree/pds/lib/secp256k1.mdk" || return 1

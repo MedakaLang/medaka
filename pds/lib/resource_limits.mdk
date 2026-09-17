@@ -72,6 +72,14 @@ export
 maxMstTraversalDepth : Int
 maxMstTraversalDepth = 128
 
+{- | The nesting ceiling both directions of `pds/lib/dagcbor.mdk` enforce. It
+   is a ceiling on the decoder's recursion, so the encoder must refuse the
+   same values: bytes that module produced but cannot read back would be a
+   record committed to a repository that no read path can ever return. -}
+export
+maxDagCborDepth : Int
+maxDagCborDepth = 128
+
 export
 checkCarBytes : Int -> Result String Unit
 checkCarBytes size =
@@ -128,7 +136,15 @@ checkMstTraversalDepth depth =
   else
     Ok ()
 
--- Rate limiting policy (#2612). One shared window across the five limit
+export
+checkDagCborDepth : Int -> Result String Unit
+checkDagCborDepth depth =
+  if depth > maxDagCborDepth then
+    Err "dagcbor: nesting depth exceeds 128 resource limit"
+  else
+    Ok ()
+
+-- Rate limiting policy. One shared window across the five limit
 -- classes `pds/lib/ratelimit.mdk` defines; each class keeps its own
 -- allowance within that window.
 export
@@ -178,7 +194,7 @@ export
 maxRepoExportsPerWindow : Int
 maxRepoExportsPerWindow = 100
 
-{- | Ceilings on the inbound `X-Forwarded-For` header itself (#2949), enforced
+{- | Ceilings on the inbound `X-Forwarded-For` header itself, enforced
    by `pds/lib/ratelimit.mdk`. The framing-level `stdlib/http.mdk`
    header-section cap bounds the WHOLE header block, not any one header's
    share of it, so a single comma-separated value can still arrive holding
@@ -218,7 +234,7 @@ checkXffTokens count =
   else
     Ok ()
 
-{- | The ceiling on proxied appview reads (#2912), which
+{- | The ceiling on proxied appview reads, which
    `maxRequestsPerWindow` cannot express for the reason
    `maxRepoExportsPerWindow` above it cannot: the quantity this bounds is not
    requests this server answers but requests this server MAKES. One inbound
@@ -236,10 +252,10 @@ export
 maxProxiedCallsPerWindow : Int
 maxProxiedCallsPerWindow = 60
 
-{- | HTTP client response-side ceilings (#2912). A response from an off-box
+{- | HTTP client response-side ceilings. A response from an off-box
    appview is exactly the untrusted-input shape that has already produced two
-   of this project's worst bugs on the INBOUND side: an unbounded read
-   (#2478) and an O(n^2) framing loop (#2571). Every length, chunk size and
+   of this project's worst bugs on the inbound side: an unbounded read and an
+   O(n^2) framing loop. Every length, chunk size and
    header count `pds/lib/httpclient.mdk` decodes is checked against one of
    these before it is trusted. -}
 export
@@ -336,8 +352,8 @@ checkHttpClientBodyBytes size =
    a complete buffer, so something has to bound the buffer while it is still
    arriving, and that something is necessarily on the socket side where no
    decoded length is known yet. A reader that waited for the codec's verdict
-   would let a drip-feeding peer grow a buffer without bound, which is the
-   inbound defect #2478 was.
+   would let a drip-feeding peer grow a buffer without bound — the same
+   unbounded-read defect this project already paid for on the inbound side.
 
    The chunk allowance is what makes it a sum rather than just the body
    ceiling: a chunked body carries a size line and a CRLF per chunk, and

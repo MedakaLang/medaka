@@ -122,7 +122,7 @@ official app entirely.
 ### 2.B Security
 
 What is strong: the crypto is graded against external oracles (G1–G5), the
-pure/shell seam and secret containment are proven by `pds/test/lib_boundary.sh`
+pure/shell seam and secret containment are proven by `pds/test/lib_boundary_test.mdk`
 with mutation controls, and `pds/test/serve_e2e.sh` attacks a running server
 across ~fifty adversarial cases. SSRF, path traversal, header injection,
 request smuggling, the proxy confused deputy, and MST cycles are closed by
@@ -139,7 +139,7 @@ executing. Reproduce before fixing; closing one as not-real is a good outcome.
 |---|---|---|---|---|
 | B1 | A per-route table (auth policy × rate-limit class × size ceiling) is pinned by a gate that enumerates the registry, so a route added without a ceiling reds. | G-QUIET | exists — `pds/test/route_policy_test.mdk` joins auth policy × rate-limit classes × ceiling over `registryEndpoints`, floor-asserted by `inlang_test_oracle_test.mdk` | #2942 |
 | B2 | Request-body JSON has a depth bound enforced before any credential is resolved; a 100k-deep body to `createSession` yields 400 and the server keeps answering. **needs-repro** | G-QUIET | **partial, and not for the reason this row gave** — #2946 closed NOT reproduced: the feared crash borrowed the tree-walking interpreter's call-depth ceiling, which the native server does not have. `stdlib/json.mdk` still has no depth bound, so the mechanism this criterion names does not exist; what changed is that the hazard did not reproduce | #2946 |
-| B3 | Encode and decode depth agree: a record deeper than the decoder's `maxDepth` is refused at write, never committed unreadable. **needs-repro, S0 if real** | G-QUIET | exists — `maxDepth = 128` gates both `emitValue` and `parseValueAt` in `pds/lib/dagcbor.mdk`, so encode and decode agree by construction | #2947 |
+| B3 | Encode and decode depth agree: a record deeper than the decoder's `maxDepth` is refused at write, never committed unreadable. **needs-repro, S0 if real** | G-QUIET | exists — `maxDagCborDepth`/`checkDagCborDepth` in `pds/lib/resource_limits.mdk` gates both `emitValue` and `parseValueAt` in `pds/lib/dagcbor.mdk`, so encode and decode agree by construction | #2947 |
 | B4 | `getBlob` responses carry `X-Content-Type-Options: nosniff` and `Content-Disposition: attachment`, or `text/html` is never stored under its own type. | G-QUIET | exists — `blobOkResponse` adds both headers, scoped to `getBlob` alone | #2948 |
 | B5 | Caddy overwrites `X-Forwarded-For` with the remote host, and the PDS independently caps the header's length and token count before parsing, so a client-supplied 64 KiB header cannot be paid for on the single scheduler thread. | G-QUIET | exists — `pds/Caddyfile` sets `header_up X-Forwarded-For {remote_host}`; `checkXffHeaderBytes` and `checkXffTokens` cap the raw bytes and the token count before any decode or split | #2949 |
 | B6 | The rate-limiter identity table is bounded (cap, TTL, or LRU); a million distinct identities do not grow RSS without bound. | G-ANNOUNCE | missing | #2950 |
@@ -187,13 +187,13 @@ on every upload (C6).
 The build → keygen → genesis → systemd → Caddy → verify path is written in
 `docs/ops/PDS-DEPLOY.md`, and backup/restore is rehearsed by `pds/test/serve_e2e.sh`
 case 33. The unit and both Caddyfiles are now written and linted by
-`pds/test/deploy_config_lint.sh`. **The systemd and Caddy halves have still
+`pds/test/deploy_config_lint_test.mdk`. **The systemd and Caddy halves have still
 never been run, and no live deploy has ever happened** — that is what D2's and
 D5's open halves are, and it is the whole of what G-QUIET is now waiting on.
 
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
-| D1 | `pds/pds.service` creates or documents its service user, and sets `MemoryMax`, `CPUWeight`/`Nice`, `TasksMax`, `LimitNOFILE`, `StartLimitBurst`, `IPAddressDeny=any` + `IPAddressAllow=localhost`, `CapabilityBoundingSet=`, `ProtectHome`, `PrivateDevices`, `UMask=0077`, `RequiresMountsFor`. A gate lints the unit for the required directives. | G-QUIET | exists — all fourteen directives present in `pds/pds.service`; `pds/test/deploy_config_lint.sh` lints for them | #2958 |
+| D1 | `pds/pds.service` creates or documents its service user, and sets `MemoryMax`, `CPUWeight`/`Nice`, `TasksMax`, `LimitNOFILE`, `StartLimitBurst`, `IPAddressDeny=any` + `IPAddressAllow=localhost`, `CapabilityBoundingSet=`, `ProtectHome`, `PrivateDevices`, `UMask=0077`, `RequiresMountsFor`. A gate lints the unit for the required directives. | G-QUIET | exists — all fourteen directives present in `pds/pds.service`; `pds/test/deploy_config_lint_test.mdk` lints for them | #2958 |
 | D2 | `pds/Caddyfile` sets `header_up X-Forwarded-For {remote_host}`, HSTS, explicit timeouts, a request body limit at or above the PDS's own, and an access log; WebSocket upgrade for `subscribeRepos` verified live. A gate lints the file. | G-QUIET | missing — one `reverse_proxy` line; no gate mentions Caddy | #2959 |
 | D3 | The running binary reports its build commit and source fingerprint on `--version` and in the startup line; binaries live under a versioned path with a symlink, and rollback is one documented command that has been run once. | G-QUIET | partial — `--version` and the startup banner both carry the commit (with `--stamp-build`; a plain `medaka build` reports a bare `pdsd 0.1.0`), and the versioned path plus symlink are documented — but the compiler fingerprint is deliberately omitted from the line, and "rollback run once" cannot be true before a first deploy | #2960 |
 | D4 | What runs on the egress port (appview) and the relay port is specified: the software, its config, its own systemd unit, and its allow-list of destinations. | G-QUIET | exists — `pds/Caddyfile.egress` + `pds/pds-egress.service`, a second Caddy under its own unit with its own allow-list | #2961 |
@@ -214,7 +214,7 @@ Val is not looking at the terminal: nothing tells her the service is down**
 
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
-| E1 | Every request produces one log line: method, route, status, duration, bytes, forwarded-for (never a token, never a body); a gate greps the log path for the secret-name list `lib_boundary.sh` already enforces on strings. | G-QUIET | exists — `accessLogLine` (`pds/lib/accesslog.mdk`) with a six-field allow-list; `serve_e2e.sh` grades six line shapes and case 7b asserts no request-supplied secret reaches a line | #2964 |
+| E1 | Every request produces one log line: method, route, status, duration, bytes, forwarded-for (never a token, never a body); a gate greps the log path for the secret-name list `lib_boundary_test.mdk` already enforces on strings. | G-QUIET | exists — `accessLogLine` (`pds/lib/accesslog.mdk`) with a six-field allow-list; `serve_e2e.sh` grades six line shapes and case 7b asserts no request-supplied secret reaches a line | #2964 |
 | E2 | Startup logs the build commit, the config summary (did, handle, hostname, bind, port, trusted-proxy, appview), and the event-log recovery outcome (discarded / promoted / none). | G-QUIET | exists — banner, `serve: config …`, and `serve: event log recovery: …` all observed on a live process 2026-09-16 | #2964 |
 | E3 | A health route (`/xrpc/_health`, as the official PDS serves) returns the version and is polled. | G-QUIET | partial — `/xrpc/_health` served and returns the version string; "and is polled" needs the deploy | #2965 |
 | E4 | A periodic stats line: active connections, un-framed connections, subscribers, repo rev, blocks and blobs on disk. | G-ANNOUNCE | exists — `serve: stats active=… unframed=… subscriptions=… rev=… blocks=… blobs=…` observed on a live process 2026-09-16 | #2966 |
@@ -233,9 +233,9 @@ instruments do not look at `pds/` at all.
 
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
-| F1 | `test/comment_register_census.sh` and `test/slop_census.sh` scope `pds/*.mdk`, and report zero issue-number citations, zero emoji shouts, and zero self-narration in `pds/lib` and `pds/shell`. | G-ANNOUNCE | missing — both scripts are hardwired to `compiler/` and `stdlib/` | #2968 |
-| F2 | Register trims applied: `pds/lib/scalar.mdk`'s header keeps the numerical argument and loses the sprint-contract and "delete this comment" prose; `pds/lib/resource_limits.mdk`, `pds/lib/field.mdk`, `pds/lib/multiformats.mdk` cite constraints, not history. The dead `storeSessionCount` export removed; the raw `2^62-1` literal in `pds/lib/handlers.mdk` named. | G-ANNOUNCE | missing | #2969 |
-| F3 | Every file over ~700 lines carries a section index at the top. | G-ANNOUNCE | missing | #2969 |
+| F1 | `test/comment_register_census.sh` and `test/slop_census.sh` scope `pds/*.mdk`, and report zero issue-number citations, zero emoji shouts, and zero self-narration in `pds/lib` and `pds/shell`. | G-ANNOUNCE | missing — both scripts now scope `pds/*.mdk`, but issue-number citations in `pds/lib` are reduced, not zero | #2968 |
+| F2 | Register trims applied: `pds/lib/scalar.mdk`'s header keeps the numerical argument and loses the sprint-contract and "delete this comment" prose; `pds/lib/resource_limits.mdk`, `pds/lib/field.mdk`, `pds/lib/multiformats.mdk` cite constraints, not history. The dead `storeSessionCount` export removed; the raw `2^62-1` literal in `pds/lib/httpclient.mdk` named. | G-ANNOUNCE | done — all four headers rewritten, `storeSessionCount` gone, and the literal now reads `intMaxBound`. This row named `pds/lib/handlers.mdk` for that literal, which never held it | #2969 |
+| F3 | Every file over ~700 lines carries a section index at the top. | G-ANNOUNCE | done — all seven files over 700 lines (`repo`, `handlers`, `httpclient`, `scalar`, `server_core`, `mst`, `shell/server`) carry one, in either the `-- ──` or `-- #` house spelling | #2969 |
 | F4 | `medaka lint pds` clean under the ratcheted rule set, with every suppression carrying a reason. | G-ANNOUNCE | unverified | #2969 |
 | F5 | `docs/design/ATPROTO-PDS-DESIGN.md`'s status banner agrees with its own §7 (the firehose is landed) and a short architecture overview for a non-author exists, ordered README → `pds/serve.mdk` → `server_core` → `handlers` → `shell/server`. | G-ANNOUNCE | partial, differently — the banner now agrees with §7 on the firehose and `pds/README.md` carries the module reading order, but the banner's `#1962` sentence went stale when that gate moved to the merge tier | #2970 |
 | F6 | A fresh agent, given only the docs, produces an architecture summary a maintainer grades as correct. | G-ANNOUNCE | unverified — #2970 closed with no grading recorded on it, which was its own acceptance criterion | #2970 |

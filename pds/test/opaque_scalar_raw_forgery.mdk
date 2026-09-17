@@ -1,5 +1,5 @@
 -- Negative opacity cell: a caller must not be able to fabricate an `Sc` from
--- raw limbs. `pds/test/opaque_field_scalar.sh` requires this file to fail.
+-- raw limbs. `pds/test/opaque_field_scalar_test.mdk` requires this to fail.
 import lib.scalar.{Sc}
 
 forged : Sc

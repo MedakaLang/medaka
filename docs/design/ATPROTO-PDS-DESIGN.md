@@ -517,7 +517,7 @@ which would be indistinguishable from a working server until somebody tried to u
 secret, the credential salt, and the per-request nonce that identifies minted tokens.
 `randomInt` is a SplitMix64 generator seeded deterministically; a session secret drawn
 from it would be the same secret on every deployment, and forgeable from a public
-constant. `pds/test/lib_boundary.sh` also grades a source-shape property in the same
+constant. `pds/test/lib_boundary_test.mdk` also grades a source-shape property in the same
 region: no password, secret, salt, digest or credential may be interpolated into a
 string anywhere in `pds/lib`, `pds/shell` or `pds/serve.mdk`, with one ledgered
 exemption for the line in `lib.jwt` that assembles a token, where building that string
@@ -750,7 +750,7 @@ pipelined, and keep-alive requests; a chunked-transfer write; each of the nine X
 NSIDs and both well-knowns, every one driven over the socket rather than read off the
 registry; a malformed request and an over-cap body, both rejected rather than hung;
 the idle-connection timeout; and restart-and-resume across a process boundary against
-the same `--data` directory. `pds/test/lib_boundary.sh` closes out #2481 itself:
+the same `--data` directory. `pds/test/lib_boundary_test.mdk` closes out #2481 itself:
 `pds/lib/` never imports `pds/shell/`, every `pds/lib/*.mdk` export carries an
 explicit type signature, and none of those signatures declares an effect row, so the
 pure core stays reachable from every engine Phase 3 does not run on. The signature

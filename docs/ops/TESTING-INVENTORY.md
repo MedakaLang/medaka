@@ -6,7 +6,7 @@
 
 - **dest** — where the check goes: `N` a native gate module (Medaka code with the full extern set, run natively, may spawn `./medaka`/clang/node and diff), `T` a `test`/`prop` block in a `*_test.mdk` sibling under `medaka test`, `SHELL` stays a script for a stated reason, `OUT` a generator/tool that is not a check.
 - **today** — `YES` = expressible with no new capability on the 2026-09-03 binary.
-- **blockers** — capability codes; see the vocabulary in `TESTING-ARCHITECTURE.md` §5.1. `NATIVE-KIND-RUNNER` is the one foundational blocker: the registry declares `kind = "native"` but no gate uses it and `gate run` has no dispatch for it.
+- **blockers** — capability codes; see the vocabulary in `TESTING-ARCHITECTURE.md` §5.1. `NATIVE-KIND-RUNNER` named the registry's `kind = "native"` dispatch gap as of the 2026-09-03 snapshot; `gate run` now dispatches it (`gateInvocation`, `gate_cmd.mdk:687`) and 35 gates use it (re-derive: `medaka gate list --json`).
 - **medianMs** — from `test/gate_cost_baseline.json` when a row exists; `—` otherwise.
 
 ## Counts
@@ -60,9 +60,9 @@
 | `pds/test/field_vectors_test.mdk` | DIFFERENTIAL | multiple (eval/native) | N | YES | — | 49216 | 125 | DONE: was `field_vectors.sh`, now one `vector_runner` row |
 | `pds/test/inlang_test_oracle.sh` | INLANG-WRAPPER | interpreter | N | NO | NATIVE-KIND-RUNNER | 418939 | 102 | WRAP: spawns ./medaka + diffs, module does the same |
 | `pds/test/lexjson_vectors_test.mdk` | GOLDEN | native | N | YES | — | 3305 | 59 | DONE: was `lexjson_vectors.sh`, now one `vector_runner` row |
-| `pds/test/lib_boundary.sh` | RATCHET/LEDGER | none | N | NO | NATIVE-KIND-RUNNER | 288 | 154 | REWRITE: probe/static text becomes library calls |
+| `pds/test/lib_boundary_test.mdk` | RATCHET/LEDGER | none | N | YES | — | 288 | 154 | DONE: was `lib_boundary.sh`, now a native `*_test.mdk` sibling (#3148) |
 | `pds/test/mst_vectors.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 30928 | 114 | WRAP: spawns ./medaka + diffs, module does the same [node] |
-| `pds/test/opaque_field_scalar.sh` | GOLDEN | none (typecheck-only) | N | NO | NATIVE-KIND-RUNNER | 3375 | 429 | WRAP: spawns ./medaka + diffs, module does the same |
+| `pds/test/opaque_field_scalar_test.mdk` | GOLDEN | none (typecheck-only) | N | YES | — | 3375 | 429 | DONE: was `opaque_field_scalar.sh`, now a native `*_test.mdk` sibling (#3148) |
 | `pds/test/protocol_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 23834 | 123 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
 | `pds/test/read_routes_all_engines.sh` | DIFFERENTIAL | multiple (eval/native/wasm) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 35748 | 157 | WRAP: spawns ./medaka + diffs, module does the same [node,python3] |
 | `pds/test/repo_vectors.sh` | DIFFERENTIAL | multiple (native/wasm only, no eval) | N | NO | NATIVE-KIND-RUNNER, EXTERNAL-TOOL | 18410 | 171 | WRAP: spawns ./medaka + diffs, module does the same [node] |

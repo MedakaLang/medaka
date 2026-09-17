@@ -281,7 +281,7 @@ toolchain = []
 [[gate]]
 name = "build_cmd"
 area = "backend"
-shard = "gates_5"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -356,7 +356,7 @@ toolchain = []
 [[gate]]
 name = "gzip/test/deflate_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_7"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -487,14 +487,13 @@ sources = ["pds/*"]
 corpus = []
 toolchain = ["wasm-tools", "node>=24"]
 
-# Two unrelated sections (#2592, #2595). One is a three-engine value
-# differential over this project's own five-row reduction probe — the vector
-# family's shape exactly. The other sweeps two FULL reference corpora on Wasm
-# through pds/test/field_vectors_main.mdk and pds/test/scalar_vectors_main.mdk,
-# drivers and corpora that belong to the pds/test/field_vectors and
-# pds/test/scalar_vectors rows. Those two rows carry no Wasm arm, so the split
-# moves Wasm work onto rows whose shard declares `wasm_arm = false`; it is a
-# repack priced against test/gate_cost_baseline.json, not an edit.
+# One section: a three-engine value differential over this project's own
+# five-row reduction probe. The second section it used to carry (#3036) swept
+# two FULL reference corpora on Wasm through pds/test/field_vectors_main.mdk
+# and pds/test/scalar_vectors_main.mdk — drivers and corpora belonging to the
+# pds/test/field_vectors and pds/test/scalar_vectors rows, which now each
+# declare a Wasm arm of their own. This row keeps the Wasm toolchain for its
+# own five-row Wasm leg.
 [[gate]]
 name = "pds/test/constant_time_parity"
 area = "engines"
@@ -628,7 +627,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/field_vectors"
 area = "engines"
-shard = "gates_4"
+shard = "gates_3"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -638,7 +637,7 @@ run = "pds/test/field_vectors_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
-toolchain = []
+toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
 name = "pds/test/inlang_test_oracle"
@@ -694,9 +693,9 @@ shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "native-wrap"
-run = "pds/test/opaque_field_scalar.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/opaque_field_scalar_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
@@ -782,7 +781,7 @@ toolchain = []
 [[gate]]
 name = "pds/test/scalar_vectors"
 area = "engines"
-shard = "gates_7"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -792,7 +791,7 @@ run = "pds/test/scalar_vectors_test.mdk"
 oracles = []
 sources = ["pds/*"]
 corpus = []
-toolchain = []
+toolchain = ["wasm-tools", "node>=24"]
 
 [[gate]]
 name = "pds/test/secp256k1_point_vectors"
@@ -951,7 +950,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/index_write_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -966,7 +965,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/inlang_test_oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_7"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -986,7 +985,7 @@ toolchain = []
 [[gate]]
 name = "sqlite/test/oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_4"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1035,7 +1034,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1290,7 +1289,7 @@ toolchain = []
 [[gate]]
 name = "check_syntax_examples"
 area = "docs"
-shard = "gates_7"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1486,7 +1485,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_core_ir_typed_modules"
 area = "eval"
-shard = "gates_5"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1651,7 +1650,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_eval_scaling"
 area = "eval"
-shard = "gates_7"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -1966,7 +1965,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_llvm_ffi"
 area = "backend"
-shard = "gates_3"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2296,7 +2295,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "diff_compiler_rt_obj"
 area = "infra"
-shard = "gates_8"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2611,7 +2610,7 @@ toolchain = []
 [[gate]]
 name = "effect_builtin_param_domain"
 area = "infra"
-shard = "gates_4"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2806,7 +2805,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "selfcompile_emit"
 area = "backend"
-shard = "gates_5"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3059,7 +3058,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_tier_drift"
 area = "infra"
-shard = "gates_8"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3363,9 +3362,9 @@ shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "pds/test/lib_boundary.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/lib_boundary_test.mdk"
 oracles = []
 sources = ["pds/lib/*"]
 corpus = []
@@ -3388,9 +3387,9 @@ shard = "gates_2"
 project = "pds"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "pds/test/deploy_config_lint.sh"
+kind = "native"
+migration = "done"
+run = "pds/test/deploy_config_lint_test.mdk"
 oracles = []
 sources = ["pds/pds.service", "pds/Caddyfile"]
 corpus = []

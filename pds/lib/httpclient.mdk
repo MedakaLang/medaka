@@ -1,9 +1,9 @@
 {- | A pure HTTP/1.1 client codec: serialize an outbound request, parse an
    inbound response, chunked transfer-encoding included. Bytes in, bytes
    out — no socket, no effect row on any export
-   (`pds/test/lib_boundary.sh`). `stdlib/net.mdk`/`stdlib/net_async.mdk` are
-   the socket layer; wiring this codec to a connected fd is a later slice's
-   job.
+   (`pds/test/lib_boundary_test.mdk`). `stdlib/net.mdk`/`stdlib/net_async.mdk`
+   are the socket layer; wiring this codec to a connected fd is a later
+   slice's job.
 
    A response is exactly the untrusted-input shape that has already produced
    two of this project's worst bugs on the inbound request side: an
@@ -421,7 +421,7 @@ parseDecimalGo value i acc =
       malformed "httpclient: invalid decimal field"
     else
       let digit = byte - 48
-      if acc > (4611686018427387903 - digit) / 10 then
+      if acc > (intMaxBound - digit) / 10 then
         malformed "httpclient: decimal field overflows Int"
       else
         parseDecimalGo value (i + 1) (acc * 10 + digit)

@@ -184,9 +184,10 @@ egressHostValue port = "\{egressAddress}:\{intToString port}"
 {- | The outbound request bytes.
 
    The bearer credential is assembled by CONCATENATION rather than
-   interpolation, deliberately: `pds/test/lib_boundary.sh` grades the shell for
-   secrets reaching a string interpolation, and a minted token belongs to that
-   class whether or not the grep's word list happens to name it.
+   interpolation, deliberately: `pds/test/lib_boundary_test.mdk` grades the
+   shell for secrets reaching a string interpolation, and a minted token
+   belongs to that class whether or not the scan's word list happens to name
+   it.
 
    The only inbound fields relayed are the ones `lib.server_core` already
    selected and graded (`lib.proxy`'s `relayedRequestHeaders`); this module

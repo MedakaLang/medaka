@@ -137,7 +137,7 @@ count = 15
 [[entry]]
 file = "compiler/driver/diagnostics.mdk"
 class = "shout"
-count = 8
+count = 10
 
 [[entry]]
 file = "compiler/driver/loader.mdk"
@@ -157,12 +157,12 @@ count = 8
 [[entry]]
 file = "compiler/driver/main_autoprint.mdk"
 class = "emoji"
-count = 2
+count = 3
 
 [[entry]]
 file = "compiler/driver/main_autoprint.mdk"
 class = "shout"
-count = 3
+count = 5
 
 [[entry]]
 file = "compiler/driver/medaka_cli.mdk"
@@ -242,12 +242,12 @@ count = 1
 [[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 class = "emoji"
-count = 20
+count = 24
 
 [[entry]]
 file = "compiler/entries/origin_agreement_main.mdk"
 class = "shout"
-count = 14
+count = 19
 
 [[entry]]
 file = "compiler/entries/playground_main.mdk"
@@ -292,12 +292,12 @@ count = 1
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "emoji"
-count = 27
+count = 33
 
 [[entry]]
 file = "compiler/eval/eval.mdk"
 class = "shout"
-count = 37
+count = 45
 
 [[entry]]
 file = "compiler/frontend/ast.mdk"
@@ -410,6 +410,11 @@ class = "shout"
 count = 1
 
 [[entry]]
+file = "compiler/ir/core_ir_eval.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
 file = "compiler/ir/core_ir_lower.mdk"
 class = "ruling"
 count = 1
@@ -492,7 +497,7 @@ count = 7
 [[entry]]
 file = "compiler/tools/gate_pack.mdk"
 class = "shout"
-count = 39
+count = 42
 
 [[entry]]
 file = "compiler/tools/gate_registry.mdk"
@@ -657,17 +662,17 @@ count = 19
 [[entry]]
 file = "compiler/types/route_key.mdk"
 class = "emoji"
-count = 8
+count = 15
 
 [[entry]]
 file = "compiler/types/route_key.mdk"
 class = "shout"
-count = 11
+count = 16
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 168
+count = 186
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -677,27 +682,162 @@ count = 6
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "tombstone"
-count = 7
+count = 8
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 807
+count = 887
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "draft"
-count = 23
+count = 27
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "deictic"
-count = 4
+count = 6
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 719
+count = 792
+
+[[entry]]
+file = "pds/lib/accesslog.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/lib/event_log_record.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/lib/field.mdk"
+class = "shout"
+count = 5
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/lib/proxy.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/lib/scalar.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/shell/egress.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/shell/eventlog.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/shell/eventlog.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/test/crawl_stub_main.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/encodings_vectors_main.mdk"
+class = "history"
+count = 2
+
+[[entry]]
+file = "pds/test/jwt_test.mdk"
+class = "tombstone"
+count = 1
+
+[[entry]]
+file = "pds/test/ratelimit_test.mdk"
+class = "history"
+count = 2
+
+[[entry]]
+file = "pds/test/read_handlers_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/read_routes_all_engines_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/record_handlers_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_test.mdk"
+class = "emoji"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_test.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_vectors_main.mdk"
+class = "emoji"
+count = 1
+
+[[entry]]
+file = "pds/test/serve_client_main.mdk"
+class = "history"
+count = 4
+
+[[entry]]
+file = "pds/test/sign_key_test.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/store_persistence_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/sync_car_shapes_main.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/trust_boundary_guards_test.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/vector_runner.mdk"
+class = "shout"
+count = 1
 
 [[entry]]
 file = "stdlib/args.mdk"

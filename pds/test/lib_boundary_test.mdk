@@ -1,0 +1,785 @@
+{- | #2481 #2604 #2611 #2964 — the `pds/lib` ⇄ `pds/shell` boundary and the
+   secret-containment properties that share its source, migrated from the
+   retired shell gate of the same name under #3148.
+
+   Five source-shape checks, each a fold over a file's lines:
+
+   1. `pds/lib/*.mdk` must never import `pds/shell/` — the pure core
+      performs no I/O (`pds/README.md`'s "Layout").
+   2. No exported `pds/lib` signature may declare an effect row (`<...>`).
+   3. Every `pds/lib` export must carry an explicit type signature. This is
+      what makes check 2 non-bypassable: an unannotated export gets an
+      INFERRED row, which no scan over declared rows can see.
+   4. No password, session secret, token, salt or derived key may be
+      interpolated into a string, because every string this server builds
+      out of one is a string that can reach a diagnostic, an error body or a
+      log line. Its scope is wider than checks 1-3: `pds/lib`, `pds/shell`
+      and `pds/serve.mdk`, because the entry point is where the secrets are
+      read.
+   5. Check 4's other half, for the one containment hole the interpolation
+      scan cannot see: the per-request ACCESS LOG. Its formatter
+      interpolates its own fields (`event.method`, `event.client`), so a
+      secret reaching a line does so as an ARGUMENT at a call site and never
+      as a secret-named interpolation check 4 would match. The record
+      literal spans lines, so this check tracks the block rather than
+      grading one line at a time.
+
+   These are source-shape properties, so they are graded here rather than in
+   `pds/test/trust_boundary_guards_test.mdk`, whose cells run one probe
+   process each and grade a runtime abort — a secret that leaks into a
+   string nothing in the suite happens to print is invisible to a runtime
+   probe and plain to a scan.
+
+   Why these scans are Medaka and not spawned `awk`: the retired script's five
+   checks were three `awk` state machines and a `grep`; the two state
+   machines that matter carry state ACROSS lines (a signature block, a
+   block-comment depth, an open `AccessEvent` record), which is a fold, not
+   a pattern. Ported here they are ordinary functions over `List String`,
+   which is also what lets each mutation control feed one synthetic file
+   instead of copying a directory: the real tree is never written to, where
+   the script had to copy `pds/lib` eight times and prove it had restored
+   nothing.
+
+   Recursion is the walk's property, not the scanners'. The script's checks
+   read a directory each and #3140 was four of them stopping at the top
+   level. Here `fs.fixtureFiles` walks, every scanner takes the files it is
+   given, and the nesting control below builds a real nested scratch tree so
+   a walk that stopped descending reds instead of going quiet.
+
+   Runs under `medaka test --native`: the mutation controls write scratch
+   files, and the interpreter binds no subprocess extern. -}
+
+import array
+import fs.{fixtureFiles, mkdirAll}
+import list.{dropWhile, reverse, span}
+import path.{basename}
+import string.{
+  contains,
+  drop,
+  endsWith,
+  fromChars,
+  indexOf,
+  isAlphaNum,
+  lines,
+  replaceAll,
+  startsWith,
+  stripSuffix,
+  take,
+  toChars,
+  toLower,
+  trimLeft,
+  unlines,
+  words,
+}
+import test.{Expectation(..)}
+import test_process.{scratchDir, underRoot}
+
+-- # Reading the tree
+
+{- | Every `.mdk` file under `dir`, recursively, paired with its content.
+
+   `fixtureFiles` carries the anti-vacuity floor: a directory that reads
+   cleanly but holds no files is an `Err`, so a scan of nothing cannot
+   report clean. -}
+sourcesUnder : String -> <FileRead "_"> Result String (List (String, String))
+sourcesUnder dir = match fixtureFiles dir
+  Err e => Err "could not walk \{dir}: \{e}"
+  Ok paths => withContents (filter (endsWith ".mdk") paths)
+
+withContents : List String ->
+  <FileRead "_"> Result String (List (String, String))
+withContents [] = Ok []
+withContents (p :: rest) = match readFile p
+  Err e => Err "could not read \{p}: \{e}"
+  Ok content => map ((p, content) :: _) (withContents rest)
+
+-- | The one file `path`, paired with its content, as a one-element source
+-- list.
+sourceFile : String -> <FileRead "_"> Result String (List (String, String))
+sourceFile path = withContents [path]
+
+libDir : <IO> String
+libDir = underRoot "pds/lib"
+
+shellDir : <IO> String
+shellDir = underRoot "pds/shell"
+
+entryPath : <IO> String
+entryPath = underRoot "pds/serve.mdk"
+
+libSources : <FileRead "_", IO> Result String (List (String, String))
+libSources = sourcesUnder libDir
+
+shellSources : <FileRead "_", IO> Result String (List (String, String))
+shellSources = sourcesUnder shellDir
+
+entrySources : <FileRead "_", IO> Result String (List (String, String))
+entrySources = sourceFile entryPath
+
+{- | The two source sets checks 4 and 5 sweep: a directory plus the entry
+   point.
+
+   The entry point is in both, exactly as the script passed it to both
+   invocations — it is where the secrets are read, so it is in scope for
+   whichever half is being graded. -}
+plusEntry : Result String (List (String, String)) ->
+  <FileRead "_", IO> Result String (List (String, String))
+plusEntry (Err e) = Err e
+plusEntry (Ok sources) = map (sources ++ _) entrySources
+
+-- # Character predicates
+
+-- | Whether `c` can occur in an identifier — awk's `[A-Za-z0-9_]`.
+isIdentChar : Char -> Bool
+isIdentChar c = isAlphaNum c || c == '_'
+
+{- | The maximal runs of identifier characters in `s`.
+
+   This is awk's `(^|[^A-Za-z0-9_])name([^A-Za-z0-9_]|$)` restated as a set
+   membership, which it is exactly whenever `name` is itself all identifier
+   characters: such an occurrence is delimited on both sides by a
+   non-identifier character or a string edge precisely when it is a maximal
+   run. Every name the two rosters below carry is alphabetic. -}
+identRuns : String -> List String
+identRuns s = words (fromChars (map identOrSpace (toList (toChars s))))
+
+identOrSpace : Char -> Char
+identOrSpace c = if isIdentChar c then c else ' '
+
+-- | Whether any of `names` occurs in `s` as a whole identifier.
+anyWholeWord : List String -> String -> Bool
+anyWholeWord names s =
+  let runs = identRuns s
+  any (n => elem n runs) names
+
+-- | Whether any of `needles` occurs in `s` as a substring.
+anySubstring : List String -> String -> Bool
+anySubstring needles s = any (n => contains n s) needles
+
+-- # Check 1 — no pds/shell import
+
+{- | One violation line per `import shell.` at the start of a line, in the
+   `path:line:text` shape the retired script's `grep -n` produced. -}
+shellImportHits : (String, String) -> List String
+shellImportHits (path, content) = shellImportScan path 1 (lines content)
+
+shellImportScan : String -> Int -> List String -> List String
+shellImportScan _ _ [] = []
+shellImportScan path n (line :: rest) =
+  let more = shellImportScan path (n + 1) rest
+  if startsWith "import shell." line then
+    "\{path}:\{intToString n}:\{line}" :: more
+  else
+    more
+
+-- # Checks 2 and 3 — exported signatures
+--
+-- An exported declaration starts on its own `export` (or `public export`)
+-- line. `export data`/`export interface` and friends put the keyword on
+-- that line itself, so they never enter either state machine.
+
+-- | Whether `line` is an `export` line that opens a signature block.
+opensExport : String -> Bool
+opensExport line = line == "export" || line == "public export"
+
+-- | Whether `line` is a continuation: it begins with a space or a tab.
+isIndented : String -> Bool
+isIndented line = startsWith " " line || startsWith "\t" line
+
+{- | One violation line per exported signature that declares an effect row.
+
+   The signature starts on the line after `export` and may wrap across
+   further indented lines; the block ends at the next line at column 0,
+   which is where the accumulated text is examined for a `<`. -}
+effectExportHits : (String, String) -> List String
+effectExportHits (path, content) =
+  effectScan path (lines content) False "" False
+
+effectScan : String -> List String -> Bool -> String -> Bool -> List String
+effectScan _ [] _ _ _ = []
+effectScan path (line :: rest) collecting sig first =
+  if opensExport line then
+    effectScan path rest True "" True
+  else if not collecting then
+    effectScan path rest False sig first
+  else if not first && not (isIndented line) then
+    let closed = if contains "<" sig then ["\{path}: \{sig}"] else []
+    closed ++ effectScan path rest False "" False
+  else
+    effectScan path rest True "\{sig} \{line}" False
+
+{- | One violation line per export that carries no explicit type signature.
+
+   A signature is the first non-blank line after the `export` line and has
+   the form `<name> : ...`; a definition (`<name> <args> = ...`) does not.
+   Without this check the effect check above is bypassable by omission: an
+   export with no signature at all compiles, the typechecker infers its
+   row, and an inferred effect row is invisible to a scan over declared
+   ones. -}
+unsignedExportHits : (String, String) -> List String
+unsignedExportHits (path, content) = unsignedScan path 1 (lines content) None
+
+unsignedScan : String -> Int -> List String -> Option Int -> List String
+unsignedScan _ _ [] _ = []
+unsignedScan path n (line :: rest) pending =
+  if opensExport line then
+    unsignedScan path (n + 1) rest (Some n)
+  else match pending
+    None => unsignedScan path (n + 1) rest None
+    Some at =>
+      if isBlank line then
+        unsignedScan path (n + 1) rest pending
+      else
+        let more = unsignedScan path (n + 1) rest None
+        if hasSignatureShape line then
+          more
+        else
+          "\{path}:\{intToString at}: export without a type signature: \{line}"
+            :: more
+
+-- | Whether `line` holds nothing but spaces and tabs.
+isBlank : String -> Bool
+isBlank line = words line == []
+
+{- | Whether `line` matches awk's `^[^ \t:]+[ \t]*:`: at least one character
+   that is neither a space, a tab nor a colon, then optional spaces and
+   tabs, then a colon. -}
+hasSignatureShape : String -> Bool
+hasSignatureShape line =
+  let cs = toList (toChars line)
+  let (name, afterName) = span isNameChar cs
+  name /= [] && startsWith ":" (fromChars (dropWhile isBlankChar afterName))
+
+isNameChar : Char -> Bool
+isNameChar c = not (isBlankChar c) && c /= ':'
+
+isBlankChar : Char -> Bool
+isBlankChar c = c == ' ' || c == '\t'
+
+-- # Check 4 — no secret interpolated into a string
+
+{- | The identifiers that name a secret, matched as WHOLE WORDS.
+
+   Whole words are what make the check usable rather than noisy:
+   `secretPath`, `tokenSecretHex` and `saltBytes` name a path, a file and a
+   length, and none of them is a secret. `secret`, `password`, `digest` and
+   `salt` on their own are. -}
+secretNames : List String
+secretNames = [
+  "password",
+  "passphrase",
+  "secret",
+  "salt",
+  "digest",
+  "credential",
+  "jwt",
+]
+
+{- | The exemption list, deliberately tiny: a site is exempt only when
+   building the string IS the point, never because the leak was judged
+   harmless.
+
+   Each row is `basename:interpolation`, so an exemption cannot travel to
+   another file — the control below injects the ledgered expression into a
+   different module and requires it to be caught there. -}
+secretInterpolationLedger : List String
+secretInterpolationLedger = ["jwt.mdk:{hs256Signature secret signingInput}"]
+
+{- | Every `\{...}` in `line`, each including its leading backslash.
+
+   `\{expr}` is Medaka's only interpolation form, so every string built out
+   of a value goes through this shape. An unterminated `\{` ends the scan:
+   no `}` occurs after it, so none occurs after any later `\{` either. -}
+interpolations : String -> List String
+interpolations line = match indexOf "\\{" line
+  None => []
+  Some i =>
+    let afterOpen = drop (i + 2) line
+    match indexOf "}" afterOpen
+      None => []
+      Some j =>
+        "\\{\{take j afterOpen}}" :: interpolations (drop (j + 1) afterOpen)
+
+-- | One violation line per string interpolation that names a secret.
+secretInterpolationHits : (String, String) -> List String
+secretInterpolationHits (path, content) =
+  secretScan path (basename path) 1 (lines content)
+
+secretScan : String -> String -> Int -> List String -> List String
+secretScan _ _ _ [] = []
+secretScan path base n (line :: rest) =
+  flatMap (leakedInterpolation path base n) (interpolations line)
+    ++ secretScan path base (n + 1) rest
+
+leakedInterpolation : String -> String -> Int -> String -> List String
+leakedInterpolation path base n expr =
+  let key = drop 1 expr
+  if anyWholeWord secretNames expr
+    && not (elem "\{base}:\{key}" secretInterpolationLedger) then
+    ["\{path}:\{intToString n}: secret interpolated into a string: \{expr}"]
+  else
+    []
+
+-- # Check 5 — no secret reaching the access log
+
+{- | The whole access-log surface: the two emitters, the pure formatter, the
+   shell trace it is built from, and the `AccessEvent` record literal, whose
+   fields are on their own lines and are therefore tracked as a block.
+
+   A secret reaching any of them reaches a line that whoever reads the
+   journal reads — a wider audience than whoever holds the account. -}
+accessLogSites : List String
+accessLogSites = [
+  "logAccess",
+  "logAccessBytes",
+  "accessLogLine",
+  "traceFor",
+  "RequestTrace",
+  "AccessEvent",
+  "StatsEvent",
+  "statsLogLine",
+  "emitStats",
+]
+
+{- | Check 4's identifiers plus `token` and `bearer`, matched
+   case-insensitively and as a SUBSTRING.
+
+   An access log is the one place a request's own Authorization material
+   would plausibly be put "for debugging", and unlike a diagnostic it is
+   written on EVERY request rather than on a failure. The substring rule is
+   stricter than check 4's whole-word one and deliberately so: the
+   identifiers actually holding these values in this tree are camelCase
+   (`sessionSecret`, `credentialDigest`, `tokenSecret`), and a whole-word
+   lowercase scan sees none of them. The width costs nothing here, because
+   the allow-list of six `AccessEvent` fields is narrow enough that no
+   legitimate argument to any site above is named after a secret — a hit is
+   a leak or a misnamed value, and both want a human. -}
+accessLogSecrets : List String
+accessLogSecrets = [
+  "password",
+  "passphrase",
+  "secret",
+  "salt",
+  "digest",
+  "credential",
+  "jwt",
+  "token",
+  "bearer",
+]
+
+{- | One violation line per access-log site that names a secret.
+
+   Unlike check 4 this grades CODE and not source text: comments are
+   stripped before matching. A doc comment that explains which values may
+   NOT reach a log line necessarily names both an access-log symbol and a
+   secret, so a text-level scan reds on the very prose that documents the
+   rule — and the first thing an author would do about that is delete the
+   explanation. -}
+accessLogHits : (String, String) -> List String
+accessLogHits (path, content) = accessScan path 1 0 False (lines content)
+
+accessScan : String -> Int -> Int -> Bool -> List String -> List String
+accessScan _ _ _ _ [] = []
+accessScan path n depth inRecord (line :: rest) =
+  let (code, depth2) = stripComments line depth
+  let opened = inRecord || opensRecord code
+  let leaks =
+    (opened || anyWholeWord accessLogSites code)
+      && anySubstring accessLogSecrets (toLower code)
+  let hits =
+    if leaks then
+      ["\{path}:\{intToString n}: a secret reaches the access log: \{code}"]
+    else
+      []
+  let stillOpen = opened && not (contains "}" code)
+  hits ++ accessScan path (n + 1) depth2 stillOpen rest
+
+-- | Whether `code` opens an `AccessEvent` or `StatsEvent` record literal.
+opensRecord : String -> Bool
+opensRecord code =
+  braceFollows "AccessEvent" code || braceFollows "StatsEvent" code
+
+-- | Whether some occurrence of `name` in `code` is followed, across spaces
+-- and tabs only, by `{`.
+braceFollows : String -> String -> Bool
+braceFollows name code = match indexOf name code
+  None => False
+  Some i =>
+    let after = drop (i + stringLength name) code
+    startsWith "{" (trimLeft after) || braceFollows name after
+
+{- | `line` with its comments removed, and the block-comment nesting depth
+   left open at its end.
+
+   The depth is threaded from line to line because a `{- ... -}` may span
+   them; a double-quoted string is tracked within the line so that `"--did"`
+   and friends do not read as a line comment. A `\` inside a string skips
+   the character after it, so an escaped quote does not close the string. -}
+stripComments : String -> Int -> (String, Int)
+stripComments line depth =
+  let cs = toChars line
+  let (kept, depth2) = stripFrom cs (arrayLength cs) 0 [] False depth
+  (fromChars (reverse kept), depth2)
+
+stripFrom : Array Char ->
+  Int ->
+  Int ->
+  List Char ->
+  Bool ->
+  Int ->
+  (List Char, Int)
+stripFrom cs n i kept inQuote depth =
+  if i >= n then
+    (kept, depth)
+  else
+    let c = arrayGetUnsafe i cs
+    if inQuote && c == '\\' then
+      stripFrom cs n (i + 2) kept True depth
+    else if inQuote then
+      stripFrom cs n (i + 1) (keeping depth c kept) (c /= '"') depth
+    else if depth == 0 && c == '"' then
+      stripFrom cs n (i + 1) (c :: kept) True depth
+    else if depth == 0 && c == '-' && charAt cs n (i + 1) == Some '-' then
+      (kept, depth)
+    else if c == '{' && charAt cs n (i + 1) == Some '-' then
+      stripFrom cs n (i + 2) kept False (depth + 1)
+    else if c == '-' && charAt cs n (i + 1) == Some '}' then
+      stripFrom cs n (i + 2) kept False (if depth > 0 then depth - 1 else 0)
+    else
+      stripFrom cs n (i + 1) (keeping depth c kept) False depth
+
+-- | The character at `i`, if `i` is within the first `n` of `cs`.
+charAt : Array Char -> Int -> Int -> Option Char
+charAt cs n i = if i < n then Some (arrayGetUnsafe i cs) else None
+
+-- | `c` prepended to `kept`, unless it is inside a block comment.
+keeping : Int -> Char -> List Char -> List Char
+keeping depth c kept = if depth == 0 then c :: kept else kept
+
+-- # Grading
+
+{- | Every violation line a check reports over a source set, or the reason
+   the set could not be read. -}
+sweep : (List (String, String) -> List String) ->
+  Result String (List (String, String)) ->
+  Result String (List String)
+sweep _ (Err e) = Err e
+sweep check (Ok sources) = Ok (check sources)
+
+-- | One file-level check lifted to a source set.
+overFiles : ((String, String) -> List String) ->
+  List (String, String) ->
+  List String
+overFiles check sources = flatMap check sources
+
+-- | Passes when the check reported no violation lines.
+expectClean : String -> Result String (List String) -> Expectation
+expectClean what (Err e) =
+  Fail "\{what}: \{e}" "no violations" "the check could not run"
+expectClean _ (Ok []) = Pass "no violations" "no violations"
+expectClean what (Ok hits) =
+  Fail
+    "\{what}:\n\{unlines (map indent hits)}"
+    "no violations"
+    "\{intToString (length hits)} violations"
+
+{- | Passes when the check reported at least one violation line — a mutation
+   control, where a clean report is the failure. -}
+expectCaught : String -> Result String (List String) -> Expectation
+expectCaught what (Err e) =
+  Fail "\{what}: \{e}" "a violation" "the check could not run"
+expectCaught what (Ok []) =
+  Fail
+    "\{what}: the injected violation was not caught"
+    "a violation"
+    "no violations"
+expectCaught _ (Ok hits) =
+  Pass "a violation" "\{intToString (length hits)} violations"
+
+indent : String -> String
+indent line = "  \{line}"
+
+-- # The real tree
+
+test "no pds/lib module imports pds/shell" =
+  expectClean
+    "real tree: pds/lib imports pds/shell"
+    (sweep (overFiles shellImportHits) libSources)
+
+test "no pds/lib export declares an effect row" =
+  expectClean
+    "real tree: pds/lib exports an effect-bearing signature"
+    (sweep (overFiles effectExportHits) libSources)
+
+test "every pds/lib export carries an explicit type signature" =
+  expectClean
+    "real tree: pds/lib export carries no type signature"
+    (sweep (overFiles unsignedExportHits) libSources)
+
+test "no secret is interpolated into a string in pds/lib or pds/serve.mdk" =
+  expectClean
+    "real tree: a secret is interpolated into a string"
+    (sweep (overFiles secretInterpolationHits) (plusEntry libSources))
+
+test "no secret reaches the access log from pds/lib or pds/serve.mdk" =
+  expectClean
+    "real tree: a secret reaches the access log"
+    (sweep (overFiles accessLogHits) (plusEntry libSources))
+
+-- The shell half of checks 4 and 5, run against the directory that
+-- actually holds every `logAccess` call site — which is also where the
+-- request's own headers are still in scope.
+
+test "no secret is interpolated into a string in pds/shell" =
+  expectClean
+    "real tree: a secret is interpolated into a string in pds/shell"
+    (sweep (overFiles secretInterpolationHits) (plusEntry shellSources))
+
+test "no secret reaches the access log in pds/shell" =
+  expectClean
+    "real tree: a secret reaches the access log in pds/shell"
+    (sweep (overFiles accessLogHits) (plusEntry shellSources))
+
+-- # Mutation controls
+--
+-- Each control appends one throwaway violation to the real content of one
+-- module and grades the check over that one file. Scanning the one
+-- mutated file rather than the whole directory is equivalent because every
+-- scanner's state resets per file and the real tree is asserted clean
+-- above, and it is sharper: a hit can only have come from the injection.
+-- Nothing is written to the source tree.
+
+repoPath : <IO> String
+repoPath = underRoot "pds/lib/repo.mdk"
+
+serverPath : <IO> String
+serverPath = underRoot "pds/shell/server.mdk"
+
+-- | `path`'s real content with `extra` appended as whole lines, as the
+-- retired script's `printf … >>` did, as a one-element source set.
+injected : String ->
+  List String ->
+  <FileRead "_"> Result String (List (String, String))
+injected path extra = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok content => Ok [
+    (path, "\{optionOr content (stripSuffix "\n" content)}\n\{unlines extra}"),
+  ]
+
+test "mutation control: an injected pds/shell import is caught" =
+  expectCaught
+    "injected shell import"
+    (sweep
+      (overFiles shellImportHits)
+      (injected repoPath ["import shell.persist.{persistSave}"]))
+
+effectProbe : List String
+effectProbe = [
+  "",
+  "export",
+  "boundaryProbeForTest : Int -> <IO> Int",
+  "boundaryProbeForTest x = x",
+]
+
+test "mutation control: an injected effect-bearing export is caught" =
+  expectCaught
+    "injected effect-bearing export"
+    (sweep (overFiles effectExportHits) (injected repoPath effectProbe))
+
+{- | The same violation one directory below a populated `pds/lib`-shaped
+   tree, which is the shape #3140 was about.
+
+   This is the only control that needs real files: it grades the WALK, and a
+   walk that stopped at the top level would see `top.mdk` and miss
+   `nested/probe.mdk`. `scratchDir` hands out a name nothing else holds, so
+   concurrent gate runs do not write over each other. -}
+nestedTree : <Exec "_", FileRead "_", FileWrite "_"> Result String String
+nestedTree = match scratchDir
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok dir =>
+    let root = "\{dir}/lib"
+    match mkdirAll "\{root}/nested"
+      Err e => Err "could not create \{root}/nested: \{e}"
+      Ok _ => match writeFile "\{root}/top.mdk" (unlines cleanProbe)
+        Err e => Err "could not write \{root}/top.mdk: \{e}"
+        Ok _ => match writeFile "\{root}/nested/probe.mdk" (unlines effectProbe)
+          Err e => Err "could not write \{root}/nested/probe.mdk: \{e}"
+          Ok _ => Ok root
+
+cleanProbe : List String
+cleanProbe = ["export", "topProbeForTest : Int -> Int", "topProbeForTest x = x"]
+
+nestedSources : <Exec "_", FileRead "_", FileWrite "_"> Result String (List (String, String))
+nestedSources = match nestedTree
+  Err e => Err e
+  Ok root => sourcesUnder root
+
+test "mutation control: an effect-bearing export in a nested directory is caught" =
+  expectCaught
+    "injected nested effect-bearing export"
+    (sweep (overFiles effectExportHits) nestedSources)
+
+{- | An unannotated export whose effect row the typechecker would infer.
+
+   This is exactly what the effect check cannot see, which is why the
+   signature check exists — so both halves are asserted: the effect check
+   must MISS it and the signature check must catch it. -}
+unsignedProbe : List String
+unsignedProbe = [
+  "",
+  "export",
+  "boundaryUnsignedProbeForTest x = println x",
+]
+
+unsignedMutant : <FileRead "_", IO> Result String (List (String, String))
+unsignedMutant = injected repoPath unsignedProbe
+
+test "mutation control: the effect check misses an unannotated export" =
+  expectClean
+    "the effect check was expected to MISS an unannotated export"
+    (sweep (overFiles effectExportHits) unsignedMutant)
+
+test "mutation control: an injected unannotated export is caught" =
+  expectCaught
+    "injected unannotated effect-bearing export"
+    (sweep (overFiles unsignedExportHits) unsignedMutant)
+
+-- A secret interpolated into a diagnostic string — the shape that turns an
+-- error message into a credential disclosure.
+test "mutation control: an injected secret interpolation is caught" =
+  expectCaught
+    "injected secret interpolation"
+    (sweep
+      (overFiles secretInterpolationHits)
+      (injected repoPath [
+        "",
+        "secretProbeForTest : String -> String",
+        "secretProbeForTest password = \"login failed for \\{password}\"",
+      ]))
+
+-- The ledger must not be a blanket amnesty. The one ledgered expression is
+-- exempt in jwt.mdk, where building that string is the whole job; the same
+-- expression anywhere else is still a violation.
+test "mutation control: the ledger is per-file, not a blanket exemption" =
+  expectCaught
+    "the ledger exempted a site it does not name"
+    (sweep
+      (overFiles secretInterpolationHits)
+      (injected repoPath [
+        "",
+        "ledgerProbeForTest : String -> String",
+        "ledgerProbeForTest secret = \"\\{hs256Signature secret signingInput}\"",
+      ]))
+
+{- | A secret handed to the access log as an ARGUMENT.
+
+   This is the shape the interpolation check cannot see — there is no
+   secret-named `\{...}` anywhere, because the formatter interpolates its
+   own field names — so both halves are asserted, exactly as the
+   signature/effect pair above. -}
+argumentProbe : List String
+argumentProbe = [
+  "",
+  "accessLogProbeForTest : String -> String",
+  "accessLogProbeForTest password = accessLogLine password",
+]
+
+argumentMutant : <FileRead "_", IO> Result String (List (String, String))
+argumentMutant = injected repoPath argumentProbe
+
+test "mutation control: the interpolation check misses a secret passed as an argument" =
+  expectClean
+    "the interpolation check was expected to MISS a secret passed as an argument"
+    (sweep (overFiles secretInterpolationHits) argumentMutant)
+
+test "mutation control: a secret passed to the access log is caught" =
+  expectCaught
+    "a secret passed to the access log"
+    (sweep (overFiles accessLogHits) argumentMutant)
+
+{- | The same leak inside an `AccessEvent` record literal, where the
+   offending field is on a DIFFERENT line from the constructor.
+
+   A line-at-a-time scan would report this clean, which is why the check
+   tracks the block. -}
+test "mutation control: a secret in an AccessEvent record field is caught" =
+  expectCaught
+    "a secret in an AccessEvent field"
+    (sweep
+      (overFiles accessLogHits)
+      (injected repoPath [
+        "",
+        "accessRecordProbeForTest : String -> AccessEvent",
+        "accessRecordProbeForTest sessionSecret =",
+        "  AccessEvent {",
+        "    method = \"GET\",",
+        "    path = \"/xrpc/probe\",",
+        "    status = 200,",
+        "    responseBytes = 0,",
+        "    durationMillis = 0,",
+        "    client = sessionSecret,",
+        "  }",
+      ]))
+
+{- | The same leak at a REAL call site, in `pds/shell/server.mdk`.
+
+   The controls above grade the check over a `pds/lib` module; this one
+   grades it over the file that actually holds every `logAccess` call, so a
+   scan that silently stopped reaching `pds/shell` — the one arm no other
+   control covers — reds here instead of going quiet. -}
+realCallSite : String
+realCallSite = "logAccessBytes trace responseBytes"
+
+serverContent : <FileRead "_", IO> Result String String
+serverContent = match readFile serverPath
+  Err e => Err "could not read \{serverPath}: \{e}"
+  Ok content => Ok content
+
+test "mutation control: the pds/shell call site this control mutates is still there" = expectClean
+  "the pds/shell call site this control mutates has moved — repoint it"
+  (match serverContent
+    Err e => Err e
+    Ok content =>
+      if contains realCallSite content then
+        Ok []
+      else
+        Ok ["\{serverPath}: no `\{realCallSite}` call site"])
+
+test "mutation control: a secret at a real pds/shell call site is caught" = expectCaught
+  "a secret at a real pds/shell access-log call site"
+  (match serverContent
+    Err e => Err e
+    Ok content =>
+      Ok
+        (accessLogHits (
+          serverPath,
+          replaceAll realCallSite "logAccessBytes trace sessionSecret" content,
+        )))
+
+-- # Non-vacuity
+
+{- | How many `.mdk` files the three source sets actually reached.
+
+   `fixtureFiles` already fails an empty directory, but a walk that reached
+   one file out of thirty-five would report every check clean. The floor is
+   the count at the time of writing, less a small margin for a module being
+   deleted. -}
+sourceCount : <FileRead "_", IO> Result String Int
+sourceCount = match plusEntry libSources
+  Err e => Err e
+  Ok lib => map (shell => length lib + length shell) shellSources
+
+fileFloor : Int
+fileFloor = 40
+
+test "lib_boundary scanned at least FILE_FLOOR=40 source files" =
+  match sourceCount
+    Err e => Fail e ">= \{intToString fileFloor} files" "the walk failed"
+    Ok n =>
+      if n >= fileFloor then
+        Pass ">= \{intToString fileFloor} files" "\{intToString n} files"
+      else
+        Fail
+          "only \{intToString n} files were scanned, expected >= \{intToString fileFloor} (vacuous-green guard)"
+          ">= \{intToString fileFloor} files"
+          "\{intToString n} files"

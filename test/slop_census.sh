@@ -58,7 +58,7 @@ comment-register-census|test/comment_register_census.sh|0|sh test/comment_regist
 arch-census|test/arch_census.sh|0|sh test/arch_census.sh
 fmt-clean-census|test/fmt_clean_census.sh|1|sh test/fmt_clean_census.sh
 cli-conformance-census|test/cli_conformance_census.sh|1|sh test/cli_conformance_census.sh
-rule-stdlib-reimpl|compiler/tools/lint.mdk|1|"$MEDAKA" lint --only=rule-stdlib-reimpl compiler stdlib
+rule-stdlib-reimpl|compiler/tools/lint.mdk|1|"$MEDAKA" lint --only=rule-stdlib-reimpl compiler stdlib pds
 diag-census (leg 8, #2446)|test/diag_census.sh|1|sh test/diag_census.sh
 doc-disposition (#2300)|test/doc_census.sh|0|sh test/doc_census.sh
 doctest-shape (leg 5)|test/doctest_shape_census.sh|0|sh test/doctest_shape_census.sh

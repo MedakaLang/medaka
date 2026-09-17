@@ -94,10 +94,10 @@ cd "$ROOT" || exit 1
 
 IFS='
 '
-files="$(git -C "$ROOT" ls-files -- 'compiler/*.mdk' 'stdlib/*.mdk')"
+files="$(git -C "$ROOT" ls-files -- 'compiler/*.mdk' 'stdlib/*.mdk' 'pds/*.mdk')"
 
 if [ -z "$files" ]; then
-  echo "comment_register_census: matched ZERO .mdk files under compiler/ or stdlib/ — harness bug, refusing to report" >&2
+  echo "comment_register_census: matched ZERO .mdk files under compiler/, stdlib/ or pds/ — harness bug, refusing to report" >&2
   exit 1
 fi
 
@@ -294,7 +294,7 @@ if [ "${1:-}" = "--check" ]; then
     targets=""
     for f in "$@"; do
       case "$f" in
-        compiler/*.mdk | stdlib/*.mdk)
+        compiler/*.mdk | stdlib/*.mdk | pds/*.mdk)
           if [ -z "$targets" ]; then
             targets="$f"
           else
