@@ -148,6 +148,7 @@ request_body:request_body
 max_size:max_size
 timeout:(read_timeout|write_timeout|dial_timeout|timeouts)
 log:^[ \t]*log[ \t]*\{
+log-to-journal:^[ \t]*output stderr$
 X-Forwarded-For:header_up X-Forwarded-For
 '
 
@@ -207,6 +208,7 @@ upstream-relay:reverse_proxy https://relay\.example\.com
 upstream-chat:reverse_proxy https://api\.bsky\.chat
 timeout:(read_timeout|write_timeout|dial_timeout|timeouts)
 log:^[ \t]*log[ \t]*\{
+log-to-journal:^[ \t]*output stderr$
 '
 
 # The allow-list property, not a directive roster: a `reverse_proxy` whose
@@ -541,6 +543,21 @@ if hits=$(check_directives "$SCRATCH_CADDY" "$CADDY_DIRECTIVES") \
   fail 'mutation control: a stripped X-Forwarded-For overwrite was not caught'
 fi
 echo 'mutation control: a stripped X-Forwarded-For overwrite correctly caught'
+rm -f "$SCRATCH_CADDY"
+
+# Violation 14: send the inbound access log back to a file. The `log` block is
+# still present, so the roster's own `log` entry still passes -- which is why
+# the DESTINATION needs its own entry. E7 asks for the Caddy log to be readable
+# BESIDE the PDS log, and a file is not beside a journal; it is a second tool
+# and a manual timestamp join during an incident (ruling, Val, 2026-09-17).
+SCRATCH_CADDY="$WORK/Caddyfile"
+sed 's#^[[:space:]]*output stderr$#\t\toutput file /var/log/caddy/pds-access.log#' \
+  "$CADDYFILE" >"$SCRATCH_CADDY"
+if hits=$(check_directives "$SCRATCH_CADDY" "$CADDY_DIRECTIVES") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: an access log redirected away from the journal was not caught'
+fi
+echo 'mutation control: an access log redirected away from the journal correctly caught'
 rm -f "$SCRATCH_CADDY"
 
 # Confirm the real tree is untouched and still green after every mutation.

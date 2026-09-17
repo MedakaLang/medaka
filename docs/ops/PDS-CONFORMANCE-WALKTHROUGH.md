@@ -138,7 +138,16 @@ on the one before.
 | **B6** | Open notifications | The second account's follow and any reply appear | `GET /xrpc/app.bsky.notification.listNotifications` → 200, **proxied**. Not in the local registry, so a 400 here means the audience set or the egress proxy, and a 404 means the method axis refused it. |
 | **B7** | Send a DM to the second account | Message sends and shows as delivered | A `chat.bsky.convo.*` route → 200, **proxied to the chat audience**. Needs the second `--proxy-audience` row; see §5. |
 | **B8** | Receive the second account's reply DM | Message arrives | Same namespace, same audience |
-| **B9** | Log out | Session ends, app returns to the login screen | `POST /xrpc/com.atproto.server.deleteSession` → 200 |
+| **B9** | Log out | Session ends, app returns to the login screen | **Nothing.** Measured 2026-09-17: the official app's sign-out drops its tokens client-side and never calls `com.atproto.server.deleteSession` — zero calls across the life of the deployment. Expect **no** new access-log line. A line here would mean the app changed, which is worth knowing |
+
+> **B9's original prediction was wrong, and that is recorded rather than
+> quietly corrected.** This row read *"`POST … deleteSession` → 200"* until a
+> run measured that the app never sends it. The route exists, is correct, and
+> is gated (`pds/test/session_routes_test.mdk`, 32/32 including rotation and
+> double-delete) — it is simply not what this client does. The consequence —
+> a session the user believes they ended stays open server-side until it
+> expires or a restart clears it — is **#3107**, and it stops being cheap the
+> moment the soak stops restarting the server.
 
 **After B9, log back in.** The walkthrough is not finished at logout: Part C
 needs a live session, and a login that fails *after* a clean logout is a

@@ -206,6 +206,30 @@ One command repoints the symlink; the restart is what makes systemd re-exec
 against it. Nothing under `/opt/pds/releases/` needs deleting to roll back —
 old stamps stay on disk as the rollback targets until an operator prunes them.
 
+🚨 **`systemctl is-active` is NOT a readiness signal, and checking too early
+will tell you a working rollback failed.** The unit is `Type=simple`, so
+systemd reports `active` the instant it forks. This server needs **~4–5
+seconds** more before it is listening: configuration admission, the
+data-directory lock (which reclaims the previous holder's generation — the
+journal says `data directory lock: reclaimed after 3s with no heartbeat`), and
+event-log recovery all precede the bind. Probe in that window and every check
+fails against a socket nobody is listening on yet.
+
+That is not hypothetical: the first run of the D3 rollback rehearsal did
+exactly this and recorded a correct rollback as broken (`#3106`). Rollback is
+what you reach for when something is *already* wrong, so this is the worst
+place to draw a false conclusion.
+
+Wait for the server's own readiness line, which is the same signal step 5's
+genesis run already tells you to watch for:
+
+```sh
+t0=$(date +%s); systemctl restart pds
+until journalctl -u pds --since "@$t0" | grep -q 'serve: listening on'; do sleep 1; done
+```
+
+Then run the provenance match — not before.
+
 ## Observability: version, health, and the access log
 
 Three things this server now reports on its own, none of them requiring a
