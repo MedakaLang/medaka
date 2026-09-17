@@ -2195,6 +2195,34 @@ once) is the architecture, the file boundary is not.
 - **The interpreter stays** — as a refinement consuming the one elaboration.
   Retiring it is an owner-only decision this proposal does not need.
 
+**A-3.5c — the `CE` reader flip for graded-impl slot kinds, and why it carries no
+re-keying delta.** `checkGradedImplTys` (`compiler/types/typecheck.mdk`) used to read
+`lookupReg (ifaceSlotKey o iface i) perRun.ifaceParamKindsRef.value` — a per-run assoc
+list carried across modules by `crossRun.universeIfaceParamKinds`, one of the tables
+`loadDataUniverse`/`storeDataUniverse` marshalled in lockstep. It now reads
+`ceSlotKindsAt`, the whole-graph `CE` filtered to the reading module's ordinal prefix
+through `ceLookupAt`, the one `CE` read accessor and the one place `declEnvVisibleAt`
+is applied to `CE`. This move carries no #1258-class acceptance delta: the KEY does
+not change (`ifaceSlotKey` was already `regKeyTabAt (ifaceTabKey o iface) i` since
+A-2.4, and `ceRowKey` is the same `regKeyOfTab (ifaceTabKey o name)` with the slot
+supplied positionally), and the CONTENT does not change (`ceRowParamKinds` is the
+identical pure per-slot computation the retired writer performed). What moves is only
+the population's provenance — a marshalled prefix becomes an ordinal-filtered one —
+and the two agree because ordinals are assigned in the loader's dependency-first
+order, the same order the accumulator was grown in. The Flat arm is unaffected: its
+own single-module `CE` is built from the same decl list `registerAllData` walks.
+
+The re-key drains #1257: two same-named interfaces, one graded and one not, in
+unrelated modules, used to be judged against whichever registered LAST — import order
+selected which of the two got checked. What this class of defect (also #1044, #1047,
+and the first cut of the graded-arc design itself) has in common is a flat table keyed
+by a bare `String` name and populated across module boundaries: last-write-wins with a
+silent loss. Renaming to a namespace merely less likely to clash is not a fix — #1044
+was created by relocating exactly this defect to a rarer namespace — so every seam
+that turns a method signature into a `Mono` takes its scope from the declaration
+(`declGradedScope`) or from the resolution result that produced the signature
+(`ceMethodTyAt`), never from a separate slot-kind projection.
+
 ---
 
 ## 6. The migration DAG
@@ -3457,13 +3485,31 @@ reach. Run the three commands rather than trusting this table's membership.
 | `buildImplTable` / `implEntryOf` / `findImplEntry` (`ImplBuckets`, 2 build sites: `:11369`, `:24576`) | per-run bucket table keyed by bare iface+tag, consumed by `entail`/`routeOf` | **DEFERRED → #1622 (OPEN).** §2 K's *"K's IE is the single environment both must read"* consolidation stays owed — verified still live: `buildImplTable`/`implEntryOf`/`findImplEntry` are unchanged in `compiler/types/typecheck.mdk` (`:20196-20215`, `:22050-22051`). B-2 (#1113) closed 2026-08-16 without moving this reader; #1622 documents the exact obstruction (`selectReqImpl`'s `iface == ""` arm reads `ImplBuckets` by first-match over a different population/rule/goal-vector than the `IE`-backed `iface != ""` arm, so collapsing them unguarded is a semantics change, not a refactor) |
 | **`implKeyOf` and its per-impl dict-registry family** — `declImplEntries`/`declImplIfaceIdRow` (`eval.mdk:305`, `:2001`), `lowerDeclImpl` → `CImplEntry`'s `key` field (`compiler/ir/core_ir_lower.mdk:1293-1313`, `:1221`), `distinctImplKeys` (`compiler/backend/wasm_emit.mdk:4066-4070`) | the **engine-side** per-impl dict-cell registry: a **bare-iface-name** key rendered into a runtime cell/symbol name, consumed by all three engines | **NOT `IE` — consolidated within B-2's own phases, #1113 (CLOSED 2026-08-16) does not gate it further.** `implKeyOf` itself is **deleted** (`B-2.2-e`, `compiler/eval/eval.mdk:543-548`): its own doc-comment records the fold — the mint now lives once, in `compiler/types/route_key.mdk`'s `implRouteKeyWord`, which both `eval.mdk`'s callers (`declImplIfaceIdRow`, `implMethodEntry`) and typecheck's `implKeyTc` (`typecheck.mdk:20415-20416`, calling `implRouteKeyWord` directly) now share — that shared call site, not a separate `keyEntryOf`/`KeyBuckets` hop (both deleted, see the `KeyBuckets` row above — this row's prior citation of them was stale), is what keeps the two byte-identical. It remains a **route-word** registry, not a declaration environment, and identity-keying it re-runs #1317's measured T1 failure (`typecheck.mdk:21411-21432`, where re-keying the *counting* scans alone reproduced #1277's S0 — and the same block records why the question is *inherently* spelling-scoped: three engines re-derive the same uniqueness test from a bare `String` tag). `Route` is an orthogonal concept, not a routing destination. ⚠️ Do not confuse `implKeyOf`'s old home with wasm's *homonym* at `wasm_emit.mdk:4068` (`CImplEntry -> List (String, String)`, a different function that merely projects the key this one minted) |
 | `cohCollectImpls` / `cohCollectModuleImpls` / `cohImplsOf` (`:12590-12591`) / `cohImplsOfMid` (`:12612-12616`) / `CohImpl` / `coherenceUserDecls` | user-decls-only list, class identity a bare `String` (`:12588`, compared at `:12909`) | ✅ **LANDED at A-3.7 (#1559)**, with one carve-out. `CohImpl`'s interface half is an `IfaceRef` compared by `cohSameIface` (`sameTyConHead`), and both sweeps now read `IE`: `checkCoherence` takes `cohRowsOwnedBy cur hasPrelude`, `globalCoherenceConflict` takes `cohRowsOf True`, both projected through `cohImplOfRow` — which is where `InstRef` gets its FIRST judgment reader (`instRefMid`). The four decl-walking adapters (`cohCollectImpls`/`cohCollectModuleImpls`/`cohImplsOf`/`cohImplsOfMid`) are **deleted**. ⚠️ **`coherenceUserDecls` does NOT retire** and A-3.7 shrinks `driver_allowed` by **zero** rows: on the Flat arm there is no ordinal-0 prelude row to filter (`flatImplEnvOf` seats its one user module at ordinal 0), so that field *is* the Flat arm's prelude carve-out. Retiring it needs the flat path to gain a prelude node (§7.1 U1 / E-4) |
-| `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` | per-decl scans; the Flat arm scanned a decl list by BARE NAME (`ifaceRequiredMethods`), the Map arm read `universeIfaceRequiredRef` | ✅ **LANDED at A-3.5a (#1557).** The two checkers are now ONE (`checkImplCompletenessMap`, kept under its historical `Map` name to avoid stranding this citation and three others), reading `CE` at the reading module's ordinal via `ceRequiredAt` → `ceLookupAt`. Retires `universeIfaceRequiredRef` + its writer `insertIfaceRequired`; `cross_allowed` **24 → 23**, derived on this unit's own base — do not quote that pair elsewhere without re-deriving (`sh test/registry_keying_ratchet.sh` prints it). ⚠️ **NOT byte-identical, and the delta is confined to the FLAT arm**: the Module arm's key does not move (`regKeyOfTab (ifaceTabKey implOrigin iface)` on both sides, and `classEnvRowsOf` mints `CeRow`'s key from the same `ifaceTabKey ifaceOrigin name`), so that arm is a population/lifetime move; the Flat arm's bare first-match scan → identity lookup **is** the re-key, per the owner ruling on #1557 OWED 1 |
+| `implCompletenessMsgsOf` / `implCompletenessMsgsOfMap` | per-decl scans; the Flat arm scanned a decl list by BARE NAME (`ifaceRequiredMethods`), the Map arm read `universeIfaceRequiredRef` | ✅ **LANDED at A-3.5a (#1557).** The two checkers are now ONE (`checkImplCompletenessMap`, kept under its historical `Map` name to avoid stranding this citation and three others), reading `CE` at the reading module's ordinal via `ceRequiredAt` → `ceLookupAt`. Retires `universeIfaceRequiredRef` + its writer `insertIfaceRequired`; `cross_allowed` **24 → 23**, derived on this unit's own base — do not quote that pair elsewhere without re-deriving (`sh test/registry_keying_ratchet.sh` prints it). ⚠️ **NOT byte-identical, and the delta is confined to the FLAT arm**: the Module arm's key does not move (`regKeyOfTab (ifaceTabKey implOrigin iface)` on both sides, and `classEnvRowsOf` mints `CeRow`'s key from the same `ifaceTabKey ifaceOrigin name`), so that arm is a population/lifetime move; the Flat arm's bare first-match scan → identity lookup **is** the re-key, per the owner ruling on #1557 OWED 1. **The bare-name key this replaced was the exact defect #1258 reproduced**: interface names are not globally unique across modules (only within one), so two unrelated modules each declaring `Same` shared one bare-name registry key, and whichever module registered last supplied the required-method list checked against BOTH — an impl that completely implemented its own `Same` was rejected as missing the other module's method (`'impl Same ET' is missing method 'bar'`, exit 1, on a program whose only `Same` in scope declares `foo`). #1111 A-2.4 fixed the key to a `RegKey` carrying the interface's identity (`ifaceTabKey`, write side from `DInterface.ifaceOrigin`, read side from the naming `DImpl`'s `implOrigin`) before A-3.5a moved the lookup's source onto `CE` |
 | `superImplMsgsOf` / `implMatchesSuper` (`:14193-14251`) | scan of `allDecls` for a super's impl | **DEFERRED → A-3.5** |
 | `checkInterfaceCycles` / `ifaceDfsCycle*` · `checkPhantomMethods` · `checkGradedImplHeads` / `checkGradedImplTys` | bare-name decl scans (cycles) · per-decl scan (phantom) · `ifaceParamKindsRef` lookup (kinds) | ✅ **LANDED at A-3.5c (#1557).** All three read `CE` at the reading module's ordinal — `ceRowsVisibleAt` (cycles, with super edges now followed by IDENTITY), `ceRowsOwnedBy` (phantom), `ceSlotKindsAt` (kinds). Retires `universeIfaceParamKinds` + `ifaceParamKindsRef`; `cross_allowed` **27 → 26** — this row said `28 → 27`, which is the PRIOR unit's transition (#1588, A-3.2b residual 1); re-derived 2026-08-12 by counting the `cross_allowed` allowlist at each merge commit (#1588 `257d7e79` 28→27, #1592 `6775679a` 27→26, #1590 `dc3e8bd5` 26→24; live value 24). NOT byte-identical, by owner ruling — see §9.9 |
 | `implTysIfMatch` · `implHeadTagForIface` · `implHeadGround` · `implHeadParametric` · `declMethodNamesOf` · `argImplRequiresRoutesRecD`'s decl walk | per-call decl-list scans, no ref — invisible to every prefix grep | **DEFERRED**: they become `IE` readers where the read is authoritative (A-3.5/3.6), not here |
 | `superDeclsRef`, `argDispatchIdxRef`, `methodDispatchIdxRef` | `DriverState`, interface/method-side | **NOT `IE`** — CE-side or RLocal-site channels (#1351); A-3.3 excludes the latter two deliberately |
 | `EmitInput.methodIfaces` / `methodIfaceIndex` / `methodIfaceIdIndex` (`compiler/backend/llvm_emit.mdk:781-783`), read via `methodIfaceOfInput`/`methodArityOfInput`/`methodArityOfIface` (`:480-513`) by both backends | emit-side method→(iface, arity) table | **NOT `IE`** — #1112 §1 row 7. B-2 (#1113) is CLOSED and is no longer this row's routing. ⚠️ This row named `methodIfaceTableRef`/`methodIfaceIndexRef` in `compiler/backend/emit_support.mdk:449-464` until 2026-08-26; **neither symbol has existed since the `EmitInput` boundary landed** (`grep -rn 'methodIfaceTableRef' compiler/` → no hits), and `emit_support.mdk:449-464` holds `lazyGlobalNames`/`isDictParamName`, unrelated. This row's question was resolved by the **`emit-dispatch-identity`** sprint (#1810 / #1852, both CLOSED) — verified: `EmitInput` now carries both `methodIfaceIndex` (bare-name) AND `methodIfaceIdIndex` (an `OrdMap Int`, identity-keyed by iface id — `llvm_emit.mdk:783`, `:513`), the identity-keyed table this row was asking for |
 | `ifaceImplHeadsRef` / `ifaceIdsAtTag` / `defaultOwnedBy` / `narrowDefaults` / `CImplDefault` (`compiler/ir/core_ir_lower.mdk`, both emitters), `defaultCellName` cells (`compiler/eval/eval.mdk`) | the default-arm registry and its selector | **NOT `IE`, BY CONSTRAINT** (§9.3) — **#1265 (OPEN)**, not B-2/#1113 (CLOSED). Verified: #1265's own repro names exactly these symbols (`CImplDefault`, `ifaceIdsAtTag`, `defaultOwnedBy`) — two different interfaces sharing a method name at one receiver tag both pass `defaultOwnedBy`, and the `_ => Some fallback` arm first-matches, surviving on all three engines |
+
+**The three selection legs above — CHECKER (`concreteReqMatchByIface`), ROUTER
+(`entailInst`'s `EKNestedTop` arm), and METHOD-keyed (`implDictRoutesForRow` /
+`argImplDictRoutesForEncl`) — are coupled and must move onto `IE` together.**
+Measured (DECISIONS.md RUN-B-023): repointing only the CHECKER and ROUTER legs took
+#1564's fixture from a loud located reject to `check` exit 0 with a SEGFAULTING
+binary (139) — the checker discharged the `requires` so the impl gained a dict param,
+while the METHOD-keyed element-route leg still selected off the prefix table and
+passed none. §10.3a details the SA-4c instance of this same failure and the
+`ieCountHeadByMethod` guard it left behind. DICT §11 / §6 *uniform resolution*
+forbids a second min⊑ selector, so every entry point funnels through the same
+`pickMostSpecificEntry`, via `keyEntryOfRow`'s projection into `KeyEntry` — the same
+field mapping the deleted `keyEntryOf` used (`headTyconTy` head, `implKeyTc` key,
+`tys` as `itys`), with `instRefSeq` as the per-row ordinal in place of
+`bucketKeyEntriesFrom`'s restarting-per-module one. `instRefSeq` is a whole-graph
+running counter that `ieFileRowByHead` appends to, so every `ieHeadRows` bucket is
+ascending by construction and the tie-break at a no-unique-minimum goal is
+graph-global declaration order.
 
 ### 9.7 `IE` is a program-global table: naming its key's scope, and proving it
 
@@ -3732,6 +3778,60 @@ comparing `irName`, and each would change behaviour if re-keyed:
 - the **routing** goal (`pushDictApp`'s iface component, `resolveDictApps`) — a route word
   against the spelling-keyed `KeyBuckets`, kept that way by #1317 T1 / the closed S0 #1277;
 - `groupConstraintMonosRef`, whose only reader compares interface names.
+
+### 10.3a The method-keyed route word's prefix-vs-graph skew (why it is taken graph-globally)
+
+`B-2.1-b2` moved the three SELECTION legs onto the graph-global `IE` and left the
+method-keyed ROUTE WORD on the topological prefix table, by design (AM-1). That
+residual was not a naming skew, it was a MISCOMPILE:
+
+`test/diff_compiler_check_cli_modules.sh`'s `SA-4c` program — `impl Tag (Wrap a)
+requires Tag a` plus the more specific `impl Tag (Wrap Int)`, both in a module the
+goal's own module does not import, the goal ground at `Tag (Wrap Int)` — gave `check`
+exit 0 (human and `--json`), `build` exit 0, and a built binary at 139. Reading off
+`build --keep-ir`: `define @mdk_impl_Tag__Wrap_a___tagOf(i64 %arg0, i64 %arg1)` is
+arity 2 (its `requires` dict), `@mdk_impl_Tag__Wrap_Int___tagOf` is arity 1, and the
+site emitted `call @mdk_impl_Tag__Wrap_a___tagOf(i64 %t2)` — an arity-2 call with one
+argument, so the value cell lands in the dict slot and is dereferenced: wrong impl and
+wrong arity.
+
+The mechanism was a count taken twice over two populations: the prefix table at the
+goal's module held no `Wrap`-headed impl, so the collision test was False and the bare
+head word `Wrap` was stamped; the emitter counts the whole program, finds two impls at
+that head, and resolves the bare word by declaration order to the general one. In the
+accepting import order the same module's prefix did contain both, the test was True,
+and the canonical key of the min⊑ winner was stamped — which is why the discriminator
+was the import order and nothing else.
+
+`B-2.1-f` made that state a loud located reject (`T-ROUTE-WORD-AMBIGUOUS`) rather than
+a segfault, on the standing rule that a fix making a defect quieter is a severity
+increase. `B-2.1-g` then did the real fix — `keyForSite` selects and counts over the
+same graph-global `bodyImplEnvRef` — so the two counts became one count and the skew
+the guard reported became unreachable. `B-2.1-d` deleted the guard with the rest of the
+prefix-table read side, which it was not separable from (it read `headCollides` →
+`countHead` → `bucketOfHead`). That guard never covered #1578: #1578 is
+`residualPredsOf`'s no-match arm, named in `T-REQUIRES-UNROUTED`'s row and not in
+`T-ROUTE-WORD-AMBIGUOUS`'s; it was measured REPRO both with the guard live and with it
+dead, so retiring it cost #1578 nothing. Its `T-ROUTE-WORD-AMBIGUOUS` row in
+`compiler/DIAGNOSTIC-CODES-DESIGN.md` is marked RETIRED rather than removed.
+
+The unsafe state was only *prefix says unique → stamp a bare word* while *the graph
+says the word names two or more impls*. A program whose prefix and graph counts are
+0-vs-1, 1-vs-1, 2-vs-2 or 2-vs-3 was untouched — which is what kept #1564, #1599 and
+#1072 drained across `f` and `g`. Per-issue impl counts do not follow from that
+sentence alone: `f`'s row claimed #1564's and #1599's programs each declare one impl at
+the head, and #1599's declares `impl Show2 Box` in both `gen.mdk` and `spec.mdk`. The
+guard is gone, so the claim no longer gates anything; the lesson is that the reasoning
+was never re-derived.
+
+`ieCountHeadByMethod` (`compiler/types/typecheck.mdk`) is the argument against
+re-splitting this decision: do not re-derive this count in the obligation channel. That
+channel is keyed by INTERFACE over a different substrate (`residualUnivRef`, the
+universe projected at a module's ordinal), where the route word is keyed by METHOD
+NAME — an impl inheriting the method via a DEFAULT is in one population and not the
+other, so a second selector there would disagree with the first. DICT §11 forbids
+exactly that, and RUN-B-023 / B-2.1-c each produced an S0 by splitting one decision
+across two reads. One substrate, one decision.
 
 ### 10.4 The bare compatibility leg: CORRECTED drain condition (superseded by §10.7)
 
