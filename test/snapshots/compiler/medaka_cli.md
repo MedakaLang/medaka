@@ -1,5 +1,5 @@
 # META
-source_lines=4325
+source_lines=4282
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -167,6 +167,10 @@ import driver.diagnostics.{
   cjFixJson,
   mkDiag,
   checkJsonFile,
+  checkJsonFileParts,
+  CheckJson(..),
+  ppCheckJson,
+  cjFoldIntoFile,
   readFileSafe,
   diagIsError,
   diagIsWarn,
@@ -198,9 +202,6 @@ import json.{
   jArray,
   stringify,
 }
--- Module-qualified alias, alongside the selective import above: `json.parse`
--- would otherwise collide with `frontend.parser.parse`, already bound bare.
-import json as Json2
 import types.typecheck.{
   elaborateModules,
   resetTypeErrorsSticky,
@@ -926,7 +927,7 @@ locatedProjectDiags allowInternal trusted target roots rsrc csrc =
 -- project-root prefix from a triple's `file` so an imported module resolved
 -- through the absolute `stdlibDir` root doesn't leak the worktree layout into
 -- the envelope, matching `check --json`'s own multi-module normalization
--- (diagnostics.mdk's `checkJsonFile`'s multi-module arm; #2798 review S2).
+-- (diagnostics.mdk's `checkJsonFileParts`, ~:2478-2482; #2798 review S2).
 relDiagTriple : String ->
   (String, String, List Diag) ->
   (String, String, List Diag)
@@ -1415,71 +1416,14 @@ cjBuildFailedJson target msg = cjAllToJson [
   (target, "", [Diag SevError "R-BUILD-FAILED" msg None None None]),
 ]
 
--- #2874: fold build-STAGE notes (a failed `--keep-ir` copy, #2243) into an
--- already-rendered JSON envelope STRING — the emit child now owns the
--- graph's only typecheck, so this process no longer runs its own pass over
--- the graph to build a structured value to fold into directly; it only has
--- the child's rendered text. The common case
--- (`notes == []`, every build without a `--keep-ir` failure) returns
--- `envelopeText` untouched — no re-parse. The rare case re-parses the
--- envelope generically, appends the notes' diagnostics into the entry file's
--- `diagnostics` array, and re-serializes. An envelope this process itself
--- just rendered always re-parses; a parse failure degrades to the
--- unmodified text rather than losing the whole build's diagnostics.
--- `entryKeys` carries BOTH spellings the child may have used for the entry's
--- own path — verbatim (single-module, `checkJsonSingleParts` parity) or
--- root-relative (multi-module, `relDiagPath`) — since the parent does not
--- reload the graph just to know which arm the child took.
-cjFoldNotesIntoText : List String -> List Diag -> String -> String
-cjFoldNotesIntoText _ [] envelopeText = envelopeText
-cjFoldNotesIntoText entryKeys notes envelopeText =
-  match Json2.parse envelopeText
-    Err _ => envelopeText
-    Ok j => stringify (cjInjectNotesJson entryKeys notes j)
-
-cjInjectNotesJson : List String -> List Diag -> Json -> Json
-cjInjectNotesJson entryKeys notes (JObject pairs) =
-  jObject (map (cjInjectField entryKeys notes) (toList pairs))
-cjInjectNotesJson _ _ j = j
-
-cjInjectField : List String -> List Diag -> (String, Json) -> (String, Json)
-cjInjectField entryKeys notes ("files", JArray files) =
-  ("files", jArray (map (cjInjectFile entryKeys notes) (toList files)))
-cjInjectField _ _ kv = kv
-
-cjInjectFile : List String -> List Diag -> Json -> Json
-cjInjectFile entryKeys notes (JObject fpairs) =
-  if cjIsEntryFile entryKeys (toList fpairs) then
-    JObject (arrayFromList (map (cjInjectDiags notes) (toList fpairs)))
-  else
-    JObject fpairs
-cjInjectFile _ _ j = j
-
-cjIsEntryFile : List String -> List (String, Json) -> Bool
-cjIsEntryFile entryKeys fpairs = match lookupAssoc "file" fpairs
-  Some (JString f) => contains f entryKeys
-  _ => False
-
-cjInjectDiags : List Diag -> (String, Json) -> (String, Json)
-cjInjectDiags notes ("diagnostics", JArray ds) =
-  ("diagnostics", jArray (toList ds ++ map (d => cjDiagnostic "" "" d) notes))
-cjInjectDiags _ kv = kv
-
--- `medaka build --json`: the FULL diagnostic verdict now comes from the emit
--- child's own envelope (ruling 3 — the child is the build's only typecheck,
--- #2874), not from a parent-side re-typecheck of the same graph (this
--- function used to run one before this change). `quietEmitStderr = True`
--- tells `runBuild` to render that
--- envelope on the child's stderr (`--json`, entry_support.mdk's
--- `driveModulesLocated`) instead of human lines, and to carry it back on
--- `rep.emitterStderr` on the clean/warnings-only path (`rep.status` on the
--- reject path, via the existing `emitDiagExitCode` forwarding). A build-stage
--- failure (emitter/clang) still becomes a `cjBuildFailedJson` envelope; the
--- discriminator is the child's own reject-vs-failure shape: a reject's
--- `status` is the bare envelope text (no "error: " preamble is ever
--- prepended to it — see `buildErr (dropTrailingNewline emitErr)` in
--- `build_cmd.mdk`), so `startsWith "{"` distinguishes it from every other
--- `buildErr` call site, all of which DO prepend one.
+-- `medaka build --json`: front-end gate via `checkJsonFile` (BYTE-IDENTICAL
+-- structured diagnostics to `check --json` on the same file — same code, same
+-- envelope), then, only if clean, the real emit+clang build. A build-stage
+-- failure (emitter/clang) becomes a `cjBuildFailedJson` envelope instead of the
+-- plain rendered error text; a clean build prints the (empty-diagnostics)
+-- gate JSON as its success marker, mirroring `check --json`'s clean output —
+-- no separate "built X -> Y" prose on this channel, so a machine consumer sees
+-- exactly one shape regardless of outcome.
 runBuildJsonCmd : Args ->
   Bool ->
   String ->
@@ -1500,40 +1444,53 @@ runBuildJsonCmd a allowInternal root stdlibDir input outOpt target =
         Err msg =>
           let _ = println (cjBuildFailedJson input msg)
           exit 1
-        Ok _ => match readPreludeFile corePath
+        Ok rsrc => match readPreludeFile corePath
           Err msg =>
             let _ = println (cjBuildFailedJson input msg)
             exit 1
-          Ok _ =>
-            let medaka = envOr "MEDAKA" "medaka"
-            let cc = envOr "CC" "clang"
-            let keepIrCli = flag "--keep-ir" a
-            let stampBuild = flag "--stamp-build" a
-            let outPath = match outOpt
-              Some o => o
-              None => defaultOutPath target input
-            let entryKeys = [input, relDiagPath root input]
-            match (runBuild
-              root
-              medaka
-              cc
-              target
-              input
-              outPath
-              keepIrCli
-              True
-              stampBuild)
-              -- #2243: the build's own notes (a failed `--keep-ir` copy) join
-              -- the entry file's `diagnostics` array rather than vanishing
-              -- with the status line this channel never prints.
-              Ok rep =>
-                println
-                  (cjFoldNotesIntoText entryKeys rep.notes rep.emitterStderr)
-              Err rep =>
-                if startsWith "{" rep.status then
-                  let _ = println rep.status
-                  exit 1
-                else
+          Ok csrc =>
+            let (cj, hasErr) =
+              checkJsonFileParts allowInternal rsrc csrc input stdlibDir
+            if hasErr then
+              let _ = println (ppCheckJson cj)
+              exit 1
+            else
+              let medaka = envOr "MEDAKA" "medaka"
+              let cc = envOr "CC" "clang"
+              let keepIrCli = flag "--keep-ir" a
+              let stampBuild = flag "--stamp-build" a
+              let outPath = match outOpt
+                Some o => o
+                None => defaultOutPath target input
+              -- `quietEmitStderr = True`: this route has already rendered every
+              -- diagnostic into the stdout envelope above (`checkJsonFileParts`),
+              -- so forwarding the child's human copy would report one diagnostic
+              -- twice on two channels. A FAILING emit still carries the child's
+              -- text, through `ppBuildReport rep` into `cjBuildFailedJson` below.
+              match (runBuild
+                root
+                medaka
+                cc
+                target
+                input
+                outPath
+                keepIrCli
+                True
+                stampBuild)
+                -- #2243: the build's own notes (a failed `--keep-ir` copy)
+                -- join the entry file's `diagnostics` array rather than
+                -- vanishing with the status line this channel never prints.
+                -- `CjRendered` is the hand-built parse-error envelope, which
+                -- only ever arrives with `hasErr` set — unreachable here.
+                Ok rep => match cj
+                  CjRendered json => println json
+                  CjParts entry triples =>
+                    println
+                      (cjAllToJson (cjFoldIntoFile entry rep.notes triples))
+                -- A build-stage FAILURE already carried its notes: they are
+                -- part of the rendered message, exactly as the plain CLI
+                -- prints them, inside the one R-BUILD-FAILED diagnostic.
+                Err rep =>
                   let _ = println (cjBuildFailedJson input (ppBuildReport rep))
                   exit 1
 
@@ -4346,9 +4303,8 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false) (mem "ResError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" false) (mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "JArray" false) (mem "JObject" false) (mem "JNull" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
-(DUse false (UseAlias ("json") "Json2"))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "setLocalPinDisabled" false) (mem "openGoalCommitWarnCode" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAsyncWrapMain" false) (mem "asyncWrapModules" false) (mem "asyncMainShapeError" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
@@ -4461,25 +4417,8 @@ runMcpServerFromEnv _ =
 (DFunDef false "runCheckJsonCmd" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjFileNotFoundJson") (EVar "target")) (EVar "e")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFile") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoLet false false PWild (EApp (EVar "println") (EVar "json"))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))
 (DTypeSig false "cjBuildFailedJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjBuildFailedJson" ((PVar "target") (PVar "msg")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (ELit (LString "")) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-BUILD-FAILED"))) (EVar "msg")) (EVar "None")) (EVar "None")) (EVar "None")))))))
-(DTypeSig false "cjFoldNotesIntoText" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "cjFoldNotesIntoText" (PWild (PList) (PVar "envelopeText")) (EVar "envelopeText"))
-(DFunDef false "cjFoldNotesIntoText" ((PVar "entryKeys") (PVar "notes") (PVar "envelopeText")) (EMatch (EApp (EVar "Json2.parse") (EVar "envelopeText")) (arm (PCon "Err" PWild) () (EVar "envelopeText")) (arm (PCon "Ok" (PVar "j")) () (EApp (EVar "stringify") (EApp (EApp (EApp (EVar "cjInjectNotesJson") (EVar "entryKeys")) (EVar "notes")) (EVar "j"))))))
-(DTypeSig false "cjInjectNotesJson" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "cjInjectNotesJson" ((PVar "entryKeys") (PVar "notes") (PCon "JObject" (PVar "pairs"))) (EApp (EVar "jObject") (EApp (EApp (EVar "map") (EApp (EApp (EVar "cjInjectField") (EVar "entryKeys")) (EVar "notes"))) (EApp (EVar "toList") (EVar "pairs")))))
-(DFunDef false "cjInjectNotesJson" (PWild PWild (PVar "j")) (EVar "j"))
-(DTypeSig false "cjInjectField" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "cjInjectField" ((PVar "entryKeys") (PVar "notes") (PTuple (PLit (LString "files")) (PCon "JArray" (PVar "files")))) (ETuple (ELit (LString "files")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EApp (EApp (EVar "cjInjectFile") (EVar "entryKeys")) (EVar "notes"))) (EApp (EVar "toList") (EVar "files"))))))
-(DFunDef false "cjInjectField" (PWild PWild (PVar "kv")) (EVar "kv"))
-(DTypeSig false "cjInjectFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "cjInjectFile" ((PVar "entryKeys") (PVar "notes") (PCon "JObject" (PVar "fpairs"))) (EIf (EApp (EApp (EVar "cjIsEntryFile") (EVar "entryKeys")) (EApp (EVar "toList") (EVar "fpairs"))) (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EApp (EApp (EVar "map") (EApp (EVar "cjInjectDiags") (EVar "notes"))) (EApp (EVar "toList") (EVar "fpairs"))))) (EApp (EVar "JObject") (EVar "fpairs"))))
-(DFunDef false "cjInjectFile" (PWild PWild (PVar "j")) (EVar "j"))
-(DTypeSig false "cjIsEntryFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))) (TyCon "Bool"))))
-(DFunDef false "cjIsEntryFile" ((PVar "entryKeys") (PVar "fpairs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "file"))) (EVar "fpairs")) (arm (PCon "Some" (PCon "JString" (PVar "f"))) () (EApp (EApp (EVar "contains") (EVar "f")) (EVar "entryKeys"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "cjInjectDiags" (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "cjInjectDiags" ((PVar "notes") (PTuple (PLit (LString "diagnostics")) (PCon "JArray" (PVar "ds")))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EBinOp "++" (EApp (EVar "toList") (EVar "ds")) (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "cjDiagnostic") (ELit (LString ""))) (ELit (LString ""))) (EVar "d")))) (EVar "notes"))))))
-(DFunDef false "cjInjectDiags" (PWild (PVar "kv")) (EVar "kv"))
 (DTypeSig false "runBuildJsonCmd" (TyFun (TyCon "Args") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readFile") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjFileNotFoundJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "entryKeys") (EListLit (EVar "input") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "input")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (arm (PCon "Ok" (PVar "rep")) () (EApp (EVar "println") (EApp (EApp (EApp (EVar "cjFoldNotesIntoText") (EVar "entryKeys")) (EFieldAccess (EVar "rep") "notes")) (EFieldAccess (EVar "rep") "emitterStderr")))) (arm (PCon "Err" (PVar "rep")) () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "{"))) (EFieldAccess (EVar "rep") "status")) (EBlock (DoLet false false PWild (EApp (EVar "println") (EFieldAccess (EVar "rep") "status"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))))))))))))))))
+(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readFile") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjFileNotFoundJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "input")) (EVar "stdlibDir"))) (DoExpr (EIf (EVar "hasErr") (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EVar "ppCheckJson") (EVar "cj")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (arm (PCon "Ok" (PVar "rep")) () (EMatch (EVar "cj") (arm (PCon "CjRendered" (PVar "json")) () (EApp (EVar "println") (EVar "json"))) (arm (PCon "CjParts" (PVar "entry") (PVar "triples")) () (EApp (EVar "println") (EApp (EVar "cjAllToJson") (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entry")) (EFieldAccess (EVar "rep") "notes")) (EVar "triples"))))))) (arm (PCon "Err" (PVar "rep")) () (EBlock (DoLet false false PWild (EApp (EVar "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))))))))))))))))))
 (DTypeSig false "cjFileNotFoundJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjFileNotFoundJson" ((PVar "target") (PVar "err")) (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read file '")) (EApp (EVar "display") (EVar "target"))) (ELit (LString "': "))) (EApp (EVar "display") (EVar "err"))) (ELit (LString "")))) (DoLet false false (PVar "diagJson") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (ELit (LString "R-FILE-NOT-FOUND")))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (ELit (LString "resolve")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EVar "JNull")) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))) (DoLet false false (PVar "filesJson") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "target"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EListLit (EVar "diagJson"))))))) (DoExpr (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "jArray") (EListLit (EVar "filesJson"))))))))))
 (DTypeSig false "stripWarningLines" (TyFun (TyCon "String") (TyCon "String")))
@@ -4801,9 +4740,8 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "resolveModulesErrorsByFile" false) (mem "internalGuardFor" false) (mem "ResError" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "LoadError" false) (mem "LoadMsg" false) (mem "LoadParseFailed" false) (mem "loadProgramFilesLocatedE" false) (mem "dropPathTriple" false) (mem "modIdToPath" false) (mem "findProjectRoot" false) (mem "findProjectRootOrSelf" false) (mem "entrySearchRoots" false) (mem "projectTrustedMods" false) (mem "stdlibOwnership" false) (mem "unknownModuleIdOf" false) (mem "findImportLoc" false) (mem "availableModulesHint" false) (mem "availableModulesText" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "analyzeProjectFull" false) (mem "analyzeLocated" false) (mem "analyzeLocatedG" false) (mem "analyzeFrom" false) (mem "analyzeSurface" false) (mem "analyzeFinish" false) (mem "tcHalfOfPerModule" false) (mem "SurfaceAnalysis" true) (mem "ppDiagCli" false) (mem "ppDiagCliSrc" false) (mem "ppDiagCliLines" false) (mem "renderTcDiags" false) (mem "ppResolveErrorsByFile" false) (mem "diagOfResError" false) (mem "diagOfTypeError" false) (mem "relDiagPath" false) (mem "srcLinesArr" false) (mem "Diag" true) (mem "Severity" true) (mem "SevError" false) (mem "cjPosition" false) (mem "cjRange" false) (mem "cjRangeOfLoc" false) (mem "cjDiagnostic" false) (mem "cjFileEntry" false) (mem "cjAllToJson" false) (mem "flushRunEnvelope" false) (mem "pendingStaleNotice" false) (mem "readDiagSrc" false) (mem "typecheckDiagsFold" false) (mem "seedAll" false) (mem "midPath" false) (mem "parseErrCode" false) (mem "parseErrHelpFix" false) (mem "codeKind" false) (mem "optField" false) (mem "cjFixJson" false) (mem "mkDiag" false) (mem "checkJsonFile" false) (mem "checkJsonFileParts" false) (mem "CheckJson" true) (mem "ppCheckJson" false) (mem "cjFoldIntoFile" false) (mem "readFileSafe" false) (mem "diagIsError" false) (mem "diagIsWarn" false) (mem "cohWarnsOfTriple" false) (mem "joinedOrNone" false) (mem "renderTripleErrors" false) (mem "renderTripleWarnings" false) (mem "residualOrGeneric" false) (mem "coherenceWarnCode" false) (mem "runBuildWarnCodes" false) (mem "isCoherenceWarn" false) (mem "findMainFunDef" false) (mem "mainBodyLoc" false) (mem "mainArityMsg" false) (mem "mainNonUnitMsg" false) (mem "mainArityWarning" false) (mem "mainNonUnitWarning" false) (mem "mainShapeWarnings" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "JArray" false) (mem "JObject" false) (mem "JNull" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false))))
-(DUse false (UseAlias ("json") "Json2"))
 (DUse false (UseGroup ("types" "typecheck") ((mem "elaborateModules" false) (mem "resetTypeErrorsSticky" false) (mem "hadTypeErrors" false) (mem "TcDiag" false) (mem "ElabResult" false) (mem "ModDiags" false) (mem "mainTypeIsUnit" false) (mem "setStdlibOwnership" false) (mem "setLocalPinDisabled" false) (mem "openGoalCommitWarnCode" false))))
 (DUse false (UseGroup ("driver" "main_autoprint") ((mem "shouldAsyncWrapMain" false) (mem "asyncWrapModules" false) (mem "asyncMainShapeError" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "evalModulesOutputRun" false) (mem "currentEvalFile" false) (mem "modulePathMap" false) (mem "runJsonMode" false) (mem "pendingRunDiags" false) (mem "progArgsRef" false))))
@@ -4916,25 +4854,8 @@ runMcpServerFromEnv _ =
 (DFunDef false "runCheckJsonCmd" ((PVar "allowInternal") (PVar "rsrc") (PVar "csrc") (PVar "target") (PVar "stdlibDir")) (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjFileNotFoundJson") (EVar "target")) (EVar "e")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PTuple (PVar "json") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFile") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "stdlibDir"))) (DoLet false false PWild (EApp (EDictApp "println") (EVar "json"))) (DoExpr (EIf (EVar "hasErr") (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))
 (DTypeSig false "cjBuildFailedJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjBuildFailedJson" ((PVar "target") (PVar "msg")) (EApp (EVar "cjAllToJson") (EListLit (ETuple (EVar "target") (ELit (LString "")) (EListLit (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-BUILD-FAILED"))) (EVar "msg")) (EVar "None")) (EVar "None")) (EVar "None")))))))
-(DTypeSig false "cjFoldNotesIntoText" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "String") (TyCon "String")))))
-(DFunDef false "cjFoldNotesIntoText" (PWild (PList) (PVar "envelopeText")) (EVar "envelopeText"))
-(DFunDef false "cjFoldNotesIntoText" ((PVar "entryKeys") (PVar "notes") (PVar "envelopeText")) (EMatch (EApp (EVar "Json2.parse") (EVar "envelopeText")) (arm (PCon "Err" PWild) () (EVar "envelopeText")) (arm (PCon "Ok" (PVar "j")) () (EApp (EVar "stringify") (EApp (EApp (EApp (EVar "cjInjectNotesJson") (EVar "entryKeys")) (EVar "notes")) (EVar "j"))))))
-(DTypeSig false "cjInjectNotesJson" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "cjInjectNotesJson" ((PVar "entryKeys") (PVar "notes") (PCon "JObject" (PVar "pairs"))) (EApp (EVar "jObject") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "cjInjectField") (EVar "entryKeys")) (EVar "notes"))) (EApp (EMethodRef "toList") (EVar "pairs")))))
-(DFunDef false "cjInjectNotesJson" (PWild PWild (PVar "j")) (EVar "j"))
-(DTypeSig false "cjInjectField" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json"))))))
-(DFunDef false "cjInjectField" ((PVar "entryKeys") (PVar "notes") (PTuple (PLit (LString "files")) (PCon "JArray" (PVar "files")))) (ETuple (ELit (LString "files")) (EApp (EVar "jArray") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "cjInjectFile") (EVar "entryKeys")) (EVar "notes"))) (EApp (EMethodRef "toList") (EVar "files"))))))
-(DFunDef false "cjInjectField" (PWild PWild (PVar "kv")) (EVar "kv"))
-(DTypeSig false "cjInjectFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyCon "Json") (TyCon "Json")))))
-(DFunDef false "cjInjectFile" ((PVar "entryKeys") (PVar "notes") (PCon "JObject" (PVar "fpairs"))) (EIf (EApp (EApp (EVar "cjIsEntryFile") (EVar "entryKeys")) (EApp (EMethodRef "toList") (EVar "fpairs"))) (EApp (EVar "JObject") (EApp (EVar "arrayFromList") (EApp (EApp (EMethodRef "map") (EApp (EVar "cjInjectDiags") (EVar "notes"))) (EApp (EMethodRef "toList") (EVar "fpairs"))))) (EApp (EVar "JObject") (EVar "fpairs"))))
-(DFunDef false "cjInjectFile" (PWild PWild (PVar "j")) (EVar "j"))
-(DTypeSig false "cjIsEntryFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Json"))) (TyCon "Bool"))))
-(DFunDef false "cjIsEntryFile" ((PVar "entryKeys") (PVar "fpairs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (ELit (LString "file"))) (EVar "fpairs")) (arm (PCon "Some" (PCon "JString" (PVar "f"))) () (EApp (EApp (EVar "contains") (EVar "f")) (EVar "entryKeys"))) (arm PWild () (EVar "False"))))
-(DTypeSig false "cjInjectDiags" (TyFun (TyApp (TyCon "List") (TyCon "Diag")) (TyFun (TyTuple (TyCon "String") (TyCon "Json")) (TyTuple (TyCon "String") (TyCon "Json")))))
-(DFunDef false "cjInjectDiags" ((PVar "notes") (PTuple (PLit (LString "diagnostics")) (PCon "JArray" (PVar "ds")))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EBinOp "++" (EApp (EMethodRef "toList") (EVar "ds")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "cjDiagnostic") (ELit (LString ""))) (ELit (LString ""))) (EVar "d")))) (EVar "notes"))))))
-(DFunDef false "cjInjectDiags" (PWild (PVar "kv")) (EVar "kv"))
 (DTypeSig false "runBuildJsonCmd" (TyFun (TyCon "Args") (TyFun (TyCon "Bool") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "BuildTarget") (TyEffect ("IO") None (TyCon "Unit"))))))))))
-(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readFile") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjFileNotFoundJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoLet false false (PVar "entryKeys") (EListLit (EVar "input") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "input")))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (arm (PCon "Ok" (PVar "rep")) () (EApp (EDictApp "println") (EApp (EApp (EApp (EVar "cjFoldNotesIntoText") (EVar "entryKeys")) (EFieldAccess (EVar "rep") "notes")) (EFieldAccess (EVar "rep") "emitterStderr")))) (arm (PCon "Err" (PVar "rep")) () (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "{"))) (EFieldAccess (EVar "rep") "status")) (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EFieldAccess (EVar "rep") "status"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))))))))))))))))
+(DFunDef false "runBuildJsonCmd" ((PVar "a") (PVar "allowInternal") (PVar "root") (PVar "stdlibDir") (PVar "input") (PVar "outOpt") (PVar "target")) (EMatch (EApp (EVar "readFile") (EVar "input")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjFileNotFoundJson") (EVar "input")) (EVar "e")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" PWild) () (EBlock (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EVar "msg")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PTuple (PVar "cj") (PVar "hasErr")) (EApp (EApp (EApp (EApp (EApp (EVar "checkJsonFileParts") (EVar "allowInternal")) (EVar "rsrc")) (EVar "csrc")) (EVar "input")) (EVar "stdlibDir"))) (DoExpr (EIf (EVar "hasErr") (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EVar "ppCheckJson") (EVar "cj")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (ELit (LString "medaka")))) (DoLet false false (PVar "cc") (EApp (EApp (EVar "envOr") (ELit (LString "CC"))) (ELit (LString "clang")))) (DoLet false false (PVar "keepIrCli") (EApp (EApp (EVar "flag") (ELit (LString "--keep-ir"))) (EVar "a"))) (DoLet false false (PVar "stampBuild") (EApp (EApp (EVar "flag") (ELit (LString "--stamp-build"))) (EVar "a"))) (DoLet false false (PVar "outPath") (EMatch (EVar "outOpt") (arm (PCon "Some" (PVar "o")) () (EVar "o")) (arm (PCon "None") () (EApp (EApp (EVar "defaultOutPath") (EVar "target")) (EVar "input"))))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runBuild") (EVar "root")) (EVar "medaka")) (EVar "cc")) (EVar "target")) (EVar "input")) (EVar "outPath")) (EVar "keepIrCli")) (EVar "True")) (EVar "stampBuild")) (arm (PCon "Ok" (PVar "rep")) () (EMatch (EVar "cj") (arm (PCon "CjRendered" (PVar "json")) () (EApp (EDictApp "println") (EVar "json"))) (arm (PCon "CjParts" (PVar "entry") (PVar "triples")) () (EApp (EDictApp "println") (EApp (EVar "cjAllToJson") (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entry")) (EFieldAccess (EVar "rep") "notes")) (EVar "triples"))))))) (arm (PCon "Err" (PVar "rep")) () (EBlock (DoLet false false PWild (EApp (EDictApp "println") (EApp (EApp (EVar "cjBuildFailedJson") (EVar "input")) (EApp (EVar "ppBuildReport") (EVar "rep"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))))))))))))))))))
 (DTypeSig false "cjFileNotFoundJson" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "cjFileNotFoundJson" ((PVar "target") (PVar "err")) (EBlock (DoLet false false (PVar "msg") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "cannot read file '")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString "': "))) (EApp (EMethodRef "display") (EVar "err"))) (ELit (LString "")))) (DoLet false false (PVar "diagJson") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "code")) (EApp (EVar "JString") (ELit (LString "R-FILE-NOT-FOUND")))) (ETuple (ELit (LString "kind")) (EApp (EVar "JString") (ELit (LString "resolve")))) (ETuple (ELit (LString "message")) (EApp (EVar "JString") (EVar "msg"))) (ETuple (ELit (LString "range")) (EVar "JNull")) (ETuple (ELit (LString "severity")) (EApp (EVar "JInt") (ELit (LInt 1)))) (ETuple (ELit (LString "source")) (EApp (EVar "JString") (ELit (LString "medaka"))))))) (DoLet false false (PVar "filesJson") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "file")) (EApp (EVar "JString") (EVar "target"))) (ETuple (ELit (LString "diagnostics")) (EApp (EVar "jArray") (EListLit (EVar "diagJson"))))))) (DoExpr (EApp (EVar "stringify") (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "files")) (EApp (EVar "jArray") (EListLit (EVar "filesJson"))))))))))
 (DTypeSig false "stripWarningLines" (TyFun (TyCon "String") (TyCon "String")))

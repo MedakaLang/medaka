@@ -1,5 +1,5 @@
 # META
-source_lines=2996
+source_lines=2884
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/diagnostics.mdk — structured error pipeline (Phase A.4)
@@ -2483,118 +2483,6 @@ cjFoldIntoFile path extra ((p, s, ds) :: rest)
   | p == path = (p, s, ds ++ extra) :: rest
   | otherwise = (p, s, ds) :: cjFoldIntoFile path extra rest
 
--- ── #2874: the JSON-rendering twin of `emitGateDiags`, for `medaka build
--- --json`'s child process ─────────────────────────────────────────────────
--- Since ruling 3 this process is the build's only typecheck; before this it
--- was the PARENT (`checkJsonFileParts`) that re-typechecked the graph to build
--- the `{"files":[...]}` envelope.  Same `typecheckDiagsFold` triples
--- `emitGateDiags` renders as human lines, folded into a `CheckJson` instead —
--- the shape `checkJsonFileParts`'s multi-module arm already builds (`CjParts`,
--- `relDiagTriple`, `cjFoldIntoFile` for the #1236 main-shape warning).  `root`
--- relativizes each path exactly as that arm did.
--- `entryPath` is the caller's own `entryPathOf modsWithPath` (a private helper
--- of `entry_support.mdk`, the sole caller) — taken as a parameter rather than
--- re-derived here so this function owns no duplicate of that walk.
-export
-emitGateDiagsJson : List (String, String, List Decl) ->
-  List Decl ->
-  List Decl ->
-  List (String, List Decl) ->
-  List (String, (List TcDiag, List TcDiag)) ->
-  String ->
-  String ->
-  <IO> (CheckJson, Bool)
-emitGateDiagsJson modsWithPath rtD coreD modsD perMod root entryPath =
-  let triples0 =
-    map
-      readDiagSrc
-      (typecheckDiagsFold
-        rtD
-        coreD
-        modsWithPath
-        modsD
-        perMod
-        (seedAll (map midPath modsWithPath) []))
-  let hasErr = anyList tripleHasErrD triples0
-  -- `checkJsonFileParts` only relativizes on its MULTI-module arm
-  -- (`checkJsonSingleParts` echoes `target` verbatim, exactly as passed on
-  -- argv) — a single-module graph here must match that, or a no-import
-  -- fixture's envelope disagrees with `check --json`'s own on the same file
-  -- (#1078's own parity gate).
-  let single = match modsWithPath
-    [_] => True
-    _ => False
-  let relTriples =
-    if single then triples0 else map (relDiagTriple root) triples0
-  let entryKey = if single then entryPath else relDiagPath root entryPath
-  let mainWarns = if hasErr then [] else mainShapeWarnsFor modsWithPath
-  (CjParts entryKey (cjFoldIntoFile entryKey mainWarns relTriples), hasErr)
-
-tripleHasErrD : (String, String, List Diag) -> Bool
-tripleHasErrD (_, _, diags) = anyList diagIsError diags
-
-mainShapeWarnsFor : List (String, String, List Decl) -> List Diag
-mainShapeWarnsFor mods = match lastModTriple mods
-  None => []
-  Some (_, _, decls) => mainShapeWarnings [] [] [] decls
-
--- Every module's path, seeded with an empty diagnostics bucket and its own
--- source — the same seeding `emitGateDiagsJson` folds diagnostics into, reused
--- by `emitWrapDiags`'s JSON path so a clean wrap-check still reports the whole
--- graph's file set, not just the entry.
-export
-seededTriplesJson : List (String, String, List Decl) ->
-  String ->
-  <IO> List (String, String, List Diag)
-seededTriplesJson modsWithPath root =
-  map
-    (relDiagTriple root)
-    (map readDiagSrc (seedAll (map midPath modsWithPath) []))
-
--- Fold the elaboration's sticky residual (#2544 M4) into an already-seeded
--- triple set, keyed by each diagnostic's own module id via `pathMap` (the
--- loader's modId → path map) — a residual diagnostic can name ANY module in
--- the graph, not only the entry.  A mid absent from `pathMap` (should not
--- happen; the emit driver's own `pathMap` is total over the loaded graph)
--- silently drops that entry rather than fabricate a file for it.  Mirrors
--- `residualOrGeneric`'s empty-residual fallback with a structured `Diag`
--- instead of prose, folded into the entry's own bucket so the envelope still
--- has somewhere to put it.
-export
-foldResidualJson : List (String, String) ->
-  String ->
-  String ->
-  List (String, TcDiag) ->
-  List (String, String, List Diag) ->
-  List (String, String, List Diag)
-foldResidualJson _ _ entryKey [] triples =
-  cjFoldIntoFile entryKey [residualGenericDiag] triples
-foldResidualJson pathMap root entryKey ((mid, d) :: rest) triples =
-  match lookupAssoc mid pathMap
-    None => foldResidualJson pathMap root entryKey rest triples
-    Some path =>
-      foldResidualJson
-        pathMap
-        root
-        entryKey
-        rest
-        (cjFoldIntoFile (relDiagPath root path) [diagOfTypeError d] triples)
-
--- The structured counterpart of `residualOrGeneric`'s no-located-diagnostic
--- fallback text (#1812): an elaboration armed `hadTypeErrors` with no
--- diagnostic the residual carries a `Loc` for.
-residualGenericDiag : Diag
-residualGenericDiag =
-  Diag
-    SevError
-    "R-BUILD-FAILED"
-    ("type error detected during elaboration (the run/build type pass); no"
-      ++ " located diagnostic is available for it, and `medaka check` may not"
-      ++ " report this program at all — see issue #1812")
-    None
-    None
-    None
-
 -- ── main-shape beginner-footgun warning (0.1.0 audit #3; #1236) ─────────────
 -- `medaka run` evaluates top-level bindings and checks `main` EXISTS but never
 -- APPLIES it: a `main` that isn't a zero-arg Unit-typed value silently no-ops
@@ -3322,19 +3210,6 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "cjFoldIntoFile" (PWild (PList) (PVar "triples")) (EVar "triples"))
 (DFunDef false "cjFoldIntoFile" (PWild PWild (PList)) (EListLit))
 (DFunDef false "cjFoldIntoFile" ((PVar "path") (PVar "extra") (PCons (PTuple (PVar "p") (PVar "s") (PVar "ds")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "path")) (EBinOp "::" (ETuple (EVar "p") (EVar "s") (EBinOp "++" (EVar "ds") (EVar "extra"))) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "p") (EVar "s") (EVar "ds")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "path")) (EVar "extra")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "emitGateDiagsJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))))
-(DFunDef false "emitGateDiagsJson" ((PVar "modsWithPath") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "perMod") (PVar "root") (PVar "entryPath")) (EBlock (DoLet false false (PVar "triples0") (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit))))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "tripleHasErrD")) (EVar "triples0"))) (DoLet false false (PVar "single") (EMatch (EVar "modsWithPath") (arm (PList PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "relTriples") (EIf (EVar "single") (EVar "triples0") (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples0")))) (DoLet false false (PVar "entryKey") (EIf (EVar "single") (EVar "entryPath") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "entryPath")))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EApp (EVar "mainShapeWarnsFor") (EVar "modsWithPath")))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))
-(DTypeSig false "tripleHasErrD" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
-(DFunDef false "tripleHasErrD" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags")))
-(DTypeSig false "mainShapeWarnsFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Diag"))))
-(DFunDef false "mainShapeWarnsFor" ((PVar "mods")) (EMatch (EApp (EVar "lastModTriple") (EVar "mods")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild PWild (PVar "decls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")))))
-(DTypeSig true "seededTriplesJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
-(DFunDef false "seededTriplesJson" ((PVar "modsWithPath") (PVar "root")) (EApp (EApp (EVar "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EApp (EVar "map") (EVar "readDiagSrc")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EVar "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit)))))
-(DTypeSig true "foldResidualJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "foldResidualJson" (PWild PWild (PVar "entryKey") (PList) (PVar "triples")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EListLit (EVar "residualGenericDiag"))) (EVar "triples")))
-(DFunDef false "foldResidualJson" ((PVar "pathMap") (PVar "root") (PVar "entryKey") (PCons (PTuple (PVar "mid") (PVar "d")) (PVar "rest")) (PVar "triples")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "pathMap")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "foldResidualJson") (EVar "pathMap")) (EVar "root")) (EVar "entryKey")) (EVar "rest")) (EVar "triples"))) (arm (PCon "Some" (PVar "path")) () (EApp (EApp (EApp (EApp (EApp (EVar "foldResidualJson") (EVar "pathMap")) (EVar "root")) (EVar "entryKey")) (EVar "rest")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "path"))) (EListLit (EApp (EVar "diagOfTypeError") (EVar "d")))) (EVar "triples"))))))
-(DTypeSig false "residualGenericDiag" (TyCon "Diag"))
-(DFunDef false "residualGenericDiag" () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-BUILD-FAILED"))) (EBinOp "++" (EBinOp "++" (ELit (LString "type error detected during elaboration (the run/build type pass); no")) (ELit (LString " located diagnostic is available for it, and `medaka check` may not"))) (ELit (LString " report this program at all — see issue #1812")))) (EVar "None")) (EVar "None")) (EVar "None")))
 (DTypeSig true "findMainFunDef" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
 (DFunDef false "findMainFunDef" ((PList)) (EVar "None"))
 (DFunDef false "findMainFunDef" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainFunDef") (EBinOp "::" (EVar "d") (EVar "rest"))))
@@ -3704,19 +3579,6 @@ checkJsonFileParts allowInternal rsrc csrc target stdlibDir =
 (DFunDef false "cjFoldIntoFile" (PWild (PList) (PVar "triples")) (EVar "triples"))
 (DFunDef false "cjFoldIntoFile" (PWild PWild (PList)) (EListLit))
 (DFunDef false "cjFoldIntoFile" ((PVar "path") (PVar "extra") (PCons (PTuple (PVar "p") (PVar "s") (PVar "ds")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "p") (EVar "path")) (EBinOp "::" (ETuple (EVar "p") (EVar "s") (EBinOp "++" (EVar "ds") (EVar "extra"))) (EVar "rest")) (EIf (EVar "otherwise") (EBinOp "::" (ETuple (EVar "p") (EVar "s") (EVar "ds")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "path")) (EVar "extra")) (EVar "rest"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DTypeSig true "emitGateDiagsJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyCon "CheckJson") (TyCon "Bool")))))))))))
-(DFunDef false "emitGateDiagsJson" ((PVar "modsWithPath") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "perMod") (PVar "root") (PVar "entryPath")) (EBlock (DoLet false false (PVar "triples0") (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "typecheckDiagsFold") (EVar "rtD")) (EVar "coreD")) (EVar "modsWithPath")) (EVar "modsD")) (EVar "perMod")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit))))) (DoLet false false (PVar "hasErr") (EApp (EApp (EVar "anyList") (EVar "tripleHasErrD")) (EVar "triples0"))) (DoLet false false (PVar "single") (EMatch (EVar "modsWithPath") (arm (PList PWild) () (EVar "True")) (arm PWild () (EVar "False")))) (DoLet false false (PVar "relTriples") (EIf (EVar "single") (EVar "triples0") (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EVar "triples0")))) (DoLet false false (PVar "entryKey") (EIf (EVar "single") (EVar "entryPath") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "entryPath")))) (DoLet false false (PVar "mainWarns") (EIf (EVar "hasErr") (EListLit) (EApp (EVar "mainShapeWarnsFor") (EVar "modsWithPath")))) (DoExpr (ETuple (EApp (EApp (EVar "CjParts") (EVar "entryKey")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EVar "mainWarns")) (EVar "relTriples"))) (EVar "hasErr")))))
-(DTypeSig false "tripleHasErrD" (TyFun (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))) (TyCon "Bool")))
-(DFunDef false "tripleHasErrD" ((PTuple PWild PWild (PVar "diags"))) (EApp (EApp (EVar "anyList") (EVar "diagIsError")) (EVar "diags")))
-(DTypeSig false "mainShapeWarnsFor" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Diag"))))
-(DFunDef false "mainShapeWarnsFor" ((PVar "mods")) (EMatch (EApp (EVar "lastModTriple") (EVar "mods")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild PWild (PVar "decls"))) () (EApp (EApp (EApp (EApp (EVar "mainShapeWarnings") (EListLit)) (EListLit)) (EListLit)) (EVar "decls")))))
-(DTypeSig true "seededTriplesJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))
-(DFunDef false "seededTriplesJson" ((PVar "modsWithPath") (PVar "root")) (EApp (EApp (EMethodRef "map") (EApp (EVar "relDiagTriple") (EVar "root"))) (EApp (EApp (EMethodRef "map") (EVar "readDiagSrc")) (EApp (EApp (EVar "seedAll") (EApp (EApp (EMethodRef "map") (EVar "midPath")) (EVar "modsWithPath"))) (EListLit)))))
-(DTypeSig true "foldResidualJson" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "TcDiag"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Diag"))))))))))
-(DFunDef false "foldResidualJson" (PWild PWild (PVar "entryKey") (PList) (PVar "triples")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EVar "entryKey")) (EListLit (EVar "residualGenericDiag"))) (EVar "triples")))
-(DFunDef false "foldResidualJson" ((PVar "pathMap") (PVar "root") (PVar "entryKey") (PCons (PTuple (PVar "mid") (PVar "d")) (PVar "rest")) (PVar "triples")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "mid")) (EVar "pathMap")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EVar "foldResidualJson") (EVar "pathMap")) (EVar "root")) (EVar "entryKey")) (EVar "rest")) (EVar "triples"))) (arm (PCon "Some" (PVar "path")) () (EApp (EApp (EApp (EApp (EApp (EVar "foldResidualJson") (EVar "pathMap")) (EVar "root")) (EVar "entryKey")) (EVar "rest")) (EApp (EApp (EApp (EVar "cjFoldIntoFile") (EApp (EApp (EVar "relDiagPath") (EVar "root")) (EVar "path"))) (EListLit (EApp (EVar "diagOfTypeError") (EVar "d")))) (EVar "triples"))))))
-(DTypeSig false "residualGenericDiag" (TyCon "Diag"))
-(DFunDef false "residualGenericDiag" () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "Diag") (EVar "SevError")) (ELit (LString "R-BUILD-FAILED"))) (EBinOp "++" (EBinOp "++" (ELit (LString "type error detected during elaboration (the run/build type pass); no")) (ELit (LString " located diagnostic is available for it, and `medaka check` may not"))) (ELit (LString " report this program at all — see issue #1812")))) (EVar "None")) (EVar "None")) (EVar "None")))
 (DTypeSig true "findMainFunDef" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "Option") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))))
 (DFunDef false "findMainFunDef" ((PList)) (EVar "None"))
 (DFunDef false "findMainFunDef" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EApp (EVar "findMainFunDef") (EBinOp "::" (EVar "d") (EVar "rest"))))
