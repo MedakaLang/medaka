@@ -22,6 +22,8 @@ import array.{drop, take}
 import hex.{encode}
 import list.{reverse, sortBy}
 import map.{Map(..), get, has, set, size}
+import set.{Set}
+import set as Set
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.resource_limits.{
@@ -604,6 +606,9 @@ mstValidateNodeBytes expected isRoot bytes = do
 cidKey : Cid -> String
 cidKey cid = encode (cidToBytes cid)
 
+mstEmptySet : Set String
+mstEmptySet = empty
+
 validateBlockRows : List (Cid, Array Int) ->
   Map String (Array Int) ->
   Result String (Map String (Array Int))
@@ -646,11 +651,11 @@ walkOptionalChild : Option Cid ->
   Option (Array Int) ->
   Option (Array Int) ->
   Map String (Array Int) ->
-  Map String Unit ->
-  Map String Unit ->
+  Set String ->
+  Set String ->
   Int ->
   Int ->
-  Result String (Map String Unit)
+  Result String (Set String)
 walkOptionalChild None _ _ _ _ _ visited _ _ = Ok visited
 walkOptionalChild (Some child) expected lower upper blocks active visited traversal limit =
   walkBlock
@@ -669,11 +674,11 @@ walkEntryChildren : List DecodedEntry ->
   Int ->
   Option (Array Int) ->
   Map String (Array Int) ->
-  Map String Unit ->
-  Map String Unit ->
+  Set String ->
+  Set String ->
   Int ->
   Int ->
-  Result String (Map String Unit)
+  Result String (Set String)
 walkEntryChildren [] _ _ _ _ visited _ _ = Ok visited
 walkEntryChildren (entry :: rest) expected upper blocks active visited traversal limit =
   let childUpper = match rest
@@ -706,11 +711,11 @@ walkNodeChildren : DecodedNode ->
   Option (Array Int) ->
   Option (Array Int) ->
   Map String (Array Int) ->
-  Map String Unit ->
-  Map String Unit ->
+  Set String ->
+  Set String ->
   Int ->
   Int ->
-  Result String (Map String Unit)
+  Result String (Set String)
 walkNodeChildren (DecodedNode left entries) expected lower upper blocks active visited traversal limit =
   let leftUpper = match entries
     [] => upper
@@ -743,12 +748,12 @@ walkKnownBlock : Array Int ->
   Option (Array Int) ->
   Option (Array Int) ->
   Map String (Array Int) ->
-  Map String Unit ->
-  Map String Unit ->
+  Set String ->
+  Set String ->
   String ->
   Int ->
   Int ->
-  Result String (Map String Unit)
+  Result String (Set String)
 walkKnownBlock bytes expected isRoot lower upper blocks active visited key traversal limit =
   do
     _ <- checkMstNodeBytes (arrayLength bytes)
@@ -769,8 +774,8 @@ walkKnownBlock bytes expected isRoot lower upper blocks active visited key trave
             lower
             upper
             blocks
-            (set key () active)
-            (set key () visited)
+            (Set.insert key active)
+            (Set.insert key visited)
             (traversal + 1)
             limit
 
@@ -789,19 +794,19 @@ walkBlock : Cid ->
   Option (Array Int) ->
   Option (Array Int) ->
   Map String (Array Int) ->
-  Map String Unit ->
-  Map String Unit ->
+  Set String ->
+  Set String ->
   Int ->
   Int ->
-  Result String (Map String Unit)
+  Result String (Set String)
 walkBlock cid expected isRoot lower upper blocks active visited traversal limit =
   match checkTraversalDepth limit traversal
     Err message => Err message
     Ok () =>
       let key = cidKey cid
-      if has key active then
+      if Set.has key active then
         Err "mst: invalid node form; subtree link cycle"
-      else if has key visited then
+      else if Set.has key visited then
         Err "mst: invalid node form; subtree block is referenced more than once"
       else match get key blocks
         None => Err "mst: missing reachable node block"
@@ -832,8 +837,18 @@ validateBlocksWithTraversalLimit limit root blocks = do
     Ok ()
   _ <- checkMstBlocks (length blocks)
   index <- validateBlockRows blocks Tip
-  visited <- walkBlock root None True None None index Tip Tip 0 limit
-  if size visited /= size index then
+  visited <- walkBlock
+    root
+    None
+    True
+    None
+    None
+    index
+    mstEmptySet
+    mstEmptySet
+    0
+    limit
+  if Set.size visited /= size index then
     Err "mst: unreachable node block supplied"
   else
     Ok ()
@@ -975,20 +990,20 @@ coveringProof key node =
   proofForKey key node ++ proofForLeftSib key node ++ proofForRightSib key node
 
 unionBlocks : List (Cid, Array Int) ->
-  Map String Unit ->
+  Set String ->
   List (Cid, Array Int) ->
-  (Map String Unit, List (Cid, Array Int))
+  (Set String, List (Cid, Array Int))
 unionBlocks [] seen acc = (seen, acc)
 unionBlocks ((cid, bytes) :: rest) seen acc =
   let key = cidKey cid
-  if has key seen then
+  if Set.has key seen then
     unionBlocks rest seen acc
   else
-    unionBlocks rest (set key () seen) ((cid, bytes) :: acc)
+    unionBlocks rest (Set.insert key seen) ((cid, bytes) :: acc)
 
 coveringProofGo : List (Array Int) ->
   MstNode ->
-  Map String Unit ->
+  Set String ->
   List (Cid, Array Int) ->
   List (Cid, Array Int)
 coveringProofGo [] _ _ acc = reverse acc
@@ -1023,4 +1038,4 @@ mstCoveringProofBlocks : List (Array Int) ->
   Result String (List (Cid, Array Int))
 mstCoveringProofBlocks keys (Mst _ _ _ node) = do
   _ <- checkProofKeys keys
-  Ok (copyBlocks (coveringProofGo keys node Tip []))
+  Ok (copyBlocks (coveringProofGo keys node mstEmptySet []))
