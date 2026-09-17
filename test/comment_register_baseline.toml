@@ -687,7 +687,7 @@ count = 8
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 888
+count = 887
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -702,7 +702,167 @@ count = 6
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 796
+count = 792
+
+[[entry]]
+file = "pds/lib/accesslog.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/lib/base58.mdk"
+class = "emoji"
+count = 1
+
+[[entry]]
+file = "pds/lib/event_log_record.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/lib/field.mdk"
+class = "emoji"
+count = 1
+
+[[entry]]
+file = "pds/lib/field.mdk"
+class = "shout"
+count = 5
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/lib/handlers.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
+class = "emoji"
+count = 3
+
+[[entry]]
+file = "pds/lib/multiformats.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/lib/proxy.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/lib/scalar.mdk"
+class = "emoji"
+count = 4
+
+[[entry]]
+file = "pds/lib/scalar.mdk"
+class = "shout"
+count = 7
+
+[[entry]]
+file = "pds/shell/egress.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/shell/eventlog.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/shell/eventlog.mdk"
+class = "shout"
+count = 2
+
+[[entry]]
+file = "pds/test/crawl_stub_main.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/encodings_vectors_main.mdk"
+class = "history"
+count = 2
+
+[[entry]]
+file = "pds/test/jwt_test.mdk"
+class = "tombstone"
+count = 1
+
+[[entry]]
+file = "pds/test/ratelimit_test.mdk"
+class = "history"
+count = 2
+
+[[entry]]
+file = "pds/test/read_handlers_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/read_routes_all_engines_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/record_handlers_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_test.mdk"
+class = "emoji"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_test.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/scalar_vectors_main.mdk"
+class = "emoji"
+count = 1
+
+[[entry]]
+file = "pds/test/serve_client_main.mdk"
+class = "history"
+count = 4
+
+[[entry]]
+file = "pds/test/sign_key_test.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/store_persistence_main.mdk"
+class = "history"
+count = 1
+
+[[entry]]
+file = "pds/test/sync_car_shapes_main.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/trust_boundary_guards_test.mdk"
+class = "shout"
+count = 1
+
+[[entry]]
+file = "pds/test/vector_runner.mdk"
+class = "shout"
+count = 1
 
 [[entry]]
 file = "stdlib/args.mdk"
