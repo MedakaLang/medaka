@@ -122,7 +122,7 @@ official app entirely.
 ### 2.B Security
 
 What is strong: the crypto is graded against external oracles (G1–G5), the
-pure/shell seam and secret containment are proven by `pds/test/lib_boundary.sh`
+pure/shell seam and secret containment are proven by `pds/test/lib_boundary_test.mdk`
 with mutation controls, and `pds/test/serve_e2e.sh` attacks a running server
 across ~fifty adversarial cases. SSRF, path traversal, header injection,
 request smuggling, the proxy confused deputy, and MST cycles are closed by
@@ -187,13 +187,13 @@ on every upload (C6).
 The build → keygen → genesis → systemd → Caddy → verify path is written in
 `docs/ops/PDS-DEPLOY.md`, and backup/restore is rehearsed by `pds/test/serve_e2e.sh`
 case 33. The unit and both Caddyfiles are now written and linted by
-`pds/test/deploy_config_lint.sh`. **The systemd and Caddy halves have still
+`pds/test/deploy_config_lint_test.mdk`. **The systemd and Caddy halves have still
 never been run, and no live deploy has ever happened** — that is what D2's and
 D5's open halves are, and it is the whole of what G-QUIET is now waiting on.
 
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
-| D1 | `pds/pds.service` creates or documents its service user, and sets `MemoryMax`, `CPUWeight`/`Nice`, `TasksMax`, `LimitNOFILE`, `StartLimitBurst`, `IPAddressDeny=any` + `IPAddressAllow=localhost`, `CapabilityBoundingSet=`, `ProtectHome`, `PrivateDevices`, `UMask=0077`, `RequiresMountsFor`. A gate lints the unit for the required directives. | G-QUIET | exists — all fourteen directives present in `pds/pds.service`; `pds/test/deploy_config_lint.sh` lints for them | #2958 |
+| D1 | `pds/pds.service` creates or documents its service user, and sets `MemoryMax`, `CPUWeight`/`Nice`, `TasksMax`, `LimitNOFILE`, `StartLimitBurst`, `IPAddressDeny=any` + `IPAddressAllow=localhost`, `CapabilityBoundingSet=`, `ProtectHome`, `PrivateDevices`, `UMask=0077`, `RequiresMountsFor`. A gate lints the unit for the required directives. | G-QUIET | exists — all fourteen directives present in `pds/pds.service`; `pds/test/deploy_config_lint_test.mdk` lints for them | #2958 |
 | D2 | `pds/Caddyfile` sets `header_up X-Forwarded-For {remote_host}`, HSTS, explicit timeouts, a request body limit at or above the PDS's own, and an access log; WebSocket upgrade for `subscribeRepos` verified live. A gate lints the file. | G-QUIET | missing — one `reverse_proxy` line; no gate mentions Caddy | #2959 |
 | D3 | The running binary reports its build commit and source fingerprint on `--version` and in the startup line; binaries live under a versioned path with a symlink, and rollback is one documented command that has been run once. | G-QUIET | partial — `--version` and the startup banner both carry the commit (with `--stamp-build`; a plain `medaka build` reports a bare `pdsd 0.1.0`), and the versioned path plus symlink are documented — but the compiler fingerprint is deliberately omitted from the line, and "rollback run once" cannot be true before a first deploy | #2960 |
 | D4 | What runs on the egress port (appview) and the relay port is specified: the software, its config, its own systemd unit, and its allow-list of destinations. | G-QUIET | exists — `pds/Caddyfile.egress` + `pds/pds-egress.service`, a second Caddy under its own unit with its own allow-list | #2961 |
@@ -214,7 +214,7 @@ Val is not looking at the terminal: nothing tells her the service is down**
 
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
-| E1 | Every request produces one log line: method, route, status, duration, bytes, forwarded-for (never a token, never a body); a gate greps the log path for the secret-name list `lib_boundary.sh` already enforces on strings. | G-QUIET | exists — `accessLogLine` (`pds/lib/accesslog.mdk`) with a six-field allow-list; `serve_e2e.sh` grades six line shapes and case 7b asserts no request-supplied secret reaches a line | #2964 |
+| E1 | Every request produces one log line: method, route, status, duration, bytes, forwarded-for (never a token, never a body); a gate greps the log path for the secret-name list `lib_boundary_test.mdk` already enforces on strings. | G-QUIET | exists — `accessLogLine` (`pds/lib/accesslog.mdk`) with a six-field allow-list; `serve_e2e.sh` grades six line shapes and case 7b asserts no request-supplied secret reaches a line | #2964 |
 | E2 | Startup logs the build commit, the config summary (did, handle, hostname, bind, port, trusted-proxy, appview), and the event-log recovery outcome (discarded / promoted / none). | G-QUIET | exists — banner, `serve: config …`, and `serve: event log recovery: …` all observed on a live process 2026-09-16 | #2964 |
 | E3 | A health route (`/xrpc/_health`, as the official PDS serves) returns the version and is polled. | G-QUIET | partial — `/xrpc/_health` served and returns the version string; "and is polled" needs the deploy | #2965 |
 | E4 | A periodic stats line: active connections, un-framed connections, subscribers, repo rev, blocks and blobs on disk. | G-ANNOUNCE | exists — `serve: stats active=… unframed=… subscriptions=… rev=… blocks=… blobs=…` observed on a live process 2026-09-16 | #2966 |

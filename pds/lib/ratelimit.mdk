@@ -3,9 +3,9 @@
 
    The step function is `(state, identity, class, now) -> (state, verdict)`.
    `now` is a plain `Int` argument, never a `Clock` effect: `pds/lib/` may
-   import no effect (`pds/test/lib_boundary.sh`), and threading time through
-   the call is what keeps the decision itself testable at exact instants
-   instead of by waiting on a real clock.
+   import no effect (`pds/test/lib_boundary_test.mdk`), and threading time
+   through the call is what keeps the decision itself testable at exact
+   instants instead of by waiting on a real clock.
 
    SLIDING WINDOW over two fixed windows, not a token bucket and not one
    fixed window (#2775). A single fixed window admits the whole allowance

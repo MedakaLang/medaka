@@ -441,8 +441,8 @@ pds/backup                     takes one encrypted off-box backup: STOPS the pds
                                hypothetical: playground/deploy_cloudflare.sh was missing its
                                entry and preflight ran a live production deploy. Its config,
                                its shape, and the age/rclone dependencies it refuses without
-                               are graded by pds/test/deploy_config_lint.sh, which reads the
-                               units and the script as text and never runs them.
+                               are graded by pds/test/deploy_config_lint_test.mdk, which
+                               reads the units and the script as text and never runs them.
 
 # ── sourced libraries (never executed; `sh <file>` is a no-op) ──
 test/lib_scratch               shell library, not a script: sourced by run_gates / build_oracles /

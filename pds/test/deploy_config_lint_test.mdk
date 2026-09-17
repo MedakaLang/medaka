@@ -1,0 +1,823 @@
+{- | #2958 #2959 deploy-config hardening, migrated from the retired
+   `pds/test/deploy_config_lint.sh` under #3148.
+
+   `pds/pds.service`, `pds/Caddyfile`, `pds/Caddyfile.egress` and the five
+   sibling systemd units are one deployment artifact split across two
+   syntaxes, so this is ONE gate covering all of them, not one per file.
+   Each file must carry a fixed roster of hardening directives, and three of
+   them must NOT carry a construct that would void the roster from the other
+   direction.
+
+   The patterns are still matched by `grep -E`, spawned once per directive.
+   None of them is a substring: they carry anchors, alternation, bracket
+   expressions and escaped dots, and Medaka has no regular-expression engine
+   (`docs/design/REGEX-DESIGN.md` is a design, not a library).
+   Re-expressing nineteen rosters as hand-rolled predicates would make every
+   row a place where this gate could accept something slightly different
+   from what the roster says. The pattern strings below are the bytes the
+   retired script's `grep` received, so what each row accepts is unchanged;
+   what is new is that each roster, each forbidden-construct check and each
+   mutation control is its own named assertion, where the script collapsed a
+   whole roster into one `fail`.
+
+   A roster pattern carries a real tab, never the two characters `\t`, and
+   that is not cosmetic. The script's rosters were newline-separated strings
+   piped through `echo`, and `/bin/sh`'s `echo` decodes `\t` to a tab before
+   `grep` ever sees it. `grep -E` itself does not: measured on this box,
+   `grep -Ec '^\tadmin off$' pds/Caddyfile.egress` counts 0 and the same
+   pattern with a literal tab counts 1. Spelling these `\\t` would compile,
+   pass the rosters' own shape and match nothing in three files.
+
+   The mutation controls derive their copies as line transforms here and
+   write them under `scratchDir`, so no control rewrites a file in the source
+   tree — the property the retired script had to assert with `cmp` against a
+   baseline rather than have by construction.
+
+   Runs under `medaka test --native`: every assertion spawns `grep`, and the
+   interpreter binds no subprocess extern. -}
+
+import io.{runVerb}
+import string.{
+  contains,
+  lines,
+  replace,
+  replaceAll,
+  startsWith,
+  stripSuffix,
+  unlines,
+  words,
+}
+import test.{Expectation(..)}
+import test_process.{scratchDir, underRoot}
+
+-- # The files
+
+service : <IO> String
+service = underRoot "pds/pds.service"
+
+caddyfile : <IO> String
+caddyfile = underRoot "pds/Caddyfile"
+
+egressService : <IO> String
+egressService = underRoot "pds/pds-egress.service"
+
+egressCaddyfile : <IO> String
+egressCaddyfile = underRoot "pds/Caddyfile.egress"
+
+backupService : <IO> String
+backupService = underRoot "pds/pds-backup.service"
+
+backupTimer : <IO> String
+backupTimer = underRoot "pds/pds-backup.timer"
+
+healthpingService : <IO> String
+healthpingService = underRoot "pds/pds-healthping.service"
+
+healthpingTimer : <IO> String
+healthpingTimer = underRoot "pds/pds-healthping.timer"
+
+alertService : <IO> String
+alertService = underRoot "pds/pds-alert@.service"
+
+-- # The rosters
+--
+-- Each entry is a (label, pattern) pair: the label a violation names, and
+-- the extended regular expression `grep -E` matches it with against the
+-- whole file. In a required roster one MISS is one violation; in a
+-- forbidden roster one HIT is.
+
+serviceDirectives : List (String, String)
+serviceDirectives = [
+  ("NoNewPrivileges", "^NoNewPrivileges=true"),
+  ("ProtectSystem", "^ProtectSystem=strict"),
+  ("ReadWritePaths", "^ReadWritePaths="),
+  ("PrivateTmp", "^PrivateTmp=true"),
+  ("MemoryMax", "^MemoryMax="),
+  ("CPUWeight-or-Nice", "^(CPUWeight|Nice)="),
+  ("TasksMax", "^TasksMax="),
+  ("LimitNOFILE", "^LimitNOFILE="),
+  ("StartLimitBurst", "^StartLimitBurst="),
+  ("IPAddressDeny", "^IPAddressDeny=any"),
+  ("IPAddressAllow", "^IPAddressAllow=.*localhost"),
+  ("CapabilityBoundingSet", "^CapabilityBoundingSet="),
+  ("ProtectHome", "^ProtectHome="),
+  ("PrivateDevices", "^PrivateDevices=true"),
+  ("UMask", "^UMask="),
+  ("RequiresMountsFor", "^RequiresMountsFor="),
+  ("OnFailure-alert", "^OnFailure=pds-alert@%n\\.service$"),
+]
+
+{- | The shared floor for the three observability/custody units (#2967
+   E5/E6, #2962 D5/B16).
+
+   All three reach the public internet by design, so none of them can carry
+   pds.service's `IPAddressDeny=any`. What they can carry is the
+   egress-by-allow-list narrowing `pds-egress.service` already uses: deny
+   the private, link-local and CGNAT ranges an SSRF would aim at, and leave
+   the public internet reachable. -}
+outboundUnitDirectives : List (String, String)
+outboundUnitDirectives = [
+  ("NoNewPrivileges", "^NoNewPrivileges=true"),
+  ("ProtectSystem", "^ProtectSystem=strict"),
+  ("ProtectHome", "^ProtectHome="),
+  ("PrivateDevices", "^PrivateDevices=true"),
+  ("PrivateTmp", "^PrivateTmp=true"),
+  ("UMask", "^UMask="),
+  ("MemoryMax", "^MemoryMax="),
+  ("TasksMax", "^TasksMax="),
+  ("LimitNOFILE", "^LimitNOFILE="),
+  ("CPUWeight-or-Nice", "^(CPUWeight|Nice)="),
+  ("IPAddressAllow-loopback", "^IPAddressAllow=127\\.0\\.0\\.1$"),
+  ("IPAddressDeny-loopback-rest", "^IPAddressDeny=localhost$"),
+  ("IPAddressDeny-private-10", "^IPAddressDeny=10\\.0\\.0\\.0/8$"),
+  ("IPAddressDeny-private-172", "^IPAddressDeny=172\\.16\\.0\\.0/12$"),
+  ("IPAddressDeny-private-192", "^IPAddressDeny=192\\.168\\.0\\.0/16$"),
+  ("IPAddressDeny-link-local", "^IPAddressDeny=169\\.254\\.0\\.0/16$"),
+  ("IPAddressDeny-cgnat", "^IPAddressDeny=100\\.64\\.0\\.0/10$"),
+  ("IPAddressDeny-unique-local-v6", "^IPAddressDeny=fc00::/7$"),
+  ("IPAddressDeny-link-local-v6", "^IPAddressDeny=fe80::/10$"),
+]
+
+-- Same reason as `egressServiceForbidden`: systemd consults the allow list
+-- first and an allow match wins outright, so one `IPAddressAllow=any`
+-- leaves every deny line above dead while the roster check still passes.
+outboundUnitForbidden : List (String, String)
+outboundUnitForbidden = [("blanket-allow", "^IPAddressAllow=any$")]
+
+{- | The backup unit's own additions on top of that floor.
+
+   TimeoutStartSec is required because a wedged backup holds nothing useful
+   and must yield to the next timer; OnFailure is required because a backup
+   that quietly stops running is the exact failure this unit exists to
+   prevent. -}
+backupServiceDirectives : List (String, String)
+backupServiceDirectives = [
+  ("Type-oneshot", "^Type=oneshot"),
+  ("ExecStart-script", "^ExecStart=/opt/pds/backup\\.sh$"),
+  ("TimeoutStartSec", "^TimeoutStartSec="),
+  ("OnFailure-alert", "^OnFailure=pds-alert@%n\\.service$"),
+]
+
+{- | `Persistent=` on the backup timer and its absence on the healthping
+   timer are both load-bearing and opposite, so each is pinned in its own
+   direction: a missed backup must run late, a missed liveness ping must
+   never be replayed (replaying one reports health for a window the box
+   spent switched off). -}
+backupTimerDirectives : List (String, String)
+backupTimerDirectives = [
+  ("OnCalendar", "^OnCalendar="),
+  ("Persistent", "^Persistent=true$"),
+  ("RandomizedDelay", "^RandomizedDelaySec="),
+  ("WantedBy", "^WantedBy=timers\\.target$"),
+]
+
+healthpingTimerDirectives : List (String, String)
+healthpingTimerDirectives = [
+  ("OnUnitActiveSec", "^OnUnitActiveSec="),
+  ("OnBootSec", "^OnBootSec="),
+  ("WantedBy", "^WantedBy=timers\\.target$"),
+]
+
+healthpingTimerForbidden : List (String, String)
+healthpingTimerForbidden = [("persistent-replay", "^Persistent=true$")]
+
+{- | `curl -f` is what makes the ping conditional on a healthy answer rather
+   than on a reachable socket: without it a 500 is still an exit-0 fetch and
+   the dead-man's switch would be fed by a server failing every request. -}
+healthpingServiceDirectives : List (String, String)
+healthpingServiceDirectives = [
+  ("Type-oneshot", "^Type=oneshot"),
+  ("EnvironmentFile", "^EnvironmentFile=/etc/pds/alert\\.env$"),
+  ("health-route-probed", "/xrpc/_health"),
+  ("curl-fail-on-http-error", "curl -fsS"),
+]
+
+-- The alert unit must not carry OnFailure= — it IS the OnFailure target,
+-- and a self-referential one would loop.
+alertServiceDirectives : List (String, String)
+alertServiceDirectives = [
+  ("Type-oneshot", "^Type=oneshot"),
+  ("EnvironmentFile", "^EnvironmentFile=/etc/pds/alert\\.env$"),
+  ("curl-fail-on-http-error", "curl -fsS"),
+]
+
+alertServiceForbidden : List (String, String)
+alertServiceForbidden = [("self-referential-onfailure", "^OnFailure=")]
+
+caddyDirectives : List (String, String)
+caddyDirectives = [
+  ("Strict-Transport-Security", "Strict-Transport-Security"),
+  ("request_body", "request_body"),
+  ("max_size", "max_size"),
+  ("timeout", "(read_timeout|write_timeout|dial_timeout|timeouts)"),
+  ("log", "^[ \t]*log[ \t]*\\{"),
+  ("log-to-journal", "^[ \t]*output stderr$"),
+  ("X-Forwarded-For", "header_up X-Forwarded-For"),
+]
+
+{- | The egress unit needs the same hardening class as pds.service (D1),
+   plus the network-layer SSRF guard its header comment describes.
+
+   systemd's IPAddress* filter matches addresses and never hostnames, so
+   this roster pins the private/link-local/CGNAT ranges the unit must deny,
+   not a list of upstream hosts (those live in `Caddyfile.egress`'s fixed
+   port-to-host mapping). The one allow entry is 127.0.0.1, narrower than
+   the `IPAddressDeny=localhost` beside it because an allow match wins
+   outright. -}
+egressServiceDirectives : List (String, String)
+egressServiceDirectives = [
+  ("NoNewPrivileges", "^NoNewPrivileges=true"),
+  ("ProtectSystem", "^ProtectSystem=strict"),
+  ("PrivateTmp", "^PrivateTmp=true"),
+  ("MemoryMax", "^MemoryMax="),
+  ("CPUWeight-or-Nice", "^(CPUWeight|Nice)="),
+  ("TasksMax", "^TasksMax="),
+  ("LimitNOFILE", "^LimitNOFILE="),
+  ("StartLimitBurst", "^StartLimitBurst="),
+  ("IPAddressAllow-loopback", "^IPAddressAllow=127\\.0\\.0\\.1$"),
+  ("IPAddressDeny-loopback-rest", "^IPAddressDeny=localhost$"),
+  ("IPAddressDeny-private-10", "^IPAddressDeny=10\\.0\\.0\\.0/8$"),
+  ("IPAddressDeny-private-172", "^IPAddressDeny=172\\.16\\.0\\.0/12$"),
+  ("IPAddressDeny-private-192", "^IPAddressDeny=192\\.168\\.0\\.0/16$"),
+  ("IPAddressDeny-link-local", "^IPAddressDeny=169\\.254\\.0\\.0/16$"),
+  ("IPAddressDeny-cgnat", "^IPAddressDeny=100\\.64\\.0\\.0/10$"),
+  ("IPAddressDeny-unique-local-v6", "^IPAddressDeny=fc00::/7$"),
+  ("IPAddressDeny-link-local-v6", "^IPAddressDeny=fe80::/10$"),
+  ("CapabilityBoundingSet", "^CapabilityBoundingSet="),
+  ("ProtectHome", "^ProtectHome="),
+  ("PrivateDevices", "^PrivateDevices=true"),
+  ("UMask", "^UMask="),
+  ("RequiresMountsFor", "^RequiresMountsFor="),
+]
+
+{- | The other half of that guard, and the reason it is a
+   forbidden-construct check rather than a required directive: systemd
+   consults the allow list first and an allow match wins outright, so a
+   single `IPAddressAllow=any` would match every packet and leave every deny
+   line above dead while the roster check still passed. -}
+egressServiceForbidden : List (String, String)
+egressServiceForbidden = [("blanket-allow", "^IPAddressAllow=any$")]
+
+{- | Each egress site block must reverse-proxy to a fixed real-world host,
+   on the loopback port that host's `pds serve` flag names — see §4 of
+   `docs/ops/PDS-DEPLOY.md` for the port roster (3128 appview, 3129 relay,
+   3130 chat, all reused unchanged here). -}
+egressCaddyDirectives : List (String, String)
+egressCaddyDirectives = [
+  ("admin-off", "^\tadmin off$"),
+  ("bind-loopback-appview", "^\tbind 127\\.0\\.0\\.1$"),
+  ("listen-appview", "^http://127\\.0\\.0\\.1:3128[ \t]*\\{"),
+  ("listen-relay", "^http://127\\.0\\.0\\.1:3129[ \t]*\\{"),
+  ("listen-chat", "^http://127\\.0\\.0\\.1:3130[ \t]*\\{"),
+  ("upstream-appview", "reverse_proxy https://api\\.bsky\\.app"),
+  ("upstream-relay", "reverse_proxy https://relay\\.example\\.com"),
+  ("upstream-chat", "reverse_proxy https://api\\.bsky\\.chat"),
+  ("timeout", "(read_timeout|write_timeout|dial_timeout|timeouts)"),
+  ("log", "^[ \t]*log[ \t]*\\{"),
+  ("log-to-journal", "^[ \t]*output stderr$"),
+]
+
+{- | The allow-list property, not a directive roster.
+
+   A `reverse_proxy` whose target is a placeholder (no fixed host between
+   the directive and its block, or a Caddy variable / header interpolated
+   into the target) is exactly the dynamic-upstream shape this file must
+   never have — the fixed 1:1 port-to-host mapping IS the allow-list, so
+   nothing here may pick an upstream at request time. -}
+egressCaddyForbidden : List (String, String)
+egressCaddyForbidden = [
+  ("dynamic-upstream-empty", "reverse_proxy[ \t]*\\{"),
+  ("dynamic-upstream-variable", "reverse_proxy.*\\{(http\\.|\\$)"),
+]
+
+-- # Matching
+
+{- | Whether `pattern` matches somewhere in `file`, as `grep -Eq` decides
+   it.
+
+   A `grep` exit other than 0 or 1 (an unreadable or moved file is exit 2)
+   is an `Err` rather than "absent": a deployment file this gate can no
+   longer read is a different finding from a directive it has stopped
+   carrying, and the retired script reported both as "missing". -}
+grepMatches : String -> String -> <Exec "_"> Result String Bool
+grepMatches pattern file =
+  match runVerb "grep" ["-E", "-q", "--", pattern, file]
+    Err e => Err "could not run grep: \{e}"
+    Ok (0, _, _) => Ok True
+    Ok (1, _, _) => Ok False
+    Ok (code, out, err) =>
+      Err
+        "grep -E \{debug pattern} \{file} exited \{intToString code}: \{out}\{err}"
+
+-- | One violation line per directive in `roster` that `file` does not
+-- carry.
+missingDirectives : String ->
+  List (String, String) ->
+  <Exec "_"> Result String (List String)
+missingDirectives _ [] = Ok []
+missingDirectives file ((label, pattern) :: rest) =
+  match grepMatches pattern file
+    Err e => Err e
+    Ok hit => match missingDirectives file rest
+      Err e => Err e
+      Ok more =>
+        if hit then
+          Ok more
+        else
+          Ok ("\{file}: missing \{label} (pattern: \{pattern})" :: more)
+
+-- | One violation line per pattern in `roster` that `file` does carry — the
+-- mirror image of `missingDirectives`.
+presentForbidden : String ->
+  List (String, String) ->
+  <Exec "_"> Result String (List String)
+presentForbidden _ [] = Ok []
+presentForbidden file ((label, pattern) :: rest) =
+  match grepMatches pattern file
+    Err e => Err e
+    Ok hit => match presentForbidden file rest
+      Err e => Err e
+      Ok more =>
+        if hit then
+          Ok
+            ("\{file}: forbidden construct present: \{label} (pattern: \{pattern})"
+              :: more)
+        else
+          Ok more
+
+-- # Mutation copies
+
+{- | A fresh scratch directory, shared by every mutation control below.
+
+   A top-level nullary binding is memoized, so this is one `mktemp -d` for
+   the whole module rather than one per control. `medaka gate run` hands a
+   native gate a `TMPDIR` under a scratch root it reaps itself, so the
+   directory is left in place. -}
+scratch : <Exec "_"> Result String String
+scratch = scratchDir
+
+-- | `content` written to `name` under `scratch`, and the path it landed at.
+scratchFile : String -> String -> <Exec "_", FileWrite "_"> Result String String
+scratchFile name content = match scratch
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok dir =>
+    let p = "\{dir}/\{name}"
+    match writeFile p content
+      Err e => Err "could not write \{p}: \{e}"
+      Ok _ => Ok p
+
+{- | `content` without the one trailing newline a text file ends with, so
+   its lines do not gain an empty last element and a derived copy is not one
+   blank line longer than its original. -}
+chomp : String -> String
+chomp content = optionOr content (stripSuffix "\n" content)
+
+-- | `path` read, its lines put through `rewrite`, and the result written to
+-- `name` under `scratch`.
+mutantOf : String ->
+  String ->
+  (List String -> List String) ->
+  <Exec "_", FileRead "_", FileWrite "_"> Result String String
+mutantOf path name rewrite = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok content => scratchFile name (unlines (rewrite (lines (chomp content))))
+
+-- | Every line but the ones satisfying `doomed` — the retired script's
+-- `grep -v`.
+without : (String -> Bool) -> List String -> List String
+without doomed ls = filter (l => not (doomed l)) ls
+
+-- | Every line, with `line` appended.
+appending : String -> List String -> List String
+appending line ls = ls ++ [line]
+
+-- | Every line, with the first occurrence of `old` in each replaced by
+-- `new` — the retired script's `sed s#old#new#`.
+substituting : String -> String -> List String -> List String
+substituting old new ls = map (replace old new) ls
+
+{- | Every line, with EVERY occurrence of `old` replaced by `new` — the
+   retired script's `sed s/old/new/g`.
+
+   Distinct from `substituting` because one control needs it: the healthping
+   unit's `ExecStart=` runs two `curl -fsS` invocations on one line, so
+   rewriting only the first leaves the roster's pattern still matching and
+   the control silently proves nothing. -}
+substitutingAll : String -> String -> List String -> List String
+substitutingAll old new ls = map (replaceAll old new) ls
+
+-- | `missingDirectives` over a mutant, with the mutant's own failure
+-- reported as the check's.
+missingIn : Result String String ->
+  List (String, String) ->
+  <Exec "_"> Result String (List String)
+missingIn (Err e) _ = Err e
+missingIn (Ok path) roster = missingDirectives path roster
+
+-- | `presentForbidden` over a mutant, with the mutant's own failure
+-- reported as the check's.
+presentIn : Result String String ->
+  List (String, String) ->
+  <Exec "_"> Result String (List String)
+presentIn (Err e) _ = Err e
+presentIn (Ok path) roster = presentForbidden path roster
+
+-- # Grading
+
+-- | Passes when the check reported no violation lines.
+expectClean : String -> Result String (List String) -> Expectation
+expectClean what (Err e) =
+  Fail "\{what}: \{e}" "no violations" "the check could not run"
+expectClean _ (Ok []) = Pass "no violations" "no violations"
+expectClean what (Ok hits) =
+  Fail
+    "\{what}:\n\{unlines (map indent hits)}"
+    "no violations"
+    "\{intToString (length hits)} violations"
+
+{- | Passes when the check reported at least one violation line — a mutation
+   control, where a clean report is the failure.
+
+   The count, not the text: a control proves the check can fire at all, and
+   pinning which label fired would restate the roster beside it. -}
+expectCaught : String -> Result String (List String) -> Expectation
+expectCaught what (Err e) =
+  Fail "\{what}: \{e}" "a violation" "the check could not run"
+expectCaught what (Ok []) =
+  Fail
+    "\{what}: the injected violation was not caught"
+    "a violation"
+    "no violations"
+expectCaught _ (Ok hits) =
+  Pass "a violation" "\{intToString (length hits)} violations"
+
+indent : String -> String
+indent line = "  \{line}"
+
+-- # The real tree
+
+test "pds.service carries every required hardening directive" =
+  expectClean
+    "pds/pds.service is missing a required hardening directive"
+    (missingDirectives service serviceDirectives)
+
+test "Caddyfile carries every required hardening directive" =
+  expectClean
+    "pds/Caddyfile is missing a required hardening directive"
+    (missingDirectives caddyfile caddyDirectives)
+
+test "pds-egress.service carries every required hardening directive" =
+  expectClean
+    "pds/pds-egress.service is missing a required hardening directive"
+    (missingDirectives egressService egressServiceDirectives)
+
+test "pds-egress.service has no blanket IPAddressAllow voiding its deny list" =
+  expectClean
+    "pds/pds-egress.service has a blanket IPAddressAllow that voids its deny list"
+    (presentForbidden egressService egressServiceForbidden)
+
+test "Caddyfile.egress carries every required hardening directive" =
+  expectClean
+    "pds/Caddyfile.egress is missing a required hardening directive"
+    (missingDirectives egressCaddyfile egressCaddyDirectives)
+
+test "Caddyfile.egress has no dynamic or header-driven upstream" =
+  expectClean
+    "pds/Caddyfile.egress has a dynamic/header-driven upstream"
+    (presentForbidden egressCaddyfile egressCaddyForbidden)
+
+-- ## The three outbound units
+--
+-- One roster, three units, graded per unit rather than in a loop: a loop
+-- that stopped at the first unit would report two units it never read as
+-- covered.
+
+test "pds-backup.service carries the shared outbound-unit roster" =
+  expectClean
+    "pds-backup.service is missing a required hardening directive"
+    (missingDirectives backupService outboundUnitDirectives)
+
+test "pds-backup.service has no blanket IPAddressAllow" =
+  expectClean
+    "pds-backup.service has a blanket IPAddressAllow that voids its deny list"
+    (presentForbidden backupService outboundUnitForbidden)
+
+test "pds-healthping.service carries the shared outbound-unit roster" =
+  expectClean
+    "pds-healthping.service is missing a required hardening directive"
+    (missingDirectives healthpingService outboundUnitDirectives)
+
+test "pds-healthping.service has no blanket IPAddressAllow" =
+  expectClean
+    "pds-healthping.service has a blanket IPAddressAllow that voids its deny list"
+    (presentForbidden healthpingService outboundUnitForbidden)
+
+test "pds-alert@.service carries the shared outbound-unit roster" =
+  expectClean
+    "pds-alert@.service is missing a required hardening directive"
+    (missingDirectives alertService outboundUnitDirectives)
+
+test "pds-alert@.service has no blanket IPAddressAllow" =
+  expectClean
+    "pds-alert@.service has a blanket IPAddressAllow that voids its deny list"
+    (presentForbidden alertService outboundUnitForbidden)
+
+test "pds-backup.service carries its own oneshot and alert directives" =
+  expectClean
+    "pds/pds-backup.service is missing a required directive"
+    (missingDirectives backupService backupServiceDirectives)
+
+test "pds-backup.timer replays a missed backup" =
+  expectClean
+    "pds/pds-backup.timer is missing a required directive"
+    (missingDirectives backupTimer backupTimerDirectives)
+
+test "pds-healthping.service probes the health route and fails on HTTP errors" =
+  expectClean
+    "pds/pds-healthping.service is missing a required directive"
+    (missingDirectives healthpingService healthpingServiceDirectives)
+
+test "pds-healthping.timer carries its own schedule directives" =
+  expectClean
+    "pds/pds-healthping.timer is missing a required directive"
+    (missingDirectives healthpingTimer healthpingTimerDirectives)
+
+test "pds-healthping.timer does not replay a missed ping" =
+  expectClean
+    "pds/pds-healthping.timer replays missed pings, which reports health for an outage"
+    (presentForbidden healthpingTimer healthpingTimerForbidden)
+
+test "pds-alert@.service carries its own oneshot and curl directives" =
+  expectClean
+    "pds/pds-alert@.service is missing a required directive"
+    (missingDirectives alertService alertServiceDirectives)
+
+test "pds-alert@.service has no self-referential OnFailure" =
+  expectClean
+    "pds/pds-alert@.service has a self-referential OnFailure"
+    (presentForbidden alertService alertServiceForbidden)
+
+-- # Mutation controls
+--
+-- Each one derives a copy of the real file with exactly one hardening
+-- property removed, or one voiding construct added, and requires the same
+-- check that passes above to fire on it. A roster entry with no control
+-- behind it is a roster entry nothing has shown can fail.
+
+test "mutation control: a stripped systemd directive (IPAddressDeny) is caught" =
+  expectCaught
+    "a stripped systemd directive (IPAddressDeny)"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-deny"
+        (without (startsWith "IPAddressDeny=")))
+      serviceDirectives)
+
+test "mutation control: a stripped systemd directive (MemoryMax) is caught" =
+  expectCaught
+    "a stripped systemd directive (MemoryMax)"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-memorymax"
+        (without (startsWith "MemoryMax=")))
+      serviceDirectives)
+
+test "mutation control: a stripped OnFailure= on pds.service is caught" =
+  expectCaught
+    "a stripped OnFailure= on pds.service"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-onfailure"
+        (without (startsWith "OnFailure=")))
+      serviceDirectives)
+
+test "mutation control: a stripped Caddy HSTS header is caught" =
+  expectCaught
+    "a stripped Caddy directive (Strict-Transport-Security)"
+    (missingIn
+      (mutantOf
+        caddyfile
+        "Caddyfile.no-hsts"
+        (without (contains "Strict-Transport-Security")))
+      caddyDirectives)
+
+test "mutation control: a stripped Caddy request-body limit is caught" =
+  expectCaught
+    "a stripped Caddy directive (max_size)"
+    (missingIn
+      (mutantOf
+        caddyfile
+        "Caddyfile.no-max-size"
+        (without (contains "max_size")))
+      caddyDirectives)
+
+test "mutation control: a stripped X-Forwarded-For overwrite is caught" =
+  expectCaught
+    "a stripped X-Forwarded-For overwrite"
+    (missingIn
+      (mutantOf
+        caddyfile
+        "Caddyfile.no-xff"
+        (without (contains "header_up X-Forwarded-For")))
+      caddyDirectives)
+
+{- | Whether `line` is the retired script's `^[[:space:]]*output stderr$`:
+   the two words `output stderr` alone, at any indent. -}
+isOutputStderr : String -> Bool
+isOutputStderr line = words line == ["output", "stderr"]
+
+{- | An access log redirected away from the journal.
+
+   The `log` block is still present, so the roster's own `log` entry still
+   passes — which is why the destination needs its own entry. E7 asks for
+   the Caddy log to be readable beside the PDS log, and a file is not beside
+   a journal; it is a second tool and a manual timestamp join during an
+   incident. -}
+toJournalFile : List String -> List String
+toJournalFile ls = map redirectOutput ls
+
+redirectOutput : String -> String
+redirectOutput line =
+  if isOutputStderr line then
+    "\t\toutput file /var/log/caddy/pds-access.log"
+  else
+    line
+
+test "mutation control: an access log redirected away from the journal is caught" =
+  expectCaught
+    "an access log redirected away from the journal"
+    (missingIn
+      (mutantOf caddyfile "Caddyfile.log-to-file" toJournalFile)
+      caddyDirectives)
+
+test "mutation control: a dropped egress IPAddressDeny range is caught" =
+  expectCaught
+    "a dropped egress IPAddressDeny range (172.16.0.0/12)"
+    (missingIn
+      (mutantOf
+        egressService
+        "pds-egress.service.no-172"
+        (without (l => l == "IPAddressDeny=172.16.0.0/12")))
+      egressServiceDirectives)
+
+{- | A blanket `IPAddressAllow` added to an otherwise correct egress unit.
+
+   The directive roster still passes on this copy — every deny line is still
+   present — which is why the forbidden-direction check exists, and both
+   halves are asserted below. -}
+blanketAllowEgress : <Exec "_", FileRead "_", FileWrite "_", IO> Result String String
+blanketAllowEgress =
+  mutantOf
+    egressService
+    "pds-egress.service.blanket-allow"
+    (appending "IPAddressAllow=any")
+
+test "mutation control: a blanket egress IPAddressAllow (any) is caught" =
+  expectCaught
+    "a blanket egress IPAddressAllow (any)"
+    (presentIn blanketAllowEgress egressServiceForbidden)
+
+test "mutation control: the blanket-allow copy still passes the egress roster" =
+  expectClean
+    "the blanket-allow copy was expected to pass the directive roster"
+    (missingIn blanketAllowEgress egressServiceDirectives)
+
+test "mutation control: a dynamic header-driven egress upstream is caught" =
+  expectCaught
+    "a dynamic/header-driven egress upstream"
+    (presentIn
+      (mutantOf
+        egressCaddyfile
+        "Caddyfile.egress.dynamic"
+        (substituting
+          "reverse_proxy https://api.bsky.app"
+          "reverse_proxy {http.request.header.X-Upstream}"))
+      egressCaddyForbidden)
+
+test "mutation control: a stripped egress upstream (chat) is caught" =
+  expectCaught
+    "a stripped egress upstream (chat)"
+    (missingIn
+      (mutantOf
+        egressCaddyfile
+        "Caddyfile.egress.no-chat"
+        (without (contains "reverse_proxy https://api.bsky.chat")))
+      egressCaddyDirectives)
+
+{- | A wildcard-bound egress listener.
+
+   This is the one that shipped: without `bind 127.0.0.1` Caddy binds the
+   wildcard interface, and the three fixed upstreams become a relay to
+   Bluesky's hosts that anyone on the internet can drive from this box's IP.
+   Measured on the first real deploy — `curl http://<public-ip>:3128/`
+   answered 200 until the directive was added. -}
+test "mutation control: a wildcard-bound egress listener is caught" =
+  expectCaught
+    "a wildcard-bound egress listener"
+    (missingIn
+      (mutantOf
+        egressCaddyfile
+        "Caddyfile.egress.no-bind"
+        (without (l => l == "\tbind 127.0.0.1")))
+      egressCaddyDirectives)
+
+-- Without `admin off` Caddy claims 127.0.0.1:2019, which the inbound Caddy
+-- already holds, and this unit restart-loops on every start.
+test "mutation control: an egress config without admin off is caught" =
+  expectCaught
+    "an egress config without `admin off`"
+    (missingIn
+      (mutantOf
+        egressCaddyfile
+        "Caddyfile.egress.no-admin-off"
+        (without (l => l == "\tadmin off")))
+      egressCaddyDirectives)
+
+-- The three outbound units share one roster, so this also proves that
+-- roster is wired to them and not only to the egress unit.
+test "mutation control: a dropped backup IPAddressDeny range is caught" =
+  expectCaught
+    "a dropped backup IPAddressDeny range (169.254.0.0/16)"
+    (missingIn
+      (mutantOf
+        backupService
+        "pds-backup.service.no-169"
+        (without (l => l == "IPAddressDeny=169.254.0.0/16")))
+      outboundUnitDirectives)
+
+{- | A replaying healthping timer.
+
+   The directive roster still passes on this copy — nothing was removed —
+   which is exactly why the forbidden-direction check exists. A replayed
+   liveness ping reports health for a window the box spent switched off. -}
+replayingHealthpingTimer : <Exec "_", FileRead "_", FileWrite "_", IO> Result String String
+replayingHealthpingTimer =
+  mutantOf
+    healthpingTimer
+    "pds-healthping.timer.persistent"
+    (appending "Persistent=true")
+
+test "mutation control: a replaying healthping timer is caught" =
+  expectCaught
+    "a replaying healthping timer (Persistent=true)"
+    (presentIn replayingHealthpingTimer healthpingTimerForbidden)
+
+test "mutation control: the Persistent=true copy still passes the timer roster" =
+  expectClean
+    "the Persistent=true copy was expected to pass the directive roster"
+    (missingIn replayingHealthpingTimer healthpingTimerDirectives)
+
+-- Dropping `-f` leaves the unit running and still pinging; it just starts
+-- feeding the dead-man's switch from a server answering every request with
+-- an error.
+test "mutation control: a healthping probe that ignores HTTP errors is caught" =
+  expectCaught
+    "a healthping probe that ignores HTTP errors"
+    (missingIn
+      (mutantOf
+        healthpingService
+        "pds-healthping.service.no-f"
+        (substitutingAll "curl -fsS" "curl -sS"))
+      healthpingServiceDirectives)
+
+-- # Non-vacuity
+
+{- | Every roster entry and forbidden pattern this module grades, counted.
+
+   A roster that lost rows would still report clean, so the total is pinned:
+   a row deleted from any roster above fails this rather than quietly
+   narrowing every assertion that reads it. -}
+gradedPatterns : Int
+gradedPatterns =
+  length serviceDirectives
+    + length caddyDirectives
+    + length egressServiceDirectives
+    + length egressServiceForbidden
+    + length egressCaddyDirectives
+    + length egressCaddyForbidden
+    + length outboundUnitDirectives
+    + length outboundUnitForbidden
+    + length backupServiceDirectives
+    + length backupTimerDirectives
+    + length healthpingServiceDirectives
+    + length healthpingTimerDirectives
+    + length healthpingTimerForbidden
+    + length alertServiceDirectives
+    + length alertServiceForbidden
+
+patternFloor : Int
+patternFloor = 100
+
+test "deploy_config_lint grades at least PATTERN_FLOOR=100 patterns" =
+  if gradedPatterns >= patternFloor then
+    Pass
+      ">= \{intToString patternFloor} patterns"
+      "\{intToString gradedPatterns} patterns"
+  else
+    Fail
+      "only \{intToString gradedPatterns} patterns are graded, expected >= \{intToString patternFloor} (vacuous-green guard)"
+      ">= \{intToString patternFloor} patterns"
+      "\{intToString gradedPatterns} patterns"

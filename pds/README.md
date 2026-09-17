@@ -18,7 +18,7 @@ shared `Ref Store`. `pds/test/serve_e2e.sh` grades it end to end (queries,
 pipelining, keep-alive, a chunked-transfer write, every one of the nine XRPC
 NSIDs and both well-knowns driven over the socket, a malformed request, an
 over-cap body, the idle-connection timeout, and restart-and-resume across a
-process boundary), and `pds/test/lib_boundary.sh` proves the `pds/lib` ⇄
+process boundary), and `pds/test/lib_boundary_test.mdk` proves the `pds/lib` ⇄
 `pds/shell` boundary holds (no `pds/lib` import of `pds/shell`, every
 `pds/lib` export explicitly signed, and no such signature effect-bearing —
 the signature check is what stops an unannotated export from carrying an
@@ -66,7 +66,7 @@ the shell is native-bound.
 - `pds/lib/` — pure library modules. Production modules under this directory
   may not import exported identifiers
   ending in `ForTest`, selectively or through `.*`, nor alias a module that
-  exports any such identifier; `opaque_field_scalar.sh` derives and enforces
+  exports any such identifier; `opaque_field_scalar_test.mdk` derives and enforces
   that deployment boundary while observing the allowed test-only consumers
   under `pds/test/`.
 - `stdlib/http.mdk` and `pds/lib/xrpc.mdk` — bounded HTTP/1.1 framing,
@@ -905,7 +905,7 @@ candidate-1/exhaustion and raw negative evidence.
 
 ```sh
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/ecdsa_vectors_test.mdk
-MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/opaque_field_scalar.sh
+MEDAKA_ROOT="$(git rev-parse --show-toplevel)" ./medaka test --native pds/test/opaque_field_scalar_test.mdk
 MEDAKA_ROOT="$(git rev-parse --show-toplevel)" sh pds/test/constant_time_signing.sh
 ```
 
