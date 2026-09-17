@@ -39,7 +39,16 @@ import http.{
   serializeResponse,
 }
 import array.{sliceClamped}
-import async.{Async, Wait, deadlineAfter, expired, liftIO, sleep, spawn}
+import async.{
+  Async,
+  Wait(..),
+  awaitAny,
+  deadlineAfter,
+  expired,
+  liftIO,
+  sleep,
+  spawn,
+}
 import lib.accesslog.{
   AccessEvent(..),
   StatsEvent(..),
@@ -295,11 +304,12 @@ maxConcurrentSubscriptions = 32
    it is the process, and with it every account's connections and every open
    subscription.
 
-   Eight is what a legitimate client asks for rather than a share of the
-   connection census: a client rendering one view issues a handful of proxied
-   reads together, and eight is that with room left. Like every ceiling above
-   it, the call past it is refused with a cheap answer — a 503, and no
-   outbound call made at all — rather than admitted and then dropped.
+   Eight is how many of those buffers this process will hold, and NOT a guess
+   at what a client asks for: the official client's cold start was measured
+   issuing ten proxied reads at once (#3100), so a caller past this number is
+   ordinary rather than abusive. What it is not is free, which is why the call
+   past the eighth waits in `maxQueuedProxiedCalls` for a slot instead of
+   either being admitted or refused outright.
 
    It bounds CONCURRENCY, and `ProxyClass` (`pds/lib/ratelimit.mdk`) bounds
    RATE; neither substitutes for the other, because a caller well within its
@@ -309,6 +319,50 @@ maxConcurrentSubscriptions = 32
    is why this is a ceiling rather than a stopgap. -}
 maxConcurrentProxiedCalls : Int
 maxConcurrentProxiedCalls = 8
+
+{- | How many proxied reads may wait for a slot before one is refused.
+
+   A caller past `maxConcurrentProxiedCalls` is not over the resource that
+   ceiling protects; it is early. One official client's cold start peaks at ten
+   concurrent proxied reads (#3100, measured over the live access log: 302
+   calls, median 563 ms, nine arriving while eight were already in flight), so
+   a bare ceiling of eight refuses part of a healthy app's first screen against
+   a server with nothing wrong with it. A legitimate burst should become
+   latency; only genuine overload should still be refused.
+
+   Sixteen is twice the ceiling, which is a bound on LATENCY rather than on
+   memory: a call admitted at the back of a full queue waits two service
+   rounds, and at the measured p90 of 697 ms per proxied read that is under a
+   second and a half — inside `proxyQueueWait` with margin. A waiter costs one
+   parked task and the inbound connection it already charged to
+   `maxConcurrentConnections`; it holds none of the response buffer the ceiling
+   exists to bound, because it has made no outbound call at all.
+
+   Raising the ceiling instead was considered and refused: the ceiling is one
+   number for the whole process while a fan-out is one client's, so a constant
+   sized for one phone is wrong for two devices and wrong again for a caller
+   poking at the server on purpose. Queueing keeps the memory bound at eight
+   whatever the fan-out is. -}
+maxQueuedProxiedCalls : Int
+maxQueuedProxiedCalls = 16
+
+{- | How long a queued proxied read waits for a slot before it is refused.
+
+   Long enough that a legitimate queue drains inside it — sixteen waiters
+   behind eight slots at the measured p90 of 697 ms is about 1.4 s — and short
+   enough that the wait is spent on an answer somebody is still there for.
+   Without a deadline the queue would be a refusal wearing a nicer error: the
+   call would end in a client-side timeout instead, after this server had spent
+   an upstream call on it.
+
+   It is well under the outbound budgets a slot can be held for
+   (`upstreamSilenceTimeout` is 5 s and `upstreamCallTimeout` 10 s,
+   `pds/shell/egress.mdk`), which is what keeps a stalled upstream from turning
+   the queue into a second and longer wait behind the first: waiters behind a
+   stall are refused on this deadline rather than held until the stalled call
+   gives its slot back. -}
+proxyQueueWait : Duration
+proxyQueueWait = seconds 2
 
 {- | How long one request's header section may take to arrive in full (#2772).
 
@@ -939,32 +993,142 @@ claimSubscription (SubscriptionCensus open) =
 releaseSubscription : SubscriptionCensus -> Unit
 releaseSubscription (SubscriptionCensus open) = open := !open - 1
 
+{- | One proxied read waiting for a slot.
+
+   Two flags and not one. `granted` is what the scheduler parks on
+   (`WaitFlag`) and it is set by the RELEASING call rather than by the waiter,
+   because the slot is handed straight over rather than given back and taken
+   again: between a decrement and the waiter's next step a fresh arrival would
+   find the slot free and barge past a call that has already been waiting.
+   `abandoned` is the waiter's own answer, and the queue is what needs it — a
+   waiter whose deadline passed is still somewhere in the list, and marking it
+   is what stops a later release from handing a slot to a call that has already
+   been refused.
+
+   Reading `granted` first is what makes the two exclusive: a grant is recorded
+   before the waiter runs again, so a waiter that could read both takes the
+   slot rather than abandoning one already charged to it. -}
+data ProxyWaiter = ProxyWaiter (Ref Bool) (Ref Bool)
+
 {- | How many proxied reads are in flight right now, bounded by
-   `maxConcurrentProxiedCalls`.
+   `maxConcurrentProxiedCalls`, and how many are queued for a slot, bounded by
+   `maxQueuedProxiedCalls`.
 
    A type of its own for the reason `SubscriptionCensus` is one: it is a
    third same-typed counter travelling this module, and one crossed with
    another would bound the wrong resource while still looking like a census.
    Unlike the other two it rides on `Serving` rather than beside them,
    because the outbound path is the only thing that charges it and `Serving`
-   is already what that path reads its configuration from. -}
-data ProxyCensus = ProxyCensus (Ref Int)
+   is already what that path reads its configuration from.
 
--- | Take a proxied-call slot if one is free. `False` means the ceiling is
--- reached and nothing was charged.
+   The count of waiters is carried beside the list rather than read off its
+   length, because the list also holds waiters that have given up: their charge
+   comes off the moment they do, and only a release walking past them drops
+   them. -}
+data ProxyCensus = ProxyCensus (Ref Int) (Ref Int) (Ref (List ProxyWaiter))
+
+-- | Take a proxied-call slot if one is free. `False` means every slot is in
+-- flight and nothing was charged.
 claimProxiedCall : ProxyCensus -> Bool
-claimProxiedCall (ProxyCensus inFlight) =
+claimProxiedCall (ProxyCensus inFlight _ _) =
   if !inFlight >= maxConcurrentProxiedCalls then
     False
   else
     let () = inFlight := !inFlight + 1
     True
 
--- | Give a proxied-call slot back. Called on the ONE path a claimed call
--- leaves by, so it needs no idempotence flag: `egressCall` answers every
--- outcome it has with a `Result`, so there is no exit that skips the release.
+-- | Join the back of the admission queue, or `None` when it is full — in which
+-- case nothing was charged and the call is refused now rather than later.
+enqueueProxiedCall : ProxyCensus -> Option ProxyWaiter
+enqueueProxiedCall (ProxyCensus _ waiting queue) =
+  if !waiting >= maxQueuedProxiedCalls then
+    None
+  else
+    let waiter = ProxyWaiter (Ref False) (Ref False)
+    let () = waiting := !waiting + 1
+    let () = queue := !queue ++ [waiter]
+    Some waiter
+
+waiterGranted : ProxyWaiter -> Ref Bool
+waiterGranted (ProxyWaiter granted _) = granted
+
+waiterAbandoned : ProxyWaiter -> Bool
+waiterAbandoned (ProxyWaiter _ abandoned) = !abandoned
+
+-- | The first waiter still holding its place, and what is left behind it.
+-- Waiters that gave up are dropped on the way past rather than returned: their
+-- charge came off `waiting` when they abandoned.
+firstLiveWaiter : List ProxyWaiter -> Option (ProxyWaiter, List ProxyWaiter)
+firstLiveWaiter [] = None
+firstLiveWaiter (waiter :: rest) =
+  if waiterAbandoned waiter then firstLiveWaiter rest else Some (waiter, rest)
+
+{- | Hand this call's slot to the caller that has waited longest for it, or
+   give it back when nobody is waiting.
+
+   The slot is TRANSFERRED on the first path: `inFlight` stays charged and the
+   waiter resumes already holding it, which is what makes the claim and the
+   release the two halves of one decision even with a queue between them —
+   there is no instant at which a slot is free and unowned for an arriving call
+   to take ahead of the queue. It is conservative in the only direction that
+   matters: the count reads one higher than the calls actually outstanding for
+   the step between the grant and the waiter's resumption, never one lower.
+
+   Called on the ONE path a claimed call leaves by, so it needs no idempotence
+   flag: `egressCall` answers every outcome it has with a `Result`, so there is
+   no exit that skips the release. -}
 releaseProxiedCall : ProxyCensus -> Unit
-releaseProxiedCall (ProxyCensus inFlight) = inFlight := !inFlight - 1
+releaseProxiedCall (ProxyCensus inFlight waiting queue) =
+  match firstLiveWaiter !queue
+    None =>
+      let () = queue := []
+      inFlight := !inFlight - 1
+    Some (waiter, rest) =>
+      let () = queue := rest
+      let () = waiting := !waiting - 1
+      waiterGranted waiter := True
+
+{- | What a woken waiter holds: `True` when a slot was handed to it, `False`
+   when its wait ran out first.
+
+   The `False` arm is where the waiter leaves the queue — it stays in the list
+   until a release walks past it, but its charge comes off here, so a refused
+   call does not go on occupying a queue place it will never use. -}
+settleProxiedCall : ProxyCensus -> ProxyWaiter -> Bool
+settleProxiedCall (ProxyCensus _ waiting _) (ProxyWaiter granted abandoned) =
+  if !granted then
+    True
+  else
+    let () = abandoned := True
+    let () = waiting := !waiting - 1
+    False
+
+{- | Take a proxied-call slot, waiting in the admission queue for one if every
+   slot is in flight. `False` means the call is refused: the queue was full, or
+   `proxyQueueWait` ran out before a slot reached it.
+
+   It PARKS on the grant flag and the deadline together rather than polling the
+   census, because this process runs one cooperative thread
+   (`stdlib/async.mdk`) and everything else it is doing runs on it too. A wait
+   that spun, or slept in a loop, would stop every other connection and every
+   open subscription as well as this call — a concurrency limit turned into a
+   global stall, which is worse than the refusal it replaced. Parked, a waiting
+   call costs one entry in the scheduler's park table and no work at all until
+   one of its two waits fires.
+
+   The rate limit is charged before this is reached (`forwardProxied` applies
+   `ProxyClass` first), so queueing admits more calls into flight without
+   admitting more calls per window: the anti-abuse bound is untouched. -}
+admitProxiedCall : ProxyCensus -> Async <Clock | e> Bool
+admitProxiedCall census =
+  if claimProxiedCall census then
+    deferPure True
+  else match enqueueProxiedCall census
+    None => deferPure False
+    Some waiter => defer
+      limit <- deadlineAfter proxyQueueWait
+      _ <- awaitAny [WaitFlag (waiterGranted waiter), limit]
+      liftIO (u => settleProxiedCall census waiter)
 
 -- | Retire this connection's un-framed charge, if it still holds one.
 releaseUnframed : UnframedSlot -> Unit
@@ -1080,7 +1244,7 @@ export data Serving = Serving TrustedProxy (Option Egress) ProxyCensus
 export
 makeServing : TrustedProxy -> Option Egress -> Ref Int -> Serving
 makeServing trustedProxy egress inFlight =
-  Serving trustedProxy egress (ProxyCensus inFlight)
+  Serving trustedProxy egress (ProxyCensus inFlight (Ref 0) (Ref []))
 
 export
 servingTrustedProxy : Serving -> TrustedProxy
@@ -1951,8 +2115,9 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
           keepAlive
           trace
           (serializeResponse (withAllowOrigin proxyUpstreamFailureResponse))
-      Some egress =>
-        if not (claimProxiedCall (servingProxyCensus serving)) then
+      Some egress => defer
+        admitted <- admitProxiedCall (servingProxyCensus serving)
+        if not admitted then
           sendAndContinue
             server
             dir
@@ -1990,15 +2155,23 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
    — is this server's business and tells a client nothing it can act on, and
    distinguishing them in the body would describe this deployment's internals to
    whoever asked. -}
-{- | What a proxied read past `maxConcurrentProxiedCalls` is told.
+{- | What a proxied read past `maxConcurrentProxiedCalls` AND
+   `maxQueuedProxiedCalls` is told.
 
    503 and not 502: nothing was asked of the upstream, so reporting a gateway
    failure would blame a service that was never called, and a caller that
-   retries later is right to — the ceiling is on what is in flight now. The
-   claim and the release around the call it guards are the two halves of one
-   decision, the way `admitSubscription`'s are, so the slot is charged at the
-   one point the call is decided on and given back at the one point it has
-   finished. -}
+   retries later is right to — what is refused here is what is in flight and
+   queued now. That reading holds for both ways past the queue, the full queue
+   and the deadline alike, which is why neither gets a code of its own: a
+   client can act on "come back" and on nothing finer, and the two differ only
+   in how long this server was willing to hold the call open first.
+
+   The claim and the release around the call it guards are still the two halves
+   of one decision, the way `admitSubscription`'s are: `admitProxiedCall`
+   charges the slot at the one point the call is decided on — whether it took
+   it directly or was handed it by `releaseProxiedCall` — and it is given back
+   at the one point the call has finished. A refused call, on either path, was
+   never charged one. -}
 proxyCeilingResponse : Response
 proxyCeilingResponse =
   xrpcErrorResponse

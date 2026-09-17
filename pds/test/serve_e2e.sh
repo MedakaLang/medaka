@@ -2439,8 +2439,15 @@ cat "$WORK/deafstalled.out"
 #    of logical bytes and an order of magnitude more of resident memory. What
 #    bounds the NUMBER of them is `maxConcurrentProxiedCalls`
 #    (`pds/shell/server.mdk`), which this case reads as the literal 8 below:
-#    eight dials are left stuck against the deaf proxy, and the ninth must be
-#    refused rather than admitted.
+#    eight dials are left stuck against the deaf proxy, so no ninth call can be
+#    admitted while they hold their slots.
+#
+#    What the ninth gets is the ADMISSION QUEUE's answer, not the ceiling's
+#    (#3100): it waits, and it is refused only because these eight hold their
+#    slots for the whole of a connect budget that outlasts `proxyQueueWait`.
+#    That is why this case proves the ceiling and case 51c proves the refusal -
+#    a call refused HERE has spent the queue's deadline first, and this case
+#    cannot tell a queue that refuses promptly from one that never admits.
 #
 #    Graded on the error CODE and not just the status: 503 is also what the
 #    subscription ceiling answers, and a status-only assertion could not tell
@@ -2481,6 +2488,32 @@ cat "$WORK"/ceiling.*.out
 client proxy-read "$PORTDEAF" "$DEAFACCESS" "$APPVIEW_DID" "$TIMELINE" 502 '' \
   || fail 'case 51: the ceiling did not give its slots back - a later proxied call was still refused'
 
+# 51c. OVERLOAD IS STILL REFUSED, AND REFUSED PROMPTLY (#3100). The admission
+#    queue turns a legitimate burst into latency; it must NOT turn genuine
+#    overload into latency too, or the 503 has been moved rather than removed.
+#    `proxy-overload` leaves the ceiling AND the whole queue outstanding - 8 in
+#    flight and 16 waiting, all of them against this same deaf proxy - and then
+#    asks for three more reads, one at a time, timing each.
+#
+#    The 300ms budget is the discriminator and is the whole case. A call
+#    refused past a FULL queue costs nothing but the decision, while a call
+#    that got INTO the queue waits `proxyQueueWait` - 2s - before being
+#    refused, and the two are indistinguishable on status and error code alike.
+#    A change that simply admitted everything would pass case 51b and fail
+#    here; a queue that made every refusal wait out its deadline would pass
+#    every status assertion in this file and fail here too.
+client proxy-overload "$PORTDEAF" "$DEAFACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  24 3 300 \
+  || fail 'case 51c: a proxied read past the ceiling AND a full admission queue was not refused 503 ProxyLimitExceeded promptly'
+client query "$PORTDEAF" "$DID" \
+  || fail 'case 51c: an ordinary read was refused while the admission queue was full'
+# The 24 calls 51c left outstanding are still spending their own budgets: the
+# queued ones until `proxyQueueWait`, the dialling ones until the connect
+# budget. Let them all land before this server is taken down, so that what its
+# stderr is graded on below is a server that finished its work rather than one
+# interrupted in the middle of it.
+sleep 6
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
@@ -2488,6 +2521,70 @@ require_empty "$WORK/servedeaf.err" 'case 50/51 (post-run)'
 require_empty "$WORK/deaf.err" 'deaf stub appview'
 kill "$STUB_DEAF_PID" 2>/dev/null || true
 wait "$STUB_DEAF_PID" 2>/dev/null || true
+
+# ── tenth --data dir: the admission queue (#3100) ───────────────────────────
+# The client this server exists for fans out more proxied reads on a cold start
+# than the in-flight ceiling admits - ten measured against a ceiling of eight -
+# so a ceiling that refused the excess outright rendered part of a healthy
+# app's first screen as an error. Case 51b is that fan-out.
+#
+# The stub runs in `batch` mode with the ceiling as its count: it answers none
+# of the first eight calls until all eight have arrived. That is what makes the
+# concurrency this case's own rather than the scheduler's - an upstream that
+# answered as it went would let the server finish one call before the next was
+# made, and twelve reads could be served with three ever outstanding, which
+# looks identical from the client and proves nothing about a ceiling of eight.
+"$WORK/appview" batch 0 "$WORK/queue.log" "$STUB_STATUS" 8 \
+  >"$WORK/queue.out" 2>"$WORK/queue.err" &
+STUB_QUEUE_PID=$!
+STUB_PIDS="$STUB_PIDS $STUB_QUEUE_PID"
+QUEUEPORT=$(wait_for_stub_port "$WORK/queue.out" "$STUB_QUEUE_PID") || {
+  cat "$WORK/queue.err" >&2
+  fail 'case 51b: the batching stub appview did not report readiness'
+}
+
+DATAQUEUE="$WORK/data-proxy-queue"
+mkdir -p "$DATAQUEUE"
+"$WORK/pdsd" \
+  --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
+  --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
+  --password-file "$WORK/password" \
+  --data "$DATAQUEUE" --port 0 --init \
+  --appview-did "$APPVIEW_DID" --egress-port "$QUEUEPORT" \
+  >"$WORK/servequeue.out" 2>"$WORK/servequeue.err" &
+SERVER_PID=$!
+PORTQUEUE=$(wait_for_port "$WORK/servequeue.out") || {
+  cat "$WORK/servequeue.err" >&2
+  fail 'case 51b: the admission-queue server did not report readiness'
+}
+require_empty "$WORK/servequeue.err" 'case 51b startup'
+
+QUEUELOGIN=$(client login "$PORTQUEUE" "$HANDLE" "$PASSWORD") \
+  || fail 'case 51b: login against the admission-queue server'
+QUEUEACCESS=${QUEUELOGIN%% *}
+
+# 51b. TWELVE AT ONCE, ALL OF THEM SERVED. Every request is sent before any
+#    answer is read, so the server holds all twelve and its own admission
+#    decision - not this client's pacing - settles how many are served. Four of
+#    them are past the ceiling and must wait for a slot rather than be refused.
+#
+#    Graded on the UPSTREAM's status (203) and not on 200, so a server that
+#    composed an answer of its own around a forwarded body is not counted as
+#    having served the call. Before the queue existed this case read
+#    `203=8 503=4`.
+client proxy-fanout "$PORTQUEUE" "$QUEUEACCESS" "$APPVIEW_DID" "$TIMELINE" \
+  12 "$STUB_STATUS" 12 \
+  || fail 'case 51b: a twelve-call fan-out was not served in full - a burst past the in-flight ceiling was refused instead of queued'
+client query "$PORTQUEUE" "$DID" \
+  || fail 'case 51b: an ordinary read was refused after the fan-out'
+
+kill "$SERVER_PID" 2>/dev/null || true
+wait "$SERVER_PID" 2>/dev/null || true
+SERVER_PID=""
+require_empty "$WORK/servequeue.err" 'case 51b (post-run)'
+require_empty "$WORK/queue.err" 'batching stub appview'
+kill "$STUB_QUEUE_PID" 2>/dev/null || true
+wait "$STUB_QUEUE_PID" 2>/dev/null || true
 
 # ── eighth and ninth --data dirs: requestCrawl (S-crawl-routes) ─────────────
 # The outbound half of discovery: an unauthenticated POST announcing this
@@ -3005,4 +3102,4 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve67b.err" 'case 67 (post-run)'
 
-echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome, and a periodic stats line carrying active/un-framed connections, open subscriptions, the account repo'"'"'s revision, and blocks and blobs on disk, at an operator-configurable interval, and a second server over a LIVE data directory refused before its sweep could delete the staged file the live one had in flight while that live one kept answering, a lock its killed holder left behind taken by --force-lock and reclaimed with no flag at all once its heartbeat stopped, and a lost last-promoted pointer over a still-owed staged entry recovered into a clean start rather than refused, which is the startup order the genesis guard depends on, eight servers started at once over a directory whose holder is gone leaving exactly one of them holding it five rounds running, a stray file beside the lock ignored rather than wedging the directory while a .lock that is not a directory at all is refused by a message naming the path and the remedy and then cured by that remedy, and a holder whose lock is forced away under it ending its run rather than going on writing beneath the directory'
+echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and reuse, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a PIN on #2772'"'"'s still-open body phase (a stalled-body flood DOES shut other callers out — asserted as the current bad behavior, red when fixed), restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded once its wait runs out while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, a twelve-call fan-out against an upstream that answers none of the first eight until all eight have arrived served in full rather than four of it refused, and a read past the in-flight ceiling AND a full admission queue refused 503 ProxyLimitExceeded within 300ms rather than after the queue'"'"'s own two-second deadline, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome, and a periodic stats line carrying active/un-framed connections, open subscriptions, the account repo'"'"'s revision, and blocks and blobs on disk, at an operator-configurable interval, and a second server over a LIVE data directory refused before its sweep could delete the staged file the live one had in flight while that live one kept answering, a lock its killed holder left behind taken by --force-lock and reclaimed with no flag at all once its heartbeat stopped, and a lost last-promoted pointer over a still-owed staged entry recovered into a clean start rather than refused, which is the startup order the genesis guard depends on, eight servers started at once over a directory whose holder is gone leaving exactly one of them holding it five rounds running, a stray file beside the lock ignored rather than wedging the directory while a .lock that is not a directory at all is refused by a message naming the path and the remedy and then cured by that remedy, and a holder whose lock is forced away under it ending its run rather than going on writing beneath the directory'
