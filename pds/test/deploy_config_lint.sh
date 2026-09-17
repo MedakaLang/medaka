@@ -523,6 +523,26 @@ fi
 echo 'mutation control: an egress config without `admin off` correctly caught'
 rm -f "$SCRATCH_EGRESS_CADDY"
 
+# Violation 13: strip the X-Forwarded-For overwrite from the inbound Caddyfile.
+# #2959's acceptance names this control by name, and until now the roster
+# carried the directive with nothing proving that entry could fail.
+#
+# What the control proves is the ROSTER, not the mechanism. Measured on the
+# Caddy in Debian trixie (2.6.2): the default `reverse_proxy` already replaces
+# a client-supplied X-Forwarded-For with the real remote host, so removing this
+# line changes no bytes on the wire today. It is a PIN on the property
+# `--trusted-proxy` depends on -- the last hop is the proxy's observation and
+# never the client's claim -- and Caddy 2.7's `trusted_proxies` option changes
+# what that default does. See pds/Caddyfile's own header for the measurement.
+SCRATCH_CADDY="$WORK/Caddyfile"
+grep -v 'header_up X-Forwarded-For' "$CADDYFILE" >"$SCRATCH_CADDY"
+if hits=$(check_directives "$SCRATCH_CADDY" "$CADDY_DIRECTIVES") \
+  && [ -z "$hits" ]; then
+  fail 'mutation control: a stripped X-Forwarded-For overwrite was not caught'
+fi
+echo 'mutation control: a stripped X-Forwarded-For overwrite correctly caught'
+rm -f "$SCRATCH_CADDY"
+
 # Confirm the real tree is untouched and still green after every mutation.
 service_hits=$(check_directives "$SERVICE" "$SERVICE_DIRECTIVES")
 caddy_hits=$(check_directives "$CADDYFILE" "$CADDY_DIRECTIVES")
