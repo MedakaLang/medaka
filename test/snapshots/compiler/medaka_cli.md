@@ -1,5 +1,5 @@
 # META
-source_lines=4282
+source_lines=4289
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -3197,41 +3197,44 @@ runTestJsonCmd engines cases filterOpt target =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    let userDecls = desugar (parse tsrc)
+    if filterMatchedNothing filterOpt tsrc userDecls then
+      Err
+        "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
+    else
+      let (typeError, runs, props, tests, typecheckSkipped) =
+        runTestReport
+          engines
+          rsrc
+          csrc
+          target
+          tsrc
+          stdlibDir
+          cases
+          filterOpt
+          True
+      let _ =
+        putStrLn
+          (stringify
+            (cliTestReportJson
+              target
+              typeError
+              engines
+              runs
+              props
+              tests
+              typecheckSkipped))
+      if cliTestReportOk typeError runs props tests then
+        Ok ()
+      else
+        Err "test failed"
+  match r
     Err e => dieMsg e
-    Ok rsrc => match readPreludeFile corePath
-      Err e => dieMsg e
-      Ok csrc => match readFile target
-        Err e => dieMsg e
-        Ok tsrc =>
-          let userDecls = desugar (parse tsrc)
-          if filterMatchedNothing filterOpt tsrc userDecls then
-            dieMsg
-              "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
-          else
-            let (typeError, runs, props, tests, typecheckSkipped) =
-              runTestReport
-                engines
-                rsrc
-                csrc
-                target
-                tsrc
-                stdlibDir
-                cases
-                filterOpt
-                True
-            let _ =
-              putStrLn
-                (stringify
-                  (cliTestReportJson
-                    target
-                    typeError
-                    engines
-                    runs
-                    props
-                    tests
-                    typecheckSkipped))
-            if cliTestReportOk typeError runs props tests then () else exit 1
+    Ok v => v
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
 -- files (SAME walk as lint/fmt), then run+aggregate.  C3
@@ -3328,13 +3331,14 @@ runDocTargets (target :: _) =
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    Ok (putStr (runDoc rsrc csrc tsrc target roots))
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match readFile target
-        Err msg => dieMsg msg
-        Ok tsrc => putStr (runDoc rsrc csrc tsrc target roots)
+    Ok v => v
 
 -- ── doc: library mode (S-doc-library-mode) ──────────────────────────────────
 -- `medaka doc --out DIR <file.mdk> [<file.mdk> ...]`: read + doc every target,
@@ -3347,30 +3351,27 @@ runDocLibraryTargets outDir targets =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    _ <- ensureOutDir outDir
+    mds <- collectModuleDocs rsrc csrc stdlibDir targets
+    -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
+    -- every module is computed and before ANY output is written, so the
+    -- pages, the index and the inventory all read the same (already
+    -- re-filed) entry lists — an impl cannot be on one page and indexed
+    -- under another.
+    --
+    -- `targets` arrives in whatever order the shell/CLI handed it
+    -- (`stdlib/*.mdk` glob expansion), which is locale-dependent —
+    -- collation of `.` vs `_` differs across LC_COLLATE settings, so
+    -- e.g. `net.mdk`/`net_async.mdk` can swap places between machines.
+    -- Sort by module name here so index.md/inventory.json are
+    -- byte-identical regardless of invocation order.
+    Ok (writeLibraryOutputs outDir (rebucketLibraryImpls (sortOn mdName mds)))
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match ensureOutDir outDir
-        Err msg => dieMsg msg
-        Ok _ => match collectModuleDocs rsrc csrc stdlibDir targets
-          Err msg => dieMsg msg
-          -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
-          -- every module is computed and before ANY output is written, so the
-          -- pages, the index and the inventory all read the same (already
-          -- re-filed) entry lists — an impl cannot be on one page and indexed
-          -- under another.
-          --
-          -- `targets` arrives in whatever order the shell/CLI handed it
-          -- (`stdlib/*.mdk` glob expansion), which is locale-dependent —
-          -- collation of `.` vs `_` differs across LC_COLLATE settings, so
-          -- e.g. `net.mdk`/`net_async.mdk` can swap places between machines.
-          -- Sort by module name here so index.md/inventory.json are
-          -- byte-identical regardless of invocation order.
-          Ok mds =>
-            writeLibraryOutputs
-              outDir
-              (rebucketLibraryImpls (sortOn mdName mds))
+    Ok v => v
 
 -- `makeDir` (global extern) errors EEXIST on an already-present directory;
 -- tolerate that one case, exactly like `fs.mdk`'s `mkdirAll` does for its own
@@ -3513,25 +3514,26 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    Ok (rsrc, csrc, tsrc)
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match readFile target
-        Err msg => dieMsg msg
-        Ok tsrc => match runCheckPolicy rsrc csrc tsrc allow fn
-          -- runCheckPolicy forces the accepted-plugin evaluation before it
-          -- returns, so an evaluation panic cannot leak an acceptance verdict.
+    Ok (rsrc, csrc, tsrc) => match runCheckPolicy rsrc csrc tsrc allow fn
+      -- runCheckPolicy forces the accepted-plugin evaluation before it
+      -- returns, so an evaluation panic cannot leak an acceptance verdict.
 
-          -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
-          -- stderr everything else.  The ACCEPT report is the answer and
-          -- stays on stdout; the REJECTION report is the reason for a
-          -- nonzero exit — a diagnostic — and moves to stderr, where every
-          -- sibling verb already reports failure.  Exit code unchanged.
-          PolicyReject report =>
-            let _ = ePutStr report
-            exit 1
-          PolicyAccept report => putStr report
+      -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
+      -- stderr everything else.  The ACCEPT report is the answer and
+      -- stays on stdout; the REJECTION report is the reason for a
+      -- nonzero exit — a diagnostic — and moves to stderr, where every
+      -- sibling verb already reports failure.  Exit code unchanged.
+      PolicyReject report =>
+        let _ = ePutStr report
+        exit 1
+      PolicyAccept report => putStr report
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability
@@ -3587,13 +3589,14 @@ runManifestArgs (ManifestArgs (Some target) fn) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    Ok (putStr (runManifest rsrc csrc tsrc fn))
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match readFile target
-        Err msg => dieMsg msg
-        Ok tsrc => putStr (runManifest rsrc csrc tsrc fn)
+    Ok v => v
 
 -- ── lint ──────────────────────────────────────────────────────────────────
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
@@ -4151,17 +4154,18 @@ runReplCmd [] =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
+    -- verb's route; consumed live by `initSession` below.
+    let runtimeDecls = desugaredPrelude rsrc
+    let preludeDecls = desugaredPrelude csrc
+    let _ = initSession runtimeDecls preludeDecls
+    Ok (replLoop ())
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc =>
-        -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
-        -- verb's route; consumed live by `initSession` below.
-        let runtimeDecls = desugaredPrelude rsrc
-        let preludeDecls = desugaredPrelude csrc
-        let _ = initSession runtimeDecls preludeDecls
-        replLoop ()
+    Ok v => v
 runReplCmd ("--help" :: _) =
   let _ = putStrLn replUsageLine
   exit 0
@@ -4223,11 +4227,13 @@ runLspServerFromEnv _ =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    Ok (runServer rsrc csrc)
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => runServer rsrc csrc
+    Ok v => v
 
 -- Short usage blurb for `medaka mcp --help` / `-h` — mirrors the one-line
 -- description `usage` (line ~284) gives mcp in the top-level help, plus the
@@ -4278,12 +4284,13 @@ runMcpServerFromEnv _ =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    Ok (runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion)
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc =>
-        runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion
+    Ok v => v
 # DESUGAR
 (DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModulesFromDiags" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
@@ -4591,7 +4598,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runTestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "testArgSpec")) (EVar "argv0"))) (DoExpr (EMatch (EApp (EVar "parseTestEngines") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "parseTestCasesFlag") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EMatch (EVar "casesOpt") (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 100))))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "flagValue") (ELit (LString "--filter"))) (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoExpr (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EVar "runTestJsonCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")))) (arm (PCon "Ok" PWild) () (EIf (EVar "jsonMode") (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: directory targets are not supported; pass a single file.mdk target")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EListLit (EVar "target"))))))) (arm (PVar "targets") () (EIf (EVar "jsonMode") (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: exactly one file.mdk target is supported")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "targets"))))))))))))))))
 (DTypeSig false "runTestJsonCmd" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "tsrc")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "cliTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests")) (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1))))))))))))))))))
+(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (ELet false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc"))) (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "tsrc")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "cliTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (ELit (LString "test failed"))))))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EVar "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EApp (EVar "dieMsg") (ELit (LString "medaka test: no .mdk files found")))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "rosterOk") (EApp (EApp (EApp (EVar "checkTestMdkRoster") (EVar "root")) (EVar "targets")) (EVar "files"))) (DoLet false false (PVar "anyFailed") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "files")) (EVar "False"))) (DoExpr (EIf (EBinOp "||" (EVar "anyFailed") (EApp (EVar "not") (EVar "rosterOk"))) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))))
 (DTypeSig false "docHelpText" (TyCon "String"))
@@ -4603,10 +4610,10 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runDocTargets" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runDocTargets" ((PList)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka doc <file.mdk>"))))
 (DFunDef false "runDocTargets" ((PCons PWild (PCons PWild PWild))) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka doc <file.mdk> (doc takes exactly one file)"))))
-(DFunDef false "runDocTargets" ((PCons (PVar "target") PWild)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EApp (EVar "runDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))))))))))))
+(DFunDef false "runDocTargets" ((PCons (PVar "target") PWild)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EApp (EVar "runDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "runDocLibraryTargets" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "runDocLibraryTargets" (PWild (PList)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"))))
-(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "ensureOutDir") (EVar "outDir")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "targets")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "mds")) () (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EApp (EApp (EVar "sortOn") (EVar "mdName")) (EVar "mds")))))))))))))))
+(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "ensureOutDir") (EVar "outDir"))) (ELam (PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "targets"))) (ELam ((PVar "mds")) (EApp (EVar "Ok") (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EApp (EApp (EVar "sortOn") (EVar "mdName")) (EVar "mds")))))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "ensureOutDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "ensureOutDir" ((PVar "dir")) (EMatch (EApp (EVar "makeDir") (EVar "dir")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "exists"))) (EVar "e"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e"))))))
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))
@@ -4640,7 +4647,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "optDefault" ((PCon "None") (PVar "d")) (EVar "d"))
 (DTypeSig false "runCheckPolicyArgs" (TyFun (TyCon "PolicyArgs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runCheckPolicyArgs" ((PCon "PolicyArgs" (PCon "None") PWild PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
-(DFunDef false "runCheckPolicyArgs" ((PCon "PolicyArgs" (PCon "Some" (PVar "target")) (PVar "allow") (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicy") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "allow")) (EVar "fn")) (arm (PCon "PolicyReject" (PVar "report")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "report"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "PolicyAccept" (PVar "report")) () (EApp (EVar "putStr") (EVar "report")))))))))))))
+(DFunDef false "runCheckPolicyArgs" ((PCon "PolicyArgs" (PCon "Some" (PVar "target")) (PVar "allow") (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (ETuple (EVar "rsrc") (EVar "csrc") (EVar "tsrc")))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PTuple (PVar "rsrc") (PVar "csrc") (PVar "tsrc"))) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicy") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "allow")) (EVar "fn")) (arm (PCon "PolicyReject" (PVar "report")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "report"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "PolicyAccept" (PVar "report")) () (EApp (EVar "putStr") (EVar "report")))))))))
 (DTypeSig false "manifestHelpText" (TyCon "String"))
 (DFunDef false "manifestHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka manifest — Emit a module's verified capability manifest as TOML\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka manifest <file.mdk> [--fn name]\n")) (ELit (LString "\n")) (ELit (LString "  --fn name  the function whose inferred effect row is emitted\n")) (ELit (LString "             (default: main)\n")) (ELit (LString "\n")) (ELit (LString "Prints a [package.capabilities] TOML block: one entry per effect label\n")) (ELit (LString "in the function's inferred effect row (a prefix-param becomes a string\n")) (ELit (LString "value; a Unit/top param becomes `true`).\n")))))
 (DTypeSig false "manifestArgSpec" (TyCon "ArgSpec"))
@@ -4649,7 +4656,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runManifestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "manifestArgSpec")) (EVar "argv0"))) (DoExpr (EApp (EVar "runManifestArgs") (EApp (EApp (EVar "ManifestArgs") (EApp (EVar "firstPositional") (EVar "a"))) (EApp (EApp (EVar "optDefault") (EApp (EApp (EVar "lastValue") (ELit (LString "--fn"))) (EVar "a"))) (ELit (LString "main"))))))))
 (DTypeSig false "runManifestArgs" (TyFun (TyCon "ManifestArgs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "None") PWild)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka manifest <file.mdk> [--fn name]"))))
-(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "fn"))))))))))))
+(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "fn"))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
 (DTypeSig false "lintArgSpec" (TyCon "ArgSpec"))
@@ -4697,7 +4704,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "replUsageLine" (TyCon "String"))
 (DFunDef false "replUsageLine" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka repl — Start the interactive REPL\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka repl     Start an interactive session that reads expressions\n")) (ELit (LString "                 from stdin, evaluates them, and prints results until\n")) (ELit (LString "                 stdin closes (EOF) or you enter :quit.\n")))))
 (DTypeSig false "runReplCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runReplCmd" ((PList)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "preludeDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false PWild (EApp (EApp (EVar "initSession") (EVar "runtimeDecls")) (EVar "preludeDecls"))) (DoExpr (EApp (EVar "replLoop") (ELit LUnit)))))))))))
+(DFunDef false "runReplCmd" ((PList)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (ELet false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc")) (ELet false (PVar "preludeDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc")) (ELet false PWild (EApp (EApp (EVar "initSession") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EApp (EVar "Ok") (EApp (EVar "replLoop") (ELit LUnit))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DFunDef false "runReplCmd" ((PCons (PLit (LString "--help")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "replUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runReplCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "replUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runReplCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "replArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "replUsageLine")))))
@@ -4711,7 +4718,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runLspCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "lspUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runLspCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "lspArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "lspUsageLine")))))
 (DTypeSig false "runLspServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))))
+(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "mcpUsage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "mcpUsage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n")) (ELit (LString "                 and writes responses to stdout until stdin closes (EOF).\n")) (ELit (LString "                 This is the normal, correct behavior for an MCP stdio\n")) (ELit (LString "                 server — it is not supposed to be interactive.\n"))))))
 (DTypeSig false "runMcpCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -4720,7 +4727,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka mcp: unknown argument '")) (EVar "bad")) (ELit (LString "' (mcp takes no arguments; try 'medaka mcp --help')"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))))
+(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 # MARK
 (DUse false (UseGroup ("tools" "check") ((mem "runCheck" false) (mem "runCheckFromDecls" false) (mem "checkHasErrors" false) (mem "runCheckModulesFromDiags" false))))
 (DUse false (UseGroup ("tools" "snapshot") ((mem "runSnapshotWorker" false) (mem "runSnapshotSupervisor" false) (mem "parseStages" false) (mem "SnapMode" true))))
@@ -5028,7 +5035,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runTestCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runTestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "testArgSpec")) (EVar "argv0"))) (DoExpr (EMatch (EApp (EVar "parseTestEngines") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "engines")) () (EMatch (EApp (EVar "parseTestCasesFlag") (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "casesOpt")) () (EMatch (EApp (EApp (EVar "parseTestIntFlag") (ELit (LString "--seed"))) (EVar "a")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "msg"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "seedOpt")) () (EBlock (DoLet false false PWild (EMatch (EVar "seedOpt") (arm (PCon "Some" (PVar "s")) () (EApp (EVar "seedPropRng") (EVar "s"))) (arm (PCon "None") () (ELit LUnit)))) (DoLet false false (PVar "cases") (EMatch (EVar "casesOpt") (arm (PCon "Some" (PVar "n")) () (EVar "n")) (arm (PCon "None") () (ELit (LInt 100))))) (DoLet false false (PVar "filterOpt") (EApp (EApp (EVar "flagValue") (ELit (LString "--filter"))) (EVar "a"))) (DoLet false false (PVar "jsonMode") (EApp (EApp (EVar "flag") (ELit (LString "--json"))) (EVar "a"))) (DoExpr (EMatch (EFieldAccess (EVar "a") "positionals") (arm (PList) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka test [--native | --engines eval,native] [--json] [--filter <substring>] [--seed <n>] [--cases <n>] [file.mdk | dir]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PList (PVar "target")) () (EMatch (EApp (EVar "listDir") (EVar "target")) (arm (PCon "Err" PWild) () (EIf (EVar "jsonMode") (EApp (EApp (EApp (EApp (EVar "runTestJsonCmd") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")) (EApp (EApp (EApp (EApp (EVar "runTestOne") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "target")))) (arm (PCon "Ok" PWild) () (EIf (EVar "jsonMode") (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: directory targets are not supported; pass a single file.mdk target")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EListLit (EVar "target"))))))) (arm (PVar "targets") () (EIf (EVar "jsonMode") (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "medaka test --json: exactly one file.mdk target is supported")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))) (EApp (EApp (EApp (EApp (EVar "runTestManyTargets") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "targets"))))))))))))))))
 (DTypeSig false "runTestJsonCmd" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit")))))))
-(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "tsrc")) () (EBlock (DoLet false false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc")))) (DoExpr (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "dieMsg") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "tsrc")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "cliTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests")) (ELit LUnit) (EApp (EVar "exit") (ELit (LInt 1))))))))))))))))))
+(DFunDef false "runTestJsonCmd" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "target")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (ELet false (PVar "userDecls") (EApp (EVar "desugar") (EApp (EVar "parse") (EVar "tsrc"))) (EIf (EApp (EApp (EApp (EVar "filterMatchedNothing") (EVar "filterOpt")) (EVar "tsrc")) (EVar "userDecls")) (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EMethodRef "display") (EVar "target"))) (ELit (LString ": --filter matched no doctests, props, or `test \"…\"` decls")))) (EBlock (DoLet false false (PTuple (PVar "typeError") (PVar "runs") (PVar "props") (PVar "tests") (PVar "typecheckSkipped")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runTestReport") (EVar "engines")) (EVar "rsrc")) (EVar "csrc")) (EVar "target")) (EVar "tsrc")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "True"))) (DoLet false false PWild (EApp (EVar "putStrLn") (EApp (EVar "stringify") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "cliTestReportJson") (EVar "target")) (EVar "typeError")) (EVar "engines")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EVar "typecheckSkipped"))))) (DoExpr (EIf (EApp (EApp (EApp (EApp (EVar "cliTestReportOk") (EVar "typeError")) (EVar "runs")) (EVar "props")) (EVar "tests")) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (ELit (LString "test failed"))))))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EVar "e"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "runTestManyTargets" (TyFun (TyApp (TyCon "List") (TyCon "Engine")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))))
 (DFunDef false "runTestManyTargets" ((PVar "engines") (PVar "cases") (PVar "filterOpt") (PVar "targets")) (EBlock (DoLet false false (PVar "files") (EApp (EApp (EDictApp "flatMap") (EVar "expandLintTarget")) (EVar "targets"))) (DoExpr (EMatch (EVar "files") (arm (PList) () (EApp (EVar "dieMsg") (ELit (LString "medaka test: no .mdk files found")))) (arm PWild () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "rosterOk") (EApp (EApp (EApp (EVar "checkTestMdkRoster") (EVar "root")) (EVar "targets")) (EVar "files"))) (DoLet false false (PVar "anyFailed") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "files")) (EVar "False"))) (DoExpr (EIf (EBinOp "||" (EVar "anyFailed") (EApp (EVar "not") (EVar "rosterOk"))) (EApp (EVar "exit") (ELit (LInt 1))) (ELit LUnit)))))))))
 (DTypeSig false "docHelpText" (TyCon "String"))
@@ -5040,10 +5047,10 @@ runMcpServerFromEnv _ =
 (DTypeSig false "runDocTargets" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runDocTargets" ((PList)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka doc <file.mdk>"))))
 (DFunDef false "runDocTargets" ((PCons PWild (PCons PWild PWild))) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka doc <file.mdk> (doc takes exactly one file)"))))
-(DFunDef false "runDocTargets" ((PCons (PVar "target") PWild)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EApp (EVar "runDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))))))))))))
+(DFunDef false "runDocTargets" ((PCons (PVar "target") PWild)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EApp (EVar "runDoc") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "target")) (EVar "roots"))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "runDocLibraryTargets" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit")))))
 (DFunDef false "runDocLibraryTargets" (PWild (PList)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka doc --out DIR <file.mdk> [<file.mdk> ...]"))))
-(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "ensureOutDir") (EVar "outDir")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "targets")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "mds")) () (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EApp (EApp (EVar "sortOn") (EVar "mdName")) (EVar "mds")))))))))))))))
+(DFunDef false "runDocLibraryTargets" ((PVar "outDir") (PVar "targets")) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "ensureOutDir") (EVar "outDir"))) (ELam (PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "collectModuleDocs") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "targets"))) (ELam ((PVar "mds")) (EApp (EVar "Ok") (EApp (EApp (EVar "writeLibraryOutputs") (EVar "outDir")) (EApp (EVar "rebucketLibraryImpls") (EApp (EApp (EVar "sortOn") (EVar "mdName")) (EVar "mds")))))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "ensureOutDir" (TyFun (TyCon "String") (TyEffect ((hole "FileWrite")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DFunDef false "ensureOutDir" ((PVar "dir")) (EMatch (EApp (EVar "makeDir") (EVar "dir")) (arm (PCon "Ok" PWild) () (EApp (EVar "Ok") (ELit LUnit))) (arm (PCon "Err" (PVar "e")) () (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "stringIndexOf") (ELit (LString "exists"))) (EVar "e"))) (EApp (EVar "Ok") (ELit LUnit)) (EApp (EVar "Err") (EVar "e"))))))
 (DTypeSig false "collectModuleDocs" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ModuleDoc")))))))))
@@ -5077,7 +5084,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "optDefault" ((PCon "None") (PVar "d")) (EVar "d"))
 (DTypeSig false "runCheckPolicyArgs" (TyFun (TyCon "PolicyArgs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runCheckPolicyArgs" ((PCon "PolicyArgs" (PCon "None") PWild PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (ELit (LString "usage: medaka check-policy <file.mdk> [--allow L1,L2,...] [--fn name]")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
-(DFunDef false "runCheckPolicyArgs" ((PCon "PolicyArgs" (PCon "Some" (PVar "target")) (PVar "allow") (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicy") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "allow")) (EVar "fn")) (arm (PCon "PolicyReject" (PVar "report")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "report"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "PolicyAccept" (PVar "report")) () (EApp (EVar "putStr") (EVar "report")))))))))))))
+(DFunDef false "runCheckPolicyArgs" ((PCon "PolicyArgs" (PCon "Some" (PVar "target")) (PVar "allow") (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (ETuple (EVar "rsrc") (EVar "csrc") (EVar "tsrc")))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PTuple (PVar "rsrc") (PVar "csrc") (PVar "tsrc"))) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "runCheckPolicy") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "allow")) (EVar "fn")) (arm (PCon "PolicyReject" (PVar "report")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "report"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "PolicyAccept" (PVar "report")) () (EApp (EVar "putStr") (EVar "report")))))))))
 (DTypeSig false "manifestHelpText" (TyCon "String"))
 (DFunDef false "manifestHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka manifest — Emit a module's verified capability manifest as TOML\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka manifest <file.mdk> [--fn name]\n")) (ELit (LString "\n")) (ELit (LString "  --fn name  the function whose inferred effect row is emitted\n")) (ELit (LString "             (default: main)\n")) (ELit (LString "\n")) (ELit (LString "Prints a [package.capabilities] TOML block: one entry per effect label\n")) (ELit (LString "in the function's inferred effect row (a prefix-param becomes a string\n")) (ELit (LString "value; a Unit/top param becomes `true`).\n")))))
 (DTypeSig false "manifestArgSpec" (TyCon "ArgSpec"))
@@ -5086,7 +5093,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runManifestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "manifestArgSpec")) (EVar "argv0"))) (DoExpr (EApp (EVar "runManifestArgs") (EApp (EApp (EVar "ManifestArgs") (EApp (EVar "firstPositional") (EVar "a"))) (EApp (EApp (EVar "optDefault") (EApp (EApp (EVar "lastValue") (ELit (LString "--fn"))) (EVar "a"))) (ELit (LString "main"))))))))
 (DTypeSig false "runManifestArgs" (TyFun (TyCon "ManifestArgs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "None") PWild)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka manifest <file.mdk> [--fn name]"))))
-(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "fn"))))))))))))
+(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "fn"))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
 (DTypeSig false "lintArgSpec" (TyCon "ArgSpec"))
@@ -5134,7 +5141,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "replUsageLine" (TyCon "String"))
 (DFunDef false "replUsageLine" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka repl — Start the interactive REPL\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka repl     Start an interactive session that reads expressions\n")) (ELit (LString "                 from stdin, evaluates them, and prints results until\n")) (ELit (LString "                 stdin closes (EOF) or you enter :quit.\n")))))
 (DTypeSig false "runReplCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runReplCmd" ((PList)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EBlock (DoLet false false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "preludeDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false PWild (EApp (EApp (EVar "initSession") (EVar "runtimeDecls")) (EVar "preludeDecls"))) (DoExpr (EApp (EVar "replLoop") (ELit LUnit)))))))))))
+(DFunDef false "runReplCmd" ((PList)) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (ELet false (PVar "runtimeDecls") (EApp (EVar "desugaredPrelude") (EVar "rsrc")) (ELet false (PVar "preludeDecls") (EApp (EVar "desugaredPrelude") (EVar "csrc")) (ELet false PWild (EApp (EApp (EVar "initSession") (EVar "runtimeDecls")) (EVar "preludeDecls")) (EApp (EVar "Ok") (EApp (EVar "replLoop") (ELit LUnit))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DFunDef false "runReplCmd" ((PCons (PLit (LString "--help")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "replUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runReplCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "replUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runReplCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "replArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "replUsageLine")))))
@@ -5148,7 +5155,7 @@ runMcpServerFromEnv _ =
 (DFunDef false "runLspCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "putStrLn") (EVar "lspUsageLine"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runLspCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EVar "unknownFlagMessage") (EVar "lspArgSpec")) (EVar "bad")))) (DoExpr (EApp (EVar "dieMsg") (EVar "lspUsageLine")))))
 (DTypeSig false "runLspServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))))
+(DFunDef false "runLspServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EVar "runServer") (EVar "rsrc")) (EVar "csrc")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
 (DTypeSig false "mcpUsage" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "mcpUsage" (PWild) (EApp (EVar "putStrLn") (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka mcp — Run the MCP server over stdio (JSON-RPC for agents)\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka mcp     Start the server; it reads JSON-RPC requests from stdin\n")) (ELit (LString "                 and writes responses to stdout until stdin closes (EOF).\n")) (ELit (LString "                 This is the normal, correct behavior for an MCP stdio\n")) (ELit (LString "                 server — it is not supposed to be interactive.\n"))))))
 (DTypeSig false "runMcpCmd" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
@@ -5157,4 +5164,4 @@ runMcpServerFromEnv _ =
 (DFunDef false "runMcpCmd" ((PCons (PLit (LString "-h")) PWild)) (EBlock (DoLet false false PWild (EApp (EVar "mcpUsage") (ELit LUnit))) (DoExpr (EApp (EVar "exit") (ELit (LInt 0))))))
 (DFunDef false "runMcpCmd" ((PCons (PVar "bad") PWild)) (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka mcp: unknown argument '")) (EVar "bad")) (ELit (LString "' (mcp takes no arguments; try 'medaka mcp --help')"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))
 (DTypeSig false "runMcpServerFromEnv" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "Unit"))))
-(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))))
+(DFunDef false "runMcpServerFromEnv" (PWild) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EVar "Ok") (EApp (EApp (EApp (EApp (EApp (EVar "runMcpServer") (EVar "rsrc")) (EVar "csrc")) (EVar "stdlibDir")) (EVar "sourceStalenessVerdict")) (EVar "medakaVersion")))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))

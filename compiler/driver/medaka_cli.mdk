@@ -3193,41 +3193,44 @@ runTestJsonCmd engines cases filterOpt target =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    let userDecls = desugar (parse tsrc)
+    if filterMatchedNothing filterOpt tsrc userDecls then
+      Err
+        "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
+    else
+      let (typeError, runs, props, tests, typecheckSkipped) =
+        runTestReport
+          engines
+          rsrc
+          csrc
+          target
+          tsrc
+          stdlibDir
+          cases
+          filterOpt
+          True
+      let _ =
+        putStrLn
+          (stringify
+            (cliTestReportJson
+              target
+              typeError
+              engines
+              runs
+              props
+              tests
+              typecheckSkipped))
+      if cliTestReportOk typeError runs props tests then
+        Ok ()
+      else
+        Err "test failed"
+  match r
     Err e => dieMsg e
-    Ok rsrc => match readPreludeFile corePath
-      Err e => dieMsg e
-      Ok csrc => match readFile target
-        Err e => dieMsg e
-        Ok tsrc =>
-          let userDecls = desugar (parse tsrc)
-          if filterMatchedNothing filterOpt tsrc userDecls then
-            dieMsg
-              "medaka test: \{target}: --filter matched no doctests, props, or `test \"…\"` decls"
-          else
-            let (typeError, runs, props, tests, typecheckSkipped) =
-              runTestReport
-                engines
-                rsrc
-                csrc
-                target
-                tsrc
-                stdlibDir
-                cases
-                filterOpt
-                True
-            let _ =
-              putStrLn
-                (stringify
-                  (cliTestReportJson
-                    target
-                    typeError
-                    engines
-                    runs
-                    props
-                    tests
-                    typecheckSkipped))
-            if cliTestReportOk typeError runs props tests then () else exit 1
+    Ok v => v
 
 -- Directory/project/multi-target path: expand every target to concrete .mdk
 -- files (SAME walk as lint/fmt), then run+aggregate.  C3
@@ -3324,13 +3327,14 @@ runDocTargets (target :: _) =
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
   let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    Ok (putStr (runDoc rsrc csrc tsrc target roots))
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match readFile target
-        Err msg => dieMsg msg
-        Ok tsrc => putStr (runDoc rsrc csrc tsrc target roots)
+    Ok v => v
 
 -- ── doc: library mode (S-doc-library-mode) ──────────────────────────────────
 -- `medaka doc --out DIR <file.mdk> [<file.mdk> ...]`: read + doc every target,
@@ -3343,30 +3347,27 @@ runDocLibraryTargets outDir targets =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    _ <- ensureOutDir outDir
+    mds <- collectModuleDocs rsrc csrc stdlibDir targets
+    -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
+    -- every module is computed and before ANY output is written, so the
+    -- pages, the index and the inventory all read the same (already
+    -- re-filed) entry lists — an impl cannot be on one page and indexed
+    -- under another.
+    --
+    -- `targets` arrives in whatever order the shell/CLI handed it
+    -- (`stdlib/*.mdk` glob expansion), which is locale-dependent —
+    -- collation of `.` vs `_` differs across LC_COLLATE settings, so
+    -- e.g. `net.mdk`/`net_async.mdk` can swap places between machines.
+    -- Sort by module name here so index.md/inventory.json are
+    -- byte-identical regardless of invocation order.
+    Ok (writeLibraryOutputs outDir (rebucketLibraryImpls (sortOn mdName mds)))
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match ensureOutDir outDir
-        Err msg => dieMsg msg
-        Ok _ => match collectModuleDocs rsrc csrc stdlibDir targets
-          Err msg => dieMsg msg
-          -- `rebucketLibraryImpls` runs at the `List ModuleDoc` level, after
-          -- every module is computed and before ANY output is written, so the
-          -- pages, the index and the inventory all read the same (already
-          -- re-filed) entry lists — an impl cannot be on one page and indexed
-          -- under another.
-          --
-          -- `targets` arrives in whatever order the shell/CLI handed it
-          -- (`stdlib/*.mdk` glob expansion), which is locale-dependent —
-          -- collation of `.` vs `_` differs across LC_COLLATE settings, so
-          -- e.g. `net.mdk`/`net_async.mdk` can swap places between machines.
-          -- Sort by module name here so index.md/inventory.json are
-          -- byte-identical regardless of invocation order.
-          Ok mds =>
-            writeLibraryOutputs
-              outDir
-              (rebucketLibraryImpls (sortOn mdName mds))
+    Ok v => v
 
 -- `makeDir` (global extern) errors EEXIST on an already-present directory;
 -- tolerate that one case, exactly like `fs.mdk`'s `mkdirAll` does for its own
@@ -3509,25 +3510,26 @@ runCheckPolicyArgs (PolicyArgs (Some target) allow fn) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    Ok (rsrc, csrc, tsrc)
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match readFile target
-        Err msg => dieMsg msg
-        Ok tsrc => match runCheckPolicy rsrc csrc tsrc allow fn
-          -- runCheckPolicy forces the accepted-plugin evaluation before it
-          -- returns, so an evaluation panic cannot leak an acceptance verdict.
+    Ok (rsrc, csrc, tsrc) => match runCheckPolicy rsrc csrc tsrc allow fn
+      -- runCheckPolicy forces the accepted-plugin evaluation before it
+      -- returns, so an evaluation panic cannot leak an acceptance verdict.
 
-          -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
-          -- stderr everything else.  The ACCEPT report is the answer and
-          -- stays on stdout; the REJECTION report is the reason for a
-          -- nonzero exit — a diagnostic — and moves to stderr, where every
-          -- sibling verb already reports failure.  Exit code unchanged.
-          PolicyReject report =>
-            let _ = ePutStr report
-            exit 1
-          PolicyAccept report => putStr report
+      -- C4 (docs/ops/CLI-CONFORMANCE.md §4): stdout carries the ANSWER,
+      -- stderr everything else.  The ACCEPT report is the answer and
+      -- stays on stdout; the REJECTION report is the reason for a
+      -- nonzero exit — a diagnostic — and moves to stderr, where every
+      -- sibling verb already reports failure.  Exit code unchanged.
+      PolicyReject report =>
+        let _ = ePutStr report
+        exit 1
+      PolicyAccept report => putStr report
 
 -- ── manifest ─────────────────────────────────────────────────────────────────
 -- WS-1c of EFFECTS-CONFORMANCE-ROADMAP.md.  Emit a module's verified capability
@@ -3583,13 +3585,14 @@ runManifestArgs (ManifestArgs (Some target) fn) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    tsrc <- readFile target
+    Ok (putStr (runManifest rsrc csrc tsrc fn))
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => match readFile target
-        Err msg => dieMsg msg
-        Ok tsrc => putStr (runManifest rsrc csrc tsrc fn)
+    Ok v => v
 
 -- ── lint ──────────────────────────────────────────────────────────────────
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
@@ -4147,17 +4150,18 @@ runReplCmd [] =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
+    -- verb's route; consumed live by `initSession` below.
+    let runtimeDecls = desugaredPrelude rsrc
+    let preludeDecls = desugaredPrelude csrc
+    let _ = initSession runtimeDecls preludeDecls
+    Ok (replLoop ())
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc =>
-        -- S-1/#2234 (F-converge): content-keyed prelude memo, same as every other
-        -- verb's route; consumed live by `initSession` below.
-        let runtimeDecls = desugaredPrelude rsrc
-        let preludeDecls = desugaredPrelude csrc
-        let _ = initSession runtimeDecls preludeDecls
-        replLoop ()
+    Ok v => v
 runReplCmd ("--help" :: _) =
   let _ = putStrLn replUsageLine
   exit 0
@@ -4219,11 +4223,13 @@ runLspServerFromEnv _ =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    Ok (runServer rsrc csrc)
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc => runServer rsrc csrc
+    Ok v => v
 
 -- Short usage blurb for `medaka mcp --help` / `-h` — mirrors the one-line
 -- description `usage` (line ~284) gives mcp in the top-level help, plus the
@@ -4274,9 +4280,10 @@ runMcpServerFromEnv _ =
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
   let stdlibDir = root ++ "/stdlib"
-  match readPreludeFile rtPath
+  let r = do
+    rsrc <- readPreludeFile rtPath
+    csrc <- readPreludeFile corePath
+    Ok (runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion)
+  match r
     Err msg => dieMsg msg
-    Ok rsrc => match readPreludeFile corePath
-      Err msg => dieMsg msg
-      Ok csrc =>
-        runMcpServer rsrc csrc stdlibDir sourceStalenessVerdict medakaVersion
+    Ok v => v

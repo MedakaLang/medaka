@@ -194,11 +194,14 @@ driveModulesGo : (List (String, String, List Decl) -> List Decl -> List Decl -> 
   String ->
   List String ->
   <IO> Unit
-driveModulesGo runEmit runtimeP coreP entry roots = match readFile runtimeP
-  Err e => failWith e
-  Ok rsrc => match readFile coreP
+driveModulesGo runEmit runtimeP coreP entry roots =
+  let r = do
+    rsrc <- readFile runtimeP
+    csrc <- readFile coreP
+    Ok (rsrc, csrc)
+  match r
     Err e => failWith e
-    Ok csrc => match loadProgramFilesLocatedE (_ => None) entry roots
+    Ok (rsrc, csrc) => match loadProgramFilesLocatedE (_ => None) entry roots
       Err e => failWith (moduleLoadHint (loadErrorMessage e))
       Ok mods =>
         -- #2072: publish the FFI-stamp discriminator before anything elaborates.
@@ -496,11 +499,13 @@ export
 driveParseSources : (List Decl -> List Decl -> List (String, String) -> String) ->
   <IO> Unit
 driveParseSources render = match args ()
-  runtimePath :: corePath :: targets => match readFile runtimePath
-    Err msg => failWith msg
-    Ok rsrc => match readFile corePath
+  runtimePath :: corePath :: targets =>
+    let r = do
+      rsrc <- readFile runtimePath
+      csrc <- readFile corePath
+      srcs <- readAllSources targets
+      Ok (putStr (render (parse rsrc) (parse csrc) srcs))
+    match r
       Err msg => failWith msg
-      Ok csrc => match readAllSources targets
-        Err msg => failWith msg
-        Ok srcs => putStr (render (parse rsrc) (parse csrc) srcs)
+      Ok v => v
   _ => failWith usageRuntime
