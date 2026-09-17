@@ -664,14 +664,68 @@ test "every opacity cell exists" =
       "9 cells present"
       "\{intToString (9 - length missing)} cells present"
 
-{- | The cell rosters still hold what the retired script's floors named:
-   `FAIL_FLOOR=7` rejected cells and `PASS_FLOOR=2` controls. -}
-test "the opacity cell rosters meet FAIL_FLOOR=7 and PASS_FLOOR=2" =
-  let rejected = length typeMismatchCells + length abstractExportCells
-  let accepted = length passCells
-  let got = "\{intToString rejected} rejected, \{intToString accepted} controls"
-  let want = ">= 7 rejected, >= 2 controls"
-  if rejected >= 7 && accepted >= 2 then
-    Pass want got
+{- | This file's own source lines that lie inside a `test` declaration's
+   body, including the declaration line itself.
+
+   Every cell path is spelled twice in this file: once in a roster above and
+   once in the `test` block that spawns it. Only the second spelling is
+   evidence that the cell is graded, so the floor below has to be able to
+   tell them apart — a scan of the whole file would count a cell whose
+   `test` block had been deleted, which is the "reports green while proving
+   less" shape this gate exists to refuse. -}
+testBodyLines : List String -> List String
+testBodyLines ls = bodyScan ls False
+
+bodyScan : List String -> Bool -> List String
+bodyScan [] _ = []
+bodyScan (line :: rest) inside =
+  if startsWith "test \"" line then
+    line :: bodyScan rest True
+  else if isTopLevelLine line then
+    bodyScan rest False
+  else if inside then
+    line :: bodyScan rest True
   else
-    Fail "the opacity cell rosters shrank to \{got}" want got
+    bodyScan rest False
+
+-- | Whether `line` opens a new top-level declaration or comment, which ends
+-- the preceding `test` block's body.
+isTopLevelLine : String -> Bool
+isTopLevelLine line = line /= "" && not (startsWith " " line)
+
+ownBodyLines : <FileRead "_", IO> Result String (List String)
+ownBodyLines =
+  map
+    (text => testBodyLines (lines text))
+    (readFile (underRoot "pds/test/opaque_field_scalar_test.mdk"))
+
+-- | The cells of `cells` that some `test` block in this file actually names
+-- as a string literal, and therefore spawns.
+spawnedCells : List String -> List String -> List String
+spawnedCells bodies cells =
+  filter (rel => any (line => contains "\"\{rel}\"" line) bodies) cells
+
+{- | The cells actually SPAWNED still meet what the retired script's floors
+   named: `FAIL_FLOOR=7` rejected cells and `PASS_FLOOR=2` controls.
+
+   Counting the rosters' lengths instead would count compile-time
+   constants: deleting one of the nine `test` blocks above leaves its cell
+   rostered, unspawned, and the floor green. -}
+test "the opacity cells spawned meet FAIL_FLOOR=7 and PASS_FLOOR=2" =
+  let want = ">= 7 rejected, >= 2 controls"
+  match ownBodyLines
+    Err e =>
+      Fail "could not read this gate's own source: \{e}" want "read failed"
+    Ok bodies =>
+      let rejected =
+        length (spawnedCells bodies (typeMismatchCells ++ abstractExportCells))
+      let accepted = length (spawnedCells bodies passCells)
+      let got =
+        "\{intToString rejected} rejected, \{intToString accepted} controls"
+      if rejected >= 7 && accepted >= 2 then
+        Pass want got
+      else
+        Fail
+          "only \{got} are spawned by a `test` block in this file — a roster row with no `test` block, or a deleted `test` block, leaves its cell ungraded"
+          want
+          got

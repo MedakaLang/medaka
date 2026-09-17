@@ -789,7 +789,12 @@ test "mutation control: a healthping probe that ignores HTTP errors is caught" =
 
    A roster that lost rows would still report clean, so the total is pinned:
    a row deleted from any roster above fails this rather than quietly
-   narrowing every assertion that reads it. -}
+   narrowing every assertion that reads it.
+
+   This is a sum of compile-time list lengths, so it pins the ROSTERS and
+   nothing else. The assertion floor below is its other half: deleting a
+   `test` block that reads a roster narrows what the gate proves without
+   moving this total at all. -}
 gradedPatterns : Int
 gradedPatterns =
   length serviceDirectives
@@ -821,3 +826,36 @@ test "deploy_config_lint grades at least PATTERN_FLOOR=100 patterns" =
       "only \{intToString gradedPatterns} patterns are graded, expected >= \{intToString patternFloor} (vacuous-green guard)"
       ">= \{intToString patternFloor} patterns"
       "\{intToString gradedPatterns} patterns"
+
+{- | How many `test` declarations this file's own source still carries, read
+   as source text rather than through a `medaka test --json` self-spawn,
+   which would recurse into this very gate.
+
+   The rosters are only half of what this gate proves; the other half is the
+   set of (file, roster) pairs the `test` blocks above actually grade, and a
+   deleted block leaves every roster intact. So the count of blocks is
+   pinned the same way each roster's floor is: committed when written, only
+   ever raised. -}
+declaredAssertions : <FileRead "_", IO> Result String Int
+declaredAssertions =
+  map
+    (text => length (filter (startsWith "test \"") (lines text)))
+    (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
+
+assertionFloor : Int
+assertionFloor = 39
+
+test "deploy_config_lint declares at least ASSERTION_FLOOR=39 `test` blocks" =
+  let want = ">= \{intToString assertionFloor} `test` blocks"
+  match declaredAssertions
+    Err e =>
+      Fail "could not read this gate's own source: \{e}" want "read failed"
+    Ok declared =>
+      let got = "\{intToString declared} `test` blocks"
+      if declared >= assertionFloor then
+        Pass want got
+      else
+        Fail
+          "only \{got} remain, expected >= \{intToString assertionFloor} — an assertion was deleted, which narrows this gate without moving `gradedPatterns`"
+          want
+          got
