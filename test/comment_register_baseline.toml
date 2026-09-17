@@ -672,7 +672,7 @@ count = 16
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "history"
-count = 186
+count = 184
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -687,7 +687,7 @@ count = 8
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "emoji"
-count = 888
+count = 884
 
 [[entry]]
 file = "compiler/types/typecheck.mdk"
@@ -702,7 +702,7 @@ count = 6
 [[entry]]
 file = "compiler/types/typecheck.mdk"
 class = "shout"
-count = 796
+count = 791
 
 [[entry]]
 file = "stdlib/args.mdk"

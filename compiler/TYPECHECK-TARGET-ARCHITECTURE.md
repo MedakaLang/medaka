@@ -475,6 +475,16 @@ plan alone. One PR, one commit per step; every step's gate list is in its commit
 5. **Step 4 done** (#2546): one impl-body inference form on the Module arm (the check
    path's `inferUserImplBodies`); the corpus's acceptance delta is empty. The Flat arm's
    gate stays (E-2b's business); the impl-obligation gate on the emit path is untouched.
+   Before this step, the emit path kept the full source-order `inferImplBodies` walk
+   (`inferModuleImplBodiesIfEnabled`) while the check path ran `inferUserImplBodies` —
+   ground impls first through the O(log) registered identity-keyed class row, then the
+   parametric impls under an obligation window that keeps only the decidable-now goals
+   (#760 closed the check-side half of "no path both inferred an impl body AND checked
+   its obligations"). The recorded reason for keeping the emit path on the old form (a
+   ground-only, error-suppressing filter that moved the Flat-arm typed-IR goldens)
+   described a function that no longer exists. Measured before unifying (the production
+   instrument — `run_check_agreement`, `dict_semantics`, `engines`, `argtag_matrix`, the
+   LEG A golden — driven through `medaka build`): no golden moved.
 6. **Step 5 unit 1 done** (#2547): `GraphRun` — the deferred channels, the two counters and
    the tyvar-id-keyed given table (`activeDictVars`) are graph-lifetime; per-module drains
    take their slices from `GraphMarks` recorded at module start (`moduleRanges` is the
@@ -2729,6 +2739,14 @@ orders merges, and the plan does not pretend otherwise.
   `rowArgOf` catch-all kind error, and the two named boundary cases (grade-join
   positions route to subsumption when #821 lands; alias positions take
   post-expansion kinds). #797 rides this unifier work.
+
+  `rowArgOf`'s catch-all (`compiler/types/typecheck.mdk`) used to return `pureRow`
+  silently for an ordinary type written into a row-kinded slot (`Box Int Int`), so the
+  written `Int` was read back as `Box <> Int` with no diagnostic — the same
+  silently-coerced-instead-of-diagnosed root as the #1094 S0, one function apart. The
+  fix takes the same shipped code as the mirrored use-site check (`fromAstTypeE`'s
+  `TyRow` arm), applying the `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
+  (EFFECTS-SEMANTICS §6.4/§6.9 Q2) at this site too.
 - **D-2. Per-parameter polarity computation** — covariant/contravariant/mixed
   from field occurrences, propagated transitively through nominal types;
   contravariant-or-mixed ⇒ invariant row treatment. Write channels (#1098) are

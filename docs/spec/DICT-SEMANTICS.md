@@ -831,6 +831,17 @@ tracked as #1082, gated on this clause).
   the multi-type use with a located diagnostic; declining to generalize is not an
   admissible approximation of this clause, it is a different and unsound rule.**
 
+**Implementation note (`registerLocalScheme`, `compiler/types/typecheck.mdk`).**
+Local-scheme obligations are registered everywhere a local generalizes, not only
+inside IMPL/DEFAULT bodies (#827/#838 I2). An earlier `inRigidityBodyRef` gate scoped
+registration to the W3 channel because registering universally re-routed constraints
+through the ambiguity machinery — an `Ord`-constrained `where`-helper's use tripped
+`Ambiguous instance` instead of deferring, and a top-level `where` helper's orphaned
+constraint (`f x = go x where go n = n + 1` typing `f : a -> a`, `f "abc"` panicking
+at run) was the resulting S0. I2's uniform deferral (`checkUndeterminedObligation`
+RULE 2, `deferrableVarIds`) now defers a generalizable var into the enclosing scheme
+instead of rejecting, so the gate is safe to leave open.
+
 ### 4.2 Obligation deferral: which predicates defer, and where a deferred one is discharged
 
 §4's rules say *what* evidence a term needs. They do not say *when* an implementation

@@ -1,5 +1,5 @@
 # META
-source_lines=47097
+source_lines=47059
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -3209,12 +3209,6 @@ dropGoalsSince mark kinds =
 -- and the identity-keyed companion `universeMethodIdentsRef`.  The FLAT path is
 -- unchanged and still last-write-wins; a flat program has one user module, so its
 -- names cannot collide across modules (#1115 / E-1 is what would change that).
-
--- ⚠️ #147 minted `PerRun.registeredIfacesRef` HERE — a cached SET of iface names with
--- ≥1 method registered above, so `ifaceRegistered` was an O(log n) membership test
--- instead of a full linear scan of the method table per operator/numeric-literal.
--- #1539 deleted that reader, leaving the set write-only; #1569 removed the field
--- itself — see `PerRun.registeredIfacesRef`'s retirement note for the full history.
 
 -- C5 (TYPECHECK-AUDIT / Phase 112): names that are BOTH an interface method AND a
 -- cross-module-imported standalone top-level function (e.g. box's `toList`/`isEmpty`
@@ -11818,17 +11812,11 @@ rowArgOf etbl (TyEffect labels tail _) =
 -- DISCARDED for dict-passing purposes.
 rowArgOf etbl (TyRow labels tail _) =
   EffRow (atomsOfWritten labels) (tailCell etbl tail)
--- #1094: anything else here is an ordinary TYPE written into a row-kinded slot
--- (`Box Int Int`).  This used to return `pureRow` silently, so the written `Int` was
--- read back as `Box <> Int` with no diagnostic at all — the same "a row written in a
--- position the elaborator does not recognise is silently coerced instead of diagnosed"
--- root as the S0 above, one function apart, which is why it lands in the same change.
--- It is the MIRROR of the shipped use-site check (`fromAstTypeE`'s `TyRow` arm: a row
--- written where a type is expected), so it takes the same shipped code rather than
--- half-applying the decided `T-ROW-KIND-MISMATCH` → `T-EFFECT-KIND-MISMATCH` rename
--- (EFFECTS-SEMANTICS §6.4/§6.9 Q2) at one site out of three.  `pureRow` stays as the
--- inert continuation value so inference proceeds, exactly as `fromAstTypeE` continues
--- with `TCon "Unit"`.
+-- Catch-all: an ordinary type written into a row-kinded slot (`Box Int Int`) is
+-- diagnosed here rather than silently coerced. Mirrors the use-site check in
+-- `fromAstTypeE`'s `TyRow` arm; `pureRow` stays the inert continuation so inference
+-- proceeds, exactly as `fromAstTypeE` continues with `TCon "Unit"`. History:
+-- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "D-1. Index invariance + row-arm fixes".
 rowArgOf _ ty =
   let _ =
     pushTypeErrorOnceAt
@@ -18911,15 +18899,8 @@ inferRecLet env x xloc e1 e2 =
 -- signed-off ergonomics-for-soundness trade (#1021).
 registerLocalScheme : String -> Scheme -> Int -> Int -> Int -> Unit
 registerLocalScheme x sch oblN0 callN0 dictN0 =
-  -- #827/#838 I2: register local-scheme obligations EVERYWHERE, not just inside
-  -- IMPL/DEFAULT bodies.  The old `inRigidityBodyRef` gate scoped this to the W3
-  -- channel because registering universally re-routed constraints through the
-  -- ambiguity machinery (an Ord-constrained where-helper's use tripped `Ambiguous
-  -- instance` instead of deferring) — a top-level `where` helper's orphaned
-  -- constraint (`f x = go x where go n = n + 1` typing `f : a -> a`, `f "abc"`
-  -- panicking at run) was the resulting S0.  I2's uniform deferral (checkUndetermined-
-  -- Obligation RULE 2, deferrableVarIds) now defers a generalizable var into the
-  -- enclosing scheme instead of rejecting, so the gate is safe to flip open.
+  -- Obligations registered universally (#827/#838 I2); do not gate to IMPL/DEFAULT
+  -- bodies only. See docs/spec/DICT-SEMANTICS.md § "4.1 `gen` at a local binder".
   let addedObls = wWindow perRun.value.implObls oblN0
   let callOblsDelta = callOblsWindow callN0
   -- #838 I5: the dict-slot's forwarded obligation is ALREADY in callOblsDelta as the
@@ -27136,27 +27117,19 @@ candsOneIface ((KeyEntry _ _ _ _ ifn _ _ _) :: rest) =
 keyEntryIface : KeyEntry -> String
 keyEntryIface (KeyEntry _ _ _ _ ifn _ _ _) = ifn
 
--- #1155: names the GOAL and every competing impl head.  `ambiguousImplMsg` — the
--- undetermined-VARIABLE reject, a different situation — names only the interface,
--- which here would leave the reader no way to find the impls that collided
--- (ERROR-QUALITY §1: "in the user's vocabulary", "actionable").  The goal's monos are
--- rendered through ONE shared naming context so a variable occurring in two argument
--- positions prints as the same letter, exactly as `cohOverlapMsg` does for the
--- declaration-time conflict.
+-- #1155: names the GOAL and every competing impl head, not just the interface, so the
+-- reader can find the impls that collided (ERROR-QUALITY §1: "in the user's
+-- vocabulary", "actionable"). The goal's monos render through ONE shared naming
+-- context so a variable in two argument positions prints as the same letter, matching
+-- `cohOverlapMsg`'s declaration-time conflict rendering.
 --
--- ⚠️ ARITY-NEUTRAL WORDING, and it was NOT at first.  THREE mutually ⊑-incomparable
--- impls are constructible today (`C (T Int b c)` / `C (T a Int c)` / `C (T a b Int)`),
--- and the original text — `joinWith " and "`, then "neither … the other", then "make
--- these two disjoint" — rendered "matches A and B and C, and NEITHER is more specific
--- than the other … make THESE TWO disjoint" on it.  Every count-bearing word here is
--- now either derived from `listLen cands` or absent.
+-- Wording is arity-neutral: three mutually incomparable impls are constructible
+-- (`C (T Int b c)` / `C (T a Int c)` / `C (T a b Int)`), so every count-bearing word is
+-- derived from `listLen cands`, never hardcoded to two.
 --
--- ⚠️ The last remedy clause exists because A COMPETING IMPL MAY NOT BE THE USER'S.
--- The flagship #1155 fixture collides a user impl with `stdlib/core.mdk`'s
--- `impl Index (List a) Int a`, where "make them disjoint" is not an action the reader
--- can take.  The message cannot SAY which one is the prelude's — `KeyEntry` carries no
--- module id and adding one re-signs the whole registry — so it names the one remedy
--- that always works instead of implying the reader owns both.
+-- The remedy clause suggests annotation rather than editing, because a competing impl
+-- may be prelude or imported code the reader does not own — `KeyEntry` carries no
+-- module id, so the message cannot name which impl that is.
 ambiguousOverlapMsg : String -> List Mono -> List KeyEntry -> String
 ambiguousOverlapMsg iface goals cands =
   "Ambiguous instance for `\{iface}`. The goal `\{iface} \{ppPredArgsShared goals}` matches \{joinAnd (map (implHeadLabel iface) cands)}, and \{noMinimumClause (listLen cands)}. Overlapping impls are allowed only when one of them is more specific than every other match — make them disjoint, or add an impl more specific than all of them. If one of these is a prelude or imported impl you cannot edit, annotate this expression to a type only one of them matches"
@@ -30698,20 +30671,9 @@ checkBodyImpl seed mode prog0 =
       ()
     Module _ _ implDecls =>
       let bodyEnv = extendVars env1 topSchemes
-      -- #2546 (ARCH Q3a): ONE impl-body inference form on the Module arm, both drivers.
-      -- The emit path used to keep the full source-order `inferImplBodies` walk
-      -- (`inferModuleImplBodiesIfEnabled`) while the check path ran
-      -- `inferUserImplBodies` — ground impls first through the O(log) registered
-      -- identity-keyed class row, then the parametric impls under an obligation window that
-      -- keeps only the decidable-now goals (#760 closed the check-side half of "no path
-      -- both inferred an impl body AND checked its obligations").  The recorded reason
-      -- for keeping the emit path on the old form (a ground-only, error-suppressing
-      -- filter that moved the Flat-arm typed-IR goldens) described a function that no
-      -- longer exists: `inferUserImplBodies` infers parametric heads and keeps its
-      -- diagnostics.  Measured before unifying (the production instrument —
-      -- run_check_agreement, dict_semantics, engines, argtag_matrix, the LEG A golden —
-      -- driven through `medaka build`): no golden moved.  allProg = implDecls
-      -- (interfaces + accumulated impls) grounds the field types.
+      -- Unified impl-body inference form (Module arm, both drivers): inferUserImplBodies
+      -- infers parametric heads and preserves diagnostics. See
+      -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "SA-10a. Landing log" (#2546, ARCH Q3a).
       let _ =
         inferUserImplBodies
           bodyEnv
