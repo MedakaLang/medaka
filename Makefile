@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census t4-census
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census t4-census jev-census jev-eval
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -379,6 +379,23 @@ dup-census: medaka
 ##           test/t4_census.sh's header.
 t4-census: medaka
 	sh test/t4_census.sh
+
+## jev-census — judgment-class style findings over compiler/*.mdk +
+##           stdlib/*.mdk via TypeSafe's Jev model: comment-register ranking
+##           and do-syntax conversion candidates (scripts/jev/README.md,
+##           docs/design/JEV-DESIGN.md). Needs `pip install typesafe-sdk`
+##           and a key in ~/.config/typesafe/api_key; calls an external API,
+##           so it is NEVER a gate and never enrolled. Answers cached under
+##           .jev-cache/. Pass JEV_ARGS='--changed origin/main' etc.
+##           Always exits 0: a census, not a gate.
+jev-census:
+	python3 scripts/jev/jev_census.py $(JEV_ARGS)
+
+## jev-eval — re-measure scripts/jev's questions against the hand-labeled
+##           scripts/jev/eval_corpus.json (precision, recall, calibration).
+##           Run after changing any question in scripts/jev/jev_census.py.
+jev-eval:
+	python3 scripts/jev/jev_eval.py $(JEV_ARGS)
 
 ## slop-census — the ONE composing entry point over the slop-burndown
 ##           crusade's (#2276) member censuses (#2304). Registry is data IN
