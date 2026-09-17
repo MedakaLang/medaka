@@ -120,6 +120,33 @@ day 2 of a soak already in progress, the clock restarts from that deploy, not
 from the original one. The duration itself is Val's call at the time each
 soak begins; do not deploy against an assumed number.
 
+**That is the calendar clock. There is a second one, and it is not a
+calendar.** `PDS-LAUNCH-PLAN.md` §1 states both: the uninterrupted-run clock
+resets on *every* restart — a deploy, a config change, a crash, a reboot —
+whatever the severity. Three properties depend on it and on nothing else:
+
+| property | uninterrupted run needed |
+|---|---|
+| refresh-token rotation against a live token | > 2h |
+| the retention sweep, and a relay reconnecting past it | **> 72h** |
+| RSS drift with a readable trend | days |
+
+So during a soak:
+
+- **Deploys are allowed** — the calendar clock only resets on S0/S1 — but
+  **batch them.** Each restart zeroes the run clock.
+- **Record every deploy on #1697** with its date and the severities it carried.
+  Two clocks cannot be reconstructed afterwards from a tag list alone.
+- **At least one ≥72h window with no restart must fall inside the soak** before
+  its gate closes. Without it the sweep never fires and `#3005` stays untested,
+  and the soak has demonstrated availability rather than correctness.
+
+🚨 **`systemctl restart` during a soak is not free even when the change is
+trivial.** It also closes every session, since sessions are in-memory by design
+— so a deploy-heavy soak is a re-login-heavy one, and the operator's own use of
+the service (which is what L1 makes the soak's evidence) gets interrupted along
+with it.
+
 ## 5. Rollback
 
 Rollback is the exact D3 command from `PDS-DEPLOY.md`'s ["Versioned releases
