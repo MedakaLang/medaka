@@ -16,19 +16,14 @@ data FixtureState =
   | FixtureState String (List Cid) (List (Cid, Array Int)) (Option (Array Int))
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "car_vectors: malformed hex: \{message}"
+mustHex text = resultOrPanic "car_vectors: malformed hex" (decode text)
 
 mustCid : String -> Cid
-mustCid text = match cidFromString text
-  Ok cid => cid
-  Err message => panic "car_vectors: malformed CID: \{message}"
+mustCid text = resultOrPanic "car_vectors: malformed CID" (cidFromString text)
 
 mustHeader : DagCbor -> Array Int
-mustHeader value = match dagCborEncode value
-  Ok bytes => bytes
-  Err message => panic "car_vectors: header encoding failed: \{message}"
+mustHeader value =
+  resultOrPanic "car_vectors: header encoding failed" (dagCborEncode value)
 
 mustCar : Result String Car -> Car
 mustCar (Ok car) = car

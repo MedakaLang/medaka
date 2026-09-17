@@ -16,9 +16,8 @@ import lib.secp256k1.{
 import hex.{decode, encode}
 
 bytes : String -> Array Int
-bytes value = match decode value
-  Ok decoded => decoded
-  Err message => panic "constant_time_signing: invalid fixture: \{message}"
+bytes value =
+  resultOrPanic "constant_time_signing: invalid fixture" (decode value)
 
 scalar : String -> Sc
 scalar value = scFromBytesReduce (bytes value)

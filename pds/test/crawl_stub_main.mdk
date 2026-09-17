@@ -109,9 +109,10 @@ hostnameField body = match parse (fromUtf8 body)
   Err _ => "<unparseable>"
 
 mustJsonHeader : Header
-mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
-  Ok header => header
-  Err message => panic "crawl_stub: header error: \{message}"
+mustJsonHeader =
+  resultOrPanic
+    "crawl_stub: header error"
+    (makeHeader "content-type" (toUtf8 "application/json"))
 
 answerBytes : Int -> String -> String -> Array Int
 answerBytes status hostname authorization =
@@ -186,14 +187,11 @@ serve port handle = match listen "127.0.0.1" port
     acceptLoop lis handle
 
 mustPort : String -> Int
-mustPort text = match toInt text
-  Some port => port
-  None => panic "crawl_stub: not a port: \{text}"
+mustPort text = optionOrPanic "crawl_stub: not a port: \{text}" (toInt text)
 
 mustStatus : String -> Int
-mustStatus text = match toInt text
-  Some status => status
-  None => panic "crawl_stub: not a status code: \{text}"
+mustStatus text =
+  optionOrPanic "crawl_stub: not a status code: \{text}" (toInt text)
 
 usage : String
 usage = "usage: crawl_stub_main PORT LOGFILE STATUS"

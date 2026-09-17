@@ -54,14 +54,13 @@ handleText : String
 handleText = "synth.example"
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "cost_curve: malformed hex: \{message}"
+mustHex text = resultOrPanic "cost_curve: malformed hex" (decode text)
 
 corpusSecret : SecretKey
-corpusSecret = match secretKeyFromBytes (mustHex secretHex)
-  Ok key => key
-  Err message => panic "cost_curve: bad signing key: \{message}"
+corpusSecret =
+  resultOrPanic
+    "cost_curve: bad signing key"
+    (secretKeyFromBytes (mustHex secretHex))
 
 -- ── loading the corpus exactly as `pds/serve.mdk` does ──────────────────────
 
@@ -227,9 +226,8 @@ mustAccount _ = match makeAccount corpusDid handleText hostText
   Err message => panic "cost_curve: account setup failed: \{message}"
 
 mustInt : String -> Int
-mustInt text = match toInt text
-  Some value => value
-  None => panic "cost_curve: malformed integer: \{text}"
+mustInt text =
+  optionOrPanic "cost_curve: malformed integer: \{text}" (toInt text)
 
 main : <IO, Env, Clock, FileRead "_"> Unit
 main = match args ()

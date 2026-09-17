@@ -118,19 +118,16 @@ accountDid : String
 accountDid = "did:plc:persistencefixture000000"
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "store_persistence: malformed hex: \{message}"
+mustHex text = resultOrPanic "store_persistence: malformed hex" (decode text)
 
 mustSecret : SecretKey
-mustSecret = match secretKeyFromBytes (mustHex secretHex)
-  Ok key => key
-  Err message => panic "store_persistence: malformed secret: \{message}"
+mustSecret =
+  resultOrPanic
+    "store_persistence: malformed secret"
+    (secretKeyFromBytes (mustHex secretHex))
 
 mustTid : String -> Tid
-mustTid text = match tidParse text
-  Ok tid => tid
-  Err message => panic "store_persistence: malformed TID: \{message}"
+mustTid text = resultOrPanic "store_persistence: malformed TID" (tidParse text)
 
 mustRepo : Result String Repo -> Repo
 mustRepo (Ok repo) = repo
@@ -175,9 +172,8 @@ fixtureRepo =
   write "app.bsky.actor.profile/self" "third" "3lba2s5ykxs2d" olderRepo
 
 mustCar : Repo -> Array Int
-mustCar repo = match repoExportCar repo
-  Ok bytes => bytes
-  Err message => panic "store_persistence: CAR export failed: \{message}"
+mustCar repo =
+  resultOrPanic "store_persistence: CAR export failed" (repoExportCar repo)
 
 {- | The whole observable identity of a repository: head commit CID, record
    count, and the exact `sync.getRepo` CAR bytes (length plus their digest, so a
@@ -202,9 +198,8 @@ summary label repo =
   ()
 
 blocksOf : Repo -> List (Cid, Array Int)
-blocksOf repo = match repoExportBlocks repo
-  Ok rows => rows
-  Err message => panic "store_persistence: block export failed: \{message}"
+blocksOf repo =
+  resultOrPanic "store_persistence: block export failed" (repoExportBlocks repo)
 
 runSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
 runSave dir =

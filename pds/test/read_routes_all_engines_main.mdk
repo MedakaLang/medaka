@@ -100,14 +100,16 @@ expectedDidDocument =
   "{\"@context\":[\"https://www.w3.org/ns/did/v1\"],\"id\":\"did:web:pds.example\",\"service\":[{\"id\":\"#atproto_pds\",\"type\":\"AtprotoPersonalDataServer\",\"serviceEndpoint\":\"https://pds.example\"}]}"
 
 mustAccount : Account
-mustAccount = match makeAccount accountDidText accountHandleText accountHostText
-  Ok account => account
-  Err message => panic "read_routes: account setup failed: \{message}"
+mustAccount =
+  resultOrPanic
+    "read_routes: account setup failed"
+    (makeAccount accountDidText accountHandleText accountHostText)
 
 mustServer : Server
-mustServer = match pdsServer mustAccount serverLinksEmpty "test-driver"
-  Ok server => server
-  Err message => panic "read_routes: server setup failed: \{message}"
+mustServer =
+  resultOrPanic
+    "read_routes: server setup failed"
+    (pdsServer mustAccount serverLinksEmpty "test-driver")
 
 {- | The instant every request in this file is placed at. `lib.server_core`
    reads no clock, so each of its callers supplies one. -}
@@ -379,9 +381,10 @@ configuredChatPort : Int
 configuredChatPort = 3129
 
 mustRoute : String -> Int -> AppviewRoute
-mustRoute did port = match makeAppviewRoute did port
-  Ok route => route
-  Err message => panic "read_routes: audience row setup failed: \{message}"
+mustRoute did port =
+  resultOrPanic
+    "read_routes: audience row setup failed"
+    (makeAppviewRoute did port)
 
 configuredAudiences : Option AppviewTable
 configuredAudiences =

@@ -51,9 +51,8 @@ gradeLines validate expectOk (line :: rest) =
     (restPass + (if ok then 1 else 0), restTotal + 1)
 
 mustReadLines : String -> <IO> List String
-mustReadLines path = match readLines path
-  Err message => panic "atsyntax_vectors: cannot read \{path}: \{message}"
-  Ok lines => lines
+mustReadLines path =
+  resultOrPanic "atsyntax_vectors: cannot read \{path}" (readLines path)
 
 {- | Grade one corpus and print its counted line. `expectedValidPass` is
    `None` for "must be 100%"; `Some n` pins a documented, deliberate,

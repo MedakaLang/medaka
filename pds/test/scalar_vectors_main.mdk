@@ -97,9 +97,7 @@ bump arr i = A.setInPlace i (arr[i] + 1) arr
 -- ── Row evaluation ───────────────────────────────────────────────────
 
 mustHex : String -> Array Int
-mustHex s = match decode s
-  Ok bs => bs
-  Err m => panic "scalar_vectors: bad hex '\{s}': \{m}"
+mustHex s = resultOrPanic "scalar_vectors: bad hex '\{s}'" (decode s)
 
 loadSc : String -> Sc
 loadSc s = scFromBytesReduce (mustHex s)
