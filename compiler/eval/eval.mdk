@@ -676,7 +676,7 @@ tyvarsInArgs ts = sumInts (map countTyvars ts)
 --   * #1618 -- `check` wrong at exit 0, `run` correct, `build` exit 1 with no
 --     binary.
 --   * #1630 -- same three cells at one impl; with a second impl of the same
---     interface, `run` is WRONG AT EXIT 0 and declaration-order-dependent
+--     interface, `run` is wrong at exit 0 and declaration-order-dependent
 --     (silent wrongness). Pinned at
 --     `test/dict_fixtures/s3-constrained-headed-impl-vs-plain-sibling.mdk`.
 --   * #1617 -- `run` wrong and declaration-order-dependent at exit 0 (the same

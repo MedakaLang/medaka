@@ -52,9 +52,10 @@ types must be imported by name (`import map.{Map}`), never through the alias.
 
 ## `compiler/entries/origin_agreement_main.mdk` — F1/F2, two S0s through 12/12 green CI (#1110)
 
-`Ty.TyCon` carries a `TyConOrigin` stamped by resolve, and so do the four type-declaration
-nodes (`DData.dataOrigin`, `DNewtype.newtypeOrigin`, `DTypeAlias.tyAliasOrigin`,
-`DInterface.ifaceOrigin`). Nothing in the compiler read any of them before #1110, which made
+The `Ty` constructor `TyCon` carries a `TyConOrigin` stamped by resolve, in its
+`tyConOrigin` field, and so do the four type-declaration nodes — `DData`, `DNewtype`,
+`DTypeAlias` and `DInterface`, through `dataOrigin`, `newtypeOrigin`, `tyAliasOrigin`
+and `ifaceOrigin`. Nothing in the compiler read any of them before #1110, which made
 every identity fact the compiler minted unobservable — and two defects shipped through
 12/12 green CI on exactly that:
 
