@@ -2,8 +2,8 @@
    ref JSON shape, MIME-shape admission, and size-cap admission.
 
    No routes, no disk, no randomness, no clock — every export here declares
-   no effect row (`pds/test/lib_boundary.sh`). This is the ONE place blob
-   size-cap enforcement happens: `admitBlob` is the single admission
+   no effect row (`pds/test/lib_boundary_test.mdk`). This is the ONE place
+   blob size-cap enforcement happens: `admitBlob` is the single admission
    function slice 3's `uploadBlob` handler calls, and the persistence shell
    (slice 4) does not re-decide admission — it only fails closed if handed
    something this module would not have admitted.

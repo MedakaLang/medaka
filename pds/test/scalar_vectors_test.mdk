@@ -16,7 +16,12 @@
    one op silently unexercised while the total still cleared its floor).
    Pinning each op's exact count subsumes that: an op dropping to 0 changes
    its own line, which a `needs` substring catches directly, without a
-   negative-assertion field `Row` does not have. -}
+   negative-assertion field `Row` does not have.
+
+   The Wasm arm sweeps the same full corpus as the native one, so it is held
+   to the same per-op lines. It is the arm that can be absent from a host: it
+   needs the Wasm emitter, `node` and `wasm-tools`, and is skipped without
+   them unless `MEDAKA_REQUIRE_WASM=1`. -}
 
 import test.vector_runner.{
   Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
@@ -36,8 +41,8 @@ evalOpLines = [
   "counted: 40/40 rows ok, 988 skipped (stride 26)",
 ]
 
-nativeOpLines : List String
-nativeOpLines = [
+fullCorpusOpLines : List String
+fullCorpusOpLines = [
   "op red: 52 ok",
   "op neg: 52 ok",
   "op inv: 52 ok",
@@ -48,6 +53,15 @@ nativeOpLines = [
   "op sub: 256 ok",
   "counted: 1028/1028 rows ok, 0 skipped (stride 1)",
 ]
+
+fullCorpusArm : Engine -> Arm
+fullCorpusArm e = Arm {
+  engine = e,
+  driverArgs = [],
+  countFloor = None,
+  needs = fullCorpusOpLines,
+  lastLine = Some "TOTAL: PASS",
+}
 
 row : Row
 row = Row {
@@ -65,16 +79,11 @@ row = Row {
       needs = evalOpLines,
       lastLine = Some "TOTAL: PASS",
     },
-    Arm {
-      engine = NativeEngine,
-      driverArgs = [],
-      countFloor = None,
-      needs = nativeOpLines,
-      lastLine = Some "TOTAL: PASS",
-    },
+    fullCorpusArm NativeEngine,
+    fullCorpusArm WasmEngine,
   ],
   parity = False,
 }
 
-test "scalar vectors: every op's row count holds at stride 26 (eval) and across the full corpus (native)" =
+test "scalar vectors: every op's row count holds at stride 26 (eval) and across the full corpus (native, Wasm)" =
   expectRow row

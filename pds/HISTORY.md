@@ -95,7 +95,7 @@ leaving only the atproto-specific XRPC routing in `pds/lib/xrpc.mdk`.
 `pds/serve.mdk` and `pds/shell/server.mdk`: the accept loop, the
 per-connection HTTP/1.1 lifecycle, and the one `Ref Store` every connection
 task shares. `pds/test/serve_e2e.sh` grades it end to end and
-`pds/test/lib_boundary.sh` proves the `pds/lib` ⇄ `pds/shell` boundary holds.
+`pds/test/lib_boundary_test.mdk` proves the `pds/lib` ⇄ `pds/shell` boundary holds.
 
 ## Phase 4 — the endpoints (#1697)
 

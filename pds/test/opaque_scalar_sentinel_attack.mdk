@@ -1,5 +1,5 @@
 -- Negative opacity cell: these shared scalar sentinels must never be mutable
--- by a caller. `pds/test/opaque_field_scalar.sh` requires this file to fail.
+-- by a caller. `pds/test/opaque_field_scalar_test.mdk` requires this to fail.
 import array as A
 import lib.scalar.{scZero, scOne}
 

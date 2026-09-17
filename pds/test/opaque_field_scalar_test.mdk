@@ -1,0 +1,731 @@
+{- | #1723 — the opaque-type boundary around `Fe` and `Sc`, and the
+   deployment boundary around the `ForTest` exports that exist to poke at
+   them, migrated from the retired shell gate of the same name under
+   #3148.
+
+   `Fe` and `Sc` hold mutable arrays, so opacity is what stops a caller from
+   corrupting a shared sentinel or forging a non-canonical value. Both
+   halves below are COMPILE-TIME properties on purpose: a bad program has to
+   be rejected before it can run, and a runtime test can only grade one that
+   already did.
+
+   PART A — the deployment boundary. A name ending in `ForTest` is an
+   explicit test-only export. No module under `pds/lib` may reach one, by
+   any of the three routes the language offers: naming it selectively,
+   sweeping it up in a wildcard, or aliasing its module and qualifying
+   through the alias. The boundary is DERIVED from source on every run
+   rather than listed here, so a hook added tomorrow is in scope without
+   anyone editing this file — and the test drivers are required to keep at
+   least one explicit route to a hook, so the policy cannot pass by there
+   being nothing to reach.
+
+   PART B — the opacity cells themselves. Each is a committed program that
+   must be REJECTED, checked one `medaka check` at a time, and each is
+   graded on its diagnostic as well as its exit code: a rejection graded on
+   the exit status alone stays green once it starts failing for an unrelated
+   reason, which is how a boundary gate quietly stops testing the boundary.
+   The two control cells are the other half of that — they use the same
+   public API legitimately and must still check, so a change that rejected
+   everything could not read as success.
+
+   Why the scan is Medaka and the cells are spawns: Part A's two `awk` state
+   machines (`extract_test_exports`, `parse_imports`) are folds over lines
+   carrying a pending-export flag and a brace depth; they port to ordinary
+   functions, and once they are functions the four mutation controls need no
+   directory copy — each grades the scan over the real source with one
+   import line prepended in memory, where the script copied `pds/lib` and
+   `pds/test` and then had to prove byte-for-byte that it had restored
+   them. Part B genuinely needs the compiler's own answer, so those nine
+   cells spawn `medaka check` exactly as the script did.
+
+   Runs under `medaka test --native`: the interpreter binds no subprocess
+   extern, so Part B needs the native vehicle. -}
+
+import fs.{fixtureFiles}
+import string.{
+  contains,
+  drop,
+  endsWith,
+  indexOf,
+  lines,
+  replaceAll,
+  split,
+  startsWith,
+  stripPrefix,
+  stripSuffix,
+  take,
+  trim,
+  trimLeft,
+  trimRight,
+  unlines,
+  unwords,
+}
+import io.{runVerb}
+import test.{Expectation(..)}
+import test_process.{
+  expectSpawnFails, expectSpawnOk, medakaBin, medakaRoot, underRoot
+}
+
+-- # Part A — reading the tree
+
+{- | One `.mdk` module: where it sits in the tree, what it is called as a
+   module, and its text.
+
+   `rel` and `name` are both carried because the two halves of the
+   cross-reference below key on different ones: a violation is reported
+   against the CONSUMER's path, which is what a reader has to open, while a
+   hook is owned by the EXPORTER's module name, which is what an import
+   clause spells. -}
+data Src = Src { rel : String, name : String, text : String }
+
+{- | Every `.mdk` module under `<root>/<sub>`, recursively.
+
+   `fixtureFiles` carries the anti-vacuity floor: a directory that reads
+   cleanly but holds no files is an `Err`, so a scan of nothing cannot
+   report a clean boundary. -}
+loadSrcs : String -> String -> <FileRead "_"> Result String (List Src)
+loadSrcs root sub = match fixtureFiles "\{root}/\{sub}"
+  Err e => Err "could not walk \{root}/\{sub}: \{e}"
+  Ok paths => readSrcs root (filter (endsWith ".mdk") paths)
+
+readSrcs : String -> List String -> <FileRead "_"> Result String (List Src)
+readSrcs _ [] = Ok []
+readSrcs root (p :: rest) = match readFile p
+  Err e => Err "could not read \{p}: \{e}"
+  Ok content =>
+    let src = Src {
+      rel = relativeTo root p,
+      name = moduleNameOf root p,
+      text = content,
+    }
+    map (src :: _) (readSrcs root rest)
+
+-- | `path` with `<root>/` removed, the form every violation message below
+-- names a consumer by.
+relativeTo : String -> String -> String
+relativeTo root path = optionOr path (stripPrefix "\{root}/" path)
+
+{- | The module name `path` is imported under.
+
+   Module names are relative to `pds/`, not to the tree root, because that
+   is where `pds/medaka.toml` puts the project: `pds/lib/secp256k1.mdk` is
+   imported as `lib.secp256k1`. -}
+moduleNameOf : String -> String -> String
+moduleNameOf root path =
+  let rel = optionOr path (stripPrefix "\{root}/pds/" path)
+  replaceAll "/" "." (optionOr rel (stripSuffix ".mdk" rel))
+
+-- | `line` with any `--` comment removed.
+stripComment : String -> String
+stripComment line = match indexOf "--" line
+  None => line
+  Some i => trimRight (take i line)
+
+-- # Part A — the test-only export census
+
+{- | The `ForTest` names `src` exports, paired with its module name.
+
+   An exported declaration either puts `export` on its own line, with the
+   declaration on the next non-blank one, or writes `export <decl>` on a
+   single line; both forms are read, since which one a module uses is a
+   formatting choice and the boundary is not. -}
+hooksOf : Src -> List (String, String)
+hooksOf src = map (n => (src.name, n)) (exportedNames (lines src.text))
+
+exportedNames : List String -> List String
+exportedNames ls = exportScan ls False
+
+exportScan : List String -> Bool -> List String
+exportScan [] _ = []
+exportScan (raw :: rest) pending =
+  let line = trim (stripComment raw)
+  if pending && line == "" then
+    exportScan rest True
+  else if pending then
+    prependSome (testOnlyName line) (exportScan rest False)
+  else if line == "export" || line == "public export" then
+    exportScan rest True
+  else match exportKeyword line
+    None => exportScan rest False
+    Some decl => prependSome (testOnlyName decl) (exportScan rest False)
+
+prependSome : Option a -> List a -> List a
+prependSome None xs = xs
+prependSome (Some x) xs = x :: xs
+
+{- | The declaration text after a single-line `export` or `public export`
+   keyword, if `line` is one. -}
+exportKeyword : String -> Option String
+exportKeyword line = match stripPrefix "public export" line
+  Some rest => afterKeyword rest
+  None => match stripPrefix "export" line
+    Some rest => afterKeyword rest
+    None => None
+
+-- | `rest` trimmed, if the keyword it follows was separated from it by
+-- whitespace rather than running into a longer word.
+afterKeyword : String -> Option String
+afterKeyword rest =
+  if startsWith " " rest || startsWith "\t" rest then
+    Some (trimLeft rest)
+  else
+    None
+
+{- | The declared name in `decl`, if it ends in `ForTest`.
+
+   `data` is stripped first so that `export data FeForTest = ...` is read as
+   the name and not as the keyword, and the name ends at the first character
+   that cannot be part of one. -}
+testOnlyName : String -> Option String
+testOnlyName decl =
+  let body =
+    optionOr decl (afterKeyword (optionOr "" (stripPrefix "data" decl)))
+  let name = takeWhileName (trim body)
+  if endsWith "ForTest" name then Some name else None
+
+takeWhileName : String -> String
+takeWhileName s =
+  if s == "" then
+    ""
+  else
+    let c = take 1 s
+    if elem c [" ", "\t", ":", "=", "("] then
+      ""
+    else
+      "\{c}\{takeWhileName (drop 1 s)}"
+
+-- # Part A — the import census
+
+{- | Every import edge `src` declares, as
+   `(consumer path, imported module, name)`.
+
+   `name` is a name for a selective import, `"*"` for a wildcard and
+   `"@alias"` for an aliased module, because those are three DIFFERENT
+   routes to the same hook and a policy that only knew about the first would
+   be bypassable by writing either of the others. An import clause may wrap
+   across lines, so the brace depth is carried until it closes. -}
+edgesOf : Src -> Result String (List (String, String, String))
+edgesOf src = importScan src.rel (lines src.text) "" 0 False
+
+importScan : String ->
+  List String ->
+  String ->
+  Int ->
+  Bool ->
+  Result String (List (String, String, String))
+importScan consumer [] _ _ collecting =
+  if collecting then Err "\{consumer}: unterminated import clause" else Ok []
+importScan consumer (raw :: rest) clause depth collecting =
+  let line = stripComment raw
+  if not collecting && not (isImportStart line) then
+    importScan consumer rest "" 0 False
+  else
+    let clause2 = if collecting then "\{clause} \{line}" else line
+    let depth2 = (if collecting then depth else 0) + braceDelta line
+    if depth2 <= 0 then
+      map
+        (importEdges consumer clause2 ++ _)
+        (importScan consumer rest "" 0 False)
+    else
+      importScan consumer rest clause2 depth2 True
+
+-- | Whether `line` opens an import clause.
+isImportStart : String -> Bool
+isImportStart line =
+  let t = trimLeft line
+  startsWith "import " t || startsWith "import\t" t
+
+-- | How many braces `line` opens, less how many it closes.
+braceDelta : String -> Int
+braceDelta line = occurrences "{" line - occurrences "}" line
+
+-- | How many times `needle` occurs in `s`.
+occurrences : String -> String -> Int
+occurrences needle s = length (split needle s) - 1
+
+{- | The edges one whole import clause declares.
+
+   The three routes are tried in order and only one applies: a clause is a
+   wildcard, or a selective list, or an alias of a whole module. A bare
+   `import m` names nothing and contributes no edge — it cannot reach a hook,
+   because an unqualified name it did not bind is not in scope. -}
+importEdges : String -> String -> List (String, String, String)
+importEdges consumer clause =
+  let s =
+    trim
+      (optionOr
+        clause
+        (afterKeyword (optionOr "" (stripPrefix "import" (trim clause)))))
+  match indexOf ".*" s
+    Some i => [(consumer, trim (take i s), "*")]
+    None => match indexOf ".{" s
+      Some i =>
+        let body = take0 "}" (drop (i + 2) s)
+        let from = trim (take i s)
+        map
+          (n => (consumer, from, n))
+          (filter (/= "") (map trim (split "," body)))
+      None => match indexOf " as " s
+        Some i => [(consumer, trim (take i s), "@alias")]
+        None => []
+
+-- | `s` up to the first occurrence of `stop`, or all of `s`.
+take0 : String -> String -> String
+take0 stop s = match indexOf stop s
+  None => s
+  Some i => take i s
+
+-- # Part A — the cross-reference
+
+{- | Every way the import edges reach a test-only export, in the wording the
+   retired script printed, one line per violation.
+
+   The script's `awk` exited on the first; this reports all of them, so a
+   diff that breaches the boundary in three places names three. -}
+breaches : List (String, String) -> List (String, String, String) -> List String
+breaches hooks edges = flatMap (breachOf hooks) edges
+
+breachOf : List (String, String) -> (String, String, String) -> List String
+breachOf hooks (consumer, from, name) =
+  let exports = any ((m, _) => m == from) hooks
+  if name == "*" && exports then
+    ["\{consumer} imports test-only API wildcard from \{from}"]
+  else if name == "@alias" && exports then
+    [
+      "\{consumer} imports module with test-only APIs through alias from \{from}",
+    ]
+  else if elem (from, name) hooks then
+    ["\{consumer} imports test-only API \{name}"]
+  else
+    []
+
+-- | The distinct consumer→hook edges a source set legitimately holds, which
+-- is what the test drivers must keep at least one of.
+reaches : List (String, String) -> List (String, String, String) -> List String
+reaches hooks edges = dedupe (breaches hooks edges)
+
+dedupe : List String -> List String
+dedupe [] = []
+dedupe (x :: rest) = x :: dedupe (filter (/= x) rest)
+
+-- # Part A — the real tree
+
+root : <IO> String
+root = medakaRoot
+
+production : <FileRead "_", IO> Result String (List Src)
+production = loadSrcs root "pds/lib"
+
+drivers : <FileRead "_", IO> Result String (List Src)
+drivers = loadSrcs root "pds/test"
+
+hooks : <FileRead "_", IO> Result String (List (String, String))
+hooks = map (flatMap hooksOf) production
+
+allEdges : List Src -> Result String (List (String, String, String))
+allEdges [] = Ok []
+allEdges (src :: rest) = match edgesOf src
+  Err e => Err e
+  Ok edges => map (edges ++ _) (allEdges rest)
+
+productionEdges : <FileRead "_", IO> Result String (List (String, String, String))
+productionEdges = match production
+  Err e => Err e
+  Ok srcs => allEdges srcs
+
+driverEdges : <FileRead "_", IO> Result String (List (String, String, String))
+driverEdges = match drivers
+  Err e => Err e
+  Ok srcs => allEdges srcs
+
+-- | The violations a source set's edges commit against the real hook set.
+breachesOf : Result String (List (String, String, String)) ->
+  <FileRead "_", IO> Result String (List String)
+breachesOf (Err e) = Err e
+breachesOf (Ok edges) = map (h => breaches h edges) hooks
+
+-- | Passes when a scan reported no violation lines.
+expectClean : String -> Result String (List String) -> Expectation
+expectClean what (Err e) =
+  Fail "\{what}: \{e}" "no violations" "the scan could not run"
+expectClean _ (Ok []) = Pass "no violations" "no violations"
+expectClean what (Ok hits) =
+  Fail
+    "\{what}:\n\{unlines (map indent hits)}"
+    "no violations"
+    "\{intToString (length hits)} violations"
+
+indent : String -> String
+indent line = "  \{line}"
+
+test "no pds/lib module reaches a test-only ForTest export" =
+  expectClean
+    "real tree: pds/lib reaches a test-only export"
+    (breachesOf productionEdges)
+
+-- The three non-vacuity assertions the retired script made by refusing an
+-- empty file: a boundary derived from nothing accepts everything.
+
+test "the deployment scan found at least one pds/lib production module" =
+  expectAtLeast "production modules" 1 (map length production)
+
+test "the deployment scan found at least one exported test-only API" =
+  expectAtLeast "exported test-only APIs" 1 (map length hooks)
+
+driverReach : <FileRead "_", IO> Result String (List String)
+driverReach = match driverEdges
+  Err e => Err e
+  Ok edges => map (h => reaches h edges) hooks
+
+test "the test drivers keep at least one explicit route to a test-only API" =
+  expectAtLeast "test-only API consumer edges" 1 (map length driverReach)
+
+{- | A census floor over all three counts at once.
+
+   This is STRICTER than the retired script, which asserted only that each
+   set was non-empty. One module, one hook and one edge would satisfy that
+   while a walk that had silently stopped after its first file reported the
+   whole boundary clean; these floors are the counts at the time of writing,
+   less a margin for a module or a hook being retired. -}
+test "the deployment census did not collapse" = match production
+  Err e => Fail e "a populated census" "the scan could not run"
+  Ok srcs => match hooks
+    Err e => Fail e "a populated census" "the scan could not run"
+    Ok hs => match driverReach
+      Err e => Fail e "a populated census" "the scan could not run"
+      Ok rs =>
+        let got =
+          "\{intToString (length srcs)} modules, \{intToString (length hs)} hooks, \{intToString (length rs)} edges"
+        let want = ">= 25 modules, >= 5 hooks, >= 8 edges"
+        if length srcs >= 25 && length hs >= 5 && length rs >= 8 then
+          Pass want got
+        else
+          Fail "the deployment census collapsed to \{got}" want got
+
+expectAtLeast : String -> Int -> Result String Int -> Expectation
+expectAtLeast what floor (Err e) =
+  Fail
+    "\{what}: \{e}"
+    ">= \{intToString floor} \{what}"
+    "the scan could not run"
+expectAtLeast what floor (Ok n) =
+  let want = ">= \{intToString floor} \{what}"
+  let got = "\{intToString n} \{what}"
+  if n >= floor then Pass want got else Fail "found \{got}" want got
+
+-- # Part A — mutation controls
+--
+-- Each control prepends one import line to `pds/lib/sign.mdk`'s real
+-- content IN MEMORY and re-runs the cross-reference over the result. The
+-- source tree is never written to, and the assertion below that the real
+-- file still holds none of the three breach injections (the fourth
+-- control, the ordinary-alias case, is expected to be ACCEPTED rather
+-- than found, so it is not part of that list) is what the retired
+-- script's byte-for-byte restore check becomes.
+
+signRel : String
+signRel = "pds/lib/sign.mdk"
+
+-- | The production source set with `extra` prepended to `pds/lib/sign.mdk`.
+withPrepended : String -> <FileRead "_", IO> Result String (List Src)
+withPrepended extra = map (map (prependTo extra)) production
+
+prependTo : String -> Src -> Src
+prependTo extra src =
+  if src.rel == signRel then
+    Src { src | text = "\{extra}\n\{src.text}" }
+  else
+    src
+
+mutantBreaches : String -> <FileRead "_", IO> Result String (List String)
+mutantBreaches extra = match withPrepended extra
+  Err e => Err e
+  Ok srcs => breachesOf (allEdges srcs)
+
+{- | An alias of a module that has no test-only exports must still be
+   accepted.
+
+   Without this the policy could pass by rejecting every alias, which would
+   forbid ordinary code rather than the boundary breach. -}
+test "mutation control: an ordinary module alias is still accepted" =
+  expectClean
+    "an alias of a module with no test-only exports was rejected"
+    (mutantBreaches "import array as SafeArray")
+
+selectiveInjection : String
+selectiveInjection = "import lib.secp256k1.{ecdsaSignDigestForTest}"
+
+wildcardInjection : String
+wildcardInjection = "import lib.secp256k1.*"
+
+aliasInjection : String
+aliasInjection = "import lib.secp256k1 as Internal"
+
+{- | Passes when the scan reported exactly the expected violation line.
+
+   The line and not merely a rejection: a control graded on "something was
+   reported" stays green when the scan starts rejecting the mutant for an
+   unrelated reason, and it is the WORDING that tells whoever hits this
+   which of the three routes they took. -}
+expectBreach : String -> Result String (List String) -> Expectation
+expectBreach wanted (Err e) =
+  Fail "could not scan the mutant: \{e}" wanted "the scan could not run"
+expectBreach wanted (Ok hits) =
+  let got = if hits == [] then "no violations" else unlines (map indent hits)
+  if elem wanted hits then
+    Pass wanted wanted
+  else
+    Fail
+      "the injected breach was not reported as \{debug wanted}, got:\n\{got}"
+      wanted
+      got
+
+test "mutation control: a selective test-only import is reported" =
+  expectBreach
+    "pds/lib/sign.mdk imports test-only API ecdsaSignDigestForTest"
+    (mutantBreaches selectiveInjection)
+
+test "mutation control: a wildcard test-only import is reported" =
+  expectBreach
+    "pds/lib/sign.mdk imports test-only API wildcard from lib.secp256k1"
+    (mutantBreaches wildcardInjection)
+
+test "mutation control: an aliased test-only module import is reported" =
+  expectBreach
+    "pds/lib/sign.mdk imports module with test-only APIs through alias from lib.secp256k1"
+    (mutantBreaches aliasInjection)
+
+{- | The real `pds/lib/sign.mdk` holds none of the three injections.
+
+   The mutants above exist only as values, so there is nothing to restore —
+   but the property the retired script's `cmp` was defending is worth
+   keeping stated: whatever the controls do, the file on disk is not one of
+   them. -}
+test "mutation control: the real pds/lib/sign.mdk holds no injected import" =
+  match readFile (underRoot signRel)
+    Err e =>
+      Fail "could not read \{signRel}: \{e}" "no injected import" "unreadable"
+    Ok content =>
+      let found =
+        filter
+          (i => contains i content)
+          [selectiveInjection, wildcardInjection, aliasInjection]
+      if found == [] then
+        Pass "no injected import" "no injected import"
+      else
+        Fail
+          "\{signRel} holds an injected import: \{unlines found}"
+          "no injected import"
+          "\{intToString (length found)} injected imports"
+
+-- # Part B — the opacity cells
+--
+-- Nine committed programs, one `medaka check` each. Seven must be rejected
+-- and two must check; each rejection is graded on its diagnostic as well as
+-- its exit code, so a cell that starts failing for an unrelated reason reds
+-- instead of reading as a successful rejection.
+
+{- | Passes when `medaka check <rel>` fails with `needle` in its output.
+
+   `expectSpawnFails` is the whole grader: exit code and diagnostic
+   together, which is the assertion this half wants. -}
+expectCellRejected : String -> String -> <Exec "_", IO> Expectation
+expectCellRejected rel needle =
+  expectSpawnFails medakaBin ["check", underRoot rel] needle
+
+-- | Passes when `medaka check <rel>` exits 0.
+expectCellChecks : String -> <Exec "_", IO> Expectation
+expectCellChecks rel = expectSpawnOk medakaBin ["check", underRoot rel]
+
+{- | Passes when `medaka check <rel>` fails and BOTH `first` and `second`
+   appear in its output.
+
+   `expectSpawnFails` takes one needle, and the abstract-export diagnostic
+   below has to be pinned on two independent phrases, so this is its
+   two-needle peer rather than a second way of doing the same thing. -}
+expectCellRejectedBoth : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Expectation
+expectCellRejectedBoth rel first second =
+  let want =
+    "nonzero exit, output containing \{debug first} and \{debug second}"
+  match runVerb medakaBin ["check", underRoot rel]
+    Err e => Fail "could not run `medaka check \{rel}`: \{e}" want "no spawn"
+    Ok (code, out, err) =>
+      let text = out ++ err
+      let got = "exit \{intToString code}, output \{debug text}"
+      if code == 0 then
+        Fail
+          "\{rel} checked successfully; private constructors are exported: \{debug text}"
+          want
+          got
+      else if contains first text && contains second text then
+        Pass want got
+      else
+        Fail
+          "\{rel} failed for an unexpected reason, not abstract constructor export: \{debug text}"
+          want
+          got
+
+{- | The two exact-`Array.set` sentinel mutations and the two raw-array
+   forgeries, all of which the typechecker must refuse as a type mismatch:
+   the representation is not the opaque type. -}
+typeMismatchCells : List String
+typeMismatchCells = [
+  "pds/test/opaque_field_sentinel_attack.mdk",
+  "pds/test/opaque_scalar_sentinel_attack.mdk",
+  "pds/test/opaque_field_raw_forgery.mdk",
+  "pds/test/opaque_scalar_raw_forgery.mdk",
+]
+
+{- | The three constructor-import probes, which must fail at IMPORT
+   RESOLUTION rather than with the expression mismatch above.
+
+   They pin `export data`'s abstract constructor boundary: changing either
+   declaration to `public export data` would make its cell resolve, and then
+   unwrap, mutate or construct the representation successfully. Both needles
+   are required because the two halves of that diagnostic name different
+   things — that the module exports no constructors, and that it is the
+   abstract export that is why. -}
+abstractExportCells : List String
+abstractExportCells = [
+  "pds/test/opaque_field_constructor_import.mdk",
+  "pds/test/opaque_scalar_constructor_import.mdk",
+  "pds/test/opaque_signature_constructor_import.mdk",
+]
+
+noConstructors : String
+noConstructors = "exports no constructors"
+
+exportedAbstractly : String
+exportedAbstractly = "exported abstractly"
+
+-- | The cells that use the public opaque API legitimately and must check.
+passCells : List String
+passCells = [
+  "pds/test/opaque_field_scalar_control.mdk",
+  "pds/test/opaque_signature_control.mdk",
+]
+
+test "opacity attack rejected: opaque_field_sentinel_attack" =
+  expectCellRejected "pds/test/opaque_field_sentinel_attack.mdk" "Type mismatch"
+
+test "opacity attack rejected: opaque_scalar_sentinel_attack" =
+  expectCellRejected
+    "pds/test/opaque_scalar_sentinel_attack.mdk"
+    "Type mismatch"
+
+test "opacity attack rejected: opaque_field_raw_forgery" =
+  expectCellRejected "pds/test/opaque_field_raw_forgery.mdk" "Type mismatch"
+
+test "opacity attack rejected: opaque_scalar_raw_forgery" =
+  expectCellRejected "pds/test/opaque_scalar_raw_forgery.mdk" "Type mismatch"
+
+test "abstract constructor import rejected: opaque_field_constructor_import" =
+  expectCellRejectedBoth
+    "pds/test/opaque_field_constructor_import.mdk"
+    noConstructors
+    exportedAbstractly
+
+test "abstract constructor import rejected: opaque_scalar_constructor_import" =
+  expectCellRejectedBoth
+    "pds/test/opaque_scalar_constructor_import.mdk"
+    noConstructors
+    exportedAbstractly
+
+test "abstract constructor import rejected: opaque_signature_constructor_import" =
+  expectCellRejectedBoth
+    "pds/test/opaque_signature_constructor_import.mdk"
+    noConstructors
+    exportedAbstractly
+
+test "opacity control checks: opaque_field_scalar_control" =
+  expectCellChecks "pds/test/opaque_field_scalar_control.mdk"
+
+test "opacity control checks: opaque_signature_control" =
+  expectCellChecks "pds/test/opaque_signature_control.mdk"
+
+{- | Every cell above exists on disk.
+
+   A deleted cell is the one way this half goes quiet without going red:
+   `medaka check` on a missing path fails, and a failure is what six of the
+   nine rows want. -}
+test "every opacity cell exists" =
+  let missing =
+    filter
+      (rel => not (fileExists (underRoot rel)))
+      (typeMismatchCells ++ abstractExportCells ++ passCells)
+  if missing == [] then
+    Pass "9 cells present" "9 cells present"
+  else
+    Fail
+      "missing opacity cells:\n\{unlines (map indent missing)}"
+      "9 cells present"
+      "\{intToString (9 - length missing)} cells present"
+
+{- | This file's own source lines that lie inside a `test` declaration's
+   body, including the declaration line itself.
+
+   Every cell path is spelled twice in this file: once in a roster above and
+   once in the `test` block that spawns it. Only the second spelling is
+   evidence that the cell is graded, so the floor below has to be able to
+   tell them apart — a scan of the whole file would count a cell whose
+   `test` block had been deleted, which is the "reports green while proving
+   less" shape this gate exists to refuse. -}
+testBodyLines : List String -> List String
+testBodyLines ls = bodyScan ls False
+
+bodyScan : List String -> Bool -> List String
+bodyScan [] _ = []
+bodyScan (line :: rest) inside =
+  if startsWith "test \"" line then
+    line :: bodyScan rest True
+  else if isTopLevelLine line then
+    bodyScan rest False
+  else if inside then
+    line :: bodyScan rest True
+  else
+    bodyScan rest False
+
+-- | Whether `line` opens a new top-level declaration or comment, which ends
+-- the preceding `test` block's body.
+isTopLevelLine : String -> Bool
+isTopLevelLine line = line /= "" && not (startsWith " " line)
+
+ownBodyLines : <FileRead "_", IO> Result String (List String)
+ownBodyLines =
+  map
+    (text => testBodyLines (lines text))
+    (readFile (underRoot "pds/test/opaque_field_scalar_test.mdk"))
+
+-- | The cells of `cells` that some `test` block in this file actually names
+-- as a string literal, and therefore spawns.
+spawnedCells : List String -> List String -> List String
+spawnedCells bodies cells =
+  filter (rel => any (line => contains "\"\{rel}\"" line) bodies) cells
+
+{- | The cells actually SPAWNED still meet what the retired script's floors
+   named: `FAIL_FLOOR=7` rejected cells and `PASS_FLOOR=2` controls.
+
+   Counting the rosters' lengths instead would count compile-time
+   constants: deleting one of the nine `test` blocks above leaves its cell
+   rostered, unspawned, and the floor green. -}
+test "the opacity cells spawned meet FAIL_FLOOR=7 and PASS_FLOOR=2" =
+  let want = ">= 7 rejected, >= 2 controls"
+  match ownBodyLines
+    Err e =>
+      Fail "could not read this gate's own source: \{e}" want "read failed"
+    Ok bodies =>
+      let rejected =
+        length (spawnedCells bodies (typeMismatchCells ++ abstractExportCells))
+      let accepted = length (spawnedCells bodies passCells)
+      let got =
+        "\{intToString rejected} rejected, \{intToString accepted} controls"
+      if rejected >= 7 && accepted >= 2 then
+        Pass want got
+      else
+        Fail
+          "only \{got} are spawned by a `test` block in this file — a roster row with no `test` block, or a deleted `test` block, leaves its cell ungraded"
+          want
+          got
