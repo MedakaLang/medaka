@@ -3292,9 +3292,20 @@ nowhere — it is a deliverable, not a behaviour change.
 **The head half stays bare, by decision, with its measured reason.** Do not read
 "identity-keyed `IE`" as covering both halves: `dispHeadTab`
 (`compiler/types/typecheck.mdk:18163`) is spelling-keyed because the **goal**
-side cannot match an identity there, and re-keying it re-introduces the closed
-S0 #1277 (the #1317 T1 rule; RELAYED, with the derivation written at
-`dispHeadTab`'s own block). The compatibility leg in `insertUnivImplKeys` —
+side cannot match an identity there — `Mono.TCon`'s origin field is a carrier
+every comparison (`unifyN` included) ignores, so two modules' same-named types
+unify regardless of which mint supplied the origin. Supply closes for the
+extern population (#1280); the flat driver's own user-module declarations
+remain unstamped (#1115, E-1, open). A third precondition holds independent of
+supply: T1, the head partition's two counting scans, chooses between a short
+bare-head alias and the canonical impl key by count, and an identity-keyed
+count that disagreed with the runtime bucket would pick the ambiguous alias —
+so T1 stays bare even where supply is total. T2 (the obligation channel) has
+no such choice and has already moved to identity keys (#1446). Moving T1
+anyway re-introduces the closed S0 #1277 (the #1317 T1 rule): measured on a
+cold `MEDAKA_STRICT=1` build, #1277's own three-module repro turns `(1, 2)`
+into `(1, 1)` — a valid program, exit 0, wrong answer, no diagnostic. The
+compatibility leg in `insertUnivImplKeys` —
 index an identity-carrying impl **also** under its bare spelling, for goals
 minted by the two remaining `ifaceRefBare` producers — is carried into `IE`
 unchanged, which is why **#1438 still accepts after A-3.4** and its pin still
