@@ -6,7 +6,7 @@
 
 - **dest** — where the check goes: `N` a native gate module (Medaka code with the full extern set, run natively, may spawn `./medaka`/clang/node and diff), `T` a `test`/`prop` block in a `*_test.mdk` sibling under `medaka test`, `SHELL` stays a script for a stated reason, `OUT` a generator/tool that is not a check.
 - **today** — `YES` = expressible with no new capability on the 2026-09-03 binary.
-- **blockers** — capability codes; see the vocabulary in `TESTING-ARCHITECTURE.md` §5.1. `NATIVE-KIND-RUNNER` is the one foundational blocker: the registry declares `kind = "native"` but no gate uses it and `gate run` has no dispatch for it.
+- **blockers** — capability codes; see the vocabulary in `TESTING-ARCHITECTURE.md` §5.1. `NATIVE-KIND-RUNNER` named the registry's `kind = "native"` dispatch gap as of the 2026-09-03 snapshot; `gate run` now dispatches it (`gateInvocation`, `gate_cmd.mdk:689`) and 32 gates use it.
 - **medianMs** — from `test/gate_cost_baseline.json` when a row exists; `—` otherwise.
 
 ## Counts

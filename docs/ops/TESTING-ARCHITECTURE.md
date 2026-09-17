@@ -46,7 +46,7 @@ Seven reports, scratch-only; the load-bearing numbers, each with its source repo
 | `strip_unit` definitions | 41 inline copies in **7 semantically distinct variants** under one name | A |
 | Shape | GOLDEN 93 · DIFFERENTIAL 74 · RATCHET 29 · PERF 14 · CLI 14 · TRUST-ANCHOR 14 · other 50 | A |
 | Subject engine | native 125 · multiple 60 · interpreter 33 · wasm 8 · none 62 | A |
-| Registry `kind = "native"` entries | **0 of 256**; `gate run` has no dispatch for it (`gate_cmd.mdk:1161`) | A, I |
+| Registry `kind = "native"` entries | **32 of 256**; `gate run` dispatches it to `medaka test --native --json` (`gateInvocation`, `gate_cmd.mdk:689`) | A, I |
 | New shell scripts, last 60 days | 174 files in 163 commits: **135 registered gates**, 16 ledgered tools, 12 censuses, 11 helpers/fixtures. Native side: 75 commits adding `test`/`prop` decls, 26 new `*_test.mdk` files. On gates alone, ~2:1 shell to native by commit | E, review |
 | Shell-adding commits stating why shell | 1 of 163. This measures the absence of a convention that did not exist, against a vehicle that could not run the subject; it is not a measured cause | E |
 | Measured gates / modeled cost | 222 / 5,387 s (~90 CPU-min); top-10 = 58%; 130 gates < 5 s = 3.9% | C, D |
@@ -56,7 +56,7 @@ Seven reports, scratch-only; the load-bearing numbers, each with its source repo
 | CPU saved by removing every genuine duplicate | ~5 s; ~7 s if the `bootstrap_*` ladder is retired (a decision §5.2 leaves to the owner); ~28 near-clone scripts, 108 redundant goldens | C |
 | Gate-budget enforcement | built (4 clauses + override trailer), **a required check** (sprint cost-governor-on S4, #2596 item 2) | D |
 | Native vehicle real deficiencies | no IO/subprocess under eval (`testCapableExterns` = 5 names); a panic kills the run and every later file on a dir target; no derived `*_test.mdk` discovery | B |
-| Native vehicle folklore that is false | takes one file (dirs and multi-target work); sibling can't see subject (it loads the graph); doesn't typecheck (it does, except under paths without a `compiler`/`stdlib` segment — all 24 pds/sqlite `_test.mdk` files) | B |
+| Native vehicle folklore that is false | takes one file (dirs and multi-target work); sibling can't see subject (it loads the graph); doesn't typecheck (it does — `underProjectTestDir`, `test_cmd.mdk:377-413`) | B |
 | `medaka test` on `pds/test/scalar_test.mdk` | 311–324 s wall for 38 decls, **dev box**. Separately: the whole 15-file `pds_test_inlang_test_oracle` gate is a 419 s **CI** median. Different machines, so no share is quoted; the direction (one file dominates) is the finding | B, F |
 | pds native `_main.mdk` drivers kept because eval is too slow | 26 files; one measured 4 min → 4 s eval→native | F |
 | One native build of a minimal gate-shaped program | 1.6–1.9 s wall on the dev box, against 0.27 s for `mq/test/check.sh` end to end today; 109 of the 191 unblocked gates have a CI median under 5 s | review |
