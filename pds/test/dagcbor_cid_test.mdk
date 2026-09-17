@@ -16,7 +16,8 @@ import lib.cid.{
   cidToBytes,
   cidToString,
 }
-import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode, maxDepth}
+import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
+import lib.resource_limits.{maxDagCborDepth}
 
 isErr : Result e a -> Bool
 isErr (Err _) = True
@@ -90,17 +91,17 @@ test "DAG-CBOR encoder rejects non-byte array elements" =
   expectTrue (isErr (dagCborEncode (DcBytes [|0, 256|])))
 
 test "DAG-CBOR encoder admits the deepest nesting its decoder reads back" =
-  expectTrue (roundTrip (nest maxDepth))
+  expectTrue (roundTrip (nest maxDagCborDepth))
 
 test "DAG-CBOR encoder refuses nesting one level past the decoder's ceiling" =
-  expectTrue (isErr (dagCborEncode (nest (maxDepth + 1))))
+  expectTrue (isErr (dagCborEncode (nest (maxDagCborDepth + 1))))
 
 {- | The two ceilings are the SAME ceiling: one more array header in front of
    the deepest admitted encoding is the encoding the encoder now refuses, and
    the decoder must still refuse it. A gate that only checked the encoder
    would pass an encoder bound set anywhere at or below the decoder's. -}
 test "DAG-CBOR decoder refuses exactly what the encoder now refuses" =
-  match dagCborEncode (nest maxDepth)
+  match dagCborEncode (nest maxDagCborDepth)
     Err _ => expectTrue False
     Ok bytes =>
       expectTrue (isErr (dagCborDecode (A.concat [|[|0x81|], bytes|])))

@@ -3,8 +3,8 @@
    22 (9*26 + 22 = 256, non-redundant), least-significant limb first.
 
    ── Why this representation ──────────────────────────────────────────
-   Design decision P10 (`docs/design/ATPROTO-PDS-DESIGN.md`, #1699 field
-   10x2^26 limbs): it is the layout `libsecp256k1`'s `field_10x26_impl.h`
+   Design decision P10 (`docs/design/ATPROTO-PDS-DESIGN.md`): it is the
+   layout `libsecp256k1`'s `field_10x26_impl.h`
    uses, so the subtlest arithmetic in this project is cross-checkable
    ELEMENT BY ELEMENT against an audited implementation of the identical
    representation. The answer key lives at
@@ -85,7 +85,8 @@
    operations transfers; its magnitudes do not.
 
    ── Constant-time boundary ───────────────────────────────────────────
-   The native reduction path implements #1724's fixed-control contract:
+   The native reduction path implements the fixed-control contract in
+   `docs/design/ATPROTO-PDS-CONSTANT-TIME.md`:
    exactly three carry/fold rounds and an unconditional arithmetic
    subtract-and-select. `feInverse`'s exponent ladder is also fixed-shape;
    its exponent is a public compile-time constant.
@@ -98,17 +99,6 @@
    Eval/Wasm retain value parity; Wasm's ordinary boxed `Int` carrier is
    outside this native constant-time claim. -}
 
--- Writes here are still on `Array.setInPlace` rather than the `arr[i] := v` sugar the
--- rest of the tree uses (#1786) -- but the reason is now HISTORICAL, and this
--- comment is a note to whoever migrates them, not a warning against it.
---
--- The cost was never dispatch (`setIndex` on a monomorphic `Array` receiver emits
--- a direct call, same as `Array.setInPlace`). It was an INLINING asymmetry: `setIndex`'s
--- out-of-bounds branch interpolated a message, which put it past LLVM's inline
--- threshold, so it never inlined into the hot loops where `Array.setInPlace` did --
--- 0.588s vs 0.677s over 200k feMuls. #1787 removed the interpolation, and both
--- spellings now inline. Migrating these three modules is mechanical and wanted;
--- re-measure when you do, and delete this comment.
 import array.{setInPlace, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────
@@ -621,7 +611,7 @@ feSquare a = feMul a a
 --   square-and-multiply over the fixed 256-bit exponent, most-significant
 --   bit first.
 --
---   🚨 `feInverse feZero` IS `feZero`. THIS IS A TOTAL FUNCTION and 0 has no
+--   `feInverse feZero` is `feZero`. This is a total function and 0 has no
 --   true inverse: the value 0 is returned for the input 0. That matches
 --   `libsecp256k1` (`secp256k1_fe_inv` of zero is zero, not an error) and it is
 --   pinned executably by the `inv 0` row of the reference corpus — diverging on

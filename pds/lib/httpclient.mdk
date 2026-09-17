@@ -421,7 +421,7 @@ parseDecimalGo value i acc =
       malformed "httpclient: invalid decimal field"
     else
       let digit = byte - 48
-      if acc > (4611686018427387903 - digit) / 10 then
+      if acc > (intMaxBound - digit) / 10 then
         malformed "httpclient: decimal field overflows Int"
       else
         parseDecimalGo value (i + 1) (acc * 10 + digit)
