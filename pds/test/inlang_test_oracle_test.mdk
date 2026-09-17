@@ -184,6 +184,18 @@ exempt = [
     "secp256k1_public_key_test",
     "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/secp256k1_public_key`",
   ),
+  (
+    "lib_boundary_test",
+    "a gate-test, not a suite, migrated from shell under #3148: `test/gates.toml` runs it as `pds/test/lib_boundary`",
+  ),
+  (
+    "deploy_config_lint_test",
+    "a gate-test, not a suite, migrated from shell under #3148: `test/gates.toml` runs it as `pds/test/deploy_config_lint`",
+  ),
+  (
+    "opaque_field_scalar_test",
+    "a gate-test, not a suite, migrated from shell under #3148: `test/gates.toml` runs it as `pds/test/opaque_field_scalar`",
+  ),
 ]
 
 exemptNames : List String

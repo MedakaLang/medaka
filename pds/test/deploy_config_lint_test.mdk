@@ -1,5 +1,5 @@
-{- | #2958 #2959 deploy-config hardening, migrated from the retired
-   `pds/test/deploy_config_lint.sh` under #3148.
+{- | #2958 #2959 deploy-config hardening, migrated from the retired shell
+   gate of the same name under #3148.
 
    `pds/pds.service`, `pds/Caddyfile`, `pds/Caddyfile.egress` and the five
    sibling systemd units are one deployment artifact split across two
