@@ -729,16 +729,8 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
   -- basename-unique in a GLOBAL directory — concurrent builds writing the same
   -- output basename (very common: `-o <tmpdir>/out`) overwrite each other's IR.
   let llPath = joinPath tmpDir "program.ll"
-  -- #2874: `quietEmitStderr` is True on exactly the `--json` route (see this
-  -- function's doc comment above) — reused here as the JSON-mode signal
-  -- rather than threading a second flag with the same truth table down the
-  -- same five call layers. Trailing, so it lands after `roots` on the
-  -- child's argv; `driveModulesLocated` (entry_support.mdk) strips it before
-  -- matching the existing `runtimeP :: coreP :: entry :: roots` shape.
-  let emitArgsBase0 =
-    [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
   let emitArgsBase =
-    if quietEmitStderr then emitArgsBase0 ++ ["--json"] else emitArgsBase0
+    [runtimeP, preludeP, inputAbs] ++ inputRoots ++ [compilerDir, stdlibDir]
   let emitter2 = envOr "MEDAKA_EMITTER" defaultMedakaEmitter
   let useNative = emitter2 /= ""
   let emitProg0 = if useNative then emitter2 else medaka
@@ -827,15 +819,7 @@ runBuildNativeRootsGo root medaka cc inputAbs outPath tmpDir keepIrCli extraRoot
                 keepIrOutcome (outPath ++ ".ll") ir
               else
                 (None, [])
-            -- On the `--json` route (`quietEmitStderr`), the child's stderr
-            -- IS the CheckJson envelope for a clean-or-warning-only build
-            -- (#2874) — `runBuildJsonCmd` reads it off `emitterStderr`
-            -- instead of the parent's own now-removed typecheck. Every other
-            -- route keeps discarding it here: it was already forwarded live
-            -- above (`forwardEmitterStderr`), and the human `ppBuildReport`
-            -- would otherwise print it a second time.
-            let keptEmitErr = if quietEmitStderr then emitErr else ""
-            withBuildNotes keptIr keptEmitErr keepNotes res
+            withBuildNotes keptIr "" keepNotes res
 
 -- ---- wasm (WasmGC + wasm-tools) target ----
 -- Structurally identical to runBuildNative: run the emitter (here the WasmGC
