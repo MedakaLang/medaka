@@ -18184,6 +18184,10 @@ shadowStandaloneDictSlotsAt mscheme name key xt =
 --
 -- Scoped to the definer-shadow case only: one bare name with two bindings is the missing
 -- per-occurrence discriminator #1898/#1899 name, and this does not re-key anything.
+--
+-- [P-NO-MARK-PASS]: [key] is only ever mangled post-mark-pass, which no production verb
+-- runs, so [name] and [key] coincide on every reachable caller today — the [name]/[key]
+-- split above is correct by construction but currently unwitnessable by any gate.
 shadowDeclaredFor : String -> String -> CDeclared
 shadowDeclaredFor name key
   | isDefinerShadow name = localDeclaredConstraintFor key
