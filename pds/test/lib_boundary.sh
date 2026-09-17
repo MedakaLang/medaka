@@ -60,8 +60,7 @@ check_no_shell_import() {
 # INDENTED lines — the signature block ends at the next column-0 line.
 check_no_effect_export() {
   dir=$1
-  for f in "$dir"/*.mdk; do
-    [ -f "$f" ] || continue
+  find "$dir" -name '*.mdk' | while IFS= read -r f; do
     awk -v file="$f" '
       /^export$/ || /^public export$/ { collecting = 1; sig = ""; first = 1; next }
       collecting {
@@ -89,8 +88,7 @@ check_no_effect_export() {
 # itself, so they never enter this state machine.
 check_export_has_signature() {
   dir=$1
-  for f in "$dir"/*.mdk; do
-    [ -f "$f" ] || continue
+  find "$dir" -name '*.mdk' | while IFS= read -r f; do
     awk -v file="$f" '
       /^export$/ || /^public export$/ { pending = NR; next }
       pending {
@@ -125,7 +123,7 @@ jwt.mdk:{hs256Signature secret signingInput}
 check_no_secret_interpolation() {
   dir=$1
   entry=$2
-  for f in "$dir"/*.mdk "$entry"; do
+  { find "$dir" -name '*.mdk'; printf '%s\n' "$entry"; } | while IFS= read -r f; do
     [ -f "$f" ] || continue
     awk -v file="$f" -v ledger="$SECRET_INTERPOLATION_LEDGER" '
       BEGIN {
@@ -188,7 +186,7 @@ ACCESS_LOG_SECRETS='(password|passphrase|secret|salt|digest|credential|jwt|token
 check_no_secret_in_access_log() {
   dir=$1
   entry=$2
-  for f in "$dir"/*.mdk "$entry"; do
+  { find "$dir" -name '*.mdk'; printf '%s\n' "$entry"; } | while IFS= read -r f; do
     [ -f "$f" ] || continue
     awk -v file="$f" -v words="$ACCESS_LOG_SECRETS" '
       function strip(line,   out, i, c, c2, inq) {
@@ -302,6 +300,19 @@ if effect_hits=$(check_no_effect_export "$SCRATCH") && [ -z "$effect_hits" ]; th
   fail 'mutation control: injected effect-bearing export was not caught'
 fi
 echo 'mutation control: injected effect-bearing export correctly caught'
+rm -rf "$SCRATCH"
+
+# Violation 2b: the same shape, but under a NESTED subdirectory of the
+# scratch copy — proving detection survives nesting, not just the top level.
+cp -R "$LIB_DIR" "$SCRATCH"
+mkdir -p "$SCRATCH/nested"
+VICTIM2B="$SCRATCH/nested/probe.mdk"
+printf '\nexport\nboundaryProbeForTest : Int -> <IO> Int\nboundaryProbeForTest x = x\n' \
+  >>"$VICTIM2B"
+if effect_hits=$(check_no_effect_export "$SCRATCH") && [ -z "$effect_hits" ]; then
+  fail 'mutation control: injected nested effect-bearing export was not caught'
+fi
+echo 'mutation control: injected nested effect-bearing export correctly caught'
 rm -rf "$SCRATCH"
 
 # Violation 3: an unannotated export whose effect row the typechecker would
