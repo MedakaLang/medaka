@@ -25,13 +25,16 @@
 -- `foldModules` by hand — a lockstep obligation, stated at `chainGo` itself, that no
 -- gate checks.  Its unkeyed arm (`None`) is a projection like the rest.
 --
--- Two things the selections still differ on BY CONSTRUCTION, and both are observable:
--- `GOutTrees` promotes (inferred-constraint user fns join the dict-name set) and it
--- runs `renameAliasedMethods`.  So ACCEPTING UNDER ONE SELECTION IS STILL NOT PROOF
--- ABOUT THE OTHER for a program that promotes an inferred-constraint fn across modules,
--- or that imports an aliased method: the alias-import divergence is pinned as a fixture
--- (`test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject/`) and its
--- consequence for the gate over this compiler's own source is #1811.
+-- One thing the selections still differ on by construction, and it is observable:
+-- `GOutTrees` promotes (inferred-constraint user fns join the dict-name set).  So
+-- acceptance under one selection is still not proof about the other for a program that
+-- promotes an inferred-constraint fn across modules; its consequence for the gate over
+-- this compiler's own source is #1811.  `renameAliasedMethods` used to be the second
+-- such difference and is not any more: it runs on both selections, because half (b) of
+-- it decides which declaration a bare method name binds to, so skipping it on one
+-- selection made that selection typecheck a different program
+-- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
+-- permuted accepting twin).
 --
 -- The FLAT arm is a separate driver and always was: `elaborateDict` /
 -- `checkProgramSchemesWithRuntime` / `checkToLines` run a single program with no
@@ -42274,9 +42277,10 @@ renameAliasedMethodsIn : List (String, List String) ->
 -- Half (b) runs UNCONDITIONALLY.  It used to be gated on half (a) finding a rename,
 -- which was sound only while a MODULE alias produced one: with the module-alias arm
 -- of (a) gone, gating (b) on (a) would stop `import m as A` bringing `m`'s methods
--- into scope under their origin name at all — `run`/`build` would go SILENT on the
--- #1812 shape they reject today (`test/must_fail_fixtures/1812-…`, whose claim names
--- that outcome and forbids it) and an alias-qualified call would lose its dispatch.
+-- into scope under their origin name at all — every verb would go SILENT on the
+-- #1812 shape they all reject today, and an alias-qualified call would lose its
+-- dispatch.  Pinned by
+-- `test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk`.
 -- The pass is a no-op on a module whose imports name no method, so running it always
 -- costs a walk and changes nothing else.
 renameAliasedMethodsIn methodsPerMid (mid, prog) =
@@ -44592,7 +44596,14 @@ checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
     coreDecls0
     modules0).gdPerMod
 checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
+  -- method-alias rewrite: without it this arm typechecks a graph in which
+  -- `import m as A` binds none of `m`'s methods under their origin name, and a bare
+  -- occurrence of such a name resolves to a different declaration than on the arm
+  -- that renames.  A module's rewrite reads only its dependencies' method sets, so
+  -- it is stable under the prefix the step memo resumes from.
+  let (coreDecls, modules) =
+    stampGraphTyOrigins coreDecls0 (renameAliasedMethods coreDecls0 modules0)
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey = chainFullKey rk ck chainKey
@@ -44752,11 +44763,13 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- resolved to the origin name here, before any marking / stamping / dict-arity
   -- machinery runs; a MODULE alias keeps its dotted spelling through inference and
   -- is resolved at the end of the tree arm (`resolveAliasMethodSpellings`).  See
-  -- `renameAliasedMethods`.  The diags arm neither renames nor restores: it emits no
-  -- trees, and an alias spelling is not a diagnostic difference.
-  let modulesAliased = match sel
-    GOutTrees => renameAliasedMethods coreDecls0 modulesIn
-    GOutDiags => modulesIn
+  -- `renameAliasedMethods`.  BOTH selections rename: half (b) of that rewrite makes
+  -- `import m as A` bind `m`'s methods under their ORIGIN name as well, which decides
+  -- WHICH declaration a bare occurrence of that name resolves to — a binding change,
+  -- not a spelling one, so a selection that skips it typechecks a different program.
+  -- Only the RESTORE (`resolveAliasMethodSpellings`) is tree-arm-only: it rewrites
+  -- occurrences in trees the diags arm does not emit.
+  let modulesAliased = renameAliasedMethods coreDecls0 modulesIn
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  It is HERE, not in the preamble, because this is the seam the
