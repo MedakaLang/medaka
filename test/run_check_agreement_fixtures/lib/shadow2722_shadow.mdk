@@ -1,0 +1,15 @@
+-- #2722: the shadowing module.  It imports the method `size` by bare name AND
+-- declares its own CONSTRAINED standalone of that name, so inside this module `size`
+-- denotes the standalone and `useIt 3` is 4.
+--
+-- The selective import of `size` is the whole point of the row: without it the same
+-- program answers 4 already.  With it, the standalone's `Num n` dict slot is looked up
+-- through a bare-name table that reports the IMPORT's constraints, the call loses its
+-- dict argument, and `useIt` returns a partial application instead of an Int.
+import lib.shadow2722_iface.{Sizeable, size, Box(..)}
+
+export size : Num n => n -> n
+size v = v + 1
+
+export useIt : Int -> Int
+useIt k = size k
