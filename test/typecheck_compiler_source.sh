@@ -1695,9 +1695,13 @@ fi
 # derives is invisible to passes 1 and 2 by construction — `check` exits 0 while
 # `run`/`build` exit 1 with "type error … detected during elaboration" (#1812).
 #
-# That is not hypothetical: the four-module `A2` corpus (an alias import plus an
-# imported standalone shadowing an interface method) reads `check=0 build=1` on
-# this very tree.  So `compiler-soundness` — the job that exists because "ALL the gate
+# That was not hypothetical: a four-module corpus (an alias import plus an imported
+# standalone shadowing an interface method) once read `check=0 build=1` here.  That
+# particular axis has since closed — the diagnostics selection runs the same
+# method-alias rewrite the tree selection does, so both drivers see one program
+# (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` asserts the
+# three verbs agree on it) — but the selections still differ on promotion, so the
+# class this pass covers is not empty.  So `compiler-soundness` — the job that exists because "ALL the gate
 # shards pass on an ill-typed compiler" — was vetting the compiler with an
 # instrument blind to a whole class of ill-typedness.  This pass closes that:
 # it puts the compiler's own closure through the elaborate driver's gate, which

@@ -1,0 +1,12 @@
+-- #1812, the accepting half: byte-identical to `reject_1812_alias_import_order.mdk`
+-- except that the three import lines are permuted so the standalone `mth` import
+-- precedes the alias import.  The standalone then wins the name, `mth "abc" 5` is
+-- well typed, and the program prints 99 on every verb.
+--
+-- The value pin matters as much as the verdict: 99 is the standalone's answer, so a
+-- change that let `IZ.mth` win here would still exit 0 while printing 7.
+import lib.order1812_amod.{af}
+import lib.order1812_fmod.{mth}
+import lib.order1812_zmod as Z
+
+main = println (mth "abc" 5 + af 0 + Z.zf 0)

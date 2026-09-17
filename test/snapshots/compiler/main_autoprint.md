@@ -1,5 +1,5 @@
 # META
-source_lines=383
+source_lines=386
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/main_autoprint.mdk — shared composite-`main` auto-print wrap.
@@ -28,12 +28,13 @@ stages=DESUGAR,MARK
 -- UNDERIVED detection: a bare ADT main with no `Display` instance (`data H = H;
 -- main = H`) must surface the clean `No impl of Display for H; add 'deriving
 -- Display'` error, NOT a miscompile.  `underivedMainDiags` re-runs the CHECK gate
--- (`checkOneDiags`, the located-diagnostics driver) on the
--- WRAPPED, UN-MANGLED program — exactly what source-level `medaka build` of an
--- explicit `main = println H` already does.  (The design's critical caveat: NEVER
--- call checkImplObligations on the MANGLED emit-elaborated program — it can't match
--- mangled `display`/`println` obligations to impl heads and mis-fires on every
--- program.  Routing through checkOneDiags on un-mangled decls avoids that.)
+-- (`checkOneDiagsSynthetic`, the located-diagnostics driver over the whole
+-- module-list graph) on the WRAPPED, UN-MANGLED program — exactly what
+-- source-level `medaka build` of an explicit `main = println H` already does.
+-- (The design's critical caveat: NEVER call checkImplObligations on the MANGLED
+-- emit-elaborated program — it can't match mangled `display`/`println`
+-- obligations to impl heads and mis-fires on every program.  Routing through
+-- checkOneDiagsSynthetic on un-mangled decls avoids that.)
 
 import frontend.ast.{
   Decl(..),
@@ -223,13 +224,14 @@ wrapCall callee (ELoc l inner) = ELoc l (EApp (EVar callee) (ELoc l inner))
 wrapCall callee body = EApp (EVar callee) body
 
 -- Re-run the CHECK gate on the wrapped program to surface an underived-ADT main
--- as the clean `No impl of Display …` type error.  Gated to a SINGLE loaded
--- module (the common composite-main shape: playground + `medaka build file.mdk`):
--- `checkOneDiags` runs the ONE-MODULE `Module` arm over just this module, keyed by
--- the module id the caller already bound.  A multi-module program flattened this way
--- risks the over-rejection the CLI's multi-module gate deliberately avoids, so it is
--- skipped there (best-effort — the compiler graph never wraps, so this never affects
--- the fixpoint).  Returns the type-error `TcDiag`s for the caller to render.
+-- as the clean `No impl of Display …` type error.  Runs over the WHOLE loaded
+-- module graph (single-file or multi-module alike): `checkOneDiagsSynthetic`
+-- (types/typecheck.mdk) is the `Module` arm's own general entry driver
+-- (`checkModulesEntryFullK`), which already harvests only the graph's terminal
+-- (entry) module's own diagnostics — so a multi-module import does not risk
+-- the over-rejection the CLI's multi-module gate deliberately avoids; it sees
+-- exactly the same entry-module report the non-wrapped check would.  Returns
+-- the type-error `TcDiag`s for the caller to render.
 --
 -- ⚠️ THIS CALL WAS PINNED TO THE `Flat` ARM (#2049) AND THE PIN IS NOW DISCHARGED —
 -- do not re-derive the S0 from this comment, it describes a FIXED defect.
@@ -269,17 +271,18 @@ underivedMainDiags : List Decl ->
   List Decl ->
   List (String, List Decl) ->
   List TcDiag
-underivedMainDiags runtimeDecls coreDecls [(mid, entryDecls)] =
-  let _ = setCoherenceUserDecls entryDecls
-  -- `entryDecls` here is the WRAPPED program (`main = println <e>`), not the user's,
-  -- so this re-check must not be allowed to redefine the driver's record of the real
-  -- `main`'s type — `checkOneDiagsSynthetic` (types/typecheck.mdk) is `checkOneDiags`
-  -- with `mainSchemeRef` saved and restored around it, and its header states the
-  -- `W-MAIN-SHAPE` regression that reaching for the plain one reintroduces.
-  let (tcErrs, _) =
-    checkOneDiagsSynthetic runtimeDecls coreDecls (mid, entryDecls)
-  tcErrs
-underivedMainDiags _ _ _ = []
+underivedMainDiags runtimeDecls coreDecls modules = match entryPair modules
+  None => []
+  Some (_, entryDecls) =>
+    let _ = setCoherenceUserDecls entryDecls
+    -- `entryDecls` here is the WRAPPED entry module (`main = println <e>`), not
+    -- the user's, so this re-check must not be allowed to redefine the driver's
+    -- record of the real `main`'s type — `checkOneDiagsSynthetic`
+    -- (types/typecheck.mdk) saves and restores `mainSchemeRef` around the whole
+    -- graph re-check, and its header states the `W-MAIN-SHAPE` regression that
+    -- reaching for the plain entry driver reintroduces.
+    let (tcErrs, _) = checkOneDiagsSynthetic runtimeDecls coreDecls modules
+    tcErrs
 
 -- ── `main : Async _` driver wrap (ASYNC-DESIGN D5, ASYNC-RUNTIME-DESIGN §4.4) ──
 -- A `main` whose type heads in `Async` is an inert VALUE until a driver forces
@@ -434,8 +437,7 @@ wrapAsyncMainDecl d = d
 (DFunDef false "wrapCall" ((PVar "callee") (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapCall" ((PVar "callee") (PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
-(DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
+(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild (PVar "entryDecls"))) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EVar "tcErrs"))))))
 (DTypeSig true "asyncMainPinName" (TyCon "String"))
 (DFunDef false "asyncMainPinName" () (ELit (LString "0runasync")))
 (DTypeSig false "asyncModuleId" (TyCon "String"))
@@ -514,8 +516,7 @@ wrapAsyncMainDecl d = d
 (DFunDef false "wrapCall" ((PVar "callee") (PCon "ELoc" (PVar "l") (PVar "inner"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EApp (EApp (EVar "ELoc") (EVar "l")) (EVar "inner")))))
 (DFunDef false "wrapCall" ((PVar "callee") (PVar "body")) (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "callee"))) (EVar "body")))
 (DTypeSig true "underivedMainDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "TcDiag"))))))
-(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PList (PTuple (PVar "mid") (PVar "entryDecls")))) (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (ETuple (EVar "mid") (EVar "entryDecls")))) (DoExpr (EVar "tcErrs"))))
-(DFunDef false "underivedMainDiags" (PWild PWild PWild) (EListLit))
+(DFunDef false "underivedMainDiags" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EMatch (EApp (EVar "entryPair") (EVar "modules")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple PWild (PVar "entryDecls"))) () (EBlock (DoLet false false PWild (EApp (EVar "setCoherenceUserDecls") (EVar "entryDecls"))) (DoLet false false (PTuple (PVar "tcErrs") PWild) (EApp (EApp (EApp (EVar "checkOneDiagsSynthetic") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EVar "tcErrs"))))))
 (DTypeSig true "asyncMainPinName" (TyCon "String"))
 (DFunDef false "asyncMainPinName" () (ELit (LString "0runasync")))
 (DTypeSig false "asyncModuleId" (TyCon "String"))

@@ -779,13 +779,26 @@ main = println (EA.emit ++ emitB)
 
 | form | meaning |
 |---|---|
-| `import m as A` | binds every VALUE `m` exports as `A.name`. Does **not** bind bare `name`. |
+| `import m as A` | binds every non-method VALUE `m` exports as `A.name`. Does **not** bind bare `name`. |
 | `import m.sub as A` | same, for a nested module path |
 | `import m.{a as b, c}` | binds `m`'s `a` as `b`, plus `c`. Does **not** bind bare `a`. |
 
 **An alias REPLACES the unqualified import** (like Python's `import x as y`, or
 Haskell's `qualified`). That is what makes a collision resolvable: `import emit_a as A`
 and `import emit_b as B` puts both modules' `emit` in scope, as `A.emit` and `B.emit`.
+
+**Interface methods are the one exception, and it is not a special case of aliasing — it
+falls out of how methods are bound at all.** A method is not a per-module binding the way
+an ordinary value is: every impl of a method shares exactly one dispatch-table cell keyed
+by the method's bare name (`compiler/types/typecheck.mdk`'s `renameAliasedMethods`), so an
+alias cannot create "a new binding under `A.name`" for a method the way it does for a
+value — there is no second binding to make. Importing a module — aliased, selective, or
+bare — brings its impls into dispatch scope regardless of the import form, the same rule
+that makes a bare `import map` (binding no names at all) still change dispatch behavior
+(see stdlib import forms, above). `import m as A` therefore binds `m`'s methods under
+their bare origin name too, alongside `A.name`; only `m`'s non-method values are
+alias-qualified-only. Fixed 2026-09-16 (#1812): `check`, `run`, `build`, the LSP, and the
+MCP tools all now agree on this.
 
 Rules, each a real error rather than a silent no-op:
 

@@ -25,13 +25,16 @@
 -- `foldModules` by hand — a lockstep obligation, stated at `chainGo` itself, that no
 -- gate checks.  Its unkeyed arm (`None`) is a projection like the rest.
 --
--- Two things the selections still differ on BY CONSTRUCTION, and both are observable:
--- `GOutTrees` promotes (inferred-constraint user fns join the dict-name set) and it
--- runs `renameAliasedMethods`.  So ACCEPTING UNDER ONE SELECTION IS STILL NOT PROOF
--- ABOUT THE OTHER for a program that promotes an inferred-constraint fn across modules,
--- or that imports an aliased method: the alias-import divergence is pinned as a fixture
--- (`test/must_fail_fixtures/1812-alias-import-check-accepts-run-build-reject/`) and its
--- consequence for the gate over this compiler's own source is #1811.
+-- One thing the selections still differ on by construction, and it is observable:
+-- `GOutTrees` promotes (inferred-constraint user fns join the dict-name set).  So
+-- acceptance under one selection is still not proof about the other for a program that
+-- promotes an inferred-constraint fn across modules; its consequence for the gate over
+-- this compiler's own source is #1811.  `renameAliasedMethods` is NOT a second such
+-- difference: it runs on both selections, because half (b) of it decides which
+-- declaration a bare method name binds to, so skipping it on one selection would make
+-- that selection typecheck a different program
+-- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
+-- permuted accepting twin).
 --
 -- The FLAT arm is a separate driver and always was: `elaborateDict` /
 -- `checkProgramSchemesWithRuntime` / `checkToLines` run a single program with no
@@ -12567,6 +12570,7 @@ recordRLocalSite env name tagRef inst
         let dicts =
           shadowStandaloneDictSlotsAt
             (standaloneSchemeFor env name sym)
+            name
             (if sym == "" then name else sym)
             am
         pushSiteGoal
@@ -13113,22 +13117,33 @@ declaredConstraintFor name = match qualConstraintDecl name
     if hasImportDefiner name then
       CDeclared { cdSlots = [], cdPrefix = CDPLen 0, cdArgs = [] }
     else
-      let stored =
-        optionOr
-          []
-          (lookupPredicateSlots name perRun.value.funPredicateSlotsRef.value)
-      let slots = predicateSlotCSlots stored
-      CDeclared {
-        cdSlots = slots,
-        cdPrefix =
-          clampPrefix
-            slots
-            (lookupAssoc name perRun.value.funConstraintDeclaredRef.value),
-        -- the LOCAL / wildcard / re-export / check-path arm keeps the bare-name vector
-        -- table `funPredicateSlotsRef`, projected by `predicateSlotArgs` — the same
-        -- lookup `enclPreds` uses for the ENCLOSING fn.
-        cdArgs = predicateSlotArgs stored,
-      }
+      localDeclaredConstraintFor name
+
+-- the LOCAL / wildcard / re-export / check-path arm of `declaredConstraintFor`, named so
+-- that a reader who has ALREADY established the binding is this module's own can take it
+-- directly instead of re-entering the import-keyed dispatch above.  The one such reader
+-- is `shadowDeclaredFor` (a definer shadow's own standalone), whose bare name is in
+-- `currentImportDefinersRef` by construction and so cannot reach this arm through
+-- `declaredConstraintFor`.
+--
+-- The vector table is `funPredicateSlotsRef`, projected by `predicateSlotArgs` — the same
+-- lookup `enclPreds` uses for the ENCLOSING fn.  Both halves come off ONE `stored`
+-- resolution, which is the invariant `declaredConstraintFor`'s own header states.
+localDeclaredConstraintFor : String -> CDeclared
+localDeclaredConstraintFor name =
+  let stored =
+    optionOr
+      []
+      (lookupPredicateSlots name perRun.value.funPredicateSlotsRef.value)
+  let slots = predicateSlotCSlots stored
+  CDeclared {
+    cdSlots = slots,
+    cdPrefix =
+      clampPrefix
+        slots
+        (lookupAssoc name perRun.value.funConstraintDeclaredRef.value),
+    cdArgs = predicateSlotArgs stored,
+  }
 
 -- B-2.2-f (#1113): a recorded prefix, clamped to the slots it indexes into; an ABSENT
 -- one stays `CDPUnknown`, which every reader must treat as WITHHOLD (prefix 0).  Do not
@@ -18133,7 +18148,7 @@ shadowStandaloneDictsWithSp : Option Scheme ->
   ShadowDicts
 shadowStandaloneDictsWithSp mscheme name sym ats =
   let _ = recordStandaloneSigObligationsSp name sym ats
-  shadowStandaloneDictSlotsSp mscheme (if sym == "" then name else sym) ats
+  shadowStandaloneDictSlotsSp mscheme name (if sym == "" then name else sym) ats
 
 -- the dict slots ONLY — no call obligations.
 -- recordRLocalSite needs this: it fires for EVERY shadow method occurrence, at a point
@@ -18142,18 +18157,59 @@ shadowStandaloneDictsWithSp mscheme name sym ats =
 -- the DISPATCH arm too and spuriously reject `size (Box 3)` with `Num Box`.  When the
 -- receiver does turn out to have an impl, stampRLocalOrFallback simply discards these
 -- slots and the route dispatches as before.
-shadowStandaloneDictSlotsAt : Option Scheme -> String -> Mono -> ShadowDicts
-shadowStandaloneDictSlotsAt mscheme key xt =
-  shadowStandaloneDictSlotsSp mscheme key [xt]
+--
+-- [name] is the BARE name and [key] the binding symbol (mangled on the emit path).
+-- Both are needed: the tables below are keyed by the binding, while the definer/importer
+-- classifier `isDefinerShadow` reads `definerShadowNamesRef`, which holds bare names on
+-- every path.  Passing [key] to that classifier makes it silently answer False for every
+-- mangled occurrence — see `shadowDeclaredFor`.
+shadowStandaloneDictSlotsAt : Option Scheme ->
+  String ->
+  String ->
+  Mono ->
+  ShadowDicts
+shadowStandaloneDictSlotsAt mscheme name key xt =
+  shadowStandaloneDictSlotsSp mscheme name key [xt]
+
+-- #2722: a DEFINER SHADOW's own standalone, resolved from ITS module's table rather than
+-- through the import-keyed dispatch.  `declaredConstraintFor` / `declaredConstraintIds`
+-- cannot answer this case: a definer shadow's bare name is in `currentImportDefinersRef`
+-- BY CONSTRUCTION (selectively importing the method it shadows is what makes it a shadow),
+-- so #739's source-exact arm fires and reports "genuinely unconstrained in its source
+-- module" — the right answer about the IMPORT, the wrong answer about the local binding
+-- the occurrence already resolved to.  The result was `[]` dict slots against a definition
+-- that takes one, i.e. a call under-applied by exactly its dict parameter: `run` E-PANICked
+-- `intToString: not an Int` and the built binary printed a partial-application POINTER, a
+-- different one every execution, at exit 0.
+--
+-- Scoped to the definer-shadow case only: one bare name with two bindings is the missing
+-- per-occurrence discriminator #1898/#1899 name, and this does not re-key anything.
+--
+-- [P-NO-MARK-PASS]: [key] is only ever mangled post-mark-pass, which no production verb
+-- runs, so [name] and [key] coincide on every reachable caller today — the [name]/[key]
+-- split above is correct by construction but currently unwitnessable by any gate.
+shadowDeclaredFor : String -> String -> CDeclared
+shadowDeclaredFor name key
+  | isDefinerShadow name = localDeclaredConstraintFor key
+  | otherwise = declaredConstraintFor key
+
+-- the id twin of `shadowDeclaredFor`, taking the SAME arm off the same pure classifier so
+-- the slots and the gate below can never come from different entry decisions.
+shadowDeclaredIds : String -> String -> List Int
+shadowDeclaredIds name key
+  | isDefinerShadow name =
+    predicateSlotIdsAt key perRun.value.funPredicateSlotsRef.value
+  | otherwise = declaredConstraintIds key
 
 shadowStandaloneDictSlotsSp : Option Scheme ->
   String ->
+  String ->
   List Mono ->
   ShadowDicts
-shadowStandaloneDictSlotsSp mscheme key ats =
+shadowStandaloneDictSlotsSp mscheme name key ats =
   -- FIX-shadow-arity-skew: ONE resolution, two projections — the slots AND the argument
   -- vectors must come from the same entry decision, exactly as `inferDictAtFound` does.
-  let dc = declaredConstraintFor key
+  let dc = shadowDeclaredFor name key
   let slots = dc.cdSlots
   -- REJECT direction — from the SIGNATURE, NOT from schemeObligationsRef.
   -- ⚠️ For a SIGNATURED binding the two obligation tables live in DIFFERENT ID SPACES:
@@ -18169,7 +18225,7 @@ shadowStandaloneDictSlotsSp mscheme key ats =
   -- ⚠️ Gated on the UNTRUNCATED id list, not on `slots`: this guard also decides whether
   -- the `unify` below runs, so a truncation here would remove a unification side effect.
   -- See `declaredConstraintIds`.
-  if isEmptyL (declaredConstraintIds key) then
+  if isEmptyL (shadowDeclaredIds name key) then
     emptyShadowDicts
   else match mscheme
     None => emptyShadowDicts
@@ -42274,9 +42330,10 @@ renameAliasedMethodsIn : List (String, List String) ->
 -- Half (b) runs UNCONDITIONALLY.  It used to be gated on half (a) finding a rename,
 -- which was sound only while a MODULE alias produced one: with the module-alias arm
 -- of (a) gone, gating (b) on (a) would stop `import m as A` bringing `m`'s methods
--- into scope under their origin name at all — `run`/`build` would go SILENT on the
--- #1812 shape they reject today (`test/must_fail_fixtures/1812-…`, whose claim names
--- that outcome and forbids it) and an alias-qualified call would lose its dispatch.
+-- into scope under their origin name at all — every verb would go SILENT on the
+-- #1812 shape they all reject today, and an alias-qualified call would lose its
+-- dispatch.  Pinned by
+-- `test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk`.
 -- The pass is a no-op on a module whose imports name no method, so running it always
 -- costs a walk and changes nothing else.
 renameAliasedMethodsIn methodsPerMid (mid, prog) =
@@ -44592,7 +44649,14 @@ checkModulesDiagsChain None _ _ runtimeDecls coreDecls0 modules0 =
     coreDecls0
     modules0).gdPerMod
 checkModulesDiagsChain (Some (rk, ck)) chainKey stepKeys runtimeDecls coreDecls0 modules0 =
-  let (coreDecls, modules) = stampGraphTyOrigins coreDecls0 modules0
+  -- The keyed arm mirrors `driveGraphK`'s prologue by hand, so it owes the same
+  -- method-alias rewrite: without it this arm typechecks a graph in which
+  -- `import m as A` binds none of `m`'s methods under their origin name, and a bare
+  -- occurrence of such a name resolves to a different declaration than on the arm
+  -- that renames.  A module's rewrite reads only its dependencies' method sets, so
+  -- it is stable under the prefix the step memo resumes from.
+  let (coreDecls, modules) =
+    stampGraphTyOrigins coreDecls0 (renameAliasedMethods coreDecls0 modules0)
   let (runtimeSeed, coreSchemes) =
     checkModulesPreambleK (Some (rk, ck)) runtimeDecls coreDecls modules
   let fullKey = chainFullKey rk ck chainKey
@@ -44752,11 +44816,13 @@ driveGraphK sel drain preludeKey runtimeDecls coreDecls0 modulesIn =
   -- resolved to the origin name here, before any marking / stamping / dict-arity
   -- machinery runs; a MODULE alias keeps its dotted spelling through inference and
   -- is resolved at the end of the tree arm (`resolveAliasMethodSpellings`).  See
-  -- `renameAliasedMethods`.  The diags arm neither renames nor restores: it emits no
-  -- trees, and an alias spelling is not a diagnostic difference.
-  let modulesAliased = match sel
-    GOutTrees => renameAliasedMethods coreDecls0 modulesIn
-    GOutDiags => modulesIn
+  -- `renameAliasedMethods`.  BOTH selections rename: half (b) of that rewrite makes
+  -- `import m as A` bind `m`'s methods under their ORIGIN name as well, which decides
+  -- WHICH declaration a bare occurrence of that name resolves to — a binding change,
+  -- not a spelling one, so a selection that skips it typechecks a different program.
+  -- Only the RESTORE (`resolveAliasMethodSpellings`) is tree-arm-only: it rewrites
+  -- occurrences in trees the diags arm does not emit.
+  let modulesAliased = renameAliasedMethods coreDecls0 modulesIn
   -- #1110: acquire type-constructor identity over the whole graph before anything
   -- typechecks; the rebind shadows the raw params so no line below can read the
   -- unstamped tree.  It is HERE, not in the preamble, because this is the seam the
@@ -45123,8 +45189,12 @@ checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
     checkModulesEntryFullK preludeKey runtimeDecls coreDecls [(rootId, prog)]
   (errs, warns)
 
--- `checkOneDiags` for a SYNTHETIC program — one this driver derived from the user's
--- rather than one the user wrote — with `mainSchemeRef` SAVED AND RESTORED across it.
+-- `checkModulesEntryFullK` for a SYNTHETIC program graph — one this driver derived
+-- from the user's rather than one the user wrote — with `mainSchemeRef` SAVED AND
+-- RESTORED across it.  General over any module-list shape (`checkModulesEntryFullK`
+-- already is: it harvests only the graph's terminal/entry module's own report, one
+-- or many modules alike), so a single caller serves both the single-file and the
+-- multi-module case.
 --
 -- WHY THIS EXISTS.  `checkModulesEntryFullSplit` records the entry module's `main`
 -- scheme in `mainSchemeRef` (#2155, see the SET-OR-CLEAR comment there), which is the
@@ -45142,19 +45212,18 @@ checkOneDiagsK preludeKey runtimeDecls coreDecls (rootId, prog) =
 -- prelude typecheck (S-3, #2234) is what makes the residue observable, so the two
 -- changes must travel together — with the save/restore alone, deleting the elaborate
 -- silently DELETED the `W-MAIN-SHAPE` warning on `medaka build` and on
--- `medaka check --json` (measured: 8 warning sites before, 6 after, both single-file;
--- multi-module is unaffected because `underivedMainDiags` only matches a singleton
--- module list and returns [] otherwise).
+-- `medaka check --json` (measured: 8 warning sites before, 6 after, both single-file).
 export
 checkOneDiagsSynthetic : List Decl ->
   List Decl ->
-  (String, List Decl) ->
+  List (String, List Decl) ->
   (List TcDiag, List TcDiag)
-checkOneDiagsSynthetic runtimeDecls coreDecls prog =
+checkOneDiagsSynthetic runtimeDecls coreDecls modules =
   let savedMain = driverState.value.mainSchemeRef.value
-  let res = checkOneDiags runtimeDecls coreDecls prog
+  let (_, errs, warns) =
+    checkModulesEntryFullK None runtimeDecls coreDecls modules
   driverState.value.mainSchemeRef := savedMain
-  res
+  (errs, warns)
 
 -- S-migrate-check-route (E-1 #1115): thin ONE-MODULE String/Bool wrappers, matching
 -- `checkToLinesWithRuntime`'s / `checkErrorsWithRuntime`'s (runtimeDecls, coreProg,

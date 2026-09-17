@@ -1,0 +1,10 @@
+-- #2722: the same constrained standalone shadow, used in VALUE position.
+--
+-- `lib/shadow2722_value.mdk` never applies its own `size`; it passes it to `map`. Each
+-- element therefore carries the standalone's `Num n` dict independently, so the pin is
+-- three values rather than one: [1, 2, 3] maps to [2, 3, 4]. A per-element 3 would mean
+-- the imported method won inside the shadowing module; a partial application in any
+-- element would print a heap pointer instead of a number.
+import lib.shadow2722_value.{useIt}
+
+main = println (useIt [1, 2, 3])

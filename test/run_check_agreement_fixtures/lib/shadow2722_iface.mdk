@@ -1,0 +1,10 @@
+-- #2722: the provider.  A single-typaram interface whose method name a downstream
+-- module also uses for its own CONSTRAINED standalone, plus a type with an impl so
+-- the method has a live receiver.
+export interface Sizeable a where
+  size : a -> Int
+
+public export data Box = Box Int
+
+impl Sizeable Box where
+  size (Box n) = n

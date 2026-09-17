@@ -1,0 +1,12 @@
+-- #2722: a constrained standalone shadowing an imported method of the same name.
+--
+-- Two bindings of one bare name, in two different modules, and each occurrence has
+-- exactly one right denotation.  Here in the entry module `size` denotes the imported
+-- METHOD, so `size (Box 3)` is 3.  Inside `lib/shadow2722_shadow.mdk` the same bare
+-- name denotes that module's OWN standalone, so `useIt 3` is `3 + 1`.  The program
+-- therefore prints 4, and the value pin carries as much of the claim as the verdict
+-- does: 3 would mean the method won in the shadowing module too.
+import lib.shadow2722_iface.{Sizeable, size, Box(..)}
+import lib.shadow2722_shadow.{useIt}
+
+main = println (useIt (size (Box 3)))

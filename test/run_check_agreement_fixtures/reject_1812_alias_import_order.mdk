@@ -1,0 +1,16 @@
+-- #1812: an alias-qualified import of a module that DECLARES a method also brings that
+-- method into scope under its origin name, so `mth` here can denote either `IZ.mth`
+-- (`Int -> b -> Int`) or the standalone imported from `lib.order1812_fmod`
+-- (`String -> Int -> Int`), and the import that comes FIRST decides which.  With the
+-- alias first the occurrence is the method, whose first parameter is an `Int`, so
+-- `mth "abc" 5` is unsatisfiable and all three verbs owe a rejection.
+--
+-- This is the order-decided half of a pair: `accept_1812_alias_import_order.mdk` is
+-- the same program with the import lines permuted, where the standalone wins and the
+-- answer is 99.  A change that rejects BOTH is as wrong as one that accepts both, and
+-- only the pair can see that.
+import lib.order1812_zmod as Z
+import lib.order1812_fmod.{mth}
+import lib.order1812_amod.{af}
+
+main = println (mth "abc" 5 + af 0 + Z.zf 0)
