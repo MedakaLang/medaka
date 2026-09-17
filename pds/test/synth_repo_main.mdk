@@ -42,22 +42,20 @@ secretHex : String
 secretHex = "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "synth_repo: malformed hex: \{message}"
+mustHex text = resultOrPanic "synth_repo: malformed hex" (decode text)
 
 corpusSecret : SecretKey
-corpusSecret = match secretKeyFromBytes (mustHex secretHex)
-  Ok key => key
-  Err message => panic "synth_repo: bad signing key: \{message}"
+corpusSecret =
+  resultOrPanic
+    "synth_repo: bad signing key"
+    (secretKeyFromBytes (mustHex secretHex))
 
 corpusDid : String
 corpusDid = "did:plc:synthrepocorpus000000000"
 
 corpusRev : Tid
-corpusRev = match tidParse "3lba2s5ykxs2a"
-  Ok tid => tid
-  Err message => panic "synth_repo: bad TID literal: \{message}"
+corpusRev =
+  resultOrPanic "synth_repo: bad TID literal" (tidParse "3lba2s5ykxs2a")
 
 -- ── the three named shapes ──────────────────────────────────────────────────
 
@@ -108,9 +106,8 @@ recordFor seed i = DcMap [
 ]
 
 mustEncode : DagCbor -> Array Int
-mustEncode value = match dagCborEncode value
-  Ok bytes => bytes
-  Err message => panic "synth_repo: record encoding failed: \{message}"
+mustEncode value =
+  resultOrPanic "synth_repo: record encoding failed" (dagCborEncode value)
 
 -- One row: the record's path bytes, its content CID, and its encoded bytes —
 -- built once per record so the entry (for the MST) and the block (for the
@@ -147,9 +144,8 @@ recordBlocksOf [] = []
 recordBlocksOf ((_, cid, bytes) :: rest) = (cid, bytes) :: recordBlocksOf rest
 
 mustTree : List (Array Int, Cid) -> Mst
-mustTree entries = match mstFromEntries entries
-  Ok tree => tree
-  Err message => panic "synth_repo: mst build failed: \{message}"
+mustTree entries =
+  resultOrPanic "synth_repo: mst build failed" (mstFromEntries entries)
 
 -- ── the signed commit `lib.repo`'s `buildCommit` would produce ─────────────
 
@@ -244,9 +240,8 @@ defaultSeed : Int
 defaultSeed = 1
 
 mustInt : String -> Int
-mustInt text = match toInt text
-  Some value => value
-  None => panic "synth_repo: malformed integer: \{text}"
+mustInt text =
+  optionOrPanic "synth_repo: malformed integer: \{text}" (toInt text)
 
 main : <IO, Env, FileRead "_", FileWrite "_"> Unit
 main = match args ()

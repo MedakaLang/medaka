@@ -22,9 +22,7 @@ isErr (Ok _) = False
 isErr (Err _) = True
 
 bytes : String -> Array Int
-bytes value = match decode value
-  Ok decoded => decoded
-  Err message => panic "sign_key_test: malformed hex: \{message}"
+bytes value = resultOrPanic "sign_key_test: malformed hex" (decode value)
 
 oneBytes : Array Int
 oneBytes = [|

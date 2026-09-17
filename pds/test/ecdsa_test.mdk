@@ -10,14 +10,13 @@ import lib.secp256k1.{
 }
 
 bytes : String -> Array Int
-bytes value = match decode value
-  Ok decoded => decoded
-  Err message => panic "ecdsa_test: malformed hex: \{message}"
+bytes value = resultOrPanic "ecdsa_test: malformed hex" (decode value)
 
 signature : String -> EcdsaSignature
-signature value = match ecdsaSignatureFromCompact (bytes value)
-  Ok parsed => parsed
-  Err message => panic "ecdsa_test: invalid fixed signature: \{message}"
+signature value =
+  resultOrPanic
+    "ecdsa_test: invalid fixed signature"
+    (ecdsaSignatureFromCompact (bytes value))
 
 knownCompact : String
 knownCompact =

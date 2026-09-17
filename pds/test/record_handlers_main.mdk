@@ -60,14 +60,10 @@ collectionText : String
 collectionText = "app.bsky.feed.post"
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "record_handlers: malformed hex: \{message}"
+mustHex text = resultOrPanic "record_handlers: malformed hex" (decode text)
 
 mustTid : String -> Tid
-mustTid text = match tidParse text
-  Ok tid => tid
-  Err message => panic "record_handlers: malformed TID: \{message}"
+mustTid text = resultOrPanic "record_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
 mustRecordJson text = match dagCborDecode (mustHex text)
@@ -75,14 +71,14 @@ mustRecordJson text = match dagCborDecode (mustHex text)
   Err message => panic "record_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
-mustAccount did = match makeAccount did accountHandleText accountHostText
-  Ok account => account
-  Err message => panic "record_handlers: account setup failed: \{message}"
+mustAccount did =
+  resultOrPanic
+    "record_handlers: account setup failed"
+    (makeAccount did accountHandleText accountHostText)
 
 mustServer : Account -> Server
-mustServer account = match recordServer account
-  Ok server => server
-  Err message => panic "record_handlers: server setup failed: \{message}"
+mustServer account =
+  resultOrPanic "record_handlers: server setup failed" (recordServer account)
 
 mustRepo : String -> String -> Tid -> Repo
 mustRepo did secretHex rev =
@@ -176,9 +172,10 @@ responseBodyText bytes =
   fromUtf8 (arrayMakeWith (arrayLength bytes - start) (i => bytes[start + i]))
 
 responseJson : Array Int -> Json
-responseJson bytes = match parse (responseBodyText bytes)
-  Ok value => value
-  Err message => panic "record_handlers: response body is not JSON: \{message}"
+responseJson bytes =
+  resultOrPanic
+    "record_handlers: response body is not JSON"
+    (parse (responseBodyText bytes))
 
 fieldText : String -> Json -> String
 fieldText name value = match get name value

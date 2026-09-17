@@ -206,9 +206,8 @@ readResponse conn pending =
     (readTypedResponse conn pending)
 
 mustConnect : Int -> <Net "_"> Connection
-mustConnect port = match connect "127.0.0.1" port
-  Ok conn => conn
-  Err message => panic "serve_client: connect failed: \{message}"
+mustConnect port =
+  resultOrPanic "serve_client: connect failed" (connect "127.0.0.1" port)
 
 mustSend : Connection -> Array Int -> <Net "_"> Unit
 mustSend conn bytes = match sendAll conn bytes
@@ -2468,17 +2467,12 @@ runSyncGetBlocksMissing port did firstMissing secondMissing =
 
 -- | An expected HTTP status, as the shell gate spells it on the command line.
 mustStatus : String -> Int
-mustStatus text = match toInt text
-  Some n => n
-  None => panic "serve_client: not a status: \{text}"
+mustStatus text =
+  optionOrPanic "serve_client: not a status: \{text}" (toInt text)
 
 mustPort : String -> Int
-mustPort text = match toInt text
-  Some n => n
-  None => panic "serve_client: not a port: \{text}"
+mustPort text = optionOrPanic "serve_client: not a port: \{text}" (toInt text)
 
 -- | A rate-limit case's request count, as the shell gate spells it.
 mustCount : String -> Int
-mustCount text = match toInt text
-  Some n => n
-  None => panic "serve_client: not a count: \{text}"
+mustCount text = optionOrPanic "serve_client: not a count: \{text}" (toInt text)

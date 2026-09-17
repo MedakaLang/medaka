@@ -21,9 +21,8 @@ errContains witness (Err message) = contains witness message
 errContains _ (Ok _) = False
 
 mustTid : Int -> Int -> Tid
-mustTid micros clockId = match tidEncode micros clockId
-  Ok tid => tid
-  Err message => panic "repo_tid_test: setup failed: \{message}"
+mustTid micros clockId =
+  resultOrPanic "repo_tid_test: setup failed" (tidEncode micros clockId)
 
 test "TID encode and parse preserve timestamp clock and spelling" =
   let tid = mustTid 1700000000000000 7

@@ -22,9 +22,7 @@ import lib.dagcbor.{dagCborDecode, dagCborEncode}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "lexjson_vectors: malformed hex: \{message}"
+mustHex text = resultOrPanic "lexjson_vectors: malformed hex" (decode text)
 
 checkForward : String -> Array Int -> String -> <IO> Bool
 checkForward name cborBytes jsonText = match dagCborDecode cborBytes

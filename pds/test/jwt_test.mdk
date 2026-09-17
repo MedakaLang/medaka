@@ -284,18 +284,14 @@ test "verification reads no clock: the same token verifies at any instant in its
 -- reference-derived pds/test/vectors/pds_did_key_corpus.txt, which is what
 -- lets the interop driver hand that verifier an externally graded key.
 hexBytes : String -> Array Int
-hexBytes value = match decode value
-  Ok decoded => decoded
-  Err message => panic "jwt_test: malformed hex: \{message}"
+hexBytes value = resultOrPanic "jwt_test: malformed hex" (decode value)
 
 serviceScalar : Array Int
 serviceScalar =
   hexBytes "0000000000000000000000000000000000000000000000000000000000000001"
 
 serviceKey : SecretKey
-serviceKey = match secretKeyFromBytes serviceScalar
-  Ok key => key
-  Err message => panic "jwt_test: \{message}"
+serviceKey = resultOrPanic "jwt_test" (secretKeyFromBytes serviceScalar)
 
 serviceIssuer : String
 serviceIssuer = "did:plc:s-service-jwt-account"
@@ -323,9 +319,8 @@ serviceRequest aud lxm jti = ServiceAuthRequest {
 }
 
 serviceToken : ServiceAuthRequest -> String
-serviceToken request = match mintServiceToken serviceKey request
-  Ok minted => minted
-  Err message => panic "jwt_test: \{message}"
+serviceToken request =
+  resultOrPanic "jwt_test" (mintServiceToken serviceKey request)
 
 -- The audience as an `atproto-proxy` header spells it: a service OF a DID.
 withLxmToken : String

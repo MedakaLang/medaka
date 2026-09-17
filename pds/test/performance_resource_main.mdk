@@ -103,22 +103,23 @@ perfSecretHex =
   "c9afa9d845ba75166b5c215767b1d6934e50c3db36e89b127b8a622b120f6721"
 
 mustHexBytes : String -> Array Int
-mustHexBytes text = match decode text
-  Ok bytes => bytes
-  Err message => panic "performance_resource: malformed hex: \{message}"
+mustHexBytes text =
+  resultOrPanic "performance_resource: malformed hex" (decode text)
 
 perfSecret : SecretKey
-perfSecret = match secretKeyFromBytes (mustHexBytes perfSecretHex)
-  Ok key => key
-  Err message => panic "performance_resource: bad signing key: \{message}"
+perfSecret =
+  resultOrPanic
+    "performance_resource: bad signing key"
+    (secretKeyFromBytes (mustHexBytes perfSecretHex))
 
 perfDid : String
 perfDid = "did:plc:perfrouteidentity0000000"
 
 perfRev : Tid
-perfRev = match tidParse "3lba2s5ykxs2a"
-  Ok tid => tid
-  Err message => panic "performance_resource: bad TID literal: \{message}"
+perfRev =
+  resultOrPanic
+    "performance_resource: bad TID literal"
+    (tidParse "3lba2s5ykxs2a")
 
 -- Every entry's key is a distinct fixed-width byte string and its value CID
 -- points at a small distinct record block, built once via `mstFromEntries`
@@ -148,9 +149,10 @@ perfRecordBlocksOf ((_, cid, bytes) :: rest) =
   (cid, bytes) :: perfRecordBlocksOf rest
 
 mustPerfTree : List (Array Int, Cid) -> Mst
-mustPerfTree entries = match mstFromEntries entries
-  Ok tree => tree
-  Err message => panic "performance_resource: mst build failed: \{message}"
+mustPerfTree entries =
+  resultOrPanic
+    "performance_resource: mst build failed"
+    (mstFromEntries entries)
 
 -- Mirrors `lib.repo`'s private `buildCommit` signed-commit shape, using only
 -- exported primitives — `buildCommit` itself is not exported.

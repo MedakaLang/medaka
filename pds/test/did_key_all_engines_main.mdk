@@ -17,19 +17,20 @@ import lib.multiformats.{
 import lib.sign.{publicKeyCompressed, publicKeyFromCompressed}
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "did_key_all_engines: malformed corpus hex: \{message}"
+mustHex text =
+  resultOrPanic "did_key_all_engines: malformed corpus hex" (decode text)
 
 mustInt : String -> Int
-mustInt text = match toInt text
-  Some value => value
-  None => panic "did_key_all_engines: malformed corpus row id: \{text}"
+mustInt text =
+  optionOrPanic
+    "did_key_all_engines: malformed corpus row id: \{text}"
+    (toInt text)
 
 mustStrip : String -> String -> String
-mustStrip prefix text = match stripPrefix prefix text
-  Some rest => rest
-  None => panic "did_key_all_engines: expected prefix \{prefix}"
+mustStrip prefix text =
+  optionOrPanic
+    "did_key_all_engines: expected prefix \{prefix}"
+    (stripPrefix prefix text)
 
 canonicalPayload : String -> Array Int -> Bool
 canonicalPayload did keyBytes =

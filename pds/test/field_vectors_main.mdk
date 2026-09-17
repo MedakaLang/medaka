@@ -74,9 +74,7 @@ bump arr i = setInPlace i (arr[i] + 1) arr
 -- ── Row evaluation ───────────────────────────────────────────────────
 
 mustHex : String -> Array Int
-mustHex s = match decode s
-  Ok bs => bs
-  Err m => panic "field_vectors: bad hex '\{s}': \{m}"
+mustHex s = resultOrPanic "field_vectors: bad hex '\{s}'" (decode s)
 
 loadFe : String -> Fe
 loadFe s = feFromBytesReduce (mustHex s)

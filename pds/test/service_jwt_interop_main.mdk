@@ -85,9 +85,8 @@ request audience lxm jti exp = ServiceAuthRequest {
 }
 
 mint : SecretKey -> ServiceAuthRequest -> String
-mint key claims = match mintServiceToken key claims
-  Err message => panic "service_jwt_interop: \{message}"
-  Ok minted => minted
+mint key claims =
+  resultOrPanic "service_jwt_interop" (mintServiceToken key claims)
 
 -- `lxm` is the NSID the verifier must require, or `-` for a token minted
 -- without the claim. A row that states no expected lifetime is graded against

@@ -38,9 +38,10 @@ import lib.xrpc.{
 }
 
 mustHeader : String -> String -> Header
-mustHeader name value = match makeHeader name (toUtf8 value)
-  Ok header => header
-  Err message => panic "server_core_test: header setup failed: \{message}"
+mustHeader name value =
+  resultOrPanic
+    "server_core_test: header setup failed"
+    (makeHeader name (toUtf8 value))
 
 mustResponse : Int -> String -> String -> Response
 mustResponse status reason body =
@@ -105,9 +106,10 @@ seedBytes : Array Int
 seedBytes = toUtf8 "seed"
 
 seededStore : Store
-seededStore = match storePut (cidForRaw seedBytes) seedBytes storeEmpty
-  Ok store => store
-  Err message => panic "server_core_test: seed store setup failed: \{message}"
+seededStore =
+  resultOrPanic
+    "server_core_test: seed store setup failed"
+    (storePut (cidForRaw seedBytes) seedBytes storeEmpty)
 
 seedPreserved : Store -> Bool
 seedPreserved store =

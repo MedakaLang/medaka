@@ -19,14 +19,13 @@ import lib.cid.{
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "dagcbor_cid_vectors: malformed hex: \{message}"
+mustHex text = resultOrPanic "dagcbor_cid_vectors: malformed hex" (decode text)
 
 mustCid : String -> Cid
-mustCid text = match cidFromString text
-  Ok cid => cid
-  Err message => panic "dagcbor_cid_vectors: malformed fixture CID: \{message}"
+mustCid text =
+  resultOrPanic
+    "dagcbor_cid_vectors: malformed fixture CID"
+    (cidFromString text)
 
 fixtureValue : String -> DagCbor
 -- lint-disable-next-line rule-match-on-param

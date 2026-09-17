@@ -77,14 +77,10 @@ scratchCollection : String
 scratchCollection = "app.medaka.scratch"
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "batch_handlers: malformed hex: \{message}"
+mustHex text = resultOrPanic "batch_handlers: malformed hex" (decode text)
 
 mustTid : String -> Tid
-mustTid text = match tidParse text
-  Ok tid => tid
-  Err message => panic "batch_handlers: malformed TID: \{message}"
+mustTid text = resultOrPanic "batch_handlers: malformed TID" (tidParse text)
 
 mustRecordJson : String -> Json
 mustRecordJson text = match dagCborDecode (mustHex text)
@@ -92,14 +88,14 @@ mustRecordJson text = match dagCborDecode (mustHex text)
   Err message => panic "batch_handlers: malformed record: \{message}"
 
 mustAccount : String -> Account
-mustAccount did = match makeAccount did accountHandleText accountHostText
-  Ok account => account
-  Err message => panic "batch_handlers: account setup failed: \{message}"
+mustAccount did =
+  resultOrPanic
+    "batch_handlers: account setup failed"
+    (makeAccount did accountHandleText accountHostText)
 
 mustServer : Account -> Server
-mustServer account = match recordServer account
-  Ok server => server
-  Err message => panic "batch_handlers: server setup failed: \{message}"
+mustServer account =
+  resultOrPanic "batch_handlers: server setup failed" (recordServer account)
 
 mustRepo : String -> String -> Tid -> Repo
 mustRepo did secretHex rev =
@@ -277,9 +273,8 @@ storeFingerprint store = match storeRepo store
     "\{cidToString (repoCommitCid (repoLatestCommit repo))}/\{cidToString (repoRootCid repo)}"
 
 storeMustRepo : Store -> Repo
-storeMustRepo store = match storeRepo store
-  Some repo => repo
-  None => panic "batch_handlers: store carries no repository"
+storeMustRepo store =
+  optionOrPanic "batch_handlers: store carries no repository" (storeRepo store)
 
 stateWord : Bool -> String
 stateWord True = "unchanged"

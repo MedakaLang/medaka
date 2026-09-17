@@ -35,14 +35,11 @@ bytes value =
     Err message => panic "ecdsa_vectors: malformed hex: \{message}"
 
 scalar : String -> Sc
-scalar value = match scFromBytes (bytes value)
-  Ok parsed => parsed
-  Err message => panic "ecdsa_vectors: invalid secret key: \{message}"
+scalar value =
+  resultOrPanic "ecdsa_vectors: invalid secret key" (scFromBytes (bytes value))
 
 tcId : String -> Int
-tcId value = match toInt value
-  Some parsed => parsed
-  None => panic "ecdsa_vectors: invalid tcId: \{value}"
+tcId value = optionOrPanic "ecdsa_vectors: invalid tcId: \{value}" (toInt value)
 
 isErr : Result String a -> Bool
 isErr (Ok _) = False

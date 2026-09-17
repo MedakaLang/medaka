@@ -298,9 +298,8 @@ report label ok detail =
     exit 1
 
 mustConnect : Int -> <Net "_"> Connection
-mustConnect port = match connect "127.0.0.1" port
-  Ok conn => conn
-  Err message => panic "serve_subscribe: connect failed: \{message}"
+mustConnect port =
+  resultOrPanic "serve_subscribe: connect failed" (connect "127.0.0.1" port)
 
 mustSend : Connection -> Array Int -> <Net "_"> Unit
 mustSend conn bytes = match sendAll conn bytes
@@ -942,14 +941,12 @@ malformedCloseFrames : List Frame
 malformedCloseFrames = [Frame True Close [|3|]]
 
 mustPort : String -> Int
-mustPort text = match toInt text
-  Some n => n
-  None => panic "serve_subscribe: not a port: \{text}"
+mustPort text =
+  optionOrPanic "serve_subscribe: not a port: \{text}" (toInt text)
 
 mustCount : String -> Int
-mustCount text = match toInt text
-  Some n => n
-  None => panic "serve_subscribe: not a count: \{text}"
+mustCount text =
+  optionOrPanic "serve_subscribe: not a count: \{text}" (toInt text)
 
 usage : String
 usage =

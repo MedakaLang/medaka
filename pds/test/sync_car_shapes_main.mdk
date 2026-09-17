@@ -145,19 +145,14 @@ testContext : RequestContext
 testContext = RequestContext { nowSeconds = 1700000000, nonce = [||] }
 
 mustHex : String -> Array Int
-mustHex text = match decode text
-  Ok bytes => bytes
-  Err message => panic "sync_car_shapes: malformed hex: \{message}"
+mustHex text = resultOrPanic "sync_car_shapes: malformed hex" (decode text)
 
 mustCbor : Array Int -> DagCbor
-mustCbor bytes = match dagCborDecode bytes
-  Ok value => value
-  Err message => panic "sync_car_shapes: undecodable block: \{message}"
+mustCbor bytes =
+  resultOrPanic "sync_car_shapes: undecodable block" (dagCborDecode bytes)
 
 mustTid : String -> Tid
-mustTid text = match tidParse text
-  Ok tid => tid
-  Err message => panic "sync_car_shapes: malformed TID: \{message}"
+mustTid text = resultOrPanic "sync_car_shapes: malformed TID" (tidParse text)
 
 textOf : DagCbor -> String -> String
 textOf (DcMap fields) name = match lookup name fields
@@ -179,9 +174,8 @@ parseRows (line :: rest) acc =
     _ => panic "sync_car_shapes: unrecognized corpus row: \{line}"
 
 rowValue : List (String, String) -> String -> String
-rowValue rows tag = match lookup tag rows
-  Some value => value
-  None => panic "sync_car_shapes: corpus has no \{tag} row"
+rowValue rows tag =
+  optionOrPanic "sync_car_shapes: corpus has no \{tag} row" (lookup tag rows)
 
 -- A CID-list row, which is empty for the one row that names no CID at all.
 rowCids : List (String, String) -> String -> List String
@@ -196,14 +190,16 @@ gradeWord False = "FAIL"
 -- ── the fixture repository ──────────────────────────────────────────────────
 
 mustAccount : String -> Account
-mustAccount did = match makeAccount did accountHandleText accountHostText
-  Ok account => account
-  Err message => panic "sync_car_shapes: account setup failed: \{message}"
+mustAccount did =
+  resultOrPanic
+    "sync_car_shapes: account setup failed"
+    (makeAccount did accountHandleText accountHostText)
 
 mustServer : Account -> Server
-mustServer account = match pdsServer account serverLinksEmpty "test-driver"
-  Ok server => server
-  Err message => panic "sync_car_shapes: server setup failed: \{message}"
+mustServer account =
+  resultOrPanic
+    "sync_car_shapes: server setup failed"
+    (pdsServer account serverLinksEmpty "test-driver")
 
 {- | The repository the corpus was computed over: its four records, written at
    the corpus's own revision.

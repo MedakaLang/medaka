@@ -563,9 +563,8 @@ runSample port controlPort plan requests intervalMs =
 -- # Driver
 
 mustInt : String -> Int
-mustInt text = match toInt text
-  Some value => value
-  None => panic "load_client: malformed integer: \{text}"
+mustInt text =
+  optionOrPanic "load_client: malformed integer: \{text}" (toInt text)
 
 usage : String
 usage =
