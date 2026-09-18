@@ -141,11 +141,12 @@ So during a soak:
   its gate closes. Without it the sweep never fires and `#3005` stays untested,
   and the soak has demonstrated availability rather than correctness.
 
-🚨 **`systemctl restart` during a soak is not free even when the change is
-trivial.** It also closes every session, since sessions are in-memory by design
-— so a deploy-heavy soak is a re-login-heavy one, and the operator's own use of
-the service (which is what L1 makes the soak's evidence) gets interrupted along
-with it.
+⚠️ **`systemctl restart` during a soak still costs the 72h window above**, even
+when the change is trivial. It no longer costs every session: the open session
+set is persisted and read back at startup, so a restart is not a logout and the
+operator's own use of the service carries across one. A session lost across a
+restart is a defect now, not the design — `pds/test/serve_e2e.sh` case 9g is
+what holds that.
 
 ## 5. Rollback
 

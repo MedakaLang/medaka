@@ -265,11 +265,14 @@ getRequest : String -> String -> Array Int
 getRequest auth target =
   toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}\r\n"
 
--- A procedure with no input at all, which is the shape a refresh route takes.
+{- | A procedure with no input at all, which is the shape a refresh route
+   takes. The zero-length `Content-Length` is deliberate and is what a real
+   client sends on a bodiless POST: a refresh route reached without it is a
+   refresh route reached in a shape no client uses. -}
 postNoInputRequest : String -> String -> Array Int
 postNoInputRequest auth nsid =
   toUtf8
-    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}\r\n"
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{auth}Content-Length: 0\r\n\r\n"
 
 bearer : String -> String
 bearer token = "Authorization: Bearer \{token}\r\n"

@@ -285,12 +285,15 @@ postRequestXff xff token path bodyJson =
     body,
   |]
 
--- A POST with no body and no body framing at all, which is the shape
--- `com.atproto.server.{refreshSession, deleteSession}` take: they are
--- `NoInput` procedures, and the router refuses one that carries framing.
+{- | A POST with no body, which is the shape
+   `com.atproto.server.{refreshSession, deleteSession}` take: they are
+   `NoInput` procedures. The zero-length `Content-Length` is the shape a real
+   client gives a bodiless POST, and the router admits it as the statement of
+   "no body" that it is. -}
 postNoInputRequest : String -> String -> Array Int
 postNoInputRequest token path =
-  toUtf8 "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}\r\n"
+  toUtf8
+    "POST \{path} HTTP/1.1\r\n\{hostHeader}\{authHeader token}Content-Length: 0\r\n\r\n"
 
 {- | A `content-length` POST whose body is raw bytes under a caller-chosen
    media type, which is the shape `com.atproto.repo.uploadBlob` takes: the

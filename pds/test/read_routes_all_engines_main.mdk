@@ -128,10 +128,19 @@ getRequest : String -> Array Int
 getRequest target =
   toUtf8 "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
 
-getWithBodyFraming : String -> Array Int
-getWithBodyFraming target =
+-- A read route takes no request body, and one that carries bytes is refused.
+getWithBody : String -> Array Int
+getWithBody target =
   toUtf8
-    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\n\r\n"
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+
+{- | A zero-length `Content-Length` and a `Content-Type` over it, which is not
+   a body: RFC 9110 §8.6 makes a zero length the statement that there is
+   none, and it is the shape an HTTP client gives a bodiless request. -}
+getWithZeroLengthFraming : String -> Array Int
+getWithZeroLengthFraming target =
+  toUtf8
+    "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\nContent-Type: application/json\r\nContent-Length: 0\r\n\r\n"
 
 postRequest : String -> Array Int
 postRequest target =
@@ -1109,12 +1118,18 @@ runCells corpus =
       (postRequest "/.well-known/did.json")
       "405"
       "MethodNotAllowed"
-  let wellKnownFramed =
+  let wellKnownBody =
     failCell
-      "wellknown-body-framing-rejected"
-      (getWithBodyFraming "/.well-known/atproto-did")
+      "wellknown-body-rejected"
+      (getWithBody "/.well-known/atproto-did")
       "400"
       "InvalidRequest"
+  let wellKnownZeroLength =
+    okCell
+      "wellknown-zero-length-framing-admitted"
+      (getWithZeroLengthFraming "/.well-known/atproto-did")
+      "text/plain; charset=utf-8"
+      accountDidText
   let favicon =
     failCell "non-xrpc-still-404" (getRequest "/favicon.ico") "404" "NotFound"
   let sibling =
@@ -1263,7 +1278,8 @@ runCells corpus =
       + didJson
       + atprotoDid
       + wellKnownPost
-      + wellKnownFramed
+      + wellKnownBody
+      + wellKnownZeroLength
       + favicon
       + sibling
       + resolve
@@ -1291,8 +1307,8 @@ runCells corpus =
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/60 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 60 then
+      "cells: \{intToString cells}/61 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 61 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"

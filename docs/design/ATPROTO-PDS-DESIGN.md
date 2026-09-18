@@ -485,12 +485,28 @@ presenting it again finds no session and is refused — reuse detection with no 
 state. The rotation replaces the whole record, access half included, so a client that
 refreshes is expected to use the access token it was just issued.
 
-**Sessions live only in memory, and a restart closes all of them.** They are not
-persisted: after a restart every previously issued token is refused and every client
-logs in again. That is a fail-CLOSED behavior and it is deliberate — the alternative,
-persisting session records, is a second on-disk file of security-relevant state with
-its own staleness and mode problems, for the benefit of not asking a client to log in
-after a server restart. The credential record IS persisted, because a server that
+**Sessions are persisted, and a restart does not close them.** The open session set
+is written to `<data>/sessions` and read back at startup, so a token issued before a
+restart still resolves after it.
+
+This reverses an earlier ruling that kept sessions in memory as a fail-CLOSED
+default. What that ruling did not weigh is that the refresh token dies with the
+access token: a restart refuses BOTH halves of every session, so a client has nothing
+to recover with and is sent back to the password. Against a deployment that restarts
+on a schedule — the nightly backup window stops the service to take a consistent
+archive — that is a forced re-login per restart, which is not the behavior any other
+PDS on the network has and not one a client can be asked to absorb.
+
+The two objections that ruling raised are answered rather than dismissed. **Mode**:
+the file is written through `io.writeFilePrivate` at 0600 like the credential record,
+and `pds serve` refuses to start on a wider one (`requirePrivateMode`), so it fails
+closed exactly where the secret files do. **Staleness**: the set is pruned against the
+current instant as it is read, so a row that expired while nothing was running is
+dropped at load rather than readmitted. What the file holds is also not a bearer
+token: a row is a pair of SHA-256 fingerprints (`sessionFingerprint`) and an expiry,
+so the file cannot be replayed against the server that wrote it.
+
+The credential record is persisted for the older and simpler reason: a server that
 forgot the account password on restart could not accept a login at all.
 
 **Secrets at rest are owner-only, and a wider one is refused rather than warned
