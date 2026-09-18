@@ -133,3 +133,9 @@ cidFromString text = match multibaseBase32LowerDecode text
 export
 cidEqual : Cid -> Cid -> Bool
 cidEqual left right = cidToBytes left == cidToBytes right
+
+-- | Whether a CID occurs in a list under CID identity.
+export
+cidMember : Cid -> List Cid -> Bool
+cidMember _ [] = False
+cidMember cid (candidate :: rest) = cidEqual cid candidate || cidMember cid rest
