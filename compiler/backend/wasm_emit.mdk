@@ -306,6 +306,7 @@ import backend.wasm_preamble.{
   floatStrRuntimeLines,
   strSearchRuntimeLines,
   strCodecRuntimeLines,
+  byteBlockRuntimeLines,
   charFromCodeRuntimeLines,
   charClassRuntimeLines,
   ioHostImportLines,
@@ -374,6 +375,7 @@ data WasmEmit = WasmEmit {
   useArgs : Ref Bool,
   useFileBytes : Ref Bool,
   useStrCodec : Ref Bool,
+  useByteBlock : Ref Bool,
   useValueCmp : Ref Bool,
   useMath : Ref Bool,
   useCharFromCode : Ref Bool,
@@ -444,6 +446,7 @@ freshWasmEmit mode = WasmEmit {
   useArgs = Ref False,
   useFileBytes = Ref False,
   useStrCodec = Ref False,
+  useByteBlock = Ref False,
   useValueCmp = Ref False,
   useMath = Ref False,
   useCharFromCode = Ref False,
@@ -1977,6 +1980,11 @@ externArityW name =
       "cosh",
       "tanh",
       "stringToFloat",
+      "byteBlockMake",
+      "byteBlockLength",
+      "byteBlockFromIntArray",
+      "byteBlockToIntArray",
+      "byteBlockFromString",
     ] then
     -- W11: charCode : Char -> Int (1-arg leaf); W11b: char classification + case-mapping (1-arg).
 
@@ -2027,6 +2035,8 @@ externArityW name =
       "floatRem",
       "writeFileBytes",
       "sliceError",
+      "byteBlockGetUnsafe",
+      "byteBlockCopyUnsafe",
     ] then
     -- W10: arrayGetUnsafe (idx, arr); arrayMake (size, init); arrayMakeWith (size, f).
 
@@ -2041,7 +2051,9 @@ externArityW name =
 
     -- #670: sliceError (lo, hiIncl) -- the coded E-SLICE-OOB abort extern (2-arg).
     2
-  else if contains name ["stringSlice", "arraySetUnsafe"] then
+  else if contains
+    name
+    ["stringSlice", "arraySetUnsafe", "byteBlockSetUnsafe"] then
     3
   else if name == "arrayBlit" then
     -- stage-A: arrayBlit src srcOff dst dstOff len (5 args).
@@ -2051,7 +2063,10 @@ externArityW name =
 
 isWasmEtaExtern : String -> Bool
 isWasmEtaExtern name =
-  isStrExternW name || isLeafExternW name || isArrayExternW name
+  isStrExternW name
+    || isLeafExternW name
+    || isArrayExternW name
+    || isByteBlockExternW name
 
 -- ── W10: Array intrinsic externs (RUNTIME-DESIGN array kernel) ────────────────
 -- The seven array primitives from stdlib/runtime.mdk that lower to the `$arr =
@@ -2079,6 +2094,31 @@ isArrayExternW name = contains
     "floatToBytes64",
     "bytesToFloat64",
   ]
+
+-- ── the `ByteBlock` builtin's eight primitives ──────────────────────
+-- Peer of llvm_emit's `isByteBlockExtern`, over the same eight names.  A block IS
+-- a `$u8arr`, so these force the $str rep (which declares $u8arr) and the $arr rep
+-- (which the two Array-crossing prims name) — see noteW8Extern below.
+-- NOTE the arg orders, which follow stdlib/runtime.mdk, not the receiver-last
+-- reading: the index/size comes FIRST, the block LAST, exactly as for $arr.
+isByteBlockExternW : String -> Bool
+-- Deliberately a per-backend copy of llvm_emit.mdk's `isByteBlockExtern`, not a
+-- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
+-- implemented-extern column by extracting the family binding's own quoted names
+-- out of that engine's own file, so hoisting the eight names into a module both
+-- backends import would leave the gate reading neither engine as implementing
+-- them -- the duplication is what keeps the two columns independently derivable.
+-- lint-disable-next-line rule-duplicate-body
+isByteBlockExternW name = contains name [
+  "byteBlockMake",
+  "byteBlockLength",
+  "byteBlockGetUnsafe",
+  "byteBlockSetUnsafe",
+  "byteBlockCopyUnsafe",
+  "byteBlockFromIntArray",
+  "byteBlockToIntArray",
+  "byteBlockFromString",
+]
 
 -- ── W8b: the ONE residual deferred extern ────────────────────────────────────
 -- All other Float externs (floatToString / intToFloat / floatToInt / hashFloat /
@@ -2428,6 +2468,14 @@ noteW8Extern emit name =
     if contains name ["floatToBytes64", "bytesToFloat64"] then
       setRef emit.useFloat True
   let _ = if name == "arrayFromList" then setRef emit.useList True
+  -- the `ByteBlock` builtin: a block IS a `$u8arr`, which is declared with the $str
+  -- rep, so useStr.  byteBlockFromIntArray/ToIntArray also name $arr, and the runtime
+  -- block is emitted whole, so every one of the eight forces both reps rather than
+  -- letting a make-only program emit a body referencing an undeclared $arr.
+  let _ =
+    if isByteBlockExternW name then
+      let _ = setRef emit.useByteBlock True in
+        let _ = setRef emit.useStr True in setRef emit.useArray True
   -- W12: the IO host-surface externs.  readFile/fileExists/getEnv/args all build a $str
   -- (path/result), so force the $str rep; args additionally builds a Cons list (force
   -- useList).  `exit` needs no $str (it lowers to mdk_exit + unreachable) but still
@@ -3499,6 +3547,10 @@ emitRefProgram prog groups =
   -- the codec nor strLeaf, so its runtime fn is gated independently.
   let strCodecRt =
     if (progEmit prog).useStrCodec.value then strCodecRuntimeLines else []
+  -- the `ByteBlock` builtin's four loop/copy helpers.  Needs $u8arr + $str (forced
+  -- via useStr) and $arr (useArray), both set with useByteBlock in noteW8Extern.
+  let byteBlockRt =
+    if (progEmit prog).useByteBlock.value then byteBlockRuntimeLines else []
   let charFromCodeRt =
     if (progEmit prog).useCharFromCode.value then
       charFromCodeRuntimeLines
@@ -3573,6 +3625,7 @@ emitRefProgram prog groups =
       ++ randomFloatRt
       ++ strSearchRt
       ++ strCodecRt
+      ++ byteBlockRt
       ++ charFromCodeRt
       ++ charClassRt
       ++ ioHostRt
@@ -6819,6 +6872,8 @@ emitExternEtaDefine prog lamName name arity =
       emitStrExternRef prog params 0 name argVars
     else if isArrayExternW name then
       emitArrayExternRef prog params 0 name argVars
+    else if isByteBlockExternW name then
+      emitByteBlockExternRef prog params 0 name argVars
     else
       emitLeafExternRef prog params 0 name argVars
   let arrayScratch = if isArrayExternW name then arrayEtaScratchLocals else []
@@ -7446,6 +7501,8 @@ emitAppRef prog env d app =
         emitLeafExternRef prog env d f args
       else if isArrayExternW f then
         emitArrayExternRef prog env d f args
+      else if isByteBlockExternW f then
+        emitByteBlockExternRef prog env d f args
       else if isDeferredFloatExternW f then
         floatExternStub f
       else if isUnimplStrExternW f then
@@ -8276,6 +8333,83 @@ emitArrayExternRef prog env d "bytesToFloat64" _ =
   gapLP prog "wasm stage-B: bytesToFloat64 takes exactly two arguments"
 emitArrayExternRef prog _ _ name _ =
   gapLP prog ("wasm W10: unsupported array extern '" ++ name ++ "'")
+
+-- ── the `ByteBlock` builtin's eight primitives ──────────────────────
+-- A block is a bare `$u8arr`; the four that loop or copy call into
+-- byteBlockRuntimeLines, the four that don't are inline.  Arg orders follow
+-- stdlib/runtime.mdk (index/size FIRST, block LAST), mirroring the $arr family:
+--   byteBlockMake         n            → array.new $u8arr (0, n)
+--   byteBlockLength       b            → array.len → i31
+--   byteBlockGetUnsafe    i b          → (i FIRST) cast b, array.get_u → i31
+--   byteBlockSetUnsafe    i v b        → array.set (low 8 bits of v); result Unit
+--   byteBlockCopyUnsafe   n b          → $mdk_bb_copy (a COPY — freeze's engine half)
+--   byteBlockFromIntArray a            → $mdk_bb_from_int_array
+--   byteBlockToIntArray   b            → $mdk_bb_to_int_array
+--   byteBlockFromString   s            → $mdk_bb_from_string
+emitByteBlockExternRef : Prog ->
+  List String ->
+  Int ->
+  String ->
+  List CExpr ->
+  List String
+emitByteBlockExternRef prog env d "byteBlockMake" [n] =
+  ["i32.const 0"] ++ bbIntArg prog env d n ++ ["array.new $u8arr"]
+emitByteBlockExternRef prog env d "byteBlockMake" _ =
+  gapLP prog "wasm: byteBlockMake takes exactly one argument"
+emitByteBlockExternRef prog env d "byteBlockLength" [b] =
+  emitRefExpr prog env d b ++ ["ref.cast (ref $u8arr)", "array.len", "ref.i31"]
+emitByteBlockExternRef prog env d "byteBlockLength" _ =
+  gapLP prog "wasm: byteBlockLength takes exactly one argument"
+emitByteBlockExternRef prog env d "byteBlockGetUnsafe" [i, b] =
+  emitRefExpr prog env d b
+    ++ ["ref.cast (ref $u8arr)"]
+    ++ bbIntArg prog env d i
+    ++ ["array.get_u $u8arr", "ref.i31"]
+emitByteBlockExternRef prog env d "byteBlockGetUnsafe" _ =
+  gapLP prog "wasm: byteBlockGetUnsafe takes exactly two arguments"
+-- The i8 slot keeps the low eight bits of the stored i32 on its own, so the
+-- explicit mask is what makes the 0..255 domain READABLE here rather than a
+-- property of the array type; both agree with native's (unsigned char) cast.
+emitByteBlockExternRef prog env d "byteBlockSetUnsafe" [i, v, b] =
+  emitRefExpr prog env d b
+    ++ ["ref.cast (ref $u8arr)"]
+    ++ bbIntArg prog env d i
+    ++ bbIntArg prog env d v
+    ++ ["i32.const 255", "i32.and"]
+    ++ ["array.set $u8arr", "i32.const 0", "ref.i31"]
+emitByteBlockExternRef prog env d "byteBlockSetUnsafe" _ =
+  gapLP prog "wasm: byteBlockSetUnsafe takes exactly three arguments"
+emitByteBlockExternRef prog env d "byteBlockCopyUnsafe" [n, b] =
+  bbIntArg prog env d n
+    ++ emitRefExpr prog env d b
+    ++ ["ref.cast (ref $u8arr)", "call $mdk_bb_copy"]
+emitByteBlockExternRef prog env d "byteBlockCopyUnsafe" _ =
+  gapLP prog "wasm: byteBlockCopyUnsafe takes exactly two arguments"
+emitByteBlockExternRef prog env d "byteBlockFromIntArray" [a] =
+  emitRefExpr prog env d a
+    ++ ["ref.cast (ref $arr)", "call $mdk_bb_from_int_array"]
+emitByteBlockExternRef prog env d "byteBlockFromIntArray" _ =
+  gapLP prog "wasm: byteBlockFromIntArray takes exactly one argument"
+emitByteBlockExternRef prog env d "byteBlockToIntArray" [b] =
+  emitRefExpr prog env d b
+    ++ ["ref.cast (ref $u8arr)", "call $mdk_bb_to_int_array"]
+emitByteBlockExternRef prog env d "byteBlockToIntArray" _ =
+  gapLP prog "wasm: byteBlockToIntArray takes exactly one argument"
+emitByteBlockExternRef prog env d "byteBlockFromString" [sv] =
+  emitRefExpr prog env d sv
+    ++ ["ref.cast (ref $str)", "call $mdk_bb_from_string"]
+emitByteBlockExternRef prog env d "byteBlockFromString" _ =
+  gapLP prog "wasm: byteBlockFromString takes exactly one argument"
+emitByteBlockExternRef prog _ _ name _ =
+  gapLP prog ("wasm: unsupported byte-block extern '" ++ name ++ "'")
+
+-- An Int argument as a raw i32.  The $arr family takes the i31 fast path, which
+-- traps on an Int outside the i31 range; native has no boxed Int at all, so a
+-- block index, length, or stored byte built from a large Int would diverge rather
+-- than agree.  Route through $mdk_unbox_int (i31 OR $boxint) and narrow.
+bbIntArg : Prog -> List String -> Int -> CExpr -> List String
+bbIntArg prog env d e =
+  emitRefExpr prog env d e ++ ["call $mdk_unbox_int", "i32.wrap_i64"]
 
 -- stage-B helpers: set arr[i] = boxed byte ((bits >> (8*(7-i))) & 0xFF); big-endian.
 f2bByteSet : String -> String -> Int -> List String
@@ -9407,6 +9541,7 @@ emitAppTail prog env arity app =
         || isStrExternW f
         || isLeafExternW f
         || isArrayExternW f
+        || isByteBlockExternW f
         || isDeferredFloatExternW f
         || isUnimplStrExternW f then
         emitAppRef prog env 0 app ++ ["return"]

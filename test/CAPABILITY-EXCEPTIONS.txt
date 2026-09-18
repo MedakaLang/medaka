@@ -221,7 +221,7 @@ netTrySendFrom	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_em
 # --- assertSnapshot (1) — TODO, same as the llvm row. ---
 assertSnapshot	wasm	TODO	unimplemented in all 3 engines, no stdlib caller — forward-declared snapshot-testing primitive, not an asymmetric regression
 
-# --- WASM-GAP (26) — genuinely unported, no structural blocker like net's.
+# --- WASM-GAP (18) — genuinely unported, no structural blocker like net's.
 #     Grouped by theme below; each still gets its own row. ---
 #
 # #101 LANDED (2026-07-15): the 23 libm math (sqrt/floor/ceil/trunc/round +
@@ -229,19 +229,6 @@ assertSnapshot	wasm	TODO	unimplemented in all 3 engines, no stdlib caller — fo
 # intBitsToFloat) externs are now ported to wasm — IEEE-exact ops → native f64 opcodes,
 # round → $mdk_round (C half-away-from-zero), transcendentals → JS Math.* host imports,
 # bitwise → i64 ops over the box/unbox seam.  Their rows were deleted from here.
-
-# byte block (8): the `ByteBlock` builtin's kernel — implemented in the
-# interpreter (eval.mdk's byte-block prims) and in llvm (isByteBlockExtern →
-# the mdk_byteblock_* C helpers).  WasmGC needs its own packed-array
-# representation and its own cell tag before these can be ported.
-byteBlockMake	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
-byteBlockLength	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
-byteBlockGetUnsafe	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
-byteBlockSetUnsafe	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
-byteBlockCopyUnsafe	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
-byteBlockFromIntArray	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
-byteBlockToIntArray	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
-byteBlockFromString	wasm	WASM-GAP	ported in llvm (isByteBlockExtern) and interp, not yet in wasm — needs a WasmGC byte-array representation
 
 # perf (4): llvm's isPerfExtern does real gettimeofday/clock_gettime/nanosleep/
 # GC-byte-counter FFI; wasm has none of it (no host-import wired for it).

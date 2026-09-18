@@ -180,7 +180,7 @@ sort -u -o "$WORK/llvm_impl.txt" "$WORK/llvm_impl.txt"
 
 # ── 4. Wasm ──────────────────────────────────────────────────────────────────
 : > "$WORK/wasm_impl.txt"
-for fam in isStrExternW isLeafExternW isArrayExternW; do
+for fam in isStrExternW isLeafExternW isArrayExternW isByteBlockExternW; do
   extract_family "$WASMMDK" "$fam" | quoted_names >> "$WORK/wasm_impl.txt"
 done
 # Comment-only quoted examples that are NOT extern names leak into the

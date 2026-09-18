@@ -2856,6 +2856,13 @@ emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 -- Do NOT end a fixture with a block-returning call: emitPrint LTCon panics.
 -- Project to scalar via byteBlockGetUnsafe / byteBlockLength in every fixture.
 isByteBlockExtern : String -> Bool
+-- Deliberately a per-backend copy of wasm_emit.mdk's `isByteBlockExternW`, not a
+-- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
+-- implemented-extern column by extracting the family binding's own quoted names
+-- out of that engine's own file, so hoisting the eight names into a module both
+-- backends import would leave the gate reading neither engine as implementing
+-- them -- the duplication is what keeps the two columns independently derivable.
+-- lint-disable-next-line rule-duplicate-body
 isByteBlockExtern name = contains name [
   "byteBlockMake", "byteBlockLength", "byteBlockGetUnsafe",
   "byteBlockSetUnsafe", "byteBlockCopyUnsafe", "byteBlockFromIntArray",
