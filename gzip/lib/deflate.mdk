@@ -335,6 +335,15 @@ byteAt arr i = match get i arr
   Some v => v
   None => panic "deflate: byteAt index \{i} out of range (unreachable)"
 
+-- The chain link stored at position `p`: the previous position with the same
+-- 3-byte hash, or `-1` for the end of the chain. Not a byte — `prevArr`
+-- holds input POSITIONS, sentinelled with `-1`, so its domain is
+-- `-1 .. n-1`, not `0 .. 255`.
+prevGet : Array Int -> Int -> Int
+prevGet prevArr p = match get p prevArr
+  Some v => v
+  None => panic "deflate: prevGet index \{p} out of chain range (unreachable)"
+
 -- The 3-byte rolling hash at `pos` (caller must have already checked
 -- `hasHash pos n`).
 hash3At : Array Int -> Int -> Int
@@ -399,7 +408,7 @@ findMatchChain m pos candidate chainLeft bestLen bestDist
       findMatchChain
         m
         pos
-        (byteAt m.prevArr candidate)
+        (prevGet m.prevArr candidate)
         (chainLeft - 1)
         bestLen2
         bestDist2
