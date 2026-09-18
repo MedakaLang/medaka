@@ -47,6 +47,7 @@
    here is graded only against this implementation. -}
 
 import base64.{decodeUrlSafe, encodeUrlSafe}
+import hmac.{ctEq}
 import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
 import sha256.{sha256}
 import string.{fromUtf8, indexOf, split, stripSuffix, take, toUtf8}
@@ -116,22 +117,6 @@ b64uDecode s = match stringLength s % 4
   2 => decodeUrlSafe "\{s}=="
   3 => decodeUrlSafe "\{s}="
   _ => Err "jwt: segment length is not a valid unpadded base64url length"
-
--- XOR-accumulates across the whole array with no early return, so the number
--- of byte comparisons does not depend on where the first difference is. The
--- length check ahead of it is deliberate: lengths here are public (a
--- truncated segment is visible in the token text), and comparing arrays of
--- different lengths has no well-defined constant-time meaning.
-xorAccum : Array Int -> Array Int -> Int -> Int -> Int
-xorAccum a b i acc =
-  if i >= arrayLength a then
-    acc
-  else
-    xorAccum a b (i + 1) (bitOr acc (bitXor a[i] b[i]))
-
-ctEqBytes : Array Int -> Array Int -> Bool
-ctEqBytes a b =
-  if arrayLength a /= arrayLength b then False else xorAccum a b 0 0 == 0
 
 {- | The HS256 signature of a JWS Signing Input (RFC 7515 §5.1 step 5), as an
      unpadded base64url string.
@@ -251,7 +236,7 @@ verifySegments : Array Int ->
   Result JwtError Claims
 verifySegments secret expectedSub expectedAud now headerSeg claimsSeg sigSeg =
   let expected = hs256Signature secret "\{headerSeg}.\{claimsSeg}"
-  if not (ctEqBytes (toUtf8 expected) (toUtf8 sigSeg)) then
+  if not (ctEq (toUtf8 expected) (toUtf8 sigSeg)) then
     Err JwtBadSignature
   else match checkAlg headerSeg
     Err algError => Err algError
