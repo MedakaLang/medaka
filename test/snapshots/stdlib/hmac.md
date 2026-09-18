@@ -1,5 +1,5 @@
 # META
-source_lines=88
+source_lines=116
 stages=DESUGAR,MARK
 # SOURCE
 {- | HMAC-SHA-256 (RFC 2104) over byte arrays.
@@ -15,6 +15,34 @@ stages=DESUGAR,MARK
 
 import array.{concat, make, setInPlace}
 import sha256.{sha256, sha256FixedBytes}
+
+ctEqAccum : Array Int -> Array Int -> Int -> Int -> Int
+ctEqAccum a b i acc =
+  if i >= arrayLength a then
+    acc
+  else
+    ctEqAccum a b (i + 1) (bitOr acc (bitXor a[i] b[i]))
+
+{- | Whether two byte arrays contain the same values.
+
+   Unequal lengths return `False`. Equal-length inputs visit every byte
+   position without returning early based on the contents.
+
+   > ctEq [|0x48, 0x69|] [|0x48, 0x69|]
+   True -}
+export
+ctEq : Array Int -> Array Int -> Bool
+ctEq a b =
+  if arrayLength a /= arrayLength b then False else ctEqAccum a b 0 0 == 0
+
+-- > ctEq [|1, 2, 3|] [|9, 2, 3|]
+-- False
+-- > ctEq [|1, 2, 3|] [|1, 2, 4|]
+-- False
+-- > ctEq [||] [||]
+-- True
+-- > ctEq [|1, 2, 3|] [|1, 2, 3, 4|]
+-- False
 
 -- The SHA-256 block size, which is what the ipad/opad are padded to and the
 -- length above which RFC 2104 §2 hashes the key down.
@@ -93,6 +121,10 @@ hmacSha256FixedBytes key message =
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
 (DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256FixedBytes" false))))
+(DTypeSig false "ctEqAccum" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EVar "index") (EVar "a")) (EVar "i"))) (EApp (EApp (EVar "index") (EVar "b")) (EVar "i")))))))
+(DTypeSig true "ctEq" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "ctEq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b"))) (EVar "False") (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "blockBytes" (TyCon "Int"))
 (DFunDef false "blockBytes" () (ELit (LInt 64)))
 (DTypeSig false "fillKeyPad" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))
@@ -106,6 +138,10 @@ hmacSha256FixedBytes key message =
 # MARK
 (DUse false (UseGroup ("array") ((mem "concat" false) (mem "make" false) (mem "setInPlace" false))))
 (DUse false (UseGroup ("sha256") ((mem "sha256" false) (mem "sha256FixedBytes" false))))
+(DTypeSig false "ctEqAccum" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "ctEqAccum" ((PVar "a") (PVar "b") (PVar "i") (PVar "acc")) (EIf (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "a"))) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EApp (EVar "bitOr") (EVar "acc")) (EApp (EApp (EVar "bitXor") (EApp (EApp (EMethodRef "index") (EVar "a")) (EVar "i"))) (EApp (EApp (EMethodRef "index") (EVar "b")) (EVar "i")))))))
+(DTypeSig true "ctEq" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bool"))))
+(DFunDef false "ctEq" ((PVar "a") (PVar "b")) (EIf (EBinOp "/=" (EApp (EVar "arrayLength") (EVar "a")) (EApp (EVar "arrayLength") (EVar "b"))) (EVar "False") (EBinOp "==" (EApp (EApp (EApp (EApp (EVar "ctEqAccum") (EVar "a")) (EVar "b")) (ELit (LInt 0))) (ELit (LInt 0))) (ELit (LInt 0)))))
 (DTypeSig false "blockBytes" (TyCon "Int"))
 (DFunDef false "blockBytes" () (ELit (LInt 64)))
 (DTypeSig false "fillKeyPad" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit"))))))

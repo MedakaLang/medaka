@@ -11,6 +11,22 @@ to its digest first, and pads a shorter one with zero bytes on the right.
 `0` to `255`. `hmacSha256FixedBytes` is the same tag without that check,
 for a caller whose bytes are already known to be in range.
 
+## `ctEq`
+
+```
+ctEq : Array Int -> Array Int -> Bool
+```
+
+Whether two byte arrays contain the same values.
+
+Unequal lengths return `False`. Equal-length inputs visit every byte
+position without returning early based on the contents.
+
+```medaka
+> ctEq [|0x48, 0x69|] [|0x48, 0x69|]
+True
+```
+
 ## `hmacSha256`
 
 ```

@@ -359,6 +359,7 @@ Hexadecimal encoding and decoding of bytes.
 
 HMAC-SHA-256 (RFC 2104) over byte arrays.
 
+- [`ctEq`](hmac.md#cteq)
 - [`hmacSha256`](hmac.md#hmacsha256)
 - [`hmacSha256FixedBytes`](hmac.md#hmacsha256fixedbytes)
 
