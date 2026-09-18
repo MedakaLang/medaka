@@ -157,6 +157,7 @@ preambleLines = [
   "declare i64 @mdk_net_listen_port(i64)",
   "declare i64 @mdk_net_tcp_accept(i64)",
   "declare i64 @mdk_net_send(i64, i64)",
+  "declare i64 @mdk_net_send_from(i64, i64, i64)",
   "declare i64 @mdk_net_recv(i64, i64)",
   "declare i64 @mdk_net_shutdown(i64, i64)",
   "declare i64 @mdk_net_close(i64)",

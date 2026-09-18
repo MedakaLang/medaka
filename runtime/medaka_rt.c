@@ -2339,6 +2339,28 @@ long long mdk_net_send(long long fd_tagged, long long arr) {
   return mdk_ok(MDK_NET_TAG((long long)w));
 }
 
+/* netSendFrom : fd -> Array Int -> offset -> Result String Int.
+ * Blocking netSend from a clamped offset, copying at most one chunk per call. */
+#define MDK_SEND_CHUNK 65536
+long long mdk_net_send_from(long long fd_tagged, long long arr, long long off_tagged) {
+  const long long *a = (const long long *)arr;
+  long long len = a[0];
+  long long off = off_tagged >> 1;
+  if (off < 0) off = 0;
+  if (off > len) off = len;
+  long long n = len - off;
+  if (n > MDK_SEND_CHUNK) n = MDK_SEND_CHUNK;
+  unsigned char *buf = (unsigned char *)mdk_alloc(n ? n : 1);
+  for (long long i = 0; i < n; i++) buf[i] = (unsigned char)((a[off + i + 1] >> 1) & 0xFF);
+  int flags = 0;
+#ifdef MSG_NOSIGNAL
+  flags = MSG_NOSIGNAL;
+#endif
+  ssize_t w = send(MDK_NET_UNTAG(fd_tagged), buf, (size_t)n, flags);
+  if (w < 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  return mdk_ok(MDK_NET_TAG((long long)w));
+}
+
 /* netRecv : fd -> maxBytes -> Result String (Array Int).  Empty Array = EOF/peer-closed.
  * Array cell = [len (raw), tagged byte...] matching mdk_read_file_bytes. */
 long long mdk_net_recv(long long fd_tagged, long long max_tagged) {
@@ -2559,7 +2581,6 @@ long long mdk_net_try_send(long long fd_tagged, long long arr) {
  * a caller looping over a large payload pays for the bytes it sends, not for
  * the whole remainder on every retry.  None = would-block; Some n = bytes
  * written from `offset` (may be short, never more than the chunk). */
-#define MDK_SEND_CHUNK 65536
 long long mdk_net_try_send_from(long long fd_tagged, long long arr, long long off_tagged) {
   const long long *a = (const long long *)arr;
   long long len = a[0];

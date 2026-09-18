@@ -357,6 +357,15 @@ netSend : Int -> Array Int -> <Net _> Result String Int
 Sends bytes on a connection. The result is the number of bytes
 written, which may be fewer than given.
 
+### `netSendFrom`
+
+```
+netSendFrom : Int -> Array Int -> Int -> <Net _> Result String Int
+```
+
+`netSend` starting at `offset` into the array, sending at most 64 KiB per
+call so a loop can retain one array while advancing through it.
+
 ### `netRecv`
 
 ```

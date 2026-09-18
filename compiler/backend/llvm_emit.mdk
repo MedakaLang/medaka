@@ -3273,6 +3273,7 @@ isNetExtern name = contains name [
   "netListenPort",
   "netTcpAccept",
   "netSend",
+  "netSendFrom",
   "netRecv",
   "netShutdown",
   "netClose",
@@ -3328,6 +3329,15 @@ emitNetExtern e env "netSend" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_net_send(i64 \{fd}, i64 \{bs})"
     (r, LTCon)
   _ => panic "llvm: netSend takes two arguments"
+emitNetExtern e env "netSendFrom" args = match emitArgs e env args
+  [fd, bs, off] =>
+    let r = freshReg e
+    let _ =
+      emit
+        e
+        "  \{r} = call i64 @mdk_net_send_from(i64 \{fd}, i64 \{bs}, i64 \{off})"
+    (r, LTCon)
+  _ => panic "llvm: netSendFrom takes three arguments"
 emitNetExtern e env "netRecv" args = match emitArgs e env args
   [fd, n] =>
     let r = freshReg e
