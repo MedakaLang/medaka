@@ -755,9 +755,14 @@ provably false at the same time. A dead path is orthogonal to every question in
 the set, so it is checked mechanically instead — it is the one part of the
 comment-register rule a machine can decide.
 
-### 8.6 The proposal
+### 8.6 The rules
 
-Offered for decision, not adopted here:
+**Adopted 2026-09-17 by Val, in full.** The register of what is settled is
+`docs/design/JEV-LEDGER.md` section 1.1, which carries the two caveats the
+adoption did not erase: rule 3's two halves differ in task class as well as in
+gating, so the measurement does not isolate gating as the cause; and rule 4
+rests on a single episode, N = 1. They were adopted with those caveats stated,
+which is not the same as their being measured.
 
 1. **Let the cheap hand classify; never let it place.** A disposition may
    propose delete / recast / relocate. A proposed *destination* is a hint, and
