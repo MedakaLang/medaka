@@ -86,6 +86,8 @@ encode bytes = encodeBytes (fromArrayAssumeByteDomain bytes)
 -- ""
 -- > encode (fromList [0])
 -- "00"
+-- > encode (fromList [300, -1])
+-- "2cff"
 
 {- | The bytes as uppercase hex, two digits per byte.
 
