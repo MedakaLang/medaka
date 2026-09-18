@@ -50,7 +50,8 @@ import base64.{decodeUrlSafe, encodeUrlSafe}
 import hmac.{ctEq}
 import json.{Json, Json(..), asInt, asString, get, jObject, parse, stringify}
 import sha256.{sha256}
-import string.{fromUtf8, indexOf, split, stripSuffix, take, toUtf8}
+import string.{fromUtf8, split, stripSuffix, toUtf8}
+import lib.atsyntax.{stripDidFragment}
 import lib.hmac_sha256.{hmacSha256FixedKey}
 import lib.sign.{SecretKey, signDigest, signatureCompact}
 
@@ -312,14 +313,6 @@ serviceTokenLifetimeSeconds = 60
 serviceHeaderJson : Json
 serviceHeaderJson = jObject [("typ", JString "JWT"), ("alg", JString "ES256K")]
 
--- `did:web:appview.example#bsky_appview` names the `bsky_appview` service of
--- a DID; the audience is the DID. Signing the fragment in would mint a
--- credential that no peer's `aud` comparison accepts.
-bareDid : String -> String
-bareDid serviceId = match indexOf "#" serviceId
-  Some at => take at serviceId
-  None => serviceId
-
 lxmMembers : Option String -> List (String, Json)
 lxmMembers (Some method) = [("lxm", JString method)]
 lxmMembers None = []
@@ -343,7 +336,7 @@ serviceClaimsJson request =
     ([
         ("iat", JInt request.iat),
         ("iss", JString request.iss),
-        ("aud", JString (bareDid request.aud)),
+        ("aud", JString (stripDidFragment request.aud)),
         ("exp", JInt (serviceTokenExpiry request)),
       ]
       ++ lxmMembers request.lxm

@@ -1,0 +1,25 @@
+{- | Pure query-parameter cardinality.
+
+   A query parameter that does not use array syntax is either absent, present
+   once, or ambiguous; callers choose the response constructor for the
+   ambiguity, while this module keeps the cardinality rule shared. -}
+
+import http.{QueryParam(..)}
+
+export
+soleParam : String -> List QueryParam -> Result String (Option String)
+soleParam name params = soleParamGo name params 0 None
+
+soleParamGo : String ->
+  List QueryParam ->
+  Int ->
+  Option String ->
+  Result String (Option String)
+soleParamGo _ [] 0 _ = Ok None
+soleParamGo _ [] 1 found = Ok found
+soleParamGo name [] _ _ = Err "Query parameter '\{name}' must not be repeated"
+soleParamGo name ((QueryParam key value) :: rest) count found =
+  if key == name then
+    soleParamGo name rest (count + 1) (Some value)
+  else
+    soleParamGo name rest count found

@@ -7,8 +7,15 @@
    (`lib.nsid`, `lib.tid`) and are graded there. -}
 
 import regex.{Regex, isFullMatchBytes, mustCompile}
-import string.{contains, split, toUtf8, utf8ByteLength}
+import string.{contains, indexOf, split, take, toUtf8, utf8ByteLength}
 import lib.nsid.{nsidErrorMessage, validateNsid}
+
+-- | The DID portion of a DID URL or service identifier.
+export
+stripDidFragment : String -> String
+stripDidFragment value = match indexOf "#" value
+  Some at => take at value
+  None => value
 
 -- byte classes ----------------------------------------------------------------
 --

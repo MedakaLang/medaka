@@ -53,8 +53,8 @@ import http.{
   Response,
 }
 import list.{filter}
-import string.{fromUtf8, indexOf, startsWith, take, toLower, toUtf8}
-import lib.atsyntax.{validateDid}
+import string.{fromUtf8, startsWith, toLower, toUtf8}
+import lib.atsyntax.{stripDidFragment, validateDid}
 import lib.cors.{allowOriginHeader, printableAscii}
 import lib.nsid.{canonicalNsid, sameNsidIdentity, validateNsid}
 import lib.xrpc.{Registry, endpointNsid, registryEndpoints, xrpcErrorResponse}
@@ -227,9 +227,7 @@ proxyHeaderGo (header :: rest) count value =
    configured appview here is the value that would be signed. -}
 export
 bareServiceDid : String -> String
-bareServiceDid serviceId = match indexOf "#" serviceId
-  Some at => take at serviceId
-  None => serviceId
+bareServiceDid serviceId = stripDidFragment serviceId
 
 {- | The bare DID the header named, or `None` when it named no DID at all.
    Admission is `lib.atsyntax`'s, the same validator the configured account's

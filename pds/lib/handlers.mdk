@@ -84,11 +84,14 @@ import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.blockstore.{blockStoreGet}
 import lib.car.{carEncode, carEncodeRootless}
-import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
+import lib.cid.{
+  Cid, cidEqual, cidForDagCbor, cidFromString, cidMember, cidToString
+}
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.did_key.{didKeyMultibase}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.mst.{mstCoveringProofBlocks}
+import lib.query_params as QueryParams
 import lib.repo.{
   Repo,
   RepoCommit,
@@ -963,11 +966,6 @@ recordServer account = do
 
 -- ── query-parameter admission ───────────────────────────────────────────────
 
-paramCount : String -> List QueryParam -> Int
-paramCount _ [] = 0
-paramCount name ((QueryParam key _) :: rest) =
-  if key == name then 1 + paramCount name rest else paramCount name rest
-
 paramFirst : String -> List QueryParam -> Option String
 paramFirst _ [] = None
 paramFirst name ((QueryParam key value) :: rest) =
@@ -987,11 +985,9 @@ paramAll name ((QueryParam key value) :: rest) =
    request whose meaning is ambiguous — rejected rather than silently resolved
    to whichever copy happens to come first. -}
 optionalParam : String -> List QueryParam -> Result Response (Option String)
-optionalParam name params =
-  if paramCount name params > 1 then
-    Err (invalidRequest "Query parameter '\{name}' must not be repeated")
-  else
-    Ok (paramFirst name params)
+optionalParam name params = match QueryParams.soleParam name params
+  Err message => Err (invalidRequest message)
+  Ok found => Ok found
 
 requiredParam : String -> List QueryParam -> Result Response String
 requiredParam name params = do
@@ -1590,15 +1586,10 @@ admitCids (text :: rest) seen = match cidFromString text
       (invalidRequest
         "Query parameter 'cids' holds a value that is not a valid CID: \{message}")
   Ok cid =>
-    if anyCidEqual cid seen then
+    if cidMember cid seen then
       admitCids rest seen
     else
       admitCids rest (cid :: seen)
-
-anyCidEqual : Cid -> List Cid -> Bool
-anyCidEqual _ [] = False
-anyCidEqual cid (candidate :: rest) =
-  cidEqual cid candidate || anyCidEqual cid rest
 
 -- | Requested CIDs split into the blocks this repository holds and the CIDs
 -- it does not, each accumulated reversed for `partitionBlocks` to restore.
