@@ -52,6 +52,22 @@ maxHttpRequestLineBytes : Int
 
 The ceiling on one request line.
 
+### `maxHttpResponseStatusLineBytes`
+
+```
+maxHttpResponseStatusLineBytes : Int
+```
+
+The ceiling on one response status line.
+
+### `maxHttpResponseChunkBytes`
+
+```
+maxHttpResponseChunkBytes : Int
+```
+
+The ceiling on one response chunk's declared size.
+
 ### `maxHttpHeaderFields`
 
 ```
@@ -140,6 +156,22 @@ checkHttpRequestLineBytes : Int -> Result String Unit
 
 `Ok` when `size` is within `maxHttpRequestLineBytes`, `Err` with the
 diagnostic the framer reports otherwise.
+
+### `checkHttpResponseStatusLineBytes`
+
+```
+checkHttpResponseStatusLineBytes : Int -> Result String Unit
+```
+
+`Ok` when `size` is within `maxHttpResponseStatusLineBytes`.
+
+### `checkHttpResponseChunkBytes`
+
+```
+checkHttpResponseChunkBytes : Int -> Result String Unit
+```
+
+`Ok` when `size` is within `maxHttpResponseChunkBytes`.
 
 ### `checkHttpHeaderFields`
 
@@ -320,6 +352,87 @@ requestKeepAlive : Request -> Bool
 Whether the connection stays open after this request, as its Connection
 field settled it.
 
+### `isTokenByte`
+
+```
+isTokenByte : Int -> Bool
+```
+
+Whether `byte` is one of HTTP's ASCII token bytes.
+
+### `findByte`
+
+```
+findByte : Array Int -> Int -> Int -> Int -> Option Int
+```
+
+Find `wanted` in the half-open byte range `input[pos, end)`. No byte at
+or beyond `end` is inspected.
+
+### `findCrlf`
+
+```
+findCrlf : Array Int -> Int -> Int -> Option Int
+```
+
+Find the CR byte of the first CRLF in the half-open range
+`input[pos, end)`. A CR at `end - 1` is not a complete CRLF.
+
+### `trimLeftOws`
+
+```
+trimLeftOws : Array Int -> Int -> Int -> Int
+```
+
+Skip optional whitespace in the half-open range `input[pos, end)`.
+
+### `trimRightOws`
+
+```
+trimRightOws : Array Int -> Int -> Int -> Int
+```
+
+Trim optional whitespace from the right edge of `input[start, end)`.
+
+### `parseFields`
+
+```
+parseFields : Array Int -> Int -> Bool -> Result HttpParseFailure (List Header, Int)
+```
+
+Parse a complete header or trailer section beginning at `pos`. Fields
+retain their received order and duplicates, names are lowercased, and
+surrounding optional whitespace is removed from values. When `trailer` is
+`True`, framing and routing fields forbidden in trailers are rejected.
+The returned offset is just past the section's empty-line CRLF.
+
+### `hexDigit`
+
+```
+hexDigit : Int -> Option Int
+```
+
+Decode one ASCII hexadecimal digit.
+
+### `skipOws`
+
+```
+skipOws : Array Int -> Int -> Int -> Int
+```
+
+Skip optional whitespace in the half-open range `input[pos, end)`.
+
+### `parseChunked`
+
+```
+parseChunked : Array Int -> Int -> Result HttpParseFailure (Array Int, List Header, Int)
+```
+
+Decode one complete chunked body beginning at `pos`. The result contains
+the decoded bytes, retained trailer fields, and the offset just past the
+terminating trailer section. Per-chunk, decoded-body, chunk-count, trailer,
+and framing ceilings are enforced before the result is returned.
+
 ### `parseRequestClassified`
 
 ```
@@ -439,7 +552,115 @@ Parse one complete request, reporting a failure as its diagnostic alone.
 `parseRequestClassified` keeps the structural class a caller needs to
 choose 400 against 413.
 
-## Responses
+## Response parsing
+
+### `ParsedResponse`
+
+```
+data ParsedResponse
+  = ParsedResponse Int String (List Header) (List Header) (Array Int)
+```
+
+A parsed HTTP/1.0 or HTTP/1.1 response. Fields and trailers retain their
+received order and duplicates; the body has any chunked transfer coding
+removed. The constructor is private so every value has passed the framing
+and resource checks below.
+
+### `parsedResponseStatus`
+
+```
+parsedResponseStatus : ParsedResponse -> Int
+```
+
+The parsed response's status code.
+
+### `parsedResponseReason`
+
+```
+parsedResponseReason : ParsedResponse -> String
+```
+
+The parsed response's reason phrase, exactly as received.
+
+### `parsedResponseHeaders`
+
+```
+parsedResponseHeaders : ParsedResponse -> List Header
+```
+
+The parsed response fields in received order, duplicates retained.
+
+### `parsedResponseTrailers`
+
+```
+parsedResponseTrailers : ParsedResponse -> List Header
+```
+
+Parsed trailer fields in received order, or an empty list for a body
+without chunked transfer coding.
+
+### `parsedResponseBody`
+
+```
+parsedResponseBody : ParsedResponse -> Array Int
+```
+
+The decoded response body, with chunk framing removed.
+
+### `parsedResponseBodyLength`
+
+```
+parsedResponseBodyLength : ParsedResponse -> Int
+```
+
+The decoded response body's length without copying it.
+
+### `parseResponseClassified`
+
+```
+parseResponseClassified : Array Int -> Result HttpParseFailure ParsedResponse
+```
+
+Parse one complete HTTP response with structural failure classification.
+Status lines, fields, chunks, decoded bodies, and trailers are bounded.
+Transfer-coding tokens are compared as ASCII case-insensitively. A response
+without a declared length is close-delimited unless its status forbids a
+body.
+
+### `parseResponse`
+
+```
+parseResponse : Array Int -> Result String ParsedResponse
+```
+
+`parseResponseClassified` with its structural class collapsed to the
+diagnostic string.
+
+```medaka
+> isErr (parseResponse [||])
+True
+```
+
+### `responseBoundaryWithin`
+
+```
+responseBoundaryWithin : Array Int -> Int -> Option Int
+```
+
+The offset just past the first response framed by `input[0, avail)`, or
+`None` when that prefix is incomplete, malformed, or close-delimited.
+Bytes at or beyond `avail` are never inspected. A returned boundary may be
+less than `avail` when another message follows it.
+
+### `responseBoundary`
+
+```
+responseBoundary : Array Int -> Option Int
+```
+
+`responseBoundaryWithin` over all bytes in `input`.
+
+## Response building
 
 ### `Response`
 

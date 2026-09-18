@@ -47,9 +47,9 @@
    closed only by the second. -}
 
 import async.{Async, Wait, deadlineAfter, expired}
+import http.{Header}
 import lib.httpclient.{
   findHeader,
-  Header,
   makeRequestHeader,
   parseResponse,
   responseBody,
