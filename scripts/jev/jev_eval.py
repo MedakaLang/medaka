@@ -128,7 +128,14 @@ def main() -> int:
             return [(x, it) for x, it in zip(ans, items) if q in it["labels"]]
         for q in ("history", "ephemeral", "offsite"):
             noul_report(q, [(x[q]["noul"], it["labels"][q] == "y") for x, it in labeled(q)])
-        score_report("register", [(x["register"]["score"], it["labels"]["register"]) for x, it in labeled("register")])
+        # `register` labels come from two different rules -- see `register_rule` in
+        # the corpus -- so the two populations are reported apart. Pooling their
+        # per-level means would average two different questions.
+        for rule in ("pre-ruling", "post-ruling"):
+            rows = [(x, it) for x, it in labeled("register") if it.get("register_rule") == rule]
+            if rows:
+                score_report(f"register [{rule} labels]",
+                             [(x["register"]["score"], it["labels"]["register"]) for x, it in rows])
         # The regex baselines can only be computed where the census classes were
         # recorded; `regex_census: null` means "not computed", not "no hits".
         rx = [it for it in items if it.get("regex_census") is not None]

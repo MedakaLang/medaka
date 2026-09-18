@@ -1,5 +1,5 @@
 {
- "_about": "Hand-labeled evaluation corpus for scripts/jev (2026-09-16). Labels are one reader's judgment after reading each item in full; they are the baseline the model is measured against, not ground truth. Items carry their own text so the corpus does not drift with the tree; 'origin' is provenance only. Rows D060-D064 and C100 were added 2026-09-17 by the sprint the-finding-was-the-expensive-part and have a DIFFERENT provenance: each was adjudicated against the question text in jev_census.py by the front seat, after both the census and its reader disagreed, because that sprint's finding is that neither is ground truth. Their per-row `note` says who was right. 2026-09-17, second revision: the `reviewer` label is RENAMED `ephemeral` and narrowed to one judgment -- is the comment anchored to an in-flight change the reader cannot identify? The merged label also counted prose that argues against an objection, which Val ruled on 2026-09-17 is the register Medaka wants, not a defect; measured, that arm scores AUC 0.496 against the narrowed label, i.e. it carries no information about it. The 26 rows in the relabel population were re-read BLIND (no old label, no model score) and 14 changed; each says so in its note. Rows F000-F079 are a FRESH stratified draw (seed 20260917) from the 7466 comment blocks in compiler/ and stdlib/, disjoint from C000-C100 by comment text, labeled blind. They are the held-out test set for the `ephemeral` question and carry that label only; `regex_census` is null on them because the regex census classes were never computed for that draw. The draw is anchor-stratified, so its positive rate is NOT the tree's -- the weighted tree estimate is about 1.7% of blocks.",
+ "_about": "Hand-labeled evaluation corpus for scripts/jev (2026-09-16). Labels are one reader's judgment after reading each item in full; they are the baseline the model is measured against, not ground truth. Items carry their own text so the corpus does not drift with the tree; 'origin' is provenance only. Rows D060-D064 and C100 were added 2026-09-17 by the sprint the-finding-was-the-expensive-part and have a DIFFERENT provenance: each was adjudicated against the question text in jev_census.py by the front seat, after both the census and its reader disagreed, because that sprint's finding is that neither is ground truth. Their per-row `note` says who was right. 2026-09-17, second revision: the `reviewer` label is RENAMED `ephemeral` and narrowed to one judgment -- is the comment anchored to an in-flight change the reader cannot identify? The merged label also counted prose that argues against an objection, which Val ruled on 2026-09-17 is the register Medaka wants, not a defect; measured, that arm scores AUC 0.496 against the narrowed label, i.e. it carries no information about it. The 26 rows in the relabel population were re-read BLIND (no old label, no model score) and 14 changed; each says so in its note. Rows F000-F079 are a FRESH stratified draw (seed 20260917) from the 7466 comment blocks in compiler/ and stdlib/, disjoint from C000-C100 by comment text, labeled blind. They are the held-out test set for the `ephemeral` question and carry that label only; `regex_census` is null on them because the regex census classes were never computed for that draw. The draw is anchor-stratified, so its positive rate is NOT the tree's -- the weighted tree estimate is about 1.7% of blocks. 2026-09-17, third revision: the 80 fresh rows gain a blind `register` label. \u26a0\ufe0f `register_rule` splits the corpus: the C000-C100 register labels were assigned while prose that ARGUES for a design still counted as a defect, and the F000-F079 labels were assigned after Val's ruling that it does not. Their per-level means answer two different questions and must not be pooled. The fresh draw contains NO level-3 block at all, which bounds how common that level is in the tree and is why the top level's unreachability is reported as a measured property rather than fixed: rewriting the level text does not move it.",
  "comments": [
   {
    "id": "C000",
@@ -17,7 +17,8 @@
     "register": 0,
     "ephemeral": "n"
    },
-   "note": "regex FP: instrumental 'used to reconstruct'"
+   "note": "regex FP: instrumental 'used to reconstruct'",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C001",
@@ -32,7 +33,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C002",
@@ -49,7 +51,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C003",
@@ -67,7 +70,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. \"F23 (#1351 L2 repair)\", RUN-METHID-116; named. Borderline: a run handle is a thin name"
+   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. \"F23 (#1351 L2 repair)\", RUN-METHID-116; named. Borderline: a run handle is a thin name",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C004",
@@ -84,7 +88,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C005",
@@ -102,7 +107,8 @@
     "register": 3,
     "ephemeral": "n"
    },
-   "note": "no code below; banner follows"
+   "note": "no code below; banner follows",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C006",
@@ -118,7 +124,8 @@
     "register": 1,
     "ephemeral": "y"
    },
-   "note": "'this slice' | relabel 2026-09-17: re-read blind, label unchanged. \"this slice\""
+   "note": "'this slice' | relabel 2026-09-17: re-read blind, label unchanged. \"this slice\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C007",
@@ -133,7 +140,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C008",
@@ -151,7 +159,8 @@
     "register": 1,
     "ephemeral": "y"
    },
-   "note": "'this slice' | relabel 2026-09-17: re-read blind, label unchanged. \"this slice\""
+   "note": "'this slice' | relabel 2026-09-17: re-read blind, label unchanged. \"this slice\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C009",
@@ -166,7 +175,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C010",
@@ -182,7 +192,8 @@
     "register": 1,
     "ephemeral": "y"
    },
-   "note": "'see the report's Notes' | relabel 2026-09-17: re-read blind, label unchanged. \"see the report's Notes\" -- an in-flight sprint artifact, unlocatable later"
+   "note": "'see the report's Notes' | relabel 2026-09-17: re-read blind, label unchanged. \"see the report's Notes\" -- an in-flight sprint artifact, unlocatable later",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C011",
@@ -200,7 +211,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. \"DRAINED by the stamping PR\" / \"the fix the carrier PR called for\" -- past tense, and #1110 names it"
+   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. \"DRAINED by the stamping PR\" / \"the fix the carrier PR called for\" -- past tense, and #1110 names it",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C012",
@@ -216,7 +228,8 @@
     "register": 2,
     "ephemeral": "y"
    },
-   "note": "'measured on this diff' | relabel 2026-09-17: re-read blind, label unchanged. \"measured on this diff\""
+   "note": "'measured on this diff' | relabel 2026-09-17: re-read blind, label unchanged. \"measured on this diff\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C013",
@@ -234,7 +247,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "'earlier cut' | relabel 2026-09-17: reviewer=y -> ephemeral=n. \"until this unit, WHICH IS #1257\" -- named. My blind pass read the clause short; corrected against the text, not against a score."
+   "note": "'earlier cut' | relabel 2026-09-17: reviewer=y -> ephemeral=n. \"until this unit, WHICH IS #1257\" -- named. My blind pass read the clause short; corrected against the text, not against a score.",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C014",
@@ -249,7 +263,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C015",
@@ -264,7 +279,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C016",
@@ -279,7 +295,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C017",
@@ -294,7 +311,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C018",
@@ -309,7 +327,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C019",
@@ -324,7 +343,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C020",
@@ -342,7 +362,8 @@
     "register": 2,
     "ephemeral": "y"
    },
-   "note": "relabel 2026-09-17: re-read blind, label unchanged. \"Before this slice the group site unioned\"; \"behaves exactly as it did before this slice\""
+   "note": "relabel 2026-09-17: re-read blind, label unchanged. \"Before this slice the group site unioned\"; \"behaves exactly as it did before this slice\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C021",
@@ -360,7 +381,8 @@
     "register": 2,
     "ephemeral": "y"
    },
-   "note": "'REFUTED', 'on this branch' | relabel 2026-09-17: re-read blind, label unchanged. \"written, built and probed on this branch\"; \"CONTROL ... built from this branch\""
+   "note": "'REFUTED', 'on this branch' | relabel 2026-09-17: re-read blind, label unchanged. \"written, built and probed on this branch\"; \"CONTROL ... built from this branch\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C022",
@@ -375,7 +397,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C023",
@@ -390,7 +413,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C024",
@@ -405,7 +429,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C025",
@@ -421,7 +446,8 @@
     "register": 1,
     "ephemeral": "n"
    },
-   "note": "first paragraph describes the variable emitter, code below is isFtSentinel"
+   "note": "first paragraph describes the variable emitter, code below is isFtSentinel",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C026",
@@ -438,7 +464,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C027",
@@ -456,7 +483,8 @@
     "register": 2,
     "ephemeral": "y"
    },
-   "note": "'this PR' | relabel 2026-09-17: re-read blind, label unchanged. \"both predating this PR\""
+   "note": "'this PR' | relabel 2026-09-17: re-read blind, label unchanged. \"both predating this PR\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C028",
@@ -473,7 +501,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C029",
@@ -489,7 +518,8 @@
     "register": 2,
     "ephemeral": "y"
    },
-   "note": "'before this slice' | relabel 2026-09-17: re-read blind, label unchanged. \"rendered NOTHING before this slice\""
+   "note": "'before this slice' | relabel 2026-09-17: re-read blind, label unchanged. \"rendered NOTHING before this slice\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C030",
@@ -504,7 +534,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C031",
@@ -519,7 +550,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C032",
@@ -538,7 +570,8 @@
     "register": 3,
     "ephemeral": "y"
    },
-   "note": "relabel 2026-09-17: re-read blind, label unchanged. \"the residual A-2.2 made greppable, which this unit does NOT get to delete\" -- unit unnamed, prohibition reads live"
+   "note": "relabel 2026-09-17: re-read blind, label unchanged. \"the residual A-2.2 made greppable, which this unit does NOT get to delete\" -- unit unnamed, prohibition reads live",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C033",
@@ -555,7 +588,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C034",
@@ -574,7 +608,8 @@
     "register": 3,
     "ephemeral": "n"
    },
-   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. \"this unit\" appears but the header names it (#1557 A-3.5c) -- locatable"
+   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. \"this unit\" appears but the header names it (#1557 A-3.5c) -- locatable",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C035",
@@ -593,7 +628,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. all named issues (#1576, #1154, #1161, #2665); \"this comment used to add\" is own-text"
+   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. all named issues (#1576, #1154, #1161, #2665); \"this comment used to add\" is own-text",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C036",
@@ -610,7 +646,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C037",
@@ -625,7 +662,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C038",
@@ -642,7 +680,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C039",
@@ -660,7 +699,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. all named units (#1617/#1618, #1630, F-3c/#1155); rest is own-text history"
+   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. all named units (#1617/#1618, #1630, F-3c/#1155); rest is own-text history",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C040",
@@ -675,7 +715,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C041",
@@ -694,7 +735,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. every change named (A-2.2b, #1317's scoping pass)"
+   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. every change named (A-2.2b, #1317's scoping pass)",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C042",
@@ -711,7 +753,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C043",
@@ -726,7 +769,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C044",
@@ -743,7 +787,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C045",
@@ -761,7 +806,8 @@
     "register": 0,
     "ephemeral": "n"
    },
-   "note": "regex FP: instrumental 'used to track'"
+   "note": "regex FP: instrumental 'used to track'",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C046",
@@ -776,7 +822,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C047",
@@ -794,7 +841,8 @@
     "register": 3,
     "ephemeral": "n"
    },
-   "note": "no code below; banner follows"
+   "note": "no code below; banner follows",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C048",
@@ -812,7 +860,8 @@
     "register": 3,
     "ephemeral": "y"
    },
-   "note": "108 lines about a deleted table; code below is a one-line projector | relabel 2026-09-17: re-read blind, label unchanged. \"this stage is a bug fix\" -- stage unnamed"
+   "note": "108 lines about a deleted table; code below is a one-line projector | relabel 2026-09-17: re-read blind, label unchanged. \"this stage is a bug fix\" -- stage unnamed",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C049",
@@ -827,7 +876,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C050",
@@ -842,7 +892,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C051",
@@ -859,7 +910,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C052",
@@ -876,7 +928,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C053",
@@ -892,7 +945,8 @@
     "register": 1,
     "ephemeral": "y"
    },
-   "note": "relabel 2026-09-17: reviewer=n -> ephemeral=y. \"slice-5b\", \"slice-8\", \"SPIKE-REP NOTES\" -- sprint slices, unlocatable"
+   "note": "relabel 2026-09-17: reviewer=n -> ephemeral=y. \"slice-5b\", \"slice-8\", \"SPIKE-REP NOTES\" -- sprint slices, unlocatable",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C054",
@@ -909,7 +963,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C055",
@@ -927,7 +982,8 @@
     "register": 1,
     "ephemeral": "y"
    },
-   "note": "relabel 2026-09-17: reviewer=n -> ephemeral=y. \"this unit's bar\"; \"no unit such a bypass could be mistaken for finishing early\""
+   "note": "relabel 2026-09-17: reviewer=n -> ephemeral=y. \"this unit's bar\"; \"no unit such a bypass could be mistaken for finishing early\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C056",
@@ -945,7 +1001,8 @@
     "register": 3,
     "ephemeral": "n"
    },
-   "note": "describes the whole checker; code below is the error-push helper | relabel 2026-09-17: reviewer=y -> ephemeral=n. named throughout (P0-17, #1557 A-3.5a, the dated owner ruling)"
+   "note": "describes the whole checker; code below is the error-push helper | relabel 2026-09-17: reviewer=y -> ephemeral=n. named throughout (P0-17, #1557 A-3.5a, the dated owner ruling)",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C057",
@@ -963,7 +1020,8 @@
     "register": 2,
     "ephemeral": "y"
    },
-   "note": "'in the slice report' | relabel 2026-09-17: re-read blind, label unchanged. \"measurement and the site it WOULD need are in the slice report\""
+   "note": "'in the slice report' | relabel 2026-09-17: re-read blind, label unchanged. \"measurement and the site it WOULD need are in the slice report\"",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C058",
@@ -978,7 +1036,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C059",
@@ -995,7 +1054,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C060",
@@ -1012,7 +1072,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C061",
@@ -1027,7 +1088,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C062",
@@ -1043,7 +1105,8 @@
     "register": 0,
     "ephemeral": "n"
    },
-   "note": "doctest lines, not prose"
+   "note": "doctest lines, not prose",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C063",
@@ -1061,7 +1124,8 @@
     "register": 1,
     "ephemeral": "n"
    },
-   "note": "'earlier revision of this comment' | relabel 2026-09-17: reviewer=y -> ephemeral=n. \"an earlier revision of this comment argued\" -- own-text history"
+   "note": "'earlier revision of this comment' | relabel 2026-09-17: reviewer=y -> ephemeral=n. \"an earlier revision of this comment argued\" -- own-text history",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C064",
@@ -1078,7 +1142,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C065",
@@ -1095,7 +1160,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C066",
@@ -1110,7 +1176,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C067",
@@ -1125,7 +1192,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C068",
@@ -1140,7 +1208,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C069",
@@ -1158,7 +1227,8 @@
     "register": 1,
     "ephemeral": "n"
    },
-   "note": "'this comment used to read' | relabel 2026-09-17: reviewer=y -> ephemeral=n. own-text history only; no unnamed in-flight anchor"
+   "note": "'this comment used to read' | relabel 2026-09-17: reviewer=y -> ephemeral=n. own-text history only; no unnamed in-flight anchor",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C070",
@@ -1173,7 +1243,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C071",
@@ -1189,7 +1260,8 @@
     "register": 0,
     "ephemeral": "n"
    },
-   "note": "doctest lines, not prose"
+   "note": "doctest lines, not prose",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C072",
@@ -1204,7 +1276,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C073",
@@ -1219,7 +1292,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C074",
@@ -1236,7 +1310,8 @@
     "offsite": "y",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C075",
@@ -1252,7 +1327,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "'review round of ...' | relabel 2026-09-17: reviewer=y -> ephemeral=n. names the review round it came from (S1-6); landed and locatable"
+   "note": "'review round of ...' | relabel 2026-09-17: reviewer=y -> ephemeral=n. names the review round it came from (S1-6); landed and locatable",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C076",
@@ -1269,7 +1345,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C077",
@@ -1285,7 +1362,8 @@
     "register": 1,
     "ephemeral": "n"
    },
-   "note": "stale about the loader (medaka.toml walk-up exists now) but code_after is consistent"
+   "note": "stale about the loader (medaka.toml walk-up exists now) but code_after is consistent",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C078",
@@ -1300,7 +1378,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C079",
@@ -1317,7 +1396,8 @@
     "offsite": "n",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C080",
@@ -1332,7 +1412,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C081",
@@ -1347,7 +1428,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C082",
@@ -1362,7 +1444,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C083",
@@ -1380,7 +1463,8 @@
     "register": 0,
     "ephemeral": "n"
    },
-   "note": "regex FP: instrumental 'used to refuse'"
+   "note": "regex FP: instrumental 'used to refuse'",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C084",
@@ -1395,7 +1479,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C085",
@@ -1410,7 +1495,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C086",
@@ -1425,7 +1511,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C087",
@@ -1443,7 +1530,8 @@
     "register": 2,
     "ephemeral": "n"
    },
-   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. named throughout (#154 PR-A, #1557 A-3.5c, #1512 slices 2+3); count history is own-text"
+   "note": "relabel 2026-09-17: reviewer=y -> ephemeral=n. named throughout (#154 PR-A, #1557 A-3.5c, #1512 slices 2+3); count history is own-text",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C088",
@@ -1458,7 +1546,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C089",
@@ -1475,7 +1564,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C090",
@@ -1493,7 +1583,8 @@
     "register": 3,
     "ephemeral": "n"
    },
-   "note": "explicit tombstone list"
+   "note": "explicit tombstone list",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C091",
@@ -1508,7 +1599,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C092",
@@ -1524,7 +1616,8 @@
     "register": 1,
     "ephemeral": "n"
    },
-   "note": "cites dev/astdump.exe, the removed OCaml oracle"
+   "note": "cites dev/astdump.exe, the removed OCaml oracle",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C093",
@@ -1541,7 +1634,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C094",
@@ -1558,7 +1652,8 @@
     "offsite": "y",
     "register": 2,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C095",
@@ -1573,7 +1668,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C096",
@@ -1590,7 +1686,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C097",
@@ -1605,7 +1702,8 @@
     "offsite": "n",
     "register": 0,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C098",
@@ -1622,7 +1720,8 @@
     "offsite": "n",
     "register": 1,
     "ephemeral": "n"
-   }
+   },
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C099",
@@ -1641,7 +1740,8 @@
     "register": 3,
     "ephemeral": "y"
    },
-   "note": "relabel 2026-09-17: re-read blind, label unchanged. \"the collision this unit exists for\"; \"Unit 4 owns retiring it\" -- neither named"
+   "note": "relabel 2026-09-17: re-read blind, label unchanged. \"the collision this unit exists for\"; \"Unit 4 owns retiring it\" -- neither named",
+   "register_rule": "pre-ruling"
   },
   {
    "id": "C100",
@@ -1659,7 +1759,8 @@
    "code_after": "\nimport frontend.ast.{Decl}\nimport ir.core_ir.{CProgram}\nimport frontend.parser.{parse, parseWithPositions}\nimport tools.lint.{lintProgram, allRules, emptyStdlibIndex}\nimport frontend.desugar.{desugar}\nimport frontend.resolve.{resolveToLines}\nimport frontend.marker.{markWithPrelude}\nimport types.typecheck.{\n  checkOneToLinesWithRuntime,\n  elaborateDict,\n  constrainedSigNames,\n  preludeReturnPosDictNames,\n  preludeArgPosDictNames,\n  mainTypeIsUnit,\n  mainTypeIsFloat,",
    "regex_census": [
     "emoji"
-   ]
+   ],
+   "register_rule": "pre-ruling"
   },
   {
    "id": "F000",
@@ -1669,9 +1770,11 @@
    "code_after": "export\nemitProgramWithStats : EmitInput -> CProgram -> (String, List (String, Int))\nemitProgramWithStats input (CProgram groups ctorArs ctorTypes implEntries) =\n  let cfg = programEmitConfig Strict input groups\n  let e = buildEmitState cfg input groups ctorArs ctorTypes implEntries\n  let stats = tableStats e\n  let text = runStrictEmission e input groups implEntries\n  (text, stats)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "\"F2-emit-stats-cleanup\" names the slice; locatable"
+   "note": "\"F2-emit-stats-cleanup\" names the slice; locatable",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F001",
@@ -1681,9 +1784,11 @@
    "code_after": "emitConstDictCell : Emit -> Int -> List String -> String\nemitConstDictCell e headTag reqWords =\n  let n = lengthS reqWords\n  let initBody =\n    \"[\\{intToString (n + 1)} x i64] [i64 \\{intToString headTag}\\{constDictReqInits reqWords}]\"\n  let key = constCellKey e initBody\n  match lookupAssoc key !e.dictConstCache\n    Some gname => \"ptrtoint (ptr @\" ++ gname ++ \" to i64)\"\n    None =>\n      let gname = \"mdk_dc\" ++ mangleScoped e\n      let _ = emitGlobal e \"@\\{gname} = internal constant \\{initBody}\"\n      e.dictConstCache := (key, gname) :: !e.dictConstCache\n      \"ptrtoint (ptr @\" ++ gname ++ \" to i64)\"",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F002",
@@ -1693,9 +1798,11 @@
    "code_after": "import frontend.parser.{parse}\nimport frontend.desugar.{desugar}\nimport eval.eval.{evalMain}",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 0
    },
-   "note": "\"(SLICE 1)\" / \"prelude-free for this slice\" -- bare ordinal, no sprint named"
+   "note": "\"(SLICE 1)\" / \"prelude-free for this slice\" -- bare ordinal, no sprint named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F003",
@@ -1705,9 +1812,11 @@
    "code_after": "oblCallVerdict : ImplUniverse -> IfaceRef -> List Mono -> Option Bool\noblCallVerdict univ iface [a0] =\n  let cb = univConcreteBucket univ iface (headTyconMono a0)\n  if bucketAnyLonger cb 1 then\n    None\n  else\n    let hb = univHeadless univ iface\n    if bucketAnyLonger hb 1 then\n      None\n    else\n      Some (bucketRecvMatch cb a0 || bucketRecvMatch hb a0)\noblCallVerdict univ iface args = Some (implMatchesU univ iface args)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#1867/#1974 named throughout"
+   "note": "#1867/#1974 named throughout",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F004",
@@ -1717,9 +1826,11 @@
    "code_after": "ffiArrayIntOut : Emit -> String -> String\nffiArrayIntOut e v =\n  let p = freshReg e\n  let _ = emit e \"  \\{p} = call ptr @mdk_ffi_array_int_out(i64 \\{v})\"\n  p",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 0
    },
-   "note": "\"see the report's Notes\""
+   "note": "\"see the report's Notes\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F005",
@@ -1729,9 +1840,11 @@
    "code_after": "emitConstClosureCell : Emit -> String -> Int -> String\nemitConstClosureCell e lamName arity =\n  let codePtr = \"ptrtoint (ptr @\" ++ lamName ++ \" to i64)\"\n  let initBody = \"[2 x i64] [i64 \\{intToString arity}, i64 \\{codePtr}]\"\n  let key = constCellKey e initBody\n  match lookupAssoc key !e.closConstCache\n    Some gname => \"ptrtoint (ptr @\" ++ gname ++ \" to i64)\"\n    None =>\n      let gname = \"mdk_cc\" ++ mangleScoped e\n      let _ = emitGlobal e \"@\\{gname} = internal constant \\{initBody}\"\n      e.closConstCache := (key, gname) :: !e.closConstCache\n      \"ptrtoint (ptr @\" ++ gname ++ \" to i64)\"",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"THE SPRINT'S MECHANISM\" -- which sprint is nowhere on the page"
+   "note": "\"THE SPRINT'S MECHANISM\" -- which sprint is nowhere on the page",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F006",
@@ -1741,9 +1854,11 @@
    "code_after": "  let tMg0 = now ()\n  let aMg0 = allocSnap ()\n  let oMg0 = opSnap ()\n  let (mgCore, mgMods) = mangleUnits cDecls ((\"target\", desugared) :: [])\n  let _ = listLen mgCore + listLen mgMods\n  let tMg1 = now ()\n  let _ =\n    emitPhaseAO\n      on\n      \"mangle\"\n      (tMg1 - tMg0)\n      (allocSnap () - aMg0)\n      declsOp\n      (opSnap () - oMg0)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#882/#2809/#352/#881 named"
+   "note": "#882/#2809/#352/#881 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F007",
@@ -1753,9 +1868,11 @@
    "code_after": "import frontend.parser.{parse}\nimport frontend.desugar.{desugar}\nimport types.typecheck.{checkOneDiags, tcCode}",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"this slice lands it unused\""
+   "note": "\"this slice lands it unused\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F008",
@@ -1765,9 +1882,11 @@
    "code_after": "recWeight0 : Int\nrecWeight0 = 6",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "header names #2294; \"Before this\" resolves to it"
+   "note": "header names #2294; \"Before this\" resolves to it",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F009",
@@ -1777,9 +1896,11 @@
    "code_after": "emitValueCmpNumRef : Prog ->\n  List String ->\n  Int ->\n  String ->\n  CExpr ->\n  CExpr ->\n  List String\nemitValueCmpNumRef prog env d op l r =\n  let lv = emitRefExpr prog env d l\n  let rv = emitRefExpr prog env d r\n  if op == \"==\" then\n    lv ++ rv ++ [\"call $mdk_value_eq_num\"]\n  else if op == \"/=\" then\n    lv\n      ++ rv\n      ++ [\n        \"call $mdk_value_eq_num\",\n        \"ref.cast (ref i31)\",\n        \"i31.get_u\",\n        \"i32.eqz\",\n        \"ref.i31\",\n      ]\n  else",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "A1, S2/#2359 named"
+   "note": "A1, S2/#2359 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F010",
@@ -1789,9 +1910,11 @@
    "code_after": "  TRigid n2 => if n == n2 then MOk else MFail\n  _ => MFail\nmatchStep (TyApp a b) m = match normalize m\n  TApp ma mb => MKids [(a, ma), (b, mb)]\n  _ => MFail\nmatchStep (TyTuple ts) m = match tupleSpine m\n  Some ms => if listLen ts == listLen ms then MKids (zipL ts ms) else MFail\n  _ => MFail\nmatchStep (TyFun a b) m = match normalize m\n  TFun ma _ mb => MKids [(a, ma), (stripEff b, mb)]\n  _ => MFail\nmatchStep (TyEffect _ _ t) m = MKids [(t, m)]\nmatchStep (TyConstrained _ t) m = MKids [(t, m)]\nmatchStep _ _ = MFail",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"this PR is the carrier step; changing answers is the follow-on\""
+   "note": "\"this PR is the carrier step; changing answers is the follow-on\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F011",
@@ -1801,9 +1924,11 @@
    "code_after": "normalizeTrailingUnit : String -> String",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "\"an earlier draft stripped a trailing 0\" -- own-code history, landed"
+   "note": "\"an earlier draft stripped a trailing 0\" -- own-code history, landed",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F012",
@@ -1813,9 +1938,11 @@
    "code_after": "      let _ =\n        checkImplMethodRigidity\n          iface.irName\n          mname\n          mty\n          headMonos\n          extraMap\n          effMap\n          addedObls\n          addedCallObls\n          launderFlagged\n          gscope\n          eagerIdx\n          launderLoc",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"deliberately not this slice's\""
+   "note": "\"deliberately not this slice's\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F013",
@@ -1825,9 +1952,11 @@
    "code_after": "parseBuildArgs : Args -> Result String (String, Option String, BuildTarget)\nparseBuildArgs a = match buildTargetOf (flagValues \"--target\" a) TNative\n  Err msg => Err msg\n  Ok target => finishBuildArgs a.positionals (lastValue \"-o\" a) target",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"was a hard error before this slice and stays one\""
+   "note": "\"was a hard error before this slice and stays one\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F014",
@@ -1837,9 +1966,11 @@
    "code_after": "import frontend.ast.{Lit, Pat, Addr, Route}",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "design-doc citations only"
+   "note": "design-doc citations only",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F015",
@@ -1849,9 +1980,11 @@
    "code_after": "  let moduleImplUniv = match mode\n    Flat _ => emptyImplUniverse\n    Module mid _ _ =>\n      let envs = driverState.value.declEnvsRef.value\n      ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "\"this unit\" appears but A-3.4 PR2 is in the header"
+   "note": "\"this unit\" appears but A-3.4 PR2 is in the header",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F016",
@@ -1861,9 +1994,11 @@
    "code_after": "  let _ =\n    setRef\n      perRun.value.funPredicateSlotsRef\n      (selfDeclArities\n        mid\n        prog\n        promotedQ\n        (aliasConstraintEntries prog promotedQ\n          ++ scopePredicateSlots promotedQ scopeMods scope))",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#1425 named"
+   "note": "#1425 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F017",
@@ -1873,9 +2008,11 @@
    "code_after": "cohSameIface : IfaceRef -> IfaceRef -> Bool\ncohSameIface a b = sameTyConHead a.irName a.irOrigin b.irName b.irOrigin",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "\"before this unit\" but #1559 A-3.7 heads the block"
+   "note": "\"before this unit\" but #1559 A-3.7 heads the block",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F018",
@@ -1885,9 +2022,11 @@
    "code_after": "checkGradedImplHeads : ClassEnv -> Int -> List Decl -> Unit\ncheckGradedImplHeads _ _ [] = ()\ncheckGradedImplHeads ce cur (d :: rest) =\n  let _ = checkGradedImplHeadDecl ce cur d\n  checkGradedImplHeads ce cur rest",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "#822 / #1557 A-3.5c named; dated owner ruling"
+   "note": "#822 / #1557 A-3.5c named; dated owner ruling",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F019",
@@ -1897,9 +2036,11 @@
    "code_after": "ifaceRefBare : String -> IfaceRef\nifaceRefBare n = IfaceRef { irName = n, irOrigin = OriginUnresolved }",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "\"the two sites this comment used to name\" -- own-text; U1b #1482 named"
+   "note": "\"the two sites this comment used to name\" -- own-text; U1b #1482 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F020",
@@ -1909,9 +2050,11 @@
    "code_after": "propsReport : TestPair ->\n  String ->\n  String ->\n  List Decl ->\n  Int ->\n  Option String ->\n  <IO> List PropResult\npropsReport pair target tsrc userDecls cases filterOpt\n  | not (hasProps userDecls) = []\n  | otherwise = match pair\n    TestPairErr _ => []\n    TestPair coreM modsM =>\n      runAllPropsResults\n        cases\n        filterOpt\n        (propLineTests tsrc)\n        (evalModulesRootEnvWith (testCapableExterns ()) coreM modsM)\n        (elaboratedRootProps modsM userDecls)\n        (coreM ++ flatMap snd modsM)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "F1 finding id + #2295 named"
+   "note": "F1 finding id + #2295 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F021",
@@ -1921,9 +2064,11 @@
    "code_after": "isNetExternW name = contains name [\n  \"netResolve\",\n  \"netTcpConnect\",\n  \"netTcpListen\",\n  \"netListenPort\",\n  \"netTcpAccept\",\n  \"netSend\",\n  \"netRecv\",\n  \"netShutdown\",\n  \"netClose\",\n  \"netSetTimeout\",\n  \"ioPoll\",\n  \"netSetNonblock\",\n  \"netConnectStart\",\n  \"netConnectCheck\",\n  \"netTryAccept\",\n  \"netTryRecv\",\n  \"netTrySend\",\n  \"netTrySendFrom\",\n]",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F022",
@@ -1933,9 +2078,11 @@
    "code_after": "externSchemes : OrdMap TyConOrigin -> List Decl -> List (String, Scheme)\nexternSchemes scope decls =\n  let ds = externDecls decls",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#1280/#1279 named; \"The first cut here was\" is own-code history"
+   "note": "#1280/#1279 named; \"The first cut here was\" is own-code history",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F023",
@@ -1945,9 +2092,11 @@
    "code_after": "ieUnivConcreteOf : ImplUniverse -> MultiRegistry (List Ty, List Require)\nieUnivConcreteOf (ImplUniverse conc _ _) = conc",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 2
    },
-   "note": "\"this round is comment-only\" -- round unnamed"
+   "note": "\"this round is comment-only\" -- round unnamed",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F024",
@@ -1957,9 +2106,11 @@
    "code_after": "  let dc = declaredConstraintFor name\n  let slots = dc.cdSlots",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "\"this slice closes\" but the slice is named in the same line (S-xmod-vector-supply #1868/#1867)"
+   "note": "\"this slice closes\" but the slice is named in the same line (S-xmod-vector-supply #1868/#1867)",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F025",
@@ -1969,9 +2120,11 @@
    "code_after": "doEmit : Bool ->\n  String ->\n  String ->\n  String ->\n  String ->\n  List (String, List Decl) ->\n  List (String, String, List Diag) ->\n  <IO> Unit\ndoEmit emit rsrc csrc tsrc entry mods warnTriples =\n  let rt = desugaredPrelude rsrc\n  let core = desugaredPrelude csrc\n  let modules = map desugarPair mods\n  if shouldAutoPrintMain core modules then",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "S2/#2442 named"
+   "note": "S2/#2442 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F026",
@@ -1981,9 +2134,11 @@
    "code_after": "emitReservedStructs : Prog -> List String\nemitReservedStructs prog =\n  reservedTypeStructs prog \"Option\" [\"Some\", \"None\"]\n    ++ reservedTypeStructs prog \"Result\" [\"Ok\", \"Err\"]\n    ++ reservedTypeStructs prog \"Ordering\" [\"Lt\", \"Eq\", \"Gt\"]",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 0
    },
-   "note": "\"the simple correct choice for this slice\""
+   "note": "\"the simple correct choice for this slice\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F027",
@@ -1993,9 +2148,11 @@
    "code_after": "methodConstrainedPairs : Unit -> List (Int, String)\nmethodConstrainedPairs _ =\n  flatMap argStampPairs (siteGoals GKArgStamp (currentModuleMarks ()).mGoals)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "GAP-2 phase-a, #866, #2445 S-1 named"
+   "note": "GAP-2 phase-a, #866, #2445 S-1 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F028",
@@ -2005,9 +2162,11 @@
    "code_after": "refPrintFor _ WChar = [\n  \"    ref.cast (ref i31)\",\n  \"    i31.get_u\",\n  \"    call $mdk_char_to_str\",\n  \"    call $mdk_print_strln\",\n]",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F029",
@@ -2017,9 +2176,11 @@
    "code_after": "      let addedObls = wWindow perRun.value.implObls oblN0",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#814 named"
+   "note": "#814 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F030",
@@ -2029,9 +2190,11 @@
    "code_after": "      let _ = declEnvSeedDataUniverse mid envs",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#674/#154 PR-C/#1259/#1256/A-2.3 named; \"This note used to name a PAIR\" is own-text"
+   "note": "#674/#154 PR-C/#1259/#1256/A-2.3 named; \"This note used to name a PAIR\" is own-text",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F031",
@@ -2041,9 +2204,11 @@
    "code_after": "import frontend.ast.{\n  Ns(..),\n  Ident(..),\n  IdentOrigin,\n  TyConOrigin(..),\n  identOriginOf,\n  identOriginFold,\n  identOriginBuiltin,\n  mkIdent,",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#1111 A-2.0 named; dated tracker read"
+   "note": "#1111 A-2.0 named; dated tracker read",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F032",
@@ -2053,9 +2218,11 @@
    "code_after": "conHeadInfo : CHead -> Option (String, Int)\nconHeadInfo (HCon c a) = Some (c, a)\nconHeadInfo HCons = Some (\"Cons\", 2)\nconHeadInfo HNil = Some (\"Nil\", 0)\nconHeadInfo (HTuple n) = Some (\"$tuple\", n)\nconHeadInfo _ = None",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F033",
@@ -2065,9 +2232,11 @@
    "code_after": "public export data LoadError =\n  | LoadMsg String\n  | LoadParseFailed String String ParseError",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#100 named"
+   "note": "#100 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F034",
@@ -2077,9 +2246,11 @@
    "code_after": "ifaceForInferredId : String -> Int -> IfaceRef\nifaceForInferredId m id =\n  let direct = ifaceForConstraintId id\n  if direct.irName /= \"\" then\n    direct\n  else match lookupSchemeIface m id perRun.value.schemeObligationsRef.value\n    Some ir => ir\n    None =>\n      match ifaceFromDictApps id (dictAppsSince (currentModuleMarks ()).mGoals)\n        \"\" => ifaceRefNone\n        n => ifaceRefBare n",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"exactly as before this slice\" -- \"slice 1\" is a bare ordinal, no sprint named"
+   "note": "\"exactly as before this slice\" -- \"slice 1\" is a bare ordinal, no sprint named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F035",
@@ -2089,9 +2260,11 @@
    "code_after": "data ClassEnv = ClassEnv { ceRows : List CeRow, ceByKey : Registry CeRow }",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F036",
@@ -2101,9 +2274,11 @@
    "code_after": "reservedOrPatFail : Token -> Parser Pat\nreservedOrPatFail t = match reservedIdentKeyword t\n  Some name => fatalP (reservedKeywordMsg name)\n  None => failP \"expected pattern\"",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F037",
@@ -2113,9 +2288,11 @@
    "code_after": "public export data StdlibIndex =\n  | StdlibIndex (HashMap String (List (String, Ty)))",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "\"Measured on this tree\" is measurement provenance, not an in-flight change"
+   "note": "\"Measured on this tree\" is measurement provenance, not an in-flight change",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F038",
@@ -2125,9 +2302,11 @@
    "code_after": "  let _ = reportAmbiguousImports prog0",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#1675 named"
+   "note": "#1675 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F039",
@@ -2137,9 +2316,11 @@
    "code_after": "checkLetGroupBindsLocated : List LetBind -> Unit\ncheckLetGroupBindsLocated = checkLetGroupBindsGo",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"confirmed against the tree before landing this\" -- landing WHAT is unrecoverable"
+   "note": "\"confirmed against the tree before landing this\" -- landing WHAT is unrecoverable",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F040",
@@ -2149,9 +2330,11 @@
    "code_after": "public export data Ns =\n  | NsType\n  | NsIface\n  | NsMethod\n  | NsCtor\n  | NsField\n  | NsValue\n  deriving (Eq, Ord, Debug)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "#1111 A-2.0 named; \"An earlier draft of this comment\" is own-text"
+   "note": "#1111 A-2.0 named; \"An earlier draft of this comment\" is own-text",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F041",
@@ -2161,9 +2344,11 @@
    "code_after": "export\npreambleLines : List String\npreambleLines = [\n  \"; Medaka native spike (Stage 2.4) \u2014 emitted textual LLVM IR.\",\n  \"; Value rep is PROVISIONAL (uniform 64-bit tagged word); see RUNTIME-DESIGN.md.\",\n  \"declare ptr @mdk_alloc(i64)\",\n  \"declare ptr @mdk_alloc_atomic(i64)\",\n  \"declare i64 @__mdk_apply(i64, i64, ptr)\",\n  \"declare void @mdk_oob() noreturn\",",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "\"ARCH-REVIEW pass 3, finding #2\" names the pass"
+   "note": "\"ARCH-REVIEW pass 3, finding #2\" names the pass",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F042",
@@ -2173,9 +2358,11 @@
    "code_after": "implReqDictVarOf : Option PredicateRequest ->\n  Mono ->\n  String ->\n  ScopeId ->\n  Option AssumAnswer\nimplReqDictVarOf None _ _ _ = None\nimplReqDictVarOf (Some request) m encl useScope\n  | encl == \"\" = None\n  | otherwise = match normalize m\n    TVar cell =>\n      firstPredForEnclAt\n        GSImplRequires\n        (tyvarId cell)\n        request\n        useScope\n        (givensForScope useScope)\n    TApp a _ => implReqDictVarOf (Some request) a encl useScope\n    _ => None",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"MEASURED on the typed Core IR dump at this slice's base\""
+   "note": "\"MEASURED on the typed Core IR dump at this slice's base\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F043",
@@ -2185,9 +2372,11 @@
    "code_after": "substringMatch : String -> String -> Bool\nsubstringMatch needle haystack = isSome (stringIndexOf needle haystack)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"to keep this slice's snapshot bless scoped to the files it names\""
+   "note": "\"to keep this slice's snapshot bless scoped to the files it names\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F044",
@@ -2197,9 +2386,11 @@
    "code_after": "emitDefaultRKey : Emit ->\n  OrdMap (String, LTy) ->\n  String ->\n  Int ->\n  String ->\n  List Route ->\n  List Route ->\n  List String ->\n  (String, LTy)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "E19/G7/#728-2 named"
+   "note": "E19/G7/#728-2 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F045",
@@ -2209,9 +2400,11 @@
    "code_after": "export data IdentOrigin =\n  | IdentBuiltin\n  | IdentModule String\n  deriving (Eq, Ord, Debug)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#1111 A-2.0, \u00a78 I6.3 named; \"an earlier draft of this line\" is own-text"
+   "note": "#1111 A-2.0, \u00a78 I6.3 named; \"an earlier draft of this line\" is own-text",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F046",
@@ -2221,9 +2414,11 @@
    "code_after": "checkInterfaceCycles : ClassEnv -> Int -> Unit\ncheckInterfaceCycles ce cur =",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "#1557 A-3.5c named; \"AN EARLIER CUT OF THIS COMMENT\" is own-text"
+   "note": "#1557 A-3.5c named; \"AN EARLIER CUT OF THIS COMMENT\" is own-text",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F047",
@@ -2233,9 +2428,11 @@
    "code_after": "runTestJsonCmd : List Engine -> Int -> Option String -> String -> <IO> Unit\nrunTestJsonCmd engines cases filterOpt target =\n  let root = envOr \"MEDAKA_ROOT\" defaultMedakaRoot\n  let rtPath = root ++ \"/stdlib/runtime.mdk\"\n  let corePath = root ++ \"/stdlib/core.mdk\"\n  let stdlibDir = root ++ \"/stdlib\"\n  let r = do\n    rsrc <- readPreludeFile rtPath\n    csrc <- readPreludeFile corePath\n    tsrc <- readFile target\n    let userDecls = desugar (parse tsrc)\n    if filterMatchedNothing filterOpt tsrc userDecls then\n      Err\n        \"medaka test: \\{target}: --filter matched no doctests, props, or `test \\\"\u2026\\\"` decls\"\n    else\n      let (typeError, runs, props, tests, typecheckSkipped) =\n        runTestReport\n          engines\n          rsrc\n          csrc\n          target\n          tsrc\n          stdlibDir\n          cases\n          filterOpt\n          True\n      let _ =\n        putStrLn\n          (stringify\n            (cliTestReportJson",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"mirrors this slice's scope\"; \"this slice's acceptance requires\""
+   "note": "\"mirrors this slice's scope\"; \"this slice's acceptance requires\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F048",
@@ -2245,9 +2442,11 @@
    "code_after": "importerShadowOnEmitPath : String -> Ref Route -> Bool\nimporterShadowOnEmitPath name tagRef =\n  singleTyparamIfaceMethod name\n    && driverState.value.mangledFunDefsPresentRef.value\n    && occurrenceCarriesMangledShadowSym name tagRef",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "RUN-XMOD-045 is a named run handle (same call as C003's RUN-METHID-116)"
+   "note": "RUN-XMOD-045 is a named run handle (same call as C003's RUN-METHID-116)",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F049",
@@ -2257,9 +2456,11 @@
    "code_after": "ffiEmitCall e fname rty cargs\n  | ffiCrossableHead rty =\n    let r = freshReg e\n    let _ = emit e \"  \\{r} = call i64 @\\{fname}(\\{cargs})\"\n    if rty == \"Bool\" then\n      (ffiNormalizeBool e r, LTBool)\n    else if rty == \"Char\" then\n      (ffiNormalizeChar e fname r, LTChar)\n    else\n      (tagInt e r, ffiImmediateLTy rty)\n  | otherwise =\n    gapE\n      e\n      \"non-crossable return type '\\{rty}' reached the FFI lowering (compiler/FFI-ABI.md section 1)\"",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#2128 named; \"Before this arm normalised\" resolves to it"
+   "note": "#2128 named; \"Before this arm normalised\" resolves to it",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F050",
@@ -2269,9 +2470,11 @@
    "code_after": "emitGuardChain : Emit ->\n  OrdMap (String, LTy) ->\n  List CGuard ->\n  CExpr ->\n  String ->\n  OrdMap (String, LTy)\nemitGuardChain _ env [] _ _ = env\nemitGuardChain e env ((CGBool g) :: rest) body failL =\n  let (bw, _) = emitExpr e env g\n  let cmp = freshReg e\n  let _ = emit e \"  \\{cmp} = icmp eq i64 \\{bw}, 3\"\n  let pass = \"guardok\" ++ intToString (freshLocal e)\n  let _ = emit e \"  br i1 \\{cmp}, label %\\{pass}, label %\\{failL}\"\n  let _ = emit e (pass ++ \":\")\n  emitGuardChain e env rest body failL\nemitGuardChain e env ((CGBind p ex) :: rest) body failL =\n  let (v, _) = emitExpr e env ex\n  let env2 = emitRefutMatch e env p v body failL\n  emitGuardChain e env2 rest body failL",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F051",
@@ -2281,9 +2484,11 @@
    "code_after": "  let savedTrmc = (progEmit prog).trmcCtx.value\n  let savedDisp = (progEmit prog).wDispCtx.value\n  let _ = setRef (progEmit prog).trmcCtx WTrmcOff\n  let _ = setRef (progEmit prog).wDispCtx WDispOff",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F052",
@@ -2293,9 +2498,11 @@
    "code_after": "    let valArity = progFnArity prog name - listLen routes\n    if listLen args == valArity then\n      let dictWords = flatMap (routeWitness prog env d) routes\n      let argInstrs = flatMap (a => emitRefExpr prog env d a) args\n      dictWords ++ argInstrs ++ [\"call $\" ++ gname name]\n    else\n      emitIndirectApp prog env d (CDict name routes) args\n  else\n    gapLP prog (\"wasm W5: CDict over unknown function '\" ++ name ++ \"'\")",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "P2 #729 named"
+   "note": "P2 #729 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F053",
@@ -2305,9 +2512,11 @@
    "code_after": "      let _ = flushStdout ()\n      if code == 0 then\n        True\n      else\n        let _ = ePutStr err\n        let _ =\n          ePutStrLn \"medaka test: \\{f}: DEAD (child exited \\{intToString code})\"\n        False\n  testFilesGo\n    engines\n    rtPath\n    corePath\n    stdlibDir\n    cases\n    filterOpt\n    rest\n    (acc || not ok)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F054",
@@ -2317,9 +2526,11 @@
    "code_after": "aliasUniverseAt : Int ->\n  List (TabKey, AliasDecl) ->\n  List (TabKey, (List String, Ty))\naliasUniverseAt _ [] = []\naliasUniverseAt cur ((key, ad) :: rest)\n  | aliasVisibleTo cur ad =\n    (key, (ad.adParams, ad.adRhs)) :: aliasUniverseAt cur rest\n  | otherwise = aliasUniverseAt cur rest",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "A-3.2b #1512 named throughout; \"It used to say\" is own-text"
+   "note": "A-3.2b #1512 named throughout; \"It used to say\" is own-text",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F055",
@@ -2329,9 +2540,11 @@
    "code_after": "import support.util.{stringTrim, joinWith, joinNl}\nimport string.{words, contains}\nimport io.{runCommandOk}\nimport support.timer.{perfEnabled, now, emitPhase}\nimport driver.loader.{\n  entrySearchRoots, findProjectRootOrSelf, readDeps, readForeignLibs\n}\nimport support.path.{dirOf, chopExt, joinPath}\nimport frontend.parser.{parseResult}\nimport frontend.parse_cache.{notePreludeParse}\nimport driver.diagnostics.{\n  Diag,\n  SevWarning,\n  emitDiagExitCode,\n  mkDiag,\n  parseErrDiag,\n  ppDiag,\n  ppDiagCliSrc,\n}",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "\"Stage 4 Phase B.11\" named"
+   "note": "\"Stage 4 Phase B.11\" named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F056",
@@ -2341,9 +2554,11 @@
    "code_after": "pinLocalIfDictForwarded : Int -> Int -> String -> Option Loc -> Mono -> Bool\npinLocalIfDictForwarded callN0 dictN0 name loc t =\n  recordPinnedLocals\n    name\n    loc\n    (freeGenVars perRun.value.currentLevel.value t)\n    (localPinPairs callN0 dictN0)\n    t",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"the name is kept so this slice's LEG A / snapshot diff stays additive\""
+   "note": "\"the name is kept so this slice's LEG A / snapshot diff stays additive\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F057",
@@ -2353,9 +2568,11 @@
    "code_after": "-- the interface method an impl entry implements (field 0).\nimplEntryMethodOf : CImplEntry -> String\nimplEntryMethodOf (CImplEntry n _ _) = n",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"the duality this slice removes\""
+   "note": "\"the duality this slice removes\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F058",
@@ -2365,9 +2582,11 @@
    "code_after": "export\nclosTypeLines : List String\nclosTypeLines = [\n  \"    ;; \u2500\u2500 \u00a74 closure ABI (arity-in-struct, uniform code sig) \u2500\u2500\",\n  \"    (type $argarr (array (mut (ref null eq))))\",\n  \"    (type $codety (func (param (ref eq)) (param (ref $argarr)) (result (ref eq))))\",\n  \"    (type $clos (sub (struct (field $code (ref $codety)) (field $arity i32) (field $env (ref $argarr)))))\"\n]",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "W4 / WASMGC-DESIGN \u00a74 named"
+   "note": "W4 / WASMGC-DESIGN \u00a74 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F059",
@@ -2377,9 +2596,11 @@
    "code_after": "export\nruntimePanic : String -> String -> a\nruntimePanic code msg = match !currentEvalLoc\n  Loc f sl sc el ec =>\n    let ff = if f == \"\" then !currentEvalFile else f",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "#2400/#2472/#2473, \"Stage 4\" named"
+   "note": "#2400/#2472/#2473, \"Stage 4\" named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F060",
@@ -2389,9 +2610,11 @@
    "code_after": "stampTyHead : OrdMap TyConOrigin -> Ty -> (Ty, Bool)\nstampTyHead scope (t@(TyCon { tyConName = n, tyConOrigin = o })) = match o\n  OriginUnresolved => stampHeadWith t (originOfTyName scope n)\n  OriginBuiltin => (t, False)\n  OriginModule _ => (t, False)\nstampTyHead _ t = (t, False)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "\"an earlier draft did\" -- own-text"
+   "note": "\"an earlier draft did\" -- own-text",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F061",
@@ -2401,9 +2624,11 @@
    "code_after": "-- The TYPE names one non-core import contributes, attributed to its",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "\"before this was written\" is measurement provenance; #1110 named"
+   "note": "\"before this was written\" is measurement provenance; #1110 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F062",
@@ -2413,9 +2638,11 @@
    "code_after": "desugarCacheRef : Ref (List (String, (Int, List Decl)))\ndesugarCacheRef = Ref []",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "pure constraint"
+   "note": "pure constraint",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F063",
@@ -2425,9 +2652,11 @@
    "code_after": "export\nioByteImportLines : List String\nioByteImportLines = [\n  \"  ;; \u2500\u2500 \u00a76 host-import IO seam (\u00a710 fork e \u2014 byte-level custom import) \u2500\u2500\",\n  \"  (import \\\"env\\\" \\\"mdk_write_byte\\\" (func $mdk_write_byte (param i32)))\",\n]",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"real intToString/string codegen, this slice\""
+   "note": "\"real intToString/string codegen, this slice\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F064",
@@ -2437,9 +2666,11 @@
    "code_after": "runGatesLoop : RunEnv -> List Gate -> List GateResult -> <IO> List GateResult\nrunGatesLoop _ [] acc = reverseL acc\nrunGatesLoop env (g :: gs) acc =\n  let r = runOneGate env g\n  let _ = putStr (resultLine r)\n  let _ = flushStdout ()\n  runGatesLoop env gs (r :: acc)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 0
    },
-   "note": "\"see the report's Notes\""
+   "note": "\"see the report's Notes\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F065",
@@ -2449,9 +2680,11 @@
    "code_after": "ieProbeBlobHead : HeadKey\nieProbeBlobHead = headKeyOfCon (OriginModule \"amod\") \"Blob\"",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "\"while writing these tests\" -- the tests are on the page; RUN-B-007/025 named"
+   "note": "\"while writing these tests\" -- the tests are on the page; RUN-B-007/025 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F066",
@@ -2461,9 +2694,11 @@
    "code_after": "export\nifaceIdsAtTag : List (String, String, String, String) -> String -> List String\nifaceIdsAtTag heads tag = ifaceIdsAtTagGo tag heads",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#1047/#1265 named"
+   "note": "#1047/#1265 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F067",
@@ -2473,9 +2708,11 @@
    "code_after": "      let rtObjEnv = envOr \"MEDAKA_RT_OBJ\" \"\"\n      let rtCached =\n        if rtObjEnv /= \"\" && fileExists rtObjEnv then\n          rtObjEnv\n        else\n          cachedRtObj cc rtC optFlag gcCflags tmpDir\n      let rtInput = if rtCached == \"\" then rtC else rtCached\n      let tRtObj = now ()\n      let _ =\n        emitPhase\n          perfOn\n          \"rt-obj\"\n          (tRtObj - tGcProbe)\n          (rtObjNote rtObjEnv rtCached)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#133/G1 named"
+   "note": "#133/G1 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F068",
@@ -2485,9 +2722,11 @@
    "code_after": "seedBuiltinClasses : CheckMode -> List Decl -> Unit\nseedBuiltinClasses (Flat coreProg) prog =\n  let classes =\n    builtinClassesOf (if declsNonEmpty coreProg then coreProg else prog)\n  crossRun.value.builtinClassesRef := classes",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 2
    },
-   "note": "#1508 (U2a), U1b/#1507 named"
+   "note": "#1508 (U2a), U1b/#1507 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F069",
@@ -2497,9 +2736,11 @@
    "code_after": "normalizeRecordOrder : List (String, List String) ->\n  String ->\n  List CField ->\n  CExpr\nnormalizeRecordOrder fo name fields = match lookupAssoc name fo\n  None => CRecord name fields\n  Some labels =>\n    let written = map cFieldLabel fields\n    if written == labels || not (isPermutationOf written labels) then\n      CRecord name fields\n    else\n      bindFieldTemps fields (CRecord name (map recTempField labels))",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#1513 heads the block; \"before this change\" resolves to it"
+   "note": "#1513 heads the block; \"before this change\" resolves to it",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F070",
@@ -2509,9 +2750,11 @@
    "code_after": "    let (preludeSchemes, ownSchemes) =\n      checkOneSchemeFull rtD coreD (\"__user__\", userD)\n    let schemes = ownSchemes ++ preludeSchemes\n    let effTable = fnEffectsTable schemes",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "S-full-env-scheme-entry #1116 named"
+   "note": "S-full-env-scheme-entry #1116 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F071",
@@ -2521,9 +2764,11 @@
    "code_after": "data ImplRow =\n  | ImplRow Int InstRef IfaceRef (List Ty) (List Require) (List String)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 1
    },
-   "note": "\"MEASURED on this branch\""
+   "note": "\"MEASURED on this branch\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F072",
@@ -2533,9 +2778,11 @@
    "code_after": "export\ncheckOneToLinesWithRuntime : List Decl -> List Decl -> List Decl -> String\ncheckOneToLinesWithRuntime runtimeDecls coreProg userProg =\n  checkModulesEntryReport runtimeDecls coreProg [(\"__user__\", userProg)]",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "S-migrate-check-route (E-1 #1115) named"
+   "note": "S-migrate-check-route (E-1 #1115) named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F073",
@@ -2545,9 +2792,11 @@
    "code_after": "fenceFloatOperand : Emit -> CExpr -> CExpr -> String -> String\nfenceFloatOperand e l r ld = match (constFoldFloat l, constFoldFloat r)\n  (Some _, Some _) => ld\n  _ =>\n    let fr = freshReg e\n    let _ =\n      emit e \"  \\{fr} = call double @llvm.arithmetic.fence.f64(double \\{ld})\"\n    fr",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "#762/#672 named"
+   "note": "#762/#672 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F074",
@@ -2557,9 +2806,11 @@
    "code_after": "namesAtLoc : Loc -> List String -> List (String, Loc)\nnamesAtLoc loc ns = map (n => (n, loc)) ns",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "\u00a79.5 B4/B8 named"
+   "note": "\u00a79.5 B4/B8 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F075",
@@ -2569,9 +2820,11 @@
    "code_after": "runTimeout : Args -> Result String Int\nrunTimeout a = match flagValue \"--timeout\" a\n  None => Ok 0\n  Some v => match parseDecChecked v\n    None =>\n      Err\n        \"medaka gate run: --timeout needs a whole number of seconds, got '\\{v}'\"\n    Some n => Ok n",
    "regex_census": null,
    "labels": {
-    "ephemeral": "y"
+    "ephemeral": "y",
+    "register": 2
    },
-   "note": "\"not one of this slice's six C2 sites\""
+   "note": "\"not one of this slice's six C2 sites\"",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F076",
@@ -2581,9 +2834,11 @@
    "code_after": "ffiMarshalOut : Emit ->\n  List String ->\n  List String ->\n  (List String, List (String, String))\nffiMarshalOut _ [] _ = ([], [])\nffiMarshalOut _ _ [] = ([], [])",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 0
    },
-   "note": "FFI-ABI.md \u00a72 named"
+   "note": "FFI-ABI.md \u00a72 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F077",
@@ -2593,9 +2848,11 @@
    "code_after": "data CohImpl = CohImpl IfaceRef (List Mono) String (Option Loc)",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "\"until this unit\" but #1559 A-3.7 heads the block"
+   "note": "\"until this unit\" but #1559 A-3.7 heads the block",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F078",
@@ -2605,9 +2862,11 @@
    "code_after": "keepBoundResidual : (IfaceRef, List Int, List Mono) -> VecObl\nkeepBoundResidual (iface, ids, args) =\n  VecObl { voIface = iface, voIds = ids, voArgs = residualOblArgs args }",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "#1905 named"
+   "note": "#1905 named",
+   "register_rule": "post-ruling"
   },
   {
    "id": "F079",
@@ -2617,9 +2876,11 @@
    "code_after": "isNonexpansive : TcEnv -> Expr -> Bool\nisNonexpansive env (ELoc _ e) = isNonexpansive env e\nisNonexpansive env (EDoOrigin _ e) = isNonexpansive env e\nisNonexpansive _ (ELit _) = True\nisNonexpansive _ (EVar _) = True\nisNonexpansive _ (EVarId _ _) = True",
    "regex_census": null,
    "labels": {
-    "ephemeral": "n"
+    "ephemeral": "n",
+    "register": 1
    },
-   "note": "issue 1150 named; \"until 2026-07-31\" is own-text with a date"
+   "note": "issue 1150 named; \"until 2026-07-31\" is own-text with a date",
+   "register_rule": "post-ruling"
   }
  ],
  "do": [
