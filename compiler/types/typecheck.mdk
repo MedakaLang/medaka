@@ -9327,6 +9327,19 @@ public export data MethodReturnTraceEntry = MethodReturnTraceEntry {
   mrtPrerequisites : List Route,
 }
 
+-- A drained ordinary-return observation safe to retain in a memo.  It deliberately
+-- excludes Monos, ScopeIds, evidence binders, ImplRows, and the request's resolution
+-- Ref; those values belong to the request that produced the closed route.
+public export data MethodReturnMemoView = MethodReturnMemoView {
+  mrmvInterface : String,
+  mrmvMethod : String,
+  mrmvArguments : Option (List String),
+  mrmvOutcome : String,
+  mrmvPrerequisites : List (String, List String),
+  mrmvEvidence : String,
+}
+  deriving (Eq, Debug)
+
 data AssumAnswer =
   | SemanticGiven SolverEvidence
   | LegacyScalar EvidenceBinderId
@@ -9698,6 +9711,9 @@ data GraphRun = GraphRun {
   -- the stampers wrote into their cells, read back from those same cells, never an
   -- independently-derived answer.
   evTable : Ref EvTable,
+  -- Immutable observations projected while a memo snapshot seals drained ordinary
+  -- returns.  They are diagnostic/test visibility only and are never solver input.
+  memoMethodReturns : Ref (List MethodReturnMemoView),
   -- #2705: the method-occurrence cells, indexed by the node's evidence ORDINAL —
   -- the same key `evDictRoutes` indexes on — so a stamper's lookup is O(1).  Sized
   -- by doubling as ids are minted.  Like `evCounter` this survives
@@ -9722,6 +9738,7 @@ freshGraphRun _ = GraphRun {
   goalsN = Ref 0,
   evCounter = Ref 0,
   evTable = Ref [],
+  memoMethodReturns = Ref [],
   evCells = Ref (arrayMake 0 None),
   scopeStore = Scopes.freshScopeStore (),
 }
@@ -9884,12 +9901,101 @@ copyGraphRun g = GraphRun {
   goalsN = Ref g.goalsN.value,
   evCounter = Ref g.evCounter.value,
   evTable = Ref g.evTable.value,
+  memoMethodReturns = Ref g.memoMethodReturns.value,
   -- The cells themselves are shared, not re-minted: a memoized tree still holds
   -- the ids of the cells minted for it, and its nodes must keep answering.  Only
   -- the INDEX is copied, so a mint on one side cannot grow the other's array.
   evCells = Ref (arrayCopy g.evCells.value),
   scopeStore = Scopes.copyScopeStore g.scopeStore,
 }
+
+-- Memo snapshots are taken only after `checkGraphFinish` drained the prefix.  At
+-- that boundary an exact-return request has no remaining solver work: diagnostics
+-- are in the module result and route evidence is in `evTable`/method cells.  Replace
+-- its live goal carrier with the immutable observation above before the graph can
+-- outlive the request.
+copyGraphRunForMemo : GraphRun -> GraphRun
+copyGraphRunForMemo g =
+  let (goals, views) = sealMethodReturnGoals g.evTable.value g.goals.value
+  let copied = copyGraphRun g
+  copied.goals := goals
+  copied.goalsN := listLen goals
+  copied.memoMethodReturns := views ++ g.memoMethodReturns.value
+  copied
+
+sealMethodReturnGoals : EvTable ->
+  List Obligation ->
+  (List Obligation, List MethodReturnMemoView)
+sealMethodReturnGoals _ [] = ([], [])
+sealMethodReturnGoals evidence (goal :: rest) =
+  let (goals, views) = sealMethodReturnGoals evidence rest
+  match exactReturnRequestOfGoal goal
+    Some request => (goals, methodReturnMemoView evidence goal request :: views)
+    None => (goal :: goals, views)
+
+exactReturnRequestOfGoal : Obligation -> Option MethodReturnRequest
+exactReturnRequestOfGoal goal = match goal.oPayload
+  GPSite _ _ (SKExactReturn _ request) => Some request
+  _ => None
+
+methodReturnMemoView : EvTable ->
+  Obligation ->
+  MethodReturnRequest ->
+  MethodReturnMemoView
+methodReturnMemoView evidence goal request =
+  let (outcome, prerequisites) = match request.mrrResolution.value
+    None => ("legacy", [])
+    Some resolution => (
+      methodReturnMemoOutcome resolution.mrrOutcome,
+      methodReturnMemoPrerequisites resolution.mrrOutcome,
+    )
+  MethodReturnMemoView {
+    mrmvInterface = methodReturnMemoIface request.mrrIface,
+    mrmvMethod = request.mrrName,
+    mrmvArguments = map (map ppMono) (methodReturnArgs request),
+    mrmvOutcome = outcome,
+    mrmvPrerequisites = prerequisites,
+    mrmvEvidence = methodReturnMemoEvidence goal.oEv evidence,
+  }
+
+methodReturnMemoIface : IfaceRef -> String
+methodReturnMemoIface iface =
+  let identity = ifaceIdentity iface.irOrigin iface.irName
+  if identity == "" then iface.irName else identity
+
+methodReturnMemoOutcome : SolverOutcome -> String
+methodReturnMemoOutcome (Solved (GivenEvidence _)) = "given"
+methodReturnMemoOutcome (Solved (InstanceEvidence _ _ _)) = "instance"
+methodReturnMemoOutcome (Solved (SuperclassEvidence _ _)) = "superclass"
+methodReturnMemoOutcome (Deferred _ _) = "deferred"
+methodReturnMemoOutcome (Insoluble _ MissingInstance) = "missing"
+methodReturnMemoOutcome (Insoluble _ (AmbiguousInstances _)) = "ambiguous"
+methodReturnMemoOutcome (Insoluble _ (ResolutionCycle _)) = "cycle"
+
+methodReturnMemoPrerequisites : SolverOutcome -> List (String, List String)
+methodReturnMemoPrerequisites (Solved (InstanceEvidence _ _ prerequisites)) =
+  map
+    (prerequisite => (
+      methodReturnMemoIface prerequisite.prerequisiteInterface,
+      map ppMono prerequisite.prerequisiteArguments,
+    ))
+    prerequisites
+methodReturnMemoPrerequisites _ = []
+
+methodReturnMemoEvidence : EvId -> EvTable -> String
+methodReturnMemoEvidence goal evidence = match lookupTraceEvidence goal evidence
+  Some (EvOne route) => methodReturnMemoRoute route
+  Some (EvMany routes) => joinWith "," (map methodReturnMemoRoute routes)
+  None => "unpublished"
+
+methodReturnMemoRoute : Route -> String
+methodReturnMemoRoute RNone = "none"
+methodReturnMemoRoute (RKey key prerequisites) =
+  "key:\{key}[\{joinWith "," (map methodReturnMemoRoute prerequisites)}]"
+methodReturnMemoRoute (RDict name) = "given:\{name}"
+methodReturnMemoRoute (RDictFwd name) = "forwarded:\{name}"
+methodReturnMemoRoute (RLocal name _) = "local:\{name}"
+methodReturnMemoRoute (RScalar name) = "scalar:\{name}"
 
 -- Test-only seam for route states that production inference cannot place together:
 -- an RLocal seed inside a default body, and a retained RNone in a synthetic child
@@ -43628,7 +43734,7 @@ checkCoreMemoized key coreDecls runtimeSeed = match coreCheckMemoHit key
           ccmKey = k,
           ccmCoreSchemes = coreSchemes,
           ccmCrossRun = copyCrossRun crossRun.value,
-          ccmGraphRun = copyGraphRun graphRun.value,
+          ccmGraphRun = copyGraphRunForMemo graphRun.value,
           ccmDriver = copyDriverState driverState.value,
         }
     coreSchemes
@@ -44430,6 +44536,99 @@ data ChainMemo = ChainMemo { chKey : String, chSteps : List ChainStep }
 moduleChainMemoRef : Ref (Option ChainMemo)
 moduleChainMemoRef = Ref None
 
+exactReturnGoalCount : List Obligation -> Int
+exactReturnGoalCount [] = 0
+exactReturnGoalCount (goal :: rest) =
+  (if isSome (exactReturnRequestOfGoal goal) then 1 else 0)
+    + exactReturnGoalCount rest
+
+methodReturnMemoGraphStats : GraphRun -> (Int, Int)
+methodReturnMemoGraphStats graph = (
+  exactReturnGoalCount graph.goals.value,
+  listLen graph.memoMethodReturns.value,
+)
+
+methodReturnChainStats : List ChainStep -> (Int, Int, Int)
+methodReturnChainStats [] = (0, 0, 0)
+methodReturnChainStats (step :: rest) =
+  let (carriers, summaries) = methodReturnMemoGraphStats step.csGraphRun
+  let (restCarriers, restSummaries, restSteps) = methodReturnChainStats rest
+  (carriers + restCarriers, summaries + restSummaries, restSteps + 1)
+
+-- Family-specific structural retention, not a heap-size proxy: live request
+-- carriers, immutable closed summaries, and retained chain steps reachable from
+-- the two memos that snapshot GraphRun.
+export
+methodReturnMemoRetentionStats : Unit -> (Int, Int, Int)
+methodReturnMemoRetentionStats _ =
+  let (coreCarriers, coreSummaries) = match coreCheckMemoRef.value
+    None => (0, 0)
+    Some memo => methodReturnMemoGraphStats memo.ccmGraphRun
+  let (chainCarriers, chainSummaries, steps) = match moduleChainMemoRef.value
+    None => (0, 0, 0)
+    Some memo => methodReturnChainStats memo.chSteps
+  (
+    coreCarriers + chainCarriers,
+    coreSummaries + chainSummaries,
+    steps,
+  )
+
+export
+methodReturnMemoCurrentViews : Unit -> List MethodReturnMemoView
+methodReturnMemoCurrentViews _ =
+  let (_, live) =
+    sealMethodReturnGoals
+      graphRun.value.evTable.value
+      graphRun.value.goals.value
+  live ++ graphRun.value.memoMethodReturns.value
+
+-- Test-only lifecycle observation: model session teardown by clearing the two
+-- GraphRun-owning memos, observe the family counters at their floor, then restore
+-- the session so the sibling suite remains order-independent.
+export
+methodReturnMemoTeardownStats : Unit -> (Int, Int, Int)
+methodReturnMemoTeardownStats _ =
+  let savedCore = coreCheckMemoRef.value
+  let savedChain = moduleChainMemoRef.value
+  coreCheckMemoRef := None
+  moduleChainMemoRef := None
+  let floor = methodReturnMemoRetentionStats ()
+  coreCheckMemoRef := savedCore
+  moduleChainMemoRef := savedChain
+  floor
+
+firstExactReturnRequest : List Obligation -> Option MethodReturnRequest
+firstExactReturnRequest [] = None
+firstExactReturnRequest (goal :: rest) = match exactReturnRequestOfGoal goal
+  Some request => Some request
+  None => firstExactReturnRequest rest
+
+-- The first two booleans prove the rejected mutations are observable: skipping
+-- sealing retains a carrier, and the old detached copy shallow-shares its
+-- resolution Ref.  The third proves the memo projection removes that carrier and
+-- retains only a closed observation.
+export
+methodReturnMemoFenceMutationProbe : Unit -> (Bool, Bool, Bool)
+methodReturnMemoFenceMutationProbe _ =
+  match firstExactReturnRequest graphRun.value.goals.value
+    None => (False, False, False)
+    Some request =>
+      let shallow = copyGraphRun graphRun.value
+      let skippedSeal = exactReturnGoalCount shallow.goals.value > 0
+      let shallowShare = match firstExactReturnRequest shallow.goals.value
+        None => False
+        Some copiedRequest =>
+          let saved = request.mrrResolution.value
+          copiedRequest.mrrResolution := None
+          let leaked = isNone request.mrrResolution.value
+          request.mrrResolution := saved
+          leaked
+      let sealed = copyGraphRunForMemo graphRun.value
+      let sealedSafe =
+        exactReturnGoalCount sealed.goals.value == 0
+          && isNonEmptyL sealed.memoMethodReturns.value
+      (skippedSeal, shallowShare, sealedSafe)
+
 -- `driveGraphK GOutDiags` resuming from the module-chain memo.  `stepKeys` pairs
 -- with `modules0` positionally.
 -- The per-module payload is the worker's whole `(schemes, errs, warns)` triple: a
@@ -44570,7 +44769,7 @@ chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) 
         csAccAll = accAll2,
         csResults = results2,
         csCrossRun = copyCrossRun crossRun.value,
-        csGraphRun = copyGraphRun graphRun.value,
+        csGraphRun = copyGraphRunForMemo graphRun.value,
         csDriver = copyDriverState driverState.value,
       }
       let (finalResults, moreSteps) =

@@ -29,6 +29,7 @@ import types.typecheck.{
   AssumptionTraceKind(..),
   DefaultBodyRNoneKind(..),
   DefaultBodyRNoneTraceEntry(..),
+  MethodReturnMemoView(..),
   MethodReturnTraceEntry(..),
   MethodReturnTraceStage(..),
   ModDiags,
@@ -49,6 +50,10 @@ import types.typecheck.{
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
   methodReturnResolutionMutationProbe,
+  methodReturnMemoCurrentViews,
+  methodReturnMemoFenceMutationProbe,
+  methodReturnMemoRetentionStats,
+  methodReturnMemoTeardownStats,
   methodReturnTemplatePresenceProbe,
   scopeFrameStats,
   scopeTraceContext,
@@ -1795,6 +1800,146 @@ test "ordinary return traces are fresh while cache hits replay no events" =
     expectEqual (0, []) hit,
     expectEqual True (fst failedHit > 0 && snd failedHit == []),
     expectEqual (0, []) afterFailedHit,
+  ]
+
+data ReturnMemoRequestView = ReturnMemoRequestView {
+  rmrvModules : List (String, List (String, String), List (String, String)),
+  rmrvReturns : List MethodReturnMemoView,
+}
+  deriving (Eq, Debug)
+
+returnMemoModuleView : ModDiags ->
+  (String, List (String, String), List (String, String))
+returnMemoModuleView (moduleId, (schemes, errors, warnings)) = (
+  moduleId,
+  map (entry => (fst entry, ppScheme (snd entry))) schemes,
+  map (diag => (tcCode diag, tcMsg diag)) (errors ++ warnings),
+)
+
+returnMemoRelevant : MethodReturnMemoView -> Bool
+returnMemoRelevant view =
+  view.mrmvMethod == "cachedChoose" || view.mrmvMethod == "hidden"
+
+returnMemoPrefix : Bool -> String
+returnMemoPrefix useBool =
+  let head = if useBool then "Bool" else "Int"
+  let value = if useBool then "True" else "41"
+  joinNl [
+    "export interface Need a where",
+    "  need : a -> Int",
+    "impl Need \{head} where",
+    "  need _ = 1",
+    "export interface CachedChoice a where",
+    "  cachedChoose : Unit -> a",
+    "impl CachedChoice \{head} requires Need \{head} where",
+    "  cachedChoose _ = \{value}",
+    "export cached : \{head}",
+    "cached = cachedChoose ()",
+    "export interface Hidden a b where",
+    "  hidden : Unit -> a",
+    "export useHidden : Hidden a b => b -> a",
+    "useHidden witness = hidden ()",
+  ]
+
+returnMemoEntry : String
+returnMemoEntry =
+  "import return_memo_prefix.{cached, useHidden}\nentry = cached\n"
+
+returnMemoConflictPrefix : String
+returnMemoConflictPrefix = joinNl [
+  returnMemoPrefix False,
+  "impl CachedChoice Int requires Need Int where",
+  "  cachedChoose _ = 99",
+]
+
+returnMemoObserved : String -> String -> String -> ReturnMemoRequestView
+returnMemoObserved prefixSource entrySource stepKey =
+  let results =
+    checkModulesDiagsChain
+      (Some (1091, 1093))
+      "method-return-request-fence"
+      [Some stepKey, None]
+      []
+      (desugar (parse numericPreludeSource))
+      [
+        ("return_memo_prefix", desugar (parseLocated prefixSource)),
+        ("return_memo_entry", desugar (parseLocated entrySource)),
+      ]
+  ReturnMemoRequestView {
+    rmrvModules = map returnMemoModuleView results,
+    rmrvReturns = filter returnMemoRelevant (methodReturnMemoCurrentViews ()),
+  }
+
+returnMemoErrorCount : ReturnMemoRequestView -> Int
+returnMemoErrorCount view = returnMemoErrorCountRows view.rmrvModules
+
+returnMemoErrorCountRows : List (String, List (String, String), List (String, String)) ->
+  Int
+returnMemoErrorCountRows [] = 0
+returnMemoErrorCountRows ((_, _, diagnostics) :: rest) =
+  listLen diagnostics + returnMemoErrorCountRows rest
+
+returnMemoMethod : String ->
+  ReturnMemoRequestView ->
+  Option MethodReturnMemoView
+returnMemoMethod method view =
+  match filter (entry => entry.mrmvMethod == method) view.rmrvReturns
+    entry :: _ => Some entry
+    [] => None
+
+test "ordinary return memo fence preserves outcomes and evidence across requests" =
+  let pSource = returnMemoPrefix False
+  let changedSource = returnMemoPrefix True
+  let cold = returnMemoObserved pSource returnMemoEntry pSource
+  let hit = returnMemoObserved pSource returnMemoEntry pSource
+  let failed =
+    returnMemoObserved pSource "entry : Int\nentry = \"wrong\"\n" pSource
+  let afterFailed = returnMemoObserved pSource returnMemoEntry pSource
+  let conflict =
+    returnMemoObserved
+      returnMemoConflictPrefix
+      returnMemoEntry
+      returnMemoConflictPrefix
+  let afterConflict = returnMemoObserved pSource returnMemoEntry pSource
+  let changed = returnMemoObserved changedSource returnMemoEntry changedSource
+  let backToP = returnMemoObserved pSource returnMemoEntry pSource
+  let mutations = methodReturnMemoFenceMutationProbe ()
+  let retained = methodReturnMemoRetentionStats ()
+  let teardown = methodReturnMemoTeardownStats ()
+  let forcedStale = returnMemoObserved changedSource returnMemoEntry pSource
+  let coldInstance = returnMemoMethod "cachedChoose" cold
+  let changedInstance = returnMemoMethod "cachedChoose" changed
+  let coldGiven = returnMemoMethod "hidden" cold
+  expectAll [
+    expectEqual 0 (returnMemoErrorCount cold),
+    expectEqual cold hit,
+    expectEqual cold afterFailed,
+    expectEqual cold afterConflict,
+    expectEqual cold backToP,
+    expectEqual True (returnMemoErrorCount failed > 0),
+    expectEqual True (returnMemoErrorCount conflict > 0),
+    expectEqual True (changed /= cold && returnMemoErrorCount changed == 0),
+    expectEqual True (forcedStale /= changed),
+    expectEqual True (match (coldInstance, changedInstance)
+      (Some before, Some after) =>
+        before.mrmvOutcome == "instance"
+          && after.mrmvOutcome == "instance"
+          && before.mrmvPrerequisites == [("return_memo_prefix::Need", ["Int"])]
+          && after.mrmvPrerequisites == [("return_memo_prefix::Need", ["Bool"])]
+          && before.mrmvEvidence /= "unpublished"
+          && after.mrmvEvidence /= "unpublished"
+          && before.mrmvEvidence /= after.mrmvEvidence
+      _ => False),
+    expectEqual True (match coldGiven
+      Some given =>
+        given.mrmvArguments == Some ["a", "a"]
+          && given.mrmvOutcome == "given"
+          && given.mrmvPrerequisites == []
+          && given.mrmvEvidence /= "unpublished"
+      None => False),
+    expectEqual (True, True, True) mutations,
+    expectEqual (0, 2, 1) retained,
+    expectEqual (0, 0, 0) teardown,
   ]
 
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
