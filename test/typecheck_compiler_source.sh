@@ -1297,7 +1297,7 @@ done || exit 1
 # Numeric literals retain their fixed Num predicate from the method-row producer
 # through checking and return stamping.  Each former OblProjection reader states
 # explicitly whether the unary numeric population participates.
-numeric_predicate_required='import types.solver_contract.{ClassPredicate(..)}
+numeric_predicate_required='  ClassPredicate(..),
   | SKNumReturn ClassPredicate Mono
   | OpNumLit Mono
   | EKNumReturn ClassPredicate Mono Bool (Option Loc)
@@ -1354,38 +1354,42 @@ require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpN
 require_typecheck_arm oblPredOf vecOblOfPred 'OpNumLit _ => match o.pred.args'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpNumLit occ => match normalize occ'
 
-# Ordinary return predicates retain their declaration through both consumers.
-# Scope the instance check to its own arm: the numeric arm uses the same matcher.
-ordinary_return_inst_body="$(sed -n '/^entailInst .*EKExactReturn/,/^entailInst .*EKNumReturn/p' "$predicate_slot_src")"
-ordinary_return_inst_required='  let goals = optionOr [] (methodReturnArgs request)
-  match ieSelectRowByIface env request.mrrIface goals
-      let routeKey = methodRouteKeyForRow request.mrrName env row
-      let routes = implDictRoutesForRow encl useScope goals row'
-printf '%s\n' "$ordinary_return_inst_required" | while IFS= read -r required; do
-  if ! printf '%s\n' "$ordinary_return_inst_body" | grep -Fq "$required"; then
-    echo "FAIL: ordinary return instance arm is missing required source: $required"
+# Complete ordinary returns install one solver outcome on their request.  The checker
+# consumes it, while the route adapter projects the already-selected row and semantic
+# prerequisites without entering the legacy entailment ladder or selecting again.
+ordinary_return_resolution_body="$(sed -n '/^data MethodReturnResolution =/,/^}/p' "$predicate_slot_src")"
+ordinary_return_resolution_required='  mrrWanted : Wanted
+  mrrOutcome : SolverOutcome
+  mrrSelectedRow : Option ImplRow'
+printf '%s\n' "$ordinary_return_resolution_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_resolution_body" | grep -Fq "$required"; then
+    echo "FAIL: ordinary return resolution is missing required source: $required"
     exit 1
   fi
 done || exit 1
-if printf '%s\n' "$ordinary_return_inst_body" | grep -Eq 'ifaceParamMonos|goalPredOf|ieSelectRowByMethod'; then
-  echo "FAIL: ordinary exact return instance arm reconstructs its predicate by spelling"
+
+if ! grep -Fq '  SolverOutcome(..),' "$predicate_slot_src"; then
+  echo "FAIL: ordinary return production code does not import SolverOutcome"
   exit 1
 fi
 
-# #2982: a match inside the record field loses its bound local in Wasm's local collector.
-# Keep the complete/unknown projection outside construction until that emitter gap
-# is repaired; the playground compiler build exercises the actual emitted artifact.
-ordinary_return_goal_body="$(sed -n '/^goalRequestOfKind .*EKExactReturn/,/^goalRequestOfKind .*EKNumReturn/p' "$predicate_slot_src")"
-ordinary_return_goal_required='  let args = match methodReturnArgs request
-    Some args => PSArgsKnown args
-    None => PSArgsUnknown
-  Some PredicateRequest { prIface = request.mrrIface, prArgs = args }'
-printf '%s\n' "$ordinary_return_goal_required" | while IFS= read -r required; do
-  if ! printf '%s\n' "$ordinary_return_goal_body" | grep -Fq "$required"; then
-    echo "FAIL: ordinary return goal projection is missing required source: $required"
+ordinary_return_solver_body="$(sed -n '/^solveExactReturnOnce :/,/^exactReturnDefers :/p' "$predicate_slot_src")"
+ordinary_return_solver_required='solveExactReturnOnce request = match request.mrrResolution.value
+    request.mrrResolution := Some resolution
+        mrrOutcome = Solved (GivenEvidence (assumAnswerBinder answer))
+        mrrOutcome =
+          Solved
+            (InstanceEvidence'
+printf '%s\n' "$ordinary_return_solver_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_solver_body" | grep -Fq "$required"; then
+    echo "FAIL: ordinary return one-outcome solver is missing required source: $required"
     exit 1
   fi
 done || exit 1
+if [ "$(printf '%s\n' "$ordinary_return_solver_body" | grep -c 'ieSelectRowByIface')" -ne 1 ]; then
+  echo "FAIL: ordinary return one-outcome solver must contain exactly one instance selector"
+  exit 1
+fi
 
 require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'let published = match entry.mrtGoal'
 require_typecheck_arm publishMethodReturnTrace lookupTraceEvidence 'mrtPublished = published'
@@ -1394,11 +1398,12 @@ require_typecheck_arm pushExactReturnObl methodReturnRequest 'pred = Predicate {
 require_typecheck_arm pushExactReturnObl methodReturnRequest 'oblProj = OpExactReturn request'
 require_typecheck_arm uOblArgs callOblsWindow 'OpExactReturn request => optionOr [] (methodReturnArgs request)'
 require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'let occs = uOblArgs o'
-require_typecheck_arm checkCallObligationsU noteNumericObligationChecked 'checkOneCallObligation deferNonGround univ iface occs loc o.uoScope'
 require_typecheck_arm recordSite recordNumLitSite 'Some request => SKExactReturn implRef request'
 require_typecheck_arm recordSite recordNumLitSite 'Some request => optionOr ev request.mrrGoalEv'
 require_typecheck_arm recordSite recordNumLitSite '      siteEv)'
-require_typecheck_arm recordSite recordNumLitSite 'recordMethodDictsFromSlots row.msrMethodSlots methodRef subst'
+require_typecheck_arm recordSite recordNumLitSite '        recordMethodDictsFromSlots'
+require_typecheck_arm recordSite recordNumLitSite '          row.msrMethodSlots'
+require_typecheck_arm recordSite recordNumLitSite '          subst.misTypeSubst'
 require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelSlots 'instantiateMethodPredicateSlots row.msrMethodSlots subst'
 
 # The other projection readers retain their own policies; presence in one reader
@@ -1413,11 +1418,57 @@ require_typecheck_arm checkSurvivorObligations checkSurvivorCallObligations 'OpE
 require_typecheck_arm oblPredOf vecOblOfPred 'OpExactReturn request => match methodReturnArgs request'
 require_typecheck_arm ifaceForConstraintIdGo registerActiveDictVars 'OpExactReturn request => match normalize request.mrrOccurrence'
 
-# A queued descriptor may retain the existing occurrence Mono, but neither the
-# producer's live Scheme nor a solver result belongs in this compatibility payload.
+ordinary_return_check_body="$(sed -n '/^checkCallObligationsU deferNonGround univ (o :: rest) =/,/^solveExactReturnOnce :/p' "$predicate_slot_src")"
+ordinary_return_complete_check="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/OpExactReturn request => match methodReturnWanted request/,/      None =>/p')"
+ordinary_return_check_required='        let resolution = solveExactReturnOnce request
+        let _ = consumeExactReturnOutcome univ request resolution
+        noteMethodReturnTrace MRTChecked request None []'
+printf '%s\n' "$ordinary_return_check_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_complete_check" | grep -Fq "$required"; then
+    echo "FAIL: complete ordinary return checker does not consume the one outcome: $required"
+    exit 1
+  fi
+done || exit 1
+if printf '%s\n' "$ordinary_return_complete_check" | grep -Fq 'checkOneCallObligation'; then
+  echo "FAIL: complete ordinary return still reaches the independent obligation selector"
+  exit 1
+fi
+# The absent-formals and non-return projections are the licensed legacy arms.
+ordinary_return_legacy_check="$(printf '%s\n' "$ordinary_return_check_body" | sed -n '/      None =>/,/    _ =>/p')"
+if ! printf '%s\n' "$ordinary_return_legacy_check" | grep -Fq 'checkOneCallObligation deferNonGround univ iface occs loc o.uoScope'; then
+  echo "FAIL: absent-formals ordinary return no longer retains the legacy checker"
+  exit 1
+fi
+
+ordinary_return_stamp_body="$(sed -n '/^resolveExactReturnSite :/,/^resolveNumLitSite :/p' "$predicate_slot_src")"
+ordinary_return_stamp_required='      let resolution = solveExactReturnOnce request
+        exactReturnRoutes name encl scope (contains name rpNames) resolution
+exactReturnRoutes name encl scope isReturnPosition resolution = match (
+    methodReturnEvidenceRoutes encl scope prerequisites,'
+printf '%s\n' "$ordinary_return_stamp_required" | while IFS= read -r required; do
+  if ! printf '%s\n' "$ordinary_return_stamp_body" | grep -Fq "$required"; then
+    echo "FAIL: ordinary return route adapter is missing required source: $required"
+    exit 1
+  fi
+done || exit 1
+if printf '%s\n' "$ordinary_return_stamp_body" | grep -Eq '(^|[^A-Za-z])entail[[:space:](]|ieSelectRowBy'; then
+  echo "FAIL: ordinary return route adapter retains an independent entailment or selector"
+  exit 1
+fi
+if grep -Fq 'EKExactReturn' "$predicate_slot_src"; then
+  echo "FAIL: retired EKExactReturn entailment arm remains"
+  exit 1
+fi
+
+# A queued descriptor retains one request-owned result cell, never the producer's
+# live Scheme or a second, independently mutable route destination.
 ordinary_return_request_body="$(sed -n '/^data MethodReturnRequest =/,/^}/p' "$predicate_slot_src")"
-if [ -z "$ordinary_return_request_body" ] || printf '%s\n' "$ordinary_return_request_body" | grep -Eq ':.*(Scheme|SolverOutcome|SolverEvidence|Ref )'; then
-  echo "FAIL: ordinary return request is absent or retains a scheme, result, or mutable destination"
+if [ -z "$ordinary_return_request_body" ] || printf '%s\n' "$ordinary_return_request_body" | grep -Eq ':.*(Scheme|SolverOutcome|SolverEvidence)'; then
+  echo "FAIL: ordinary return request is absent or embeds a scheme or duplicate outcome"
+  exit 1
+fi
+if ! printf '%s\n' "$ordinary_return_request_body" | grep -Fq 'mrrResolution : Ref (Option MethodReturnResolution)'; then
+  echo "FAIL: ordinary return request does not own its one resolution cell"
   exit 1
 fi
 

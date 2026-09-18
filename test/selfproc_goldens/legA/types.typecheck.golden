@@ -515,6 +515,7 @@ constraintVarIfaceMonos : List (IfaceRef, List String) -> List (String, Mono) ->
 constraintVarNames : Constraint -> List String
 constraintVarNamesTy : Ty -> List String
 constraintsHaveMethodLevel : List String -> List Constraint -> Bool
+consumeExactReturnOutcome : ImplUniverse -> MethodReturnRequest -> MethodReturnResolution -> Unit
 containerArgHint : String -> String
 containerArgMsg : Option String -> String -> String
 containerParamScalarArg : Mono -> Mono -> Option String
@@ -839,6 +840,9 @@ evCell : EvDest -> Ref Route
 evEntriesOf : List Obligation -> List EvEntry
 evOrdinal : EvId -> Int
 evValueOf : EvDest -> EvVal
+exactReturnBlockers : List Mono -> List SolverBlocker
+exactReturnDefers : Wanted -> List Mono -> Bool
+exactReturnRoutes : String -> String -> ScopeId -> Bool -> MethodReturnResolution -> (Route, List Route)
 exactReturnRow : TcEnv -> String -> Scheme -> Option MethodSchemeRow
 exemptInPlaceIndexMutHeads : List String
 exitLevel : Unit -> Unit
@@ -1590,9 +1594,15 @@ methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
 methodPredicateSlotsOfType : List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
 methodRet : Ty -> Ty
 methodReturnArgs : MethodReturnRequest -> Option (List Mono)
+methodReturnEvidenceRoute : String -> ScopeId -> PrerequisiteEvidence -> Route
+methodReturnEvidenceRoutes : String -> ScopeId -> List PrerequisiteEvidence -> List Route
+methodReturnFallbackTag : MethodReturnRequest -> Option String
+methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
 methodReturnInstantiation : MethodSchemeRow -> MethodInstantiationSubst -> ScopeId -> Option Loc -> EvId -> Option Instantiation
 methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
+methodReturnPrerequisites : List Mono -> ImplRow -> List PrerequisiteEvidence
+methodReturnPrerequisitesMatch : List PrerequisiteEvidence -> List PrerequisiteEvidence -> Bool
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeGoalIfaces : List Obligation -> List String
 methodReturnProbeIface : String -> String -> Ty -> Decl
@@ -1607,10 +1617,15 @@ methodReturnProbeSlotIfaces : List PredicateSlot -> List String
 methodReturnProbeSpelling : MethodSchemeRow -> Unit
 methodReturnProbeStamp : MethodSchemeRow -> MethodSchemeRow -> List Decl -> (String, String, String)
 methodReturnRequest : MethodSchemeRow -> Mono -> MethodInstantiationSubst -> Option EvId -> MethodReturnRequest
+methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
+methodReturnResolutionValid : MethodReturnRequest -> MethodReturnResolution -> Bool
+methodReturnSelectedIdentity : MethodReturnResolution -> Int
 methodReturnSlotOwnershipProbe : Unit -> ((List String, List String), (List String, List String), (List String, List String))
 methodReturnTraceEnabled : Ref Bool
 methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
 methodReturnVectorCompletenessProbe : Unit -> (Option (List String), Option (List String), Bool, Bool)
+methodReturnWanted : MethodReturnRequest -> Option Wanted
+methodReturnWantedMatches : MethodReturnRequest -> Wanted -> Bool
 methodRouteKeyForRow : String -> ImplEnv -> ImplRow -> String
 methodRouteKeyOfSelection : String -> ImplEnv -> Option ImplRow -> Option String
 methodRowCanCarry : MethodSchemeRow -> Bool
@@ -1722,7 +1737,7 @@ noteAssumption : ScopeId -> AssumAnswer -> Unit
 noteBuiltinExternNames : List Decl -> Unit
 noteDefaultBodyRNone : DefaultBodyRNoneKind -> String -> Option Loc -> ScopeId -> Route -> Route -> Unit
 noteHeadCtor : Pat -> Map String Unit -> Map String Unit
-noteMethodReturnTrace : MethodReturnTraceStage -> MethodReturnRequest -> Unit
+noteMethodReturnTrace : MethodReturnTraceStage -> MethodReturnRequest -> Option Route -> List Route -> Unit
 noteNumericEntailment : EntailKind -> ScopeId -> Option IfaceRef -> Route -> List Route -> Unit
 noteNumericObligationChecked : UObligation -> List Mono -> Unit
 noteNumericPredicateTrace : NumericPredicateTraceStage -> ClassPredicate -> ScopeId -> Option Loc -> Option IfaceRef -> Option Route -> List Route -> Unit
@@ -1907,6 +1922,8 @@ prependDiagOpt : String -> Int -> Option String -> Option String -> List TcDiag 
 prependDictClause : String -> Int -> FunClause -> FunClause
 prependImplDictIfUser : TyConOrigin -> Int -> List String -> ImplMethod -> ImplMethod
 prependPredicateSlots : List PredicateSlot -> List PredicateSlot -> List PredicateSlot
+prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
+prerequisiteObligation : PrerequisiteEvidence -> (IfaceRef, List Mono)
 preunifySigsEx : List (String, Ty) -> List ScopedMember -> (List ConstraintReg, List (String, Ty, List (String, Mono)))
 processLetGroup : TcEnv -> List LetBind -> TcEnv
 processSCC : TcEnv -> List (String, Ty) -> Map String (List (List Pat, Expr)) -> List String -> (TcEnv, List (String, Scheme), Map String (List (List Pat, Expr)))
@@ -2300,6 +2317,9 @@ siteObligation : GoalKind -> PendingEntry -> Obligation
 siteRDictName : Ref Route -> List String
 siteRDictNamesL : List Route -> List String
 sitesFor : String -> Map String (List a) -> List a
+solveExactReturn : MethodReturnRequest -> MethodReturnResolution
+solveExactReturnInstance : MethodReturnRequest -> Wanted -> List Mono -> MethodReturnResolution
+solveExactReturnOnce : MethodReturnRequest -> MethodReturnResolution
 sortIfaceRefs : List IfaceRef -> List IfaceRef
 sortIfaceRefsGo : List IfaceRef -> List IfaceRef -> List IfaceRef
 sortInsertIfaceRef : IfaceRef -> List IfaceRef -> List IfaceRef
@@ -2516,6 +2536,7 @@ wRestore : Windowed a -> (List a, Int) -> Unit
 wSnapshot : Windowed a -> (List a, Int)
 wWindow : Windowed a -> Int -> List a
 walkDispatch : List String -> Ty -> Mono -> List (String, Mono)
+wantedMatches : Wanted -> Wanted -> Bool
 wildOverlayDecls : Int -> List DeclEnvModule -> String -> List Decl
 wildSchemeOblEntry : String -> ((String, String), List VecObl) -> List (String, List VecObl)
 withAliasMethodNames : List (String, String) -> Map String Unit -> Map String Unit
