@@ -1183,8 +1183,11 @@ grep -E -q '^keygen: public key 0[23][0-9a-f]{64}$' "$WORK/keygen.out" \
 # The scalar reaches its file and nothing else: what keygen printed must not
 # contain the bytes it wrote.
 KEYGEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/key.hex")
-if grep -F "$KEYGEN_SECRET" "$WORK/keygen.out" "$WORK/keygen.err" >/dev/null 2>&1; then
-  fail 'case 28: keygen printed the signing key it generated'
+KEYGEN_TOKEN_SECRET=$(tr -d '\n' < "$KEYGEN_DIR/token.hex")
+if grep -F "$KEYGEN_SECRET" "$WORK/keygen.out" "$WORK/keygen.err" >/dev/null 2>&1 \
+  || grep -F "$KEYGEN_TOKEN_SECRET" "$WORK/keygen.out" "$WORK/keygen.err" >/dev/null 2>&1
+then
+  fail 'case 28: keygen printed a secret it generated'
 fi
 # A second run over the same path must refuse rather than destroy the key.
 "$WORK/pdsd" keygen --key "$KEYGEN_DIR/key.hex" \
@@ -1208,6 +1211,24 @@ grep -E -q '^keygen: keygen' "$WORK/keygen2.err" \
   && fail 'case 28: keygen accepted an existing --token-secret destination'
 [ ! -e "$KEYGEN_DIR/fresh.hex" ] \
   || fail 'case 28: keygen left a signing key behind after refusing the run'
+# A destination can pass the existence precheck and still fail to be written.
+# The first write is then cleaned up, and no success summary is published.
+"$WORK/pdsd" keygen --key "$KEYGEN_DIR/fresh-write-failure.hex" \
+  --token-secret "$KEYGEN_DIR/missing-parent/token.hex" \
+  > "$WORK/keygen4.out" 2> "$WORK/keygen4.err" \
+  && fail 'case 28: keygen accepted an unwritable --token-secret destination'
+[ ! -e "$KEYGEN_DIR/fresh-write-failure.hex" ] \
+  || fail 'case 28: a second-write failure left the signing key behind'
+[ ! -e "$KEYGEN_DIR/missing-parent/token.hex" ] \
+  || fail 'case 28: a second-write failure left the token secret behind'
+grep -F "unwritable session-token secret $KEYGEN_DIR/missing-parent/token.hex" \
+  "$WORK/keygen4.err" >/dev/null \
+  || fail 'case 28: the second-write failure did not name the token path'
+if grep -E 'keygen: (wrote|public key|did:key)' \
+  "$WORK/keygen4.out" "$WORK/keygen4.err" >/dev/null 2>&1
+then
+  fail 'case 28: a failed paired write published a success summary'
+fi
 # 28b. and what keygen wrote is what serve accepts: a whole genesis server
 #    stands up on the generated key and the generated token secret, which is
 #    the only proof that keygen and serve agree on the file format and mode.

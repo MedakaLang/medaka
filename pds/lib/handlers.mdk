@@ -84,11 +84,14 @@ import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
 import lib.blockstore.{blockStoreGet}
 import lib.car.{carEncode, carEncodeRootless}
-import lib.cid.{Cid, cidEqual, cidForDagCbor, cidFromString, cidToString}
+import lib.cid.{
+  Cid, cidEqual, cidForDagCbor, cidFromString, cidMember, cidToString
+}
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.did_key.{didKeyMultibase}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
 import lib.mst.{mstCoveringProofBlocks}
+import lib.query_params as QueryParams
 import lib.repo.{
   Repo,
   RepoCommit,
@@ -297,29 +300,30 @@ internalError =
   xrpcErrorResponse 500 "Internal Server Error" "InternalServerError"
 
 contentTypeHeader : String -> Header
-contentTypeHeader value = match makeHeader "content-type" (toUtf8 value)
-  Ok header => header
-  Err message => panic "handlers: internal response header error: \{message}"
+contentTypeHeader value =
+  resultOrPanic
+    "handlers: internal response header error"
+    (makeHeader "content-type" (toUtf8 value))
 
 {- | The success counterpart of `xrpcErrorResponse`: 200 with an exact body and
    one declared media type. `http`'s serializer owns all framing. -}
 bytesOkResponse : String -> Array Int -> Response
 bytesOkResponse contentType body =
-  match makeResponse 200 "OK" [contentTypeHeader contentType] body
-    Ok response => response
-    Err message =>
-      panic "handlers: internal response construction error: \{message}"
+  resultOrPanic
+    "handlers: internal response construction error"
+    (makeResponse 200 "OK" [contentTypeHeader contentType] body)
 
 nosniffHeader : Header
-nosniffHeader = match makeHeader "x-content-type-options" (toUtf8 "nosniff")
-  Ok header => header
-  Err message => panic "handlers: internal response header error: \{message}"
+nosniffHeader =
+  resultOrPanic
+    "handlers: internal response header error"
+    (makeHeader "x-content-type-options" (toUtf8 "nosniff"))
 
 contentDispositionAttachmentHeader : Header
 contentDispositionAttachmentHeader =
-  match makeHeader "content-disposition" (toUtf8 "attachment")
-    Ok header => header
-    Err message => panic "handlers: internal response header error: \{message}"
+  resultOrPanic
+    "handlers: internal response header error"
+    (makeHeader "content-disposition" (toUtf8 "attachment"))
 
 {- | `getBlob`'s own success envelope: identical to `bytesOkResponse` plus two
    headers that stop a browser from rendering a stored blob as a live
@@ -335,10 +339,9 @@ blobOkResponse contentType body =
     nosniffHeader,
     contentDispositionAttachmentHeader,
   ]
-  match makeResponse 200 "OK" headers body
-    Ok response => response
-    Err message =>
-      panic "handlers: internal response construction error: \{message}"
+  resultOrPanic
+    "handlers: internal response construction error"
+    (makeResponse 200 "OK" headers body)
 
 {- | The standard XRPC success envelope: 200 with a serialized JSON body.
    `lib.xrpc` owns the matching error envelope (`xrpcErrorResponse`) but has no
@@ -963,11 +966,6 @@ recordServer account = do
 
 -- ── query-parameter admission ───────────────────────────────────────────────
 
-paramCount : String -> List QueryParam -> Int
-paramCount _ [] = 0
-paramCount name ((QueryParam key _) :: rest) =
-  if key == name then 1 + paramCount name rest else paramCount name rest
-
 paramFirst : String -> List QueryParam -> Option String
 paramFirst _ [] = None
 paramFirst name ((QueryParam key value) :: rest) =
@@ -988,17 +986,12 @@ paramAll name ((QueryParam key value) :: rest) =
    to whichever copy happens to come first. -}
 optionalParam : String -> List QueryParam -> Result Response (Option String)
 optionalParam name params =
-  if paramCount name params > 1 then
-    Err (invalidRequest "Query parameter '\{name}' must not be repeated")
-  else
-    Ok (paramFirst name params)
+  mapErr (message => invalidRequest message) (QueryParams.soleParam name params)
 
 requiredParam : String -> List QueryParam -> Result Response String
 requiredParam name params = do
   found <- optionalParam name params
-  match found
-    None => Err (invalidRequest "Query parameter '\{name}' is required")
-    Some value => Ok value
+  toResult (invalidRequest "Query parameter '\{name}' is required") found
 
 {- | A parameter this server understands the meaning of but does not implement
    is REFUSED, never ignored: silently dropping `since` or `cursor` would
@@ -1037,18 +1030,16 @@ recordViews : Account ->
   String ->
   List (String, DagCbor) ->
   Result Response (List Json)
-recordViews _ _ [] = Ok []
-recordViews account collection ((rkey, value) :: rest) = do
-  view <- recordView account collection rkey value
-  views <- recordViews account collection rest
-  Ok (view :: views)
+recordViews account collection entries =
+  traverse ((rkey, value) => recordView account collection rkey value) entries
 
 -- ── repository reads ────────────────────────────────────────────────────────
 
 lookupRecord : Array Int -> Repo -> Result Response (Option DagCbor)
-lookupRecord path repo = match repoLookup path repo
-  Err message => Err (invalidRequest "Repository read rejected: \{message}")
-  Ok found => Ok found
+lookupRecord path repo =
+  mapErr
+    (message => invalidRequest "Repository read rejected: \{message}")
+    (repoLookup path repo)
 
 {- | Decode the records of an ALREADY-SELECTED page, and no others.
 
@@ -1544,9 +1535,9 @@ applySyncGetRecord account store params = do
     Err message =>
       Err (invalidRequest "Record key is not admissible: \{message}")
     Ok blocks => Ok blocks
-  found <- match repoRecordCid path repo
-    Err message => Err (internalError "Repository lookup failed: \{message}")
-    Ok value => Ok value
+  found <- mapErr
+    (message => internalError "Repository lookup failed: \{message}")
+    (repoRecordCid path repo)
   record <- recordProofBlock found repo
   let commit = repoLatestCommit repo
   let commitCid = repoCommitCid commit
@@ -1590,15 +1581,10 @@ admitCids (text :: rest) seen = match cidFromString text
       (invalidRequest
         "Query parameter 'cids' holds a value that is not a valid CID: \{message}")
   Ok cid =>
-    if anyCidEqual cid seen then
+    if cidMember cid seen then
       admitCids rest seen
     else
       admitCids rest (cid :: seen)
-
-anyCidEqual : Cid -> List Cid -> Bool
-anyCidEqual _ [] = False
-anyCidEqual cid (candidate :: rest) =
-  cidEqual cid candidate || anyCidEqual cid rest
 
 -- | Requested CIDs split into the blocks this repository holds and the CIDs
 -- it does not, each accumulated reversed for `partitionBlocks` to restore.
@@ -1890,9 +1876,9 @@ applyCreateSession account context store body = do
         (internalError
           "This server has no session secret configured and can issue no session")
     Some value => Ok value
-  credential <- match storeCredential store
-    None => Err (authenticationRequired "Invalid identifier or password")
-    Some value => Ok value
+  credential <- toResult
+    (authenticationRequired "Invalid identifier or password")
+    (storeCredential store)
   () <- checkLogin account identifier password credential
   let (access, refresh) = mintSessionTokens account secret context
   Ok (
@@ -1954,9 +1940,7 @@ applyRefreshSession account context presented store = do
       (sessionFingerprint refresh)
       (sessionExpiry context)
       (storeSessionsPrune context.nowSeconds store)
-  rotated <- match rotation
-    None => Err (invalidToken "Token could not be verified")
-    Some next => Ok next
+  rotated <- toResult (invalidToken "Token could not be verified") rotation
   Ok (rotated, sessionOutput account access refresh)
 
 {- | `com.atproto.server.deleteSession`: close the presented session.

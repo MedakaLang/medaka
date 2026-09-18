@@ -86,14 +86,10 @@ roundF t b c d =
 -- call site below only ever indexes within a known length, so the `None`
 -- arm is unreachable (same idiom as `stdlib/sha256.mdk`'s `byteAt`).
 byteAt : Array Int -> Int -> Int
-byteAt arr i = match get i arr
-  Some b => b
-  None => panic "sha1: byteAt index out of bounds"
+byteAt arr i = optionOrPanic "sha1: byteAt index out of bounds" (get i arr)
 
 wordAt : Array Int -> Int -> Int
-wordAt arr i = match get i arr
-  Some w => w
-  None => panic "sha1: wordAt index out of bounds"
+wordAt arr i = optionOrPanic "sha1: wordAt index out of bounds" (get i arr)
 
 -- ── Message schedule ─────────────────────────────────────────────────
 

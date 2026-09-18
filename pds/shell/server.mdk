@@ -61,9 +61,9 @@ import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.credential.{
   credentialDigest,
   credentialIterations,
-  ctEqBytes,
   saltBytes,
 }
+import hmac.{ctEq}
 import lib.ratelimit.{
   ClientIdentity,
   RateLimitClass(..),
@@ -514,7 +514,7 @@ persistCredentialHalf dir before after = match (
   (None, Some next) => persistCredential dir next
   (Some prior, Some next) =>
     if credentialIterations prior == credentialIterations next
-      && ctEqBytes (credentialDigest prior) (credentialDigest next) then
+      && ctEq (credentialDigest prior) (credentialDigest next) then
       Ok ()
     else
       persistCredential dir next
@@ -910,9 +910,10 @@ classMessage ProxyClass =
   "too many proxied appview reads for this identity in the current window"
 
 intHeader : String -> Int -> Header
-intHeader name value = match makeHeader name (toUtf8 "\{value}")
-  Ok header => header
-  Err message => panic "serve: internal rate-limit header error: \{message}"
+intHeader name value =
+  resultOrPanic
+    "serve: internal rate-limit header error"
+    (makeHeader name (toUtf8 "\{value}"))
 
 -- `RateLimit-Reset` needs no state, only `now` and the shared window length:
 -- every class resets on the same window boundary.

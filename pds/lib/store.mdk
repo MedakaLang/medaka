@@ -58,9 +58,10 @@ import lib.blockstore.{
   blockStoreSize,
 }
 import lib.cid.{Cid, cidToString}
-import lib.credential.{CredentialRecord, ctEqBytes}
+import lib.credential.{CredentialRecord}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
+import hmac.{ctEq}
 import sha256.{sha256}
 import json.{Json}
 import map.{Map(..), get, set, entries}
@@ -192,17 +193,17 @@ sessionFingerprint token = sha256 (toUtf8 token)
 hasAccess : Array Int -> List SessionRecord -> Bool
 hasAccess _ [] = False
 hasAccess wanted ((SessionRecord access _ _) :: rest) =
-  ctEqBytes wanted access || hasAccess wanted rest
+  ctEq wanted access || hasAccess wanted rest
 
 hasRefresh : Array Int -> List SessionRecord -> Bool
 hasRefresh _ [] = False
 hasRefresh wanted ((SessionRecord _ refresh _) :: rest) =
-  ctEqBytes wanted refresh || hasRefresh wanted rest
+  ctEq wanted refresh || hasRefresh wanted rest
 
 withoutRefresh : Array Int -> List SessionRecord -> List SessionRecord
 withoutRefresh _ [] = []
 withoutRefresh wanted ((SessionRecord access refresh expires) :: rest) =
-  if ctEqBytes wanted refresh then
+  if ctEq wanted refresh then
     withoutRefresh wanted rest
   else
     SessionRecord access refresh expires :: withoutRefresh wanted rest

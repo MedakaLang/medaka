@@ -40,9 +40,8 @@ import lib.base58.{base58btcEncode, base58btcDecode}
 import base32.{base32Encode, base32Decode}
 
 byteAt : Int -> Array Int -> Int
-byteAt i arr = match get i arr
-  Some b => b
-  None => panic "multiformats: byte index out of bounds"
+byteAt i arr =
+  optionOrPanic "multiformats: byte index out of bounds" (get i arr)
 
 -- ── unsigned-varint (LEB128) ─────────────────────────────────────────────
 

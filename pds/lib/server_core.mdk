@@ -52,6 +52,7 @@ import lib.proxy.{
   proxyServiceDid,
   relayedRequestHeaders,
 }
+import lib.query_params as QueryParams
 import lib.store.{
   Store,
   sessionFingerprint,
@@ -908,29 +909,13 @@ serviceAuthMaxExpirySeconds = 3600
 serviceAuthMaxMethodlessExpirySeconds : Int
 serviceAuthMaxMethodlessExpirySeconds = 60
 
--- Exactly one value for `name`, `None` when the client sent none, and the
--- refusal a repeat is owed: picking among two values a client sent is choosing
--- on its behalf, and here the choice is what a signature vouches for. Same
--- rule `cursorOf` above applies, and the same one `lib.handlers` applies to
--- every other query parameter on this server.
-soleParam : String ->
-  List QueryParam ->
-  Int ->
-  Option String ->
-  Result Response (Option String)
-soleParam _ [] 0 _ = Ok None
-soleParam _ [] 1 found = Ok found
-soleParam name [] _ _ =
-  Err (serviceAuthRefusal "Query parameter '\{name}' must not be repeated")
-soleParam name ((QueryParam key value) :: rest) count found =
-  if key == name then
-    soleParam name rest (count + 1) (Some value)
-  else
-    soleParam name rest count found
-
+-- A repeated parameter is ambiguous: picking one value would choose what the
+-- service-auth signature vouches for on the caller's behalf. The shared
+-- cardinality helper reports that fact; this adapter chooses the service-auth
+-- refusal response.
 requiredParam : String -> List QueryParam -> Result Response String
-requiredParam name params = match soleParam name params 0 None
-  Err response => Err response
+requiredParam name params = match QueryParams.soleParam name params
+  Err message => Err (serviceAuthRefusal message)
   Ok None => Err (serviceAuthRefusal "Query parameter '\{name}' is required")
   Ok (Some value) => Ok value
 
@@ -985,8 +970,8 @@ admitServiceExpiry : RequestContext ->
   Option String ->
   List QueryParam ->
   Result Response Int
-admitServiceExpiry context lxm params = match soleParam "exp" params 0 None
-  Err response => Err response
+admitServiceExpiry context lxm params = match QueryParams.soleParam "exp" params
+  Err message => Err (serviceAuthRefusal message)
   Ok None => Ok (context.nowSeconds + serviceTokenLifetimeSeconds)
   Ok (Some text) => match toInt (trim text)
     None =>
@@ -1033,7 +1018,9 @@ serviceAuthClaims : Account ->
 serviceAuthClaims account context table params = do
   audience <- requiredParam "aud" params
   () <- admitServiceAudience table audience
-  method <- soleParam "lxm" params 0 None
+  method <- mapErr
+    (message => serviceAuthRefusal message)
+    (QueryParams.soleParam "lxm" params)
   () <- admitServiceMethod method
   expiry <- admitServiceExpiry context method params
   Ok ServiceAuthRequest {

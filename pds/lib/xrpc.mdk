@@ -219,9 +219,10 @@ xrpcFailureResponse : XrpcFailure -> Response
 xrpcFailureResponse (XrpcFailure _ _ _ response) = response
 
 mustJsonHeader : Header
-mustJsonHeader = match makeHeader "content-type" (toUtf8 "application/json")
-  Ok header => header
-  Err message => panic "xrpc: internal response header error: \{message}"
+mustJsonHeader =
+  resultOrPanic
+    "xrpc: internal response header error"
+    (makeHeader "content-type" (toUtf8 "application/json"))
 
 errorResponse : Int -> String -> String -> String -> Response
 errorResponse status reason code message =
@@ -241,9 +242,9 @@ errorResponseWithHeaders status reason code message extraHeaders =
     toUtf8
       (stringify
         (jObject [("error", JString code), ("message", JString message)]))
-  match makeResponse status reason (mustJsonHeader :: extraHeaders) body
-    Ok response => response
-    Err detail => panic "xrpc: internal response construction error: \{detail}"
+  resultOrPanic
+    "xrpc: internal response construction error"
+    (makeResponse status reason (mustJsonHeader :: extraHeaders) body)
 
 -- | Build the canonical XRPC JSON error envelope for protocol layers that
 -- fail before a route exists, such as HTTP framing.

@@ -1,5 +1,5 @@
 # META
-source_lines=670
+source_lines=675
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -265,6 +265,11 @@ extern netTcpAccept : Int -> <Net "_"> Result String Int
 -- | Sends bytes on a connection. The result is the number of bytes
 -- written, which may be fewer than given.
 extern netSend : Int -> Array Int -> <Net "_"> Result String Int
+
+-- | Sends bytes starting at `offset` into the array. The result is the number
+-- of bytes written, which may be fewer than given and is limited to 64 KiB per
+-- call so a loop can retain one array while advancing through it.
+extern netSendFrom : Int -> Array Int -> Int -> <Net "_"> Result String Int
 
 -- | Receives up to `n` bytes from a connection. An empty array means the
 -- other side has closed.
@@ -722,6 +727,7 @@ extern stringToLower : String -> String
 (DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
 (DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
@@ -874,6 +880,7 @@ extern stringToLower : String -> String
 (DExtern false "netListenPort" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "netTcpAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
 (DExtern false "netSend" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
+(DExtern false "netSendFrom" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))))
 (DExtern false "netRecv" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int")))))))
 (DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))

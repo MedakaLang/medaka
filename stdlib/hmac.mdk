@@ -12,6 +12,34 @@
 import array.{concat, make, setInPlace}
 import sha256.{sha256, sha256FixedBytes}
 
+ctEqAccum : Array Int -> Array Int -> Int -> Int -> Int
+ctEqAccum a b i acc =
+  if i >= arrayLength a then
+    acc
+  else
+    ctEqAccum a b (i + 1) (bitOr acc (bitXor a[i] b[i]))
+
+{- | Whether two byte arrays contain the same values.
+
+   Unequal lengths return `False`. Equal-length inputs visit every byte
+   position without returning early based on the contents.
+
+   > ctEq [|0x48, 0x69|] [|0x48, 0x69|]
+   True -}
+export
+ctEq : Array Int -> Array Int -> Bool
+ctEq a b =
+  if arrayLength a /= arrayLength b then False else ctEqAccum a b 0 0 == 0
+
+-- > ctEq [|1, 2, 3|] [|9, 2, 3|]
+-- False
+-- > ctEq [|1, 2, 3|] [|1, 2, 4|]
+-- False
+-- > ctEq [||] [||]
+-- True
+-- > ctEq [|1, 2, 3|] [|1, 2, 3, 4|]
+-- False
+
 -- The SHA-256 block size, which is what the ipad/opad are padded to and the
 -- length above which RFC 2104 §2 hashes the key down.
 blockBytes : Int

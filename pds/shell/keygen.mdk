@@ -123,3 +123,32 @@ keygenTokenSecret path = do
     (osEntropyBytes serverSecretBytes)
   let () = putStrLn "keygen: wrote session-token secret \{path} (mode 0600)"
   Ok ()
+
+{- | Generate both secrets, publish neither success summary until both writes
+   succeed, and remove the signing key if the token-secret write fails.
+
+   This is command-level cleanup, not cross-directory crash atomicity. A
+   cleanup failure preserves the original write error and also names the
+   signing-key residue that may remain. -}
+export
+keygenSigningKeyAndTokenSecret : String ->
+  String ->
+  <FileRead "_", FileWrite "_", Rand, Stdout> Result String Unit
+keygenSigningKeyAndTokenSecret keyPath secretPath = do
+  keyBytes <- keygenSecretBytes keygenAttempts
+  (publicHex, did) <- keygenSummary keyBytes
+  let secretBytes = osEntropyBytes serverSecretBytes
+  () <- keygenWrite "signing key" keyPath keyBytes
+  match keygenWrite "session-token secret" secretPath secretBytes
+    Err message => match removeFile keyPath
+      Ok () => Err message
+      Err cleanup =>
+        Err
+          "\{message}; cleanup of signing key \{keyPath} also failed: \{cleanup}; the signing key may remain"
+    Ok () =>
+      let () = putStrLn "keygen: wrote signing key \{keyPath} (mode 0600)"
+      let () = putStrLn "keygen: public key \{publicHex}"
+      let () = putStrLn "keygen: did:key \{did}"
+      let () =
+        putStrLn "keygen: wrote session-token secret \{secretPath} (mode 0600)"
+      Ok ()

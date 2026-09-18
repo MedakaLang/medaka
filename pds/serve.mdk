@@ -139,7 +139,12 @@ import shell.eventlog.{
   eventLogPlanRecovery,
   eventLogSweepStaging,
 }
-import shell.keygen.{keygenRefusePath, keygenSigningKey, keygenTokenSecret}
+import shell.keygen.{
+  keygenRefusePath,
+  keygenSigningKey,
+  keygenSigningKeyAndTokenSecret,
+  keygenTokenSecret,
+}
 import shell.persist.{
   credentialPath,
   persistCredential,
@@ -686,8 +691,7 @@ runKeygen parsed = match (
     () <- requireDistinctDestinations keyPath secretPath
     () <- keygenRefusePath "signing key" keyPath
     () <- keygenRefusePath "session-token secret" secretPath
-    () <- keygenSigningKey keyPath
-    keygenTokenSecret secretPath
+    keygenSigningKeyAndTokenSecret keyPath secretPath
 
 requireDistinctDestinations : String -> String -> Result String Unit
 requireDistinctDestinations keyPath secretPath =

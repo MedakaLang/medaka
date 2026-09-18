@@ -59,7 +59,7 @@ expected_internal_source_manifest() {
 2128618670 25697  pds/lib/field.mdk
 1518600487 31160  pds/lib/scalar.mdk
 4099640445 12086  stdlib/sha256.mdk
-4205512882 5228  stdlib/hmac.mdk
+1287185123 5939  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
@@ -71,7 +71,7 @@ expected_public_source_manifest() {
 2128618670 25697  pds/lib/field.mdk
 1518600487 31160  pds/lib/scalar.mdk
 4099640445 12086  stdlib/sha256.mdk
-4205512882 5228  stdlib/hmac.mdk
+1287185123 5939  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3175129806 3842  pds/lib/sign.mdk
