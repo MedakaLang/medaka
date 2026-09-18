@@ -1,5 +1,5 @@
 # META
-source_lines=188
+source_lines=190
 stages=DESUGAR,MARK
 # SOURCE
 {- | Hexadecimal encoding and decoding of bytes.
@@ -18,7 +18,7 @@ stages=DESUGAR,MARK
 -- codecs; the rule has no semantic/type-level check to tell them apart, not a real duplicate.
 -- lint-disable-file rule-stdlib-reimpl
 
-import array.{fromList}
+import array.{fromList, get as arrGet}
 -- Wildcard, not selective: `import bytes.{Bytes, ...}` cannot bring the bare
 -- type name into scope here — `Bytes`'s constructor shares the type's own
 -- name, and the resolver's selective-member path (`resolve.mdk`'s
@@ -29,12 +29,14 @@ import bytes.*
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 
--- Every call site below only ever indexes within the array's own known
--- length, so the internal-only `arrayGetUnsafe` primitive is safe here.
--- (Not `Array.get`: that name is now ambiguous between `array` and the
--- wildcard-imported `bytes`.)
+-- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
+-- call site below only ever indexes within the array's own known length, so
+-- the `None` arm is unreachable; this just avoids the internal-only
+-- `arrayGetUnsafe` primitive.
 charAt : Int -> Array Char -> Char
-charAt i arr = arrayGetUnsafe i arr
+charAt i arr = match arrGet i arr
+  Some c => c
+  None => panic "hex: index out of bounds"
 
 -- # Encoding
 
@@ -191,12 +193,12 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
   let b = fromArray (toByteArray xs)
   decodeBytes (encodeBytes b) == Ok b
 # DESUGAR
-(DUse false (UseGroup ("array") ((mem "fromList" false))))
+(DUse false (UseGroup ("array") ((mem "fromList" false) (mem "get" false "arrGet"))))
 (DUse false (UseWild ("bytes")))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
-(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))
+(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "hex: index out of bounds"))))))
 (DTypeSig false "digitChar" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
 (DFunDef false "digitChar" ((PVar "n") (PVar "upper")) (EIf (EVar "upper") (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToUpper") (EVar "c"))) (arm (PCon "None") () (ELit (LChar "?")))) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?"))))))
 (DTypeSig false "byteToHexChars" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Char") (TyCon "Char")))))
@@ -227,12 +229,12 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
 (DProp false "hex encode length is 2x byte length" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "bs") (EApp (EVar "toByteArray") (EVar "xs"))) (DoExpr (EBinOp "==" (EApp (EVar "stringLength") (EApp (EVar "encode") (EVar "bs"))) (EBinOp "*" (ELit (LInt 2)) (EApp (EVar "arrayLength") (EVar "bs")))))))
 (DProp false "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "fromArray") (EApp (EVar "toByteArray") (EVar "xs")))) (DoExpr (EBinOp "==" (EApp (EVar "decodeBytes") (EApp (EVar "encodeBytes") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
 # MARK
-(DUse false (UseGroup ("array") ((mem "fromList" false))))
+(DUse false (UseGroup ("array") ((mem "fromList" false) (mem "get" false "arrGet"))))
 (DUse false (UseWild ("bytes")))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
-(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr")))
+(DFunDef false "charAt" ((PVar "i") (PVar "arr")) (EMatch (EApp (EApp (EVar "arrGet") (EVar "i")) (EVar "arr")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "hex: index out of bounds"))))))
 (DTypeSig false "digitChar" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyCon "Char"))))
 (DFunDef false "digitChar" ((PVar "n") (PVar "upper")) (EIf (EVar "upper") (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EApp (EVar "charToUpper") (EVar "c"))) (arm (PCon "None") () (ELit (LChar "?")))) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?"))))))
 (DTypeSig false "byteToHexChars" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyTuple (TyCon "Char") (TyCon "Char")))))

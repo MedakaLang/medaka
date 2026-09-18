@@ -1,13 +1,21 @@
 # META
-source_lines=147
+source_lines=161
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
 
-   `Bytes` wraps a sequence of byte values, each `0` to `255`, and hands out
-   no way to change it once built. Use it for data that is bytes — a file's
-   contents, a hash digest, a UTF-8 encoding — and `Array Int` for a sequence
-   of numbers that happen to be small.
+   `Bytes` wraps a sequence of byte values, each meant to be `0` to `255`,
+   and hands out no way to change it once built. Use it for data that is
+   bytes, such as a file's contents, a hash digest, or a UTF-8 encoding, and
+   `Array Int` for a sequence of numbers that happen to be small.
+
+   At B1 the `0` to `255` domain is not enforced. `fromArray` accepts any
+   `Int`, and `get`, `b[i]`, `eq`, and `compare` all read an out-of-range
+   element back unchanged, with no masking. Some byte-consuming code
+   elsewhere (`hex.encodeBytes`, for one) masks to the low eight bits before
+   use, so the same out-of-range value can render differently depending on
+   which operation reads it. Masking or rejecting out-of-range elements is
+   left to `Bytes`'s packed B2 representation.
 
    `fromArray` and `toArray` convert; `bytesLength` is the byte count and
    `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
@@ -40,9 +48,8 @@ export newtype Bytes = Bytes (Array Int)
 
 {- | The byte string holding the elements of `arr`, in order.
 
-   Only the low eight bits of each element carry meaning to the functions
-   that read bytes; nothing here masks or rejects an element outside `0` to
-   `255`.
+   Nothing here masks or rejects an element outside `0` to `255`: `get`,
+   `b[i]`, `eq`, and `compare` all read such an element back unchanged.
 
    > toArray (fromArray [|104, 105|])
    [|104, 105|] -}
@@ -63,7 +70,7 @@ toArray (Bytes arr) = arr
 {- | The number of bytes in `b`.
 
    The name is not `length`: that one is `Foldable`'s method, which the
-   prelude exports, and `Bytes` cannot implement `Foldable` — the interface
+   prelude exports, and `Bytes` cannot implement `Foldable`. The interface
    ranges over a container of some element type, and `Bytes` has no element
    parameter.
 
@@ -126,6 +133,13 @@ export impl Eq Bytes where
 export impl Ord Bytes where
   compare (Bytes a) (Bytes b) = compare a b
 
+{- | Renders as its bytes would as an `Array Int`.
+
+   > debug (fromArray [|7, 8, 9|])
+   "[|7, 8, 9|]" -}
+export impl Debug Bytes where
+  debug (Bytes arr) = debug arr
+
 -- # Text
 
 {- | The UTF-8 encoding of `s`.
@@ -163,6 +177,7 @@ fromUtf8Bytes (Bytes arr) = stringFromUtf8Bytes arr
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "Int")) () ((im "index" ((PCon "Bytes" (PVar "arr")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DImpl true "Eq" ((TyCon "Bytes")) () ((im "eq" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b")))))
 (DImpl true "Ord" ((TyCon "Bytes")) () ((im "compare" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EApp (EApp (EVar "compare") (EVar "a")) (EVar "b")))))
+(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "arr"))) (EApp (EVar "debug") (EVar "arr")))))
 (DTypeSig true "toUtf8Bytes" (TyFun (TyCon "String") (TyCon "Bytes")))
 (DFunDef false "toUtf8Bytes" ((PVar "s")) (EApp (EVar "Bytes") (EApp (EVar "stringToUtf8Bytes") (EVar "s"))))
 (DTypeSig true "fromUtf8Bytes" (TyFun (TyCon "Bytes") (TyCon "String")))
@@ -181,6 +196,7 @@ fromUtf8Bytes (Bytes arr) = stringFromUtf8Bytes arr
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "Int")) () ((im "index" ((PCon "Bytes" (PVar "arr")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "arr")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "arr"))))))
 (DImpl true "Eq" ((TyCon "Bytes")) () ((im "eq" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EApp (EApp (EMethodRef "eq") (EVar "a")) (EVar "b")))))
 (DImpl true "Ord" ((TyCon "Bytes")) () ((im "compare" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EApp (EApp (EMethodRef "compare") (EVar "a")) (EVar "b")))))
+(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "arr"))) (EApp (EMethodRef "debug") (EVar "arr")))))
 (DTypeSig true "toUtf8Bytes" (TyFun (TyCon "String") (TyCon "Bytes")))
 (DFunDef false "toUtf8Bytes" ((PVar "s")) (EApp (EVar "Bytes") (EApp (EVar "stringToUtf8Bytes") (EVar "s"))))
 (DTypeSig true "fromUtf8Bytes" (TyFun (TyCon "Bytes") (TyCon "String")))
