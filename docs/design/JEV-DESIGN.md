@@ -121,10 +121,14 @@ landed. The rewrite was frozen before the held-out sample was drawn:
 |---|---|---|
 | `reviewer` as shipped, vs. the corrected label | 0.836 | 0.732 |
 | `ephemeral` v1 | -- | 0.905 |
-| `ephemeral` v2, shipped | 0.991 | **0.972** |
+| `ephemeral` v2, shipped | 0.993 | **0.974** |
 
 The held-out column is the one that means anything; the tuning column is the
-sample the question was written against. At the shipped 0.35 the mechanical
+sample the question was written against. ⚠️ Like the `register` means below,
+these drift by a few thousandths with any edit to the state OR to a SIBLING
+question, because the cache key hashes the whole question dict and re-asks all
+four. Quote them to two places at most, and re-derive before relying on one:
+`python3 scripts/jev/jev_eval.py --kind comments`. At the shipped 0.35 the mechanical
 baseline (the census's `draft`+`deictic`+`ruling` classes) gets precision 0.45
 at recall 0.36 on the same rows, against 0.86/0.74 -- so this question clears
 the "beat the regex you sit beside" bar that `reviewer` never did.
