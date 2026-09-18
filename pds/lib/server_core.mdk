@@ -248,8 +248,9 @@ sessionOpen _ fingerprint store = storeAccessActive fingerprint store
    must still be open. That is what makes `deleteSession` a revocation rather
    than an announcement — the access token it revokes is still inside its own
    validity window and still carries a good MAC, and is refused anyway.
-   Sessions live only in memory (`lib.store`), so a restart refuses every
-   token minted before it.
+   Sessions outlive the process (`shell.persist` writes the set, `pds/serve.mdk`
+   reads it back at startup), so a restart is not a logout and a token minted
+   before one still resolves after it.
 
    A `Store` with no session secret can resolve nothing, so every credential
    presented to it is refused. That is the state a server started without a

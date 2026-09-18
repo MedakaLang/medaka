@@ -388,14 +388,27 @@ requestNsid request = match parseTargetQuery request
     XrpcPath nsid => Some nsid
     _ => None
 
-hasBodyFraming : List Header -> Bool
-hasBodyFraming [] = False
-hasBodyFraming (header :: rest) =
-  let name = headerName header
-  name == "content-length"
-    || name == "transfer-encoding"
-    || name == "content-type"
-    || hasBodyFraming rest
+{- | Whether these headers declare a request body, for the routes that accept
+   none.
+
+   `Content-Length: 0` does not declare one: RFC 9110 §8.6 makes a zero length
+   exactly the statement that there is no body, and it is what a bodiless POST
+   carries from nearly every HTTP client. Refusing it puts the two `NoInput`
+   procedures, `com.atproto.server.refreshSession` and `deleteSession`, out of
+   reach of such a client before the seam can read the token. A `Content-Type`
+   beside a zero length describes a body that is not there, and is likewise not
+   a declaration of one.
+
+   A transfer coding is one, and is refused: `chunked` is a framing these
+   routes have no reason to carry. `stdlib/http.mdk` has already refused a
+   `Transfer-Encoding` arriving with a `Content-Length`, a repeated one, and
+   any coding that is not exactly `chunked`, so what reaches here is a
+   well-formed chunked framing, and the caller's own decoded-length test is
+   what catches one that carried bytes. -}
+declaresBody : List Header -> Bool
+declaresBody [] = False
+declaresBody (header :: rest) =
+  headerName header == "transfer-encoding" || declaresBody rest
 
 data MediaSelection =
   | MissingMedia
@@ -500,8 +513,7 @@ decodeProcedure : String ->
   Request ->
   RouteResult
 decodeProcedure nsid NoInput auth params request =
-  if requestBodyLength request > 0
-    || hasBodyFraming (requestHeaders request) then
+  if requestBodyLength request > 0 || declaresBody (requestHeaders request) then
     invalidRequest "This procedure does not accept request body framing"
   else
     RouteCall auth (ProcedureNoInputCall nsid params)
@@ -545,7 +557,7 @@ routeEndpoint (Endpoint nsid QueryEndpoint auth) request params =
   if requestMethod request /= "GET" then
     methodNotAllowed "XRPC query endpoints require GET"
   else if requestBodyLength request > 0
-    || hasBodyFraming (requestHeaders request) then
+    || declaresBody (requestHeaders request) then
     invalidRequest "XRPC query endpoints do not accept request body framing"
   else
     RouteCall auth (QueryCall nsid params)
@@ -568,7 +580,7 @@ routeWellKnown wellKnown request =
   if requestMethod request /= "GET" then
     methodNotAllowed "atproto well-known paths require GET"
   else if requestBodyLength request > 0
-    || hasBodyFraming (requestHeaders request) then
+    || declaresBody (requestHeaders request) then
     invalidRequest "atproto well-known paths do not accept request body framing"
   else
     RouteCall PublicRoute (WellKnownCall wellKnown)
@@ -580,7 +592,7 @@ routeHealth request =
   if requestMethod request /= "GET" then
     methodNotAllowed "the health probe requires GET"
   else if requestBodyLength request > 0
-    || hasBodyFraming (requestHeaders request) then
+    || declaresBody (requestHeaders request) then
     invalidRequest "the health probe does not accept request body framing"
   else
     RouteCall PublicRoute HealthCall

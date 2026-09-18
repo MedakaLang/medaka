@@ -117,8 +117,10 @@ import lib.store.{
   storePutBlob,
   storeFromRepo,
   storeWithCredential,
+  storeSessionsPrune,
   storeWithPreferences,
   storeWithServerSecret,
+  storeWithSessionRows,
 }
 import lib.tid.{Tid, tidEncode}
 import net.{Listener, listenPort}
@@ -151,6 +153,8 @@ import shell.persist.{
   persistHasHead,
   persistLoad,
   persistLoadPreferences,
+  persistLoadSessions,
+  sessionsPath,
   persistSave,
   persistSweepStagedBlocks,
 }
@@ -904,6 +908,15 @@ configure parsed = do
   -- interrupted partway through would have no later start able to finish it
   -- (#3006).
   let nowSeconds = floatToInt (now ())
+  -- Readmit the sessions the previous process had open, minus whatever
+  -- expired while nothing was running: a restart is not a logout. Pruning
+  -- here rather than trusting the file is what keeps a stale row from
+  -- outliving its own expiry across a long stop.
+  () <- if fileExists (sessionsPath dir) then
+    requirePrivateMode "sessions file" (sessionsPath dir)
+  else
+    Ok ()
+  sessionRows <- persistLoadSessions dir
   () <- requireDataLock lock
   () <- eventLogApplyRecovery dir recovery eventLogRetentionSeconds nowSeconds
   () <- completeGenesisEvents dir did handle nowSeconds repo
@@ -912,7 +925,11 @@ configure parsed = do
   () <- requireDataLock lock
   Ok (
     server,
-    storeWithPreferences prefs withCredential,
+    storeSessionsPrune
+      nowSeconds
+      (storeWithSessionRows
+        sessionRows
+        (storeWithPreferences prefs withCredential)),
     dir,
     port,
     bind,
