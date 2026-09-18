@@ -135,10 +135,22 @@ Two limits, both measured and neither fixed here:
   positives uses no in-flight vocabulary at all, and the stratum it came from
   weights to roughly 49 positives tree-wide. A regex gate in front of Jev
   would drop them silently.
-- **The question degrades with block length.** On the held-out draw, blocks
-  under ~12 lines score AUC 0.988 and blocks over it 0.910, and every false
-  negative is 27 lines or longer. Long blocks dilute the anchoring phrase in
-  both directions. Chunking by paragraph is the open fix.
+- **The question degrades with block length, and the loss is RECALL.** On the
+  held-out draw, under the shipped configuration, blocks of 20 lines or fewer
+  score AUC 0.984 and longer ones 0.910; at the 0.35 operating point recall
+  falls from 0.86 to 0.50 while precision barely moves (0.86 to 0.75). A long
+  block dilutes its anchoring phrase, so the miss is silent rather than noisy.
+  It is a tendency and not a rule: the five false negatives are at 11, 19, 27,
+  33 and 80 lines, so two of them are short blocks that length cannot explain.
+
+  ⚠️ **Splitting long blocks by paragraph does NOT fix this — measured, it is
+  worse.** Judging each paragraph and taking the max, which is how a chunked
+  census would report back at block level, gives AUC 0.948 against the whole
+  block's 0.974, and 0.926 against 0.961 on exactly the long blocks it was
+  meant to help. The max lifts every block that contains one ambiguous
+  paragraph, so the recall it buys is paid for in precision, at 2.6x the
+  requests. The dilution is real; this particular fix for it is refuted, and a
+  roadmap item proposing it again should cite a different mechanism.
 
 The whole-tree positive rate implied by the stratified draw is about 1.7% of
 the 7466 comment blocks, roughly 125. The draw is anchor-oversampled, so that
@@ -266,6 +278,25 @@ not running it unattended, and it is stronger than the one above; the earlier
 draft of this paragraph printed 0.67 / 0.66 bare, which reads far better than
 it is.
 
+**But do not "fix" it by asking the binary question directly — measured, that
+is worse.** The obvious reading of the paragraph above is that a three-way
+Choice scoring 0.66 should be replaced by the two-way one actually used. Three
+ranking keys against the same binary label on the same 65 rows:
+
+| ranking key | AUC | best operating point |
+|---|---:|---|
+| collapsed three-way, `P(convert)+P(partial)` — shipped | **0.973** | precision 0.87, recall 1.00 at 0.80 |
+| a two-way `rewrite`/`leave` Choice asked directly | 0.950 | precision 0.76, recall 0.96 at 0.55 |
+| no Choice at all: `uniform_chain` x normalized `readability_gain` | 0.939 | precision 0.96, recall 0.85 at 0.40 |
+
+The three-way framing earns its place by giving the model somewhere to put a
+partial answer; collapsing that afterwards beats forcing the binary up front,
+and beats computing the key from the other two answers. So the question stays
+as it is. What is retired is the CLAIM: its three-way accuracy is not this
+question's performance, the convert-versus-partial line is unmeasurable at
+`convert` n=5, and no roadmap item should propose shrinking it again without
+re-running this comparison.
+
 **Confidence does not separate the confident wrong answers.** Two rows in the
 corpus are there to pin this. `D063` (`compiler/tools/lsp.mdk:815 typeAtPoint`)
 is called `convert` at 0.82, above every other disagreement in the do half; the
@@ -358,9 +389,10 @@ exemplar):
 
 ### 4.2 Next
 
-- Chunk long comment blocks by paragraph. `ephemeral` loses 0.08 AUC on
-  blocks over ~12 lines and every one of its false negatives is a long block
-  (2.1.1); `register` and `offsite` are untested on that axis.
+- Recover `ephemeral`'s recall on long blocks by some mechanism OTHER than
+  paragraph chunking, which is measured and refuted (2.1.1). The loss is real
+  -- recall 0.86 on blocks of 20 lines or fewer against 0.50 above that -- and
+  it is the largest known gap in the shipped question.
 - Comment-versus-code mismatch as claim pairing (#3121): code pairs each
   backticked identifier and each checkable claim with the declaration, Jev
   judges the pair.
