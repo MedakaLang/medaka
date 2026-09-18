@@ -44,7 +44,8 @@ These rows mirror the public-exposure table in issue #1697.
    successful old-cost login must rehash; weak admission must fail loudly.
 6. **Key generation and at-rest handling.** Run key generation into fresh paths
    and into a configuration with one invalid destination. Check all-or-nothing
-   behavior, `0600` secrets, and that only the public DID reaches stdout.
+   behavior, `0600` secrets, and that stdout contains only destination/mode
+   confirmations plus the public key and DID, never secret bytes.
 7. **Bind, proxy, and operator refusal.** Exercise loopback spellings and unsafe
    non-loopback spellings with and without authentication and trusted-proxy
    configuration. Refusal must happen before secrets are read or generated.
@@ -67,8 +68,8 @@ These rows mirror the public-exposure table in issue #1697.
     authenticate and make a new signed write on the restored copy.
 12. **Block-store growth.** Create and replace records and blobs, observe
     unreferenced block growth, and confirm it is the known loud residual in
-    #2572. A stray non-directory entry must fail startup rather than silently
-    discard data.
+    #2572. Unknown top-level residue must be preserved; recognized shard/leaf
+    structural collisions must refuse startup rather than discard data.
 13. **MST range and incremental reads.** Read a large synthetic repository in
     small chunks and request narrow record pages. Check byte identity and
     liveness, and distinguish the closed `readMore` copy problem from open MST
