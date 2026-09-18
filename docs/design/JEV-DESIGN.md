@@ -6,6 +6,12 @@ J-NATIVE. J-NATIVE is parked as of 2026-09-17 and section 5.1 says on what
 condition it unparks. Tracking is on the issues; this document is the design
 and the measured record.
 
+**Looking for what was already tried?** `docs/design/JEV-LEDGER.md` is the
+index of attempts: accepted, live, refuted, declined. Read it before proposing
+a change to a question -- five proposals have already been measured and
+rejected, and the ledger says why. This document holds the detail those rows
+point at.
+
 ## 1. The niche
 
 Medaka has two ways to keep code in shape. `medaka lint` is mechanical,
