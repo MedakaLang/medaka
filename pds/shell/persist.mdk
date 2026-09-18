@@ -37,10 +37,11 @@
 
 import array
 import fs.{mkdirAll}
-import hex.{encode}
+import hex.{decode, encode}
 import io.{writeFilePrivate}
 import json.{Json, asArray, jArray, parse, stringify}
 import path.{dirname}
+import string.{join, lines, split, toInt, trim}
 import lib.cid.{Cid, cidFromString, cidToString}
 import lib.credential.{
   CredentialRecord,
@@ -190,3 +191,87 @@ persistLoadPreferences dir =
     match asArray value
       None => Err "persist: preferences file is not a JSON array"
       Some items => Ok (toList items)
+
+-- | Where the open session set is kept beneath `dir`. Exported because
+-- `pds/serve.mdk` admits this file's mode before reading it back.
+export
+sessionsPath : String -> String
+sessionsPath dir = "\{dir}/sessions"
+
+-- One session per line: access fingerprint, refresh fingerprint, and the
+-- instant the refresh token expires, space-separated, the two fingerprints in
+-- hex. Neither field is a bearer token -- both are SHA-256 digests of one
+-- (`lib.store`'s `sessionFingerprint`) -- so what this file holds cannot be
+-- presented to the server it was read from.
+sessionRowText : (Array Int, Array Int, Int) -> String
+sessionRowText (access, refresh, expires) =
+  "\{encode access} \{encode refresh} \{intToString expires}"
+
+sessionsText : List (Array Int, Array Int, Int) -> String
+sessionsText rows = join "\n" (map sessionRowText rows)
+
+parseSessionRow : String -> Result String (Array Int, Array Int, Int)
+parseSessionRow line = match split " " (trim line)
+  [accessHex, refreshHex, expiresText] => do
+    access <- mapErr
+      (message =>
+        "persist: sessions file has an invalid fingerprint: \{message}")
+      (decode accessHex)
+    refresh <- mapErr
+      (message =>
+        "persist: sessions file has an invalid fingerprint: \{message}")
+      (decode refreshHex)
+    match toInt expiresText
+      None => Err "persist: sessions file has a non-numeric expiry"
+      Some expires => Ok (access, refresh, expires)
+  _ => Err "persist: sessions file has a malformed row"
+
+parseSessionRows : List String ->
+  Result String (List (Array Int, Array Int, Int))
+parseSessionRows [] = Ok []
+parseSessionRows (line :: rest) =
+  if trim line == "" then
+    parseSessionRows rest
+  else do
+    row <- parseSessionRow line
+    rows <- parseSessionRows rest
+    Ok (row :: rows)
+
+{- | Persist the open session set beneath `dir`, staged then `rename`d exactly
+   like the credential file, and at the same 0600: a session row is not a
+   bearer token but it is security-relevant state, and `pds/serve.mdk` refuses
+   to read a secret file back at a wider mode.
+
+   Writing this is what lets a restart readmit the sessions it had open, so a
+   backup window or a version bump does not log every client out. -}
+export
+persistSessions : String ->
+  List (Array Int, Array Int, Int) ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistSessions dir rows = do
+  () <- ensureRoot dir
+  let staged = "\{sessionsPath dir}.tmp"
+  () <- match writeFilePrivate staged (sessionsText rows)
+    Err message => Err "unwritable sessions \{sessionsPath dir}: \{message}"
+    Ok () => Ok ()
+  () <- fsync staged
+  () <- rename staged (sessionsPath dir)
+  fsync dir
+
+{- | Read back the persisted session set, or the empty list when `dir` has
+   never had one written.
+
+   The rows are unverified disk bytes and are not live sessions on their own:
+   an expired row is returned as readily as a current one, and the caller
+   prunes against the instant it is starting at. -}
+export
+persistLoadSessions : String ->
+  <FileRead "_"> Result String (List (Array Int, Array Int, Int))
+persistLoadSessions dir =
+  if not (fileExists (sessionsPath dir)) then
+    Ok []
+  else do
+    text <- mapErr
+      (message => "persist: unreadable sessions file: \{message}")
+      (readFile (sessionsPath dir))
+    parseSessionRows (lines text)

@@ -265,17 +265,17 @@ test "query rejects a non-empty framed body" =
         "Content-Type: application/json\r\n"
         (toUtf8 "{}")))
 
-test "query rejects zero-length framing and Content-Type" =
-  expectTrue
-    (failureMatches
-      400
-      "InvalidRequest"
-      "XRPC query endpoints do not accept request body framing"
-      (bodyRequest
-        "GET"
-        "/xrpc/com.atproto.server.describeServer"
-        "Content-Type: application/json\r\n"
-        [||]))
+test "query admits zero-length framing and Content-Type" =
+  match (routeRequest
+    registry
+    (bodyRequest
+      "GET"
+      "/xrpc/com.atproto.server.describeServer"
+      "Content-Type: application/json\r\n"
+      [||]))
+    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) =>
+      expectTrue True
+    _ => expectTrue False
 
 test "no-input procedure produces a typed call" =
   match (routeRequest
@@ -285,13 +285,45 @@ test "no-input procedure produces a typed call" =
       expectTrue True
     _ => expectTrue False
 
-test "no-input procedure rejects body framing" =
+-- The shape nearly every HTTP client gives a bodiless POST, and so the one
+-- `com.atproto.server.refreshSession` is reached by in the field.
+test "no-input procedure admits a zero-length Content-Length" =
+  match (routeRequest
+    registry
+    (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" [||]))
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
+      expectTrue True
+    _ => expectTrue False
+
+test "no-input procedure admits a Content-Type over a zero-length body" =
+  match (routeRequest
+    registry
+    (bodyRequest
+      "POST"
+      "/xrpc/com.example.nobody.ping"
+      "Content-Type: application/json\r\n"
+      [||]))
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
+      expectTrue True
+    _ => expectTrue False
+
+test "no-input procedure rejects a body that carries bytes" =
   expectTrue
     (failureMatches
       400
       "InvalidRequest"
       "This procedure does not accept request body framing"
-      (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" [||]))
+      (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" (toUtf8 "{}")))
+
+test "no-input procedure rejects a chunked transfer coding" =
+  expectTrue
+    (failureMatches
+      400
+      "InvalidRequest"
+      "This procedure does not accept request body framing"
+      (mustRequest
+        (toUtf8
+          "POST /xrpc/com.example.nobody.ping HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")))
 
 test "JSON procedure produces a typed parsed call" =
   let request =
