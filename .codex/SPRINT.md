@@ -27,7 +27,7 @@ body. Ignore that body's Claude-specific frontmatter and apply these mappings:
 
 | Claude role or tier | Codex dispatch |
 |---|---|
-| `sprint-implementer`, routine `sonnet` slice | `sprint_implementer`; use the repository's default subagent model and effort |
+| `sprint-implementer`, routine `sonnet` slice | `sprint_implementer` with `gpt-5.6-terra`, `high` (the repository defaults in `.codex/config.toml`) |
 | `sprint-implementer`, tricky `opus` slice or justified upgrade | `sprint_implementer` with explicit `gpt-5.6-sol`, `high` |
 | `sprint-reviewer` | `sprint_reviewer` (Sol, high) |
 | `sprint-retro` | `sprint_retro` (Terra, high) |
@@ -36,7 +36,9 @@ body. Ignore that body's Claude-specific frontmatter and apply these mappings:
 These are workflow tiers using this repository's model choices, not a claim
 of model equivalence. Preserve an explicit user model selection. Record the
 resolved model in the packet. The implementer role deliberately leaves its
-model unset so the default or explicit spawn model can take effect.
+model unset: routine slices inherit the Terra/high defaults from
+`.codex/config.toml`, while a tricky slice or justified upgrade passes
+Sol/high explicitly at dispatch.
 
 Use native subagent tools and fresh context for each slice. With a tool that
 offers `fork_turns`, use `none`: the packet and cited files are the handoff.
