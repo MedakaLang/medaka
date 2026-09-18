@@ -11,6 +11,13 @@ reference compiler was removed 2026-06-26 (tag `oracle-frozen` preserves the las
 **This file is a *router*: maps, traps, and links.** It does not teach. For prose,
 rationale, and post-mortems, follow the links — and don't assume detail that isn't here.
 
+**Sprints:** plan with `.claude/skills/sprint-plan/SKILL.md`, run with
+`.claude/skills/sprint-orchestrator/SKILL.md`, and hand off through
+`.claude/skills/sprint-packet/SKILL.md`. Codex uses these same skills via the
+`.agents/skills` symlink; read [.codex/SPRINT.md](.codex/SPRINT.md) for its
+harness mappings. The orchestrator delegates implementation to sprint agents;
+packet checks are a ceiling, with thorough review once at the end.
+
 > **Claude project memories are available on this machine:**
 > `/root/.claude/projects/-root-medaka/memory/MEMORY.md`. Consult when durable project
 > decisions or prior-session learnings are relevant; do not load automatically.

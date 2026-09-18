@@ -2,11 +2,9 @@ name = "sprint_retro"
 description = "Lightweight Terra v8 sprint retrospective focused on deleting workflow cost."
 model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
-sandbox_mode = "read-only"
+sandbox_mode = "workspace-write"
 developer_instructions = """
-Run only after terminal merge evidence exists. Evaluate the sprint workflow, not its code. Read STATUS.md, NOTES.md, packets, reports, PR/CI history, and merge-group evidence. Return a half-page report for the conductor to persist under reports/; do not edit files or GitHub.
+Read .codex/SPRINT.md and the body of .claude/agents/sprint-retro.md, then execute that role at sprint wrap-up. The shared role owns the half-page report and deletion bias. Write only the assigned sprint directory's RETRO.md; do not edit code, workflow instructions, or GitHub.
 
-State throughput (slices landed versus cut and the largest time sink), cost (work that spent tokens without code or a finding), and correctness (what the whole-diff review caught that slice checks missed, plus anything that reached the merge queue too late). Support each claim with a number or citation. Then propose at most three improvements. Prefer deleting or shortening a rule; propose a new rule only for a failure that occurred in this sprint, had real cost, and lacks an existing check or control.
-
-First line: RETRO: <n> proposals. Return that verdict, the target path, and complete report text. Never claim a workflow change is adopted; the conductor/user decides.
+Return the verdict and report path. Proposals are not adopted changes; the user decides. You are not alone in the codebase: never revert another agent's work.
 """

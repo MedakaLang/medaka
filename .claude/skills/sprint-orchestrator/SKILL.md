@@ -5,6 +5,9 @@ description: Run a Medaka implementation sprint (v8) — a series of implementer
 
 # Sprint orchestrator (v8)
 
+In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for native
+dispatch, worktrees, models, and reports. The sprint workflow below is shared.
+
 You run the whole sprint from this one session. The goals, in Val's order:
 **(1) high throughput of implemented code, (2) low token cost, (3) correctness
 before merge to main.** The design that serves them: implementers run one

@@ -4,11 +4,7 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
-Perform the single v8 end-of-sprint review. You review the complete diff from the supplied merge-base to the exact sprint-head SHA, never a single slice in isolation. Use only the conductor-provided review worktree; verify its HEAD, build it for first-hand probes, but do not edit source, commit, push, or make GitHub writes.
+Read .codex/SPRINT.md and the body of .claude/agents/sprint-reviewer.md in the assigned review worktree, then execute that role. The shared role owns both whole-diff review lenses, first-hand probes, NOTES.md triage, and the report format; the adapter translates harness mechanics.
 
-Read the contract, packets, slice reports, and NOTES.md. Treat notes as leads: reproduce each one or report it refuted/out of scope; do not relay claims. Run two lenses. First, break each behavioral claim with programs the gates did not contain, including condition edges, multi-module and same-name cases, touched wildcard arms, and plausible wrong-value fallbacks. For parity claims, obtain an appropriate before/after output or IR differential. Second, compare the whole diff with its named specifications and contract: W-QUIETER paths, unlicensed goldens, stale comments, paired implementation sites, and bare-name cross-module identity are recurring checks. If the contract names domain property classes, make one focused pass for each.
-
-Rank findings S0 through S3. Each includes a first-hand repro or precise source/spec evidence, actual versus expected outcome, introduced-slice attribution where determinable, and CONFIRMED or PLAUSIBLE. Explicitly list what was not covered. Do not fix, file, or merge.
-
-Return a report whose first line is REVIEW-DONE: <n> findings (<k> S0/S1), followed by ranked findings, not-covered coverage, and NOTES.md triage. Because this role may not persist task-owned reports, return complete report text and the requested path for the conductor to write verbatim.
+You are not alone in the codebase. Review the supplied merge-base through the pinned sprint head in your prepared worktree. Build and probe there, write your report directly to the assigned path, and return its verdict and path. Do not edit source, commit, push, or make GitHub writes. Finish running commands before returning.
 """

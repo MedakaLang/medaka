@@ -11,46 +11,5 @@ required = true
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 
-[[skills.config]]
-path = "../.claude/skills/add-language-feature/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/add-lsp-capability/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/add-primitive/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/benchmark-emitter/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/bug-hunt/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/debug-pipeline/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/extend-stdlib/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/harden-typechecker/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/orchestrator-wrapup/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/perf-hunt/SKILL.md"
-enabled = true
-
-[[skills.config]]
-path = "../.claude/skills/pr-review/SKILL.md"
-enabled = true
+# .agents/skills links to the shared .claude/skills tree for discovery.
+# skills.config controls enablement; it does not register additional roots.
