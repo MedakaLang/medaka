@@ -123,6 +123,15 @@ test/comment_register_census   derived comment-register census (#2281, S-comment
                                 reads the per-file breakdown before acting on it (see the
                                 script header).
 
+test/bytes_census               derived Array Int type-position census (epic #3134,
+                                `make bytes-census`): counts the per-file `Array Int`
+                                position count tree-wide. Default mode always exits 0
+                                and asserts nothing — a per-file opt-in ratchet
+                                (`--check` against test/bytes_census_baseline.toml) is
+                                the gated path, run by the real gate
+                                test/diff_compiler_bytes_census.sh, not this script
+                                directly. See the script header.
+
 test/arch_census                derived architecture census (#2289, S-arch-census,
                                 `make arch-census`): reports the largest-files table plus
                                 per-directory file/line totals over compiler/*.mdk +
