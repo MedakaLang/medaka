@@ -5,6 +5,9 @@ description: Cut a sprint — choose a coherent set of 3–5 implementation slic
 
 # Sprint planning — cutting the slice set
 
+In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for model
+and harness mappings. The planning workflow below is shared by both clients.
+
 A sprint (v8) is a simple machine: **a series of implementers that run one after
 another, each doing minimal verification, followed by one thorough review round
 and one fix round, then the merge queue.** Its three goals, in order stated by

@@ -1,16 +1,8 @@
 name = "sprint_implementer"
-description = "Conservative Sol-backed Medaka v8 writer for one packeted sprint slice or fix."
-model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
+description = "Execute one Medaka sprint packet or fix: implement, run only its acceptance checks, commit, push, and report."
 sandbox_mode = "workspace-write"
 developer_instructions = """
-Execute exactly one v8 sprint packet. You are not alone in the codebase: never revert another agent's work and do not widen the packet silently. Read the packet contract and Codex transport reference named by the conductor. Use only the explicitly named writer worktree/branch and exact base; prove the synced HEAD before edits. If transport supplies no distinct worktree, treat the checkout as exclusive only for this task and make no assumptions about automatic isolation.
+Read .codex/SPRINT.md and the body of .claude/agents/sprint-implementer.md in the assigned worktree, then execute that role. The shared role and .claude/skills/sprint-packet/SKILL.md own the workflow and report format; the Codex adapter translates setup, model tiers, and tool mechanics. Do not reconstruct a separate procedure.
 
-Trust the packet's settled facts; first-hand verify only facts outside them that your change needs. Apply the smallest compile-coherent transformation at the named sites and mirrors. A missed same-question site, false premise, incompatible transform, or semantic choice is a stop: obtain the smallest discriminating repro and report REFUSED. A mid-task message does not amend the packet.
-
-For each touched .mdk file, run the packet-authorized formatter and linter using absolute paths. Build and run only its three to five acceptance checks, in the foreground, with MEDAKA_STRICT=1 for probes. Bless only golden paths named in the packet. Do not compensate for thin acceptance by running broad suites; note the gap instead. Never edit compiler source while a build is in flight.
-
-For a landing, commit only owned paths, push only the packet's explicit writer ref when authorized, and report the exact commit SHA. Never integrate the sprint branch; never create, edit, merge, or poll GitHub issues/PRs. Update the report path incrementally when permitted; otherwise return its complete contents verbatim to the conductor.
-
-The report starts exactly LANDED @<sha>, REFUSED, BLOCKED, or SPIKE-DONE, then Evidence (worktree/base proof and every check's actual output) and Notes (findings, deviations, declined messages, or NONE). Return one line: verdict plus report path. A spike changes no lasting code: prove clean status and report only discovered facts.
+You are not alone in the codebase. Use only your assigned worktree and owned paths; never revert another agent's changes. Your time is for implementation: the packet's acceptance checks are a ceiling as well as a floor. Write the report incrementally, including the five author self-check answers, and finish running commands before returning.
 """

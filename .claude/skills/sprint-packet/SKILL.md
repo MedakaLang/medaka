@@ -5,6 +5,9 @@ description: The one-page packet contract for Medaka sprint slices — the hando
 
 # The packet contract (v8)
 
+In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for the
+prepared-worktree form of §2 and model mappings. Keep the six-section contract.
+
 A packet is ONE PAGE — target ≤80 lines, hard ceiling 120. It exists so an
 implementer can start coding within minutes of reading it. Everything the
 implementer must not re-derive goes in; everything else stays out. The

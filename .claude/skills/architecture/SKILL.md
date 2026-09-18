@@ -97,6 +97,10 @@ why it is not reopened here.
 | Mirroring `.claude/skills/` into `.agents/` and `.opencode/` — **DELETED** 2026-09-04 | #2313 (Val ruling) | `.agents/` and `.opencode/` removed as unreferenced, diverged mirror trees — `.agents/skills` was a stale copy of `.claude/skills`, `.opencode/` an independent, unused roster. No gate referenced either tree. |
 | The `compiler/types/` module map README — **PENDING, referenced not written** | #2283 (open) | It is leg 4 **R** and will land as a `README.md` under `compiler/types/`, carrying the per-module depth this skill deliberately does not: which of `typecheck.mdk`'s fenced regions does what. It does not exist yet (this skill functions without it); when it lands, link it from here rather than copying it. Not cited as a live path above precisely because it is not on disk. |
 
+Codex discovers the canonical skills through the `.agents/skills` symlink to
+`.claude/skills`. Keep that link as a discovery entry point, not a copied tree;
+Codex-specific sprint mechanics live in `.codex/SPRINT.md`.
+
 ## Drift detection between sprints
 
 ```sh
