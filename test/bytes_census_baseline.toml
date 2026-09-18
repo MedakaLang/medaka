@@ -1,0 +1,21 @@
+# test/bytes_census_baseline.toml — Array Int position count baseline,
+# GENERATED, never hand-edited (epic #3134).
+#
+# One [[entry]] per file this census has been explicitly enrolled for. A
+# file's count may drop freely; exceeding its own pinned count is an
+# error. A file with NO row here is UNCONSTRAINED — see
+# test/bytes_census.sh's header for why this is a per-file opt-in
+# ratchet, never a tree-wide one (stdlib/bytes.mdk deliberately gets no
+# row: its Array Int positions are the epic's permanent bridge).
+#
+# Enforced by test/diff_compiler_bytes_census.sh (merge-tier).
+#
+# Regenerate from the repo root, never by hand:
+#
+#   sh test/bytes_census.sh --write test/bytes_census_baseline.toml <file> ...
+#
+# Paths are relative to the repo root, matching every consumer above.
+
+[[entry]]
+file = "stdlib/hex.mdk"
+count = 6

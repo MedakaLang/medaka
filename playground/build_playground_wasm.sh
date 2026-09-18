@@ -71,7 +71,7 @@ cp "$CORE"    "$DIST/core.mdk"
 # EXCLUDED on purpose (native-only externs that trap/LinkError on wasm):
 #   math (libm), fs (file IO), net (sockets), time (<Clock>), io (file/stdin),
 #   test (runExpectation).  Keep this list in sync with EXTRA_MODULES in main.js.
-EXTRA_MODULES="args array async base64 bytebuilder byteparser hash_map hash_set hex \
+EXTRA_MODULES="args array async base64 bytebuilder byteparser bytes hash_map hash_set hex \
 json list map nonempty path set string toml validation vector"
 for m in $EXTRA_MODULES; do
   cp "$ROOT/stdlib/$m.mdk" "$DIST/$m.mdk"

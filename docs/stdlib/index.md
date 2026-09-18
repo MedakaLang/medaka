@@ -185,6 +185,18 @@ byteparser — a binary parser-combinator library for Medaka.
 - [`leFloat64`](byteparser.md#lefloat64)
 - [`runByteParser`](byteparser.md#runbyteparser)
 
+## [`bytes`](bytes.md)
+
+An immutable string of bytes.
+
+- [`Bytes`](bytes.md#bytes)
+- [`fromArray`](bytes.md#fromarray)
+- [`toArray`](bytes.md#toarray)
+- [`bytesLength`](bytes.md#byteslength)
+- [`get`](bytes.md#get)
+- [`toUtf8Bytes`](bytes.md#toutf8bytes)
+- [`fromUtf8Bytes`](bytes.md#fromutf8bytes)
+
 ## [`core`](core.md)
 
 The prelude: the types, interfaces, and functions every Medaka program can use without an import.
@@ -335,9 +347,11 @@ A mutable set of distinct elements, keyed by hash.
 
 Hexadecimal encoding and decoding of bytes.
 
+- [`encodeBytes`](hex.md#encodebytes)
 - [`encode`](hex.md#encode)
 - [`encodeUpper`](hex.md#encodeupper)
 - [`encodeString`](hex.md#encodestring)
+- [`decodeBytes`](hex.md#decodebytes)
 - [`decode`](hex.md#decode)
 - [`decodeString`](hex.md#decodestring)
 

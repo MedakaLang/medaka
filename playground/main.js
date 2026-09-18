@@ -259,9 +259,9 @@ function applyDiagnostics(files) {
 // math, fs, net, time, io, test.  Keep in sync with EXTRA_MODULES in
 // build_playground_wasm.sh (these are fetched from dist/<id>.mdk).
 const EXTRA_MODULES = [
-  'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'hash_map',
-  'hash_set', 'hex', 'json', 'list', 'map', 'nonempty', 'path', 'set',
-  'string', 'toml', 'validation', 'vector',
+  'args', 'array', 'async', 'base64', 'bytebuilder', 'byteparser', 'bytes',
+  'hash_map', 'hash_set', 'hex', 'json', 'list', 'map', 'nonempty', 'path',
+  'set', 'string', 'toml', 'validation', 'vector',
 ];
 
 // ── Asset loader ──────────────────────────────────────────────────────────────

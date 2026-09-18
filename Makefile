@@ -13,7 +13,7 @@
 MEDAKA_SCRATCH ?= /var/tmp/medaka-scratch
 export TMPDIR := $(shell mkdir -p $(MEDAKA_SCRATCH) 2>/dev/null && echo $(MEDAKA_SCRATCH) || echo /tmp)
 
-.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census t4-census jev-census jev-eval
+.PHONY: medaka emitter seed bootstrap seed-health check-self test gates snapshot-check preflight ci clean help docs-links docs-index gen-ci agent-doc-symbols pr-helper-test fmt-clean-census cli-conformance-census diag-census first-hour-census comment-census arch-census slop-census dup-census dist o2-survivor-census doc-census t4-census jev-census jev-eval bytes-census
 
 ## medaka  — build the native OCaml-free `medaka` CLI (CANONICAL).
 ##           WARM (./medaka_emitter present): 2-stage rebuild from current source,
@@ -168,6 +168,13 @@ test: medaka
 	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without this line
 	## nothing would run them.
 	./medaka test stdlib/http.mdk
+	## stdlib/bytes.mdk's doctests — the `Bytes` surface, including the
+	## out-of-range pairing (`get` answers `None` where `b[i]` panics). Nothing
+	## imports the module by design (keeping it out of the compiler's import
+	## closure is what makes it free of a seed re-mint), so it is outside every
+	## entry's import closure ([W-MODULE-BLIND]) and is not in
+	## test/diff_compiler_fmt_test.mdk's testReportCorpus list either.
+	./medaka test stdlib/bytes.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
 	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
@@ -332,6 +339,14 @@ first-hour-census: medaka
 ##           built ./medaka needed. Always exits 0: a census, not a gate.
 comment-census:
 	sh test/comment_register_census.sh
+
+## bytes-census — report the per-file `Array Int` type-position count
+##           tree-wide (epic #3134). Derived, not hand-maintained — see
+##           test/bytes_census.sh's header. Pure text/regex, no built
+##           ./medaka needed. Always exits 0 unless the file corpus comes
+##           back empty: a census, not a gate.
+bytes-census:
+	sh test/bytes_census.sh
 
 ## arch-census — report the largest-files table + per-directory file/line
 ##           totals over compiler/*.mdk + stdlib/*.mdk (#2289). Derived, not

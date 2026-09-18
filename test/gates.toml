@@ -1962,6 +1962,25 @@ sources = ["*"]
 corpus = []
 toolchain = []
 
+# Epic #3134 (Bytes) — the per-file Array Int position ratchet, modelled on
+# comment_register_census's --check/--write shape. Phase A enrolls exactly
+# one file (stdlib/hex.mdk); see test/bytes_census.sh's header for why a
+# file with no baseline row is deliberately unconstrained.
+[[gate]]
+name = "diff_compiler_bytes_census"
+area = "testing"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "cheap"
+kind = "exec"
+migration = "native-rewrite"
+run = "test/diff_compiler_bytes_census.sh"
+oracles = []
+sources = ["test/bytes_census.sh", "test/bytes_census_baseline.toml"]
+corpus = []
+toolchain = []
+
 [[gate]]
 name = "diff_compiler_llvm_ffi"
 area = "backend"

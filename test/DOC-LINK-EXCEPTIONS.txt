@@ -196,7 +196,6 @@ REF	compiler/bytecode.mdk	TODO(docs-cleanup): the bytecode pipeline stage was re
 REF	compiler/entries/llvm_emit_gaps_main.mdk	TODO(docs-cleanup): entry point renamed/removed during the compiler/entries/ reorg; no llvm_emit_gaps_main.mdk exists (see wasm_emit_gaps_main.mdk for the wasm-side survivor)
 REF	compiler/entries/mark_main.mdk	TODO(docs-cleanup): entry point renamed/removed during the compiler/entries/ reorg; no mark_main.mdk exists in compiler/entries/
 REF	compiler/entries/perf_main.mdk	TODO(docs-cleanup): entry point renamed during the compiler/entries/ reorg; now compiler/entries/profile_main.mdk (or profile_modules_main.mdk)
-REF	stdlib/bytes.mdk	TODO(docs-cleanup): planned module from the P1 stdlib design shipped under different names — stdlib/byteparser.mdk and stdlib/bytebuilder.mdk — not stdlib/bytes.mdk
 REF	test/diff_compiler_bytecode_eval_dict.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
 REF	test/diff_compiler_bytecode_selfproc.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists
 REF	test/diff_compiler_eval_bytecode.sh	TODO(docs-cleanup): gate for the retired bytecode pipeline stage; no successor script exists

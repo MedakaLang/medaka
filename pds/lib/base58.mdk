@@ -75,6 +75,15 @@ byteAt i arr = match get i arr
   Some b => b
   None => panic "base58: byte index out of bounds"
 
+-- Reads a slot of the ENCODE scratch buffer, whose domain is a base58 digit
+-- (`0 .. 57`) and not a byte. The decode buffer holds bytes and is read
+-- through `byteAt`; keeping the two accessors apart is what names which
+-- radix a given index walk is in.
+digitAt : Int -> Array Int -> Int
+digitAt i arr = match get i arr
+  Some d => d
+  None => panic "base58: digit index out of bounds"
+
 charAtA : Int -> Array Char -> Char
 charAtA i arr = match get i arr
   Some c => c
@@ -116,7 +125,7 @@ carryByteIntoDigits buf size i carry length =
   if carry == 0 && i >= length || j < 0 then
     i
   else
-    let cur = carry + 256 * byteAt j buf
+    let cur = carry + 256 * digitAt j buf
     buf[j] := cur % 58
     carryByteIntoDigits buf size (i + 1) (cur / 58) length
 
@@ -135,7 +144,7 @@ foldBytesIntoDigits bytes idx n buf size length
 skipZeroDigits : Array Int -> Int -> Int -> Int
 skipZeroDigits buf i limit
   | i >= limit = i
-  | byteAt i buf /= 0 = i
+  | digitAt i buf /= 0 = i
   | otherwise = skipZeroDigits buf (i + 1) limit
 
 -- Map digit-buffer slots `i .. size-1` through the alphabet, in order.
@@ -143,7 +152,7 @@ digitsToChars : Array Int -> Int -> Int -> List Char
 digitsToChars buf i size
   | i >= size = []
   | otherwise =
-    charAtA (byteAt i buf) alphabetChars :: digitsToChars buf (i + 1) size
+    charAtA (digitAt i buf) alphabetChars :: digitsToChars buf (i + 1) size
 
 {- | Bytes -> base58btc string. A leading zero byte becomes a leading `'1'`
    character (see the module header); this is a separate step from the

@@ -73,6 +73,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`ATPROTO-PDS-CONSTANT-TIME.md`](design/ATPROTO-PDS-CONSTANT-TIME.md) | atproto PDS field/scalar constant-time reduction contract | implemented and landed for #1724 |
 | [`ATPROTO-PDS-DESIGN.md`](design/ATPROTO-PDS-DESIGN.md) | A self-hosted atproto PDS in Medaka | ACTIVE |
 | [`ATPROTO-PDS-SIGNING-CONTRACT.md`](design/ATPROTO-PDS-SIGNING-CONTRACT.md) | atproto PDS native signing and public-key contract | accepted implementation contract for #1700, prerequisite #1877 |
+| [`BYTES-DESIGN.md`](design/BYTES-DESIGN.md) | Bytes — a packed byte string for Medaka | B1 shipped |
 | [`CAPABILITY-EFFECTS.md`](design/CAPABILITY-EFFECTS.md) | Capability-safe effects — Medaka's headline direction | PARTIAL |
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |
@@ -124,6 +125,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`bits64.md`](stdlib/bits64.md) | bits64 | — |
 | [`bytebuilder.md`](stdlib/bytebuilder.md) | bytebuilder | — |
 | [`byteparser.md`](stdlib/byteparser.md) | byteparser | — |
+| [`bytes.md`](stdlib/bytes.md) | bytes | — |
 | [`core.md`](stdlib/core.md) | core | — |
 | [`fs.md`](stdlib/fs.md) | fs | — |
 | [`hash_map.md`](stdlib/hash_map.md) | hash_map | — |
