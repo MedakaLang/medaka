@@ -398,7 +398,7 @@ A4_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImpor
 A4_FILEBYTES_IMPORT_LINE="$(grep -n -E '\(progEmit prog\)\.useFileBytes\.value then$' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A4_IO_IMPORT_LINE" ] && [ -n "$A4_FILEBYTES_IMPORT_LINE" ] &&
   [ "$A4_IO_IMPORT_LINE" -lt "$A4_FILEBYTES_IMPORT_LINE" ] &&
-  has_wasm_pin '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
+  has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
     echo "FAIL A4-FILEBYTES-ORDER: import/runtime order changed"
     exit 1
   }
@@ -496,7 +496,7 @@ A2_FLOATSTR_IMPORT_LINE="$(grep -n -F '(progEmit prog).useFloatStr.value then fl
 A2_IO_IMPORT_LINE="$(grep -n -F 'if (progEmit prog).useIO.value then ioHostImportLines else []' "$WASM_SRC" | cut -d: -f1)"
 [ -n "$A2_FLOATSTR_IMPORT_LINE" ] && [ -n "$A2_IO_IMPORT_LINE" ] &&
   [ "$A2_FLOATSTR_IMPORT_LINE" -lt "$A2_IO_IMPORT_LINE" ] &&
-  has_wasm_pin '++ strCodecRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
+  has_wasm_pin '++ strCodecRt ++ byteBlockRt ++ charFromCodeRt ++ charClassRt ++ ioHostRt ++ ioArgsRt ++ fileBytesRt ++ floatStrRt' || {
     echo "FAIL A2-FLOATSTR-ORDER: import/runtime order changed"
     exit 1
   }
