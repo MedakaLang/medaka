@@ -1,9 +1,10 @@
 # Bytes — a packed byte string for Medaka
 
-**Status:** B1 shipped — `stdlib/bytes.mdk` exists as a `newtype` staging
-wrapper over `Array Int`, with no representation change. The packed
-representation, the mutable and growable siblings, and the caller migration
-are later milestones of the Bytes epic (#3134).
+**Status:** B1 shipped, and B2's representation change has landed —
+`stdlib/bytes.mdk` is a `newtype` over the runtime's packed `ByteBlock`
+buffer, so a byte string costs one byte per byte. The mutable and growable
+siblings and the caller migration are later milestones of the Bytes epic
+(#3134).
 
 This document records the decisions the epic is built on, so later waves cite
 a written ruling instead of a recollection. Each section below is one ruling
@@ -26,6 +27,29 @@ eventually change is already a compile error rather than a silent mismatch.
 
 `Array Int` survives the epic. It is the FFI-crossable sequence type, and
 nothing here retires it.
+
+---
+
+## The B2 shape — a `newtype` over the runtime's packed block
+
+B2 keeps the wrapper and swaps the payload: `newtype Bytes = Bytes ByteBlock`,
+where `ByteBlock` is the runtime's packed byte buffer — one byte per byte,
+eight primitives, implemented by all three engines.
+
+The wrapper is not what makes dispatch work. `Eq`, `Ord`, `Debug`, `Index`,
+`Hashable` and `Display` all attach to a builtin type head directly, so a
+`Bytes` that *was* the builtin head would still dispatch. The wrapper is what
+makes `Bytes` behave like a library type:
+
+- A builtin head claims its identifier in every program at once, so any user's
+  own `data Bytes = …` becomes a hard `Duplicate type` error.
+- A builtin head cannot be imported by name, so `import bytes.{Bytes}` would
+  have nothing to bring into scope.
+- A builtin head cannot be constructed or pattern-matched by name.
+- A builtin head must be listed in the compiler frontend's hardcoded
+  `primitiveTypes`, which puts a library type's name inside the frontend.
+
+So the payload is a builtin and the name is not.
 
 ---
 
@@ -136,6 +160,13 @@ export fromUtf8Bytes : Bytes -> String
 
 There is deliberately no `fromList` and no builder. `Foldable`, `Mappable` and
 `Filterable` are declined at the kind level, per ruling 5.
+
+B2 moves two rows of that surface. `fromArray` becomes
+`Array Int -> Option Bytes` and answers `None` on an element outside `0` to
+`255`, and a transitional `fromArrayAssumeByteDomain : Array Int -> Bytes`
+joins it, masking to the low eight bits instead of refusing, for callers whose
+elements are bytes by construction. The transitional door is removed at B6,
+alongside `toUtf8`/`fromUtf8`.
 
 `stdlib/bytes.mdk` is not imported by `stdlib/core.mdk` (the only
 auto-prelude) or by any `compiler/` module at B1 — `stdlib/hex.mdk` does
