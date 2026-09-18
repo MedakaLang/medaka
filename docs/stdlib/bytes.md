@@ -2,10 +2,18 @@
 
 An immutable string of bytes.
 
-`Bytes` wraps a sequence of byte values, each `0` to `255`, and hands out
-no way to change it once built. Use it for data that is bytes — a file's
-contents, a hash digest, a UTF-8 encoding — and `Array Int` for a sequence
-of numbers that happen to be small.
+`Bytes` wraps a sequence of byte values, each meant to be `0` to `255`,
+and hands out no way to change it once built. Use it for data that is
+bytes, such as a file's contents, a hash digest, or a UTF-8 encoding, and
+`Array Int` for a sequence of numbers that happen to be small.
+
+At B1 the `0` to `255` domain is not enforced. `fromArray` accepts any
+`Int`, and `get`, `b[i]`, `eq`, and `compare` all read an out-of-range
+element back unchanged, with no masking. Some byte-consuming code
+elsewhere (`hex.encodeBytes`, for one) masks to the low eight bits before
+use, so the same out-of-range value can render differently depending on
+which operation reads it. Masking or rejecting out-of-range elements is
+left to `Bytes`'s packed B2 representation.
 
 `fromArray` and `toArray` convert; `bytesLength` is the byte count and
 `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
@@ -28,7 +36,7 @@ ways in and `toArray` and `fromUtf8Bytes` are the ways out.
 3
 ```
 
-Instances: [`Index`](#index-bytes-int-int), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes)
+Instances: [`Index`](#index-bytes-int-int), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Debug`](#debug-bytes)
 
 ## Conversion
 
@@ -40,9 +48,8 @@ fromArray : Array Int -> Bytes
 
 The byte string holding the elements of `arr`, in order.
 
-Only the low eight bits of each element carry meaning to the functions
-that read bytes; nothing here masks or rejects an element outside `0` to
-`255`.
+Nothing here masks or rejects an element outside `0` to `255`: `get`,
+`b[i]`, `eq`, and `compare` all read such an element back unchanged.
 
 ```medaka
 > toArray (fromArray [|104, 105|])
@@ -73,7 +80,7 @@ bytesLength : Bytes -> Int
 The number of bytes in `b`.
 
 The name is not `length`: that one is `Foldable`'s method, which the
-prelude exports, and `Bytes` cannot implement `Foldable` — the interface
+prelude exports, and `Bytes` cannot implement `Foldable`. The interface
 ranges over a container of some element type, and `Bytes` has no element
 parameter.
 
@@ -187,5 +194,18 @@ extends it.
 Lt
 > compare (fromArray [|1, 2|]) (fromArray [|1, 2, 0|])
 Lt
+```
+
+### `Debug Bytes`
+
+```
+impl Debug Bytes
+```
+
+Renders as its bytes would as an `Array Int`.
+
+```medaka
+> debug (fromArray [|7, 8, 9|])
+"[|7, 8, 9|]"
 ```
 

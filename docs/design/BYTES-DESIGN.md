@@ -137,9 +137,10 @@ export fromUtf8Bytes : Bytes -> String
 There is deliberately no `fromList` and no builder. `Foldable`, `Mappable` and
 `Filterable` are declined at the kind level, per ruling 5.
 
-`stdlib/bytes.mdk` is imported by nothing at B1: not by `stdlib/core.mdk` (the
-only auto-prelude) and by no `compiler/` module. Keeping it out of the
-compiler's import closure is what makes B1 free of a seed re-mint.
+`stdlib/bytes.mdk` is not imported by `stdlib/core.mdk` (the only
+auto-prelude) or by any `compiler/` module at B1 — `stdlib/hex.mdk` does
+import it. Keeping it out of the compiler's import closure is what makes B1
+free of a seed re-mint.
 
 ---
 
@@ -154,3 +155,13 @@ compiler's import closure is what makes B1 free of a seed re-mint.
 | B6 | Delete `toUtf8`/`fromUtf8` and the remaining `Array Int`-as-bytes uses |
 
 B1's whole job is that every later mistake is a compile error.
+
+---
+
+## Open for B2 — domain enforcement
+
+The `0` to `255` domain `Bytes` documents is not enforced at B1: `fromArray`
+accepts any `Int`, and `get`/`b[i]`/`eq`/`compare` all read an out-of-range
+element back unchanged. Whether B2's packed representation masks
+out-of-range elements, rejects them, or leaves the discipline to the caller
+is not decided here.

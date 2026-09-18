@@ -8,6 +8,10 @@
 # The `--write`/`--check` modes are the GATED path, consumed by
 # test/diff_compiler_bytes_census.sh, a merge-tier gate.
 #
+# The scanner matches the literal two-word text "Array Int" on a single line
+# (see count_positions below), so a type split across a line wrap, or with
+# unusual internal spacing, under-counts. It is a FLOOR, not an exact count.
+#
 # WHY THIS EXISTS: epic #3134 is retiring `Array Int` as the ad-hoc
 # representation of a byte sequence in favor of the packed `Bytes` type
 # (stdlib/bytes.mdk). `Array Int` is not going away entirely — it remains the
@@ -174,6 +178,11 @@ $f"
     echo "  A baselined file's Array Int position count may only FALL."
     echo "  Regenerate the baseline after fixing (or deliberately re-pinning):"
     echo "    sh test/bytes_census.sh --write test/bytes_census_baseline.toml <file> ..."
+    exit 1
+  fi
+  if [ "$checked" -eq 0 ]; then
+    echo "FAIL: NOTHING CHECKED — every row was skipped (missing baseline entry" >&2
+    echo "  or missing file). This is not a pass." >&2
     exit 1
   fi
   echo "-- bytes census baseline: ok ($checked file(s) checked)"

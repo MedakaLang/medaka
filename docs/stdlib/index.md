@@ -347,9 +347,11 @@ A mutable set of distinct elements, keyed by hash.
 
 Hexadecimal encoding and decoding of bytes.
 
+- [`encodeBytes`](hex.md#encodebytes)
 - [`encode`](hex.md#encode)
 - [`encodeUpper`](hex.md#encodeupper)
 - [`encodeString`](hex.md#encodestring)
+- [`decodeBytes`](hex.md#decodebytes)
 - [`decode`](hex.md#decode)
 - [`decodeString`](hex.md#decodestring)
 

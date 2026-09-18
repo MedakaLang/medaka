@@ -2,12 +2,26 @@
 
 Hexadecimal encoding and decoding of bytes.
 
-Bytes are an `Array Int` with each element from `0` to `255`, the same
-form `readFileBytes` and `writeFileBytes` use. Each byte becomes two hex
-digits, most significant first. `encode` produces lowercase digits and
-`decode` accepts either case.
+`encode`/`decode` take an `Array Int` with each element from `0` to `255`,
+the same form `readFileBytes` and `writeFileBytes` use; `encodeBytes`/
+`decodeBytes` take and return `Bytes` instead. Each byte becomes two hex
+digits, most significant first. Encoding produces lowercase digits and
+decoding accepts either case.
 
 ## Encoding
+
+### `encodeBytes`
+
+```
+encodeBytes : Bytes -> String
+```
+
+`b` as lowercase hex, two digits per byte.
+
+```medaka
+> encodeBytes (fromArray [|255, 0, 16|])
+"ff0010"
+```
 
 ### `encode`
 
@@ -49,6 +63,24 @@ The UTF-8 bytes of a string as lowercase hex.
 ```
 
 ## Decoding
+
+### `decodeBytes`
+
+```
+decodeBytes : String -> Result String Bytes
+```
+
+The bytes written in a hex string.
+
+`Err` when the string has an odd length or any character that is not a
+hex digit. Whitespace is not skipped.
+
+```medaka
+> map toArray (decodeBytes "ff0010")
+Ok [|255, 0, 16|]
+> decodeBytes "zz"
+Err "hex.decode: invalid hex digit"
+```
 
 ### `decode`
 

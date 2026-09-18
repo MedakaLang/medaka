@@ -14,7 +14,7 @@
 -- codecs; the rule has no semantic/type-level check to tell them apart, not a real duplicate.
 -- lint-disable-file rule-stdlib-reimpl
 
-import array.{fromList}
+import array.{fromList, get as arrGet}
 -- Wildcard, not selective: `import bytes.{Bytes, ...}` cannot bring the bare
 -- type name into scope here — `Bytes`'s constructor shares the type's own
 -- name, and the resolver's selective-member path (`resolve.mdk`'s
@@ -25,12 +25,14 @@ import bytes.*
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 
--- Every call site below only ever indexes within the array's own known
--- length, so the internal-only `arrayGetUnsafe` primitive is safe here.
--- (Not `Array.get`: that name is now ambiguous between `array` and the
--- wildcard-imported `bytes`.)
+-- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
+-- call site below only ever indexes within the array's own known length, so
+-- the `None` arm is unreachable; this just avoids the internal-only
+-- `arrayGetUnsafe` primitive.
 charAt : Int -> Array Char -> Char
-charAt i arr = arrayGetUnsafe i arr
+charAt i arr = match arrGet i arr
+  Some c => c
+  None => panic "hex: index out of bounds"
 
 -- # Encoding
 

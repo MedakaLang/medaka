@@ -1209,6 +1209,12 @@ while IFS= read -r f; do
     # edit moves the gate's own inputs.
     test/lint_baseline.toml|.githooks/pre-commit)
                                    add 'diff_compiler_lint_baseline' ;;
+    # FIX1 (epic #3134): the per-file `Array Int` position count baseline and
+    # the scanner that reads/writes it. Two loose files under test/ that
+    # `_fixture_dir_for` cannot see — an UNMAPPED non-prose path widens the
+    # whole PR run to the FULL suite ([W-THIRD-CONSUMER]).
+    test/bytes_census.sh|test/bytes_census_baseline.toml)
+                                   add 'diff_compiler_bytes_census' ;;
     # FR-3 (fix round, S1-1/S3-5): the nightly auto-advance TOOL (in
     # CI-COVERAGE-TOOLS.txt, so it is not a gate candidate either). It shares
     # the ingest/balance/gen-ci gates above (it calls all three), plus the two
