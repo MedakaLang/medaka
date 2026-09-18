@@ -1224,8 +1224,14 @@ export impl IndexMut (Array a) Int a where
    `Option`-returning form. Lists are immutable, so there is no `IndexMut`
    instance. -}
 export impl Index (List a) Int a where
-  index [] _ = indexError "index out of bounds"
-  index (h :: t) i = if i <= 0 then h else index t (i - 1)
+  index xs i = indexGo xs i i
+
+-- Threads the caller's ORIGINAL index alongside the one being decremented down
+-- to the base case, so the out-of-bounds message can name the index the caller
+-- passed rather than the leftover 0 from the recursion.
+indexGo : List a -> Int -> Int -> a
+indexGo [] i0 _ = indexError "index \{intToString i0} out of bounds"
+indexGo (h :: t) i0 i = if i <= 0 then h else indexGo t i0 (i - 1)
 
 {- | `s[i]` is the character at codepoint position `i`.
 

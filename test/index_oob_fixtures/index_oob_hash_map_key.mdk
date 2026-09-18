@@ -1,0 +1,5 @@
+-- #3185: `HashMap`'s absent-key message names the key too — the `Debug`
+-- plumbing is identical to `Map`'s, so an ordinary key is enough here.
+import hash_map.{fromList}
+
+main = println (fromList [("alpha", 1), ("beta", 2)])["gamma"]

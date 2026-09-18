@@ -176,10 +176,10 @@ get k (Bin _ k2 v l r) = match compare k k2
    Panics with an index error when the key is absent; `get` is the
    `Option`-returning form. The `Index` interface takes the map first, so
    this is `index m k` where `get` is `get k m`. -}
-export impl Index (Map k v) k v requires Ord k where
+export impl Index (Map k v) k v requires Ord k, Debug k where
   index m k = match get k m
     Some v => v
-    None => indexError "key not found"
+    None => indexError "key not found: \{debug k}"
 
 {- | Whether `k` is present.
 

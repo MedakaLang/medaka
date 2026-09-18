@@ -163,6 +163,15 @@ check_oob index_oob_vector '4'
 # the prose arm: `indexError "…"` straight from source, no number anywhere in the
 # line.  Its only assertion is that the caller's own words survive to both engines.
 check_abort index_oob_message 'custom message'
+# #3185: the ORIGINAL index survives List's recursive impl, not the leftover 0
+# from decrementing down to the base case.
+check_oob index_oob_list '5'
+# #3185: Map/HashMap name the absent KEY via `debug` — ordinary, empty-string,
+# and whitespace-only keys must each be visibly, correctly quoted.
+check_abort index_oob_map_key            'key not found: "gamma"'
+check_abort index_oob_map_key_empty      'key not found: ""'
+check_abort index_oob_map_key_whitespace 'key not found: " "'
+check_abort index_oob_hash_map_key       'key not found: "gamma"'
 check_ok  index_ok
 
 echo

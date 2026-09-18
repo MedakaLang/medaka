@@ -1,0 +1,5 @@
+-- #3185: the SAME absent-key path, but with an EMPTY STRING key — `debug`
+-- must still visibly quote it (`""`), not print a blank tail.
+import map.{fromList}
+
+main = println (fromList [("alpha", 1), ("beta", 2)])[""]
