@@ -344,7 +344,7 @@ export
 setInPlace : Int -> a -> Array a -> Unit
 setInPlace i x arr =
   if i < 0 || i >= arrayLength arr then
-    panic "Array.setInPlace: index out of bounds"
+    indexErrorAt i
   else
     arraySetUnsafe i x arr
 

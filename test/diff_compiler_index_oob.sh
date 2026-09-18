@@ -170,6 +170,10 @@ check_oob index_oob_write     '9'
 check_oob index_oob_negative  '-3'
 check_oob index_oob_string    '10'
 check_oob index_oob_vector '4'
+# #3187: `setInPlace`'s own OOB guard — previously a bare `panic` (E-PANIC, no
+# index); now routes through the same `indexErrorAt` its `IndexMut` sibling uses.
+check_oob index_oob_array_set_in_place  '9'
+check_oob index_oob_vector_set_in_place '4'
 # the prose arm: `indexError "…"` straight from source, no number anywhere in the
 # line.  Its only assertion is that the caller's own words survive to both engines.
 check_abort index_oob_message 'custom message'

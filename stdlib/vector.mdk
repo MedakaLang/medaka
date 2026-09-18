@@ -197,7 +197,7 @@ export
 setInPlace : Int -> a -> Vector a -> Unit
 setInPlace i x (Vector backing len)
   | i >= 0 && i < !len = arraySetUnsafe i x !backing
-  | otherwise = panic "Vector.setInPlace: index out of bounds"
+  | otherwise = indexErrorAt i
 
 {- | `v[i] = x` replaces the element at index `i` in place, in `O(1)`.
 
