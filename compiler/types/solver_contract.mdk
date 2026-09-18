@@ -63,6 +63,19 @@ public export data InstantiationServices subst = InstantiationServices {
   freshDestination : GoalOrigin -> ScopeId -> EvId,
 }
 
+-- An adapter that already instantiated the HM scheme supplies that exact
+-- substitution here.  Wanted targets are supplied separately so migrating a
+-- producer never mints a second evidence destination.
+public export data ExistingInstantiationServices subst = ExistingInstantiationServices {
+  substituteExistingBody : subst -> Mono -> Mono,
+  substituteExistingArgument : subst -> Mono -> Mono,
+}
+
+public export data WantedTarget = WantedTarget {
+  targetGoal : GoalId,
+  targetDestination : EvId,
+}
+
 -- The deferred form preserves the original wanted and classifies why it cannot
 -- yet be decided.  Whole-graph finalization is explicit rather than encoded as
 -- an empty blocker list.
@@ -109,6 +122,57 @@ instantiateQualifiers services subst scope origin (qualifier :: rest) =
   }
   InstantiationArgument { formal = qualifier.formal, wanted = wanted }
     :: instantiateQualifiers services subst scope origin rest
+
+instantiateExistingQualifiers : ExistingInstantiationServices subst ->
+  subst ->
+  ScopeId ->
+  GoalOrigin ->
+  List Qualifier ->
+  List WantedTarget ->
+  Option (List InstantiationArgument)
+instantiateExistingQualifiers _ _ _ _ [] [] = Some []
+instantiateExistingQualifiers services subst scope origin (qualifier :: rest) (target :: targets) =
+  let wanted = Wanted {
+    id = target.targetGoal,
+    predicate = ClassPredicate {
+      predicateInterface = qualifier.predicate.predicateInterface,
+      predicateArguments =
+        map
+          (services.substituteExistingArgument subst)
+          qualifier.predicate.predicateArguments,
+    },
+    origin = origin,
+    scope = scope,
+    destination = target.targetDestination,
+  }
+  map
+    (InstantiationArgument { formal = qualifier.formal, wanted = wanted } :: _)
+    (instantiateExistingQualifiers services subst scope origin rest targets)
+instantiateExistingQualifiers _ _ _ _ _ _ = None
+
+export
+instantiateQualifiedAt : ExistingInstantiationServices subst ->
+  subst ->
+  ScopeId ->
+  GoalOrigin ->
+  List WantedTarget ->
+  QualifiedScheme ->
+  Option Instantiation
+instantiateQualifiedAt services subst scope origin targets qualified =
+  match qualified.hm
+    Forall _ _ schemeBody =>
+      map
+        (arguments => Instantiation {
+          body = services.substituteExistingBody subst schemeBody,
+          arguments = arguments,
+        })
+        (instantiateExistingQualifiers
+          services
+          subst
+          scope
+          origin
+          qualified.qualifiers
+          targets)
 
 export
 instantiateQualified : InstantiationServices subst ->

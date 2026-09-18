@@ -6,10 +6,17 @@
 -- `RequestInstanceId` is deliberately request-local.  It is not a stable cache
 -- identity and must not be persisted across typechecking requests.
 
-import frontend.ast.{EvId}
+import frontend.ast.{EvId(..)}
 import types.repr.{Mono}
 
 public export data GoalId = GoalId String Int deriving (Eq, Ord, Debug)
+
+-- A migrated goal and its existing evidence destination share the request-local
+-- ordinal.  Keeping the conversion here prevents adapters from allocating a
+-- competing identity or reconstructing one from ambient module state.
+export
+goalIdForDestination : EvId -> GoalId
+goalIdForDestination (EvId moduleId ordinal) = GoalId moduleId ordinal
 
 public export data ScopeId = ScopeId Int deriving (Eq, Ord, Debug)
 

@@ -1388,13 +1388,14 @@ installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 instantiate : Scheme -> Mono
 instantiateMethodPredicateSlot : MethodPredicateSlot -> List (Int, Mono) -> Option PredicateSlot
 instantiateMethodPredicateSlots : List MethodPredicateSlot -> List (Int, Mono) -> List PredicateSlot
+instantiateMethodTracked : Scheme -> MethodTrackedInstantiation
 instantiateNamedMonos : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
 instantiateRecordShared : RecordInfo -> (List (Int, Mono), Mono)
 instantiateSigTracked : Ty -> (Mono, List (String, Mono))
 instantiateTracked : Scheme -> (Mono, List (Int, Mono))
 instantiateVarTrackedId : String -> Int -> Scheme -> Mono
-instantiateVarTrackedWithSubst : String -> Int -> Scheme -> (Mono, List (Int, Mono))
+instantiateVarTrackedWithSubst : String -> Int -> Scheme -> MethodTrackedInstantiation
 instantiatedMethodPredicate : MethodPredicateSlot -> List (Int, Mono) -> List (Int, Mono) -> PredicateSlot
 instantiatedMethodPredicateArgs : PredicateSlotArgs -> List (Int, Mono) -> PredicateSlotArgs
 intercalateComma : List String -> String
@@ -1574,6 +1575,8 @@ methodEffArgOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffChargedOccs : Ty -> List (String, List Atom)
 methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEnvBinding : MethodSchemeRow -> EnvBinding
+methodExistingInstantiationServices : ExistingInstantiationServices MethodInstantiationSubst
+methodInterfacePredicateArgs : List String -> List (String, Mono) -> Option (List Mono)
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
 methodLevelConstraintVarNames : List String -> Ty -> List String
 methodLevelPredicateSlot : List String -> List (String, Mono) -> Constraint -> List PredicateSlot
@@ -1587,13 +1590,15 @@ methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
 methodPredicateSlotsOfType : List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
 methodRet : Ty -> Ty
 methodReturnArgs : MethodReturnRequest -> Option (List Mono)
+methodReturnInstantiation : MethodSchemeRow -> MethodInstantiationSubst -> ScopeId -> Option Loc -> EvId -> Option Instantiation
+methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeGoalIfaces : List Obligation -> List String
 methodReturnProbeIface : String -> String -> Ty -> Decl
 methodReturnProbeImpl : String -> String -> Decl
 methodReturnProbeOblIfaces : List UObligation -> List String
-methodReturnProbeOccurrence : MethodSchemeRow -> (Mono, List (Int, Mono))
+methodReturnProbeOccurrence : MethodSchemeRow -> MethodTrackedInstantiation
 methodReturnProbeRequest : MethodSchemeRow -> MethodReturnRequest
 methodReturnProbeRouteKey : Route -> String
 methodReturnProbeScope : String -> ScopeId
@@ -1601,7 +1606,7 @@ methodReturnProbeSlotCase : MethodSchemeRow -> MethodSchemeRow -> Bool -> (List 
 methodReturnProbeSlotIfaces : List PredicateSlot -> List String
 methodReturnProbeSpelling : MethodSchemeRow -> Unit
 methodReturnProbeStamp : MethodSchemeRow -> MethodSchemeRow -> List Decl -> (String, String, String)
-methodReturnRequest : MethodSchemeRow -> Mono -> Option EvId -> MethodReturnRequest
+methodReturnRequest : MethodSchemeRow -> Mono -> MethodInstantiationSubst -> Option EvId -> MethodReturnRequest
 methodReturnSlotOwnershipProbe : Unit -> ((List String, List String), (List String, List String), (List String, List String))
 methodReturnTraceEnabled : Ref Bool
 methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
@@ -1996,7 +2001,7 @@ recordMethodLevelObls : List String -> Ty -> Mono -> Unit
 recordMethodLevelSlotObls : List (String, IfaceRef) -> List (String, Mono) -> Unit
 recordMethodLevelSlotsOwned : MethodSchemeRow -> List (Int, Mono) -> Option Loc -> ScopeId -> Unit
 recordMethodObligationGuarded : TcEnv -> String -> Scheme -> Mono -> Mono
-recordMethodObligationOwned : TcEnv -> String -> Scheme -> Mono -> List (Int, Mono) -> Option EvId -> Mono
+recordMethodObligationOwned : TcEnv -> String -> Scheme -> Mono -> MethodInstantiationSubst -> Option EvId -> Mono
 recordModuleStart : String -> Unit
 recordNumLitImplObligation : MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
 recordNumLitObligationGuarded : TcEnv -> MethodSchemeRow -> ClassPredicate -> Mono -> Option Loc -> ScopeId -> Mono
@@ -2016,7 +2021,7 @@ recordSchemeCallObligations : Int -> List VecObl -> List (Int, Mono) -> Unit
 recordShadowStandaloneObls : String -> List (Int, Mono) -> Unit
 recordSigConstraintArgs : List Ty -> List (String, Mono) -> List (Int, Mono) -> Option (List Mono)
 recordSigConstraintObls : List Constraint -> List (String, Mono) -> List (Int, Mono) -> Unit
-recordSite : TcEnv -> String -> Scheme -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono -> List (Int, Mono) -> Mono
+recordSite : TcEnv -> String -> Scheme -> Ref Route -> Ref (List Route) -> Ref (List Route) -> Mono -> MethodInstantiationSubst -> Mono
 recordStandaloneSigObligationsSp : String -> String -> List Mono -> Unit
 recordTypeError : TcDiag -> Unit
 recordUnopSite : String -> Ref Route -> Mono -> Unit

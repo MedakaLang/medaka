@@ -222,6 +222,7 @@ import types.repr.{
 }
 import types.evidence.{
   EvidenceBinderId(..),
+  goalIdForDestination,
   ScopeId(..),
   SolverEvidence(..),
 }
@@ -233,7 +234,18 @@ import types.scopes.{
   ScopeStore,
 }
 import types.scopes as Scopes
-import types.solver_contract.{ClassPredicate(..)}
+import types.solver_contract.{
+  ClassPredicate(..),
+  ExistingInstantiationServices(..),
+  GoalOrigin(..),
+  Instantiation(..),
+  InstantiationArgument(..),
+  QualifiedScheme(..),
+  Qualifier(..),
+  Wanted(..),
+  WantedTarget(..),
+  instantiateQualifiedAt,
+}
 import types.registry.{
   RegKey,
   Registry,
@@ -7387,29 +7399,91 @@ pushExactReturnObl request = wPush perRun.value.implObls UObligation {
   oblProj = OpExactReturn request,
 }
 
-methodReturnRequest : MethodSchemeRow ->
-  Mono ->
-  Option EvId ->
-  MethodReturnRequest
-methodReturnRequest row occurrence goalEv = MethodReturnRequest {
-  mrrIface = row.msrIface,
-  mrrName = row.msrName,
-  mrrTyparams = row.msrTyparams,
-  mrrType = row.msrType,
-  mrrOccurrence = occurrence,
-  mrrLoc = !currentLoc,
-  mrrScope = captureScope (),
-  mrrGoalEv = goalEv,
+methodExistingInstantiationServices : ExistingInstantiationServices MethodInstantiationSubst
+methodExistingInstantiationServices = ExistingInstantiationServices {
+  substituteExistingBody =
+    subst =>
+      body => substMonoP True subst.misTypeSubst subst.misEffectSubst body,
+  substituteExistingArgument =
+    subst =>
+      argument => substMono subst.misTypeSubst subst.misEffectSubst argument,
 }
 
+methodReturnOrigin : Option Loc -> GoalOrigin
+methodReturnOrigin loc =
+  let moduleId = driverState.value.currentModuleRef.value
+  let binding =
+    if perRun.value.currentFn.value == "" then
+      None
+    else
+      mkIdent NsValue (OriginModule moduleId) perRun.value.currentFn.value
+  GoalOrigin {
+    location = loc,
+    moduleId = moduleId,
+    binding = binding,
+  }
+
+methodReturnInstantiation : MethodSchemeRow ->
+  MethodInstantiationSubst ->
+  ScopeId ->
+  Option Loc ->
+  EvId ->
+  Option Instantiation
+methodReturnInstantiation row subst scope loc destination =
+  match row.msrPredicate
+    None => None
+    Some predicate =>
+      let qualified = QualifiedScheme {
+        hm = row.msrScheme,
+        qualifiers = [
+          Qualifier {
+            predicate = predicate,
+            formal = Scopes.binderAt scope 0,
+          },
+        ],
+      }
+      instantiateQualifiedAt
+        methodExistingInstantiationServices
+        subst
+        scope
+        (methodReturnOrigin loc)
+        [
+          WantedTarget {
+            targetGoal = goalIdForDestination destination,
+            targetDestination = destination,
+          },
+        ]
+        qualified
+
+methodReturnRequest : MethodSchemeRow ->
+  Mono ->
+  MethodInstantiationSubst ->
+  Option EvId ->
+  MethodReturnRequest
+methodReturnRequest row occurrence subst goalEv =
+  let loc = !currentLoc
+  let scope = captureScope ()
+  let instantiation = match goalEv
+    Some destination =>
+      methodReturnInstantiation row subst scope loc destination
+    None => None
+  MethodReturnRequest {
+    mrrIface = row.msrIface,
+    mrrName = row.msrName,
+    mrrTyparams = row.msrTyparams,
+    mrrType = row.msrType,
+    mrrOccurrence = occurrence,
+    mrrLoc = loc,
+    mrrScope = scope,
+    mrrGoalEv = goalEv,
+    mrrInstantiation = instantiation,
+  }
+
 methodReturnArgs : MethodReturnRequest -> Option (List Mono)
-methodReturnArgs request =
-  collectByParamGo
-    request.mrrTyparams
-    (walkDispatch
-      request.mrrTyparams
-      (stripTyConstraints request.mrrType)
-      request.mrrOccurrence)
+methodReturnArgs request = match request.mrrInstantiation
+  Some (Instantiation { arguments = [argument], ... }) =>
+    Some argument.wanted.predicate.predicateArguments
+  _ => None
 
 -- the mint for an impl-channel obligation.  `pred.args` is EMPTY and must stay so:
 -- the dispatch vector is `OpMethodOcc`'s to project, at check time, via `uOblArgs`.
@@ -7721,7 +7795,18 @@ data MethodSchemeRow = MethodSchemeRow {
   msrTyparams : List String,
   msrType : Ty,
   msrScheme : Scheme,
+  msrPredicate : Option ClassPredicate,
   msrMethodSlots : List MethodPredicateSlot,
+}
+
+data MethodInstantiationSubst = MethodInstantiationSubst {
+  misTypeSubst : List (Int, Mono),
+  misEffectSubst : List (Int, Ref Effvar),
+}
+
+data MethodTrackedInstantiation = MethodTrackedInstantiation {
+  mtiBody : Mono,
+  mtiSubstitution : MethodInstantiationSubst,
 }
 
 -- One ordinary method occurrence, tied to the declaration row that supplied its
@@ -7738,6 +7823,7 @@ data MethodReturnRequest = MethodReturnRequest {
   mrrLoc : Option Loc,
   mrrScope : ScopeId,
   mrrGoalEv : Option EvId,
+  mrrInstantiation : Option Instantiation,
 }
 
 data NumAnchorTestObservation = NumAnchorTestObservation {
@@ -9201,6 +9287,8 @@ public export data MethodReturnTraceEntry = MethodReturnTraceEntry {
   mrtOrigin : Option Loc,
   mrtGoal : Option EvId,
   mrtPublished : Option EvVal,
+  mrtQualifiedBody : Option Mono,
+  mrtWanted : Option Wanted,
 }
 
 data AssumAnswer =
@@ -9309,6 +9397,8 @@ publishMethodReturnTrace evidence entry =
     mrtOrigin = entry.mrtOrigin,
     mrtGoal = entry.mrtGoal,
     mrtPublished = published,
+    mrtQualifiedBody = entry.mrtQualifiedBody,
+    mrtWanted = entry.mrtWanted,
   }
 
 lookupTraceEvidence : EvId -> EvTable -> Option EvVal
@@ -9326,6 +9416,10 @@ sameTraceEvId (EvId moduleA ordinalA) (EvId moduleB ordinalB) =
 noteMethodReturnTrace : MethodReturnTraceStage -> MethodReturnRequest -> Unit
 noteMethodReturnTrace stage request =
   if methodReturnTraceEnabled.value then
+    let (qualifiedBody, wanted) = match request.mrrInstantiation
+      Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }] }) =>
+        (Some body, Some carried)
+      _ => (None, None)
     methodReturnTraceEntries :=
       MethodReturnTraceEntry {
           mrtStage = stage,
@@ -9336,6 +9430,8 @@ noteMethodReturnTrace stage request =
           mrtOrigin = request.mrrLoc,
           mrtGoal = request.mrrGoalEv,
           mrtPublished = None,
+          mrtQualifiedBody = qualifiedBody,
+          mrtWanted = wanted,
         }
         :: methodReturnTraceEntries.value
 
@@ -12165,19 +12261,20 @@ inferMethodAt env name arityRef tagRef implRef methodRef =
         m
       None => panic ("unbound method: " ++ name)
     Some s =>
-      let inst = instantiateTracked s
-      arityRef := Some (funArity (fst inst))
-      let _ = recordShadowStandaloneObls name (snd inst)
-      let _ = recordRLocalSite env name tagRef (fst inst)
+      let inst = instantiateMethodTracked s
+      let occurrence = inst.mtiBody
+      let subst = inst.mtiSubstitution
+      arityRef := Some (funArity occurrence)
+      let _ = recordShadowStandaloneObls name subst.misTypeSubst
+      let _ = recordRLocalSite env name tagRef occurrence
       let ret = match argDispatchOf name
         Some idx =>
-          let _ = recordMethodDicts name methodRef (snd inst)
-          let _ = recordMethodObligationGuarded env name s (fst inst)
-          let _ = recordArgStamp name tagRef implRef idx (fst inst)
-          let _ = recordArgSiteFn name idx (fst inst)
-          fst inst
-        None =>
-          recordSite env name s tagRef implRef methodRef (fst inst) (snd inst)
+          let _ = recordMethodDicts name methodRef subst.misTypeSubst
+          let _ = recordMethodObligationGuarded env name s occurrence
+          let _ = recordArgStamp name tagRef implRef idx occurrence
+          let _ = recordArgSiteFn name idx occurrence
+          occurrence
+        None => recordSite env name s tagRef implRef methodRef occurrence subst
       -- P0-19 d4b (S4): a bare value-position definer shadow (`map size xs`, marked to
       -- `EMethodAt`) denotes the STANDALONE — return its declared scheme type so the type
       -- mismatches live-impl elements (Box vs Int) instead of dispatching, while the route
@@ -12546,25 +12643,33 @@ recordSite : TcEnv ->
   Ref (List Route) ->
   Ref (List Route) ->
   Mono ->
-  List (Int, Mono) ->
+  MethodInstantiationSubst ->
   Mono
 recordSite env name scheme tagRef implRef methodRef methodType subst =
   let stripped = stripArrows methodType
   let ev = freshEvId ()
   let exactRow = exactReturnRow env name scheme
-  let exact = map (row => methodReturnRequest row methodType (Some ev)) exactRow
+  let exact =
+    map (row => methodReturnRequest row methodType subst (Some ev)) exactRow
   let _ = match (exact, exactRow)
     (Some request, Some row) =>
       let _ =
-        recordMethodLevelSlotsOwned row subst request.mrrLoc request.mrrScope
+        recordMethodLevelSlotsOwned
+          row
+          subst.misTypeSubst
+          request.mrrLoc
+          request.mrrScope
       let _ = recordExactMethodObligation request
       if isEmptyL row.msrMethodSlots then
         ()
       else
-        recordMethodDictsFromSlots row.msrMethodSlots methodRef subst
+        recordMethodDictsFromSlots
+          row.msrMethodSlots
+          methodRef
+          subst.misTypeSubst
     _ =>
       let _ = recordMethodObligationGuarded env name scheme methodType
-      recordMethodDicts name methodRef subst
+      recordMethodDicts name methodRef subst.misTypeSubst
   let siteEv = match exact
     Some request => optionOr ev request.mrrGoalEv
     None => ev
@@ -13019,6 +13124,18 @@ instantiateTracked : Scheme -> (Mono, List (Int, Mono))
 instantiateTracked (Forall ids evars t) =
   let subst = freshSubst ids
   (substMonoP True subst (freshEffSubst evars) t, subst)
+
+instantiateMethodTracked : Scheme -> MethodTrackedInstantiation
+instantiateMethodTracked (Forall ids evars body) =
+  let typeSubst = freshSubst ids
+  let effectSubst = freshEffSubst evars
+  MethodTrackedInstantiation {
+    mtiBody = substMonoP True typeSubst effectSubst body,
+    mtiSubstitution = MethodInstantiationSubst {
+      misTypeSubst = typeSubst,
+      misEffectSubst = effectSubst,
+    },
+  }
 
 -- Slot-parallel to constraintMonosOf's OUTPUT, and it must stay that way: it walks the
 -- SAME slot list against the SAME [subst] and applies the SAME drop rule (an id absent
@@ -15455,7 +15572,7 @@ inferVarPlainId env x id = match lookupVar env x
   Some s => match lookupMethodRow env x
     Some _ =>
       let inst = instantiateVarTrackedWithSubst x id s
-      recordMethodObligationOwned env x s (fst inst) (snd inst) None
+      recordMethodObligationOwned env x s inst.mtiBody inst.mtiSubstitution None
     None =>
       let mono = instantiateVarTrackedId x id s
       recordMethodObligationGuarded env x s mono
@@ -15489,12 +15606,13 @@ instantiateVarTrackedId x id s =
 instantiateVarTrackedWithSubst : String ->
   Int ->
   Scheme ->
-  (Mono, List (Int, Mono))
+  MethodTrackedInstantiation
 instantiateVarTrackedWithSubst x id s =
   match lookupSchemeObls x id perRun.value.schemeObligationsRef.value
     Some obs =>
-      let inst = instantiateTracked s
-      let _ = recordSchemeCallObligations id obs (snd inst)
+      let inst = instantiateMethodTracked s
+      let _ =
+        recordSchemeCallObligations id obs inst.mtiSubstitution.misTypeSubst
       inst
     -- #673: schemeObligationsRef is a PER-MODULE ref (reset per module), so a CROSS-MODULE
     -- constrained binding used as a plain EVar has NO entry here.  For a PRELUDE binding
@@ -15503,10 +15621,11 @@ instantiateVarTrackedWithSubst x id s =
     -- with no Display while `run`/`build` (dict elaboration is a separate net) rejected.
     None => match declaredCrossModuleObls x
       Some obs =>
-        let inst = instantiateTracked s
-        let _ = recordSchemeCallObligations id obs (snd inst)
+        let inst = instantiateMethodTracked s
+        let _ =
+          recordSchemeCallObligations id obs inst.mtiSubstitution.misTypeSubst
         inst
-      None => instantiateTracked s
+      None => instantiateMethodTracked s
 
 -- #673: the declared call obligations of a CROSS-MODULE constrained binding [x] used as a
 -- plain EVar, in schemeObligations shape (`(iface, quantified-var-id VECTOR)` list) so the
@@ -15970,15 +16089,19 @@ recordMethodObligationOwned : TcEnv ->
   String ->
   Scheme ->
   Mono ->
-  List (Int, Mono) ->
+  MethodInstantiationSubst ->
   Option EvId ->
   Mono
 recordMethodObligationOwned env name scheme occurrence subst goalEv =
   match exactReturnRow env name scheme
     Some row =>
-      let request = methodReturnRequest row occurrence goalEv
+      let request = methodReturnRequest row occurrence subst goalEv
       let _ =
-        recordMethodLevelSlotsOwned row subst request.mrrLoc request.mrrScope
+        recordMethodLevelSlotsOwned
+          row
+          subst.misTypeSubst
+          request.mrrLoc
+          request.mrrScope
       recordExactMethodObligation request
     None => recordMethodObligationGuarded env name scheme occurrence
 
@@ -34965,9 +35088,24 @@ methodSchemeRows scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
       msrTyparams = typarams,
       msrType = mty,
       msrScheme = scheme,
+      msrPredicate =
+        map
+          (arguments => ClassPredicate {
+            predicateInterface = iface,
+            predicateArguments = arguments,
+          })
+          (methodInterfacePredicateArgs typarams tvs),
       msrMethodSlots = slots,
     }
     :: methodSchemeRows scope iface typarams rest
+
+methodInterfacePredicateArgs : List String ->
+  List (String, Mono) ->
+  Option (List Mono)
+methodInterfacePredicateArgs [] _ = Some []
+methodInterfacePredicateArgs (param :: rest) tvs = match lookupAssoc param tvs
+  None => None
+  Some argument => map (argument :: _) (methodInterfacePredicateArgs rest tvs)
 
 -- Compatibility projection for the existing term environment and scheme output.
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
@@ -38004,10 +38142,10 @@ methodReturnProbeScope moduleId =
   let _ = openScope scope
   scope
 
-methodReturnProbeOccurrence : MethodSchemeRow -> (Mono, List (Int, Mono))
+methodReturnProbeOccurrence : MethodSchemeRow -> MethodTrackedInstantiation
 methodReturnProbeOccurrence row =
-  let inst = instantiateTracked row.msrScheme
-  let _ = unify (stripArrows (fst inst)) (tconBuiltin "Int")
+  let inst = instantiateMethodTracked row.msrScheme
+  let _ = unify (stripArrows inst.mtiBody) (tconBuiltin "Int")
   inst
 
 methodReturnProbeSpelling : MethodSchemeRow -> Unit
@@ -38017,8 +38155,12 @@ methodReturnProbeSpelling row =
 
 methodReturnProbeRequest : MethodSchemeRow -> MethodReturnRequest
 methodReturnProbeRequest row =
-  let occurrence = fst (methodReturnProbeOccurrence row)
-  methodReturnRequest row occurrence None
+  let inst = methodReturnProbeOccurrence row
+  methodReturnRequest
+    row
+    inst.mtiBody
+    inst.mtiSubstitution
+    (Some (freshEvId ()))
 
 methodReturnVectorCompletenessProbe : Unit ->
   (Option (List String), Option (List String), Bool, Bool)
@@ -38216,10 +38358,10 @@ methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
       extendMethodRow initialEnv "make" ownedRow
     else
       extendVar initialEnv "make" ownedRow.msrScheme
-  let inst = instantiateTracked ownedRow.msrScheme
+  let inst = instantiateMethodTracked ownedRow.msrScheme
   let _ =
     unify
-      (stripArrows (fst inst))
+      (stripArrows inst.mtiBody)
       (tupleMono [tconBuiltin "Int", tconBuiltin "Int"])
   let _ =
     recordSite
@@ -38229,8 +38371,8 @@ methodReturnProbeSlotCase ownedRow foreignRow retainOwner =
       (Ref RNone)
       (Ref [])
       (Ref [])
-      (fst inst)
-      (snd inst)
+      inst.mtiBody
+      inst.mtiSubstitution
   (
     methodReturnProbeOblIfaces (wAll perRun.value.obls),
     methodReturnProbeGoalIfaces graphRun.value.goals.value,
