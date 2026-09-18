@@ -518,9 +518,10 @@ relayedResponseFields =
   ["atproto-repo-rev", "atproto-content-labelers", "retry-after"]
 
 jsonContentType : Header
-jsonContentType = match makeHeader "content-type" (toUtf8 "application/json")
-  Ok header => header
-  Err message => panic "proxy: internal response header error: \{message}"
+jsonContentType =
+  resultOrPanic
+    "proxy: internal response header error"
+    (makeHeader "content-type" (toUtf8 "application/json"))
 
 relayedContentType : Option (Array Int) -> Header
 relayedContentType None = jsonContentType

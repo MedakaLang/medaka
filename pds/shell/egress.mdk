@@ -218,11 +218,8 @@ egressRequestBytes port admission minted = do
 -- names from its own list — so an `Err` here is a defect in one of the two
 -- gradings rather than something a client can provoke.
 relayedRequestFieldsOf : List (String, String) -> Result String (List Header)
-relayedRequestFieldsOf [] = Ok []
-relayedRequestFieldsOf ((name, value) :: rest) = do
-  header <- makeRequestHeader name value
-  tail <- relayedRequestFieldsOf rest
-  Ok (header :: tail)
+relayedRequestFieldsOf fields =
+  traverse ((name, value) => makeRequestHeader name value) fields
 
 -- The fields `lib.proxy` says an answer may carry back, paired with their
 -- values, in that module's order. A field the upstream did not send is absent

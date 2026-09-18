@@ -238,9 +238,10 @@ signedValue did dataCid rev signature = DcMap [
 ]
 
 encodeCommit : String -> DagCbor -> Result String (Array Int)
-encodeCommit label value = match dagCborEncode value
-  Err message => Err "repo: \{label} commit encoding failed: \{message}"
-  Ok bytes => Ok bytes
+encodeCommit label value =
+  mapErr
+    (message => "repo: \{label} commit encoding failed: \{message}")
+    (dagCborEncode value)
 
 buildCommit : String ->
   SecretKey ->
@@ -250,19 +251,19 @@ buildCommit : String ->
   Result String (RepoCommit, BlockStore)
 buildCommit did secret rev tree store = do
   unsigned <- encodeCommit "unsigned" (unsignedValue did (mstRootCid tree) rev)
-  signature <- match signDigest secret (sha256 unsigned)
-    Err message => Err "repo: signing failed: \{message}"
-    Ok value => Ok value
+  signature <- mapErr
+    (message => "repo: signing failed: \{message}")
+    (signDigest secret (sha256 unsigned))
   signed <- encodeCommit
     "signed"
     (signedValue did (mstRootCid tree) rev signature)
   let commitCid = cidForDagCbor signed
-  withTree <- match blockStoreAddMany (mstNodeBlocks tree) store
-    Err message => Err "repo: storing MST failed: \{message}"
-    Ok value => Ok value
-  complete <- match blockStorePut commitCid signed withTree
-    Err message => Err "repo: storing commit failed: \{message}"
-    Ok value => Ok value
+  withTree <- mapErr
+    (message => "repo: storing MST failed: \{message}")
+    (blockStoreAddMany (mstNodeBlocks tree) store)
+  complete <- mapErr
+    (message => "repo: storing commit failed: \{message}")
+    (blockStorePut commitCid signed withTree)
   Ok (
     RepoCommit rev (mstRootCid tree) commitCid unsigned signed signature,
     complete,
@@ -292,17 +293,17 @@ rehydrate : String ->
   BlockStore ->
   Result String Repo
 rehydrate did secret commitCid signed store = do
-  (commitDid, dataCid, rev, signature) <- match decodeSignedCommit signed
-    Err message => Err "repo: invalid persisted commit: \{message}"
-    Ok value => Ok value
+  (commitDid, dataCid, rev, signature) <- mapErr
+    (message => "repo: invalid persisted commit: \{message}")
+    (decodeSignedCommit signed)
   () <- if commitDid == did then
     Ok ()
   else
     Err "repo: persisted commit DID mismatch"
   (nodes, leaves) <- walkNodes [dataCid] store [] cidSeqEmpty 0
-  tree <- match mstFromBlocks dataCid nodes
-    Err message => Err "repo: invalid persisted MST: \{message}"
-    Ok value => Ok value
+  tree <- mapErr
+    (message => "repo: invalid persisted MST: \{message}")
+    (mstFromBlocks dataCid nodes)
   _ <- recordBlocks leaves store []
   unsigned <- encodeCommit "unsigned" (unsignedValue did dataCid rev)
   let publicKey = publicKeyForSecret secret
@@ -329,9 +330,9 @@ repoFromBlocks : String ->
   Result String Repo
 repoFromBlocks did secret commitCid blocks = do
   () <- validateDid did
-  store <- match blockStoreFromBlocks blocks
-    Err message => Err "repo: invalid persisted blocks: \{message}"
-    Ok value => Ok value
+  store <- mapErr
+    (message => "repo: invalid persisted blocks: \{message}")
+    (blockStoreFromBlocks blocks)
   match blockStoreGet commitCid store
     None => Err "repo: missing persisted commit block"
     Some signed => rehydrate did secret commitCid signed store
@@ -440,13 +441,13 @@ finishMutation did secret publicKey rev tree store = do
    the caller's to keep. -}
 stageRecord : DagCbor -> BlockStore -> Result String (Cid, BlockStore)
 stageRecord record store = do
-  bytes <- match dagCborEncode record
-    Err message => Err "repo: record encoding failed: \{message}"
-    Ok value => Ok value
+  bytes <- mapErr
+    (message => "repo: record encoding failed: \{message}")
+    (dagCborEncode record)
   let recordCid = cidForDagCbor bytes
-  withRecord <- match blockStorePut recordCid bytes store
-    Err message => Err "repo: storing record failed: \{message}"
-    Ok value => Ok value
+  withRecord <- mapErr
+    (message => "repo: storing record failed: \{message}")
+    (blockStorePut recordCid bytes store)
   Ok (recordCid, withRecord)
 
 -- | Create a previously absent record.
@@ -457,9 +458,9 @@ repoCreate path record rev (Repo did secret publicKey tree store prior) = do
   () <- validateRecord record
   () <- ensureNewer rev prior
   (recordCid, withRecord) <- stageRecord record store
-  nextTree <- match mstInsert path recordCid tree
-    Err message => Err "repo: duplicate create: \{message}"
-    Ok value => Ok value
+  nextTree <- mapErr
+    (message => "repo: duplicate create: \{message}")
+    (mstInsert path recordCid tree)
   finishMutation did secret publicKey rev nextTree withRecord
 
 -- | Replace an existing record.
@@ -470,9 +471,9 @@ repoUpdate path record rev (Repo did secret publicKey tree store prior) = do
   () <- validateRecord record
   () <- ensureNewer rev prior
   (recordCid, withRecord) <- stageRecord record store
-  nextTree <- match mstReplace path recordCid tree
-    Err message => Err "repo: missing update: \{message}"
-    Ok value => Ok value
+  nextTree <- mapErr
+    (message => "repo: missing update: \{message}")
+    (mstReplace path recordCid tree)
   finishMutation did secret publicKey rev nextTree withRecord
 
 -- | Delete an existing record.
@@ -481,9 +482,9 @@ repoDelete : Array Int -> Tid -> Repo -> Result String RepoMutation
 repoDelete path rev (Repo did secret publicKey tree store prior) = do
   () <- validatePath path
   () <- ensureNewer rev prior
-  nextTree <- match mstDelete path tree
-    Err message => Err "repo: missing delete: \{message}"
-    Ok value => Ok value
+  nextTree <- mapErr
+    (message => "repo: missing delete: \{message}")
+    (mstDelete path tree)
   finishMutation did secret publicKey rev nextTree store
 
 {- | One batch element against the intermediate tree and blocks.
@@ -502,17 +503,17 @@ applyWrite (RepoWriteCreate path record) tree store = do
   () <- validatePath path
   () <- validateRecord record
   (recordCid, withRecord) <- stageRecord record store
-  nextTree <- match mstInsert path recordCid tree
-    Err message => Err "repo: duplicate create: \{message}"
-    Ok value => Ok value
+  nextTree <- mapErr
+    (message => "repo: duplicate create: \{message}")
+    (mstInsert path recordCid tree)
   Ok (nextTree, withRecord)
 applyWrite (RepoWriteUpdate path record) tree store = do
   () <- validatePath path
   () <- validateRecord record
   (recordCid, withRecord) <- stageRecord record store
-  nextTree <- match mstReplace path recordCid tree
-    Err message => Err "repo: missing update: \{message}"
-    Ok value => Ok value
+  nextTree <- mapErr
+    (message => "repo: missing update: \{message}")
+    (mstReplace path recordCid tree)
   Ok (nextTree, withRecord)
 applyWrite (RepoWriteDelete path) tree store = do
   () <- validatePath path
@@ -578,9 +579,10 @@ repoMutationCommit (RepoMutation _ commit) = commit
 decodeAt : Cid -> BlockStore -> Result String DagCbor
 decodeAt cid store = match blockStoreGet cid store
   None => Err "repo: missing graph record block"
-  Some bytes => match dagCborDecode bytes
-    Err message => Err "repo: invalid stored record: \{message}"
-    Ok value => Ok value
+  Some bytes =>
+    mapErr
+      (message => "repo: invalid stored record: \{message}")
+      (dagCborDecode bytes)
 
 -- | Look up and strictly decode one record.
 export
@@ -781,12 +783,12 @@ decodeSignedCommit bytes = match dagCborDecode bytes
           Err "repo: commit version mismatch"
         else do
           () <- validateDid did
-          rev <- match tidParse revText
-            Err message => Err "repo: invalid commit TID: \{message}"
-            Ok value => Ok value
-          signature <- match signatureFromCompact compact
-            Err message => Err "repo: invalid compact signature: \{message}"
-            Ok value => Ok value
+          rev <- mapErr
+            (message => "repo: invalid commit TID: \{message}")
+            (tidParse revText)
+          signature <- mapErr
+            (message => "repo: invalid compact signature: \{message}")
+            (signatureFromCompact compact)
           Ok (did, dataCid, rev, signature)
       _ =>
         Err

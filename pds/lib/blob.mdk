@@ -117,9 +117,8 @@ requiredRefCid body = match get "ref" body
   None => Err "blob: missing 'ref'"
   Some ref => match get "$link" ref
     None => Err "blob: 'ref' must contain a '$link' string"
-    Some (JString text) => match cidFromString text
-      Err message => Err "blob: \{message}"
-      Ok cid => Ok cid
+    Some (JString text) =>
+      mapErr (message => "blob: \{message}") (cidFromString text)
     Some _ => Err "blob: 'ref.$link' must be a string"
 
 requiredMimeType : Json -> Result String String

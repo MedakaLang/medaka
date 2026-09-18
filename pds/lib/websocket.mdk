@@ -130,9 +130,7 @@ maxControlPayload : Int
 maxControlPayload = 125
 
 byteAt : Array Int -> Int -> Int
-byteAt arr i = match get i arr
-  Some b => b
-  None => panic "websocket: byte index out of bounds"
+byteAt arr i = optionOrPanic "websocket: byte index out of bounds" (get i arr)
 
 opcodeBits : Opcode -> Int
 opcodeBits Continuation = 0x0

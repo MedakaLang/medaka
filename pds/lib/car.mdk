@@ -110,9 +110,10 @@ readVarintAt : String -> Array Int -> Int -> Int -> Result String (Int, Int)
 readVarintAt label input pos end =
   if pos >= end then
     Err "car: truncated \{label} varint"
-  else match readVarintGo input pos end 0 0 0
-    Err message => Err "car: \{label}: \{message}"
-    Ok result => Ok result
+  else
+    mapErr
+      (message => "car: \{label}: \{message}")
+      (readVarintGo input pos end 0 0 0)
 
 slice : Array Int -> Int -> Int -> Array Int
 slice input start size = arrayMakeWith size (i => input[start + i])

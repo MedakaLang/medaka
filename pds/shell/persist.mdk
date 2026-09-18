@@ -145,12 +145,12 @@ export
 persistLoad : String ->
   <FileRead "_"> Result String (Cid, List (Cid, Array Int))
 persistLoad dir = do
-  text <- match readFile (headPath dir)
-    Err message => Err "persist: unreadable head file: \{message}"
-    Ok value => Ok value
-  head <- match cidFromString text
-    Err message => Err "persist: head file is not a CID: \{message}"
-    Ok value => Ok value
+  text <- mapErr
+    (message => "persist: unreadable head file: \{message}")
+    (readFile (headPath dir))
+  head <- mapErr
+    (message => "persist: head file is not a CID: \{message}")
+    (cidFromString text)
   blocks <- blockFileRead (blocksDir dir)
   Ok (head, blocks)
 
@@ -181,12 +181,12 @@ persistLoadPreferences dir =
   if not (fileExists (preferencesPath dir)) then
     Ok []
   else do
-    text <- match readFile (preferencesPath dir)
-      Err message => Err "persist: unreadable preferences file: \{message}"
-      Ok value => Ok value
-    value <- match parse text
-      Err message => Err "persist: preferences file is not JSON: \{message}"
-      Ok value => Ok value
+    text <- mapErr
+      (message => "persist: unreadable preferences file: \{message}")
+      (readFile (preferencesPath dir))
+    value <- mapErr
+      (message => "persist: preferences file is not JSON: \{message}")
+      (parse text)
     match asArray value
       None => Err "persist: preferences file is not a JSON array"
       Some items => Ok (toList items)

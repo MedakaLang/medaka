@@ -221,9 +221,10 @@ blobFileWrite dir rows = do
 cidForName : String -> String -> Result String Cid
 cidForName path name = match decode name
   Err message => Err "blobfile: \{path}: file name is not hex: \{message}"
-  Ok bytes => match cidFromBytes bytes
-    Err message => Err "blobfile: \{path}: file name is not a CID: \{message}"
-    Ok cid => Ok cid
+  Ok bytes =>
+    mapErr
+      (message => "blobfile: \{path}: file name is not a CID: \{message}")
+      (cidFromBytes bytes)
 
 -- A sidecar is read through the blob it belongs to, so it is skipped here —
 -- but its name still has to spell a CID, or the directory holds a file this
