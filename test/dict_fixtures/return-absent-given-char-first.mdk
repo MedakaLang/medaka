@@ -1,0 +1,15 @@
+-- #2981: the absent interface formal comes from the enclosing qualified given.
+-- Char is declared first so selecting by the visible result alone would print 22.
+interface Hidden a b where
+  hidden : Unit -> a
+
+impl Hidden Int Char where
+  hidden _ = 22
+
+impl Hidden Int Bool where
+  hidden _ = 12
+
+useHidden : Hidden a b => b -> a
+useHidden witness = hidden ()
+
+main = println (useHidden True : Int)

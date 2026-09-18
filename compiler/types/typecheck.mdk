@@ -238,18 +238,13 @@ import types.scopes.{
 import types.scopes as Scopes
 import types.solver_contract.{
   ClassPredicate(..),
-  ExistingInstantiationServices(..),
   GoalOrigin(..),
   Instantiation(..),
   InstantiationArgument(..),
-  QualifiedScheme(..),
-  Qualifier(..),
   SolverBlocker(..),
   SolverFailure(..),
   SolverOutcome(..),
   Wanted(..),
-  WantedTarget(..),
-  instantiateQualifiedAt,
 }
 import types.registry.{
   RegKey,
@@ -7404,16 +7399,6 @@ pushExactReturnObl request = wPush perRun.value.implObls UObligation {
   oblProj = OpExactReturn request,
 }
 
-methodExistingInstantiationServices : ExistingInstantiationServices MethodInstantiationSubst
-methodExistingInstantiationServices = ExistingInstantiationServices {
-  substituteExistingBody =
-    subst =>
-      body => substMonoP True subst.misTypeSubst subst.misEffectSubst body,
-  substituteExistingArgument =
-    subst =>
-      argument => substMono subst.misTypeSubst subst.misEffectSubst argument,
-}
-
 methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOrigin loc =
   let moduleId = driverState.value.currentModuleRef.value
@@ -7428,37 +7413,50 @@ methodReturnOrigin loc =
     binding = binding,
   }
 
-methodReturnInstantiation : MethodSchemeRow ->
-  MethodInstantiationSubst ->
+methodReturnInstantiation : MethodReturnRequest -> Option Instantiation
+methodReturnInstantiation request = match (
+  methodReturnPredicate request,
+  request.mrrGoalEv,
+)
+  (Some predicate, Some destination) => Some Instantiation {
+    body = request.mrrQualifiedBody,
+    arguments = [
+      InstantiationArgument {
+        formal = Scopes.binderAt request.mrrScope 0,
+        wanted = Wanted {
+          id = goalIdForDestination destination,
+          predicate = predicate,
+          origin = methodReturnOrigin request.mrrLoc,
+          scope = request.mrrScope,
+          destination = destination,
+        },
+      },
+    ],
+  }
+  _ => None
+
+methodReturnPredicate : MethodReturnRequest -> Option ClassPredicate
+methodReturnPredicate request =
+  methodReturnPredicateFromTemplate
+    request.mrrPredicateTemplate
+    request.mrrScope
+
+methodReturnPredicateFromTemplate : MethodPredicateTemplate ->
   ScopeId ->
-  Option Loc ->
-  EvId ->
-  Option Instantiation
-methodReturnInstantiation row subst scope loc destination =
-  match row.msrPredicate
-    None => None
-    Some predicate =>
-      let qualified = QualifiedScheme {
-        hm = row.msrScheme,
-        qualifiers = [
-          Qualifier {
-            predicate = predicate,
-            formal = Scopes.binderAt scope 0,
-          },
-        ],
-      }
-      instantiateQualifiedAt
-        methodExistingInstantiationServices
-        subst
-        scope
-        (methodReturnOrigin loc)
-        [
-          WantedTarget {
-            targetGoal = goalIdForDestination destination,
-            targetDestination = destination,
-          },
-        ]
-        qualified
+  Option ClassPredicate
+methodReturnPredicateFromTemplate template scope =
+  match methodPredicateTemplateArgs template.mptArguments
+    Some arguments => Some ClassPredicate {
+      predicateInterface = template.mptInterface,
+      predicateArguments = arguments,
+    }
+    None =>
+      map
+        (given => ClassPredicate {
+          predicateInterface = template.mptInterface,
+          predicateArguments = predicateSlotKnownArgs given.geSlot.psArgs,
+        })
+        (uniqueMethodTemplateGiven template scope (givensForScope scope))
 
 methodReturnRequest : MethodSchemeRow ->
   Mono ->
@@ -7468,10 +7466,9 @@ methodReturnRequest : MethodSchemeRow ->
 methodReturnRequest row occurrence subst goalEv =
   let loc = !currentLoc
   let scope = captureScope ()
-  let instantiation = match goalEv
-    Some destination =>
-      methodReturnInstantiation row subst scope loc destination
-    None => None
+  let qualifiedBody = match row.msrScheme
+    Forall _ _ body =>
+      substMonoP True subst.misTypeSubst subst.misEffectSubst body
   MethodReturnRequest {
     mrrIface = row.msrIface,
     mrrName = row.msrName,
@@ -7482,18 +7479,20 @@ methodReturnRequest row occurrence subst goalEv =
     mrrLoc = loc,
     mrrScope = scope,
     mrrGoalEv = goalEv,
-    mrrInstantiation = instantiation,
+    mrrQualifiedBody = qualifiedBody,
+    mrrPredicateTemplate =
+      instantiateMethodPredicateTemplate row.msrPredicateTemplate subst,
     mrrResolution = Ref None,
   }
 
 methodReturnArgs : MethodReturnRequest -> Option (List Mono)
-methodReturnArgs request = match request.mrrInstantiation
-  Some (Instantiation { arguments = [argument], ... }) =>
-    Some argument.wanted.predicate.predicateArguments
-  _ => None
+methodReturnArgs request =
+  map
+    (predicate => predicate.predicateArguments)
+    (methodReturnPredicate request)
 
 methodReturnWanted : MethodReturnRequest -> Option Wanted
-methodReturnWanted request = match request.mrrInstantiation
+methodReturnWanted request = match methodReturnInstantiation request
   Some (Instantiation { arguments = [argument], ... }) => Some argument.wanted
   _ => None
 
@@ -7798,6 +7797,15 @@ data MethodPredicateSlot = MethodPredicateSlot {
   mpsPositions : List Int,
 }
 
+-- The interface predicate attached to an ordinary return method before call-site
+-- instantiation.  Every interface formal occupies one ordered position.  An absent
+-- formal stays absent: no fresh inference variable is manufactured for a name the
+-- method scheme does not quantify.
+data MethodPredicateTemplate = MethodPredicateTemplate {
+  mptInterface : IfaceRef,
+  mptArguments : List (Option Mono),
+}
+
 -- One interface-method declaration, its scheme, and the method-level predicate slots
 -- built from that scheme's own type-variable allocation.  Rows stay local to environment
 -- setup: they carry live cells and are not a cache or published solver artifact.
@@ -7807,7 +7815,7 @@ data MethodSchemeRow = MethodSchemeRow {
   msrTyparams : List String,
   msrType : Ty,
   msrScheme : Scheme,
-  msrPredicate : Option ClassPredicate,
+  msrPredicateTemplate : MethodPredicateTemplate,
   msrMethodSlots : List MethodPredicateSlot,
 }
 
@@ -7846,7 +7854,8 @@ data MethodReturnRequest = MethodReturnRequest {
   mrrLoc : Option Loc,
   mrrScope : ScopeId,
   mrrGoalEv : Option EvId,
-  mrrInstantiation : Option Instantiation,
+  mrrQualifiedBody : Mono,
+  mrrPredicateTemplate : MethodPredicateTemplate,
   mrrResolution : Ref (Option MethodReturnResolution),
 }
 
@@ -9450,7 +9459,7 @@ noteMethodReturnTrace : MethodReturnTraceStage ->
   Unit
 noteMethodReturnTrace stage request route prerequisites =
   if methodReturnTraceEnabled.value then
-    let (qualifiedBody, wanted) = match request.mrrInstantiation
+    let (qualifiedBody, wanted) = match methodReturnInstantiation request
       Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }] }) =>
         (Some body, Some carried)
       _ => (None, None)
@@ -16117,7 +16126,6 @@ methodRowCanCarry row =
       (anyArgMentions
         (dispatchTyparams row.msrTyparams)
         (methodArgs row.msrType))
-    && allMethodParamsMentioned row.msrTyparams row.msrType
 
 allMethodParamsMentioned : List String -> Ty -> Bool
 allMethodParamsMentioned [] _ = True
@@ -22043,16 +22051,19 @@ resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origi
   match methodReturnArgs request
     None =>
       let _ = noteMethodReturnTrace MRTStamped request None []
-      resolveSite
-        rpNames
-        name
-        tagRef
-        implRef
-        resultMono
-        request.mrrOccurrence
-        encl
-        origin
-        scope
+      if methodReturnAmbiguousWithoutGiven request then
+        ()
+      else
+        resolveSite
+          rpNames
+          name
+          tagRef
+          implRef
+          resultMono
+          request.mrrOccurrence
+          encl
+          origin
+          scope
     Some _ =>
       let resolution = solveExactReturnOnce request
       let _ =
@@ -22772,6 +22783,84 @@ implReqDictVarOf (Some request) m encl useScope
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
 predicateSlotKnownArgs PSArgsUnknown = []
 predicateSlotKnownArgs (PSArgsKnown args) = args
+
+instantiateMethodPredicateTemplate : MethodPredicateTemplate ->
+  MethodInstantiationSubst ->
+  MethodPredicateTemplate
+instantiateMethodPredicateTemplate template subst = MethodPredicateTemplate {
+  mptInterface = template.mptInterface,
+  mptArguments =
+    map (instantiateMethodPredicateArgument subst) template.mptArguments,
+}
+
+instantiateMethodPredicateArgument : MethodInstantiationSubst ->
+  Option Mono ->
+  Option Mono
+instantiateMethodPredicateArgument subst argument =
+  map (substMono subst.misTypeSubst subst.misEffectSubst) argument
+
+methodPredicateTemplateArgs : List (Option Mono) -> Option (List Mono)
+methodPredicateTemplateArgs [] = Some []
+methodPredicateTemplateArgs ((Some argument) :: rest) =
+  map (argument :: _) (methodPredicateTemplateArgs rest)
+methodPredicateTemplateArgs (None :: _) = None
+
+data MethodTemplateGivenResult =
+  | MethodTemplateGivenNone
+  | MethodTemplateGivenOne GivenEntry
+  | MethodTemplateGivenMany
+
+uniqueMethodTemplateGiven : MethodPredicateTemplate ->
+  ScopeId ->
+  List GivenEntry ->
+  Option GivenEntry
+uniqueMethodTemplateGiven template useScope givens =
+  match methodTemplateGivenScan template useScope givens MethodTemplateGivenNone
+    MethodTemplateGivenOne given => Some given
+    _ => None
+
+methodTemplateGivenScan : MethodPredicateTemplate ->
+  ScopeId ->
+  List GivenEntry ->
+  MethodTemplateGivenResult ->
+  MethodTemplateGivenResult
+methodTemplateGivenScan _ _ [] result = result
+methodTemplateGivenScan template useScope (given :: rest) result =
+  let result2 =
+    if givenInScope GSPredicateOnly given
+      && Scopes.givenVisibleFrom
+        (currentScopeStore ())
+        useScope
+        (Scopes.binderScope given.geBinder)
+      && methodPredicateTemplateMatchesSlot
+        template
+        given.geSlot then match result
+      MethodTemplateGivenNone => MethodTemplateGivenOne given
+      _ => MethodTemplateGivenMany
+    else
+      result
+  match result2
+    MethodTemplateGivenMany => MethodTemplateGivenMany
+    _ => methodTemplateGivenScan template useScope rest result2
+
+methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
+  PredicateSlot ->
+  Bool
+methodPredicateTemplateMatchesSlot template slot =
+  sameIfaceDecl template.mptInterface slot.psIface
+    && (match slot.psArgs
+      PSArgsUnknown => False
+      PSArgsKnown arguments =>
+        methodPredicateTemplateArgumentsMatch template.mptArguments arguments)
+
+methodPredicateTemplateArgumentsMatch : List (Option Mono) -> List Mono -> Bool
+methodPredicateTemplateArgumentsMatch [] [] = True
+methodPredicateTemplateArgumentsMatch ((Some expected) :: rest) (actual :: arguments) =
+  monoSameGiven expected actual
+    && methodPredicateTemplateArgumentsMatch rest arguments
+methodPredicateTemplateArgumentsMatch (None :: rest) (_ :: arguments) =
+  methodPredicateTemplateArgumentsMatch rest arguments
+methodPredicateTemplateArgumentsMatch _ _ = False
 
 -- 🚨 #1177: A USE SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS CONSTRAINT VAR'S ID.
 -- `funConstraintsRef` is the SHATTERED per-tyvar slot table, so a context naming two
@@ -31595,7 +31684,13 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
         noteMethodReturnTrace MRTChecked request None []
       None =>
         let _ =
-          checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
+          if methodReturnAmbiguousWithoutGiven request then
+            pushTypeErrorOnceAt
+              "T-AMBIGUOUS-INSTANCE"
+              loc
+              (ambiguousImplMsg request.mrrIface.irName)
+          else
+            checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
         noteMethodReturnTrace MRTChecked request None []
     _ => checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
   let _ = noteNumericObligationChecked o occs
@@ -31610,6 +31705,49 @@ solveExactReturnOnce request = match request.mrrResolution.value
     let resolution = solveExactReturn request
     request.mrrResolution := Some resolution
     resolution
+
+methodReturnAmbiguousWithoutGiven : MethodReturnRequest -> Bool
+methodReturnAmbiguousWithoutGiven request =
+  methodPredicateTemplateHasAbsent request.mrrPredicateTemplate
+    && isNone (methodReturnPredicate request)
+    && methodPredicateTemplateCandidateCount
+        request.mrrPredicateTemplate
+        (ieRowsAll perRun.value.bodyImplEnvRef.value)
+        0
+      >= 2
+
+methodPredicateTemplateHasAbsent : MethodPredicateTemplate -> Bool
+methodPredicateTemplateHasAbsent template =
+  anyListM isNone template.mptArguments
+
+methodPredicateTemplateCandidateCount : MethodPredicateTemplate ->
+  List ImplRow ->
+  Int ->
+  Int
+methodPredicateTemplateCandidateCount _ _ count
+  | count >= 2 = count
+methodPredicateTemplateCandidateCount _ [] count = count
+methodPredicateTemplateCandidateCount template (row :: rest) count = methodPredicateTemplateCandidateCount
+  template
+  rest
+  (if methodPredicateTemplateMatchesRow template row then count + 1 else count)
+
+methodPredicateTemplateMatchesRow : MethodPredicateTemplate -> ImplRow -> Bool
+methodPredicateTemplateMatchesRow template (ImplRow _ _ iface tys _ _) =
+  sameIfaceDecl template.mptInterface iface
+    && (match methodPredicateTemplateHeadPairs template.mptArguments tys
+      Some pairs => isSome (matchOneSided matchStep eqStr cohEqMono pairs [])
+      None => False)
+
+methodPredicateTemplateHeadPairs : List (Option Mono) ->
+  List Ty ->
+  Option (List (Ty, Mono))
+methodPredicateTemplateHeadPairs [] [] = Some []
+methodPredicateTemplateHeadPairs ((Some argument) :: rest) (head :: heads) =
+  map ((head, argument) :: _) (methodPredicateTemplateHeadPairs rest heads)
+methodPredicateTemplateHeadPairs (None :: rest) (_ :: heads) =
+  methodPredicateTemplateHeadPairs rest heads
+methodPredicateTemplateHeadPairs _ _ = None
 
 solveExactReturn : MethodReturnRequest -> MethodReturnResolution
 solveExactReturn request = match methodReturnWanted request
@@ -35366,24 +35504,20 @@ methodSchemeRows scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
       msrTyparams = typarams,
       msrType = mty,
       msrScheme = scheme,
-      msrPredicate =
-        map
-          (arguments => ClassPredicate {
-            predicateInterface = iface,
-            predicateArguments = arguments,
-          })
-          (methodInterfacePredicateArgs typarams tvs),
+      msrPredicateTemplate = MethodPredicateTemplate {
+        mptInterface = iface,
+        mptArguments = methodInterfacePredicateTemplate typarams tvs,
+      },
       msrMethodSlots = slots,
     }
     :: methodSchemeRows scope iface typarams rest
 
-methodInterfacePredicateArgs : List String ->
+methodInterfacePredicateTemplate : List String ->
   List (String, Mono) ->
-  Option (List Mono)
-methodInterfacePredicateArgs [] _ = Some []
-methodInterfacePredicateArgs (param :: rest) tvs = match lookupAssoc param tvs
-  None => None
-  Some argument => map (argument :: _) (methodInterfacePredicateArgs rest tvs)
+  List (Option Mono)
+methodInterfacePredicateTemplate [] _ = []
+methodInterfacePredicateTemplate (param :: rest) tvs =
+  lookupAssoc param tvs :: methodInterfacePredicateTemplate rest tvs
 
 -- Compatibility projection for the existing term environment and scheme output.
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
@@ -38493,6 +38627,59 @@ methodReturnVectorCompletenessProbe _ =
 
 -- > methodReturnVectorCompletenessProbe ()
 -- (Some [], None, True, False)
+
+export
+methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
+methodReturnTemplatePresenceProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let present =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface
+          "return-template-present"
+          "Present"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun
+                (tyConBuiltin "Unit" None)
+                (TyTuple [TyVar "a", TyVar "b"]))
+              None
+              None,
+          ],
+      ])
+  let absent =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface
+          "return-template-absent"
+          "Absent"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+              None
+              None,
+          ],
+      ])
+  let observed = (
+    map isSome present.msrPredicateTemplate.mptArguments,
+    map isSome absent.msrPredicateTemplate.mptArguments,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observed
+
+-- > methodReturnTemplatePresenceProbe ()
+-- ([True, True], [True, False])
 
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeCodes ownedRow impls =

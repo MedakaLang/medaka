@@ -1,0 +1,12 @@
+-- No enclosing Hidden predicate supplies b. Both rows match the visible Int
+-- position, so choosing the first declaration would be silently wrong.
+interface Hidden a b where
+  hidden : Unit -> a
+
+impl Hidden Int Char where
+  hidden _ = 22
+
+impl Hidden Int Bool where
+  hidden _ = 12
+
+main = println (hidden () : Int)

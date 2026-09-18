@@ -1,3 +1,5 @@
+-- The #2981 must-fail control, retained after the pin drains: both interface
+-- parameters occur in the method type, so the ordinary complete-vector path applies.
 interface Hidden a b where
   hidden : b -> a
 
@@ -10,9 +12,4 @@ impl Hidden Int Bool where
 useHidden : Hidden a b => b -> a
 useHidden witness = hidden witness
 
-main =
-  let actual = useHidden True : Int
-  if actual == 12 then
-    println actual
-  else
-    panic "expected Hidden Int Bool to return 12"
+main = println (useHidden True : Int)
