@@ -168,6 +168,13 @@ test: medaka
 	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without this line
 	## nothing would run them.
 	./medaka test stdlib/http.mdk
+	## stdlib/bytes.mdk's doctests — the `Bytes` surface, including the
+	## out-of-range pairing (`get` answers `None` where `b[i]` panics). Nothing
+	## imports the module by design (keeping it out of the compiler's import
+	## closure is what makes it free of a seed re-mint), so it is outside every
+	## entry's import closure ([W-MODULE-BLIND]) and is not in
+	## test/diff_compiler_fmt_test.mdk's testReportCorpus list either.
+	./medaka test stdlib/bytes.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
 	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
