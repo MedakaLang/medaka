@@ -1,0 +1,5 @@
+-- #3186: half-open `s.[lo..hi]` past the end of a String.  Until this fixture landed
+-- the String arm of `Slice` CLAMPED — `"hello".[2..99]` printed `llo` and exited 0 on
+-- BOTH engines, disagreeing with `s.[lo..hi]` being the panicking form (string.mdk's
+-- `sliceClamped` doc) and with `Slice (Array a)`, which had panicked since #550.
+main = println "hello".[2..99]

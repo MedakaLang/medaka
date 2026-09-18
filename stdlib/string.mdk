@@ -617,6 +617,12 @@ export
 sliceClamped : Int -> Int -> String -> String
 sliceClamped lo hi s = stringSlice lo hi s
 
+-- > sliceClamped 0 100 "abc"
+-- "abc"
+
+-- > take 100 "abc"
+-- "abc"
+
 {- | The first `n` characters, or the whole string when it is shorter.
 
    > take 3 "hello"

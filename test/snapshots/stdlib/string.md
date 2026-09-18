@@ -1,5 +1,5 @@
 # META
-source_lines=816
+source_lines=822
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `String` and `Char`.
@@ -620,6 +620,12 @@ replaceAllGo oldLen old new s = match indexOf old s
 export
 sliceClamped : Int -> Int -> String -> String
 sliceClamped lo hi s = stringSlice lo hi s
+
+-- > sliceClamped 0 100 "abc"
+-- "abc"
+
+-- > take 100 "abc"
+-- "abc"
 
 {- | The first `n` characters, or the whole string when it is shorter.
 

@@ -1,0 +1,13 @@
+-- THE LIST CONTROL for #3186: every in-bounds List slice, including the exact
+-- boundaries the guard must NOT reject.  `[0..5]` (end == length) and `[0..=4]` (last
+-- index, inclusive) are LEGAL — and for a List those are the cases where the walk
+-- reaches Nil with the running index exactly at `hi`, which is the one place the
+-- end-of-chain test must NOT fire.  An empty slice at either end is legal too.
+main =
+  let xs = [10, 20, 30, 40, 50]
+  let _ = println xs.[1..3]
+  let _ = println xs.[1..=3]
+  let _ = println xs.[0..5]
+  let _ = println xs.[0..=4]
+  let _ = println xs.[2..2]
+  println xs.[5..5]

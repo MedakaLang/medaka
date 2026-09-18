@@ -474,7 +474,7 @@ debugging aid and the basis of the module's property tests. It costs
 ### `Index (Map k v) k v`
 
 ```
-impl Index (Map k v) k v requires Ord k
+impl Index (Map k v) k v requires Ord k, Debug k
 ```
 
 `m[k]` is the value at `k`.

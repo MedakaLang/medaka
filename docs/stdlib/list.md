@@ -1188,7 +1188,8 @@ impl Slice (List a)
 
 The sublist over `[lo, hi)`, in `O(hi)`.
 
-Out-of-range bounds are clamped to the list.
+Panics with a slice error when the range runs outside the list;
+`list.sliceClamped` clamps instead.
 
 ```medaka
 > slice [10, 20, 30, 40] 1 3

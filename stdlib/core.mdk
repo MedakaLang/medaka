@@ -1265,26 +1265,40 @@ export impl Slice (Array a) where
 
 {- | The substring over codepoint positions `[lo, hi)`.
 
-   Out-of-range bounds are clamped to the string.
+   Panics with a slice error when the range runs outside the string;
+   `string.sliceClamped` clamps instead.
 
    > slice "hello" 1 4
    "ell" -}
 export impl Slice String where
-  slice s lo hi = stringSlice lo hi s
+  slice s lo hi =
+    if lo < 0 || hi > stringLength s || hi - lo < 0 then
+      sliceError lo (hi - 1)
+    else
+      stringSlice lo hi s
 
 {- | The sublist over `[lo, hi)`, in `O(hi)`.
 
-   Out-of-range bounds are clamped to the list.
+   Panics with a slice error when the range runs outside the list;
+   `list.sliceClamped` clamps instead.
 
    > slice [10, 20, 30, 40] 1 3
    [20, 30] -}
 export impl Slice (List a) where
-  slice xs lo hi = sliceListGo xs 0 lo hi
+  slice xs lo hi =
+    if lo < 0 || hi - lo < 0 then
+      sliceError lo (hi - 1)
+    else
+      sliceListGo xs 0 lo hi
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in
--- `[lo, hi)`, stop at `hi` or end-of-list (clamps, mirror of eval's listSliceGo).
+-- `[lo, hi)`, stop at `hi`.  Reaching the end of the chain while the running
+-- index is still below `hi` is the `hi > length` half of `Slice (Array a)`'s
+-- guard, decided here so the walk doubles as the length check.
 sliceListGo : List a -> Int -> Int -> Int -> List a
-sliceListGo [] _ _ _ = []
+sliceListGo [] i lo hi
+  | i >= hi = []
+  | otherwise = sliceError lo (hi - 1)
 sliceListGo (x :: xs) i lo hi
   | i >= hi = []
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi
