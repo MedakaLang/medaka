@@ -44,8 +44,6 @@ makes `Bytes` behave like a library type:
 
 - A builtin head claims its identifier in every program at once, so any user's
   own `data Bytes = …` becomes a hard `Duplicate type` error.
-- A builtin head cannot be imported by name, so `import bytes.{Bytes}` would
-  have nothing to bring into scope.
 - A builtin head cannot be constructed or pattern-matched by name.
 - A builtin head must be listed in the compiler frontend's hardcoded
   `primitiveTypes`, which puts a library type's name inside the frontend.
