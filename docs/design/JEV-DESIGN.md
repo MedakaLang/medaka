@@ -145,41 +145,69 @@ the 7466 comment blocks, roughly 125. The draw is anchor-oversampled, so that
 figure rests mostly on the stratum sampled least; treat it as an order of
 magnitude, not a count.
 
-**The register Score's resolution collapses at the top of its range, which
-the rank correlation hides.** `make jev-eval` prints the mean predicted score
-per label level, and those four numbers say more about what the worklist can
-rest on than the 0.82 does:
+**The register Score's top level is unreachable, which the rank correlation
+hides.** `make jev-eval` prints the mean predicted score per label level, and
+the gap between the top two says more about what a worklist can rest on than
+the rank correlation does: the 2-to-3 step runs around 0.15 against a label
+step of 1.0, where the 0-to-1 step runs around 0.7.
 
-| reader's label | mean predicted | n |
-|---:|---:|---:|
-| 0 | 0.33 | 37 |
-| 1 | 1.04 | 30 |
-| 2 | 1.57 | 26 |
-| 3 | 1.73 | 8 |
+**Do not quote the per-level means from this document -- derive them.** They
+moved twice on 2026-09-17 alone, once when the policy sentence was narrowed
+and once when the levels stopped naming `argument`, because both live in the
+state the question reads and the cache key hashes the state. What is durable
+is the shape, and the shape has survived every edit tried against it.
 
-The levels are monotone, so they are ordered in the model's reading and do not
-need rewriting on that count. But the 2-to-3 step is **0.16** against a label
-step of 1.0, where the 0-to-1 step is 0.71. The Score separates clean prose
-from bad prose and is close to blind between bad and worst.
+The mechanism is not compression, it is **range use**. Measured over 101 rows:
+level 3 takes 2% of the probability mass on average and never more than 32% on
+any single row, and the highest score the Score has ever returned is 2.14 out
+of 3. The top of the scale is not used, so blocks a reader calls level 3 are
+pushed down into the level-2 region and the two labels' means converge from
+above. C034 is the most narrative block in the corpus and scores 2.14; C032 is
+185 lines and scores 1.95.
 
-Those four numbers moved on 2026-09-17 when the policy sentence was narrowed,
-because the policy lives in the state and every comment question reads it.
-Asking both policies over the same 101 rows separates the effect from noise:
+Three explanations were tested and two are refuted:
 
-| policy | 0 | 1 | 2 | 3 | smallest step | Spearman |
-|---|---:|---:|---:|---:|---:|---:|
-| before (reviewer-addressed prose condemned) | 0.49 | 1.33 | 1.85 | 1.96 | 0.11 | 0.826 |
-| after (defensive prose exempt) | 0.33 | 1.04 | 1.57 | 1.73 | 0.16 | 0.831 |
+| hypothesis | test | result |
+|---|---|---|
+| the policy's clause condemning reviewer-addressed prose | both policies over the same 101 rows | **refuted** -- every level fell ~0.2, the smallest step moved 0.11 to 0.16 |
+| long blocks dilute, so "entirely" can never be true | shortfall at labels 2-3 vs. block length | **refuted, and inverted** -- the shortfall is LARGER on short blocks (0.76 vs 0.49), Spearman(length, shortfall) -0.19 |
+| the level text is a conjunction of absolutes | rewrite all four levels around a situation a real block can be in | **not supported** -- see below |
 
-Every level fell by about 0.2 and the ordering barely moved. **The collapse at
-the top survives the edit**, so it is not the policy's doing -- it is in the
-level descriptions, which is where a fix has to go.
+The rewrite was frozen before the held-out `register` labels existed and
+measured against them. It bought nothing that striking one word did not:
 
-One inconsistency is open and deliberate: the Score's top level still reads
-"entirely history, litigation, or reviewer-addressed prose", which the policy
-no longer treats as a defect. Rewriting it moves every number in this section,
-so it is done once, with a measurement, rather than now -- the figures above
-are the shipped instrument as it stands.
+| levels | Spearman | MAE |
+|---|---:|---:|
+| as shipped before this change | 0.750 | 0.42 |
+| with `argument` struck, nothing else | **0.765** | **0.37** |
+| fully rewritten (4 levels) | 0.753 | 0.37 |
+
+So the shipped change is the one word. Levels 1 and 2 named "argument" and
+level 3 named "reviewer-addressed prose" as defect dimensions, which the
+policy in the same state no longer does; that contradiction had to go whether
+or not it helped, and it turns out to be the whole of the gain. The four-level
+rewrite is not shipped: a rewrite that buys nothing still costs every recorded
+number its comparability.
+
+**What bounds the cost of the collapse:** the 80-row held-out draw, labeled
+blind, contains **no level-3 block at all**. The top level is not merely hard
+for the model to reach -- it is rare in the tree. An instrument that never
+returns 3 is wrong about the eight blocks in the tuning corpus that earn it,
+and close to right about everything else. That is a smaller defect than a
+0.16 step suggests, and it is why the level is left as it is rather than
+rewritten again.
+
+⚠️ **The two `register` label sets are on different rules and are reported
+apart.** C000-C100 were labeled while prose arguing for a design still counted
+as a defect; F000-F079 were labeled after the ruling that it does not. Their
+per-level means answer two different questions, and `jev_eval` prints them as
+two blocks for that reason. The corpus marks each row with `register_rule`.
+
+One thing this measurement could not do honestly: the eight tuning rows a
+reader called level 3 cannot be re-labeled under the new rule, because their
+scores were read while diagnosing the collapse. A label informed by the
+instrument is the one thing the corpus rule forbids, so they are left alone
+and the held-out draw carries the post-ruling evidence instead.
 
 That is a mechanical account of an observation section 8.4 could otherwise only
 report: the 40 sites on the sprint's worklist all scored between 2.2 and 2.6,
@@ -314,7 +342,8 @@ sentence, the file, the block, and the code directly below it):
   threshold 0.35. Replaced `reviewer` on 2026-09-17 (2.1.1).
 - `register` (Score, four levels): the ranking key. Sorted descending with
   `offsite` and `history` as tie-breaks, the top of the list is the relocation
-  roadmap for #2280 (#3119).
+  roadmap for #2280 (#3119). ⚠️ Its top level is effectively unused (2.1.1), so
+  threshold it, never read a rank WITHIN the selected list as an ordering.
 
 Declarations (every top-level declaration with two or more nested matches on
 Result or Option constructor arms and no `do`; state is the file, the

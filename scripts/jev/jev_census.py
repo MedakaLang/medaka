@@ -129,11 +129,11 @@ COMMENT_QUESTIONS = {
         "criteria": [
             "States a constraint or fact the code cannot show, concisely, with "
             "at most a pointer to where rationale lives",
-            "Mostly constraint, with some history, narration, or argument mixed in",
-            "Mostly history, provenance, or argument, with the actual constraint "
+            "Mostly constraint, with some history or narration mixed in",
+            "Mostly history or provenance, with the actual constraint "
             "hard to find or stated only in passing",
-            "Entirely history, litigation, or reviewer-addressed prose with no "
-            "constraint a maintainer could act on",
+            "Entirely history or litigation with no constraint a maintainer "
+            "could act on",
         ],
     },
 }
