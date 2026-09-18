@@ -44,6 +44,48 @@ are reopening.
 | Defensive prose is the register Medaka wants | 2026-09-17, Val | Not a defect. Prose that argues against a wrong reading, or defends a choice, is stating a constraint the code cannot show. The policy sentence in the state says so explicitly. |
 | The native Medaka client | 2026-09-17, Val | **Parked, not declined** (#3132). The transport was never the cost; Medaka has no TLS anywhere. It unparks only if TLS is prioritized on its own merits, and nothing in this work is a reason to build TLS. |
 | The corpus is one reader's judgment, and says so | 2026-09-16 | Agreement with these labels is not truth. #3124 adds a second reader. |
+| The five cheap-hand rules | 2026-09-17, Val | Adopted in full; section 1.1. |
+
+### 1.1 The cheap-hand rules
+
+Adopted 2026-09-17 by Val, from the workflow measurement in
+`docs/design/JEV-DESIGN.md` section 8 (N = 52 dispositions, one sprint, two
+models). They govern the workflow the questions were built for: Jev ranks, a
+cheap model proposes a disposition, a writer applies it.
+
+1. **Let the cheap hand classify; never let it place.** A disposition may
+   propose delete / recast / relocate. A proposed *destination* is a hint, and
+   the writer opens it before using it. Prefer recast-in-place: a block about
+   its own code needs no pointer at all.
+2. **A pre-verified anchor must be read, not resolved.** Grep the destination
+   for the subject, or do not name a heading. Verifying that a heading EXISTS
+   is not verifying that it FITS.
+3. **Spend the cheap model where a gate reads the output.**
+4. **Treat a cheap model's REFUSAL as its most expensive output.** Any refusal
+   that generalizes beyond the one site must carry a probe that was actually
+   run. A wrong edit is caught by a gate where one exists; a refusal touches no
+   file and is caught by nothing, anywhere. Mirrored into the
+   `sprint-packet` refusal license, which is where a dispatched agent reads it.
+5. **Do not gate the comment drain.** Not by register score, not by ratchet
+   beyond the existing count floors. The counts may ratchet; the judgment may
+   not be automated.
+
+**Adoption did not upgrade the evidence, and these two rows say so.** Rule 3's
+two halves differ in task class as well as in gating -- mechanical syntactic
+conversion against judgment about prose -- so the measurement does not isolate
+gating as the cause. Rule 4 rests on a single episode, N = 1, which is an
+anecdote and not a rate; what carries it is the argument rather than the count.
+Both were adopted with those caveats stated, so neither is evidence for
+anything further.
+
+**What cuts against rules 1 to 3, and is adopted alongside them:** a blind
+control of 10 blocks, 5 drawn at register >= 2.0 and 5 at <= 0.8, line-matched
+and read without telling the reader which arm, drained 5/5 HIGH and 4/5 LOW.
+The verdict looks close to constant across the score range, and a provably dead
+path turned up at register 0.71 -- 138 places below the worklist floor. So:
+**use the score to pick a worklist you are willing to work through, never to
+believe the blocks you did not pick are clean.** N = 10 bounds this and does
+not settle it.
 
 ## 2. Live -- still being iterated on
 
@@ -54,7 +96,6 @@ are reopening.
 | Doc-comment register for `stdlib/*.mdk` | Not filed. | Needs a sample first: the stdlib editorial pass left the corpus clean enough that the question may have no customer. Rules are in `stdlib/README.md`. |
 | Suppression rationale quality | Not filed. | `rule-directive-reason` checks a `lint-disable` carries a reason; whether the reason is a reason is a judgment. |
 | The J-REVIEW tools (#3122, #3125 through #3131) | Filed as children of #3117, none built. | `docs/design/JEV-DESIGN.md` section 5 ranks them; each issue carries its own acceptance and measurement plan. |
-| The cheap-hand proposals | **Awaiting Val.** Five proposals from the 2026-09-17 measurement, offered for decision and not adopted. | `docs/design/JEV-DESIGN.md` section 8.6. |
 
 ## 3. Tried and refuted -- do not relitigate
 
