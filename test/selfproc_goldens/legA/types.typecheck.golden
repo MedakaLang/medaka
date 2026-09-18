@@ -1390,8 +1390,10 @@ instRefMid : InstRef -> String
 instRefSeq : InstRef -> Int
 installMethodPredicateSlots : String -> List MethodPredicateSlot -> Unit
 instantiate : Scheme -> Mono
+instantiateMethodPredicateArgument : MethodInstantiationSubst -> Option Mono -> Option Mono
 instantiateMethodPredicateSlot : MethodPredicateSlot -> List (Int, Mono) -> Option PredicateSlot
 instantiateMethodPredicateSlots : List MethodPredicateSlot -> List (Int, Mono) -> List PredicateSlot
+instantiateMethodPredicateTemplate : MethodPredicateTemplate -> MethodInstantiationSubst -> MethodPredicateTemplate
 instantiateMethodTracked : Scheme -> MethodTrackedInstantiation
 instantiateNamedMonos : List (String, Mono) -> List (Int, Mono) -> List (String, Mono)
 instantiateRecord : RecordInfo -> (Mono, List (String, Mono))
@@ -1579,8 +1581,7 @@ methodEffArgOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEffChargedOccs : Ty -> List (String, List Atom)
 methodEffRetOccs : List (String, List Kind) -> Ty -> List (String, List Atom)
 methodEnvBinding : MethodSchemeRow -> EnvBinding
-methodExistingInstantiationServices : ExistingInstantiationServices MethodInstantiationSubst
-methodInterfacePredicateArgs : List String -> List (String, Mono) -> Option (List Mono)
+methodInterfacePredicateTemplate : List String -> List (String, Mono) -> List (Option Mono)
 methodLevelConstraintSlots : List String -> Ty -> List (String, IfaceRef)
 methodLevelConstraintVarNames : List String -> Ty -> List String
 methodLevelPredicateSlot : List String -> List (String, Mono) -> Constraint -> List PredicateSlot
@@ -1592,15 +1593,25 @@ methodOccArgPairs : Unit -> List (Int, String)
 methodPredicateRoute : String -> ScopeId -> PredicateSlot -> Route
 methodPredicateRoutes : String -> ScopeId -> List PredicateSlot -> List Route
 methodPredicateSlotsOfType : List String -> Ty -> List (String, Mono) -> List Int -> List MethodPredicateSlot
+methodPredicateTemplateArgs : List (Option Mono) -> Option (List Mono)
+methodPredicateTemplateArgumentsMatch : List (Option Mono) -> List Mono -> Bool
+methodPredicateTemplateCandidateCount : MethodPredicateTemplate -> List ImplRow -> Int -> Int
+methodPredicateTemplateHasAbsent : MethodPredicateTemplate -> Bool
+methodPredicateTemplateHeadPairs : List (Option Mono) -> List Ty -> Option (List (Ty, Mono))
+methodPredicateTemplateMatchesRow : MethodPredicateTemplate -> ImplRow -> Bool
+methodPredicateTemplateMatchesSlot : MethodPredicateTemplate -> PredicateSlot -> Bool
 methodRet : Ty -> Ty
+methodReturnAmbiguousWithoutGiven : MethodReturnRequest -> Bool
 methodReturnArgs : MethodReturnRequest -> Option (List Mono)
 methodReturnEvidenceRoute : String -> ScopeId -> PrerequisiteEvidence -> Route
 methodReturnEvidenceRoutes : String -> ScopeId -> List PrerequisiteEvidence -> List Route
 methodReturnFallbackTag : MethodReturnRequest -> Option String
 methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
-methodReturnInstantiation : MethodSchemeRow -> MethodInstantiationSubst -> ScopeId -> Option Loc -> EvId -> Option Instantiation
+methodReturnInstantiation : MethodReturnRequest -> Option Instantiation
 methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOwnershipProbe : Unit -> (List String, List String, Bool, Bool)
+methodReturnPredicate : MethodReturnRequest -> Option ClassPredicate
+methodReturnPredicateFromTemplate : MethodPredicateTemplate -> ScopeId -> Option ClassPredicate
 methodReturnPrerequisites : List Mono -> ImplRow -> List PrerequisiteEvidence
 methodReturnPrerequisitesMatch : List PrerequisiteEvidence -> List PrerequisiteEvidence -> Bool
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
@@ -1621,6 +1632,7 @@ methodReturnResolutionMutationProbe : Unit -> (Bool, Bool, Bool, Bool)
 methodReturnResolutionValid : MethodReturnRequest -> MethodReturnResolution -> Bool
 methodReturnSelectedIdentity : MethodReturnResolution -> Int
 methodReturnSlotOwnershipProbe : Unit -> ((List String, List String), (List String, List String), (List String, List String))
+methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
 methodReturnTraceEnabled : Ref Bool
 methodReturnTraceEntries : Ref (List MethodReturnTraceEntry)
 methodReturnVectorCompletenessProbe : Unit -> (Option (List String), Option (List String), Bool, Bool)
@@ -1654,6 +1666,7 @@ methodSlotBoundIds : List MethodPredicateSlot -> List (List Int)
 methodSlotIdsAtPositions : List Int -> List MethodPredicateSlot -> List (List Int)
 methodSlotPositions : List MethodPredicateSlot -> List (List Int)
 methodSlotSubst : List Int -> List Int -> List (Int, Mono) -> Option (List (Int, Mono))
+methodTemplateGivenScan : MethodPredicateTemplate -> ScopeId -> List GivenEntry -> MethodTemplateGivenResult -> MethodTemplateGivenResult
 methodsPerMidGo : List (String, List String) -> List (String, List Decl) -> List (String, List String)
 minLevelOf : List (Ref Effvar) -> Int
 mintDictAt : (String -> EvId -> Unit) -> String -> Expr
@@ -2487,6 +2500,7 @@ unifySpineResult : Mono -> List Mono -> Mono
 unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
 uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)
+uniqueMethodTemplateGiven : MethodPredicateTemplate -> ScopeId -> List GivenEntry -> Option GivenEntry
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
 unitMangledShadows : List String -> (String, List Decl) -> List (String, String)
 univAddIfaceTag : Bool -> RegKey -> TabKey -> Registry SetRegistry -> Registry SetRegistry

@@ -1,0 +1,15 @@
+-- Negative twin of return-absent-given-prerequisite.mdk: the selected row needs
+-- Seed Bool, and no such implementation exists.
+interface Seed a where
+  seed : a -> Int
+
+interface Hidden a b where
+  hidden : Unit -> a
+
+impl Hidden Int Bool requires Seed Bool where
+  hidden _ = 40 + seed True
+
+useHidden : Hidden a b => b -> a
+useHidden witness = hidden ()
+
+main = println (useHidden True : Int)

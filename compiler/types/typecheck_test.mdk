@@ -49,6 +49,7 @@ import types.typecheck.{
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
   methodReturnResolutionMutationProbe,
+  methodReturnTemplatePresenceProbe,
   scopeFrameStats,
   scopeTraceContext,
   tcCode,
@@ -1445,6 +1446,11 @@ test "ordinary return validation rejects checker evidence disagreement" =
   let (_, _, _, rejected) = methodReturnResolutionMutationProbe ()
   expectEqual True rejected
 
+test "ordinary return template records present and absent interface formals" =
+  expectEqual
+    ([True, True], [True, False])
+    (methodReturnTemplatePresenceProbe ())
+
 test "ordinary return carrier distinguishes empty unknown and absent-formal boundaries" =
   let empty =
     methodCarrierStages
@@ -1477,8 +1483,103 @@ test "ordinary return carrier distinguishes empty unknown and absent-formal boun
     expectEqual
       [Some [], Some [], Some []]
       (map (entry => map wantedArgumentStrings entry.mrtWanted) empty),
-    expectEqual ([], []) (unknown, map (entry => entry.mrtStage) absent),
+    expectEqual
+      ([], [MRTProduced, MRTChecked, MRTStamped])
+      (unknown, map (entry => entry.mrtStage) absent),
+    expectEqual [None, None, None] (map methodTraceArgs absent),
   ]
+
+absentReturnSource : Bool -> Bool -> String
+absentReturnSource reverseImpls ambient =
+  let charImpl = joinNl [
+    "impl Hidden Int Char where",
+    "  hidden _ = 22",
+  ]
+  let boolImpl = joinNl [
+    "impl Hidden Int Bool where",
+    "  hidden _ = 12",
+  ]
+  let impls =
+    if reverseImpls then [boolImpl, charImpl] else [charImpl, boolImpl]
+  joinNl
+    ([
+        "interface Hidden a b where",
+        "  hidden : Unit -> a",
+      ]
+      ++ impls
+      ++ (if ambient then
+        [
+          "useHidden : Hidden a b => b -> a",
+          "useHidden witness = hidden ()",
+          "value : Int",
+          "value = useHidden True : Int",
+        ]
+      else
+        [
+          "value : Int",
+          "value = hidden ()",
+        ]))
+
+test "absent return formal completes from the exact enclosing given" =
+  let trace = methodCarrierStages "hidden" (absentReturnSource False True)
+  expectAll [
+    expectEqual
+      [None, Some ["a", "a"], Some ["a", "a"]]
+      (map methodTraceArgs trace),
+    expectEqual True (methodTraceUsesOneOutcome trace),
+    expectEqual True (match map methodOutcomeView trace
+      [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
+        checked == stamped
+      _ => False),
+    expectEqual True (match trace
+      [_, _, stamped] => match stamped.mrtRoute
+        Some (RDictFwd _) => True
+        _ => False
+      _ => False),
+  ]
+
+absentReturnCodes : Bool -> List String
+absentReturnCodes reverseImpls =
+  let (errors, _) = checkOneDiags [] (desugar (parse numericPreludeSource)) (
+    "absent_return_ambiguity",
+    desugar (parseLocated (absentReturnSource reverseImpls False)),
+  )
+  map tcCode errors
+
+test "absent return formal never fabricates a fresh instance parameter" = expectAll
+  [
+    expectEqual
+      True
+      (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes False)),
+    expectEqual True (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes True)),
+  ]
+
+test "absent return completion cannot leak from a sibling scope" =
+  let source = joinNl [
+    "interface Hidden a b where",
+    "  hidden : Unit -> a",
+    "useBool : Hidden a Bool => Bool -> a",
+    "useBool witness = hidden ()",
+    "useChar : Hidden a Char => Char -> a",
+    "useChar witness = hidden ()",
+  ]
+  let checkedArgs =
+    map
+      methodTraceSecondArg
+      (filter
+        (entry => entry.mrtStage == MRTChecked)
+        (methodCarrierStages "hidden" source))
+  expectAll [
+    expectEqual 2 (listLen checkedArgs),
+    expectEqual
+      True
+      (checkedArgs == ["Bool", "Char"] || checkedArgs == ["Char", "Bool"]),
+  ]
+
+methodTraceSecondArg : MethodReturnTraceEntry -> String
+methodTraceSecondArg entry = match methodTraceArgs entry
+  Some [_, argument] => argument
+  _ => ""
 
 methodTraceOrigin : MethodReturnTraceEntry -> String
 methodTraceOrigin entry = match entry.mrtInterface.irOrigin

@@ -1,5 +1,5 @@
 # META
-source_lines=46693
+source_lines=46880
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -242,18 +242,13 @@ import types.scopes.{
 import types.scopes as Scopes
 import types.solver_contract.{
   ClassPredicate(..),
-  ExistingInstantiationServices(..),
   GoalOrigin(..),
   Instantiation(..),
   InstantiationArgument(..),
-  QualifiedScheme(..),
-  Qualifier(..),
   SolverBlocker(..),
   SolverFailure(..),
   SolverOutcome(..),
   Wanted(..),
-  WantedTarget(..),
-  instantiateQualifiedAt,
 }
 import types.registry.{
   RegKey,
@@ -7408,16 +7403,6 @@ pushExactReturnObl request = wPush perRun.value.implObls UObligation {
   oblProj = OpExactReturn request,
 }
 
-methodExistingInstantiationServices : ExistingInstantiationServices MethodInstantiationSubst
-methodExistingInstantiationServices = ExistingInstantiationServices {
-  substituteExistingBody =
-    subst =>
-      body => substMonoP True subst.misTypeSubst subst.misEffectSubst body,
-  substituteExistingArgument =
-    subst =>
-      argument => substMono subst.misTypeSubst subst.misEffectSubst argument,
-}
-
 methodReturnOrigin : Option Loc -> GoalOrigin
 methodReturnOrigin loc =
   let moduleId = driverState.value.currentModuleRef.value
@@ -7432,37 +7417,50 @@ methodReturnOrigin loc =
     binding = binding,
   }
 
-methodReturnInstantiation : MethodSchemeRow ->
-  MethodInstantiationSubst ->
+methodReturnInstantiation : MethodReturnRequest -> Option Instantiation
+methodReturnInstantiation request = match (
+  methodReturnPredicate request,
+  request.mrrGoalEv,
+)
+  (Some predicate, Some destination) => Some Instantiation {
+    body = request.mrrQualifiedBody,
+    arguments = [
+      InstantiationArgument {
+        formal = Scopes.binderAt request.mrrScope 0,
+        wanted = Wanted {
+          id = goalIdForDestination destination,
+          predicate = predicate,
+          origin = methodReturnOrigin request.mrrLoc,
+          scope = request.mrrScope,
+          destination = destination,
+        },
+      },
+    ],
+  }
+  _ => None
+
+methodReturnPredicate : MethodReturnRequest -> Option ClassPredicate
+methodReturnPredicate request =
+  methodReturnPredicateFromTemplate
+    request.mrrPredicateTemplate
+    request.mrrScope
+
+methodReturnPredicateFromTemplate : MethodPredicateTemplate ->
   ScopeId ->
-  Option Loc ->
-  EvId ->
-  Option Instantiation
-methodReturnInstantiation row subst scope loc destination =
-  match row.msrPredicate
-    None => None
-    Some predicate =>
-      let qualified = QualifiedScheme {
-        hm = row.msrScheme,
-        qualifiers = [
-          Qualifier {
-            predicate = predicate,
-            formal = Scopes.binderAt scope 0,
-          },
-        ],
-      }
-      instantiateQualifiedAt
-        methodExistingInstantiationServices
-        subst
-        scope
-        (methodReturnOrigin loc)
-        [
-          WantedTarget {
-            targetGoal = goalIdForDestination destination,
-            targetDestination = destination,
-          },
-        ]
-        qualified
+  Option ClassPredicate
+methodReturnPredicateFromTemplate template scope =
+  match methodPredicateTemplateArgs template.mptArguments
+    Some arguments => Some ClassPredicate {
+      predicateInterface = template.mptInterface,
+      predicateArguments = arguments,
+    }
+    None =>
+      map
+        (given => ClassPredicate {
+          predicateInterface = template.mptInterface,
+          predicateArguments = predicateSlotKnownArgs given.geSlot.psArgs,
+        })
+        (uniqueMethodTemplateGiven template scope (givensForScope scope))
 
 methodReturnRequest : MethodSchemeRow ->
   Mono ->
@@ -7472,10 +7470,9 @@ methodReturnRequest : MethodSchemeRow ->
 methodReturnRequest row occurrence subst goalEv =
   let loc = !currentLoc
   let scope = captureScope ()
-  let instantiation = match goalEv
-    Some destination =>
-      methodReturnInstantiation row subst scope loc destination
-    None => None
+  let qualifiedBody = match row.msrScheme
+    Forall _ _ body =>
+      substMonoP True subst.misTypeSubst subst.misEffectSubst body
   MethodReturnRequest {
     mrrIface = row.msrIface,
     mrrName = row.msrName,
@@ -7486,18 +7483,20 @@ methodReturnRequest row occurrence subst goalEv =
     mrrLoc = loc,
     mrrScope = scope,
     mrrGoalEv = goalEv,
-    mrrInstantiation = instantiation,
+    mrrQualifiedBody = qualifiedBody,
+    mrrPredicateTemplate =
+      instantiateMethodPredicateTemplate row.msrPredicateTemplate subst,
     mrrResolution = Ref None,
   }
 
 methodReturnArgs : MethodReturnRequest -> Option (List Mono)
-methodReturnArgs request = match request.mrrInstantiation
-  Some (Instantiation { arguments = [argument], ... }) =>
-    Some argument.wanted.predicate.predicateArguments
-  _ => None
+methodReturnArgs request =
+  map
+    (predicate => predicate.predicateArguments)
+    (methodReturnPredicate request)
 
 methodReturnWanted : MethodReturnRequest -> Option Wanted
-methodReturnWanted request = match request.mrrInstantiation
+methodReturnWanted request = match methodReturnInstantiation request
   Some (Instantiation { arguments = [argument], ... }) => Some argument.wanted
   _ => None
 
@@ -7802,6 +7801,15 @@ data MethodPredicateSlot = MethodPredicateSlot {
   mpsPositions : List Int,
 }
 
+-- The interface predicate attached to an ordinary return method before call-site
+-- instantiation.  Every interface formal occupies one ordered position.  An absent
+-- formal stays absent: no fresh inference variable is manufactured for a name the
+-- method scheme does not quantify.
+data MethodPredicateTemplate = MethodPredicateTemplate {
+  mptInterface : IfaceRef,
+  mptArguments : List (Option Mono),
+}
+
 -- One interface-method declaration, its scheme, and the method-level predicate slots
 -- built from that scheme's own type-variable allocation.  Rows stay local to environment
 -- setup: they carry live cells and are not a cache or published solver artifact.
@@ -7811,7 +7819,7 @@ data MethodSchemeRow = MethodSchemeRow {
   msrTyparams : List String,
   msrType : Ty,
   msrScheme : Scheme,
-  msrPredicate : Option ClassPredicate,
+  msrPredicateTemplate : MethodPredicateTemplate,
   msrMethodSlots : List MethodPredicateSlot,
 }
 
@@ -7850,7 +7858,8 @@ data MethodReturnRequest = MethodReturnRequest {
   mrrLoc : Option Loc,
   mrrScope : ScopeId,
   mrrGoalEv : Option EvId,
-  mrrInstantiation : Option Instantiation,
+  mrrQualifiedBody : Mono,
+  mrrPredicateTemplate : MethodPredicateTemplate,
   mrrResolution : Ref (Option MethodReturnResolution),
 }
 
@@ -9454,7 +9463,7 @@ noteMethodReturnTrace : MethodReturnTraceStage ->
   Unit
 noteMethodReturnTrace stage request route prerequisites =
   if methodReturnTraceEnabled.value then
-    let (qualifiedBody, wanted) = match request.mrrInstantiation
+    let (qualifiedBody, wanted) = match methodReturnInstantiation request
       Some (Instantiation { body = body, arguments = [InstantiationArgument { wanted = carried, ... }] }) =>
         (Some body, Some carried)
       _ => (None, None)
@@ -16121,7 +16130,6 @@ methodRowCanCarry row =
       (anyArgMentions
         (dispatchTyparams row.msrTyparams)
         (methodArgs row.msrType))
-    && allMethodParamsMentioned row.msrTyparams row.msrType
 
 allMethodParamsMentioned : List String -> Ty -> Bool
 allMethodParamsMentioned [] _ = True
@@ -22047,16 +22055,19 @@ resolveExactReturnSite rpNames name tagRef implRef resultMono request encl origi
   match methodReturnArgs request
     None =>
       let _ = noteMethodReturnTrace MRTStamped request None []
-      resolveSite
-        rpNames
-        name
-        tagRef
-        implRef
-        resultMono
-        request.mrrOccurrence
-        encl
-        origin
-        scope
+      if methodReturnAmbiguousWithoutGiven request then
+        ()
+      else
+        resolveSite
+          rpNames
+          name
+          tagRef
+          implRef
+          resultMono
+          request.mrrOccurrence
+          encl
+          origin
+          scope
     Some _ =>
       let resolution = solveExactReturnOnce request
       let _ =
@@ -22776,6 +22787,84 @@ implReqDictVarOf (Some request) m encl useScope
 predicateSlotKnownArgs : PredicateSlotArgs -> List Mono
 predicateSlotKnownArgs PSArgsUnknown = []
 predicateSlotKnownArgs (PSArgsKnown args) = args
+
+instantiateMethodPredicateTemplate : MethodPredicateTemplate ->
+  MethodInstantiationSubst ->
+  MethodPredicateTemplate
+instantiateMethodPredicateTemplate template subst = MethodPredicateTemplate {
+  mptInterface = template.mptInterface,
+  mptArguments =
+    map (instantiateMethodPredicateArgument subst) template.mptArguments,
+}
+
+instantiateMethodPredicateArgument : MethodInstantiationSubst ->
+  Option Mono ->
+  Option Mono
+instantiateMethodPredicateArgument subst argument =
+  map (substMono subst.misTypeSubst subst.misEffectSubst) argument
+
+methodPredicateTemplateArgs : List (Option Mono) -> Option (List Mono)
+methodPredicateTemplateArgs [] = Some []
+methodPredicateTemplateArgs ((Some argument) :: rest) =
+  map (argument :: _) (methodPredicateTemplateArgs rest)
+methodPredicateTemplateArgs (None :: _) = None
+
+data MethodTemplateGivenResult =
+  | MethodTemplateGivenNone
+  | MethodTemplateGivenOne GivenEntry
+  | MethodTemplateGivenMany
+
+uniqueMethodTemplateGiven : MethodPredicateTemplate ->
+  ScopeId ->
+  List GivenEntry ->
+  Option GivenEntry
+uniqueMethodTemplateGiven template useScope givens =
+  match methodTemplateGivenScan template useScope givens MethodTemplateGivenNone
+    MethodTemplateGivenOne given => Some given
+    _ => None
+
+methodTemplateGivenScan : MethodPredicateTemplate ->
+  ScopeId ->
+  List GivenEntry ->
+  MethodTemplateGivenResult ->
+  MethodTemplateGivenResult
+methodTemplateGivenScan _ _ [] result = result
+methodTemplateGivenScan template useScope (given :: rest) result =
+  let result2 =
+    if givenInScope GSPredicateOnly given
+      && Scopes.givenVisibleFrom
+        (currentScopeStore ())
+        useScope
+        (Scopes.binderScope given.geBinder)
+      && methodPredicateTemplateMatchesSlot
+        template
+        given.geSlot then match result
+      MethodTemplateGivenNone => MethodTemplateGivenOne given
+      _ => MethodTemplateGivenMany
+    else
+      result
+  match result2
+    MethodTemplateGivenMany => MethodTemplateGivenMany
+    _ => methodTemplateGivenScan template useScope rest result2
+
+methodPredicateTemplateMatchesSlot : MethodPredicateTemplate ->
+  PredicateSlot ->
+  Bool
+methodPredicateTemplateMatchesSlot template slot =
+  sameIfaceDecl template.mptInterface slot.psIface
+    && (match slot.psArgs
+      PSArgsUnknown => False
+      PSArgsKnown arguments =>
+        methodPredicateTemplateArgumentsMatch template.mptArguments arguments)
+
+methodPredicateTemplateArgumentsMatch : List (Option Mono) -> List Mono -> Bool
+methodPredicateTemplateArgumentsMatch [] [] = True
+methodPredicateTemplateArgumentsMatch ((Some expected) :: rest) (actual :: arguments) =
+  monoSameGiven expected actual
+    && methodPredicateTemplateArgumentsMatch rest arguments
+methodPredicateTemplateArgumentsMatch (None :: rest) (_ :: arguments) =
+  methodPredicateTemplateArgumentsMatch rest arguments
+methodPredicateTemplateArgumentsMatch _ _ = False
 
 -- 🚨 #1177: A USE SITE IS RESOLVED BY ITS PREDICATE, NOT BY ITS CONSTRAINT VAR'S ID.
 -- `funConstraintsRef` is the SHATTERED per-tyvar slot table, so a context naming two
@@ -31599,7 +31688,13 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
         noteMethodReturnTrace MRTChecked request None []
       None =>
         let _ =
-          checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
+          if methodReturnAmbiguousWithoutGiven request then
+            pushTypeErrorOnceAt
+              "T-AMBIGUOUS-INSTANCE"
+              loc
+              (ambiguousImplMsg request.mrrIface.irName)
+          else
+            checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
         noteMethodReturnTrace MRTChecked request None []
     _ => checkOneCallObligation deferNonGround univ iface occs loc o.uoScope
   let _ = noteNumericObligationChecked o occs
@@ -31614,6 +31709,49 @@ solveExactReturnOnce request = match request.mrrResolution.value
     let resolution = solveExactReturn request
     request.mrrResolution := Some resolution
     resolution
+
+methodReturnAmbiguousWithoutGiven : MethodReturnRequest -> Bool
+methodReturnAmbiguousWithoutGiven request =
+  methodPredicateTemplateHasAbsent request.mrrPredicateTemplate
+    && isNone (methodReturnPredicate request)
+    && methodPredicateTemplateCandidateCount
+        request.mrrPredicateTemplate
+        (ieRowsAll perRun.value.bodyImplEnvRef.value)
+        0
+      >= 2
+
+methodPredicateTemplateHasAbsent : MethodPredicateTemplate -> Bool
+methodPredicateTemplateHasAbsent template =
+  anyListM isNone template.mptArguments
+
+methodPredicateTemplateCandidateCount : MethodPredicateTemplate ->
+  List ImplRow ->
+  Int ->
+  Int
+methodPredicateTemplateCandidateCount _ _ count
+  | count >= 2 = count
+methodPredicateTemplateCandidateCount _ [] count = count
+methodPredicateTemplateCandidateCount template (row :: rest) count = methodPredicateTemplateCandidateCount
+  template
+  rest
+  (if methodPredicateTemplateMatchesRow template row then count + 1 else count)
+
+methodPredicateTemplateMatchesRow : MethodPredicateTemplate -> ImplRow -> Bool
+methodPredicateTemplateMatchesRow template (ImplRow _ _ iface tys _ _) =
+  sameIfaceDecl template.mptInterface iface
+    && (match methodPredicateTemplateHeadPairs template.mptArguments tys
+      Some pairs => isSome (matchOneSided matchStep eqStr cohEqMono pairs [])
+      None => False)
+
+methodPredicateTemplateHeadPairs : List (Option Mono) ->
+  List Ty ->
+  Option (List (Ty, Mono))
+methodPredicateTemplateHeadPairs [] [] = Some []
+methodPredicateTemplateHeadPairs ((Some argument) :: rest) (head :: heads) =
+  map ((head, argument) :: _) (methodPredicateTemplateHeadPairs rest heads)
+methodPredicateTemplateHeadPairs (None :: rest) (_ :: heads) =
+  methodPredicateTemplateHeadPairs rest heads
+methodPredicateTemplateHeadPairs _ _ = None
 
 solveExactReturn : MethodReturnRequest -> MethodReturnResolution
 solveExactReturn request = match methodReturnWanted request
@@ -35370,24 +35508,20 @@ methodSchemeRows scope iface typarams ((IfaceMethod mname mty _ _) :: rest) =
       msrTyparams = typarams,
       msrType = mty,
       msrScheme = scheme,
-      msrPredicate =
-        map
-          (arguments => ClassPredicate {
-            predicateInterface = iface,
-            predicateArguments = arguments,
-          })
-          (methodInterfacePredicateArgs typarams tvs),
+      msrPredicateTemplate = MethodPredicateTemplate {
+        mptInterface = iface,
+        mptArguments = methodInterfacePredicateTemplate typarams tvs,
+      },
       msrMethodSlots = slots,
     }
     :: methodSchemeRows scope iface typarams rest
 
-methodInterfacePredicateArgs : List String ->
+methodInterfacePredicateTemplate : List String ->
   List (String, Mono) ->
-  Option (List Mono)
-methodInterfacePredicateArgs [] _ = Some []
-methodInterfacePredicateArgs (param :: rest) tvs = match lookupAssoc param tvs
-  None => None
-  Some argument => map (argument :: _) (methodInterfacePredicateArgs rest tvs)
+  List (Option Mono)
+methodInterfacePredicateTemplate [] _ = []
+methodInterfacePredicateTemplate (param :: rest) tvs =
+  lookupAssoc param tvs :: methodInterfacePredicateTemplate rest tvs
 
 -- Compatibility projection for the existing term environment and scheme output.
 legacyMethodSchemes : List MethodSchemeRow -> List (String, Scheme)
@@ -38497,6 +38631,59 @@ methodReturnVectorCompletenessProbe _ =
 
 -- > methodReturnVectorCompletenessProbe ()
 -- (Some [], None, True, False)
+
+export
+methodReturnTemplatePresenceProbe : Unit -> (List Bool, List Bool)
+methodReturnTemplatePresenceProbe _ =
+  let savedCross = crossRun.value
+  let savedGraph = graphRun.value
+  let savedPerRun = perRun.value
+  crossRun := freshCrossRun initialEnv
+  graphRun := freshGraphRun ()
+  perRun := freshPerRun ()
+  let present =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface
+          "return-template-present"
+          "Present"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun
+                (tyConBuiltin "Unit" None)
+                (TyTuple [TyVar "a", TyVar "b"]))
+              None
+              None,
+          ],
+      ])
+  let absent =
+    firstMethodRow
+      (ifaceMethodSchemeRows [
+        methodRowTestIface
+          "return-template-absent"
+          "Absent"
+          ["a", "b"]
+          [
+            IfaceMethod
+              "make"
+              (TyFun (tyConBuiltin "Unit" None) (TyVar "a"))
+              None
+              None,
+          ],
+      ])
+  let observed = (
+    map isSome present.msrPredicateTemplate.mptArguments,
+    map isSome absent.msrPredicateTemplate.mptArguments,
+  )
+  crossRun := savedCross
+  graphRun := savedGraph
+  perRun := savedPerRun
+  observed
+
+-- > methodReturnTemplatePresenceProbe ()
+-- ([True, True], [True, False])
 
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeCodes ownedRow impls =
@@ -46701,7 +46888,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "goalIdForDestination" false) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SolverEvidence" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeFrame" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "ExistingInstantiationServices" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "QualifiedScheme" true) (mem "Qualifier" true) (mem "SolverBlocker" true) (mem "SolverFailure" true) (mem "SolverOutcome" true) (mem "Wanted" true) (mem "WantedTarget" true) (mem "instantiateQualifiedAt" false))))
+(DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverFailure" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
@@ -47794,18 +47981,20 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "pushPendingObl" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ") (PVar "prov") (PVar "loc")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkMethodOccObl") (EVar "iface")) (EVar "typarams")) (EVar "mty")) (EVar "occ")) (EVar "prov")) (EVar "loc")) (EApp (EVar "captureScope") (ELit LUnit)))))
 (DTypeSig false "pushExactReturnObl" (TyFun (TyCon "MethodReturnRequest") (TyCon "Unit")))
 (DFunDef false "pushExactReturnObl" ((PVar "request")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EFieldAccess (EVar "request") "mrrIface")) (fa "args" (EListLit))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PMethodOcc")) (fa "loc" (EFieldAccess (EVar "request") "mrrLoc")) (fa "uoScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "oblProj" (EApp (EVar "OpExactReturn") (EVar "request")))))))
-(DTypeSig false "methodExistingInstantiationServices" (TyApp (TyCon "ExistingInstantiationServices") (TyCon "MethodInstantiationSubst")))
-(DFunDef false "methodExistingInstantiationServices" () (ERecordCreate "ExistingInstantiationServices" ((fa "substituteExistingBody" (ELam ((PVar "subst")) (ELam ((PVar "body")) (EApp (EApp (EApp (EApp (EVar "substMonoP") (EVar "True")) (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst")) (EVar "body"))))) (fa "substituteExistingArgument" (ELam ((PVar "subst")) (ELam ((PVar "argument")) (EApp (EApp (EApp (EVar "substMono") (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst")) (EVar "argument"))))))))
 (DTypeSig false "methodReturnOrigin" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "GoalOrigin")))
 (DFunDef false "methodReturnOrigin" ((PVar "loc")) (EBlock (DoLet false false (PVar "moduleId") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (DoLet false false (PVar "binding") (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value") (ELit (LString ""))) (EVar "None") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsValue")) (EApp (EVar "OriginModule") (EVar "moduleId"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")))) (DoExpr (ERecordCreate "GoalOrigin" ((fa "location" (EVar "loc")) (fa "moduleId" (EVar "moduleId")) (fa "binding" (EVar "binding")))))))
-(DTypeSig false "methodReturnInstantiation" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "MethodInstantiationSubst") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "EvId") (TyApp (TyCon "Option") (TyCon "Instantiation"))))))))
-(DFunDef false "methodReturnInstantiation" ((PVar "row") (PVar "subst") (PVar "scope") (PVar "loc") (PVar "destination")) (EMatch (EFieldAccess (EVar "row") "msrPredicate") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "predicate")) () (EBlock (DoLet false false (PVar "qualified") (ERecordCreate "QualifiedScheme" ((fa "hm" (EFieldAccess (EVar "row") "msrScheme")) (fa "qualifiers" (EListLit (ERecordCreate "Qualifier" ((fa "predicate" (EVar "predicate")) (fa "formal" (EApp (EApp (EVar "Scopes.binderAt") (EVar "scope")) (ELit (LInt 0))))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "instantiateQualifiedAt") (EVar "methodExistingInstantiationServices")) (EVar "subst")) (EVar "scope")) (EApp (EVar "methodReturnOrigin") (EVar "loc"))) (EListLit (ERecordCreate "WantedTarget" ((fa "targetGoal" (EApp (EVar "goalIdForDestination") (EVar "destination"))) (fa "targetDestination" (EVar "destination")))))) (EVar "qualified")))))))
+(DTypeSig false "methodReturnInstantiation" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "Instantiation"))))
+(DFunDef false "methodReturnInstantiation" ((PVar "request")) (EMatch (ETuple (EApp (EVar "methodReturnPredicate") (EVar "request")) (EFieldAccess (EVar "request") "mrrGoalEv")) (arm (PTuple (PCon "Some" (PVar "predicate")) (PCon "Some" (PVar "destination"))) () (EApp (EVar "Some") (ERecordCreate "Instantiation" ((fa "body" (EFieldAccess (EVar "request") "mrrQualifiedBody")) (fa "arguments" (EListLit (ERecordCreate "InstantiationArgument" ((fa "formal" (EApp (EApp (EVar "Scopes.binderAt") (EFieldAccess (EVar "request") "mrrScope")) (ELit (LInt 0)))) (fa "wanted" (ERecordCreate "Wanted" ((fa "id" (EApp (EVar "goalIdForDestination") (EVar "destination"))) (fa "predicate" (EVar "predicate")) (fa "origin" (EApp (EVar "methodReturnOrigin") (EFieldAccess (EVar "request") "mrrLoc"))) (fa "scope" (EFieldAccess (EVar "request") "mrrScope")) (fa "destination" (EVar "destination"))))))))))))) (arm PWild () (EVar "None"))))
+(DTypeSig false "methodReturnPredicate" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "ClassPredicate"))))
+(DFunDef false "methodReturnPredicate" ((PVar "request")) (EApp (EApp (EVar "methodReturnPredicateFromTemplate") (EFieldAccess (EVar "request") "mrrPredicateTemplate")) (EFieldAccess (EVar "request") "mrrScope")))
+(DTypeSig false "methodReturnPredicateFromTemplate" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "ClassPredicate")))))
+(DFunDef false "methodReturnPredicateFromTemplate" ((PVar "template") (PVar "scope")) (EMatch (EApp (EVar "methodPredicateTemplateArgs") (EFieldAccess (EVar "template") "mptArguments")) (arm (PCon "Some" (PVar "arguments")) () (EApp (EVar "Some") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "template") "mptInterface")) (fa "predicateArguments" (EVar "arguments")))))) (arm (PCon "None") () (EApp (EApp (EVar "map") (ELam ((PVar "given")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "template") "mptInterface")) (fa "predicateArguments" (EApp (EVar "predicateSlotKnownArgs") (EFieldAccess (EFieldAccess (EVar "given") "geSlot") "psArgs"))))))) (EApp (EApp (EApp (EVar "uniqueMethodTemplateGiven") (EVar "template")) (EVar "scope")) (EApp (EVar "givensForScope") (EVar "scope")))))))
 (DTypeSig false "methodReturnRequest" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "Mono") (TyFun (TyCon "MethodInstantiationSubst") (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyCon "MethodReturnRequest"))))))
-(DFunDef false "methodReturnRequest" ((PVar "row") (PVar "occurrence") (PVar "subst") (PVar "goalEv")) (EBlock (DoLet false false (PVar "loc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false (PVar "instantiation") (EMatch (EVar "goalEv") (arm (PCon "Some" (PVar "destination")) () (EApp (EApp (EApp (EApp (EApp (EVar "methodReturnInstantiation") (EVar "row")) (EVar "subst")) (EVar "scope")) (EVar "loc")) (EVar "destination"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ERecordCreate "MethodReturnRequest" ((fa "mrrIface" (EFieldAccess (EVar "row") "msrIface")) (fa "mrrName" (EFieldAccess (EVar "row") "msrName")) (fa "mrrTyparams" (EFieldAccess (EVar "row") "msrTyparams")) (fa "mrrType" (EFieldAccess (EVar "row") "msrType")) (fa "mrrOccurrence" (EVar "occurrence")) (fa "mrrEnclosing" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (fa "mrrLoc" (EVar "loc")) (fa "mrrScope" (EVar "scope")) (fa "mrrGoalEv" (EVar "goalEv")) (fa "mrrInstantiation" (EVar "instantiation")) (fa "mrrResolution" (EApp (EVar "Ref") (EVar "None"))))))))
+(DFunDef false "methodReturnRequest" ((PVar "row") (PVar "occurrence") (PVar "subst") (PVar "goalEv")) (EBlock (DoLet false false (PVar "loc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false (PVar "qualifiedBody") (EMatch (EFieldAccess (EVar "row") "msrScheme") (arm (PCon "Forall" PWild PWild (PVar "body")) () (EApp (EApp (EApp (EApp (EVar "substMonoP") (EVar "True")) (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst")) (EVar "body"))))) (DoExpr (ERecordCreate "MethodReturnRequest" ((fa "mrrIface" (EFieldAccess (EVar "row") "msrIface")) (fa "mrrName" (EFieldAccess (EVar "row") "msrName")) (fa "mrrTyparams" (EFieldAccess (EVar "row") "msrTyparams")) (fa "mrrType" (EFieldAccess (EVar "row") "msrType")) (fa "mrrOccurrence" (EVar "occurrence")) (fa "mrrEnclosing" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (fa "mrrLoc" (EVar "loc")) (fa "mrrScope" (EVar "scope")) (fa "mrrGoalEv" (EVar "goalEv")) (fa "mrrQualifiedBody" (EVar "qualifiedBody")) (fa "mrrPredicateTemplate" (EApp (EApp (EVar "instantiateMethodPredicateTemplate") (EFieldAccess (EVar "row") "msrPredicateTemplate")) (EVar "subst"))) (fa "mrrResolution" (EApp (EVar "Ref") (EVar "None"))))))))
 (DTypeSig false "methodReturnArgs" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))
-(DFunDef false "methodReturnArgs" ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "mrrInstantiation") (arm (PCon "Some" (PRec "Instantiation" ((rf "arguments" (PList (PVar "argument")))) true)) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "argument") "wanted") "predicate") "predicateArguments"))) (arm PWild () (EVar "None"))))
+(DFunDef false "methodReturnArgs" ((PVar "request")) (EApp (EApp (EVar "map") (ELam ((PVar "predicate")) (EFieldAccess (EVar "predicate") "predicateArguments"))) (EApp (EVar "methodReturnPredicate") (EVar "request"))))
 (DTypeSig false "methodReturnWanted" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "Wanted"))))
-(DFunDef false "methodReturnWanted" ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "mrrInstantiation") (arm (PCon "Some" (PRec "Instantiation" ((rf "arguments" (PList (PVar "argument")))) true)) () (EApp (EVar "Some") (EFieldAccess (EVar "argument") "wanted"))) (arm PWild () (EVar "None"))))
+(DFunDef false "methodReturnWanted" ((PVar "request")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "arguments" (PList (PVar "argument")))) true)) () (EApp (EVar "Some") (EFieldAccess (EVar "argument") "wanted"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "mkMethodOccObl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyFun (TyCon "Provenance") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "UObligation")))))))))
 (DFunDef false "mkMethodOccObl" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ") (PVar "prov") (PVar "loc") (PVar "scope")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EListLit))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "prov")) (fa "loc" (EVar "loc")) (fa "uoScope" (EVar "scope")) (fa "oblProj" (EApp (EApp (EApp (EVar "OpMethodOcc") (EVar "typarams")) (EVar "mty")) (EVar "occ"))))))
 (DTypeSig false "pushNumLitObl" (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))
@@ -47850,11 +48039,12 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DData Private "PredicateRequest" () ((variant "PredicateRequest" (ConNamed (field "prIface" (TyCon "IfaceRef")) (field "prArgs" (TyCon "PredicateSlotArgs"))))) ())
 (DData Private "PredicateSlot" () ((variant "PredicateSlot" (ConNamed (field "psIface" (TyCon "IfaceRef")) (field "psArgs" (TyCon "PredicateSlotArgs")) (field "psBoundIds" (TyApp (TyCon "List") (TyCon "Int")))))) ())
 (DData Private "MethodPredicateSlot" () ((variant "MethodPredicateSlot" (ConNamed (field "mpsPredicate" (TyCon "PredicateSlot")) (field "mpsPositions" (TyApp (TyCon "List") (TyCon "Int")))))) ())
-(DData Private "MethodSchemeRow" () ((variant "MethodSchemeRow" (ConNamed (field "msrIface" (TyCon "IfaceRef")) (field "msrName" (TyCon "String")) (field "msrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "msrType" (TyCon "Ty")) (field "msrScheme" (TyCon "Scheme")) (field "msrPredicate" (TyApp (TyCon "Option") (TyCon "ClassPredicate"))) (field "msrMethodSlots" (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) ())
+(DData Private "MethodPredicateTemplate" () ((variant "MethodPredicateTemplate" (ConNamed (field "mptInterface" (TyCon "IfaceRef")) (field "mptArguments" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))))))) ())
+(DData Private "MethodSchemeRow" () ((variant "MethodSchemeRow" (ConNamed (field "msrIface" (TyCon "IfaceRef")) (field "msrName" (TyCon "String")) (field "msrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "msrType" (TyCon "Ty")) (field "msrScheme" (TyCon "Scheme")) (field "msrPredicateTemplate" (TyCon "MethodPredicateTemplate")) (field "msrMethodSlots" (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) ())
 (DData Private "MethodInstantiationSubst" () ((variant "MethodInstantiationSubst" (ConNamed (field "misTypeSubst" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (field "misEffectSubst" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))))))) ())
 (DData Private "MethodTrackedInstantiation" () ((variant "MethodTrackedInstantiation" (ConNamed (field "mtiBody" (TyCon "Mono")) (field "mtiSubstitution" (TyCon "MethodInstantiationSubst"))))) ())
 (DData Private "MethodReturnResolution" () ((variant "MethodReturnResolution" (ConNamed (field "mrrWanted" (TyCon "Wanted")) (field "mrrOutcome" (TyCon "SolverOutcome")) (field "mrrSelectedRow" (TyApp (TyCon "Option") (TyCon "ImplRow"))) (field "mrrFallbackTag" (TyApp (TyCon "Option") (TyCon "String")))))) ())
-(DData Private "MethodReturnRequest" () ((variant "MethodReturnRequest" (ConNamed (field "mrrIface" (TyCon "IfaceRef")) (field "mrrName" (TyCon "String")) (field "mrrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "mrrType" (TyCon "Ty")) (field "mrrOccurrence" (TyCon "Mono")) (field "mrrEnclosing" (TyCon "String")) (field "mrrLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "mrrScope" (TyCon "ScopeId")) (field "mrrGoalEv" (TyApp (TyCon "Option") (TyCon "EvId"))) (field "mrrInstantiation" (TyApp (TyCon "Option") (TyCon "Instantiation"))) (field "mrrResolution" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MethodReturnResolution"))))))) ())
+(DData Private "MethodReturnRequest" () ((variant "MethodReturnRequest" (ConNamed (field "mrrIface" (TyCon "IfaceRef")) (field "mrrName" (TyCon "String")) (field "mrrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "mrrType" (TyCon "Ty")) (field "mrrOccurrence" (TyCon "Mono")) (field "mrrEnclosing" (TyCon "String")) (field "mrrLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "mrrScope" (TyCon "ScopeId")) (field "mrrGoalEv" (TyApp (TyCon "Option") (TyCon "EvId"))) (field "mrrQualifiedBody" (TyCon "Mono")) (field "mrrPredicateTemplate" (TyCon "MethodPredicateTemplate")) (field "mrrResolution" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MethodReturnResolution"))))))) ())
 (DData Private "NumAnchorTestObservation" () ((variant "NumAnchorTestObservation" (ConNamed (field "natoCase" (TyCon "String")) (field "natoHasRow" (TyCon "Bool")) (field "natoIface" (TyCon "String")) (field "natoSchemeBody" (TyCon "String")) (field "natoDeclaredType" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "NumAnchorTestObservation")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "NumAnchorTestObservation" ((rf "natoCase" (PVar "__a0")) (rf "natoHasRow" (PVar "__a1")) (rf "natoIface" (PVar "__a2")) (rf "natoSchemeBody" (PVar "__a3")) (rf "natoDeclaredType" (PVar "__a4"))) false) (PRec "NumAnchorTestObservation" ((rf "natoCase" (PVar "__b0")) (rf "natoHasRow" (PVar "__b1")) (rf "natoIface" (PVar "__b2")) (rf "natoSchemeBody" (PVar "__b3")) (rf "natoDeclaredType" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EVar "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EVar "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EVar "eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "NumAnchorTestObservation")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "NumAnchorTestObservation" ((rf "natoCase" (PVar "__a0")) (rf "natoHasRow" (PVar "__a1")) (rf "natoIface" (PVar "__a2")) (rf "natoSchemeBody" (PVar "__a3")) (rf "natoDeclaredType" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "NumAnchorTestObservation {")) (ELit (LString " natoCase = "))) (EApp (EVar "debug") (EVar "__a0"))) (ELit (LString ", natoHasRow = "))) (EApp (EVar "debug") (EVar "__a1"))) (ELit (LString ", natoIface = "))) (EApp (EVar "debug") (EVar "__a2"))) (ELit (LString ", natoSchemeBody = "))) (EApp (EVar "debug") (EVar "__a3"))) (ELit (LString ", natoDeclaredType = "))) (EApp (EVar "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
@@ -48080,7 +48270,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "sameTraceEvId" (TyFun (TyCon "EvId") (TyFun (TyCon "EvId") (TyCon "Bool"))))
 (DFunDef false "sameTraceEvId" ((PCon "EvId" (PVar "moduleA") (PVar "ordinalA")) (PCon "EvId" (PVar "moduleB") (PVar "ordinalB"))) (EBinOp "&&" (EBinOp "==" (EVar "moduleA") (EVar "moduleB")) (EBinOp "==" (EVar "ordinalA") (EVar "ordinalB"))))
 (DTypeSig false "noteMethodReturnTrace" (TyFun (TyCon "MethodReturnTraceStage") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))
-(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EIf (EFieldAccess (EVar "methodReturnTraceEnabled") "value") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EFieldAccess (EVar "request") "mrrInstantiation") (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) false)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReturnTraceEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EVar "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EVar "methodReturnTraceEntries") "value"))))) (ELit LUnit)))
+(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EIf (EFieldAccess (EVar "methodReturnTraceEnabled") "value") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) false)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReturnTraceEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EVar "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EVar "methodReturnTraceEntries") "value"))))) (ELit LUnit)))
 (DTypeSig false "noteNumericPredicateTrace" (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit")))))))))
 (DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EIf (EFieldAccess (EVar "numericPredicateTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "numericPredicateTraceEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EVar "numericPredicateTraceEntries") "value"))) (ELit LUnit)))
 (DTypeSig false "assumAnswerBinder" (TyFun (TyCon "AssumAnswer") (TyCon "EvidenceBinderId")))
@@ -49224,7 +49414,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exactReturnRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "MethodSchemeRow"))))))
 (DFunDef false "exactReturnRow" ((PVar "env") (PVar "name") (PVar "scheme")) (EMatch (EApp (EApp (EVar "lookupMethodRow") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (EVar "name")) (EApp (EVar "isMonoScheme") (EVar "scheme"))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EApp (EVar "isSome") (EApp (EApp (EVar "Scopes.enclosingDefaultBody") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EApp (EVar "captureScope") (ELit LUnit))))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "admittedIfacesFor") (EVar "name"))) (ELit (LInt 2)))) (EVar "None") (EApp (EVar "Some") (EVar "row"))))))
 (DTypeSig false "methodRowCanCarry" (TyFun (TyCon "MethodSchemeRow") (TyCon "Bool")))
-(DFunDef false "methodRowCanCarry" ((PVar "row")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isSome") (EApp (EVar "identOriginOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin"))) (EApp (EVar "not") (EApp (EApp (EVar "anyArgMentions") (EApp (EVar "dispatchTyparams") (EFieldAccess (EVar "row") "msrTyparams"))) (EApp (EVar "methodArgs") (EFieldAccess (EVar "row") "msrType"))))) (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "row") "msrTyparams")) (EFieldAccess (EVar "row") "msrType"))))
+(DFunDef false "methodRowCanCarry" ((PVar "row")) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EVar "identOriginOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin"))) (EApp (EVar "not") (EApp (EApp (EVar "anyArgMentions") (EApp (EVar "dispatchTyparams") (EFieldAccess (EVar "row") "msrTyparams"))) (EApp (EVar "methodArgs") (EFieldAccess (EVar "row") "msrType"))))))
 (DTypeSig false "allMethodParamsMentioned" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "allMethodParamsMentioned" ((PList) PWild) (EVar "True"))
 (DFunDef false "allMethodParamsMentioned" ((PCons (PVar "param") (PVar "rest")) (PVar "ty")) (EBinOp "&&" (EApp (EApp (EVar "argMentions") (EListLit (EVar "param"))) (EApp (EVar "stripTyConstraints") (EVar "ty"))) (EApp (EApp (EVar "allMethodParamsMentioned") (EVar "rest")) (EVar "ty"))))
@@ -50349,7 +50539,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveSite" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))))))
 (DFunDef false "resolveSite" ((PVar "rpNames") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "resultMono") (PVar "fullMono") (PVar "encl") (PVar "origin") (PVar "scope")) (EBlock (DoLet false false (PVar "tagBefore") (EFieldAccess (EVar "tagRef") "value")) (DoLet false false (PTuple (PVar "route") (PVar "routes")) (EApp (EApp (EApp (EApp (EApp (EVar "entail") (EVar "name")) (EVar "resultMono")) (EVar "encl")) (EVar "scope")) (EApp (EApp (EVar "EKReturn") (EVar "fullMono")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "rpNames"))))) (DoLet false false PWild (EMatch (EVar "route") (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteDefaultBodyRNone") (EVar "DBRKReturn")) (EVar "name")) (EVar "origin")) (EVar "scope")) (EVar "tagBefore")) (EVar "route"))) (arm PWild () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "implRef")) (EVar "routes")))))
 (DTypeSig false "resolveExactReturnSite" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyCon "Mono") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))))))
-(DFunDef false "resolveExactReturnSite" ((PVar "rpNames") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "resultMono") (PVar "request") (PVar "encl") (PVar "origin") (PVar "scope")) (EMatch (EApp (EVar "methodReturnArgs") (EVar "request")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EVar "None")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveSite") (EVar "rpNames")) (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrOccurrence")) (EVar "encl")) (EVar "origin")) (EVar "scope"))))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "methodReturnResolutionValid") (EVar "request")) (EVar "resolution")) (ELit LUnit) (EApp (EVar "panic") (ELit (LString "ordinary return route received invalid solver evidence"))))) (DoLet false false (PVar "tagBefore") (EFieldAccess (EVar "tagRef") "value")) (DoLet false false (PTuple (PVar "route") (PVar "routes")) (EApp (EApp (EApp (EApp (EApp (EVar "exactReturnRoutes") (EVar "name")) (EVar "encl")) (EVar "scope")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "rpNames"))) (EVar "resolution"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EApp (EVar "Some") (EVar "route"))) (EVar "routes"))) (DoLet false false PWild (EMatch (EVar "route") (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteDefaultBodyRNone") (EVar "DBRKReturn")) (EVar "name")) (EVar "origin")) (EVar "scope")) (EVar "tagBefore")) (EVar "route"))) (arm PWild () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "implRef")) (EVar "routes")))))))
+(DFunDef false "resolveExactReturnSite" ((PVar "rpNames") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "resultMono") (PVar "request") (PVar "encl") (PVar "origin") (PVar "scope")) (EMatch (EApp (EVar "methodReturnArgs") (EVar "request")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EVar "None")) (EListLit))) (DoExpr (EIf (EApp (EVar "methodReturnAmbiguousWithoutGiven") (EVar "request")) (ELit LUnit) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveSite") (EVar "rpNames")) (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrOccurrence")) (EVar "encl")) (EVar "origin")) (EVar "scope")))))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "methodReturnResolutionValid") (EVar "request")) (EVar "resolution")) (ELit LUnit) (EApp (EVar "panic") (ELit (LString "ordinary return route received invalid solver evidence"))))) (DoLet false false (PVar "tagBefore") (EFieldAccess (EVar "tagRef") "value")) (DoLet false false (PTuple (PVar "route") (PVar "routes")) (EApp (EApp (EApp (EApp (EApp (EVar "exactReturnRoutes") (EVar "name")) (EVar "encl")) (EVar "scope")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "rpNames"))) (EVar "resolution"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EApp (EVar "Some") (EVar "route"))) (EVar "routes"))) (DoLet false false PWild (EMatch (EVar "route") (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteDefaultBodyRNone") (EVar "DBRKReturn")) (EVar "name")) (EVar "origin")) (EVar "scope")) (EVar "tagBefore")) (EVar "route"))) (arm PWild () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "implRef")) (EVar "routes")))))))
 (DTypeSig false "exactReturnRoutes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyCon "Bool") (TyFun (TyCon "MethodReturnResolution") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))))))
 (DFunDef false "exactReturnRoutes" ((PVar "name") (PVar "encl") (PVar "scope") (PVar "isReturnPosition") (PVar "resolution")) (EMatch (ETuple (EFieldAccess (EVar "resolution") "mrrOutcome") (EFieldAccess (EVar "resolution") "mrrSelectedRow")) (arm (PTuple (PCon "Solved" (PCon "GivenEvidence" (PVar "binder"))) (PCon "None")) () (ETuple (EIf (EVar "isReturnPosition") (EApp (EVar "RDictFwd") (EApp (EVar "renderEvidenceBinder") (EVar "binder"))) (EApp (EVar "RDict") (EApp (EVar "renderEvidenceBinder") (EVar "binder")))) (EListLit))) (arm (PTuple (PCon "Solved" (PCon "InstanceEvidence" PWild PWild (PVar "prerequisites"))) (PCon "Some" (PVar "row"))) () (ETuple (EApp (EApp (EVar "RKey") (EApp (EApp (EApp (EVar "methodRouteKeyForRow") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "row"))) (EListLit)) (EApp (EApp (EApp (EVar "methodReturnEvidenceRoutes") (EVar "encl")) (EVar "scope")) (EVar "prerequisites")))) (arm (PTuple (PCon "Deferred" PWild PWild) (PCon "None")) () (EMatch (EFieldAccess (EVar "resolution") "mrrFallbackTag") (arm (PCon "Some" (PVar "tag")) () (ETuple (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EListLit))) (arm (PCon "None") () (ETuple (EVar "RNone") (EListLit))))) (arm (PTuple (PCon "Insoluble" PWild PWild) (PCon "None")) () (EMatch (EFieldAccess (EVar "resolution") "mrrFallbackTag") (arm (PCon "Some" (PVar "tag")) () (ETuple (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EListLit))) (arm (PCon "None") () (ETuple (EVar "RNone") (EListLit))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "ordinary return outcome and selected row disagree"))))))
 (DTypeSig false "methodReturnEvidenceRoutes" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")) (TyApp (TyCon "List") (TyCon "Route"))))))
@@ -50438,6 +50628,27 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "predicateSlotKnownArgs" (TyFun (TyCon "PredicateSlotArgs") (TyApp (TyCon "List") (TyCon "Mono"))))
 (DFunDef false "predicateSlotKnownArgs" ((PCon "PSArgsUnknown")) (EListLit))
 (DFunDef false "predicateSlotKnownArgs" ((PCon "PSArgsKnown" (PVar "args"))) (EVar "args"))
+(DTypeSig false "instantiateMethodPredicateTemplate" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "MethodInstantiationSubst") (TyCon "MethodPredicateTemplate"))))
+(DFunDef false "instantiateMethodPredicateTemplate" ((PVar "template") (PVar "subst")) (ERecordCreate "MethodPredicateTemplate" ((fa "mptInterface" (EFieldAccess (EVar "template") "mptInterface")) (fa "mptArguments" (EApp (EApp (EVar "map") (EApp (EVar "instantiateMethodPredicateArgument") (EVar "subst"))) (EFieldAccess (EVar "template") "mptArguments"))))))
+(DTypeSig false "instantiateMethodPredicateArgument" (TyFun (TyCon "MethodInstantiationSubst") (TyFun (TyApp (TyCon "Option") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Mono")))))
+(DFunDef false "instantiateMethodPredicateArgument" ((PVar "subst") (PVar "argument")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "substMono") (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst"))) (EVar "argument")))
+(DTypeSig false "methodPredicateTemplateArgs" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))
+(DFunDef false "methodPredicateTemplateArgs" ((PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "methodPredicateTemplateArgs" ((PCons (PCon "Some" (PVar "argument")) (PVar "rest"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "argument") (EVar "_s")))) (EApp (EVar "methodPredicateTemplateArgs") (EVar "rest"))))
+(DFunDef false "methodPredicateTemplateArgs" ((PCons (PCon "None") PWild)) (EVar "None"))
+(DData Private "MethodTemplateGivenResult" () ((variant "MethodTemplateGivenNone" (ConPos)) (variant "MethodTemplateGivenOne" (ConPos (TyCon "GivenEntry"))) (variant "MethodTemplateGivenMany" (ConPos))) ())
+(DTypeSig false "uniqueMethodTemplateGiven" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "GivenEntry"))))))
+(DFunDef false "uniqueMethodTemplateGiven" ((PVar "template") (PVar "useScope") (PVar "givens")) (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
+(DFunDef false "methodTemplateGivenScan" (PWild PWild (PList) (PVar "result")) (EVar "result"))
+(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "useScope") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "rest")) (EVar "result2")))))))
+(DTypeSig false "methodPredicateTemplateMatchesSlot" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
+(DFunDef false "methodPredicateTemplateMatchesSlot" ((PVar "template") (PVar "slot")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EFieldAccess (EVar "slot") "psIface")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "False")) (arm (PCon "PSArgsKnown" (PVar "arguments")) () (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EFieldAccess (EVar "template") "mptArguments")) (EVar "arguments"))))))
+(DTypeSig false "methodPredicateTemplateArgumentsMatch" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" ((PList) (PList)) (EVar "True"))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" ((PCons (PCon "Some" (PVar "expected")) (PVar "rest")) (PCons (PVar "actual") (PVar "arguments"))) (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "expected")) (EVar "actual")) (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EVar "rest")) (EVar "arguments"))))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" ((PCons (PCon "None") (PVar "rest")) (PCons PWild (PVar "arguments"))) (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EVar "rest")) (EVar "arguments")))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" (PWild PWild) (EVar "False"))
 (DTypeSig false "enclDictVarOf" (TyFun (TyApp (TyCon "Option") (TyCon "PredicateRequest")) (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "EvidenceBinderId")))))))
 (DFunDef false "enclDictVarOf" ((PVar "goal") (PVar "m") (PVar "encl") (PVar "useScope")) (EIf (EBinOp "==" (EVar "encl") (ELit (LString ""))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EVar "map") (EApp (EVar "Scopes.binderAt") (EVar "useScope"))) (EApp (EApp (EApp (EVar "enclSlotIndex") (EVar "goal")) (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "encl")))) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EApp (EApp (EApp (EVar "enclDictVarOf") (EVar "goal")) (EVar "a")) (EVar "encl")) (EVar "useScope"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "enclSlotIndex" (TyFun (TyApp (TyCon "Option") (TyCon "PredicateRequest")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -51601,9 +51812,24 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligations" ((PVar "deferNonGround") (PVar "prog") (PVar "obligations")) (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EApp (EVar "buildImplUniverse") (EVar "prog"))) (EVar "obligations")))
 (DTypeSig false "checkCallObligationsU" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "checkCallObligationsU" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "univ") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false PWild (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "consumeExactReturnOutcome") (EVar "univ")) (EVar "request")) (EVar "resolution"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))))) (DoLet false false PWild (EApp (EApp (EVar "noteNumericObligationChecked") (EVar "o")) (EVar "occs"))) (DoExpr (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "univ")) (EVar "rest")))))
+(DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "univ") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false PWild (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "consumeExactReturnOutcome") (EVar "univ")) (EVar "request")) (EVar "resolution"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EApp (EVar "methodReturnAmbiguousWithoutGiven") (EVar "request")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EFieldAccess (EVar "request") "mrrIface") "irName"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))))) (DoLet false false PWild (EApp (EApp (EVar "noteNumericObligationChecked") (EVar "o")) (EVar "occs"))) (DoExpr (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "univ")) (EVar "rest")))))
 (DTypeSig false "solveExactReturnOnce" (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnResolution")))
 (DFunDef false "solveExactReturnOnce" ((PVar "request")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "Some" (PVar "resolution")) () (EVar "resolution")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturn") (EVar "request"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "request") "mrrResolution")) (EApp (EVar "Some") (EVar "resolution")))) (DoExpr (EVar "resolution"))))))
+(DTypeSig false "methodReturnAmbiguousWithoutGiven" (TyFun (TyCon "MethodReturnRequest") (TyCon "Bool")))
+(DFunDef false "methodReturnAmbiguousWithoutGiven" ((PVar "request")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "methodPredicateTemplateHasAbsent") (EFieldAccess (EVar "request") "mrrPredicateTemplate")) (EApp (EVar "isNone") (EApp (EVar "methodReturnPredicate") (EVar "request")))) (EBinOp ">=" (EApp (EApp (EApp (EVar "methodPredicateTemplateCandidateCount") (EFieldAccess (EVar "request") "mrrPredicateTemplate")) (EApp (EVar "ieRowsAll") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value"))) (ELit (LInt 0))) (ELit (LInt 2)))))
+(DTypeSig false "methodPredicateTemplateHasAbsent" (TyFun (TyCon "MethodPredicateTemplate") (TyCon "Bool")))
+(DFunDef false "methodPredicateTemplateHasAbsent" ((PVar "template")) (EApp (EApp (EVar "anyListM") (EVar "isNone")) (EFieldAccess (EVar "template") "mptArguments")))
+(DTypeSig false "methodPredicateTemplateCandidateCount" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "methodPredicateTemplateCandidateCount" (PWild PWild (PVar "count")) (EIf (EBinOp ">=" (EVar "count") (ELit (LInt 2))) (EVar "count") (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "methodPredicateTemplateCandidateCount" (PWild (PList) (PVar "count")) (EVar "count"))
+(DFunDef false "methodPredicateTemplateCandidateCount" ((PVar "template") (PCons (PVar "row") (PVar "rest")) (PVar "count")) (EApp (EApp (EApp (EVar "methodPredicateTemplateCandidateCount") (EVar "template")) (EVar "rest")) (EIf (EApp (EApp (EVar "methodPredicateTemplateMatchesRow") (EVar "template")) (EVar "row")) (EBinOp "+" (EVar "count") (ELit (LInt 1))) (EVar "count"))))
+(DTypeSig false "methodPredicateTemplateMatchesRow" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ImplRow") (TyCon "Bool"))))
+(DFunDef false "methodPredicateTemplateMatchesRow" ((PVar "template") (PCon "ImplRow" PWild PWild (PVar "iface") (PVar "tys") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EVar "iface")) (EMatch (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EFieldAccess (EVar "template") "mptArguments")) (EVar "tys")) (arm (PCon "Some" (PVar "pairs")) () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EVar "pairs")) (EListLit)))) (arm (PCon "None") () (EVar "False")))))
+(DTypeSig false "methodPredicateTemplateHeadPairs" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Ty") (TyCon "Mono")))))))
+(DFunDef false "methodPredicateTemplateHeadPairs" ((PList) (PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "methodPredicateTemplateHeadPairs" ((PCons (PCon "Some" (PVar "argument")) (PVar "rest")) (PCons (PVar "head") (PVar "heads"))) (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "head") (EVar "argument")) (EVar "_s")))) (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EVar "rest")) (EVar "heads"))))
+(DFunDef false "methodPredicateTemplateHeadPairs" ((PCons (PCon "None") (PVar "rest")) (PCons PWild (PVar "heads"))) (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EVar "rest")) (EVar "heads")))
+(DFunDef false "methodPredicateTemplateHeadPairs" (PWild PWild) (EVar "None"))
 (DTypeSig false "solveExactReturn" (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnResolution")))
 (DFunDef false "solveExactReturn" ((PVar "request")) (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "complete return solver received a legacy request")))) (arm (PCon "Some" (PVar "wanted")) () (EBlock (DoLet false false (PVar "predicate") (EFieldAccess (EVar "wanted") "predicate")) (DoLet false false (PVar "args") (EApp (EApp (EVar "map") (EVar "normalize")) (EFieldAccess (EVar "predicate") "predicateArguments"))) (DoLet false false (PVar "predRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EFieldAccess (EVar "predicate") "predicateInterface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "resultMono") (EApp (EVar "stripArrows") (EFieldAccess (EVar "request") "mrrOccurrence"))) (DoLet false false (PVar "given") (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EApp (EVar "Some") (EVar "predRequest"))) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrEnclosing")) (EFieldAccess (EVar "wanted") "scope"))) (EApp (EApp (EApp (EApp (EVar "activeDictPredOf") (EVar "predRequest")) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrEnclosing")) (EFieldAccess (EVar "wanted") "scope")))) (DoExpr (EMatch (EVar "given") (arm (PCon "Some" (PVar "answer")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteAssumption") (EFieldAccess (EVar "wanted") "scope")) (EVar "answer"))) (DoExpr (ERecordCreate "MethodReturnResolution" ((fa "mrrWanted" (EVar "wanted")) (fa "mrrOutcome" (EApp (EVar "Solved") (EApp (EVar "GivenEvidence") (EApp (EVar "assumAnswerBinder") (EVar "answer"))))) (fa "mrrSelectedRow" (EVar "None")) (fa "mrrFallbackTag" (EApp (EVar "methodReturnFallbackTag") (EVar "request")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "solveExactReturnInstance") (EVar "request")) (EVar "wanted")) (EVar "args")))))))))
 (DTypeSig false "methodReturnFallbackTag" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -52183,10 +52409,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ifaceMethodSchemeRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceMethodSchemeRows") (EVar "rest")))
 (DTypeSig false "methodSchemeRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "MethodSchemeRow")))))))
 (DFunDef false "methodSchemeRows" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "methodSchemeRows" ((PVar "scope") (PVar "iface") (PVar "typarams") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "scheme") (PVar "tvs")) (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "mty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "typarams")) (EVar "mty")) (EVar "tvs")) (EApp (EVar "schemeIds") (EVar "scheme")))) (DoLet false false PWild (EApp (EApp (EVar "installMethodPredicateSlots") (EVar "mname")) (EVar "slots"))) (DoExpr (EBinOp "::" (ERecordCreate "MethodSchemeRow" ((fa "msrIface" (EVar "iface")) (fa "msrName" (EVar "mname")) (fa "msrTyparams" (EVar "typarams")) (fa "msrType" (EVar "mty")) (fa "msrScheme" (EVar "scheme")) (fa "msrPredicate" (EApp (EApp (EVar "map") (ELam ((PVar "arguments")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EVar "iface")) (fa "predicateArguments" (EVar "arguments")))))) (EApp (EApp (EVar "methodInterfacePredicateArgs") (EVar "typarams")) (EVar "tvs")))) (fa "msrMethodSlots" (EVar "slots")))) (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "scope")) (EVar "iface")) (EVar "typarams")) (EVar "rest"))))))
-(DTypeSig false "methodInterfacePredicateArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))
-(DFunDef false "methodInterfacePredicateArgs" ((PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "methodInterfacePredicateArgs" ((PCons (PVar "param") (PVar "rest")) (PVar "tvs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "param")) (EVar "tvs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "argument")) () (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "argument") (EVar "_s")))) (EApp (EApp (EVar "methodInterfacePredicateArgs") (EVar "rest")) (EVar "tvs"))))))
+(DFunDef false "methodSchemeRows" ((PVar "scope") (PVar "iface") (PVar "typarams") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "scheme") (PVar "tvs")) (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "mty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "typarams")) (EVar "mty")) (EVar "tvs")) (EApp (EVar "schemeIds") (EVar "scheme")))) (DoLet false false PWild (EApp (EApp (EVar "installMethodPredicateSlots") (EVar "mname")) (EVar "slots"))) (DoExpr (EBinOp "::" (ERecordCreate "MethodSchemeRow" ((fa "msrIface" (EVar "iface")) (fa "msrName" (EVar "mname")) (fa "msrTyparams" (EVar "typarams")) (fa "msrType" (EVar "mty")) (fa "msrScheme" (EVar "scheme")) (fa "msrPredicateTemplate" (ERecordCreate "MethodPredicateTemplate" ((fa "mptInterface" (EVar "iface")) (fa "mptArguments" (EApp (EApp (EVar "methodInterfacePredicateTemplate") (EVar "typarams")) (EVar "tvs")))))) (fa "msrMethodSlots" (EVar "slots")))) (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "scope")) (EVar "iface")) (EVar "typarams")) (EVar "rest"))))))
+(DTypeSig false "methodInterfacePredicateTemplate" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))))))
+(DFunDef false "methodInterfacePredicateTemplate" ((PList) PWild) (EListLit))
+(DFunDef false "methodInterfacePredicateTemplate" ((PCons (PVar "param") (PVar "rest")) (PVar "tvs")) (EBinOp "::" (EApp (EApp (EVar "lookupAssoc") (EVar "param")) (EVar "tvs")) (EApp (EApp (EVar "methodInterfacePredicateTemplate") (EVar "rest")) (EVar "tvs"))))
 (DTypeSig false "legacyMethodSchemes" (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
 (DFunDef false "legacyMethodSchemes" ((PList)) (EListLit))
 (DFunDef false "legacyMethodSchemes" ((PCons (PVar "row") (PVar "rest"))) (EBinOp "::" (ETuple (EFieldAccess (EVar "row") "msrName") (EFieldAccess (EVar "row") "msrScheme")) (EApp (EVar "legacyMethodSchemes") (EVar "rest"))))
@@ -52685,6 +52911,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodReturnProbeRequest" ((PVar "row")) (EBlock (DoLet false false (PVar "inst") (EApp (EVar "methodReturnProbeOccurrence") (EVar "row"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "methodReturnRequest") (EVar "row")) (EFieldAccess (EVar "inst") "mtiBody")) (EFieldAccess (EVar "inst") "mtiSubstitution")) (EApp (EVar "Some") (EApp (EVar "freshEvId") (ELit LUnit)))))))
 (DTypeSig false "methodReturnVectorCompletenessProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool") (TyCon "Bool"))))
 (DFunDef false "methodReturnVectorCompletenessProbe" (PWild) (EBlock (DoLet false false (PVar "savedCross") (EFieldAccess (EVar "crossRun") "value")) (DoLet false false (PVar "savedGraph") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "freshCrossRun") (EVar "initialEnv")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "methodReturnProbeScope") (ELit (LString "return-vector")))) (DoLet false false (PVar "zeroRow") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-zero"))) (ELit (LString "Zero"))) (EListLit)) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None")))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "partialRow") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-partial"))) (ELit (LString "Partial"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "zeroArgs") (EApp (EApp (EVar "map") (EApp (EVar "map") (EVar "ppMono"))) (EApp (EVar "methodReturnArgs") (EApp (EVar "methodReturnProbeRequest") (EVar "zeroRow"))))) (DoLet false false (PVar "partialArgs") (EApp (EApp (EVar "map") (EApp (EVar "map") (EVar "ppMono"))) (EApp (EVar "methodReturnArgs") (EApp (EVar "methodReturnProbeRequest") (EVar "partialRow"))))) (DoLet false false (PVar "observed") (ETuple (EVar "zeroArgs") (EVar "partialArgs") (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "zeroRow") "msrTyparams")) (EFieldAccess (EVar "zeroRow") "msrType")) (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "partialRow") "msrTyparams")) (EFieldAccess (EVar "partialRow") "msrType")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EVar "savedCross"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EVar "savedGraph"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EVar "observed"))))
+(DTypeSig true "methodReturnTemplatePresenceProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyCon "Bool")) (TyApp (TyCon "List") (TyCon "Bool")))))
+(DFunDef false "methodReturnTemplatePresenceProbe" (PWild) (EBlock (DoLet false false (PVar "savedCross") (EFieldAccess (EVar "crossRun") "value")) (DoLet false false (PVar "savedGraph") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "freshCrossRun") (EVar "initialEnv")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false (PVar "present") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-template-present"))) (ELit (LString "Present"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyTuple") (EListLit (EApp (EVar "TyVar") (ELit (LString "a"))) (EApp (EVar "TyVar") (ELit (LString "b"))))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "absent") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-template-absent"))) (ELit (LString "Absent"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "observed") (ETuple (EApp (EApp (EVar "map") (EVar "isSome")) (EFieldAccess (EFieldAccess (EVar "present") "msrPredicateTemplate") "mptArguments")) (EApp (EApp (EVar "map") (EVar "isSome")) (EFieldAccess (EFieldAccess (EVar "absent") "msrPredicateTemplate") "mptArguments")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EVar "savedCross"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EVar "savedGraph"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EVar "observed"))))
 (DTypeSig false "methodReturnProbeCodes" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "methodReturnProbeCodes" ((PVar "ownedRow") (PVar "impls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "methodReturnProbeScope") (ELit (LString "return-owner-checker")))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign"))) (ELit (LString "Foreign"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))))) (DoLet false false (PVar "request") (EApp (EVar "methodReturnProbeRequest") (EVar "ownedRow"))) (DoLet false false PWild (EApp (EVar "methodReturnProbeSpelling") (EVar "foreignRow"))) (DoLet false false PWild (EApp (EVar "recordExactMethodObligation") (EVar "request"))) (DoLet false false (PVar "universe") (EApp (EVar "buildImplUniverse") (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EApp (EVar "buildFlatImplEnv") (EVar "impls")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "universe")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")))) (DoExpr (EApp (EApp (EVar "map") (EVar "tcCode")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))))))
 (DTypeSig false "methodReturnProbeRouteKey" (TyFun (TyCon "Route") (TyCon "String")))
@@ -53746,7 +53974,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DUse false (UseGroup ("types" "evidence") ((mem "EvidenceBinderId" true) (mem "goalIdForDestination" false) (mem "PrerequisiteEvidence" true) (mem "RequestInstanceId" true) (mem "ScopeId" true) (mem "SolverEvidence" true))))
 (DUse false (UseGroup ("types" "scopes") ((mem "DefaultBodyIdentity" true) (mem "ScopeCursor" true) (mem "ScopeFrame" true) (mem "ScopeOwner" true) (mem "ScopeStore" false))))
 (DUse false (UseAlias ("types" "scopes") "Scopes"))
-(DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "ExistingInstantiationServices" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "QualifiedScheme" true) (mem "Qualifier" true) (mem "SolverBlocker" true) (mem "SolverFailure" true) (mem "SolverOutcome" true) (mem "Wanted" true) (mem "WantedTarget" true) (mem "instantiateQualifiedAt" false))))
+(DUse false (UseGroup ("types" "solver_contract") ((mem "ClassPredicate" true) (mem "GoalOrigin" true) (mem "Instantiation" true) (mem "InstantiationArgument" true) (mem "SolverBlocker" true) (mem "SolverFailure" true) (mem "SolverOutcome" true) (mem "Wanted" true))))
 (DUse false (UseGroup ("types" "registry") ((mem "RegKey" false) (mem "Registry" false) (mem "regKeyOfTab" false) (mem "regKeyRender" false) (mem "regEmpty" false) (mem "regInsertK" false) (mem "regLookupK" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "mapProg" false))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "localBoundNames" false))))
@@ -54839,18 +55067,20 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "pushPendingObl" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ") (PVar "prov") (PVar "loc")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "mkMethodOccObl") (EVar "iface")) (EVar "typarams")) (EVar "mty")) (EVar "occ")) (EVar "prov")) (EVar "loc")) (EApp (EVar "captureScope") (ELit LUnit)))))
 (DTypeSig false "pushExactReturnObl" (TyFun (TyCon "MethodReturnRequest") (TyCon "Unit")))
 (DFunDef false "pushExactReturnObl" ((PVar "request")) (EApp (EApp (EVar "wPush") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EFieldAccess (EVar "request") "mrrIface")) (fa "args" (EListLit))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "PMethodOcc")) (fa "loc" (EFieldAccess (EVar "request") "mrrLoc")) (fa "uoScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "oblProj" (EApp (EVar "OpExactReturn") (EVar "request")))))))
-(DTypeSig false "methodExistingInstantiationServices" (TyApp (TyCon "ExistingInstantiationServices") (TyCon "MethodInstantiationSubst")))
-(DFunDef false "methodExistingInstantiationServices" () (ERecordCreate "ExistingInstantiationServices" ((fa "substituteExistingBody" (ELam ((PVar "subst")) (ELam ((PVar "body")) (EApp (EApp (EApp (EApp (EVar "substMonoP") (EVar "True")) (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst")) (EVar "body"))))) (fa "substituteExistingArgument" (ELam ((PVar "subst")) (ELam ((PVar "argument")) (EApp (EApp (EApp (EVar "substMono") (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst")) (EVar "argument"))))))))
 (DTypeSig false "methodReturnOrigin" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "GoalOrigin")))
 (DFunDef false "methodReturnOrigin" ((PVar "loc")) (EBlock (DoLet false false (PVar "moduleId") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (DoLet false false (PVar "binding") (EIf (EBinOp "==" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value") (ELit (LString ""))) (EVar "None") (EApp (EApp (EApp (EVar "mkIdent") (EVar "NsValue")) (EApp (EVar "OriginModule") (EVar "moduleId"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")))) (DoExpr (ERecordCreate "GoalOrigin" ((fa "location" (EVar "loc")) (fa "moduleId" (EVar "moduleId")) (fa "binding" (EVar "binding")))))))
-(DTypeSig false "methodReturnInstantiation" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "MethodInstantiationSubst") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "EvId") (TyApp (TyCon "Option") (TyCon "Instantiation"))))))))
-(DFunDef false "methodReturnInstantiation" ((PVar "row") (PVar "subst") (PVar "scope") (PVar "loc") (PVar "destination")) (EMatch (EFieldAccess (EVar "row") "msrPredicate") (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "predicate")) () (EBlock (DoLet false false (PVar "qualified") (ERecordCreate "QualifiedScheme" ((fa "hm" (EFieldAccess (EVar "row") "msrScheme")) (fa "qualifiers" (EListLit (ERecordCreate "Qualifier" ((fa "predicate" (EVar "predicate")) (fa "formal" (EApp (EApp (EVar "Scopes.binderAt") (EVar "scope")) (ELit (LInt 0))))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "instantiateQualifiedAt") (EVar "methodExistingInstantiationServices")) (EVar "subst")) (EVar "scope")) (EApp (EVar "methodReturnOrigin") (EVar "loc"))) (EListLit (ERecordCreate "WantedTarget" ((fa "targetGoal" (EApp (EVar "goalIdForDestination") (EVar "destination"))) (fa "targetDestination" (EVar "destination")))))) (EVar "qualified")))))))
+(DTypeSig false "methodReturnInstantiation" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "Instantiation"))))
+(DFunDef false "methodReturnInstantiation" ((PVar "request")) (EMatch (ETuple (EApp (EVar "methodReturnPredicate") (EVar "request")) (EFieldAccess (EVar "request") "mrrGoalEv")) (arm (PTuple (PCon "Some" (PVar "predicate")) (PCon "Some" (PVar "destination"))) () (EApp (EVar "Some") (ERecordCreate "Instantiation" ((fa "body" (EFieldAccess (EVar "request") "mrrQualifiedBody")) (fa "arguments" (EListLit (ERecordCreate "InstantiationArgument" ((fa "formal" (EApp (EApp (EVar "Scopes.binderAt") (EFieldAccess (EVar "request") "mrrScope")) (ELit (LInt 0)))) (fa "wanted" (ERecordCreate "Wanted" ((fa "id" (EApp (EVar "goalIdForDestination") (EVar "destination"))) (fa "predicate" (EVar "predicate")) (fa "origin" (EApp (EVar "methodReturnOrigin") (EFieldAccess (EVar "request") "mrrLoc"))) (fa "scope" (EFieldAccess (EVar "request") "mrrScope")) (fa "destination" (EVar "destination"))))))))))))) (arm PWild () (EVar "None"))))
+(DTypeSig false "methodReturnPredicate" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "ClassPredicate"))))
+(DFunDef false "methodReturnPredicate" ((PVar "request")) (EApp (EApp (EVar "methodReturnPredicateFromTemplate") (EFieldAccess (EVar "request") "mrrPredicateTemplate")) (EFieldAccess (EVar "request") "mrrScope")))
+(DTypeSig false "methodReturnPredicateFromTemplate" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "ClassPredicate")))))
+(DFunDef false "methodReturnPredicateFromTemplate" ((PVar "template") (PVar "scope")) (EMatch (EApp (EVar "methodPredicateTemplateArgs") (EFieldAccess (EVar "template") "mptArguments")) (arm (PCon "Some" (PVar "arguments")) () (EApp (EVar "Some") (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "template") "mptInterface")) (fa "predicateArguments" (EVar "arguments")))))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (ELam ((PVar "given")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EVar "template") "mptInterface")) (fa "predicateArguments" (EApp (EVar "predicateSlotKnownArgs") (EFieldAccess (EFieldAccess (EVar "given") "geSlot") "psArgs"))))))) (EApp (EApp (EApp (EVar "uniqueMethodTemplateGiven") (EVar "template")) (EVar "scope")) (EApp (EVar "givensForScope") (EVar "scope")))))))
 (DTypeSig false "methodReturnRequest" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyCon "Mono") (TyFun (TyCon "MethodInstantiationSubst") (TyFun (TyApp (TyCon "Option") (TyCon "EvId")) (TyCon "MethodReturnRequest"))))))
-(DFunDef false "methodReturnRequest" ((PVar "row") (PVar "occurrence") (PVar "subst") (PVar "goalEv")) (EBlock (DoLet false false (PVar "loc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false (PVar "instantiation") (EMatch (EVar "goalEv") (arm (PCon "Some" (PVar "destination")) () (EApp (EApp (EApp (EApp (EApp (EVar "methodReturnInstantiation") (EVar "row")) (EVar "subst")) (EVar "scope")) (EVar "loc")) (EVar "destination"))) (arm (PCon "None") () (EVar "None")))) (DoExpr (ERecordCreate "MethodReturnRequest" ((fa "mrrIface" (EFieldAccess (EVar "row") "msrIface")) (fa "mrrName" (EFieldAccess (EVar "row") "msrName")) (fa "mrrTyparams" (EFieldAccess (EVar "row") "msrTyparams")) (fa "mrrType" (EFieldAccess (EVar "row") "msrType")) (fa "mrrOccurrence" (EVar "occurrence")) (fa "mrrEnclosing" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (fa "mrrLoc" (EVar "loc")) (fa "mrrScope" (EVar "scope")) (fa "mrrGoalEv" (EVar "goalEv")) (fa "mrrInstantiation" (EVar "instantiation")) (fa "mrrResolution" (EApp (EVar "Ref") (EVar "None"))))))))
+(DFunDef false "methodReturnRequest" ((PVar "row") (PVar "occurrence") (PVar "subst") (PVar "goalEv")) (EBlock (DoLet false false (PVar "loc") (EUnOp "!" (EVar "currentLoc"))) (DoLet false false (PVar "scope") (EApp (EVar "captureScope") (ELit LUnit))) (DoLet false false (PVar "qualifiedBody") (EMatch (EFieldAccess (EVar "row") "msrScheme") (arm (PCon "Forall" PWild PWild (PVar "body")) () (EApp (EApp (EApp (EApp (EVar "substMonoP") (EVar "True")) (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst")) (EVar "body"))))) (DoExpr (ERecordCreate "MethodReturnRequest" ((fa "mrrIface" (EFieldAccess (EVar "row") "msrIface")) (fa "mrrName" (EFieldAccess (EVar "row") "msrName")) (fa "mrrTyparams" (EFieldAccess (EVar "row") "msrTyparams")) (fa "mrrType" (EFieldAccess (EVar "row") "msrType")) (fa "mrrOccurrence" (EVar "occurrence")) (fa "mrrEnclosing" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentFn") "value")) (fa "mrrLoc" (EVar "loc")) (fa "mrrScope" (EVar "scope")) (fa "mrrGoalEv" (EVar "goalEv")) (fa "mrrQualifiedBody" (EVar "qualifiedBody")) (fa "mrrPredicateTemplate" (EApp (EApp (EVar "instantiateMethodPredicateTemplate") (EFieldAccess (EVar "row") "msrPredicateTemplate")) (EVar "subst"))) (fa "mrrResolution" (EApp (EVar "Ref") (EVar "None"))))))))
 (DTypeSig false "methodReturnArgs" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))
-(DFunDef false "methodReturnArgs" ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "mrrInstantiation") (arm (PCon "Some" (PRec "Instantiation" ((rf "arguments" (PList (PVar "argument")))) true)) () (EApp (EVar "Some") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "argument") "wanted") "predicate") "predicateArguments"))) (arm PWild () (EVar "None"))))
+(DFunDef false "methodReturnArgs" ((PVar "request")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "predicate")) (EFieldAccess (EVar "predicate") "predicateArguments"))) (EApp (EVar "methodReturnPredicate") (EVar "request"))))
 (DTypeSig false "methodReturnWanted" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "Wanted"))))
-(DFunDef false "methodReturnWanted" ((PVar "request")) (EMatch (EFieldAccess (EVar "request") "mrrInstantiation") (arm (PCon "Some" (PRec "Instantiation" ((rf "arguments" (PList (PVar "argument")))) true)) () (EApp (EVar "Some") (EFieldAccess (EVar "argument") "wanted"))) (arm PWild () (EVar "None"))))
+(DFunDef false "methodReturnWanted" ((PVar "request")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "arguments" (PList (PVar "argument")))) true)) () (EApp (EVar "Some") (EFieldAccess (EVar "argument") "wanted"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "mkMethodOccObl" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyFun (TyCon "Mono") (TyFun (TyCon "Provenance") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "UObligation")))))))))
 (DFunDef false "mkMethodOccObl" ((PVar "iface") (PVar "typarams") (PVar "mty") (PVar "occ") (PVar "prov") (PVar "loc") (PVar "scope")) (ERecordCreate "UObligation" ((fa "pred" (ERecordCreate "Predicate" ((fa "iface" (EVar "iface")) (fa "args" (EListLit))))) (fa "originId" (ELit (LInt 0))) (fa "prov" (EVar "prov")) (fa "loc" (EVar "loc")) (fa "uoScope" (EVar "scope")) (fa "oblProj" (EApp (EApp (EApp (EVar "OpMethodOcc") (EVar "typarams")) (EVar "mty")) (EVar "occ"))))))
 (DTypeSig false "pushNumLitObl" (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit"))))))
@@ -54895,11 +55125,12 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DData Private "PredicateRequest" () ((variant "PredicateRequest" (ConNamed (field "prIface" (TyCon "IfaceRef")) (field "prArgs" (TyCon "PredicateSlotArgs"))))) ())
 (DData Private "PredicateSlot" () ((variant "PredicateSlot" (ConNamed (field "psIface" (TyCon "IfaceRef")) (field "psArgs" (TyCon "PredicateSlotArgs")) (field "psBoundIds" (TyApp (TyCon "List") (TyCon "Int")))))) ())
 (DData Private "MethodPredicateSlot" () ((variant "MethodPredicateSlot" (ConNamed (field "mpsPredicate" (TyCon "PredicateSlot")) (field "mpsPositions" (TyApp (TyCon "List") (TyCon "Int")))))) ())
-(DData Private "MethodSchemeRow" () ((variant "MethodSchemeRow" (ConNamed (field "msrIface" (TyCon "IfaceRef")) (field "msrName" (TyCon "String")) (field "msrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "msrType" (TyCon "Ty")) (field "msrScheme" (TyCon "Scheme")) (field "msrPredicate" (TyApp (TyCon "Option") (TyCon "ClassPredicate"))) (field "msrMethodSlots" (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) ())
+(DData Private "MethodPredicateTemplate" () ((variant "MethodPredicateTemplate" (ConNamed (field "mptInterface" (TyCon "IfaceRef")) (field "mptArguments" (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))))))) ())
+(DData Private "MethodSchemeRow" () ((variant "MethodSchemeRow" (ConNamed (field "msrIface" (TyCon "IfaceRef")) (field "msrName" (TyCon "String")) (field "msrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "msrType" (TyCon "Ty")) (field "msrScheme" (TyCon "Scheme")) (field "msrPredicateTemplate" (TyCon "MethodPredicateTemplate")) (field "msrMethodSlots" (TyApp (TyCon "List") (TyCon "MethodPredicateSlot")))))) ())
 (DData Private "MethodInstantiationSubst" () ((variant "MethodInstantiationSubst" (ConNamed (field "misTypeSubst" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Mono")))) (field "misEffectSubst" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Effvar")))))))) ())
 (DData Private "MethodTrackedInstantiation" () ((variant "MethodTrackedInstantiation" (ConNamed (field "mtiBody" (TyCon "Mono")) (field "mtiSubstitution" (TyCon "MethodInstantiationSubst"))))) ())
 (DData Private "MethodReturnResolution" () ((variant "MethodReturnResolution" (ConNamed (field "mrrWanted" (TyCon "Wanted")) (field "mrrOutcome" (TyCon "SolverOutcome")) (field "mrrSelectedRow" (TyApp (TyCon "Option") (TyCon "ImplRow"))) (field "mrrFallbackTag" (TyApp (TyCon "Option") (TyCon "String")))))) ())
-(DData Private "MethodReturnRequest" () ((variant "MethodReturnRequest" (ConNamed (field "mrrIface" (TyCon "IfaceRef")) (field "mrrName" (TyCon "String")) (field "mrrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "mrrType" (TyCon "Ty")) (field "mrrOccurrence" (TyCon "Mono")) (field "mrrEnclosing" (TyCon "String")) (field "mrrLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "mrrScope" (TyCon "ScopeId")) (field "mrrGoalEv" (TyApp (TyCon "Option") (TyCon "EvId"))) (field "mrrInstantiation" (TyApp (TyCon "Option") (TyCon "Instantiation"))) (field "mrrResolution" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MethodReturnResolution"))))))) ())
+(DData Private "MethodReturnRequest" () ((variant "MethodReturnRequest" (ConNamed (field "mrrIface" (TyCon "IfaceRef")) (field "mrrName" (TyCon "String")) (field "mrrTyparams" (TyApp (TyCon "List") (TyCon "String"))) (field "mrrType" (TyCon "Ty")) (field "mrrOccurrence" (TyCon "Mono")) (field "mrrEnclosing" (TyCon "String")) (field "mrrLoc" (TyApp (TyCon "Option") (TyCon "Loc"))) (field "mrrScope" (TyCon "ScopeId")) (field "mrrGoalEv" (TyApp (TyCon "Option") (TyCon "EvId"))) (field "mrrQualifiedBody" (TyCon "Mono")) (field "mrrPredicateTemplate" (TyCon "MethodPredicateTemplate")) (field "mrrResolution" (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "MethodReturnResolution"))))))) ())
 (DData Private "NumAnchorTestObservation" () ((variant "NumAnchorTestObservation" (ConNamed (field "natoCase" (TyCon "String")) (field "natoHasRow" (TyCon "Bool")) (field "natoIface" (TyCon "String")) (field "natoSchemeBody" (TyCon "String")) (field "natoDeclaredType" (TyCon "String"))))) ())
 (DImpl true "Eq" ((TyCon "NumAnchorTestObservation")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PRec "NumAnchorTestObservation" ((rf "natoCase" (PVar "__a0")) (rf "natoHasRow" (PVar "__a1")) (rf "natoIface" (PVar "__a2")) (rf "natoSchemeBody" (PVar "__a3")) (rf "natoDeclaredType" (PVar "__a4"))) false) (PRec "NumAnchorTestObservation" ((rf "natoCase" (PVar "__b0")) (rf "natoHasRow" (PVar "__b1")) (rf "natoIface" (PVar "__b2")) (rf "natoSchemeBody" (PVar "__b3")) (rf "natoDeclaredType" (PVar "__b4"))) false)) () (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))) (EApp (EApp (EMethodRef "eq") (EVar "__a2")) (EVar "__b2"))) (EApp (EApp (EMethodRef "eq") (EVar "__a3")) (EVar "__b3"))) (EApp (EApp (EMethodRef "eq") (EVar "__a4")) (EVar "__b4"))))))))
 (DImpl true "Debug" ((TyCon "NumAnchorTestObservation")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PRec "NumAnchorTestObservation" ((rf "natoCase" (PVar "__a0")) (rf "natoHasRow" (PVar "__a1")) (rf "natoIface" (PVar "__a2")) (rf "natoSchemeBody" (PVar "__a3")) (rf "natoDeclaredType" (PVar "__a4"))) false) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "NumAnchorTestObservation {")) (ELit (LString " natoCase = "))) (EApp (EMethodRef "debug") (EVar "__a0"))) (ELit (LString ", natoHasRow = "))) (EApp (EMethodRef "debug") (EVar "__a1"))) (ELit (LString ", natoIface = "))) (EApp (EMethodRef "debug") (EVar "__a2"))) (ELit (LString ", natoSchemeBody = "))) (EApp (EMethodRef "debug") (EVar "__a3"))) (ELit (LString ", natoDeclaredType = "))) (EApp (EMethodRef "debug") (EVar "__a4"))) (ELit (LString " }"))))))))
@@ -55125,7 +55356,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "sameTraceEvId" (TyFun (TyCon "EvId") (TyFun (TyCon "EvId") (TyCon "Bool"))))
 (DFunDef false "sameTraceEvId" ((PCon "EvId" (PVar "moduleA") (PVar "ordinalA")) (PCon "EvId" (PVar "moduleB") (PVar "ordinalB"))) (EBinOp "&&" (EBinOp "==" (EVar "moduleA") (EVar "moduleB")) (EBinOp "==" (EVar "ordinalA") (EVar "ordinalB"))))
 (DTypeSig false "noteMethodReturnTrace" (TyFun (TyCon "MethodReturnTraceStage") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit"))))))
-(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EIf (EFieldAccess (EVar "methodReturnTraceEnabled") "value") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EFieldAccess (EVar "request") "mrrInstantiation") (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) false)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReturnTraceEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EMethodRef "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EVar "methodReturnTraceEntries") "value"))))) (ELit LUnit)))
+(DFunDef false "noteMethodReturnTrace" ((PVar "stage") (PVar "request") (PVar "route") (PVar "prerequisites")) (EIf (EFieldAccess (EVar "methodReturnTraceEnabled") "value") (EBlock (DoLet false false (PTuple (PVar "qualifiedBody") (PVar "wanted")) (EMatch (EApp (EVar "methodReturnInstantiation") (EVar "request")) (arm (PCon "Some" (PRec "Instantiation" ((rf "body" (PVar "body")) (rf "arguments" (PList (PRec "InstantiationArgument" ((rf "wanted" (PVar "carried"))) true)))) false)) () (ETuple (EApp (EVar "Some") (EVar "body")) (EApp (EVar "Some") (EVar "carried")))) (arm PWild () (ETuple (EVar "None") (EVar "None"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "methodReturnTraceEntries")) (EBinOp "::" (ERecordCreate "MethodReturnTraceEntry" ((fa "mrtStage" (EVar "stage")) (fa "mrtInterface" (EFieldAccess (EVar "request") "mrrIface")) (fa "mrtMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrtArguments" (EApp (EVar "methodReturnArgs") (EVar "request"))) (fa "mrtScope" (EFieldAccess (EVar "request") "mrrScope")) (fa "mrtOrigin" (EFieldAccess (EVar "request") "mrrLoc")) (fa "mrtGoal" (EFieldAccess (EVar "request") "mrrGoalEv")) (fa "mrtPublished" (EVar "None")) (fa "mrtQualifiedBody" (EVar "qualifiedBody")) (fa "mrtWanted" (EVar "wanted")) (fa "mrtOutcome" (EApp (EApp (EMethodRef "map") (ELam ((PVar "resolution")) (EFieldAccess (EVar "resolution") "mrrOutcome"))) (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value"))) (fa "mrtRoute" (EVar "route")) (fa "mrtPrerequisites" (EVar "prerequisites")))) (EFieldAccess (EVar "methodReturnTraceEntries") "value"))))) (ELit LUnit)))
 (DTypeSig false "noteNumericPredicateTrace" (TyFun (TyCon "NumericPredicateTraceStage") (TyFun (TyCon "ClassPredicate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "Option") (TyCon "IfaceRef")) (TyFun (TyApp (TyCon "Option") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyCon "Unit")))))))))
 (DFunDef false "noteNumericPredicateTrace" ((PVar "stage") (PVar "predicate") (PVar "scope") (PVar "origin") (PVar "selected") (PVar "route") (PVar "prereqs")) (EIf (EFieldAccess (EVar "numericPredicateTraceEnabled") "value") (EApp (EApp (EVar "setRef") (EVar "numericPredicateTraceEntries")) (EBinOp "::" (ERecordCreate "NumericPredicateTraceEntry" ((fa "nptStage" (EVar "stage")) (fa "nptPredicate" (EVar "predicate")) (fa "nptScope" (EVar "scope")) (fa "nptOrigin" (EVar "origin")) (fa "nptSelectedInterface" (EVar "selected")) (fa "nptRoute" (EVar "route")) (fa "nptPrerequisites" (EVar "prereqs")))) (EFieldAccess (EVar "numericPredicateTraceEntries") "value"))) (ELit LUnit)))
 (DTypeSig false "assumAnswerBinder" (TyFun (TyCon "AssumAnswer") (TyCon "EvidenceBinderId")))
@@ -56269,7 +56500,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exactReturnRow" (TyFun (TyCon "TcEnv") (TyFun (TyCon "String") (TyFun (TyCon "Scheme") (TyApp (TyCon "Option") (TyCon "MethodSchemeRow"))))))
 (DFunDef false "exactReturnRow" ((PVar "env") (PVar "name") (PVar "scheme")) (EMatch (EApp (EApp (EVar "lookupMethodRow") (EVar "env")) (EVar "name")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "row")) () (EIf (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "lookupLocalFlag") (EVar "env")) (EVar "name")) (EApp (EVar "isMonoScheme") (EVar "scheme"))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef") "value"))) (EApp (EApp (EVar "omHasKey") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef") "value"))) (EApp (EVar "isSome") (EApp (EApp (EVar "Scopes.enclosingDefaultBody") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EApp (EVar "captureScope") (ELit LUnit))))) (EBinOp ">=" (EApp (EVar "listLen") (EApp (EVar "admittedIfacesFor") (EVar "name"))) (ELit (LInt 2)))) (EVar "None") (EApp (EVar "Some") (EVar "row"))))))
 (DTypeSig false "methodRowCanCarry" (TyFun (TyCon "MethodSchemeRow") (TyCon "Bool")))
-(DFunDef false "methodRowCanCarry" ((PVar "row")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "isSome") (EApp (EVar "identOriginOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin"))) (EApp (EVar "not") (EApp (EApp (EVar "anyArgMentions") (EApp (EVar "dispatchTyparams") (EFieldAccess (EVar "row") "msrTyparams"))) (EApp (EVar "methodArgs") (EFieldAccess (EVar "row") "msrType"))))) (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "row") "msrTyparams")) (EFieldAccess (EVar "row") "msrType"))))
+(DFunDef false "methodRowCanCarry" ((PVar "row")) (EBinOp "&&" (EApp (EVar "isSome") (EApp (EVar "identOriginOf") (EFieldAccess (EFieldAccess (EVar "row") "msrIface") "irOrigin"))) (EApp (EVar "not") (EApp (EApp (EVar "anyArgMentions") (EApp (EVar "dispatchTyparams") (EFieldAccess (EVar "row") "msrTyparams"))) (EApp (EVar "methodArgs") (EFieldAccess (EVar "row") "msrType"))))))
 (DTypeSig false "allMethodParamsMentioned" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Ty") (TyCon "Bool"))))
 (DFunDef false "allMethodParamsMentioned" ((PList) PWild) (EVar "True"))
 (DFunDef false "allMethodParamsMentioned" ((PCons (PVar "param") (PVar "rest")) (PVar "ty")) (EBinOp "&&" (EApp (EApp (EVar "argMentions") (EListLit (EVar "param"))) (EApp (EVar "stripTyConstraints") (EVar "ty"))) (EApp (EApp (EVar "allMethodParamsMentioned") (EVar "rest")) (EVar "ty"))))
@@ -57394,7 +57625,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "resolveSite" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))))))
 (DFunDef false "resolveSite" ((PVar "rpNames") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "resultMono") (PVar "fullMono") (PVar "encl") (PVar "origin") (PVar "scope")) (EBlock (DoLet false false (PVar "tagBefore") (EFieldAccess (EVar "tagRef") "value")) (DoLet false false (PTuple (PVar "route") (PVar "routes")) (EApp (EApp (EApp (EApp (EApp (EVar "entail") (EVar "name")) (EVar "resultMono")) (EVar "encl")) (EVar "scope")) (EApp (EApp (EVar "EKReturn") (EVar "fullMono")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "rpNames"))))) (DoLet false false PWild (EMatch (EVar "route") (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteDefaultBodyRNone") (EVar "DBRKReturn")) (EVar "name")) (EVar "origin")) (EVar "scope")) (EVar "tagBefore")) (EVar "route"))) (arm PWild () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "implRef")) (EVar "routes")))))
 (DTypeSig false "resolveExactReturnSite" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyCon "Route"))) (TyFun (TyCon "Mono") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))))))
-(DFunDef false "resolveExactReturnSite" ((PVar "rpNames") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "resultMono") (PVar "request") (PVar "encl") (PVar "origin") (PVar "scope")) (EMatch (EApp (EVar "methodReturnArgs") (EVar "request")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EVar "None")) (EListLit))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveSite") (EVar "rpNames")) (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrOccurrence")) (EVar "encl")) (EVar "origin")) (EVar "scope"))))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "methodReturnResolutionValid") (EVar "request")) (EVar "resolution")) (ELit LUnit) (EApp (EVar "panic") (ELit (LString "ordinary return route received invalid solver evidence"))))) (DoLet false false (PVar "tagBefore") (EFieldAccess (EVar "tagRef") "value")) (DoLet false false (PTuple (PVar "route") (PVar "routes")) (EApp (EApp (EApp (EApp (EApp (EVar "exactReturnRoutes") (EVar "name")) (EVar "encl")) (EVar "scope")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "rpNames"))) (EVar "resolution"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EApp (EVar "Some") (EVar "route"))) (EVar "routes"))) (DoLet false false PWild (EMatch (EVar "route") (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteDefaultBodyRNone") (EVar "DBRKReturn")) (EVar "name")) (EVar "origin")) (EVar "scope")) (EVar "tagBefore")) (EVar "route"))) (arm PWild () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "implRef")) (EVar "routes")))))))
+(DFunDef false "resolveExactReturnSite" ((PVar "rpNames") (PVar "name") (PVar "tagRef") (PVar "implRef") (PVar "resultMono") (PVar "request") (PVar "encl") (PVar "origin") (PVar "scope")) (EMatch (EApp (EVar "methodReturnArgs") (EVar "request")) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EVar "None")) (EListLit))) (DoExpr (EIf (EApp (EVar "methodReturnAmbiguousWithoutGiven") (EVar "request")) (ELit LUnit) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveSite") (EVar "rpNames")) (EVar "name")) (EVar "tagRef")) (EVar "implRef")) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrOccurrence")) (EVar "encl")) (EVar "origin")) (EVar "scope")))))) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EIf (EApp (EApp (EVar "methodReturnResolutionValid") (EVar "request")) (EVar "resolution")) (ELit LUnit) (EApp (EVar "panic") (ELit (LString "ordinary return route received invalid solver evidence"))))) (DoLet false false (PVar "tagBefore") (EFieldAccess (EVar "tagRef") "value")) (DoLet false false (PTuple (PVar "route") (PVar "routes")) (EApp (EApp (EApp (EApp (EApp (EVar "exactReturnRoutes") (EVar "name")) (EVar "encl")) (EVar "scope")) (EApp (EApp (EVar "contains") (EVar "name")) (EVar "rpNames"))) (EVar "resolution"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTStamped")) (EVar "request")) (EApp (EVar "Some") (EVar "route"))) (EVar "routes"))) (DoLet false false PWild (EMatch (EVar "route") (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "noteDefaultBodyRNone") (EVar "DBRKReturn")) (EVar "name")) (EVar "origin")) (EVar "scope")) (EVar "tagBefore")) (EVar "route"))) (arm PWild () (EApp (EApp (EVar "setRef") (EVar "tagRef")) (EVar "route"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "implRef")) (EVar "routes")))))))
 (DTypeSig false "exactReturnRoutes" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyCon "Bool") (TyFun (TyCon "MethodReturnResolution") (TyTuple (TyCon "Route") (TyApp (TyCon "List") (TyCon "Route")))))))))
 (DFunDef false "exactReturnRoutes" ((PVar "name") (PVar "encl") (PVar "scope") (PVar "isReturnPosition") (PVar "resolution")) (EMatch (ETuple (EFieldAccess (EVar "resolution") "mrrOutcome") (EFieldAccess (EVar "resolution") "mrrSelectedRow")) (arm (PTuple (PCon "Solved" (PCon "GivenEvidence" (PVar "binder"))) (PCon "None")) () (ETuple (EIf (EVar "isReturnPosition") (EApp (EVar "RDictFwd") (EApp (EVar "renderEvidenceBinder") (EVar "binder"))) (EApp (EVar "RDict") (EApp (EVar "renderEvidenceBinder") (EVar "binder")))) (EListLit))) (arm (PTuple (PCon "Solved" (PCon "InstanceEvidence" PWild PWild (PVar "prerequisites"))) (PCon "Some" (PVar "row"))) () (ETuple (EApp (EApp (EVar "RKey") (EApp (EApp (EApp (EVar "methodRouteKeyForRow") (EVar "name")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "row"))) (EListLit)) (EApp (EApp (EApp (EVar "methodReturnEvidenceRoutes") (EVar "encl")) (EVar "scope")) (EVar "prerequisites")))) (arm (PTuple (PCon "Deferred" PWild PWild) (PCon "None")) () (EMatch (EFieldAccess (EVar "resolution") "mrrFallbackTag") (arm (PCon "Some" (PVar "tag")) () (ETuple (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EListLit))) (arm (PCon "None") () (ETuple (EVar "RNone") (EListLit))))) (arm (PTuple (PCon "Insoluble" PWild PWild) (PCon "None")) () (EMatch (EFieldAccess (EVar "resolution") "mrrFallbackTag") (arm (PCon "Some" (PVar "tag")) () (ETuple (EApp (EApp (EVar "RKey") (EVar "tag")) (EListLit)) (EListLit))) (arm (PCon "None") () (ETuple (EVar "RNone") (EListLit))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "ordinary return outcome and selected row disagree"))))))
 (DTypeSig false "methodReturnEvidenceRoutes" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")) (TyApp (TyCon "List") (TyCon "Route"))))))
@@ -57483,6 +57714,27 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "predicateSlotKnownArgs" (TyFun (TyCon "PredicateSlotArgs") (TyApp (TyCon "List") (TyCon "Mono"))))
 (DFunDef false "predicateSlotKnownArgs" ((PCon "PSArgsUnknown")) (EListLit))
 (DFunDef false "predicateSlotKnownArgs" ((PCon "PSArgsKnown" (PVar "args"))) (EVar "args"))
+(DTypeSig false "instantiateMethodPredicateTemplate" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "MethodInstantiationSubst") (TyCon "MethodPredicateTemplate"))))
+(DFunDef false "instantiateMethodPredicateTemplate" ((PVar "template") (PVar "subst")) (ERecordCreate "MethodPredicateTemplate" ((fa "mptInterface" (EFieldAccess (EVar "template") "mptInterface")) (fa "mptArguments" (EApp (EApp (EMethodRef "map") (EApp (EVar "instantiateMethodPredicateArgument") (EVar "subst"))) (EFieldAccess (EVar "template") "mptArguments"))))))
+(DTypeSig false "instantiateMethodPredicateArgument" (TyFun (TyCon "MethodInstantiationSubst") (TyFun (TyApp (TyCon "Option") (TyCon "Mono")) (TyApp (TyCon "Option") (TyCon "Mono")))))
+(DFunDef false "instantiateMethodPredicateArgument" ((PVar "subst") (PVar "argument")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "substMono") (EFieldAccess (EVar "subst") "misTypeSubst")) (EFieldAccess (EVar "subst") "misEffectSubst"))) (EVar "argument")))
+(DTypeSig false "methodPredicateTemplateArgs" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono")))))
+(DFunDef false "methodPredicateTemplateArgs" ((PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "methodPredicateTemplateArgs" ((PCons (PCon "Some" (PVar "argument")) (PVar "rest"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "argument") (EVar "_s")))) (EApp (EVar "methodPredicateTemplateArgs") (EVar "rest"))))
+(DFunDef false "methodPredicateTemplateArgs" ((PCons (PCon "None") PWild)) (EVar "None"))
+(DData Private "MethodTemplateGivenResult" () ((variant "MethodTemplateGivenNone" (ConPos)) (variant "MethodTemplateGivenOne" (ConPos (TyCon "GivenEntry"))) (variant "MethodTemplateGivenMany" (ConPos))) ())
+(DTypeSig false "uniqueMethodTemplateGiven" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyApp (TyCon "Option") (TyCon "GivenEntry"))))))
+(DFunDef false "uniqueMethodTemplateGiven" ((PVar "template") (PVar "useScope") (PVar "givens")) (EMatch (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "givens")) (EVar "MethodTemplateGivenNone")) (arm (PCon "MethodTemplateGivenOne" (PVar "given")) () (EApp (EVar "Some") (EVar "given"))) (arm PWild () (EVar "None"))))
+(DTypeSig false "methodTemplateGivenScan" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyCon "GivenEntry")) (TyFun (TyCon "MethodTemplateGivenResult") (TyCon "MethodTemplateGivenResult"))))))
+(DFunDef false "methodTemplateGivenScan" (PWild PWild (PList) (PVar "result")) (EVar "result"))
+(DFunDef false "methodTemplateGivenScan" ((PVar "template") (PVar "useScope") (PCons (PVar "given") (PVar "rest")) (PVar "result")) (EBlock (DoLet false false (PVar "result2") (EIf (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "givenInScope") (EVar "GSPredicateOnly")) (EVar "given")) (EApp (EApp (EApp (EVar "Scopes.givenVisibleFrom") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "useScope")) (EApp (EVar "Scopes.binderScope") (EFieldAccess (EVar "given") "geBinder")))) (EApp (EApp (EVar "methodPredicateTemplateMatchesSlot") (EVar "template")) (EFieldAccess (EVar "given") "geSlot"))) (EMatch (EVar "result") (arm (PCon "MethodTemplateGivenNone") () (EApp (EVar "MethodTemplateGivenOne") (EVar "given"))) (arm PWild () (EVar "MethodTemplateGivenMany"))) (EVar "result"))) (DoExpr (EMatch (EVar "result2") (arm (PCon "MethodTemplateGivenMany") () (EVar "MethodTemplateGivenMany")) (arm PWild () (EApp (EApp (EApp (EApp (EVar "methodTemplateGivenScan") (EVar "template")) (EVar "useScope")) (EVar "rest")) (EVar "result2")))))))
+(DTypeSig false "methodPredicateTemplateMatchesSlot" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "PredicateSlot") (TyCon "Bool"))))
+(DFunDef false "methodPredicateTemplateMatchesSlot" ((PVar "template") (PVar "slot")) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EFieldAccess (EVar "slot") "psIface")) (EMatch (EFieldAccess (EVar "slot") "psArgs") (arm (PCon "PSArgsUnknown") () (EVar "False")) (arm (PCon "PSArgsKnown" (PVar "arguments")) () (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EFieldAccess (EVar "template") "mptArguments")) (EVar "arguments"))))))
+(DTypeSig false "methodPredicateTemplateArgumentsMatch" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyCon "Bool"))))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" ((PList) (PList)) (EVar "True"))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" ((PCons (PCon "Some" (PVar "expected")) (PVar "rest")) (PCons (PVar "actual") (PVar "arguments"))) (EBinOp "&&" (EApp (EApp (EVar "monoSameGiven") (EVar "expected")) (EVar "actual")) (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EVar "rest")) (EVar "arguments"))))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" ((PCons (PCon "None") (PVar "rest")) (PCons PWild (PVar "arguments"))) (EApp (EApp (EVar "methodPredicateTemplateArgumentsMatch") (EVar "rest")) (EVar "arguments")))
+(DFunDef false "methodPredicateTemplateArgumentsMatch" (PWild PWild) (EVar "False"))
 (DTypeSig false "enclDictVarOf" (TyFun (TyApp (TyCon "Option") (TyCon "PredicateRequest")) (TyFun (TyCon "Mono") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyApp (TyCon "Option") (TyCon "EvidenceBinderId")))))))
 (DFunDef false "enclDictVarOf" ((PVar "goal") (PVar "m") (PVar "encl") (PVar "useScope")) (EIf (EBinOp "==" (EVar "encl") (ELit (LString ""))) (EVar "None") (EIf (EVar "otherwise") (EMatch (EApp (EVar "normalize") (EVar "m")) (arm (PCon "TVar" (PVar "cell")) () (EApp (EApp (EMethodRef "map") (EApp (EVar "Scopes.binderAt") (EVar "useScope"))) (EApp (EApp (EApp (EVar "enclSlotIndex") (EVar "goal")) (EApp (EVar "tyvarId") (EVar "cell"))) (EVar "encl")))) (arm (PCon "TApp" (PVar "a") PWild) () (EApp (EApp (EApp (EApp (EVar "enclDictVarOf") (EVar "goal")) (EVar "a")) (EVar "encl")) (EVar "useScope"))) (arm PWild () (EVar "None"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "enclSlotIndex" (TyFun (TyApp (TyCon "Option") (TyCon "PredicateRequest")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -58646,9 +58898,24 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkCallObligations" ((PVar "deferNonGround") (PVar "prog") (PVar "obligations")) (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EApp (EVar "buildImplUniverse") (EVar "prog"))) (EVar "obligations")))
 (DTypeSig false "checkCallObligationsU" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "checkCallObligationsU" (PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "univ") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false PWild (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "consumeExactReturnOutcome") (EVar "univ")) (EVar "request")) (EVar "resolution"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))))) (DoLet false false PWild (EApp (EApp (EVar "noteNumericObligationChecked") (EVar "o")) (EVar "occs"))) (DoExpr (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "univ")) (EVar "rest")))))
+(DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "univ") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false PWild (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "consumeExactReturnOutcome") (EVar "univ")) (EVar "request")) (EVar "resolution"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EApp (EVar "methodReturnAmbiguousWithoutGiven") (EVar "request")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EFieldAccess (EVar "request") "mrrIface") "irName"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))))) (DoLet false false PWild (EApp (EApp (EVar "noteNumericObligationChecked") (EVar "o")) (EVar "occs"))) (DoExpr (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "univ")) (EVar "rest")))))
 (DTypeSig false "solveExactReturnOnce" (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnResolution")))
 (DFunDef false "solveExactReturnOnce" ((PVar "request")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "Some" (PVar "resolution")) () (EVar "resolution")) (arm (PCon "None") () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturn") (EVar "request"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EVar "request") "mrrResolution")) (EApp (EVar "Some") (EVar "resolution")))) (DoExpr (EVar "resolution"))))))
+(DTypeSig false "methodReturnAmbiguousWithoutGiven" (TyFun (TyCon "MethodReturnRequest") (TyCon "Bool")))
+(DFunDef false "methodReturnAmbiguousWithoutGiven" ((PVar "request")) (EBinOp "&&" (EBinOp "&&" (EApp (EVar "methodPredicateTemplateHasAbsent") (EFieldAccess (EVar "request") "mrrPredicateTemplate")) (EApp (EVar "isNone") (EApp (EVar "methodReturnPredicate") (EVar "request")))) (EBinOp ">=" (EApp (EApp (EApp (EVar "methodPredicateTemplateCandidateCount") (EFieldAccess (EVar "request") "mrrPredicateTemplate")) (EApp (EVar "ieRowsAll") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value"))) (ELit (LInt 0))) (ELit (LInt 2)))))
+(DTypeSig false "methodPredicateTemplateHasAbsent" (TyFun (TyCon "MethodPredicateTemplate") (TyCon "Bool")))
+(DFunDef false "methodPredicateTemplateHasAbsent" ((PVar "template")) (EApp (EApp (EVar "anyListM") (EVar "isNone")) (EFieldAccess (EVar "template") "mptArguments")))
+(DTypeSig false "methodPredicateTemplateCandidateCount" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyApp (TyCon "List") (TyCon "ImplRow")) (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "methodPredicateTemplateCandidateCount" (PWild PWild (PVar "count")) (EIf (EBinOp ">=" (EDictApp "count") (ELit (LInt 2))) (EDictApp "count") (EApp (EVar "__fallthrough__") (ELit LUnit))))
+(DFunDef false "methodPredicateTemplateCandidateCount" (PWild (PList) (PVar "count")) (EDictApp "count"))
+(DFunDef false "methodPredicateTemplateCandidateCount" ((PVar "template") (PCons (PVar "row") (PVar "rest")) (PVar "count")) (EApp (EApp (EApp (EVar "methodPredicateTemplateCandidateCount") (EVar "template")) (EVar "rest")) (EIf (EApp (EApp (EVar "methodPredicateTemplateMatchesRow") (EVar "template")) (EVar "row")) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))) (EDictApp "count"))))
+(DTypeSig false "methodPredicateTemplateMatchesRow" (TyFun (TyCon "MethodPredicateTemplate") (TyFun (TyCon "ImplRow") (TyCon "Bool"))))
+(DFunDef false "methodPredicateTemplateMatchesRow" ((PVar "template") (PCon "ImplRow" PWild PWild (PVar "iface") (PVar "tys") PWild PWild)) (EBinOp "&&" (EApp (EApp (EVar "sameIfaceDecl") (EFieldAccess (EVar "template") "mptInterface")) (EVar "iface")) (EMatch (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EFieldAccess (EVar "template") "mptArguments")) (EVar "tys")) (arm (PCon "Some" (PVar "pairs")) () (EApp (EVar "isSome") (EApp (EApp (EApp (EApp (EApp (EVar "matchOneSided") (EVar "matchStep")) (EVar "eqStr")) (EVar "cohEqMono")) (EVar "pairs")) (EListLit)))) (arm (PCon "None") () (EVar "False")))))
+(DTypeSig false "methodPredicateTemplateHeadPairs" (TyFun (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "Ty") (TyCon "Mono")))))))
+(DFunDef false "methodPredicateTemplateHeadPairs" ((PList) (PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "methodPredicateTemplateHeadPairs" ((PCons (PCon "Some" (PVar "argument")) (PVar "rest")) (PCons (PVar "head") (PVar "heads"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ETuple (EVar "head") (EVar "argument")) (EVar "_s")))) (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EVar "rest")) (EVar "heads"))))
+(DFunDef false "methodPredicateTemplateHeadPairs" ((PCons (PCon "None") (PVar "rest")) (PCons PWild (PVar "heads"))) (EApp (EApp (EVar "methodPredicateTemplateHeadPairs") (EVar "rest")) (EVar "heads")))
+(DFunDef false "methodPredicateTemplateHeadPairs" (PWild PWild) (EVar "None"))
 (DTypeSig false "solveExactReturn" (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnResolution")))
 (DFunDef false "solveExactReturn" ((PVar "request")) (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "None") () (EApp (EVar "panic") (ELit (LString "complete return solver received a legacy request")))) (arm (PCon "Some" (PVar "wanted")) () (EBlock (DoLet false false (PVar "predicate") (EFieldAccess (EVar "wanted") "predicate")) (DoLet false false (PVar "args") (EApp (EApp (EMethodRef "map") (EVar "normalize")) (EFieldAccess (EVar "predicate") "predicateArguments"))) (DoLet false false (PVar "predRequest") (ERecordCreate "PredicateRequest" ((fa "prIface" (EFieldAccess (EVar "predicate") "predicateInterface")) (fa "prArgs" (EApp (EVar "PSArgsKnown") (EVar "args")))))) (DoLet false false (PVar "resultMono") (EApp (EVar "stripArrows") (EFieldAccess (EVar "request") "mrrOccurrence"))) (DoLet false false (PVar "given") (EApp (EApp (EVar "orElseOpt") (EApp (EApp (EApp (EApp (EVar "activeDictVarOfEncl") (EApp (EVar "Some") (EVar "predRequest"))) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrEnclosing")) (EFieldAccess (EVar "wanted") "scope"))) (EApp (EApp (EApp (EApp (EVar "activeDictPredOf") (EVar "predRequest")) (EVar "resultMono")) (EFieldAccess (EVar "request") "mrrEnclosing")) (EFieldAccess (EVar "wanted") "scope")))) (DoExpr (EMatch (EVar "given") (arm (PCon "Some" (PVar "answer")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "noteAssumption") (EFieldAccess (EVar "wanted") "scope")) (EVar "answer"))) (DoExpr (ERecordCreate "MethodReturnResolution" ((fa "mrrWanted" (EVar "wanted")) (fa "mrrOutcome" (EApp (EVar "Solved") (EApp (EVar "GivenEvidence") (EApp (EVar "assumAnswerBinder") (EVar "answer"))))) (fa "mrrSelectedRow" (EVar "None")) (fa "mrrFallbackTag" (EApp (EVar "methodReturnFallbackTag") (EVar "request")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "solveExactReturnInstance") (EVar "request")) (EVar "wanted")) (EVar "args")))))))))
 (DTypeSig false "methodReturnFallbackTag" (TyFun (TyCon "MethodReturnRequest") (TyApp (TyCon "Option") (TyCon "String"))))
@@ -59228,10 +59495,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ifaceMethodSchemeRows" ((PCons PWild (PVar "rest"))) (EApp (EVar "ifaceMethodSchemeRows") (EVar "rest")))
 (DTypeSig false "methodSchemeRows" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Kind")))) (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "IfaceMethod")) (TyApp (TyCon "List") (TyCon "MethodSchemeRow")))))))
 (DFunDef false "methodSchemeRows" (PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "methodSchemeRows" ((PVar "scope") (PVar "iface") (PVar "typarams") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "scheme") (PVar "tvs")) (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "mty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "typarams")) (EVar "mty")) (EVar "tvs")) (EApp (EVar "schemeIds") (EVar "scheme")))) (DoLet false false PWild (EApp (EApp (EVar "installMethodPredicateSlots") (EVar "mname")) (EVar "slots"))) (DoExpr (EBinOp "::" (ERecordCreate "MethodSchemeRow" ((fa "msrIface" (EVar "iface")) (fa "msrName" (EVar "mname")) (fa "msrTyparams" (EVar "typarams")) (fa "msrType" (EVar "mty")) (fa "msrScheme" (EVar "scheme")) (fa "msrPredicate" (EApp (EApp (EMethodRef "map") (ELam ((PVar "arguments")) (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EVar "iface")) (fa "predicateArguments" (EVar "arguments")))))) (EApp (EApp (EVar "methodInterfacePredicateArgs") (EVar "typarams")) (EVar "tvs")))) (fa "msrMethodSlots" (EVar "slots")))) (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "scope")) (EVar "iface")) (EVar "typarams")) (EVar "rest"))))))
-(DTypeSig false "methodInterfacePredicateArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Mono"))))))
-(DFunDef false "methodInterfacePredicateArgs" ((PList) PWild) (EApp (EVar "Some") (EListLit)))
-(DFunDef false "methodInterfacePredicateArgs" ((PCons (PVar "param") (PVar "rest")) (PVar "tvs")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "param")) (EVar "tvs")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "argument")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (EVar "argument") (EVar "_s")))) (EApp (EApp (EVar "methodInterfacePredicateArgs") (EVar "rest")) (EVar "tvs"))))))
+(DFunDef false "methodSchemeRows" ((PVar "scope") (PVar "iface") (PVar "typarams") (PCons (PCon "IfaceMethod" (PVar "mname") (PVar "mty") PWild PWild) (PVar "rest"))) (EBlock (DoLet false false (PTuple (PVar "scheme") (PVar "tvs")) (EApp (EApp (EVar "sigToSchemeTvsIn") (EVar "scope")) (EVar "mty"))) (DoLet false false (PVar "slots") (EApp (EApp (EApp (EApp (EVar "methodPredicateSlotsOfType") (EVar "typarams")) (EVar "mty")) (EVar "tvs")) (EApp (EVar "schemeIds") (EVar "scheme")))) (DoLet false false PWild (EApp (EApp (EVar "installMethodPredicateSlots") (EVar "mname")) (EVar "slots"))) (DoExpr (EBinOp "::" (ERecordCreate "MethodSchemeRow" ((fa "msrIface" (EVar "iface")) (fa "msrName" (EVar "mname")) (fa "msrTyparams" (EVar "typarams")) (fa "msrType" (EVar "mty")) (fa "msrScheme" (EVar "scheme")) (fa "msrPredicateTemplate" (ERecordCreate "MethodPredicateTemplate" ((fa "mptInterface" (EVar "iface")) (fa "mptArguments" (EApp (EApp (EVar "methodInterfacePredicateTemplate") (EVar "typarams")) (EVar "tvs")))))) (fa "msrMethodSlots" (EVar "slots")))) (EApp (EApp (EApp (EApp (EVar "methodSchemeRows") (EVar "scope")) (EVar "iface")) (EVar "typarams")) (EVar "rest"))))))
+(DTypeSig false "methodInterfacePredicateTemplate" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyApp (TyCon "List") (TyApp (TyCon "Option") (TyCon "Mono"))))))
+(DFunDef false "methodInterfacePredicateTemplate" ((PList) PWild) (EListLit))
+(DFunDef false "methodInterfacePredicateTemplate" ((PCons (PVar "param") (PVar "rest")) (PVar "tvs")) (EBinOp "::" (EApp (EApp (EVar "lookupAssoc") (EVar "param")) (EVar "tvs")) (EApp (EApp (EVar "methodInterfacePredicateTemplate") (EVar "rest")) (EVar "tvs"))))
 (DTypeSig false "legacyMethodSchemes" (TyFun (TyApp (TyCon "List") (TyCon "MethodSchemeRow")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))
 (DFunDef false "legacyMethodSchemes" ((PList)) (EListLit))
 (DFunDef false "legacyMethodSchemes" ((PCons (PVar "row") (PVar "rest"))) (EBinOp "::" (ETuple (EFieldAccess (EVar "row") "msrName") (EFieldAccess (EVar "row") "msrScheme")) (EApp (EVar "legacyMethodSchemes") (EVar "rest"))))
@@ -59730,6 +59997,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "methodReturnProbeRequest" ((PVar "row")) (EBlock (DoLet false false (PVar "inst") (EApp (EVar "methodReturnProbeOccurrence") (EVar "row"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "methodReturnRequest") (EVar "row")) (EFieldAccess (EVar "inst") "mtiBody")) (EFieldAccess (EVar "inst") "mtiSubstitution")) (EApp (EVar "Some") (EApp (EVar "freshEvId") (ELit LUnit)))))))
 (DTypeSig false "methodReturnVectorCompletenessProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))) (TyCon "Bool") (TyCon "Bool"))))
 (DFunDef false "methodReturnVectorCompletenessProbe" (PWild) (EBlock (DoLet false false (PVar "savedCross") (EFieldAccess (EVar "crossRun") "value")) (DoLet false false (PVar "savedGraph") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "freshCrossRun") (EVar "initialEnv")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "methodReturnProbeScope") (ELit (LString "return-vector")))) (DoLet false false (PVar "zeroRow") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-zero"))) (ELit (LString "Zero"))) (EListLit)) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Int"))) (EVar "None")))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "partialRow") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-partial"))) (ELit (LString "Partial"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "zeroArgs") (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EVar "ppMono"))) (EApp (EVar "methodReturnArgs") (EApp (EVar "methodReturnProbeRequest") (EVar "zeroRow"))))) (DoLet false false (PVar "partialArgs") (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EVar "ppMono"))) (EApp (EVar "methodReturnArgs") (EApp (EVar "methodReturnProbeRequest") (EVar "partialRow"))))) (DoLet false false (PVar "observed") (ETuple (EVar "zeroArgs") (EVar "partialArgs") (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "zeroRow") "msrTyparams")) (EFieldAccess (EVar "zeroRow") "msrType")) (EApp (EApp (EVar "allMethodParamsMentioned") (EFieldAccess (EVar "partialRow") "msrTyparams")) (EFieldAccess (EVar "partialRow") "msrType")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EVar "savedCross"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EVar "savedGraph"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EVar "observed"))))
+(DTypeSig true "methodReturnTemplatePresenceProbe" (TyFun (TyCon "Unit") (TyTuple (TyApp (TyCon "List") (TyCon "Bool")) (TyApp (TyCon "List") (TyCon "Bool")))))
+(DFunDef false "methodReturnTemplatePresenceProbe" (PWild) (EBlock (DoLet false false (PVar "savedCross") (EFieldAccess (EVar "crossRun") "value")) (DoLet false false (PVar "savedGraph") (EFieldAccess (EVar "graphRun") "value")) (DoLet false false (PVar "savedPerRun") (EFieldAccess (EVar "perRun") "value")) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EApp (EVar "freshCrossRun") (EVar "initialEnv")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false (PVar "present") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-template-present"))) (ELit (LString "Present"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyTuple") (EListLit (EApp (EVar "TyVar") (ELit (LString "a"))) (EApp (EVar "TyVar") (ELit (LString "b"))))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "absent") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EApp (EVar "methodRowTestIface") (ELit (LString "return-template-absent"))) (ELit (LString "Absent"))) (EListLit (ELit (LString "a")) (ELit (LString "b")))) (EListLit (EApp (EApp (EApp (EApp (EVar "IfaceMethod") (ELit (LString "make"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))) (EVar "None")) (EVar "None")))))))) (DoLet false false (PVar "observed") (ETuple (EApp (EApp (EMethodRef "map") (EVar "isSome")) (EFieldAccess (EFieldAccess (EVar "present") "msrPredicateTemplate") "mptArguments")) (EApp (EApp (EMethodRef "map") (EVar "isSome")) (EFieldAccess (EFieldAccess (EVar "absent") "msrPredicateTemplate") "mptArguments")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "crossRun")) (EVar "savedCross"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EVar "savedGraph"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EVar "savedPerRun"))) (DoExpr (EVar "observed"))))
 (DTypeSig false "methodReturnProbeCodes" (TyFun (TyCon "MethodSchemeRow") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "methodReturnProbeCodes" ((PVar "ownedRow") (PVar "impls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "graphRun")) (EApp (EVar "freshGraphRun") (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "perRun")) (EApp (EVar "freshPerRun") (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "methodReturnProbeScope") (ELit (LString "return-owner-checker")))) (DoLet false false (PVar "foreignRow") (EApp (EVar "firstMethodRow") (EApp (EVar "ifaceMethodSchemeRows") (EListLit (EApp (EApp (EApp (EVar "methodReturnProbeIface") (ELit (LString "return-foreign"))) (ELit (LString "Foreign"))) (EApp (EApp (EVar "TyFun") (EApp (EApp (EVar "tyConBuiltin") (ELit (LString "Unit"))) (EVar "None"))) (EApp (EVar "TyVar") (ELit (LString "a"))))))))) (DoLet false false (PVar "request") (EApp (EVar "methodReturnProbeRequest") (EVar "ownedRow"))) (DoLet false false PWild (EApp (EVar "methodReturnProbeSpelling") (EVar "foreignRow"))) (DoLet false false PWild (EApp (EVar "recordExactMethodObligation") (EVar "request"))) (DoLet false false (PVar "universe") (EApp (EVar "buildImplUniverse") (EVar "impls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EApp (EVar "buildFlatImplEnv") (EVar "impls")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "universe")) (EApp (EVar "wAll") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")))) (DoExpr (EApp (EApp (EMethodRef "map") (EVar "tcCode")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))))))
 (DTypeSig false "methodReturnProbeRouteKey" (TyFun (TyCon "Route") (TyCon "String")))

@@ -1,0 +1,18 @@
+-- Completing Hidden Int Bool from the enclosing given must retain the selected
+-- instance's Seed Bool prerequisite.
+interface Seed a where
+  seed : a -> Int
+
+impl Seed Bool where
+  seed _ = 2
+
+interface Hidden a b where
+  hidden : Unit -> a
+
+impl Hidden Int Bool requires Seed Bool where
+  hidden _ = 40 + seed True
+
+useHidden : Hidden a b => b -> a
+useHidden witness = hidden ()
+
+main = println (useHidden True : Int)
