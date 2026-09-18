@@ -1,0 +1,3 @@
+import bytes.*
+
+main = mutBytesLength (mutBytesMake (0 - 1))

@@ -988,14 +988,6 @@ A new array holding the elements of a list.
 
 ## Byte blocks
 
-### `byteBlockMake`
-
-```
-byteBlockMake : Int -> ByteBlock
-```
-
-A new block of `n` zero bytes.
-
 ### `byteBlockLength`
 
 ```
@@ -1003,14 +995,6 @@ byteBlockLength : ByteBlock -> Int
 ```
 
 The number of bytes.
-
-### `byteBlockFromIntArray`
-
-```
-byteBlockFromIntArray : Array Int -> ByteBlock
-```
-
-A new block holding the low eight bits of each element of an array.
 
 ### `byteBlockToIntArray`
 

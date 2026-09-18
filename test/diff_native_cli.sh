@@ -381,6 +381,32 @@ else
   else
     fail=$((fail+1)); printf 'FAIL build/main_shape_nonunit (want exit 0 + binary + W-MAIN-SHAPE on stderr, got exit %s stderr [%s])\n' "$nub_status" "$(cat "$nub_err" 2>/dev/null)"
   fi
+
+  # ── build: MutBytes panic messages (stdlib/bytes.mdk) ─────────────────────
+  # Three `panic` arms in stdlib/bytes.mdk had zero test vehicle before this:
+  # mutBytesSet's value-range check, mutBytesSet's bounds check, and
+  # mutBytesMake's negative-length check. Pin the runtime abort text and exit
+  # code for each so a change to any of the three messages, or a regression
+  # that drops the guard entirely, is caught.
+  mb_case() {
+    mb_name="$1"; mb_f="$FIX/run/$mb_name.mdk"; mb_want="$2"
+    mb_bin="$TMP/nat_build_$mb_name"; mb_err="$TMP/nat_${mb_name}_run.err"
+    ( export MEDAKA_ROOT="$ROOT"; export MEDAKA_EMITTER="$EMITTER"; bound "$MEDAKA" build "$mb_f" -o "$mb_bin" ) >/dev/null 2>&1
+    if [ ! -x "$mb_bin" ]; then
+      fail=$((fail+1)); printf 'FAIL build/%s (build failed)\n' "$mb_name"; return
+    fi
+    bound "$mb_bin" >/dev/null 2>"$mb_err"
+    mb_status=$?
+    if [ "$mb_status" -eq 1 ] && grep -q "$mb_want" "$mb_err"; then
+      pass=$((pass+1)); printf 'ok   build/%s (exit 1, panic on stderr)\n' "$mb_name"
+    else
+      fail=$((fail+1)); printf 'FAIL build/%s (want exit 1 + stderr containing [%s], got exit %s stderr [%s])\n' \
+        "$mb_name" "$mb_want" "$mb_status" "$(cat "$mb_err" 2>/dev/null)"
+    fi
+  }
+  mb_case mutbytes_set_range "MutBytes.mutBytesSet: value out of range 0..255"
+  mb_case mutbytes_set_oob   "MutBytes.mutBytesSet: index out of bounds"
+  mb_case mutbytes_make_neg  "MutBytes.mutBytesMake: negative length"
 fi
 
 # error/* — RETIRED with the OCaml oracle (native canonical; oracle-coupled leg

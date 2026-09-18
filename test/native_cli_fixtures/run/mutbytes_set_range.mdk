@@ -1,0 +1,5 @@
+import bytes.*
+
+main =
+  let mb = mutBytesMake 4
+  mutBytesSet 0 256 mb

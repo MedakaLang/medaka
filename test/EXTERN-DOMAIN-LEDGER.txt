@@ -107,7 +107,7 @@ arrayBlit	PENDING	#476 out-of-range src/dst offsets and length
 bytesToFloat64	PENDING	#476 out-of-range byte offset into the Array Int
 stringSlice	PENDING	#476 out-of-range / inverted start/end indices
 stringFromUtf8Bytes	PENDING	#476 invalid / truncated UTF-8 byte sequences
-byteBlockMake	PENDING	#476 negative length is the edge
+byteBlockMake	PENDING	#476 negative length is the edge; now internal-extern-only (internalExterns, compiler/frontend/resolve.mdk) — reachable only via stdlib or --allow-internal
 byteBlockGetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB — probe with care before pinning
 byteBlockSetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB; the VALUE edge (a store outside 0..255 keeps the low eight bits) is exercised by test/engine_fixtures/byteblock_kernel.mdk, which is not a pinnable corpus
 byteBlockCopyUnsafe	PENDING	#476 a length past the source block's own length reads out of bounds

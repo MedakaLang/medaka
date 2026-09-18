@@ -75,8 +75,8 @@ fromArray arr = match findIndex (b => b < 0 || b > 255) arr
    the elements come from a source that already guarantees the range.
 
    This is transitional. It exists so that callers holding bytes by
-   construction move to `Bytes` without paying a scan, and it is removed at
-   B6 alongside `toUtf8`/`fromUtf8`.
+   construction move to `Bytes` without paying a scan, and it is removed once
+   the domain-checked door is the only one, alongside `toUtf8`/`fromUtf8`.
 
    > toArray (fromArrayAssumeByteDomain [|104, 105|])
    [|104, 105|]

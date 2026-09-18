@@ -80,8 +80,8 @@ refused, so `-1` and `511` both store as `255`. Prefer `fromArray` unless
 the elements come from a source that already guarantees the range.
 
 This is transitional. It exists so that callers holding bytes by
-construction move to `Bytes` without paying a scan, and it is removed at
-B6 alongside `toUtf8`/`fromUtf8`.
+construction move to `Bytes` without paying a scan, and it is removed once
+the domain-checked door is the only one, alongside `toUtf8`/`fromUtf8`.
 
 ```medaka
 > toArray (fromArrayAssumeByteDomain [|104, 105|])
