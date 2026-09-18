@@ -17,6 +17,7 @@ import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
 import types.evidence.{EvidenceBinderId(..), ScopeId}
 import types.repr.{Scheme(..), ppMono, ppScheme}
+import types.solver_contract.{Wanted(..)}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
@@ -1226,6 +1227,30 @@ methodTracePublishedOne entry = match entry.mrtPublished
   Some (EvOne _) => True
   _ => False
 
+data MethodWantedView = MethodWantedView {
+  mwvBody : String,
+  mwvInterface : String,
+  mwvArguments : List String,
+  mwvDestinationShared : Bool,
+  mwvScopeShared : Bool,
+}
+  deriving (Eq, Debug)
+
+methodWantedView : MethodReturnTraceEntry -> Option MethodWantedView
+methodWantedView entry = match (entry.mrtQualifiedBody, entry.mrtWanted)
+  (Some body, Some wanted) => Some MethodWantedView {
+    mwvBody = ppMono body,
+    mwvInterface = wanted.predicate.predicateInterface.irName,
+    mwvArguments = map ppMono wanted.predicate.predicateArguments,
+    mwvDestinationShared =
+      methodTraceGoalText entry == evIdText wanted.destination,
+    mwvScopeShared = wanted.scope == entry.mrtScope,
+  }
+  _ => None
+
+wantedArgumentStrings : Wanted -> List String
+wantedArgumentStrings wanted = map ppMono wanted.predicate.predicateArguments
+
 methodEvInExpr : String -> Expr -> Option EvId
 methodEvInExpr target (EMethodAt name _ ev)
   | target == name = Some ev
@@ -1254,6 +1279,7 @@ test "ordinary return shares declaration identity vector and goal destination" =
     filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ())
   let goals = map methodTraceGoalText trace
   let aggregate = map evIdText (methodEvInDecls "choose" typed)
+  let wanted = map methodWantedView trace
   expectAll [
     expectEqual
       [MRTProduced, MRTChecked, MRTStamped]
@@ -1275,6 +1301,75 @@ test "ordinary return shares declaration identity vector and goal destination" =
       (goal :: _, Some methodGoal) => goal /= methodGoal
       _ => False),
     expectEqual [True, True, True] (map methodTracePublishedOne trace),
+    expectEqual
+      [
+        Some MethodWantedView {
+          mwvBody = "Unit -> Pair Bool Int",
+          mwvInterface = "Choose",
+          mwvArguments = ["Int", "Bool"],
+          mwvDestinationShared = True,
+          mwvScopeShared = True,
+        },
+        Some MethodWantedView {
+          mwvBody = "Unit -> Pair Bool Int",
+          mwvInterface = "Choose",
+          mwvArguments = ["Int", "Bool"],
+          mwvDestinationShared = True,
+          mwvScopeShared = True,
+        },
+        Some MethodWantedView {
+          mwvBody = "Unit -> Pair Bool Int",
+          mwvInterface = "Choose",
+          mwvArguments = ["Int", "Bool"],
+          mwvDestinationShared = True,
+          mwvScopeShared = True,
+        },
+      ]
+      wanted,
+  ]
+
+methodCarrierStages : String -> String -> List MethodReturnTraceEntry
+methodCarrierStages method source =
+  beginMethodReturnTrace ()
+  let _ = elaborateOne [] (desugar (parse numericPreludeSource)) (
+    "method_carrier",
+    desugar (parseLocated source),
+  )
+  filter (entry => entry.mrtMethod == method) (finishMethodReturnTrace ())
+
+test "ordinary return carrier distinguishes empty unknown and absent-formal boundaries" =
+  let empty =
+    methodCarrierStages
+      "token"
+      (joinNl [
+        "interface Token where",
+        "  token : b -> Int",
+        "impl Token where",
+        "  token _ = 7",
+        "value : Int",
+        "value = token ()",
+      ])
+  let unknown = flatMethodReturnStages returnIdentitySource
+  let absent =
+    methodCarrierStages
+      "choose"
+      (joinNl [
+        "data Pair a b = Pair a b",
+        "interface Partial a b where",
+        "  choose : Unit -> a",
+        "impl Partial Int Bool where",
+        "  choose _ = 7",
+        "value : Int",
+        "value = choose ()",
+      ])
+  expectAll [
+    expectEqual
+      [Some [], Some [], Some []]
+      (map (entry => map (map ppMono) entry.mrtArguments) empty),
+    expectEqual
+      [Some [], Some [], Some []]
+      (map (entry => map wantedArgumentStrings entry.mrtWanted) empty),
+    expectEqual ([], []) (unknown, map (entry => entry.mrtStage) absent),
   ]
 
 methodTraceOrigin : MethodReturnTraceEntry -> String
