@@ -1,0 +1,12 @@
+-- #676 part A: a multi-clause function whose clauses are distinguished ONLY by
+-- boolean guards — no `otherwise`, no pattern to leave uncovered — so the
+-- fall-through sentinel at the end of the guard chain is BARE (no next clause to
+-- branch to).  Native lowered that bare sentinel to `@mdk_oob`, so the built
+-- binary blamed an index that no line of this program ever takes, while `run`
+-- reported the real cause.  Both must now say E-NONEXHAUSTIVE-MATCH.
+classify : Int -> String
+classify n
+  | n > 100 = "big"
+  | n > 10 = "medium"
+
+main = println (classify 5)

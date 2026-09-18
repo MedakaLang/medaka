@@ -1,5 +1,5 @@
 # META
-source_lines=12427
+source_lines=12429
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -6649,7 +6649,9 @@ hexDigitW d =
 -- through to the next clause.  The bare `__fallthrough__` (NOT rewritten — appears only
 -- outside a clause block, e.g. a value-binding body or a context the typechecker proved
 -- exhaustive) → a trap stub `unreachable` (the WasmGC peer of llvm_emit's `call void
--- @mdk_oob()`, EMITTER-GAPS.md E3).  PURE functions of the name — no mutable "current
+-- @mdk_nonexhaustive_match()`, EMITTER-GAPS.md E3; unlike that call the bare wasm trap
+-- carries no coded message — a clause chain's own terminus does, at
+-- emitClauseChainGo's empty-list arm).  PURE functions of the name — no mutable "current
 -- label" ref, which this lazily-assembled emitter cannot thread reliably (the strings
 -- are forced at final assembly, long after any setRef).
 isFtSentinel : String -> Bool

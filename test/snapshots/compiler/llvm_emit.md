@@ -1,5 +1,5 @@
 # META
-source_lines=15077
+source_lines=15078
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -368,17 +368,18 @@ isFallthroughVar x = x == fallthroughName || startsWith ftPrefix x
 
 -- lower the fall-through sentinel: a LABELLED one branches to the next clause's
 -- block; a BARE one (single-clause fn, or a `__fallthrough__` under a CLam, which
--- labelFallthrough deliberately does not enter) has no next clause → the @mdk_oob
--- non-exhaustive abort.  `@mdk_oob` is not a terminator, so the caller's
--- store+branch stays well-formed; the `br` path leaves them in a dead anonymous
--- block, which LLVM discards.
+-- labelFallthrough deliberately does not enter) has no next clause, so the guard
+-- chain is non-exhaustive → @mdk_nonexhaustive_match, the same abort the interpreter
+-- and the EMatch decision tree raise for an unmatched scrutinee.  `@mdk_nonexhaustive_match`
+-- is not a terminator, so the caller's store+branch stays well-formed; the `br` path
+-- leaves them in a dead anonymous block, which LLVM discards.
 emitFallthrough : Emit -> String -> (String, LTy)
 emitFallthrough e fname = match ftLabelOf fname
   Some lbl =>
     let _ = emit e ("  br label %" ++ lbl)
     ("0", LTInt)
   None =>
-    let _ = emit e "  call void @mdk_oob()"
+    let _ = emit e "  call void @mdk_nonexhaustive_match()"
     ("0", LTInt)
 
 -- ── TRMC (tail-recursion-modulo-cons) context (PLAN #56, TRMC-DESIGN.md) ─────
@@ -15093,7 +15094,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
 (DTypeSig false "emitFallthrough" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))))
-(DFunDef false "emitFallthrough" ((PVar "e") (PVar "fname")) (EMatch (EApp (EVar "ftLabelOf") (EVar "fname")) (arm (PCon "Some" (PVar "lbl")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_oob()")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt")))))))
+(DFunDef false "emitFallthrough" ((PVar "e") (PVar "fname")) (EMatch (EApp (EVar "ftLabelOf") (EVar "fname")) (arm (PCon "Some" (PVar "lbl")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_nonexhaustive_match()")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt")))))))
 (DData Private "TrmcCtx" () ((variant "TrmcOff" (ConPos)) (variant "TrmcOn" (ConPos (TyCon "SelfRef") (TyCon "Int") (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DData Private "GDispCtx" () ((variant "GDispOff" (ConPos)) (variant "GDispOn" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "gDispIsFn" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -17637,7 +17638,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DTypeSig false "isFallthroughVar" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isFallthroughVar" ((PVar "x")) (EBinOp "||" (EBinOp "==" (EVar "x") (EVar "fallthroughName")) (EApp (EApp (EVar "startsWith") (EVar "ftPrefix")) (EVar "x"))))
 (DTypeSig false "emitFallthrough" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyCon "LTy")))))
-(DFunDef false "emitFallthrough" ((PVar "e") (PVar "fname")) (EMatch (EApp (EVar "ftLabelOf") (EVar "fname")) (arm (PCon "Some" (PVar "lbl")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_oob()")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt")))))))
+(DFunDef false "emitFallthrough" ((PVar "e") (PVar "fname")) (EMatch (EApp (EVar "ftLabelOf") (EVar "fname")) (arm (PCon "Some" (PVar "lbl")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (ELit (LString "  br label %")) (EVar "lbl")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt"))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (ELit (LString "  call void @mdk_nonexhaustive_match()")))) (DoExpr (ETuple (ELit (LString "0")) (EVar "LTInt")))))))
 (DData Private "TrmcCtx" () ((variant "TrmcOff" (ConPos)) (variant "TrmcOn" (ConPos (TyCon "SelfRef") (TyCon "Int") (TyCon "String") (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))) ())
 (DData Private "GDispCtx" () ((variant "GDispOff" (ConPos)) (variant "GDispOn" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
 (DTypeSig false "gDispIsFn" (TyFun (TyCon "Emit") (TyFun (TyCon "String") (TyCon "Bool"))))
