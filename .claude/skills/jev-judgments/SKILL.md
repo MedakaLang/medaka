@@ -11,6 +11,12 @@ answer a number you must read against labels before acting on it. This
 skill is the loop that produced the numbers in `docs/design/JEV-DESIGN.md`;
 the tool is `scripts/jev/` and its usage is in `scripts/jev/README.md`.
 
+**Before proposing a change to a question, read `docs/design/JEV-LEDGER.md`** —
+the index of what has been tried, with each refuted attempt and its frozen
+evidence. Paragraph chunking, a 2-way `recommend`, a four-level `register`
+rewrite and a `defensive` arm are all measured and rejected; re-proposing one
+spends a round of API calls to re-learn what the ledger already says.
+
 **Four rules that are not negotiable** (epic #3117):
 
 1. **Code finds, Jev judges, the agent rewrites.** Jev never generates the

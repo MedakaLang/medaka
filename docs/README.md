@@ -80,6 +80,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`GZIP-DESIGN.md`](design/GZIP-DESIGN.md) | DEFLATE / gzip — a compression codec in pure Medaka | PARTIAL |
 | [`INTERFACE-CANDIDATES.md`](design/INTERFACE-CANDIDATES.md) | INTERFACE-CANDIDATES.md — which built-in constructs could generalize behind an interface | PARTIAL |
 | [`JEV-DESIGN.md`](design/JEV-DESIGN.md) | Jev judgment tools: calibrated judgments between lint and LLM review | PROPOSED, 2026-09-16 |
+| [`JEV-LEDGER.md`](design/JEV-LEDGER.md) | Jev: the experiment ledger | — |
 | [`LANGUAGE-SURFACE-AUDIT.md`](design/LANGUAGE-SURFACE-AUDIT.md) | LANGUAGE-SURFACE-AUDIT.md | OPEN |
 | [`MUT-SCOPING-DESIGN.md`](design/MUT-SCOPING-DESIGN.md) | `<Mut>` scoping — effect masking for allocate→fill→freeze | CLOSED |
 | [`REGEX-DESIGN.md`](design/REGEX-DESIGN.md) | Regular expressions in the stdlib | — |
