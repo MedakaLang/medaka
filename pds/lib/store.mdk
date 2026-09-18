@@ -232,9 +232,14 @@ storeSessionOpen access refresh expires (Store blocks repo (Auth secret credenti
     prefs
 
 {- | Whether this access-token fingerprint belongs to an open session. A token
-   this server minted but whose session has since been closed, rotated away, or
-   lost to a restart answers `False`, which is what makes `deleteSession`
-   revoke an access token that is otherwise still inside its own window. -}
+   this server minted but whose session has since been closed or rotated away
+   answers `False`, which is what makes `deleteSession` revoke an access token
+   that is otherwise still inside its own window.
+
+   A restart is not one of those: the session set is persisted and read back,
+   so a token survives one. What still answers `False` across a restart is a
+   session whose refresh token expired while nothing was running, which the
+   load-time prune drops. -}
 export
 storeAccessActive : Array Int -> Store -> Bool
 storeAccessActive fingerprint (Store _ _ (Auth _ _ sessions) _) =
@@ -290,6 +295,42 @@ storeSessionClose fingerprint (Store blocks repo (Auth secret credential session
         prefs)
   else
     None
+
+sessionRows : List SessionRecord -> List (Array Int, Array Int, Int)
+sessionRows [] = []
+sessionRows ((SessionRecord access refresh expires) :: rest) =
+  (arrayCopy access, arrayCopy refresh, expires) :: sessionRows rest
+
+rowSessions : List (Array Int, Array Int, Int) -> List SessionRecord
+rowSessions [] = []
+rowSessions ((access, refresh, expires) :: rest) =
+  SessionRecord (arrayCopy access) (arrayCopy refresh) expires
+    :: rowSessions rest
+
+{- | Every open session as a flat row: the access-token fingerprint, the
+   refresh-token fingerprint, and the instant the refresh token expires.
+
+   This is what a caller that persists sessions across a restart needs, and it
+   is all of it. `SessionRecord` itself stays private: a row is admitted back
+   as a session only through `storeWithSessionRows`, so the constructor is
+   still not reachable from outside this module, and the fingerprints are
+   copied on the way out as they are on the way in. -}
+export
+storeSessionRows : Store -> List (Array Int, Array Int, Int)
+storeSessionRows (Store _ _ (Auth _ _ sessions) _) = sessionRows sessions
+
+{- | Successor store whose open sessions are exactly these rows, replacing
+   whatever it held.
+
+   This is a load-time operation: it is how a restart readmits the sessions a
+   previous process wrote out. It admits rows unexamined — an expired one is
+   still a session here — so a caller restoring from disk prunes with
+   `storeSessionsPrune` against the current instant rather than trusting the
+   file to hold only live rows. -}
+export
+storeWithSessionRows : List (Array Int, Array Int, Int) -> Store -> Store
+storeWithSessionRows rows (Store blocks repo (Auth secret credential _) prefs) =
+  Store blocks repo (Auth secret credential (rowSessions rows)) prefs
 
 -- | Successor store with every session whose refresh token has expired at
 -- `now` dropped. An expired session verifies nothing, so it is only memory.

@@ -117,10 +117,13 @@ postJson token nsid bodyJson =
   toUtf8
     "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength (toUtf8 bodyJson))}\r\n\r\n\{bodyJson}"
 
+{- | A bodiless POST, the shape `refreshSession` and `deleteSession` take.
+   The zero-length `Content-Length` is what a real client sends on one, so it
+   is what these tests send. -}
 postNoInput : String -> String -> Array Int
 postNoInput token nsid =
   toUtf8
-    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}\r\n"
+    "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{authOf token}Content-Length: 0\r\n\r\n"
 
 getQuery : String -> String -> Array Int
 getQuery token nsid =

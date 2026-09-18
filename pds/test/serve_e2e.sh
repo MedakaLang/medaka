@@ -603,6 +603,15 @@ client unframed-flood "$PORT1" 300 15 \
 client body-stall-flood "$PORT1" 300 12 \
   || fail 'case 8c: an unrelated caller went unanswered under a stalled-body flood'
 
+# 9g (first half). A session opened on this instance and deliberately left
+#    open across the restart below. Every other login above has been logged
+#    out or rotated away by now, so this is the one whose survival case 9g
+#    can be about.
+LOGIN_SURVIVE=$(client login "$PORT1" "$HANDLE" "$PASSWORD") \
+  || fail 'case 9g: login before the restart'
+SURVIVE_ACCESS=${LOGIN_SURVIVE%% *}
+SURVIVE_REFRESH=${LOGIN_SURVIVE##* }
+
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
@@ -653,14 +662,31 @@ client sync-get-blocks-missing "$PORT2" "$DID" "$BLOB_CID" "$BLOB2_CID" \
 
 # 9b. the preference item written before the restart (case 4e) is read back
 #    by the fresh process — the preferences half survives the process
-#    boundary the same way the repository and blob halves do. Sessions are
-#    not persisted, so this logs in again to get a token good on PORT2.
+#    boundary the same way the repository and blob halves do. This logs in
+#    again rather than reusing case 9g's surviving token, so that 9b grades
+#    the preferences half alone and fails for one reason only.
 LOGIN9=$(client login "$PORT2" "$HANDLE" "$PASSWORD") \
   || fail 'case 9b: could not log in to the resumed server'
 TOKEN9=${LOGIN9%% *}
 [ -n "$TOKEN9" ] || fail 'case 9b: resumed server issued an empty access token'
 client get-preferences "$PORT2" "$TOKEN9" fixture \
   || fail 'case 9b: getPreferences survived the restart'
+
+# 9g. the session half survives the restart: a restart is not a logout. Both
+#    tokens issued before it are still good on the fresh process — the access
+#    token authenticates a write, and the refresh token still rotates. An
+#    unpersisted session set refuses both, and refuses the refresh token
+#    especially, which leaves a client nothing to recover with short of the
+#    password.
+client write "$PORT2" "$SURVIVE_ACCESS" "$DID" "$COLLECTION" 's-survives-restart' 200 \
+  || fail 'case 9g: access token issued before the restart was refused after it'
+SURVIVE_ROTATED=$(client refresh "$PORT2" "$SURVIVE_REFRESH") \
+  || fail 'case 9g: refresh token issued before the restart was refused after it'
+SURVIVE_ACCESS2=${SURVIVE_ROTATED%% *}
+[ -n "$SURVIVE_ACCESS2" ] \
+  || fail 'case 9g: rotation across the restart issued an empty access token'
+client write "$PORT2" "$SURVIVE_ACCESS2" "$DID" "$COLLECTION" 's-survives-restart-2' 200 \
+  || fail 'case 9g: the token rotated after the restart was refused'
 
 # 14. the blob written before the restart is served, byte for byte and under
 #    its DECLARED media type, by the fresh process over the same --data dir.
