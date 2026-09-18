@@ -771,7 +771,8 @@ impl Slice String
 
 The substring over codepoint positions `[lo, hi)`.
 
-Out-of-range bounds are clamped to the string.
+Panics with a slice error when the range runs outside the string;
+`string.sliceClamped` clamps instead.
 
 ```medaka
 > slice "hello" 1 4

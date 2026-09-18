@@ -1,0 +1,5 @@
+-- #3185: `Map`'s absent-key message now names the key via `debug`, not just
+-- "key not found" — an ordinary string key.
+import map.{fromList}
+
+main = println (fromList [("alpha", 1), ("beta", 2)])["gamma"]

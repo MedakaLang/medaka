@@ -725,6 +725,9 @@ IDENT "v"
 REQUIRES
 UPPER "Ord"
 IDENT "k"
+COMMA
+UPPER "Debug"
+IDENT "k"
 WHERE
 INDENT
 IDENT "index"
@@ -744,7 +747,10 @@ NEWLINE
 UPPER "None"
 FAT_ARROW
 IDENT "indexError"
-STRING "key not found"
+INTERP_OPEN "key not found: "
+IDENT "debug"
+IDENT "k"
+INTERP_END ""
 NEWLINE
 DEDENT
 NEWLINE

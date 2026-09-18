@@ -1,0 +1,6 @@
+-- #3185: the SAME absent-key path, but with a WHITESPACE-ONLY key — `debug`
+-- must still visibly quote it (`" "`), so it can't be mistaken for the empty
+-- string case or an unquoted blank.
+import map.{fromList}
+
+main = println (fromList [("alpha", 1), ("beta", 2)])[" "]

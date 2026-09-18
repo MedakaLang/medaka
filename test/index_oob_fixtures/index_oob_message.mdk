@@ -1,0 +1,6 @@
+-- A direct `indexError` call with a prose message — the shape a non-Int-keyed
+-- container's own Index impl raises, where there is no index to interpolate.
+-- The return type is annotated because `indexError : String -> a` is polymorphic
+-- and `main`'s auto-print would otherwise have no `Display` instance to pick.
+main : Unit
+main = indexError "custom message"

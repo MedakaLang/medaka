@@ -1,0 +1,6 @@
+-- #3185: `List`'s bare "index out of bounds" (the recursive impl decrements
+-- the index on its way down and loses the original) now names the CALLER's
+-- original index, matching every other container. Index 5 into a 3-element
+-- list — not the first recursion step — proves the original value survived
+-- the recursion rather than the boundary case alone.
+main = println [10, 20, 30][5]
