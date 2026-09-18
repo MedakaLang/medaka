@@ -87,6 +87,40 @@ false positives: the three instrumental "used to" hits in the sample
 0.2. Calibration holds at the extremes and over-predicts in the 0.6 to 0.8
 bucket, which is why the operating threshold is 0.75, not 0.5.
 
+**The register Score's resolution collapses at the top of its range, which
+the rank correlation hides.** `make jev-eval` prints the mean predicted score
+per label level, and those four numbers say more about what the worklist can
+rest on than the 0.82 does:
+
+| reader's label | mean predicted | n |
+|---:|---:|---:|
+| 0 | 0.49 | 37 |
+| 1 | 1.32 | 30 |
+| 2 | 1.84 | 26 |
+| 3 | 1.97 | 8 |
+
+The levels are monotone, so they are ordered in the model's reading and do not
+need rewriting on that count. But the 2-to-3 step is **0.13** against a label
+step of 1.0, where the 0-to-1 step is 0.83. The Score separates clean prose
+from bad prose and is close to blind between bad and worst.
+
+That is a mechanical account of an observation section 8.4 could otherwise only
+report: the 40 sites on the sprint's worklist all scored between 2.2 and 2.6,
+and the blind control found the drain verdict close to constant across the score
+range. The band is narrow because the worklist is drawn from the region where
+the instrument has stopped resolving, not because the forty blocks were alike.
+Two consequences, and only the first is about this question:
+
+- A threshold on `register` selects a worklist honestly. A **rank within** that
+  worklist does not carry information, so do not read the top of the list as
+  worse than the bottom of it.
+- The deeper limit is not resolution but subject. Register level is not the
+  same quantity as "what do I lose by not opening this", and the two came apart
+  at both ends of this corpus: `C100` scores 0.71 and cites a file that does not
+  exist, while the 108-line block at 2.3 in section 8.5 held a live soundness
+  hazard inside deletion narrative. Ranking by payoff is a different question
+  from ranking by register, and is not one this question set asks.
+
 The mismatch question failed as posed: given a comment and the code fragment
 below it, the model treats any detail the fragment does not show as a
 contradiction. It is retired (section 4.3) and #3121 owns the replacement.
