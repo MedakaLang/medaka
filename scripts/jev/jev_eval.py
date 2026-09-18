@@ -121,18 +121,34 @@ def main() -> int:
         res = asyncio.run(jc.ask_all([(s, jc.COMMENT_QUESTIONS) for s in states], a.model, a.jobs, True))
         ans = [res[jc.cache_key(a.model, s, jc.COMMENT_QUESTIONS)]["answers"] for s in states]
         print(f"== comments: {len(items)} items ==")
-        for q in ("history", "reviewer", "offsite"):
-            noul_report(q, [(x[q]["noul"], it["labels"][q] == "y") for x, it in zip(ans, items)])
-        score_report("register", [(x["register"]["score"], it["labels"]["register"]) for x, it in zip(ans, items)])
-        p, r, f, tp, fp, fn = prf([(1.0 if "history" in it["regex_census"] else 0.0, it["labels"]["history"] == "y") for it in items], 0.5)
-        print(f"\n[regex census 'history' class, same sample] precision {p:.2f} recall {r:.2f} F1 {f:.2f}")
+        # Rows carry different label sets: the fresh stratified draw is labeled
+        # for `ephemeral` only. Each report runs over the rows that carry what it
+        # needs, so an unlabeled row is absent rather than counted as a negative.
+        def labeled(q):
+            return [(x, it) for x, it in zip(ans, items) if q in it["labels"]]
+        for q in ("history", "ephemeral", "offsite"):
+            noul_report(q, [(x[q]["noul"], it["labels"][q] == "y") for x, it in labeled(q)])
+        # `register` labels come from two different rules -- see `register_rule` in
+        # the corpus -- so the two populations are reported apart. Pooling their
+        # per-level means would average two different questions.
+        for rule in ("pre-ruling", "post-ruling"):
+            rows = [(x, it) for x, it in labeled("register") if it.get("register_rule") == rule]
+            if rows:
+                score_report(f"register [{rule} labels]",
+                             [(x["register"]["score"], it["labels"]["register"]) for x, it in rows])
+        # The regex baselines can only be computed where the census classes were
+        # recorded; `regex_census: null` means "not computed", not "no hits".
+        rx = [it for it in items if it.get("regex_census") is not None]
+        p, r, f, tp, fp, fn = prf([(1.0 if "history" in it["regex_census"] else 0.0,
+                                    it["labels"]["history"] == "y") for it in rx if "history" in it["labels"]], 0.5)
+        print(f"\n[regex census 'history' class, {len(rx)} rows with a census] precision {p:.2f} recall {r:.2f} F1 {f:.2f}")
         p, r, f, *_ = prf([(1.0 if any(c in it["regex_census"] for c in ("draft", "deictic", "ruling")) else 0.0,
-                            it["labels"]["reviewer"] == "y") for it in items], 0.5)
-        print(f"[regex census draft+deictic+ruling vs 'reviewer' label] precision {p:.2f} recall {r:.2f} F1 {f:.2f}")
+                            it["labels"]["ephemeral"] == "y") for it in rx if "ephemeral" in it["labels"]], 0.5)
+        print(f"[regex census draft+deictic+ruling vs 'ephemeral' label] precision {p:.2f} recall {r:.2f} F1 {f:.2f}")
         print("\nlargest disagreements:")
-        for q in ("history", "reviewer", "offsite"):
+        for q in ("history", "ephemeral", "offsite"):
             bad = sorted(((abs(x[q]["noul"] - (1.0 if it["labels"][q] == "y" else 0.0)), it["id"], x[q]["noul"], it["labels"][q])
-                          for x, it in zip(ans, items)), reverse=True)[:4]
+                          for x, it in labeled(q)), reverse=True)[:4]
             print(f"  {q}: " + ", ".join(f"{i} jev={p_:.2f} label={y}" for _, i, p_, y in bad))
 
     if a.kind in ("do", "all"):

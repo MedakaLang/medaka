@@ -66,20 +66,24 @@ points are identical on both.
 | narrates history | 0.990 | precision 0.94, recall 0.94 at 0.75 | precision 0.81, recall 0.72 |
 | belongs on an issue, not in source | 0.991 / 0.992 | precision 0.94, recall 1.00 at 0.80 | no class |
 | register level 0 to 3 (Score) | rank corr 0.819 / 0.820 | mean error 0.47 levels | no class |
-| reviewer-addressed prose | 0.908 / 0.910 | precision 0.75, recall 0.75 at 0.65 | precision 0.82, recall 0.38 |
+| anchored to an in-flight change (`ephemeral`) | 0.980 (181 rows) | precision 0.86, recall 0.74 at 0.35 | precision 0.45, recall 0.36 |
 | contradicts the code below | 0.91 | unusable: yes on 81 of 100 | no class |
 
 The last row is the retired `mismatch` question and is **not re-measured** --
 `jev_eval` no longer reports it, so that figure is the 2026-09-16 one and will
 not move again.
 
-**Scope, because these two numbers get quoted loosely.** `history` and
-`offsite` are the classes that carry a strong claim: 0.99 AUC, and at their
-operating points they beat the regex census outright. `reviewer` does not.
-At the natural 0.5 threshold it is precision 0.54 -- 19 false positives against
-22 true -- and even at its best threshold it is 0.75/0.75. A claim that "Jev
-classifies comment register at 0.99" is true of two of the four questions and
-false of a third. Name the class.
+**Scope, because these numbers get quoted loosely.** `history` and
+`offsite` carry a strong claim: 0.99 AUC, and at their operating points they
+beat the regex census outright. So, now, does `ephemeral` -- but only after
+being rewritten and re-measured on a sample it had never seen (2.1.1). A claim
+that "Jev classifies comment register at 0.99" is true of two of the four
+questions and false of the other two. Name the class.
+
+The `ephemeral` row is measured on 181 rows where the other three are measured
+on 101: its 80 extra rows are a held-out draw taken to test it specifically,
+and they carry no label for the other questions. The rows are not
+interchangeable and the AUCs are not directly comparable across that boundary.
 
 The history question beats the regex census outright and removes its known
 false positives: the three instrumental "used to" hits in the sample
@@ -87,22 +91,139 @@ false positives: the three instrumental "used to" hits in the sample
 0.2. Calibration holds at the extremes and over-predicts in the 0.6 to 0.8
 bucket, which is why the operating threshold is 0.75, not 0.5.
 
-**The register Score's resolution collapses at the top of its range, which
-the rank correlation hides.** `make jev-eval` prints the mean predicted score
-per label level, and those four numbers say more about what the worklist can
-rest on than the 0.82 does:
+#### 2.1.1 `reviewer` was measuring a defect Medaka does not have
 
-| reader's label | mean predicted | n |
-|---:|---:|---:|
-| 0 | 0.49 | 37 |
-| 1 | 1.32 | 30 |
-| 2 | 1.84 | 26 |
-| 3 | 1.97 | 8 |
+The shipped `reviewer` question asked one thing with an `or` in it: is the
+comment anchored to the change under review, **or** does it argue against an
+objection? Val ruled on 2026-09-17 that the second arm is the register Medaka
+wants -- a comment that argues against a wrong reading is stating a constraint
+the code cannot show, which is what a comment is for. The question was
+therefore scoring 0.91 against a label that counted good prose as a defect.
 
-The levels are monotone, so they are ordered in the model's reading and do not
-need rewriting on that count. But the 2-to-3 step is **0.13** against a label
-step of 1.0, where the 0-to-1 step is 0.83. The Score separates clean prose
-from bad prose and is close to blind between bad and worst.
+Splitting the arms and re-measuring each against the corrected label:
+
+| arm | AUC vs. the corrected label |
+|---|---|
+| anchored to an in-flight change | 0.905 |
+| argues against an objection (`defensive`) | **0.496** |
+
+0.496 on 80 held-out rows is a coin flip: the defensive arm carries no
+information about the defect at all, and it fires on 76% of the tree. It is
+not split out and shipped (#3123 asked for that); it is dropped.
+
+The surviving arm was rewritten around what actually separates the cases --
+**locatability, not tense**. `this slice` rots because a later reader cannot
+tell which slice; `#1512 slices 2+3` does not, and neither does a comment
+narrating its own former wording, which describes something that has already
+landed. The rewrite was frozen before the held-out sample was drawn:
+
+| | tuning (101) | held out (80) |
+|---|---|---|
+| `reviewer` as shipped, vs. the corrected label | 0.836 | 0.732 |
+| `ephemeral` v1 | -- | 0.905 |
+| `ephemeral` v2, shipped | 0.993 | **0.974** |
+
+The held-out column is the one that means anything; the tuning column is the
+sample the question was written against. ⚠️ Like the `register` means below,
+these drift by a few thousandths with any edit to the state OR to a SIBLING
+question, because the cache key hashes the whole question dict and re-asks all
+four. Quote them to two places at most, and re-derive before relying on one:
+`python3 scripts/jev/jev_eval.py --kind comments`. At the shipped 0.35 the mechanical
+baseline (the census's `draft`+`deictic`+`ruling` classes) gets precision 0.45
+at recall 0.36 on the same rows, against 0.86/0.74 -- so this question clears
+the "beat the regex you sit beside" bar that `reviewer` never did.
+
+Two limits, both measured and neither fixed here:
+
+- **Recall cannot be bought with a pre-filter.** 1 of the 20 held-out
+  positives uses no in-flight vocabulary at all, and the stratum it came from
+  weights to roughly 49 positives tree-wide. A regex gate in front of Jev
+  would drop them silently.
+- **The question degrades with block length, and the loss is RECALL.** On the
+  held-out draw, under the shipped configuration, blocks of 20 lines or fewer
+  score AUC 0.984 and longer ones 0.910; at the 0.35 operating point recall
+  falls from 0.86 to 0.50 while precision barely moves (0.86 to 0.75). A long
+  block dilutes its anchoring phrase, so the miss is silent rather than noisy.
+  It is a tendency and not a rule: the five false negatives are at 11, 19, 27,
+  33 and 80 lines, so two of them are short blocks that length cannot explain.
+
+  ⚠️ **Splitting long blocks by paragraph does NOT fix this — measured, it is
+  worse.** Judging each paragraph and taking the max, which is how a chunked
+  census would report back at block level, gives AUC 0.948 against the whole
+  block's 0.974, and 0.926 against 0.961 on exactly the long blocks it was
+  meant to help. The max lifts every block that contains one ambiguous
+  paragraph, so the recall it buys is paid for in precision, at 2.6x the
+  requests. The dilution is real; this particular fix for it is refuted, and a
+  roadmap item proposing it again should cite a different mechanism.
+
+The whole-tree positive rate implied by the stratified draw is about 1.7% of
+the 7466 comment blocks, roughly 125. The draw is anchor-oversampled, so that
+figure rests mostly on the stratum sampled least; treat it as an order of
+magnitude, not a count.
+
+**The register Score's top level is unreachable, which the rank correlation
+hides.** `make jev-eval` prints the mean predicted score per label level, and
+the gap between the top two says more about what a worklist can rest on than
+the rank correlation does: the 2-to-3 step runs around 0.15 against a label
+step of 1.0, where the 0-to-1 step runs around 0.7.
+
+**Do not quote the per-level means from this document -- derive them.** They
+moved twice on 2026-09-17 alone, once when the policy sentence was narrowed
+and once when the levels stopped naming `argument`, because both live in the
+state the question reads and the cache key hashes the state. What is durable
+is the shape, and the shape has survived every edit tried against it.
+
+The mechanism is not compression, it is **range use**. Measured over 101 rows:
+level 3 takes 2% of the probability mass on average and never more than 32% on
+any single row, and the highest score the Score has ever returned is 2.14 out
+of 3. The top of the scale is not used, so blocks a reader calls level 3 are
+pushed down into the level-2 region and the two labels' means converge from
+above. C034 is the most narrative block in the corpus and scores 2.14; C032 is
+185 lines and scores 1.95.
+
+Three explanations were tested and two are refuted:
+
+| hypothesis | test | result |
+|---|---|---|
+| the policy's clause condemning reviewer-addressed prose | both policies over the same 101 rows | **refuted** -- every level fell ~0.2, the smallest step moved 0.11 to 0.16 |
+| long blocks dilute, so "entirely" can never be true | shortfall at labels 2-3 vs. block length | **refuted, and inverted** -- the shortfall is LARGER on short blocks (0.76 vs 0.49), Spearman(length, shortfall) -0.19 |
+| the level text is a conjunction of absolutes | rewrite all four levels around a situation a real block can be in | **not supported** -- see below |
+
+The rewrite was frozen before the held-out `register` labels existed and
+measured against them. It bought nothing that striking one word did not:
+
+| levels | Spearman | MAE |
+|---|---:|---:|
+| as shipped before this change | 0.750 | 0.42 |
+| with `argument` struck, nothing else | **0.765** | **0.37** |
+| fully rewritten (4 levels) | 0.753 | 0.37 |
+
+So the shipped change is the one word. Levels 1 and 2 named "argument" and
+level 3 named "reviewer-addressed prose" as defect dimensions, which the
+policy in the same state no longer does; that contradiction had to go whether
+or not it helped, and it turns out to be the whole of the gain. The four-level
+rewrite is not shipped: a rewrite that buys nothing still costs every recorded
+number its comparability.
+
+**What bounds the cost of the collapse:** the 80-row held-out draw, labeled
+blind, contains **no level-3 block at all**. The top level is not merely hard
+for the model to reach -- it is rare in the tree. An instrument that never
+returns 3 is wrong about the eight blocks in the tuning corpus that earn it,
+and close to right about everything else. That is a smaller defect than a
+0.16 step suggests, and it is why the level is left as it is rather than
+rewritten again.
+
+⚠️ **The two `register` label sets are on different rules and are reported
+apart.** C000-C100 were labeled while prose arguing for a design still counted
+as a defect; F000-F079 were labeled after the ruling that it does not. Their
+per-level means answer two different questions, and `jev_eval` prints them as
+two blocks for that reason. The corpus marks each row with `register_rule`.
+
+One thing this measurement could not do honestly: the eight tuning rows a
+reader called level 3 cannot be re-labeled under the new rule, because their
+scores were read while diagnosing the collapse. A label informed by the
+instrument is the one thing the corpus rule forbids, so they are left alone
+and the held-out draw carries the post-ruling evidence instead.
 
 That is a mechanical account of an observation section 8.4 could otherwise only
 report: the 40 sites on the sprint's worklist all scored between 2.2 and 2.6,
@@ -161,6 +282,25 @@ not running it unattended, and it is stronger than the one above; the earlier
 draft of this paragraph printed 0.67 / 0.66 bare, which reads far better than
 it is.
 
+**But do not "fix" it by asking the binary question directly — measured, that
+is worse.** The obvious reading of the paragraph above is that a three-way
+Choice scoring 0.66 should be replaced by the two-way one actually used. Three
+ranking keys against the same binary label on the same 65 rows:
+
+| ranking key | AUC | best operating point |
+|---|---:|---|
+| collapsed three-way, `P(convert)+P(partial)` — shipped | **0.973** | precision 0.87, recall 1.00 at 0.80 |
+| a two-way `rewrite`/`leave` Choice asked directly | 0.950 | precision 0.76, recall 0.96 at 0.55 |
+| no Choice at all: `uniform_chain` x normalized `readability_gain` | 0.939 | precision 0.96, recall 0.85 at 0.40 |
+
+The three-way framing earns its place by giving the model somewhere to put a
+partial answer; collapsing that afterwards beats forcing the binary up front,
+and beats computing the key from the other two answers. So the question stays
+as it is. What is retired is the CLAIM: its three-way accuracy is not this
+question's performance, the convert-versus-partial line is unmeasurable at
+`convert` n=5, and no roadmap item should propose shrinking it again without
+re-running this comparison.
+
 **Confidence does not separate the confident wrong answers.** Two rows in the
 corpus are there to pin this. `D063` (`compiler/tools/lsp.mdk:815 typeAtPoint`)
 is called `convert` at 0.82, above every other disagreement in the do half; the
@@ -175,7 +315,7 @@ not look at.**
 
 `C100` (`compiler/entries/profile_main.mdk:1`) pins the same point for the
 comment half from the other side: all four register questions answer it
-correctly (register 0.71, history 0.13, offsite 0.28, reviewer 0.08) and the
+correctly (register 0.44, history 0.10, offsite 0.14, ephemeral 0.03) and the
 comment is still provably false -- it cites `perf_main.mdk`, which has zero
 hits in `git ls-files`. That is not a miss. **A dead path is orthogonal to
 every question in the set**, which is why it is checked mechanically instead.
@@ -230,13 +370,15 @@ sentence, the file, the block, and the code directly below it):
   constraint. Operating threshold 0.75.
 - `offsite` (Noul): given the policy, belongs on an issue or design doc.
   Operating threshold 0.75.
-- `reviewer` (Noul): written for a reviewer or narrating the change in
-  progress; the criteria name the repo's own phrasings (`this slice`,
-  `earlier cut`, `measured on this diff`, `see the report's Notes`). Weakest
-  question; #3123 splits it.
+- `ephemeral` (Noul): anchored to an in-flight change the reader cannot
+  identify; the criteria name the repo's own phrasings (`this slice`,
+  `earlier cut`, `measured on this diff`, `see the report's Notes`) and
+  exempt the locatable ones (a merged issue number, a named unit). Operating
+  threshold 0.35. Replaced `reviewer` on 2026-09-17 (2.1.1).
 - `register` (Score, four levels): the ranking key. Sorted descending with
   `offsite` and `history` as tie-breaks, the top of the list is the relocation
-  roadmap for #2280 (#3119).
+  roadmap for #2280 (#3119). ⚠️ Its top level is effectively unused (2.1.1), so
+  threshold it, never read a rank WITHIN the selected list as an ordering.
 
 Declarations (every top-level declaration with two or more nested matches on
 Result or Option constructor arms and no `do`; state is the file, the
@@ -251,8 +393,10 @@ exemplar):
 
 ### 4.2 Next
 
-- Split `reviewer` into narrates-own-draft and argues-against-objection
-  (#3123).
+- Recover `ephemeral`'s recall on long blocks by some mechanism OTHER than
+  paragraph chunking, which is measured and refuted (2.1.1). The loss is real
+  -- recall 0.86 on blocks of 20 lines or fewer against 0.50 above that -- and
+  it is the largest known gap in the shipped question.
 - Comment-versus-code mismatch as claim pairing (#3121): code pairs each
   backticked identifier and each checkable claim with the declaration, Jev
   judges the pair.
@@ -417,7 +561,8 @@ original-sample figure for an accuracy claim, which is what is quoted here.
 
 It does **not** cover:
 
-- the `reviewer` question (AUC 0.91, precision 0.54 at the natural threshold);
+- the `ephemeral` question that replaced `reviewer`, which is measured
+  (2.1.1) but on a different sample and after this section's runs;
 - the retired `mismatch` question, which is not measured at all;
 - the three-way `convert / partial / leave` choice, 0.66 accurate against a
   0.633 majority-class baseline (section 2.2) — that is, barely above
@@ -598,7 +743,7 @@ comment drain mechanical, and the reason section 3's "never a gate" principle
 covers this workflow too.
 
 The mirror case: a comment header that **all four register questions score
-correctly as fine** (register 0.71, history 0.13, offsite 0.28, reviewer 0.08)
+correctly as fine** (register 0.44, history 0.10, offsite 0.14, ephemeral 0.03)
 and that cites a file which has zero hits in `git ls-files`. In-register and
 provably false at the same time. A dead path is orthogonal to every question in
 the set, so it is checked mechanically instead — it is the one part of the

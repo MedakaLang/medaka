@@ -52,10 +52,12 @@ DEFAULT_MODEL = os.environ.get("TYPESAFE_DEFAULT_MODEL", "jev-latest")
 COMMENT_POLICY = (
     "A source comment should state a constraint or fact that the code itself "
     "cannot show. History (what the code used to be, when or why it changed, "
-    "which issue or pull request decided it), litigation of a decision, and "
-    "prose addressed to a code reviewer belong on the issue tracker or in a "
-    "design document, not in the source, because they stop being true or "
-    "useful once the change lands."
+    "which issue or pull request decided it) and litigation of a decision "
+    "belong on the issue tracker or in a design document, not in the source, "
+    "because they stop being true or useful once the change lands. Prose that "
+    "argues against a wrong reading, or defends a choice, is NOT in that class: "
+    "it is stating a constraint the code cannot show, which is what a comment is "
+    "for."
 )
 
 COMMENT_QUESTIONS = {
@@ -75,23 +77,31 @@ COMMENT_QUESTIONS = {
                      "history. A bare issue number as a pointer does not count.",
         },
     },
-    "reviewer": {
+    "ephemeral": {
         "type": "noul",
         "instructions": (
-            "Is `comment` written for a code reviewer or narrating a change in "
-            "progress, rather than written for a future maintainer reading the "
-            "code? Signs: 'this PR', 'this slice', 'this unit', 'before this "
-            "slice', 'earlier cut', 'earlier draft', 'this comment used to say', "
-            "'measured on this diff' or 'on this branch', 'see the report's "
-            "Notes', 'refuted', 'ratified', 'the reviewer asked', or a defense of "
-            "a choice against an objection."
+            "Does `comment` refer to the change that introduced it as a thing "
+            "still in motion -- a pull request, a slice, a unit, a draft, a "
+            "branch, a review in progress -- such that a reader who comes to "
+            "this file later cannot tell WHICH change is meant? Judge only "
+            "whether the comment is anchored to an unidentifiable in-flight "
+            "change, not whether its content is useful."
         ),
         "criteria": {
-            "true": "The comment addresses a reviewer, refers to the change under "
-                    "review or the sprint slice as a moving thing, narrates its own "
-                    "drafts, or argues against an objection.",
-            "false": "The comment is written to whoever reads the code later and "
-                     "makes sense with no pull request, slice, or review in view.",
+            "true": "The comment points at the change under review as a present "
+                    "event, without naming it: 'this PR', 'this slice', 'this "
+                    "unit', 'before this slice', 'earlier cut', 'measured on "
+                    "this diff', 'on this branch', 'see the report's Notes', "
+                    "'the slice report'. The reader cannot locate the change "
+                    "the sentence assumes they are looking at.",
+            "false": "The comment makes sense with no pull request, slice or "
+                     "review in view. A reference to a merged issue number, a "
+                     "named unit ('#1557 A-3.5c'), or a released version is not "
+                     "an in-flight change -- those are locatable. A comment "
+                     "narrating its OWN former wording ('this comment used to "
+                     "say', 'an earlier draft of this paragraph') is describing "
+                     "something that has already landed, and is not this "
+                     "judgment.",
         },
     },
     "offsite": {
@@ -119,11 +129,11 @@ COMMENT_QUESTIONS = {
         "criteria": [
             "States a constraint or fact the code cannot show, concisely, with "
             "at most a pointer to where rationale lives",
-            "Mostly constraint, with some history, narration, or argument mixed in",
-            "Mostly history, provenance, or argument, with the actual constraint "
+            "Mostly constraint, with some history or narration mixed in",
+            "Mostly history or provenance, with the actual constraint "
             "hard to find or stated only in passing",
-            "Entirely history, litigation, or reviewer-addressed prose with no "
-            "constraint a maintainer could act on",
+            "Entirely history or litigation with no constraint a maintainer "
+            "could act on",
         ],
     },
 }
@@ -475,7 +485,7 @@ def main() -> int:
     for c in comments:
         ans = results[cache_key(a.model, comment_state(c), COMMENT_QUESTIONS)]["answers"]
         crow.append({**c, "register": ans["register"]["score"], "history": ans["history"]["noul"],
-                     "offsite": ans["offsite"]["noul"], "reviewer": ans["reviewer"]["noul"],
+                     "offsite": ans["offsite"]["noul"], "ephemeral": ans["ephemeral"]["noul"],
                      "register_confidence": ans["register"]["confidence"]})
     for d in decls:
         ans = results[cache_key(a.model, do_state(d), DO_QUESTIONS)]["answers"]
@@ -486,12 +496,12 @@ def main() -> int:
 
     if crow:
         print(f"\n== comment register: top {a.top} of {len(crow)} by register score (0 constraint .. 3 pure history) ==")
-        print(f"{'reg':>4} {'hist':>4} {'off':>4} {'rev':>4} {'ln':>3}  site")
+        print(f"{'reg':>4} {'hist':>4} {'off':>4} {'eph':>4} {'ln':>3}  site")
         for r in rank_comments(crow)[:a.top]:
-            print(f"{r['register']:4.1f} {r['history']:4.2f} {r['offsite']:4.2f} {r['reviewer']:4.2f} {r['lines']:3d}  {r['id']}")
+            print(f"{r['register']:4.1f} {r['history']:4.2f} {r['offsite']:4.2f} {r['ephemeral']:4.2f} {r['lines']:3d}  {r['id']}")
         hi = sum(1 for r in crow if r["register"] >= 2.0)
         print(f"blocks at register >= 2.0: {hi} of {len(crow)}; "
-              f"reviewer-addressed >= 0.5: {sum(1 for r in crow if r['reviewer'] >= 0.5)}")
+              f"ephemeral >= 0.35: {sum(1 for r in crow if r['ephemeral'] >= 0.35)}")
     if drow:
         print(f"\n== do-syntax: top {a.top} of {len(drow)} by P(convert)+P(partial) ==")
         print(f"{'act':>4} {'chain':>5} {'gain':>4} {'rec':>7} {'ln':>3}  site")
