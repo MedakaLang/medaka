@@ -134,6 +134,7 @@ import lib.store.{
   storeBlobMimeType,
   storeCredential,
   storePreferences,
+  storeSessionRows,
   storeRepo,
   storeSize,
 }
@@ -156,7 +157,12 @@ import shell.eventlog.{
   eventLogStage,
   eventLogStaged,
 }
-import shell.persist.{persistCredential, persistPreferences, persistSave}
+import shell.persist.{
+  persistCredential,
+  persistPreferences,
+  persistSave,
+  persistSessions,
+}
 import shell.subscribe.{runSubscription}
 import lib.websocket.{handshakeResponseBytes}
 import string.{toUtf8}
@@ -477,7 +483,31 @@ persistTransition dir did nowSeconds before after = do
   () <- if blobsMoved before after then persistBlobHalf dir after else Ok ()
   () <- persistRepoHalf dir did nowSeconds before after
   () <- persistCredentialHalf dir before after
-  persistPreferencesHalf dir before after
+  () <- persistPreferencesHalf dir before after
+  persistSessionsHalf dir before after
+
+{- | Persist the open session set when the transition moved it, which the
+   three session routes do: `createSession` opens one, `refreshSession`
+   rotates one, `deleteSession` closes one, and each of those also drops
+   whichever records had expired. Every other route leaves the set alone and
+   writes nothing.
+
+   Sessions are persisted so that a restart does not close them. A backup
+   window, a version bump or a crash would otherwise log every client out and
+   send it back to the password, which is what an unpersisted set costs:
+   a restart refuses the refresh token too, so there is nothing for a client
+   to recover with. The rows carry fingerprints rather than tokens
+   (`lib.store`'s `sessionFingerprint`), so the file cannot be replayed
+   against the server that wrote it. -}
+persistSessionsHalf : String ->
+  Store ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Unit
+persistSessionsHalf dir before after =
+  if storeSessionRows before == storeSessionRows after then
+    Ok ()
+  else
+    persistSessions dir (storeSessionRows after)
 
 {- | Persist the preference half when the transition moved it, which
    `putPreferences` does (a wholesale replace) and every other route does

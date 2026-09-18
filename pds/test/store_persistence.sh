@@ -130,6 +130,26 @@ require_empty "$WORK/prefsload.err" prefs-load
 [ "$(tail -1 "$WORK/prefsload.out")" = 'PREFS LOAD: PASS' ] \
   || fail 'preferences load route did not pass'
 
+# ── 2d. the session half saves and reloads across a process boundary ────
+# This is what makes a restart not a logout: the rows a previous process held
+# are readmitted by the next one. Written into the SAME $DATA directory, so
+# case 3's key sweep covers the sessions file too.
+"$WORK/driver" sessions-save "$DATA" > "$WORK/sesssave.out" 2> "$WORK/sesssave.err"
+require_empty "$WORK/sesssave.err" sessions-save
+[ "$(tail -1 "$WORK/sesssave.out")" = 'SESSIONS SAVE: PASS' ] \
+  || fail 'sessions save route did not pass'
+
+"$WORK/driver" sessions-load "$DATA" > "$WORK/sessload.out" 2> "$WORK/sessload.err"
+require_empty "$WORK/sessload.err" sessions-load
+[ "$(tail -1 "$WORK/sessload.out")" = 'SESSIONS LOAD: PASS' ] \
+  || fail 'sessions load route did not pass'
+
+# The session set is security-relevant state and `pds serve` refuses to read it
+# back at a wider mode, so the writer owes 0600 from the first byte.
+SESSIONS_MODE=$(stat -c %a "$DATA/sessions" 2>/dev/null || stat -f %Lp "$DATA/sessions")
+[ "$SESSIONS_MODE" = "600" ] \
+  || fail "sessions file is mode $SESSIONS_MODE, expected 600"
+
 # ── 3. no persisted file carries the signing key ────────────────────────────
 # `tree_hex` sweeps `$DATA` whole, so the blob half is inside its scope by
 # construction — but only if blob files are actually there, which is asserted

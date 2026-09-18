@@ -103,7 +103,9 @@ import shell.persist.{
   persistCredential,
   persistLoad,
   persistLoadPreferences,
+  persistLoadSessions,
   persistPreferences,
+  persistSessions,
   persistSave,
   persistSweepStagedBlocks,
 }
@@ -422,6 +424,42 @@ runPrefsLoad dir = match persistLoadPreferences dir
       println "PREFS LOAD: PASS"
     else
       let () = println "PREFS LOAD: FAIL mismatch"
+      exit 1
+
+-- ── the session half ─────────────────────────────────────────
+
+{- | Two open sessions, persisted into the same data directory as every other
+   half so the signing-key sweep in `store_persistence.sh` covers this file
+   too. The fingerprints are fixed rather than derived from tokens: these
+   routes grade the file's round trip, not `lib.store`'s `sessionFingerprint`,
+   and a row is a pair of digests plus an expiry whatever produced it. -}
+fixtureSessions : List (Array Int, Array Int, Int)
+fixtureSessions = [
+  (
+    mustHex "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+    mustHex "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100",
+    2000000000,
+  ),
+  (
+    mustHex "0f0e0d0c0b0a090807060504030201000f0e0d0c0b0a09080706050403020100",
+    mustHex "1f1e1d1c1b1a191817161514131211101f1e1d1c1b1a19181716151413121110",
+    2100000000,
+  ),
+]
+
+runSessionsSave : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runSessionsSave dir = match persistSessions dir fixtureSessions
+  Err message => panic "store_persistence: sessions save failed: \{message}"
+  Ok () => println "SESSIONS SAVE: PASS"
+
+runSessionsLoad : String -> <IO, FileRead "_"> Unit
+runSessionsLoad dir = match persistLoadSessions dir
+  Err message => panic "store_persistence: sessions load failed: \{message}"
+  Ok rows =>
+    if rows == fixtureSessions then
+      println "SESSIONS LOAD: PASS"
+    else
+      let () = println "SESSIONS LOAD: FAIL mismatch"
       exit 1
 
 -- ── the event-log half ──────────────────────────────────────────────────────
@@ -993,6 +1031,8 @@ main = match args ()
   ["blob-oversize", dir] => runBlobOversize dir
   ["prefs-save", dir] => runPrefsSave dir
   ["prefs-load", dir] => runPrefsLoad dir
+  ["sessions-save", dir] => runSessionsSave dir
+  ["sessions-load", dir] => runSessionsLoad dir
   ["credential-save", dir] => runCredentialSave dir
   ["event-recover-owed", dir] => runEventRecover dir (_ head => Some head)
   ["event-recover-orphan", dir] =>
@@ -1006,4 +1046,4 @@ main = match args ()
   ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
