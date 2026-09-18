@@ -15,9 +15,15 @@ import ir.core_ir_lower.{
 }
 import ir.core_ir_sexp.{cprogramToSexp}
 import ir.core_ir_sexp_parse.{parseCProgram}
-import types.evidence.{EvidenceBinderId(..), ScopeId}
+import types.evidence.{
+  EvidenceBinderId(..),
+  PrerequisiteEvidence(..),
+  RequestInstanceId(..),
+  ScopeId,
+  SolverEvidence(..),
+}
 import types.repr.{Scheme(..), ppMono, ppScheme}
-import types.solver_contract.{Wanted(..)}
+import types.solver_contract.{SolverOutcome(..), Wanted(..)}
 import types.typecheck.{
   AssumptionTraceEntry(..),
   AssumptionTraceKind(..),
@@ -42,6 +48,7 @@ import types.typecheck.{
   finishDefaultBodyRNoneTrace,
   finishMethodReturnTrace,
   finishNumericPredicateTrace,
+  methodReturnResolutionMutationProbe,
   scopeFrameStats,
   scopeTraceContext,
   tcCode,
@@ -1236,6 +1243,38 @@ data MethodWantedView = MethodWantedView {
 }
   deriving (Eq, Debug)
 
+data MethodOutcomeView =
+  | MOVGiven EvidenceBinderId
+  | MOVInstance Int (List String) (List (String, List String))
+  | MOVDeferred
+  | MOVInsoluble
+  deriving (Eq, Debug)
+
+methodPrerequisiteView : PrerequisiteEvidence -> (String, List String)
+methodPrerequisiteView prerequisite = (
+  prerequisite.prerequisiteInterface.irName,
+  map ppMono prerequisite.prerequisiteArguments,
+)
+
+methodOutcomeView : MethodReturnTraceEntry -> Option MethodOutcomeView
+methodOutcomeView entry = match entry.mrtOutcome
+  Some (Solved (GivenEvidence binder)) => Some (MOVGiven binder)
+  Some (Solved (InstanceEvidence (RequestInstanceId identity) args prerequisites)) =>
+    Some
+      (MOVInstance
+        identity
+        (map ppMono args)
+        (map methodPrerequisiteView prerequisites))
+  Some (Solved (SuperclassEvidence _ _)) => None
+  Some (Deferred _ _) => Some MOVDeferred
+  Some (Insoluble _ _) => Some MOVInsoluble
+  None => None
+
+methodTraceUsesOneOutcome : List MethodReturnTraceEntry -> Bool
+methodTraceUsesOneOutcome trace = match map methodOutcomeView trace
+  [None, Some checked, Some stamped] => checked == stamped
+  _ => False
+
 methodWantedView : MethodReturnTraceEntry -> Option MethodWantedView
 methodWantedView entry = match (entry.mrtQualifiedBody, entry.mrtWanted)
   (Some body, Some wanted) => Some MethodWantedView {
@@ -1301,6 +1340,10 @@ test "ordinary return shares declaration identity vector and goal destination" =
       (goal :: _, Some methodGoal) => goal /= methodGoal
       _ => False),
     expectEqual [True, True, True] (map methodTracePublishedOne trace),
+    expectEqual True (methodTraceUsesOneOutcome trace),
+    expectEqual True (match map methodOutcomeView trace
+      [None, Some (MOVInstance _ ["Int", "Bool"] []), Some _] => True
+      _ => False),
     expectEqual
       [
         Some MethodWantedView {
@@ -1336,6 +1379,71 @@ methodCarrierStages method source =
     desugar (parseLocated source),
   )
   filter (entry => entry.mrtMethod == method) (finishMethodReturnTrace ())
+
+test "ordinary return given evidence feeds checking and route publication" =
+  let trace =
+    methodCarrierStages
+      "choose"
+      (joinNl [
+        "interface GivenChoice a where",
+        "  choose : Unit -> a",
+        "use : GivenChoice a => Unit -> a",
+        "use _ = choose ()",
+      ])
+  expectAll [
+    expectEqual True (methodTraceUsesOneOutcome trace),
+    expectEqual True (match map methodOutcomeView trace
+      [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
+        checked == stamped
+      _ => False),
+    expectEqual True (match trace
+      [_, _, stamped] => match stamped.mrtRoute
+        Some (RDictFwd _) => listLen stamped.mrtPrerequisites == 0
+        _ => False
+      _ => False),
+  ]
+
+test "ordinary return instance evidence retains selected prerequisites" =
+  let trace =
+    methodCarrierStages
+      "make"
+      (joinNl [
+        "data Box a = Box a",
+        "interface Need a where",
+        "  need : a -> Int",
+        "impl Need Int where",
+        "  need n = n",
+        "interface Build a where",
+        "  make : Unit -> a",
+        "impl Build (Box a) requires Need a where",
+        "  make _ = Box (need 1)",
+        "value : Box Int",
+        "value = make ()",
+      ])
+  expectAll [
+    expectEqual True (methodTraceUsesOneOutcome trace),
+    expectEqual True (match map methodOutcomeView trace
+      [None, Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])]), Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])])] =>
+        True
+      _ => False),
+    expectEqual True (match trace
+      [_, _, stamped] => match stamped.mrtRoute
+        Some (RKey _ _) => listLen stamped.mrtPrerequisites == 1
+        _ => False
+      _ => False),
+  ]
+
+test "ordinary return validation rejects wrong selected instance" =
+  let (_, rejected, _, _) = methodReturnResolutionMutationProbe ()
+  expectEqual True rejected
+
+test "ordinary return validation rejects wrong prerequisites" =
+  let (_, _, rejected, _) = methodReturnResolutionMutationProbe ()
+  expectEqual True rejected
+
+test "ordinary return validation rejects checker evidence disagreement" =
+  let (_, _, _, rejected) = methodReturnResolutionMutationProbe ()
+  expectEqual True rejected
 
 test "ordinary return carrier distinguishes empty unknown and absent-formal boundaries" =
   let empty =
@@ -1377,13 +1485,37 @@ methodTraceOrigin entry = match entry.mrtInterface.irOrigin
   OriginModule moduleId => moduleId
   _ => "<unresolved>"
 
+methodOutcomeSemanticView : MethodReturnTraceEntry ->
+  (String, List String, List (String, List String))
+methodOutcomeSemanticView entry = match methodOutcomeView entry
+  None => ("pending", [], [])
+  Some (MOVGiven _) => ("given", [], [])
+  Some (MOVInstance _ args prerequisites) => ("instance", args, prerequisites)
+  Some MOVDeferred => ("deferred", [], [])
+  Some MOVInsoluble => ("insoluble", [], [])
+
+methodRouteKind : MethodReturnTraceEntry -> String
+methodRouteKind entry = match entry.mrtRoute
+  Some (RKey _ _) => "instance"
+  Some (RDict _) => "given"
+  Some (RDictFwd _) => "given-forwarded"
+  Some (RLocal _ _) => "local"
+  Some (RScalar _) => "scalar"
+  Some RNone => "none"
+  None => "pending"
+
 methodTraceIdentityView : MethodReturnTraceEntry ->
-  (MethodReturnTraceStage, String, Option (List String))
-methodTraceIdentityView entry =
-  (entry.mrtStage, methodTraceOrigin entry, methodTraceArgs entry)
+  (MethodReturnTraceStage, String, Option (List String), (String, List String, List (String, List String)), String)
+methodTraceIdentityView entry = (
+  entry.mrtStage,
+  methodTraceOrigin entry,
+  methodTraceArgs entry,
+  methodOutcomeSemanticView entry,
+  methodRouteKind entry,
+)
 
 importedReturnObserved : Bool ->
-  (Int, List (MethodReturnTraceStage, String, Option (List String)))
+  (Int, List (MethodReturnTraceStage, String, Option (List String), (String, List String, List (String, List String)), String))
 importedReturnObserved reverseOrder =
   let owner = (
     "return_owner",
@@ -1437,9 +1569,27 @@ test "alias-qualified ordinary returns keep owner identity across import orders"
     expectEqual forward backward,
     expectEqual
       [
-        (MRTProduced, "return_owner", Some ["Int"]),
-        (MRTChecked, "return_owner", Some ["Int"]),
-        (MRTStamped, "return_owner", Some ["Int"]),
+        (
+          MRTProduced,
+          "return_owner",
+          Some ["Int"],
+          ("pending", [], []),
+          "pending",
+        ),
+        (
+          MRTChecked,
+          "return_owner",
+          Some ["Int"],
+          ("instance", ["Int"], []),
+          "pending",
+        ),
+        (
+          MRTStamped,
+          "return_owner",
+          Some ["Int"],
+          ("instance", ["Int"], []),
+          "instance",
+        ),
       ]
       (snd forward),
   ]
