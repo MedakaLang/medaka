@@ -57,19 +57,21 @@ running doctests in stdlib/string.mdk
   ok   stdlib/string.mdk:568: replace "l" "L" "hello"
   ok   stdlib/string.mdk:588: replaceAll "l" "L" "hello"
   ok   stdlib/string.mdk:614: sliceClamped 1 4 "hello"
-  ok   stdlib/string.mdk:622: take 3 "hello"
-  ok   stdlib/string.mdk:630: drop 3 "hello"
-  ok   stdlib/string.mdk:638: splitAt 2 "hello"
-  ok   stdlib/string.mdk:649: split "," "a,b,c"
-  ok   stdlib/string.mdk:651: split "," "abc"
-  ok   stdlib/string.mdk:694: lines "a\nb\nc"
-  ok   stdlib/string.mdk:704: stripCR "ab\r"
-  ok   stdlib/string.mdk:706: stripCR "ab"
-  ok   stdlib/string.mdk:720: words "  hello   world "
-  ok   stdlib/string.mdk:739: unlines ["a", "b"]
-  ok   stdlib/string.mdk:754: unwords ["a", "b", "c"]
-  ok   stdlib/string.mdk:766: padLeft 5 '.' "ab"
-  ok   stdlib/string.mdk:780: padRight 5 '.' "ab"
-  ok   stdlib/string.mdk:795: center 5 '.' "ab"
+  ok   stdlib/string.mdk:620: sliceClamped 0 100 "abc"
+  ok   stdlib/string.mdk:623: take 100 "abc"
+  ok   stdlib/string.mdk:628: take 3 "hello"
+  ok   stdlib/string.mdk:636: drop 3 "hello"
+  ok   stdlib/string.mdk:644: splitAt 2 "hello"
+  ok   stdlib/string.mdk:655: split "," "a,b,c"
+  ok   stdlib/string.mdk:657: split "," "abc"
+  ok   stdlib/string.mdk:700: lines "a\nb\nc"
+  ok   stdlib/string.mdk:710: stripCR "ab\r"
+  ok   stdlib/string.mdk:712: stripCR "ab"
+  ok   stdlib/string.mdk:726: words "  hello   world "
+  ok   stdlib/string.mdk:745: unlines ["a", "b"]
+  ok   stdlib/string.mdk:760: unwords ["a", "b", "c"]
+  ok   stdlib/string.mdk:772: padLeft 5 '.' "ab"
+  ok   stdlib/string.mdk:786: padRight 5 '.' "ab"
+  ok   stdlib/string.mdk:801: center 5 '.' "ab"
 
-stdlib/string.mdk: 72/72 passed
+stdlib/string.mdk: 74/74 passed

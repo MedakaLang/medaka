@@ -1,9 +1,12 @@
 # Runtime-trap-format unification — design
 
-**Status:** OPEN — verified live: `stdlib/array.mdk:268` still has a bare, uncoded
-`panic "Array.set: index out of bounds"`, matching this doc's reproduction matrix row
-for `Array.set`/`Vector.set` OOB ("wrong code, stdlib loc"). Staged-and-ready open work
-(reproduction matrix, target format, touchpoints, staging plan already written); resolves
+**Status:** OPEN, but the `Array.set`/`Vector.set` OOB row is discharged: `setInPlace`
+(`stdlib/array.mdk`) and the `IndexMut (Vector a)` impl (`stdlib/vector.mdk`) both raise
+the `indexErrorAt` extern, so interp and native now agree on
+`[E-INDEX-OOB]: index N out of bounds`. What remains open is the wasm trap collapse
+(§7 fork 1), `Array.blit`'s five bare `panic`s (`stdlib/array.mdk:385-393`), and the
+absent loc on native/wasm (§5). Staged-and-ready open work (reproduction matrix, target
+format, touchpoints, staging plan already written); resolves
 `compiler/RUNTIME-DESIGN.md`'s explicitly-deferred "panic unwind model" item.
 
 Status: DESIGN (2026-07-07, read-only scoping over `90d775fd`, every row reproduced
@@ -19,16 +22,17 @@ All exit 1.
 | mod-zero | `f:L:C: … [E-MOD-ZERO]…` | same, no loc | `remainder by zero` (engine) | `program panicked` |
 | non-exhaustive | `f:L:C: … [E-NONEXHAUSTIVE-MATCH]…` | same, no loc | `unreachable` | `program panicked` |
 | array/list OOB `.[i]` | `f:L:C: … [E-INDEX-OOB]: index N…` | ~~no index N~~ → `index N` (no loc) since #1787 | array: `[E-INDEX-OOB]: index N` since #1787; **list `.[i]` = hard wasm emit gap** | `program panicked` |
-| `Array.set`/`Vector.set` OOB | `stdlib/array.mdk:L: [E-PANIC]: Array.set…` (**wrong code, stdlib loc**) | **bare, no code/loc** | `unreachable` | `program panicked` |
-| user `panic "msg"` | `f:L:C: [E-PANIC]: msg` | **bare msg, no code/loc** | `unreachable` (**msg dropped, partial stdout LOST**) | `program panicked` |
+| `Array.set`/`Vector.set` OOB | `stdlib/array.mdk:L:C: … [E-INDEX-OOB]: index N…` (**stdlib loc, not the caller's**) | same, no loc | as the `.[i]` row — shared `indexErrorAt` lowering | `program panicked` |
+| user `panic "msg"` | `f:L:C: [E-PANIC]: msg` | same, no loc | `unreachable` (**msg dropped, partial stdout LOST**) | `program panicked` |
 | no `main` | `program has no 'main' binding` (bare) | `emitter failed … no main` (bare) | build-time | build-time |
 
-**Reads:** interp/native are already ~80% consistent for the 4 coded traps — differ
-only in **loc** (interp has it) + native OOB dropping `index N`. **Wasm is the real
-gap** (engine text not Medaka's; `unreachable` collapses nonexhaust/OOB/panic). The
-**playground erases everything** (`worker.js:99` `/unreachable|trap|RuntimeError/i` →
-one generic `program panicked` for all five). Two under-coded non-wasm paths:
-stdlib set-OOB (bare `panic`) and native user-`panic` (raw string, no `[E-PANIC]`).
+**Reads:** interp/native now agree on code and message for every coded trap and differ
+only in **loc** (interp has it, native does not). **Wasm is the real gap** (engine text
+not Medaka's; `unreachable` collapses nonexhaust/panic). The **playground erases
+everything** (`worker.js:99` `/unreachable|trap|RuntimeError/i` → one generic `program
+panicked` for all five). The two under-coded non-wasm paths this matrix once named —
+stdlib set-OOB and native user-`panic` — are both coded now, the first via
+`indexErrorAt`, the second by `mdk_panic` prefixing `runtime error [E-PANIC]: `.
 
 ## 2. Target format
 Per trap, stderr, exit 1: `[<file>:<L>:<C>: ]runtime error [E-CODE]: <message>`.
@@ -42,9 +46,11 @@ loc. Bad-main → the diagnostic channel as a coded driver diagnostic (`E-NO-MAI
   `runtimePanic` (infra `:1664`, `currentEvalLoc` `:1649`); `:2214/:2248/:2458`
   no-main panics → diagnostic channel (`E-NO-MAIN`), share one builder; `:2462`
   `main:Async` panic → coded+located.
-- **(2) stdlib/array.mdk `:268`, blit `:296/:298`; stdlib/vector.mdk `:144`**
-  (NOT in emitter graph): bare `panic` → coded OOB. Constraint: stdlib has no
-  `runtimePanic`, only the `panic` extern → needs a new coded-OOB seam (fork 4).
+- **(2) stdlib/array.mdk, stdlib/vector.mdk** (NOT in emitter graph): the
+  `setInPlace`/`IndexMut` half is **done** — both raise `indexErrorAt`
+  (`stdlib/runtime.mdk:200`), which is the coded-OOB seam fork 4 asked for, so the
+  "stdlib has no `runtimePanic`" constraint is answered. Still bare `panic`:
+  `Array.blit`'s five argument checks, `stdlib/array.mdk:385-393`.
 - **(3) runtime/medaka_rt.c** (NOT in seed graph, C): `mdk_oob:192`, `mdk_div_zero:345`,
   `mdk_mod_zero:349`, `mdk_nonexhaustive_match:360` already coded (loc blocked, §5;
   `mdk_oob` could take the index arg → `index N` -- **DONE, #1787**, though not the way
@@ -52,7 +58,8 @@ loc. Bad-main → the diagnostic channel as a coded driver diagnostic (`E-NO-MAI
   are bounds checks with no index in hand), #1787 added a PARALLEL `mdk_oob_at(index)`
   plus the `indexErrorAt` extern the prelude's Index/IndexMut impls raise, and gave wasm
   the matching numbered trap.  `mdk_oob()` survives for the argument-less sites);
-  `mdk_panic:339` prints raw → wrap with `runtime error [E-PANIC]:`.
+  `mdk_panic` wrapping its message with `runtime error [E-PANIC]: ` — **done**,
+  `05720f053`.
 - **(4) typecheck.mdk `:969-970`/`:997`** (IN seed graph): dedup the T-EFFECT-PARAM
   "must end in '*'…" message into one builder.
 - **(5) wasm_emit.mdk** (NOT in LLVM seed graph): `panic` lowering `:941-944/:1252` →
@@ -83,9 +90,9 @@ project: `mdk_oob` printing `index N` -- **taken, #1787** (via `mdk_oob_at`; see
 | Bite | Scope | Model | Re-mint |
 |---|---|---|---|
 | B1 | typecheck.mdk (4) dedup message builder | Sonnet | yes (in-graph, mechanical) |
-| B2 | medaka_rt.c (3): `mdk_panic` → `[E-PANIC]` prefix; ~~`mdk_oob(index)` → `index N`~~ **DONE #1787** (as `mdk_oob_at`, + wasm parity; the `mdk_panic` half is still open) | Sonnet | no |
+| ~~B2~~ | ~~medaka_rt.c (3): `mdk_panic` → `[E-PANIC]` prefix; `mdk_oob(index)` → `index N`~~ **DONE** — the index half as `mdk_oob_at` + wasm parity (#1787), the `mdk_panic` half in `05720f053` | Sonnet | no |
 | B3 | eval.mdk (1): route `:693`/`:2462` via `runtimePanic`; no-main → `E-NO-MAIN` | Opus | **yes — make seed** |
-| B4 | stdlib array/vector (2): coded-OOB seam | Opus | no (stdlib) |
+| B4 | stdlib array/vector (2): coded-OOB seam — **done** for `setInPlace`/`IndexMut` via `indexErrorAt`; `Array.blit`'s five checks remain | Opus | no (stdlib) |
 | B5 | wasm_emit.mdk (5): divisor guard + coded trap text via `mdk_write_err_byte` + surface in worker.js/run.js | Opus | no (wasm from source) |
 Order B1→B2→B3→B4→B5; batch B1+B3 re-mint.
 
@@ -100,11 +107,12 @@ Order B1→B2→B3→B4→B5; batch B1+B3 re-mint.
    trap + playground string-map?
 3. **Wasm partial-stdout on trap** — `run.js:122` loses pre-trap stdout (native +
    playground preserve it); one-line flush for parity — in scope?
-4. **Stdlib coded-OOB seam (B4):** new stdlib-visible primitive (`oobPanic : Int -> a`
-   → `mdk_oob`) vs compiler special-casing the `"…out of bounds"` panic strings. The
-   primitive is cleaner but adds an extern across all three backends.
-5. **User-panic code identity:** unify native user `panic` to `[E-PANIC]` (B2) —
-   confirm `E-PANIC` is the intended public code for user panics.
+4. **Stdlib coded-OOB seam (B4):** SETTLED as the primitive — `indexErrorAt : Int -> a`
+   (`stdlib/runtime.mdk:200`), lowered per backend, not compiler special-casing of
+   `"…out of bounds"` panic strings. Open residue: whether `Array.blit`'s five
+   argument checks get a seam of their own or reuse this one.
+5. **User-panic code identity:** SETTLED — native user `panic` prints
+   `runtime error [E-PANIC]: <msg>`, matching the interpreter minus the loc.
 6. **`main : Async`** — the repro surfaced `Unknown effect: Async`, not the
    runAsync-missing panic (`eval.mdk:2462`). Confirm the trigger before coding.
 7. **Exit codes** — already uniformly 1; confirm that's intended.
