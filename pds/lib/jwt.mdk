@@ -184,9 +184,7 @@ checkAlg headerSeg = match decodeSegmentJson headerSeg
     _ => Err (JwtUnsupportedAlg "")
 
 payloadJson : String -> Result JwtError Json
-payloadJson claimsSeg = match decodeSegmentJson claimsSeg
-  Err _ => Err JwtMalformed
-  Ok payload => Ok payload
+payloadJson claimsSeg = mapErr (_ => JwtMalformed) (decodeSegmentJson claimsSeg)
 
 stringClaim : String -> Json -> Result JwtError String
 stringClaim name payload = match map asString (get name payload)

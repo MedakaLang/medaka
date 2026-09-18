@@ -1018,9 +1018,9 @@ serviceAuthClaims : Account ->
 serviceAuthClaims account context table params = do
   audience <- requiredParam "aud" params
   () <- admitServiceAudience table audience
-  method <- match QueryParams.soleParam "lxm" params
-    Err message => Err (serviceAuthRefusal message)
-    Ok found => Ok found
+  method <- mapErr
+    (message => serviceAuthRefusal message)
+    (QueryParams.soleParam "lxm" params)
   () <- admitServiceMethod method
   expiry <- admitServiceExpiry context method params
   Ok ServiceAuthRequest {

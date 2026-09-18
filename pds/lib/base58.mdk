@@ -71,23 +71,17 @@ alphabetChars = toChars base58btcAlphabet
 -- ── shared small helpers ─────────────────────────────────────────────────
 
 byteAt : Int -> Array Int -> Int
-byteAt i arr = match get i arr
-  Some b => b
-  None => panic "base58: byte index out of bounds"
+byteAt i arr = optionOrPanic "base58: byte index out of bounds" (get i arr)
 
 -- Reads a slot of the ENCODE scratch buffer, whose domain is a base58 digit
 -- (`0 .. 57`) and not a byte. The decode buffer holds bytes and is read
 -- through `byteAt`; keeping the two accessors apart is what names which
 -- radix a given index walk is in.
 digitAt : Int -> Array Int -> Int
-digitAt i arr = match get i arr
-  Some d => d
-  None => panic "base58: digit index out of bounds"
+digitAt i arr = optionOrPanic "base58: digit index out of bounds" (get i arr)
 
 charAtA : Int -> Array Char -> Char
-charAtA i arr = match get i arr
-  Some c => c
-  None => panic "base58: char index out of bounds"
+charAtA i arr = optionOrPanic "base58: char index out of bounds" (get i arr)
 
 -- ── Encode ───────────────────────────────────────────────────────────────
 

@@ -194,9 +194,8 @@ splitLayer ((entry@(MstEntry _ _ depth)) :: rest) layer =
     LayerSplit prefix found => LayerSplit (entry :: prefix) found
 
 mustEncodeNode : DagCbor -> Array Int
-mustEncodeNode value = match dagCborEncode value
-  Ok bytes => bytes
-  Err message => panic "mst: internal node encoding failed: \{message}"
+mustEncodeNode value =
+  resultOrPanic "mst: internal node encoding failed" (dagCborEncode value)
 
 oldLeaves : List NodeEntry -> List OldLeaf
 oldLeaves [] = []
@@ -624,9 +623,8 @@ validateBlockRows ((cid, bytes) :: rest) index =
 
 nodeDepth : DecodedNode -> Int
 nodeDepth (DecodedNode _ []) = 0
-nodeDepth (DecodedNode _ (entry :: _)) = match mstKeyDepth (entryKey entry)
-  Ok depth => depth
-  Err message => panic "mst: decoded key depth failed: \{message}"
+nodeDepth (DecodedNode _ (entry :: _)) =
+  resultOrPanic "mst: decoded key depth failed" (mstKeyDepth (entryKey entry))
 
 keyAboveLower : Array Int -> Option (Array Int) -> Bool
 keyAboveLower _ None = True
