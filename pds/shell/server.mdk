@@ -61,9 +61,9 @@ import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.credential.{
   credentialDigest,
   credentialIterations,
-  ctEqBytes,
   saltBytes,
 }
+import hmac.{ctEq}
 import lib.ratelimit.{
   ClientIdentity,
   RateLimitClass(..),
@@ -514,7 +514,7 @@ persistCredentialHalf dir before after = match (
   (None, Some next) => persistCredential dir next
   (Some prior, Some next) =>
     if credentialIterations prior == credentialIterations next
-      && ctEqBytes (credentialDigest prior) (credentialDigest next) then
+      && ctEq (credentialDigest prior) (credentialDigest next) then
       Ok ()
     else
       persistCredential dir next
