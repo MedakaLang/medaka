@@ -1,5 +1,5 @@
 # META
-source_lines=47079
+source_lines=47076
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9956,11 +9956,14 @@ methodReturnMemoView evidence goal request =
   MethodReturnMemoView {
     mrmvInterface = methodReturnMemoIface request.mrrIface,
     mrmvMethod = request.mrrName,
-    mrmvArguments = map (map ppMono) (methodReturnArgs request),
+    mrmvArguments = map methodReturnMemoArguments (methodReturnArgs request),
     mrmvOutcome = outcome,
     mrmvPrerequisites = prerequisites,
     mrmvEvidence = methodReturnMemoEvidence goal.oEv evidence,
   }
+
+methodReturnMemoArguments : List Mono -> List String
+methodReturnMemoArguments arguments = map ppMono arguments
 
 methodReturnMemoIface : IfaceRef -> String
 methodReturnMemoIface iface =
@@ -38788,9 +38791,6 @@ methodReturnTemplatePresenceProbe _ =
   perRun := savedPerRun
   observed
 
--- > methodReturnTemplatePresenceProbe ()
--- ([True, True], [True, False])
-
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeCodes ownedRow impls =
   graphRun := freshGraphRun ()
@@ -38977,9 +38977,6 @@ methodReturnSelectedIdentity : MethodReturnResolution -> Int
 methodReturnSelectedIdentity resolution = match resolution.mrrOutcome
   Solved (InstanceEvidence (RequestInstanceId identity) _ _) => identity
   _ => -1
-
--- > methodReturnResolutionMutationProbe ()
--- (True, True, True, True)
 
 methodReturnProbeSlotIfaces : List PredicateSlot -> List String
 methodReturnProbeSlotIfaces slots = map (slot => slot.psIface.irName) slots
@@ -48547,7 +48544,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "methodReturnMemoView" (TyFun (TyCon "EvTable") (TyFun (TyCon "Obligation") (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnMemoView")))))
-(DFunDef false "methodReturnMemoView" ((PVar "evidence") (PVar "goal") (PVar "request")) (EBlock (DoLet false false (PTuple (PVar "outcome") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "None") () (ETuple (ELit (LString "legacy")) (EListLit))) (arm (PCon "Some" (PVar "resolution")) () (ETuple (EApp (EVar "methodReturnMemoOutcome") (EFieldAccess (EVar "resolution") "mrrOutcome")) (EApp (EVar "methodReturnMemoPrerequisites") (EFieldAccess (EVar "resolution") "mrrOutcome")))))) (DoExpr (ERecordCreate "MethodReturnMemoView" ((fa "mrmvInterface" (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "request") "mrrIface"))) (fa "mrmvMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrmvArguments" (EApp (EApp (EVar "map") (EApp (EVar "map") (EVar "ppMono"))) (EApp (EVar "methodReturnArgs") (EVar "request")))) (fa "mrmvOutcome" (EVar "outcome")) (fa "mrmvPrerequisites" (EVar "prerequisites")) (fa "mrmvEvidence" (EApp (EApp (EVar "methodReturnMemoEvidence") (EFieldAccess (EVar "goal") "oEv")) (EVar "evidence"))))))))
+(DFunDef false "methodReturnMemoView" ((PVar "evidence") (PVar "goal") (PVar "request")) (EBlock (DoLet false false (PTuple (PVar "outcome") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "None") () (ETuple (ELit (LString "legacy")) (EListLit))) (arm (PCon "Some" (PVar "resolution")) () (ETuple (EApp (EVar "methodReturnMemoOutcome") (EFieldAccess (EVar "resolution") "mrrOutcome")) (EApp (EVar "methodReturnMemoPrerequisites") (EFieldAccess (EVar "resolution") "mrrOutcome")))))) (DoExpr (ERecordCreate "MethodReturnMemoView" ((fa "mrmvInterface" (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "request") "mrrIface"))) (fa "mrmvMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrmvArguments" (EApp (EApp (EVar "map") (EVar "methodReturnMemoArguments")) (EApp (EVar "methodReturnArgs") (EVar "request")))) (fa "mrmvOutcome" (EVar "outcome")) (fa "mrmvPrerequisites" (EVar "prerequisites")) (fa "mrmvEvidence" (EApp (EApp (EVar "methodReturnMemoEvidence") (EFieldAccess (EVar "goal") "oEv")) (EVar "evidence"))))))))
+(DTypeSig false "methodReturnMemoArguments" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "methodReturnMemoArguments" ((PVar "arguments")) (EApp (EApp (EVar "map") (EVar "ppMono")) (EVar "arguments")))
 (DTypeSig false "methodReturnMemoIface" (TyFun (TyCon "IfaceRef") (TyCon "String")))
 (DFunDef false "methodReturnMemoIface" ((PVar "iface")) (EBlock (DoLet false false (PVar "identity") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoExpr (EIf (EBinOp "==" (EVar "identity") (ELit (LString ""))) (EFieldAccess (EVar "iface") "irName") (EVar "identity")))))
 (DTypeSig false "methodReturnMemoOutcome" (TyFun (TyCon "SolverOutcome") (TyCon "String")))
@@ -55686,7 +55685,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exactReturnRequestOfGoal" (TyFun (TyCon "Obligation") (TyApp (TyCon "Option") (TyCon "MethodReturnRequest"))))
 (DFunDef false "exactReturnRequestOfGoal" ((PVar "goal")) (EMatch (EFieldAccess (EVar "goal") "oPayload") (arm (PCon "GPSite" PWild PWild (PCon "SKExactReturn" PWild (PVar "request"))) () (EApp (EVar "Some") (EVar "request"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "methodReturnMemoView" (TyFun (TyCon "EvTable") (TyFun (TyCon "Obligation") (TyFun (TyCon "MethodReturnRequest") (TyCon "MethodReturnMemoView")))))
-(DFunDef false "methodReturnMemoView" ((PVar "evidence") (PVar "goal") (PVar "request")) (EBlock (DoLet false false (PTuple (PVar "outcome") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "None") () (ETuple (ELit (LString "legacy")) (EListLit))) (arm (PCon "Some" (PVar "resolution")) () (ETuple (EApp (EVar "methodReturnMemoOutcome") (EFieldAccess (EVar "resolution") "mrrOutcome")) (EApp (EVar "methodReturnMemoPrerequisites") (EFieldAccess (EVar "resolution") "mrrOutcome")))))) (DoExpr (ERecordCreate "MethodReturnMemoView" ((fa "mrmvInterface" (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "request") "mrrIface"))) (fa "mrmvMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrmvArguments" (EApp (EApp (EMethodRef "map") (EApp (EMethodRef "map") (EVar "ppMono"))) (EApp (EVar "methodReturnArgs") (EVar "request")))) (fa "mrmvOutcome" (EVar "outcome")) (fa "mrmvPrerequisites" (EVar "prerequisites")) (fa "mrmvEvidence" (EApp (EApp (EVar "methodReturnMemoEvidence") (EFieldAccess (EVar "goal") "oEv")) (EVar "evidence"))))))))
+(DFunDef false "methodReturnMemoView" ((PVar "evidence") (PVar "goal") (PVar "request")) (EBlock (DoLet false false (PTuple (PVar "outcome") (PVar "prerequisites")) (EMatch (EFieldAccess (EFieldAccess (EVar "request") "mrrResolution") "value") (arm (PCon "None") () (ETuple (ELit (LString "legacy")) (EListLit))) (arm (PCon "Some" (PVar "resolution")) () (ETuple (EApp (EVar "methodReturnMemoOutcome") (EFieldAccess (EVar "resolution") "mrrOutcome")) (EApp (EVar "methodReturnMemoPrerequisites") (EFieldAccess (EVar "resolution") "mrrOutcome")))))) (DoExpr (ERecordCreate "MethodReturnMemoView" ((fa "mrmvInterface" (EApp (EVar "methodReturnMemoIface") (EFieldAccess (EVar "request") "mrrIface"))) (fa "mrmvMethod" (EFieldAccess (EVar "request") "mrrName")) (fa "mrmvArguments" (EApp (EApp (EMethodRef "map") (EVar "methodReturnMemoArguments")) (EApp (EVar "methodReturnArgs") (EVar "request")))) (fa "mrmvOutcome" (EVar "outcome")) (fa "mrmvPrerequisites" (EVar "prerequisites")) (fa "mrmvEvidence" (EApp (EApp (EVar "methodReturnMemoEvidence") (EFieldAccess (EVar "goal") "oEv")) (EVar "evidence"))))))))
+(DTypeSig false "methodReturnMemoArguments" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "methodReturnMemoArguments" ((PVar "arguments")) (EApp (EApp (EMethodRef "map") (EVar "ppMono")) (EVar "arguments")))
 (DTypeSig false "methodReturnMemoIface" (TyFun (TyCon "IfaceRef") (TyCon "String")))
 (DFunDef false "methodReturnMemoIface" ((PVar "iface")) (EBlock (DoLet false false (PVar "identity") (EApp (EApp (EVar "ifaceIdentity") (EFieldAccess (EVar "iface") "irOrigin")) (EFieldAccess (EVar "iface") "irName"))) (DoExpr (EIf (EBinOp "==" (EVar "identity") (ELit (LString ""))) (EFieldAccess (EVar "iface") "irName") (EVar "identity")))))
 (DTypeSig false "methodReturnMemoOutcome" (TyFun (TyCon "SolverOutcome") (TyCon "String")))

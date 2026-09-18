@@ -9952,11 +9952,14 @@ methodReturnMemoView evidence goal request =
   MethodReturnMemoView {
     mrmvInterface = methodReturnMemoIface request.mrrIface,
     mrmvMethod = request.mrrName,
-    mrmvArguments = map (map ppMono) (methodReturnArgs request),
+    mrmvArguments = map methodReturnMemoArguments (methodReturnArgs request),
     mrmvOutcome = outcome,
     mrmvPrerequisites = prerequisites,
     mrmvEvidence = methodReturnMemoEvidence goal.oEv evidence,
   }
+
+methodReturnMemoArguments : List Mono -> List String
+methodReturnMemoArguments arguments = map ppMono arguments
 
 methodReturnMemoIface : IfaceRef -> String
 methodReturnMemoIface iface =
@@ -38784,9 +38787,6 @@ methodReturnTemplatePresenceProbe _ =
   perRun := savedPerRun
   observed
 
--- > methodReturnTemplatePresenceProbe ()
--- ([True, True], [True, False])
-
 methodReturnProbeCodes : MethodSchemeRow -> List Decl -> List String
 methodReturnProbeCodes ownedRow impls =
   graphRun := freshGraphRun ()
@@ -38973,9 +38973,6 @@ methodReturnSelectedIdentity : MethodReturnResolution -> Int
 methodReturnSelectedIdentity resolution = match resolution.mrrOutcome
   Solved (InstanceEvidence (RequestInstanceId identity) _ _) => identity
   _ => -1
-
--- > methodReturnResolutionMutationProbe ()
--- (True, True, True, True)
 
 methodReturnProbeSlotIfaces : List PredicateSlot -> List String
 methodReturnProbeSlotIfaces slots = map (slot => slot.psIface.irName) slots

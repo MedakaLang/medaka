@@ -1613,6 +1613,7 @@ methodReturnEvidenceRoutes : String -> ScopeId -> List PrerequisiteEvidence -> L
 methodReturnFallbackTag : MethodReturnRequest -> Option String
 methodReturnInstanceMatches : RequestInstanceId -> ImplRow -> Bool
 methodReturnInstantiation : MethodReturnRequest -> Option Instantiation
+methodReturnMemoArguments : List Mono -> List String
 methodReturnMemoCurrentViews : Unit -> List MethodReturnMemoView
 methodReturnMemoEvidence : EvId -> List EvEntry -> String
 methodReturnMemoFenceMutationProbe : Unit -> (Bool, Bool, Bool)
