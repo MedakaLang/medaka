@@ -1,5 +1,5 @@
 # META
-source_lines=674
+source_lines=675
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -266,7 +266,8 @@ extern netTcpAccept : Int -> <Net "_"> Result String Int
 -- written, which may be fewer than given.
 extern netSend : Int -> Array Int -> <Net "_"> Result String Int
 
--- | `netSend` starting at `offset` into the array, sending at most 64 KiB per
+-- | Sends bytes starting at `offset` into the array. The result is the number
+-- of bytes written, which may be fewer than given and is limited to 64 KiB per
 -- call so a loop can retain one array while advancing through it.
 extern netSendFrom : Int -> Array Int -> Int -> <Net "_"> Result String Int
 

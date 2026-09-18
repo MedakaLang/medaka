@@ -21,7 +21,9 @@ import array.{sliceClamped}
 import string.{fromUtf8, toUtf8, repeat}
 import test.{expectEqual, expectTrue}
 import lib.httpclient.{
+  HttpClientParseFailure(..),
   parseResponse,
+  parseResponseClassified,
   responseBody,
   responseBoundary,
   responseBoundaryWithin,
@@ -87,6 +89,20 @@ test "unsupported transfer coding remains rejected" =
     (isErr
       (parseResponse
         (toUtf8 "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nhello")))
+
+test "malformed response keeps the legacy PDS diagnostic and class" =
+  match parseResponseClassified [||]
+    Err (HttpClientMalformed message) =>
+      expectEqual "httpclient: truncated status line; expected CRLF" message
+    _ => expectTrue False
+
+test "resource response keeps the legacy PDS diagnostic and class" =
+  let input =
+    toUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n100001\r\n"
+  match parseResponseClassified input
+    Err (HttpClientResourceExcess message) =>
+      expectEqual "httpclient: chunk size exceeds resource limit" message
+    _ => expectTrue False
 
 test "a response that declares its length ends where it said it would" =
   let bytes = toUtf8 (declaredResponse "hello")

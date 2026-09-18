@@ -15,7 +15,7 @@ import http.{
   headerValue,
   isTokenByte,
 }
-import string.{toUtf8}
+import string.{stripPrefix, toUtf8}
 
 -- # Request bytes
 
@@ -189,6 +189,11 @@ serializeRequest method target host headers body =
 
 -- # Response compatibility
 
+legacyResponseMessage : String -> String
+legacyResponseMessage message = match stripPrefix "http:" message
+  Some suffix => "httpclient:" ++ suffix
+  None => message
+
 -- | The shared parsed response under the name existing PDS callers use.
 export type Response = ParsedResponse
 
@@ -226,8 +231,10 @@ export
 parseResponseClassified : Array Int -> Result HttpClientParseFailure Response
 parseResponseClassified input = match H.parseResponseClassified input
   Ok response => Ok response
-  Err (HttpMalformed message) => Err (HttpClientMalformed message)
-  Err (HttpResourceExcess message) => Err (HttpClientResourceExcess message)
+  Err (HttpMalformed message) =>
+    Err (HttpClientMalformed (legacyResponseMessage message))
+  Err (HttpResourceExcess message) =>
+    Err (HttpClientResourceExcess (legacyResponseMessage message))
 
 -- | `parseResponseClassified` collapsed to its diagnostic string.
 export

@@ -34,7 +34,8 @@ The ceiling on one raw request, request line and framing bytes included.
 maxHttpHeaderBytes : Int
 ```
 
-The ceiling on the combined header and trailer sections of one request.
+The ceiling on the combined header and trailer sections of one request or
+response.
 
 ### `maxHttpBodyBytes`
 
@@ -74,7 +75,7 @@ The ceiling on one response chunk's declared size.
 maxHttpHeaderFields : Int
 ```
 
-The ceiling on the number of header fields in one request.
+The ceiling on the number of header fields in one request or response.
 
 ### `maxHttpTrailerFields`
 
