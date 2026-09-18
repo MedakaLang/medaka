@@ -1242,8 +1242,8 @@ IDENT "arrayLength"
 IDENT "arr"
 THEN
 INDENT
-IDENT "panic"
-STRING "Array.setInPlace: index out of bounds"
+IDENT "indexErrorAt"
+IDENT "i"
 NEWLINE
 DEDENT
 ELSE

@@ -201,7 +201,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`RESOLVER-DIAG-LOCATION-DESIGN.md`](../compiler/RESOLVER-DIAG-LOCATION-DESIGN.md) | Real source locations for the 3 `{0,0}`-range resolver diagnostics (F3) | IMPLEMENTED |
 | [`RUNTIME-DESIGN.md`](../compiler/RUNTIME-DESIGN.md) | Runtime & extern strategy for the native (Stage 2.4) backend | IMPLEMENTED, with 2 items still deferred |
 | [`RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md`](../compiler/RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN.md) | RUNTIME-DIAGNOSTIC-CHANNEL-DESIGN | IMPLEMENTED |
-| [`RUNTIME-TRAP-UNIFY-DESIGN.md`](../compiler/RUNTIME-TRAP-UNIFY-DESIGN.md) | Runtime-trap-format unification — design | OPEN |
+| [`RUNTIME-TRAP-UNIFY-DESIGN.md`](../compiler/RUNTIME-TRAP-UNIFY-DESIGN.md) | Runtime-trap-format unification — design | OPEN, but the `Array.set`/`Vector.set` OOB row is discharged: `setInPlace` |
 | [`S1-CONSTRAINED-SHADOW-DESIGN.md`](../compiler/S1-CONSTRAINED-SHADOW-DESIGN.md) | S-1 — a CONSTRAINED definer-shadow standalone is miscompiled | IMPLEMENTED |
 | [`SHADOW-INVERSION-DESIGN.md`](../compiler/SHADOW-INVERSION-DESIGN.md) | SHADOW-INVERSION-DESIGN — invert S2: a top-level standalone WINS over a same-named interface method | SHIPPED 2026-07-14 |
 | [`SHARED-FLOAT-RESIDUAL-DESIGN.md`](../compiler/SHARED-FLOAT-RESIDUAL-DESIGN.md) | SHARED-FLOAT-RESIDUAL-DESIGN — the signature-free type-lost-Float residual | IMPLEMENTED |

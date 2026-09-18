@@ -180,10 +180,10 @@ get k (Bin _ k2 v l r) = match compare k k2
    Panics with an index error when the key is absent; `get` is the
    `Option`-returning form. The `Index` interface takes the map first, so
    this is `index m k` where `get` is `get k m`. -}
-export impl Index (Map k v) k v requires Ord k where
+export impl Index (Map k v) k v requires Ord k, Debug k where
   index m k = match get k m
     Some v => v
-    None => indexError "key not found"
+    None => indexError "key not found: \{debug k}"
 
 {- | Whether `k` is present.
 
@@ -903,7 +903,7 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DTypeSig true "get" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyVar "v"))))))
 (DFunDef false "get" ((PVar "k") (PCon "Tip")) (EVar "None"))
 (DFunDef false "get" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EVar "get") (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EVar "get") (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EApp (EVar "Some") (EVar "v")))))
-(DImpl true "Index" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Ord" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (ELit (LString "key not found"))))))))
+(DImpl true "Index" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Ord" ((TyVar "k"))) (req "Debug" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EVar "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "key not found: ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "k")))) (ELit (LString "")))))))))
 (DTypeSig true "has" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "has" ((PVar "k") (PCon "Tip")) (EVar "False"))
 (DFunDef false "has" ((PVar "k") (PCon "Bin" PWild (PVar "k2") PWild (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EVar "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EVar "has") (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EVar "has") (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EVar "True"))))
@@ -1097,7 +1097,7 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DTypeSig true "get" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "Option") (TyVar "v"))))))
 (DFunDef false "get" ((PVar "k") (PCon "Tip")) (EVar "None"))
 (DFunDef false "get" ((PVar "k") (PCon "Bin" PWild (PVar "k2") (PVar "v") (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EApp (EVar "Some") (EVar "v")))))
-(DImpl true "Index" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Ord" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (ELit (LString "key not found"))))))))
+(DImpl true "Index" ((TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyVar "k") (TyVar "v")) ((req "Ord" ((TyVar "k"))) (req "Debug" ((TyVar "k")))) ((im "index" ((PVar "m") (PVar "k")) (EMatch (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "m")) (arm (PCon "Some" (PVar "v")) () (EVar "v")) (arm (PCon "None") () (EApp (EVar "indexError") (EBinOp "++" (EBinOp "++" (ELit (LString "key not found: ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "k")))) (ELit (LString "")))))))))
 (DTypeSig true "has" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))))
 (DFunDef false "has" ((PVar "k") (PCon "Tip")) (EVar "False"))
 (DFunDef false "has" ((PVar "k") (PCon "Bin" PWild (PVar "k2") PWild (PVar "l") (PVar "r"))) (EMatch (EApp (EApp (EMethodRef "compare") (EVar "k")) (EVar "k2")) (arm (PCon "Lt") () (EApp (EApp (EDictApp "has") (EVar "k")) (EVar "l"))) (arm (PCon "Gt") () (EApp (EApp (EDictApp "has") (EVar "k")) (EVar "r"))) (arm (PCon "Eq") () (EVar "True"))))

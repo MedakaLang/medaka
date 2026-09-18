@@ -1,0 +1,5 @@
+-- #3186: half-open `xs.[lo..hi]` past the end of a List.  Pre-fix the cons walk simply
+-- stopped at end-of-chain, so this printed `[30, 40, 50]` at exit 0 on both engines.
+-- A List has no O(1) length, so `hi > length` is decided by the walk reaching Nil with
+-- the running index still below `hi` — this is the fixture that pins that arm.
+main = println [10, 20, 30, 40, 50].[2..99]

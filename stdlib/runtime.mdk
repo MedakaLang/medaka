@@ -181,19 +181,19 @@ extern panic : String -> a
 
 -- Coded-OOB abort, for a container's own `Index`/`IndexMut` impl to raise on
 -- out-of-bounds access.  Reuses the existing E-INDEX-OOB abort machinery
--- every backend already has for the built-in index paths (native @mdk_oob,
+-- every backend already has for the built-in index paths (native @mdk_oob_msg,
 -- wasm's E-INDEX-OOB trap), unlike `panic`, which is always coded E-PANIC.
+-- Every engine prints the caller's message after the code.
 
 -- | Aborts the program with an index error. For a container's own `Index`
 -- instance.
 extern indexError : String -> a
 
--- Prefer this over `indexError` with an interpolated message: `indexError`'s
--- message is dropped by the native and wasm backends (they raise a
--- fixed-text E-INDEX-OOB abort), so interpolating one made `run` and a built
--- binary disagree, and the dead string-building cost enough LLVM inline
--- budget to stop `index`/`setIndex` inlining into hot loops.  Here the index
--- is formatted by the abort itself (native @mdk_oob_at).
+-- Prefer this over `indexError` with an interpolated message wherever the
+-- container is Int-keyed: building that string costs enough LLVM inline
+-- budget to stop `index`/`setIndex` inlining into hot loops, and the guards
+-- are on every `a[i]`.  Here the abort formats the index itself (native
+-- @mdk_oob_at), so the caller allocates nothing.
 
 -- | Aborts the program with an index error naming the offending index. For
 -- a container's own `Index` instance.

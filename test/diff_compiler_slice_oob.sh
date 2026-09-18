@@ -1,5 +1,7 @@
 #!/bin/sh
-# diff_compiler_slice_oob.sh — #550 run≠build memory-safety regression.
+# diff_compiler_slice_oob.sh — `c.[lo..hi]` is the PANICKING slice form, on every
+# receiver and both engines.  Two bugs, one invariant: #550 (Array, run≠build memory
+# safety) and #3186 (String/List, engines agreed but both clamped).
 #
 # An out-of-range `arr.[lo..hi]` is well-typed (the bounds are runtime values — you
 # cannot statically reject every over-range slice), so `check` ACCEPTs it and this does
@@ -111,14 +113,10 @@ check_oob() {
 }
 
 # assert the control: run and build+exec both exit 0 with identical, correct stdout.
+# `expected` is passed in because the three receivers print differently ([|…|] / […] /
+# "…"); the six SHAPES asserted are the same for all three, boundary for boundary.
 check_ok() {
-  name="$1"; src="$FIX/$name.mdk"; bin="$TMP/$name.bin"
-  expected='[|2, 3|]
-[|2, 3, 4|]
-[|1, 2, 3, 4, 5|]
-[|1, 2, 3, 4, 5|]
-[||]
-[||]'
+  name="$1"; expected="$2"; label="$3"; src="$FIX/$name.mdk"; bin="$TMP/$name.bin"
 
   run_out="$(bound "$MEDAKA" run "$src" 2>/dev/null)"; run_code=$?
   bound env MEDAKA_ROOT="$ROOT" MEDAKA_EMITTER="$EMITTER" "$MEDAKA" build "$src" -o "$bin" \
@@ -130,7 +128,8 @@ check_ok() {
 
   if [ "$run_code" -eq 0 ] && [ "$exec_code" -eq 0 ] \
      && [ "$run_out" = "$expected" ] && [ "$exec_out" = "$expected" ]; then
-    pass=$((pass+1)); printf 'ok   %-26s (control: 6 in-bounds slices, run == build+exec)\n' "$name"
+    pass=$((pass+1))
+    printf 'ok   %-26s (control: 6 in-bounds %s slices, run == build+exec)\n' "$name" "$label"
   else
     fail=$((fail+1))
     printf 'CONTROL-BROKE %-16s an IN-BOUNDS slice changed — the guard over-rejects, or the\n' "$name"
@@ -146,7 +145,35 @@ check_oob slice_oob_incl          '2..99'
 check_oob slice_oob_negative      '-2..0'
 check_oob slice_oob_inverted      '2..0'
 check_oob slice_oob_incl_boundary '0..3'
-check_ok  slice_ok
+check_ok  slice_ok '[|2, 3|]
+[|2, 3, 4|]
+[|1, 2, 3, 4, 5|]
+[|1, 2, 3, 4, 5|]
+[||]
+[||]' Array
+
+# #3186: the String and List arms of `Slice`.  Both CLAMPED until #3186 — `run` and
+# build+exec agreed with EACH OTHER at exit 0, which is why no run-vs-build gate could
+# see it; what they disagreed with was `Slice (Array a)` (strict since #550) and their
+# own doc comments.  So these cases are not a run≠build pin like the Array ones above:
+# they pin that the two engines now agree on ABORTING, and the controls pin that the
+# new guard did not eat the legal boundaries on either engine.
+check_oob slice_oob_string_half     '2..98'
+check_oob slice_oob_string_negative '-2..1'
+check_oob slice_oob_list_half       '2..98'
+check_oob slice_oob_list_negative   '-2..1'
+check_ok  slice_ok_string '"el"
+"ell"
+"hello"
+"hello"
+""
+""' String
+check_ok  slice_ok_list '[20, 30]
+[20, 30, 40]
+[10, 20, 30, 40, 50]
+[10, 20, 30, 40, 50]
+[]
+[]' List
 
 echo
 printf 'diff_compiler_slice_oob.sh: %d passed, %d failed\n' "$pass" "$fail"

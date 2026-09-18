@@ -40,6 +40,7 @@ EMITTER="$ROOT/medaka_emitter"
 EMITBIN="$ROOT/test/bin/wasm_emit_modules_main"
 RUNTIME="$ROOT/stdlib/runtime.mdk"
 CORE="$ROOT/stdlib/core.mdk"
+STDLIB="$ROOT/stdlib"
 FIXDIR="$ROOT/test/wasm/fixtures_modules"
 RUNJS="$ROOT/test/wasm/run.js"
 CC="${CC:-clang}"
@@ -55,7 +56,7 @@ if [ "${1:-}" = "--one" ]; then
   st=0; msg=""
   if ! "$MEDAKA" build "$entry" -o "$obin" >"$WORKDIR/$name.build.err" 2>&1; then
     msg="$(printf 'FAIL %s (oracle build)\n%s' "$name" "$(cat "$WORKDIR/$name.build.err")")"; st=1
-  elif ! "$EMITBIN" "$RUNTIME" "$CORE" "$entry" "$root" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
+  elif ! "$EMITBIN" "$RUNTIME" "$CORE" "$entry" "$root" "$STDLIB" > "$wat" 2>"$WORKDIR/$name.emit.err"; then
     # Only a message produced by wasm_emit.mdk's own `gap` helper (the literal
     # substring "wasm_emit gap — ", emitted by every documented known-gap panic)
     # is a tolerated GAP. Any other emit-time panic (e.g. a hard closure-check
@@ -222,7 +223,7 @@ NODE_ABS="$(command -v "$NODE" 2>/dev/null || echo "$NODE")"
   done
 } > "$WORK/worklist.tsv"
 
-MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" CORE="$CORE" \
+MEDAKA="$MEDAKA" EMITBIN="$EMITBIN" RUNTIME="$RUNTIME" CORE="$CORE" STDLIB="$STDLIB" \
 MEDAKA_EMITTER="${MEDAKA_EMITTER:-$EMITTER}" NODE="$NODE_ABS" RUNJS="$RUNJS" \
 WORKDIR="$WORK" RESULTDIR="$RESULTS" \
   xargs -P "$JOBS" -n 3 bash "$0" --one < "$WORK/worklist.tsv"

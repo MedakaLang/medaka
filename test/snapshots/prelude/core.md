@@ -1,5 +1,5 @@
 # META
-source_lines=2058
+source_lines=2078
 stages=TYPES
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1228,8 +1228,14 @@ export impl IndexMut (Array a) Int a where
    `Option`-returning form. Lists are immutable, so there is no `IndexMut`
    instance. -}
 export impl Index (List a) Int a where
-  index [] _ = indexError "index out of bounds"
-  index (h :: t) i = if i <= 0 then h else index t (i - 1)
+  index xs i = indexGo xs i i
+
+-- Threads the caller's ORIGINAL index alongside the one being decremented down
+-- to the base case, so the out-of-bounds message can name the index the caller
+-- passed rather than the leftover 0 from the recursion.
+indexGo : List a -> Int -> Int -> a
+indexGo [] i0 _ = indexError "index \{intToString i0} out of bounds"
+indexGo (h :: t) i0 i = if i <= 0 then h else indexGo t i0 (i - 1)
 
 {- | `s[i]` is the character at codepoint position `i`.
 
@@ -1263,26 +1269,40 @@ export impl Slice (Array a) where
 
 {- | The substring over codepoint positions `[lo, hi)`.
 
-   Out-of-range bounds are clamped to the string.
+   Panics with a slice error when the range runs outside the string;
+   `string.sliceClamped` clamps instead.
 
    > slice "hello" 1 4
    "ell" -}
 export impl Slice String where
-  slice s lo hi = stringSlice lo hi s
+  slice s lo hi =
+    if lo < 0 || hi > stringLength s || hi - lo < 0 then
+      sliceError lo (hi - 1)
+    else
+      stringSlice lo hi s
 
 {- | The sublist over `[lo, hi)`, in `O(hi)`.
 
-   Out-of-range bounds are clamped to the list.
+   Panics with a slice error when the range runs outside the list;
+   `list.sliceClamped` clamps instead.
 
    > slice [10, 20, 30, 40] 1 3
    [20, 30] -}
 export impl Slice (List a) where
-  slice xs lo hi = sliceListGo xs 0 lo hi
+  slice xs lo hi =
+    if lo < 0 || hi - lo < 0 then
+      sliceError lo (hi - 1)
+    else
+      sliceListGo xs 0 lo hi
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in
--- `[lo, hi)`, stop at `hi` or end-of-list (clamps, mirror of eval's listSliceGo).
+-- `[lo, hi)`, stop at `hi`.  Reaching the end of the chain while the running
+-- index is still below `hi` is the `hi > length` half of `Slice (Array a)`'s
+-- guard, decided here so the walk doubles as the length check.
 sliceListGo : List a -> Int -> Int -> Int -> List a
-sliceListGo [] _ _ _ = []
+sliceListGo [] i lo hi
+  | i >= hi = []
+  | otherwise = sliceError lo (hi - 1)
 sliceListGo (x :: xs) i lo hi
   | i >= hi = []
   | i >= lo = x :: sliceListGo xs (i + 1) lo hi
@@ -2158,6 +2178,7 @@ filterThen : Thenable b => (a -> b Bool) -> List a -> b (List a)
 forEach : Thenable b => (a -> b Unit) -> List a -> b Unit
 runEach : Thenable a => List (a b) -> a Unit
 guard : Alternative a => Bool -> a Unit
+indexGo : List a -> Int -> Int -> a
 sliceListGo : List a -> Int -> Int -> Int -> List a
 any : Foldable b => (a -> Bool) -> b a -> Bool
 all : Foldable b => (a -> Bool) -> b a -> Bool

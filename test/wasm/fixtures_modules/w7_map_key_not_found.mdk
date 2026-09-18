@@ -1,0 +1,10 @@
+-- W7/W9, #3185: an absent-key `Map` index through the REAL prelude `Map`.
+-- `impl Index (Map k v) k v` raises `indexError` with an INTERPOLATED
+-- message naming the key (via `debug`) since #3187/#3185 — this needs the
+-- real prelude (MODULES corpus) to exercise `map.mdk`'s own impl, not a
+-- stub. Both the native oracle and the WasmGC module must abort with EMPTY
+-- stdout, the SAME `runtime error [E-INDEX-OOB]: key not found: "gamma"`
+-- stderr line, and exit 1.
+import map.{fromList}
+
+main = println (fromList [("alpha", 1), ("beta", 2)])["gamma"]

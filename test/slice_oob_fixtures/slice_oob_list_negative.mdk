@@ -1,0 +1,4 @@
+-- #3186: a negative `lo` on a List slice.  Pre-fix this clamped `lo` up to 0 and
+-- printed `[10, 20]` at exit 0.  Caught by the impl's own `lo < 0` test rather than by
+-- the walk, so it is a distinct arm from slice_oob_list_half and needs its own pin.
+main = println [10, 20, 30, 40, 50].[-2..2]

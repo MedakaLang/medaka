@@ -259,7 +259,7 @@ in ascending key order, so the text depends only on the entries.
 ### `Index (HashMap k v) k v`
 
 ```
-impl Index (HashMap k v) k v requires Eq k, Hashable k
+impl Index (HashMap k v) k v requires Eq k, Hashable k, Debug k
 ```
 
 `m[k]` is the value at `k`.

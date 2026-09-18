@@ -1,0 +1,10 @@
+-- #3187: `Array.setInPlace` OOB used to abort with a bare `panic` — coded
+-- E-PANIC, no index, and a different message shape than its own `IndexMut`
+-- sibling (`a[i] := v`).  It now routes through `indexErrorAt i`, same as
+-- `setIndex`.
+import array.{setInPlace}
+
+main =
+  let a = [|5, 6, 7|]
+  let _ = setInPlace 9 1 a
+  println "unreachable"

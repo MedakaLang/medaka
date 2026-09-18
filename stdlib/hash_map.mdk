@@ -348,10 +348,10 @@ export impl Display (HashMap k v) requires Display k, Display v, Ord k where
 
    > (fromList [(1, 10), (2, 20)])[2]
    20 -}
-export impl Index (HashMap k v) k v requires Eq k, Hashable k where
+export impl Index (HashMap k v) k v requires Eq k, Hashable k, Debug k where
   index m k = match get k m
     Some v => v
-    None => indexError "key not found"
+    None => indexError "key not found: \{debug k}"
 
 -- ── Property tests ──────────────────────────────────────────────────────
 

@@ -610,8 +610,8 @@ NEWLINE
 PIPE
 IDENT "otherwise"
 EQUAL
-IDENT "panic"
-STRING "Vector.setInPlace: index out of bounds"
+IDENT "indexErrorAt"
+IDENT "i"
 NEWLINE
 DEDENT
 NEWLINE
