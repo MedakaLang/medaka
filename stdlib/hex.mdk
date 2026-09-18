@@ -1,9 +1,10 @@
 {- | Hexadecimal encoding and decoding of bytes.
 
-   Bytes are an `Array Int` with each element from `0` to `255`, the same
-   form `readFileBytes` and `writeFileBytes` use. Each byte becomes two hex
-   digits, most significant first. `encode` produces lowercase digits and
-   `decode` accepts either case. -}
+   `encode`/`decode` take an `Array Int` with each element from `0` to `255`,
+   the same form `readFileBytes` and `writeFileBytes` use; `encodeBytes`/
+   `decodeBytes` take and return `Bytes` instead. Each byte becomes two hex
+   digits, most significant first. Encoding produces lowercase digits and
+   decoding accepts either case. -}
 
 -- hex/base64 codec wrappers over a module-local decode share identical wrapper bodies by design.
 -- lint-disable-file rule-duplicate-body
@@ -13,23 +14,23 @@
 -- codecs; the rule has no semantic/type-level check to tell them apart, not a real duplicate.
 -- lint-disable-file rule-stdlib-reimpl
 
-import array.{get, fromList}
+import array.{fromList}
+-- Wildcard, not selective: `import bytes.{Bytes, ...}` cannot bring the bare
+-- type name into scope here — `Bytes`'s constructor shares the type's own
+-- name, and the resolver's selective-member path (`resolve.mdk`'s
+-- `expandMemberNames`) reads a plain `Bytes` member as a request for that
+-- (module-private) constructor, not the type, and refuses it
+-- (`NewtypeCtorNotExported`). `import bytes.*` sidesteps that path entirely.
+import bytes.*
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 
--- In-bounds indexing via the safe `Array.get`, panicking on a miss.  Every
--- call site below only ever indexes within the array's own known length, so
--- the `None` arm is unreachable; this just avoids the internal-only
--- `arrayGetUnsafe` primitive.
-byteAt : Int -> Array Int -> Int
-byteAt i arr = match get i arr
-  Some b => b
-  None => panic "hex: index out of bounds"
-
+-- Every call site below only ever indexes within the array's own known
+-- length, so the internal-only `arrayGetUnsafe` primitive is safe here.
+-- (Not `Array.get`: that name is now ambiguous between `array` and the
+-- wildcard-imported `bytes`.)
 charAt : Int -> Array Char -> Char
-charAt i arr = match get i arr
-  Some c => c
-  None => panic "hex: index out of bounds"
+charAt i arr = arrayGetUnsafe i arr
 
 -- # Encoding
 
@@ -49,12 +50,24 @@ byteToHexChars b upper =
   let lo = bitAnd masked 15
   (digitChar hi upper, digitChar lo upper)
 
-encodeGo : Array Int -> Int -> Bool -> List Char -> List Char
-encodeGo bytes i upper acc
+encodeGo : Bytes -> Int -> Bool -> List Char -> List Char
+encodeGo bs i upper acc
   | i < 0 = acc
   | otherwise =
-    let (hi, lo) = byteToHexChars (byteAt i bytes) upper
-    encodeGo bytes (i - 1) upper (hi :: lo :: acc)
+    let (hi, lo) = byteToHexChars bs[i] upper
+    encodeGo bs (i - 1) upper (hi :: lo :: acc)
+
+encodeAs : Bytes -> Bool -> String
+encodeAs bs upper =
+  stringFromChars (arrayFromList (encodeGo bs (bytesLength bs - 1) upper []))
+
+{- | `b` as lowercase hex, two digits per byte.
+
+   > encodeBytes (fromArray [|255, 0, 16|])
+   "ff0010" -}
+export
+encodeBytes : Bytes -> String
+encodeBytes b = encodeAs b False
 
 {- | The bytes as lowercase hex, two digits per byte.
 
@@ -62,9 +75,7 @@ encodeGo bytes i upper acc
    "ff0010" -}
 export
 encode : Array Int -> String
-encode bytes =
-  stringFromChars
-    (arrayFromList (encodeGo bytes (arrayLength bytes - 1) False []))
+encode bytes = encodeBytes (fromArray bytes)
 
 -- > encode ([||] : Array Int)
 -- ""
@@ -77,9 +88,7 @@ encode bytes =
    "FF0010" -}
 export
 encodeUpper : Array Int -> String
-encodeUpper bytes =
-  stringFromChars
-    (arrayFromList (encodeGo bytes (arrayLength bytes - 1) True []))
+encodeUpper bytes = encodeAs (fromArray bytes) True
 
 {- | The UTF-8 bytes of a string as lowercase hex.
 
@@ -108,19 +117,43 @@ decodeGo chars i n acc
    `Err` when the string has an odd length or any character that is not a
    hex digit. Whitespace is not skipped.
 
+   > map toArray (decodeBytes "ff0010")
+   Ok [|255, 0, 16|]
+   > decodeBytes "zz"
+   Err "hex.decode: invalid hex digit" -}
+export
+decodeBytes : String -> Result String Bytes
+decodeBytes s =
+  let chars = toChars s
+  let n = arrayLength chars
+  if isOdd n then
+    Err "hex.decode: odd-length input"
+  else
+    map (xs => fromArray (arrayFromList xs)) (decodeGo chars 0 n [])
+
+-- > decodeBytes (encodeBytes (fromArray [||])) == Ok (fromArray [||])
+-- True
+-- > decodeBytes (encodeBytes (fromArray [|0|])) == Ok (fromArray [|0|])
+-- True
+-- > decodeBytes (encodeBytes (fromArray (fromList [0..=255]))) == Ok (fromArray (fromList [0..=255]))
+-- True
+-- > decodeBytes "f"
+-- Err "hex.decode: odd-length input"
+-- > decodeBytes "gg"
+-- Err "hex.decode: invalid hex digit"
+
+{- | The bytes written in a hex string.
+
+   `Err` when the string has an odd length or any character that is not a
+   hex digit. Whitespace is not skipped.
+
    > decode "ff0010"
    Ok [|255, 0, 16|]
    > decode "zz"
    Err "hex.decode: invalid hex digit" -}
 export
 decode : String -> Result String (Array Int)
-decode s =
-  let chars = toChars s
-  let n = arrayLength chars
-  if isOdd n then
-    Err "hex.decode: odd-length input"
-  else
-    map arrayFromList (decodeGo chars 0 n [])
+decode s = map toArray (decodeBytes s)
 
 -- > decode "FF0010"
 -- Ok [|255, 0, 16|]
@@ -149,3 +182,7 @@ prop "hex round-trip: decode (encode bs) == Ok bs" (xs : List Int) =
 prop "hex encode length is 2x byte length" (xs : List Int) =
   let bs = toByteArray xs
   stringLength (encode bs) == 2 * arrayLength bs
+
+prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int) =
+  let b = fromArray (toByteArray xs)
+  decodeBytes (encodeBytes b) == Ok b
