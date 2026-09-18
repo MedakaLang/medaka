@@ -11,8 +11,8 @@ style pass (slow, expensive).
 Two halves today:
 
 - **Comment register.** Every `--` comment block of two or more lines in
-  `compiler/` and `stdlib/`, scored for history narration, reviewer-addressed
-  prose, whether it belongs on an issue instead, and an overall 0 to 3
+  `compiler/` and `stdlib/`, scored for history narration, anchoring to an
+  in-flight change, whether it belongs on an issue instead, and an overall 0 to 3
   register level. The ranked list is the relocation roadmap for
   `[T-COMMENT-REGISTER]`.
 - **do-syntax candidates.** Every declaration that threads Result or Option
