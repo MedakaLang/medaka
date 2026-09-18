@@ -21,10 +21,11 @@
 -- compiled loopback fixture rather than doctests, which would run under the
 -- interpreter (NET-DESIGN.md §7).
 
-import array.{drop}
+import array.{setInPlace}
 import vector.{Vector, new, push, toArray}
 import string.{toUtf8, fromUtf8}
 import time.{Duration, toMillis}
+import test.{expectAll, expectEqual}
 
 -- # Handles
 
@@ -101,13 +102,112 @@ recv (Connection fd) n = netRecv fd n
    treated as a stalled connection. -}
 export
 sendAll : Connection -> Array Int -> <Net "_"> Result String Unit
-sendAll conn bs =
-  if arrayLength bs == 0 then
+sendAll (Connection fd) bs =
+  sendAllFrom (bytes off => netSendFrom fd bytes off) bs 0
+
+sendAllFrom : (Array Int -> Int -> <e> Result String Int) ->
+  Array Int ->
+  Int ->
+  <e> Result String Unit
+sendAllFrom write bs off =
+  if off >= arrayLength bs then
     Ok ()
-  else match send conn bs
+  else match write bs off
     Err e => Err e
     Ok 0 => Err "net.sendAll: 0 bytes written (connection stalled)"
-    Ok n => sendAll conn (drop n bs)
+    Ok n => sendAllFrom write bs (off + n)
+
+testSentBytes : Array Int -> Int -> Int -> List Int
+testSentBytes bs i hi =
+  if i >= hi then [] else arrayGetUnsafe i bs :: testSentBytes bs (i + 1) hi
+
+testRecordAlias : Ref (Option (Array Int)) ->
+  Ref Bool ->
+  Array Int ->
+  Int ->
+  Unit
+testRecordAlias first aliasSeen bs call =
+  if call == 0 then
+    first := Some bs
+  else if call == 1 then match !first
+    Some original =>
+      let _ = setInPlace 0 251 original
+      aliasSeen := arrayGetUnsafe 0 bs == 251
+    None => ()
+
+testScriptedSend : Ref Int ->
+  Ref (List Int) ->
+  Ref (List Int) ->
+  Ref (Option (Array Int)) ->
+  Ref Bool ->
+  Array Int ->
+  Int ->
+  Result String Int
+testScriptedSend calls offsets sent first aliasSeen bs off =
+  let call = !calls
+  calls := call + 1
+  offsets := !offsets ++ [off]
+  let _ = testRecordAlias first aliasSeen bs call
+  if call >= 3 then
+    Err "unexpected fourth send"
+  else
+    let n =
+      if call == 0 then 2 else if call == 1 then 3 else arrayLength bs - off
+    sent := !sent ++ testSentBytes bs off (off + n)
+    Ok n
+
+testScriptedObservation : Unit ->
+  (Result String Unit, Int, List Int, List Int, Bool)
+testScriptedObservation _ =
+  let calls = Ref 0
+  let offsets = Ref []
+  let sent = Ref []
+  let first = Ref None
+  let aliasSeen = Ref False
+  let payload = arrayFromList [10, 20, 30, 40, 50, 60, 70, 80]
+  let result =
+    sendAllFrom (testScriptedSend calls offsets sent first aliasSeen) payload 0
+  (result, !calls, !offsets, !sent, !aliasSeen)
+
+test "sendAll keeps one array while offsets cover exact bytes" =
+  let (result, calls, offsets, sent, aliasSeen) = testScriptedObservation ()
+  expectAll [
+    expectEqual (Ok ()) result,
+    expectEqual 3 calls,
+    expectEqual [0, 2, 5] offsets,
+    expectEqual [10, 20, 30, 40, 50, 60, 70, 80] sent,
+    expectEqual True aliasSeen,
+  ]
+
+test "sendAll rejects a zero-byte write exactly" =
+  expectEqual
+    (Err "net.sendAll: 0 bytes written (connection stalled)")
+    (sendAllFrom (_ _ => Ok 0) (arrayFromList [1]) 0)
+
+testFirstErrorSend : Ref Int ->
+  Ref (List Int) ->
+  Array Int ->
+  Int ->
+  Result String Int
+testFirstErrorSend calls offsets _ off =
+  let call = !calls
+  calls := call + 1
+  offsets := !offsets ++ [off]
+  if call == 0 then Ok 2 else if call == 1 then Err "boom" else Err "late call"
+
+test "sendAll returns the first host error without another write" =
+  let calls = Ref 0
+  let offsets = Ref []
+  let result =
+    sendAllFrom
+      (testFirstErrorSend calls offsets)
+      (arrayFromList [1, 2, 3, 4])
+      0
+  expectAll [
+    expectEqual (Err "boom") result,
+    expectEqual 2 !calls,
+    expectEqual [0, 2] !offsets,
+  ]
 
 recvAllLoop : Connection -> Vector Int -> <Net "_"> Result String (Array Int)
 recvAllLoop conn buf = match recv conn 4096

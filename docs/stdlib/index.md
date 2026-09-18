@@ -763,6 +763,7 @@ The host primitives.
 - [`netListenPort`](runtime.md#netlistenport)
 - [`netTcpAccept`](runtime.md#nettcpaccept)
 - [`netSend`](runtime.md#netsend)
+- [`netSendFrom`](runtime.md#netsendfrom)
 - [`netRecv`](runtime.md#netrecv)
 - [`netShutdown`](runtime.md#netshutdown)
 - [`netClose`](runtime.md#netclose)

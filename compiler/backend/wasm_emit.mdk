@@ -1883,6 +1883,7 @@ isNetExternW name = contains name [
   "netListenPort",
   "netTcpAccept",
   "netSend",
+  "netSendFrom",
   "netRecv",
   "netShutdown",
   "netClose",
