@@ -1779,16 +1779,15 @@ isLeafExternW name = contains
     -- arg is emitted-then-dropped; printing it to stderr is a nice-to-have not done here.
     "panic",
     -- Index-16a: `indexError : String -> a` -- the coded-OOB abort extern the Index/
-    -- IndexMut impls call; lowers to the same fixed E-INDEX-OOB trap CIndex/CStringIndex
-    -- already emit (message dropped, per the seam design).
+    -- IndexMut impls call; streams the caller's message after an E-INDEX-OOB banner
+    -- and traps, the shape `panic` uses (native peer: @mdk_oob_msg).
     "indexError",
     -- #1787: `indexErrorAt : Int -> a` -- the same coded-OOB abort carrying the
-    -- offending index.  wasm drops the index and traps with the fixed text, exactly
-    -- as it already drops sliceError's bounds; native formats it (@mdk_oob_at).
+    -- offending index, which the trap formats (wasmTrapNum; native @mdk_oob_at).
     "indexErrorAt",
     -- #670: `sliceError : Int -> Int -> a` -- the coded-OOB abort the Slice impl
-    -- raises; lowers to the same fixed E-SLICE-OOB trap the built-in slice path emits
-    -- (bound args dropped, matching indexError's seam design).
+    -- raises; lowers to a fixed E-SLICE-OOB trap the built-in slice path also emits,
+    -- with both bound args dropped.
     "sliceError",
     -- stage-A: bitwise / shift externs (Int -> Int -> Int).  Pure i64 ops over the
     -- box/unbox seam; no $str/$arr/$float dependencies.
@@ -2395,9 +2394,11 @@ noteW8Extern emit name =
       setRef emit.useCharClass True
   -- W10: panic's message arg is a $str → force the $str rep.  B5: the coded-trap
   -- lowering streams that message through $mdk_eprint_str (gated on this emission's
-  -- `useEPut`) after a fixed "runtime error [E-PANIC]: " prefix.
+  -- `useEPut`) after a fixed banner -- "runtime error [E-PANIC]: " for panic,
+  -- "runtime error [E-INDEX-OOB]: " for indexError (Index-16a), which lowers to the
+  -- same shape and so wants the same two reps.
   let _ =
-    if name == "panic" then
+    if contains name ["panic", "indexError"] then
       let _ = setRef emit.useStr True in setRef emit.useEPut True
   -- W10: the array intrinsic externs all build/read the $arr rep (and arrayFromList
   -- consumes a cons list).  Force useArray; arrayFromList also forces useList.
@@ -7856,12 +7857,16 @@ emitLeafExternRef prog env d "panic" [msg] =
     ++ ["unreachable"]
 emitLeafExternRef prog env d "panic" _ =
   gapLP prog "wasm W10: panic takes exactly one argument"
--- Index-16a: `indexError msg` reuses the existing coded E-INDEX-OOB trap (the
--- same fixed text CIndex/CStringIndex OOB already emit) -- the message
--- argument is dropped, matching the native @mdk_oob() abort (which also
--- ignores its message and prints the fixed text).
+-- Index-16a: `indexError msg` streams the coded line `runtime error
+-- [E-INDEX-OOB]: <msg>` to stderr and traps, the same shape `panic` uses above
+-- and the same line native's @mdk_oob_msg and the interpreter both print.  The
+-- $str rep and $mdk_eprint_str are forced for `indexError` in noteW8Extern.
 emitLeafExternRef prog env d "indexError" [msg] =
-  wasmTrap (progEmit prog) "E-INDEX-OOB" "index out of bounds"
+  wasmTrapBytes (progEmit prog) "runtime error [E-INDEX-OOB]: "
+    ++ emitRefExpr prog env d msg
+    ++ ["ref.cast (ref $str)", "call $mdk_eprint_str"]
+    ++ trapByteInstr 10
+    ++ ["unreachable"]
 emitLeafExternRef prog env d "indexError" _ =
   gapLP prog "wasm Index-16a: indexError takes exactly one argument"
 -- #1787: `indexErrorAt idx` raises E-INDEX-OOB naming the offending index, so all
@@ -7880,7 +7885,7 @@ emitLeafExternRef prog env d "indexErrorAt" _ =
   gapLP prog "wasm #1787: indexErrorAt takes exactly one argument"
 -- #670: `sliceError lo hiIncl` reuses the existing coded E-SLICE-OOB trap (the
 -- same fixed text the built-in slice path emits) -- both bound arguments are
--- dropped, matching indexError and the native @mdk_slice_oob abort.
+-- dropped, where native's @mdk_slice_oob formats them into the line.
 emitLeafExternRef prog env d "sliceError" [lo, hi] =
   wasmTrap (progEmit prog) "E-SLICE-OOB" "slice out of bounds"
 emitLeafExternRef prog env d "sliceError" _ =

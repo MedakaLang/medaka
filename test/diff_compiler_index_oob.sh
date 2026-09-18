@@ -13,6 +13,12 @@
 # whose abort (@mdk_oob_at / $mdk_write_err_int) formats the index itself.  This gate
 # locks that the two engines now print the SAME line, INCLUDING the number.
 #
+# `indexError` itself — the String-taking sibling a container with no index to
+# interpolate must use — kept the same divergence until #3187: native called the
+# argument-less @mdk_oob and threw the message away.  index_oob_message pins that its
+# argument now reaches stderr on both engines, so a map or a set can say which key
+# was absent rather than "index out of bounds".
+#
 # ── WHY THIS IS ITS OWN GATE AND NOT A DOCTEST ────────────────────────────────
 # EVERY DOCTEST RUNS UNDER THE INTERPRETER, AND THE INTERPRETER WAS THE ENGINE THAT
 # WAS ALREADY RIGHT.  A doctest asserting `index 9 out of bounds` passed throughout
@@ -30,9 +36,10 @@
 #   * exit code EXACTLY 1 — not "nonzero".  A SIGSEGV exits 139; a clean abort 1.
 #   * stdout EMPTY.
 #   * stderr EXACTLY the interpreter's own message, byte for byte, INCLUDING THE
-#     INDEX.  Pinning the number and not just the E-INDEX-OOB code is the whole
-#     point: the pre-#1787 native line carried the code and no number, and a guard
-#     that fired on the wrong side of a boundary would still carry the code.
+#     INDEX (or, for index_oob_message, the caller's prose).  Pinning the tail and
+#     not just the E-INDEX-OOB code is the whole point: the pre-#1787 native line
+#     carried the code and no number, and a guard that fired on the wrong side of a
+#     boundary would still carry the code.
 # `run`'s message has a `file:L:C:` prefix native aborts do not, so run is compared
 # on the SUFFIX and build+exec on the WHOLE line.
 #
@@ -72,11 +79,11 @@ pass=0; fail=0
 # NOTE it reports 142 on expiry where timeout reports 124; nothing here reads that.
 bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
 
-# assert a trapping fixture: run and build+exec BOTH abort with the exact E-INDEX-OOB
-# line naming `idx`, exit exactly 1, and print nothing on stdout.
-check_oob() {
-  name="$1"; idx="$2"; src="$FIX/$name.mdk"; bin="$TMP/$name.bin"
-  want="runtime error [E-INDEX-OOB]: index $idx out of bounds"
+# assert a trapping fixture: run and build+exec BOTH abort with the E-INDEX-OOB code
+# followed by exactly `tail`, exit exactly 1, and print nothing on stdout.
+check_abort() {
+  name="$1"; tail="$2"; src="$FIX/$name.mdk"; bin="$TMP/$name.bin"
+  want="runtime error [E-INDEX-OOB]: $tail"
 
   bound "$MEDAKA" run "$src" >"$TMP/$name.run.out" 2>"$TMP/$name.run.err"
   run_code=$?
@@ -102,8 +109,7 @@ check_oob() {
 
   if [ "$run_ok" -eq 1 ] && [ "$exec_ok" -eq 1 ]; then
     pass=$((pass+1))
-    printf 'ok   %-24s (run=build+exec=1, both "index %s out of bounds", stdout empty)\n' \
-      "$name" "$idx"
+    printf 'ok   %-24s (run=build+exec=1, both "%s", stdout empty)\n' "$name" "$tail"
   else
     fail=$((fail+1))
     printf 'FAIL %-24s want=%s\n' "$name" "$want"
@@ -111,6 +117,9 @@ check_oob() {
     printf '       exec exit=%s stdout=%.40s stderr=%s\n' "$exec_code" "$exec_out" "$exec_err"
   fi
 }
+
+# the numeric guards: the message is the abort's own `index N out of bounds` wording.
+check_oob() { check_abort "$1" "index $2 out of bounds"; }
 
 # assert the control: run and build+exec both exit 0 with identical, correct stdout.
 check_ok() {
@@ -151,6 +160,9 @@ check_oob index_oob_write     '9'
 check_oob index_oob_negative  '-3'
 check_oob index_oob_string    '10'
 check_oob index_oob_vector '4'
+# the prose arm: `indexError "…"` straight from source, no number anywhere in the
+# line.  Its only assertion is that the caller's own words survive to both engines.
+check_abort index_oob_message 'custom message'
 check_ok  index_ok
 
 echo

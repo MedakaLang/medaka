@@ -2738,17 +2738,19 @@ emitAbortExtern : Emit ->
 emitAbortExtern e env name args = match emitArgs e env args
   [a] =>
     if name == "indexError" then
-      -- indexError reuses the existing coded E-INDEX-OOB abort (@mdk_oob); the
-      -- message argument is evaluated above (for consistency with the other
-      -- abort externs) but ignored -- @mdk_oob takes no args and prints the
-      -- fixed "runtime error [E-INDEX-OOB]: index out of bounds" text.
-      let _ = emit e "  call void @mdk_oob()"
+      -- indexError carries its message into the coded E-INDEX-OOB abort
+      -- (@mdk_oob_msg), which prints "runtime error [E-INDEX-OOB]: <msg>" --
+      -- the same line the interpreter has always printed.  `a` is a tagged
+      -- string pointer passed through unchanged, as in the panic/exit branch
+      -- below; only the int-carrying arms untag.
+      let _ = emit e "  call void @mdk_oob_msg(i64 \{a})"
       ("1", LTUnit)
     else if name == "indexErrorAt" then
       -- indexErrorAt carries the offending index into the abort (@mdk_oob_at),
       -- which formats it -- so a built binary prints the same "index N out of
-      -- bounds" text `run` does, where plain indexError could only drop the
-      -- message (#1787).  The arg is a RAW i64 there, as in sliceError.
+      -- bounds" text `run` does without the caller interpolating a string on a
+      -- path whose inline budget cannot afford one (#1787).  The arg is a RAW
+      -- i64 there, as in sliceError.
       let idx_raw = untagInt e a
       let _ = emit e "  call void @mdk_oob_at(i64 \{idx_raw})"
       ("1", LTUnit)

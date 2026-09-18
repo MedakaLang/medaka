@@ -209,6 +209,26 @@ noreturn void mdk_oob(void) {
   exit(1);
 }
 
+/* Out-of-range access raised by a container's own Index/IndexMut impl that already
+ * knows what it wants to say (`indexError : String -> a`), as opposed to mdk_oob_at
+ * below, which is handed a bare index and does the wording here.  A container keyed
+ * by something other than an Int -- a map, a set -- has no number to interpolate, so
+ * the message has to travel.
+ *
+ * `w` is a tagged pointer to a Medaka string cell, the same rep mdk_panic reads: byte
+ * length in word 1, bytes at +24.  Unlike mdk_panic there is no 0x01-sentinel branch,
+ * because no caller here hands over a pre-formatted diagnostic -- every one passes
+ * plain prose, so the coded banner is unconditional. */
+noreturn void mdk_oob_msg(long long w) {
+  mdk_flush_run_stdout_on_abort();
+  const char *cell = (const char *)w;
+  long long byte_len = ((const long long *)cell)[1];
+  fputs("runtime error [E-INDEX-OOB]: ", stderr);
+  fwrite(cell + 24, 1, (size_t)byte_len, stderr);
+  fputc('\n', stderr);
+  exit(1);
+}
+
 /* Out-of-range `arr[i]` / `arr[i] := v` raised by a container's OWN Index/IndexMut
  * impl, carrying the offending index (#1787).  `idx` is a RAW (already >>1-untagged)
  * i64, matching mdk_slice_oob's convention.
