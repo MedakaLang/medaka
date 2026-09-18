@@ -123,6 +123,12 @@ public export data Value (e : Effect) =
   | VTuple (List (Value e))
   | VList (List (Value e))
   | VArray (Array (Value e))
+  -- the `ByteBlock` builtin: a mutable buffer of bytes, each element held in
+  -- 0..255.  The native cell is packed one byte per byte; here the backing is
+  -- an `Array Int` and the packing is unobservable, so what the two engines
+  -- have to agree on is the 0..255 domain -- every write masks, exactly as the
+  -- native store truncates.
+  | VByteBlock (Array Int)
   | VCon String (List (Value e))
   | VRecord String (List (String, Value e))
   | VRef (Ref (Value e))
@@ -175,6 +181,10 @@ ppValue (VTuple vs) = "(" ++ joinWith ", " (map ppValue vs) ++ ")"
 ppValue (VList vs) = "[" ++ joinWith ", " (map ppValue vs) ++ "]"
 ppValue (VArray vs) =
   "[|" ++ joinWith ", " (map ppValue (arrayToListG vs)) ++ "|]"
+-- Opaque: a byte block is a kernel with no rendering surface of its own, and the
+-- native backend cannot print a cell at all (emitPrint panics on LTCon).  A
+-- caller that wants bytes rendered goes through byteBlockToIntArray.
+ppValue (VByteBlock b) = "<byteblock:\{intToString (arrayLength b)}>"
 ppValue (VCon name []) = displayCtorName name
 ppValue (VCon name vs) =
   "\{displayCtorName name} \{joinSp (map ppValueAtom vs)}"
@@ -614,6 +624,7 @@ runtimeTypeTag (VBool _) = Some "Bool"
 runtimeTypeTag VUnit = Some "Unit"
 runtimeTypeTag (VList _) = Some "List"
 runtimeTypeTag (VArray _) = Some "Array"
+runtimeTypeTag (VByteBlock _) = Some "ByteBlock"
 runtimeTypeTag (VTuple vs) = Some (tupleHeadTag (listLen vs))
 runtimeTypeTag (VCon cname _) = lookupAssoc cname !ctorToTypeRef
 -- #1292: a record value's head tag is its CONSTRUCTOR name, so the collision
@@ -937,6 +948,9 @@ valueEq VUnit VUnit = True
 valueEq (VTuple a) (VTuple b) = valueListEq a b
 valueEq (VList a) (VList b) = valueListEq a b
 valueEq (VArray a) (VArray b) = valueListEq (arrayToListG a) (arrayToListG b)
+-- By CONTENT, not by cell identity -- the native peer is mdk_value_eq's
+-- byte-block arm (runtime/medaka_rt.c), which must give the same answer.
+valueEq (VByteBlock a) (VByteBlock b) = arrayToListG a == arrayToListG b
 valueEq (VCon n1 a1) (VCon n2 a2) = n1 == n2 && valueListEq a1 a2
 valueEq (VRecord n1 f1) (VRecord n2 f2) = n1 == n2 && fieldListEq f1 f2
 valueEq (VRef a) (VRef b) = valueEq !a !b
@@ -975,6 +989,7 @@ valueTag (VArray _) = 8
 valueTag (VCon _ _) = 9
 valueTag (VRecord _ _) = 10
 valueTag (VRef _) = 11
+valueTag (VByteBlock _) = 12
 valueTag _ = 99
 
 valueCompare : Value e -> Value e -> Ordering
@@ -987,6 +1002,10 @@ valueCompare VUnit VUnit = Eq
 valueCompare (VList a) (VList b) = compareValueLists a b
 valueCompare (VArray a) (VArray b) =
   compareValueLists (arrayToListG a) (arrayToListG b)
+-- Lexicographic over the bytes, shorter prefix first -- the native peer is
+-- mdk_value_cmp_raw's byte-block arm.
+valueCompare (VByteBlock a) (VByteBlock b) =
+  compare (arrayToListG a) (arrayToListG b)
 valueCompare (VTuple a) (VTuple b) = compareValueLists a b
 valueCompare (VCon n1 a1) (VCon n2 a2) = match compare n1 n2
   Eq => compareValueLists a1 a2
@@ -3367,6 +3386,14 @@ externBindings _ = [
   ("arraySetUnsafe", prim3M pArraySetUnsafe),
   ("arrayBlit", prim5M pArrayBlit),
   ("arrayFill", prim2M pArrayFill),
+  ("byteBlockMake", prim1 pByteBlockMake),
+  ("byteBlockLength", prim1 pByteBlockLength),
+  ("byteBlockGetUnsafe", prim2 pByteBlockGetUnsafe),
+  ("byteBlockSetUnsafe", prim3M pByteBlockSetUnsafe),
+  ("byteBlockCopyUnsafe", prim2 pByteBlockCopyUnsafe),
+  ("byteBlockFromIntArray", prim1 pByteBlockFromIntArray),
+  ("byteBlockToIntArray", prim1 pByteBlockToIntArray),
+  ("byteBlockFromString", prim1 pByteBlockFromString),
   ("Ref", prim1 pRef),
   ("setRef", prim2M pSetRef),
   ("putStr", prim1M pPutStr),
@@ -3786,6 +3813,54 @@ pArrayBlit (VArray src) (VInt srcOff) (VArray dst) (VInt dstOff) (VInt len) =
   blitGo src srcOff dst dstOff len
   VUnit
 pArrayBlit _ _ _ _ _ = panic "arrayBlit: bad operands"
+
+-- ── byte-block kernel (the `ByteBlock` builtin) ───────────────────────────
+-- The native cell packs one byte per byte; the backing here is an `Array Int`,
+-- so the one thing the engines must agree on is the 0..255 element domain.  The
+-- native store truncates to the low eight bits, so every write here masks.
+
+lowByte : Int -> Int
+lowByte n = bitAnd n 255
+
+-- byteBlockMake : Int -> ByteBlock — a fresh block of n zero bytes.
+pByteBlockMake : Value e -> <e> Value e
+pByteBlockMake (VInt n) = VByteBlock (arrayMake n 0)
+pByteBlockMake _ = panic "byteBlockMake: bad operands"
+
+pByteBlockLength : Value e -> <e> Value e
+pByteBlockLength (VByteBlock b) = VInt (arrayLength b)
+pByteBlockLength _ = panic "byteBlockLength: not a ByteBlock"
+
+pByteBlockGetUnsafe : Value e -> Value e -> <e> Value e
+pByteBlockGetUnsafe (VInt i) (VByteBlock b) = VInt (arrayGetUnsafe i b)
+pByteBlockGetUnsafe _ _ = panic "byteBlockGetUnsafe: bad operands"
+
+pByteBlockSetUnsafe : Value e -> Value e -> Value e -> <e> Value e
+pByteBlockSetUnsafe (VInt i) (VInt v) (VByteBlock b) =
+  let _ = arraySetUnsafe i (lowByte v) b
+  VUnit
+pByteBlockSetUnsafe _ _ _ = panic "byteBlockSetUnsafe: bad operands"
+
+-- byteBlockCopyUnsafe : Int -> ByteBlock -> ByteBlock — the first n bytes into a
+-- fresh block, sharing nothing with the source (freeze's engine half).
+pByteBlockCopyUnsafe : Value e -> Value e -> <e> Value e
+pByteBlockCopyUnsafe (VInt n) (VByteBlock b) =
+  VByteBlock (arrayMakeWith n (i => arrayGetUnsafe i b))
+pByteBlockCopyUnsafe _ _ = panic "byteBlockCopyUnsafe: bad operands"
+
+pByteBlockFromIntArray : Value e -> <e> Value e
+pByteBlockFromIntArray (VArray vs) =
+  VByteBlock (arrayFromList (map (v => lowByte (unInt v)) (arrayToListG vs)))
+pByteBlockFromIntArray _ = panic "byteBlockFromIntArray: not an Array"
+
+pByteBlockToIntArray : Value e -> <e> Value e
+pByteBlockToIntArray (VByteBlock b) =
+  VArray (arrayFromList (map VInt (arrayToListG b)))
+pByteBlockToIntArray _ = panic "byteBlockToIntArray: not a ByteBlock"
+
+pByteBlockFromString : Value e -> <e> Value e
+pByteBlockFromString (VString s) = VByteBlock (stringToUtf8Bytes s)
+pByteBlockFromString _ = panic "byteBlockFromString: not a String"
 
 buildWith : Value e -> Int -> Int -> <e> List (Value e)
 buildWith f i n =

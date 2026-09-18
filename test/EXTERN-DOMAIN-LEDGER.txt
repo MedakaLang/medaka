@@ -107,6 +107,10 @@ arrayBlit	PENDING	#476 out-of-range src/dst offsets and length
 bytesToFloat64	PENDING	#476 out-of-range byte offset into the Array Int
 stringSlice	PENDING	#476 out-of-range / inverted start/end indices
 stringFromUtf8Bytes	PENDING	#476 invalid / truncated UTF-8 byte sequences
+byteBlockMake	PENDING	#476 negative length is the edge
+byteBlockGetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB — probe with care before pinning
+byteBlockSetUnsafe	PENDING	#476 out-of-bounds index is genuinely unsafe/UB; the VALUE edge (a store outside 0..255 keeps the low eight bits) is exercised by test/engine_fixtures/byteblock_kernel.mdk, which is not a pinnable corpus
+byteBlockCopyUnsafe	PENDING	#476 a length past the source block's own length reads out of bounds
 #
 # ── TOTAL: every input yields a well-defined finite comparable value ──────────
 # Nullary constants.
@@ -152,6 +156,11 @@ arrayLength	TOTAL	total: length of any Array
 arrayCopy	TOTAL	total: shallow copy of any Array
 arrayFromList	TOTAL	total: build an Array from any List
 arrayFill	TOTAL	total: overwrite every slot of the given Array
+# Byte blocks: total over their whole-block operations.
+byteBlockLength	TOTAL	total: length of any ByteBlock
+byteBlockFromIntArray	TOTAL	total: every Int has low eight bits, for any Array Int
+byteBlockToIntArray	TOTAL	total: every byte is an Int in 0..255
+byteBlockFromString	TOTAL	total: UTF-8 encoding is defined for every String
 # Float functions with a total real domain (bounded or finite everywhere).
 sin	TOTAL	total, bounded output [-1,1]
 cos	TOTAL	total, bounded output [-1,1]

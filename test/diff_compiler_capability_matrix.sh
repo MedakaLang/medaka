@@ -167,7 +167,8 @@ sort -u -o "$WORK/interp_impl.txt" "$WORK/interp_impl.txt"
 # ── 3. LLVM ──────────────────────────────────────────────────────────────────
 : > "$WORK/llvm_impl.txt"
 for fam in isStrExtern isNumExtern isMathUnary isMathBinary isIoExtern isAbortExtern \
-           isArrIntrinsic isArrLeafExtern isCharExtern isStrCharExtern isUnicodeExtern \
+           isArrIntrinsic isArrLeafExtern isByteBlockExtern isCharExtern \
+           isStrCharExtern isUnicodeExtern \
            isAdtExtern isEnvExtern isFileExtern isNetExtern isRngExtern isPerfExtern \
            isBitExtern isHashExtern isDebugLitExtern; do
   extract_family "$LLVMMDK" "$fam" | quoted_names >> "$WORK/llvm_impl.txt"

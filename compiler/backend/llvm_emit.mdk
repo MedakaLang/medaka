@@ -2847,6 +2847,78 @@ emitArrLeafExtern e env "arrayFill" args = match emitArgs e env args
   _ => panic "llvm: arrayFill takes two arguments"
 emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 
+-- byte-block leaf externs (the `ByteBlock` builtin).
+-- C helpers in runtime/medaka_rt.c; byte-block cell = [i64 tag | i64 count |
+-- count bytes].  Unlike the array cell there is a header word, so `length` is a
+-- C call rather than the `loadTag` intrinsic `arrayLength` uses.
+-- byteBlockMake/CopyUnsafe/FromIntArray/ToIntArray/FromString return a cell
+-- (LTCon); Length/GetUnsafe return Int; SetUnsafe returns Unit.
+-- Do NOT end a fixture with a block-returning call: emitPrint LTCon panics.
+-- Project to scalar via byteBlockGetUnsafe / byteBlockLength in every fixture.
+isByteBlockExtern : String -> Bool
+isByteBlockExtern name = contains name [
+  "byteBlockMake", "byteBlockLength", "byteBlockGetUnsafe",
+  "byteBlockSetUnsafe", "byteBlockCopyUnsafe", "byteBlockFromIntArray",
+  "byteBlockToIntArray", "byteBlockFromString"
+]
+
+emitByteBlockExtern : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitByteBlockExtern e env "byteBlockMake" args = match emitArgs e env args
+  [n] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_make(i64 \{n})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockMake takes one argument"
+emitByteBlockExtern e env "byteBlockLength" args = match emitArgs e env args
+  [bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_length(i64 \{bb})"
+    (r, LTInt)
+  _ => panic "llvm: byteBlockLength takes one argument"
+emitByteBlockExtern e env "byteBlockGetUnsafe" args = match emitArgs e env args
+  [i, bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_get(i64 \{i}, i64 \{bb})"
+    (r, LTInt)
+  _ => panic "llvm: byteBlockGetUnsafe takes two arguments"
+emitByteBlockExtern e env "byteBlockSetUnsafe" args = match emitArgs e env args
+  [i, v, bb] =>
+    let _ =
+      emit e "  call void @mdk_byteblock_set(i64 \{i}, i64 \{v}, i64 \{bb})"
+    ("1", LTUnit)
+  _ => panic "llvm: byteBlockSetUnsafe takes three arguments"
+emitByteBlockExtern e env "byteBlockCopyUnsafe" args = match emitArgs e env args
+  [n, bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_copy(i64 \{n}, i64 \{bb})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockCopyUnsafe takes two arguments"
+emitByteBlockExtern e env "byteBlockFromIntArray" args =
+  match emitArgs e env args
+    [a] =>
+      let r = freshReg e
+      let _ = emit e "  \{r} = call i64 @mdk_byteblock_from_int_array(i64 \{a})"
+      (r, LTCon)
+    _ => panic "llvm: byteBlockFromIntArray takes one argument"
+emitByteBlockExtern e env "byteBlockToIntArray" args = match emitArgs e env args
+  [bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_to_int_array(i64 \{bb})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockToIntArray takes one argument"
+emitByteBlockExtern e env "byteBlockFromString" args = match emitArgs e env args
+  [s] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_from_string(i64 \{s})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockFromString takes one argument"
+emitByteBlockExtern e _ name _ =
+  gapE e ("unsupported byte-block extern " ++ name)
+
 -- char scalar externs (native extern catalog slice 8).
 -- charCode is INTRINSIC: Char and Int share the same tagged word encoding, so
 -- charCode is a pure re-type — emit the operand as-is and return LTInt.
@@ -3653,6 +3725,7 @@ externCatalog = [
   (isAbortExtern, emitAbortExtern),
   (isArrIntrinsic, emitArrIntrinsic),
   (isArrLeafExtern, emitArrLeafExtern),
+  (isByteBlockExtern, emitByteBlockExtern),
   (isCharExtern, emitCharExtern),
   (isStrCharExtern, emitStrCharExtern),
   (isUnicodeExtern, emitUnicodeExtern),
@@ -9953,6 +10026,13 @@ ctorTagShift = 4294967296
 -- merely "consistent." If that resolver check is ever removed, THIS is the place a
 -- silent tag collision would resurface — worth an emit-time assertion, not just a
 -- comment (EMITTER-SEMANTICS M2).
+-- Reserved type-id slots, so the next one added takes the first FREE id rather
+-- than a used one: 0 List, 1 Option, 2 Result, 3 Ordering, 4 ByteBlock.  Slot 4
+-- is NOT an ADT and deliberately has no `reservedTag` arm -- `ByteBlock` is a
+-- type name, and an arm here would hand its cell header to a user CONSTRUCTOR
+-- that happened to be spelled `ByteBlock`.  Its one construction site is
+-- mdk_byteblock_alloc in runtime/medaka_rt.c, which spells the same composite as
+-- MDK_BYTEBLOCK_TAG and pins it to `MDK_TAG(4, 0)` with a _Static_assert.
 reservedTypeBase : Int
 reservedTypeBase = 65536
 
