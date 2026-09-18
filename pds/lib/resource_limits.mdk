@@ -8,10 +8,11 @@
    Inbound HTTP framing and endpoint-body ceilings are not here: they belong
    to the codec that enforces them and live in `stdlib/http.mdk` as its own
    `max*` and `check*` exports. The OUTBOUND direction — a response received
-   from an off-box appview through `pds/lib/httpclient.mdk` — is untrusted
-   input by the same argument, so its ceilings DO live here, alongside the
-   repository and blob ones: `httpclient.mdk`'s codec enforces them but does
-   not own their values, matching every other consumer in this file. -}
+   from an off-box appview — is untrusted input by the same argument. Its
+   decoded ceilings are compatibility aliases of `stdlib/http.mdk`'s shared
+   codec; only the PDS wire-accumulation ceiling below remains local policy. -}
+
+import http as H
 
 -- Blob layer policy. Distinct from `http.maxRawBodyBytes`: that is the outer
 -- HTTP raw-body framing ceiling (`stdlib/http.mdk`'s `RawBody`), enforced
@@ -252,23 +253,20 @@ export
 maxProxiedCallsPerWindow : Int
 maxProxiedCallsPerWindow = 60
 
-{- | HTTP client response-side ceilings. A response from an off-box
-   appview is exactly the untrusted-input shape that has already produced two
-   of this project's worst bugs on the inbound side: an unbounded read and an
-   O(n^2) framing loop. Every length, chunk size and
-   header count `pds/lib/httpclient.mdk` decodes is checked against one of
-   these before it is trusted. -}
+{- | Compatibility names for the shared HTTP response ceilings. A response
+   from an off-box appview is untrusted input; `stdlib/http.mdk` enforces these
+   while the PDS socket layer separately enforces `maxHttpClientWireBytes`. -}
 export
 maxHttpClientStatusLineBytes : Int
-maxHttpClientStatusLineBytes = 8192
+maxHttpClientStatusLineBytes = H.maxHttpResponseStatusLineBytes
 
 export
 maxHttpClientHeaderBytes : Int
-maxHttpClientHeaderBytes = 65536
+maxHttpClientHeaderBytes = H.maxHttpHeaderBytes
 
 export
 maxHttpClientHeaderFields : Int
-maxHttpClientHeaderFields = 100
+maxHttpClientHeaderFields = H.maxHttpHeaderFields
 
 -- | The ceiling on one chunk's declared size, independent of how many bytes
 -- of the decoded body have accumulated so far — a single chunk-size line
@@ -276,48 +274,42 @@ maxHttpClientHeaderFields = 100
 -- rather than only once the running total crosses `maxHttpClientBodyBytes`.
 export
 maxHttpClientChunkBytes : Int
-maxHttpClientChunkBytes = 1048576
+maxHttpClientChunkBytes = H.maxHttpResponseChunkBytes
 
 export
 maxHttpClientChunks : Int
-maxHttpClientChunks = 65536
+maxHttpClientChunks = H.maxHttpChunks
 
 export
 maxHttpClientBodyBytes : Int
-maxHttpClientBodyBytes = 5242880
+maxHttpClientBodyBytes = H.maxHttpBodyBytes
 
 export
 checkHttpClientStatusLineBytes : Int -> Result String Unit
 checkHttpClientStatusLineBytes size =
-  if size > maxHttpClientStatusLineBytes then
-    Err "httpclient: status line exceeds 8192-byte resource limit"
-  else
-    Ok ()
+  match H.checkHttpResponseStatusLineBytes size
+    Ok () => Ok ()
+    Err _ => Err "httpclient: status line exceeds 8192-byte resource limit"
 
 export
 checkHttpClientHeaderBytes : Int -> Result String Unit
-checkHttpClientHeaderBytes size =
-  if size > maxHttpClientHeaderBytes then
+checkHttpClientHeaderBytes size = match H.checkHttpHeaderBytes size
+  Ok () => Ok ()
+  Err _ =>
     Err
       "httpclient: combined header and trailer section exceeds 65536-byte resource limit"
-  else
-    Ok ()
 
 export
 checkHttpClientHeaderFields : Int -> Result String Unit
-checkHttpClientHeaderFields count =
-  if count > maxHttpClientHeaderFields then
-    Err "httpclient: header field count exceeds 100 resource limit"
-  else
-    Ok ()
+checkHttpClientHeaderFields count = match H.checkHttpHeaderFields count
+  Ok () => Ok ()
+  Err _ => Err "httpclient: header field count exceeds 100 resource limit"
 
 export
 checkHttpClientChunkBytes : Int -> Result String Unit
-checkHttpClientChunkBytes size =
-  if size > maxHttpClientChunkBytes then
-    Err "httpclient: chunk size exceeds 1048576-byte resource limit"
-  else
-    Ok ()
+checkHttpClientChunkBytes size = match H.checkHttpResponseChunkBytes size
+  Ok () => Ok ()
+  Err _ => Err "httpclient: chunk size exceeds 1048576-byte resource limit"
 
 {- | `pds/test/protocol_all_engines.sh` cannot drive this ceiling through an
    actual chunked response the way it does the others: exceeding it needs
@@ -330,19 +322,15 @@ checkHttpClientChunkBytes size =
    True -}
 export
 checkHttpClientChunks : Int -> Result String Unit
-checkHttpClientChunks count =
-  if count > maxHttpClientChunks then
-    Err "httpclient: chunk count exceeds 65536 resource limit"
-  else
-    Ok ()
+checkHttpClientChunks count = match H.checkHttpChunks count
+  Ok () => Ok ()
+  Err _ => Err "httpclient: chunk count exceeds 65536 resource limit"
 
 export
 checkHttpClientBodyBytes : Int -> Result String Unit
-checkHttpClientBodyBytes size =
-  if size > maxHttpClientBodyBytes then
-    Err "httpclient: decoded body exceeds 5242880-byte resource limit"
-  else
-    Ok ()
+checkHttpClientBodyBytes size = match H.checkHttpBodyBytes size
+  Ok () => Ok ()
+  Err _ => Err "httpclient: decoded body exceeds 5242880-byte resource limit"
 
 {- | How many bytes of one upstream response a reader may accumulate before the
    codec has seen any of them.

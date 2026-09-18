@@ -74,6 +74,20 @@ chunkedBody : String
 chunkedBody =
   "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n3\r\nabc\r\n2\r\nde\r\n0\r\n\r\n"
 
+test "transfer coding is ASCII case-insensitive" =
+  let input =
+    toUtf8
+      "HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
+  match parseResponse input
+    Err _ => expectTrue False
+    Ok response => expectEqual "hello" (fromUtf8 (responseBody response))
+
+test "unsupported transfer coding remains rejected" =
+  expectTrue
+    (isErr
+      (parseResponse
+        (toUtf8 "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nhello")))
+
 test "a response that declares its length ends where it said it would" =
   let bytes = toUtf8 (declaredResponse "hello")
   expectEqual (Some (arrayLength bytes)) (responseBoundary bytes)
