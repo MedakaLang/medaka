@@ -885,10 +885,21 @@ don't read that message as a parser bug. `@Name` has no replacement (named insta
 
 ## Writing tests
 
-🛠️ **[WT-SKILL] Adding a fixture or a gate? Load the `gates` skill** — fixture/golden steps
-(`[WT-STEPS]`), the CI shard registration rule, and the dash-not-bash shell half
-(`[WT-DASH-PRINTF]`, `[WT-TIMEOUT]`). Add cases to the gate matching the stage changed
-(parser → `diff_compiler_parse*.sh`).
+🛠️ **[WT-VEHICLE] Pick the vehicle BEFORE you write the test — load the `write-tests`
+skill.** The default is native Medaka: a doctest, a `prop`, or a `test` block in a
+`*_test.mdk` sibling. When the subject is the compiled binary rather than interpreter
+behaviour, the vehicle is still a `*_test.mdk` — registered in `test/gates.toml` with
+`kind = "native"` — not a new shell script. Shell is for a trust anchor, external harness,
+or instrumentation, and then the script carries a `shell-because:` header that
+`medaka gate verify` pairs against its registry row. A shell gate written because the
+vehicle cannot yet express the check is debt with a name, `migration = "native-wrap"`, not
+a free choice. Epic #2600; design `docs/ops/TESTING-ARCHITECTURE.md`.
+
+🛠️ **[WT-SKILL] Once `write-tests` has said a gate is the right vehicle, load the `gates`
+skill** for the authoring half — fixture/golden steps (`[WT-STEPS]`), the CI shard
+registration rule, and the dash-not-bash shell half (`[WT-DASH-PRINTF]`, `[WT-TIMEOUT]`).
+Add cases to the gate matching the stage changed (parser → `diff_compiler_parse*.sh`) —
+that is where a case goes, never the answer to which vehicle to use.
 
 The two that must reach you before you load it — both silent:
 
@@ -910,7 +921,7 @@ The two that must reach you before you load it — both silent:
 | **extend-stdlib** | Pure-Medaka stdlib fn/impl/doctest/prop, not externs. User-reserved. |
 | **debug-pipeline** | Parse/typecheck/eval failure or a wrong value; first choice for [T-DISPATCH-LOADER]. Also carries the probe/flag catalogue and the two-arm differential recipe. |
 | **gates** | A gate or CI shard went red and you need to know what it proved; or you're adding a fixture, a golden, or a gate. |
-| **write-tests** | Asked to "write tests"/"add unit tests" for a module — picks the vehicle (doctest / prop / `*_test.mdk` sibling / gate) before you write one. |
+| **write-tests** | Asked to "write tests"/"add unit tests" for a module, or about to add ANY check — picks the vehicle (doctest / prop / `*_test.mdk` sibling / `kind = "native"` gate-test / shell) before you write one. Read it before `gates`, not after — see [WT-VEHICLE]. |
 | **jev-judgments** | Testing Jev (TypeSafe) against a class of fix candidates, adding or changing a question in `scripts/jev/`, or building a Jev-backed tool from `docs/design/JEV-DESIGN.md`'s roadmap — the enumerate / sample / label / ask / measure / iterate loop, and how to move a question's signal. Never a gate. |
 | **harden-typechecker** | Typechecker-*internal*: `type_error`, constraint/coherence/unification. |
 | **perf-hunt** | Stage slow, or `diff_compiler_perf_scaling.sh` red. |
