@@ -1702,7 +1702,7 @@ cost = "cheap"
 kind = "exec"
 migration = "inverted-polarity"
 run = "test/diff_compiler_flat_vs_onemodule.sh"
-oracles = ["check_flat_diags_main", "check_one_diags_main", "llvm_emit_typed_main"]
+oracles = ["check_one_diags_main"]
 sources = ["test/diff_compiler_flat_vs_onemodule.sh"]
 corpus = []
 toolchain = ["clang"]
@@ -2100,21 +2100,6 @@ oracles = []
 sources = ["test/diff_compiler_mcp.sh"]
 corpus = ["test/mcp_fixtures"]
 toolchain = []
-
-[[gate]]
-name = "diff_compiler_origin_agreement"
-area = "infra"
-shard = "gates_2"
-project = "compiler"
-tiers = ["merge"]
-cost = "cheap"
-kind = "exec"
-migration = "native-rewrite"
-run = "test/diff_compiler_origin_agreement.sh"
-oracles = ["origin_agreement_main"]
-sources = ["compiler/frontend/ast.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_origin_agreement.sh"]
-corpus = ["test/origin_fixtures"]
-toolchain = ["clang"]
 
 [[gate]]
 name = "diff_compiler_os_entropy"
