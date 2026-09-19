@@ -1,5 +1,5 @@
 # META
-source_lines=46502
+source_lines=46311
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -40,13 +40,9 @@ stages=DESUGAR,MARK
 -- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
 -- permuted accepting twin).
 --
--- The FLAT arm is a separate driver and always was: `checkProgramSchemesWithRuntime`
--- and `checkToLines` (the `Flat coreProg` case of `CheckMode`) run a single program
--- with no module graph, with their own stamper order (`flatStampOrder`) and their own
--- pre-pass marking.  Fix inference behaviour in whichever arm you measured, then
--- check the other.  The flat arm no longer has an ELABORATION driver of its own —
--- `elaborateDict` is gone and every emit/eval consumer elaborates through
--- `elaborateOne`/`elaborateModules`; what remains flat is the CHECK side.
+-- Single-file consumers are one-module projections of the same graph driver. There
+-- is no second checking mode or second stamper order; `checkOne*` and `elaborateOne`
+-- supply the one-module entry surface.
 --
 -- History: this began as a prelude-less HM engine validated against the (since removed)
 -- OCaml reference compiler.  Both that reference and its `dev/tc_probe.exe` harness are
@@ -1957,47 +1953,17 @@ argPerformableOccs _ _ _ = []
 -- the wrong module's row; under identity keying it HITS ITS OWN row.  Case 5
 -- is the residue (a genuinely absent type), not the mechanism.
 --
--- ── THE IDENTITY-LESS PATH, and why it is not a bare-name fallback ────────
--- 🚨 RESIDUAL, and A-2's stated bound — but NOT "no identity is built at all":
--- on the FLAT / single-file driver path the table holds BOTH populations at
--- once.  `checkProgramSeededSplit` (`:14219`) runs `stampDeclOrigins "core"
--- coreProgTy`, so the PRELUDE's own `DData`/`DNewtype`/`DTypeAlias`/
--- `DInterface` decls carry `OriginModule "core"` and register through
--- `registerAllData` → `recordParamKinds` → `tyTabKey` as identity-bearing
--- `TkIdent` rows.  Every FLAT **USER** declaration, by contrast, carries
--- `OriginUnresolved` (`stampFlatTyOrigins`, `frontend/resolve.mdk`) — for
--- those `mkIdent` returns `None`, so they key as `TkBare`.  That path is
--- `medaka check` on a no-import file, the LSP, `doc`, `repl` and the
--- playground.  A-2's MODULE-PATH-ONLY bound is specifically about the USER
--- half: giving the flat path's own declarations identity is drained by #1115
--- (E-1), which gives that path module ids.  Greppable here and in
--- `frontend/ast.mdk` as the Module-path-only bound.
---
--- What makes a table holding both populations SAFE is per-population
--- STAMPING AGREEMENT, not the miss policy: an occurrence and the declaration
--- it names are always stamped by the SAME pass reading the SAME scope, so a
--- `TkIdent` occurrence never meets a `TkBare` declaration of the same name,
--- or vice versa.  Checked, not asserted: `flatTyOriginScope`
--- (`frontend/resolve.mdk:4111-4117`) derives its scope from exactly
--- `dataRecordNames coreDecls ++ interfaceNamesOf coreDecls` — precisely the
--- decl set `stampDeclOrigin` covers (`dataRecordNames` reaches
--- `DData`/`DNewtype`/`DTypeAlias`; `interfaceNamesOf` reaches `DInterface`).
--- That agreement is what is verified here; it says nothing about whether the
--- flat USER half ever gets identity, which is the #1115 residual above, not
--- this paragraph's claim.
---
--- ⚠️ `TkBare` IS NOT A FALLBACK THE MODULE PATH CAN REACH.  `tabKeyEq`
+-- `TkBare` is not a fallback the graph path can reach. `tabKeyEq`
 -- (`types/registry.mdk`) never equates a `TkIdent` with a `TkBare`, in either
 -- direction, so an identity-bearing lookup can neither hit a bare row nor be
 -- hit by one — re-creating the bug "with extra steps" is structurally
 -- excluded rather than avoided by care.  What makes that safe rather than a
--- new silent hole is that the two halves cannot MIX within one run: an
--- occurrence acquires identity only from `tyOriginScope`/`flatTyOriginScope`,
+-- new silent hole is that the two halves cannot mix within one run: an
+-- occurrence acquires identity from the resolved graph's `tyOriginScope`,
 -- whose every layer is derived from declarations that the SAME pass stamps
 -- (own / imported / prelude), plus a builtin layer whose names have no
 -- declarations (case 1 above).  So "identity-bearing occurrence, unstamped
--- declaration" — the one shape that would turn a former hit into a miss —
--- has no producer.
+-- declaration" has no producer.
 tyTabKey : TyConOrigin -> String -> TabKey
 tyTabKey o n = tabKeyOf NsType o n
 
@@ -2022,10 +1988,6 @@ tyTabKey o n = tabKeyOf NsType o n
 -- per-population stamping-agreement argument A-2.3 wrote onto `tyTabKey`,
 -- one namespace over; both layers are produced by `stampOneModule`
 -- (`resolve.mdk`), in one function, so they cannot drift apart.
--- Checked, not assumed: `test/origin_fixtures/graph/agreement.golden` records
--- `alpha iface:Weighable … graph=mod:alpha` for a user interface and
--- `iface:<Name> 1 mod:core` for every prelude one.
---
 -- ── MISS POLICY: a miss ABSTAINS.  Derivation ─────────────────────────────
 -- Both readers already abstain on a miss and this unit does not change that:
 --   * `implCompletenessMsgsOfMap`'s `None` arm is `[]` with the pre-existing
@@ -2041,51 +2003,6 @@ tyTabKey o n = tabKeyOf NsType o n
 -- interface resolved to a module that declares no such interface", which
 -- cannot happen for an accepted program — resolve rejects the impl first.
 --
--- ── THE IDENTITY-LESS PATH ────────────────────────────────────────────────
--- 🚨 Same MODULE-PATH-ONLY bound A-2.3 recorded, and for the interface
--- namespace it bites HARDER, because this key is minted on BOTH driver arms:
--- `checkGradedImplHeads` is called from `checkBodyImpl`, which Flat and Module
--- share, and since #1557 A-3.5c the relocated cycle walk mints it on both arms too
--- (`flatClassEnvOf` on Flat, `deIfaces` on Module).  On the FLAT path `checkProgramSeededSplit` runs
--- `stampDeclOrigins "core" coreProgTy`, so the PRELUDE's interfaces are
--- `TkIdent`; every flat USER interface is `OriginUnresolved` and keys
--- `TkBare`, and so does a flat user `impl`'s `implOrigin` — the two halves
--- still meet, because they are stamped by the same pass over the same scope.
--- That is why `RegKey` had to grow a bare half for this unit (see its
--- doc-comment in `types/registry.mdk`): an `Ident`-only key would have made
--- every flat interface unregisterable, silently switching the graded
--- instance-head kind check OFF for `medaka check` on a no-import file.
--- Giving the flat path real identity is #1115 (E-1), not this unit.
---
--- ⚠️ ONE CROSS-POPULATION SHAPE EXISTS AND IT IS UNREACHABLE, NOT MERELY
--- UNLIKELY: a FLAT program declaring `impl <prelude iface> T`.  Its
--- `implOrigin` is stamped from `flatTyOriginScope`, which DOES carry the
--- prelude's own interfaces as `mod:core` (`resolve.mdk`, the `ifaceDeclaredIn
--- "core"` term), so such an impl keys `TkIdent … core` and meets the
--- prelude's own `TkIdent … core` declaration row.  The mismatch shape would
--- need a flat impl of a prelude interface whose occurrence was NOT in that
--- scope, and there is no such producer: the scope is built from exactly
--- `interfaceNamesOf coreDecls`, the same decl list `stampDeclOrigins "core"`
--- stamps.
---
--- ⚠️ AND THAT ARGUMENT IS STRUCTURAL, ONLY STRUCTURAL.  This paragraph used to
--- end "Verified behaviourally, not only by reading", citing
--- `test/typecheck_error_fixtures/graded_head_wrong_kind_flat.mdk`.  That
--- fixture cannot witness it: it declares its OWN `interface Graded`, so what it
--- exercises is a `TkBare` ↔ `TkBare` meeting, not the `TkIdent … core` ↔
--- `TkIdent … core` one this paragraph is about.  No fixture witnesses this
--- shape, and today none CAN: the FLAT arm reads only the graded slot kinds (the
--- completeness table is Module-only — see the mode switch feeding
--- `checkImplCompletenessMap`), and there a HIT on a non-graded prelude row and
--- an outright MISS both take `checkGradedImplTys`' `_ => ()` arm.  A prelude
--- interface would have to become GRADED for the difference to be observable at
--- all.  None is — DERIVE that, do not trust this sentence: a single file with
--- `impl <each higher-kinded prelude iface> Q` over `data Q a b = MkQ a b`, plus
--- one locally-declared graded interface as a POSITIVE CONTROL, yields exactly
--- ONE T-IMPL-KIND-MISMATCH and it names the LOCAL interface (run against this
--- HEAD, `medaka check --json`).  So the unreachability claim above rests on
--- reading `resolve.mdk`; the residual risk is this comment rotting, not a
--- missing gate.
 ifaceTabKey : TyConOrigin -> String -> TabKey
 ifaceTabKey o n = tabKeyOf NsIface o n
 
@@ -2310,8 +2227,7 @@ checkGradedImplHeadDecl _ _ _ = ()
 -- (`ifaceTabKey o iface` + slot position), identity-based not bare-name, preserving
 -- the identity mint from A-2.4. Ordinals are assigned in dependency-first order,
 -- matching the order the accumulator is grown in, so ordinal filtering and the
--- previous marshalled population agree. The Flat arm's CE is built from
--- registerAllData's decl list, so nothing switches off there either. See
+-- previous marshalled population agree. See
 -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "5. Decisions reopened, and decisions
 -- deliberately kept" (A-3.5c) for the prior bare-name table this replaced and the
 -- #1257 defect class it drains.
@@ -3134,8 +3050,8 @@ dropGoalsSince mark kinds =
 
 -- Error-path BLOCKER B4 (audit finding D3): missing-impl dispatch obligations.
 -- methodIfaceParamsRef maps each interface method NAME → (iface name, the iface's
--- typarams, the method's declared AST type).  Built once per checkProgramSeeded
--- from the program's DInterface decls.  At each EVar/EMethodAt occurrence of a
+-- typarams, the method's declared AST type). Built per module from its visible
+-- interface declarations. At each EVar/EMethodAt occurrence of a
 -- registered method, recordImplObligation captures the OCCURRENCE mono so that,
 -- after inference, checkImplObligations can read what the interface params
 -- resolved to (parallel-walking the declared type against the normalized
@@ -3154,11 +3070,9 @@ dropGoalsSince mark kinds =
 -- INTERFACE, silently, in either direction (S0).  The table stays name-keyed here (it
 -- is per-module state and a module's scope binds a bare method name to at most one
 -- declaration — resolve rejects the ambiguous case outright).  What is new is that on
--- the MODULE path the map installed into it is the universe's map OVERLAID with this
+-- the graph path the map installed into it is the universe's map OVERLAID with this
 -- module's own scope for exactly the colliding names — see `applyMethodScopeOverrides`
--- and the identity-keyed companion `universeMethodIdentsRef`.  The FLAT path is
--- unchanged and still last-write-wins; a flat program has one user module, so its
--- names cannot collide across modules (#1115 / E-1 is what would change that).
+-- and the identity-keyed companion `universeMethodIdentsRef`.
 
 -- C5 (TYPECHECK-AUDIT / Phase 112): names that are BOTH an interface method AND a
 -- cross-module-imported standalone top-level function (e.g. box's `toList`/`isEmpty`
@@ -3278,8 +3192,7 @@ recoveredShadowSym name tagRef =
 -- key LOOKUP readers only, so appending a module's contribution is
 -- byte-identical to rebuilding over the full universe. They survive
 -- per-module `resetState`, are cleared per RUN by `resetCrossModuleState`,
--- and are seeded by the core pass. The Flat path never touches them (it
--- rebuilds over its whole `prog`, already O(N)).
+-- and are seeded by the core pass.
 --   * interface-method name SET (buildDefinerShadows / buildStandaloneShadows)
 --   * top-level funDef name SET (buildStandaloneShadows' importedFns)
 --     (Do not add an impl KEY-BUCKET accumulator beside this list: all three
@@ -3367,40 +3280,6 @@ recoveredShadowSym name tagRef =
 -- module cannot name is unreachable by construction rather than merely unqueried.
 -- Survives per-module `resetState`; cleared per
 -- RUN by `resetCrossModuleState`; seeded by the core pass (also Module mode).
--- FLAT-PATH SHADOW FIX (facet 1): interface-method names that a USER top-level fn
--- shadows on the single-file flat check path.  processSCC drops a scheme with one
--- of these names from the env it THREADS FORWARD, so a later prelude binding
--- (`neq x y = not (eq x y)`) resolves the name to the METHOD scheme (kept in the
--- base env / globalS) rather than the user's shadowing fn.  Set by checkProgramSeeded
--- right before processTopGroups; empty everywhere else (multi-module path checks
--- core in isolation and never needs this).  See checkProgramSeeded for rationale.
-
--- FLAT-PATH SHADOW SCOPING (SHADOW-SEMANTICS S1: shadow-hood is per-module, per-name).
--- The flat path hands checkProgramSeededSplit ONE program, `core ++ user`, and then
--- applied the definer-shadow name set to EVERY occurrence in it — INCLUDING the
--- prelude's own bodies.  So a user file that merely DEFINES (and never uses)
--- `map : Int -> Int` made core's `map2`/`map3`/`replaceWith`/`discard` type their own
--- `map` calls against the USER's `map`, yielding 14 errors — all inside core, all
--- reported at a fabricated `1:0` on the user's signature.  (Once SHADOW-SEMANTICS S2 is
--- inverted so a standalone WINS over a same-named method, the same leak stops merely
--- mistyping and starts ROUTING the prelude's calls into user code — a silent miscompile
--- of the prelude.)  The multi-module path never had this: checkModuleFullImpl seeds the
--- shadow set PER MODULE and checks core in ISOLATION.
---
--- These three refs reproduce that isolation on the flat path WITHOUT splitting the
--- inference: definerShadowNamesRef is toggled OFF while a CORE-owned letrec group (and
--- core's impl/default/prop/test bodies) is inferred and back ON for the user's, so every
--- consumer of that ref (definerShadowVarHead / definerShadowArgHead /
--- maybeStandaloneValueMono / recordImplObligation / resolveRLocalSite) becomes
--- per-module for free.  Empty/False on every other path — resetState clears them and
--- ONLY a checkProgramSeededSplit with a NON-EMPTY prelude sets them — so the
--- multi-module path and the prelude-free probe paths are byte-identical.
-
--- the prelude's own top-level fn names (a set: this is consulted once per letrec group).
-
--- the definer-shadow names of the USER module only — what definerShadowNamesRef holds
--- whenever a user-owned group/body is being inferred.
-
 -- C5: arg-position method occurrences whose name is a standalone-shadow, recorded
 -- UNGATED (the ordinary arg-stamp machinery is emit-path-only, but eval also
 -- arg-tag-dispatches and panics on a receiver with no impl — box's `toList b`).
@@ -3857,7 +3736,7 @@ ieCandidacyVisibleAt _ _ = True
 -- SUSPECTED-UNPROVEN, and recorded rather than fixed because it is not reachable
 -- today: the ids come from the very list `buildDeclEnvs` indexed, within one driver
 -- invocation, so a checking reader cannot arrive with an id the envelope never saw.
--- Probed against the #1223 nested-root shape (`test/origin_fixtures/nested`) — the
+-- Probed against the retired #1223 nested-root fixture — the
 -- one place a module id has historically disagreed with itself — and all three checks
 -- fire identically on both arms.  A-3.5a/A-3.5b relocate MORE checking readers behind
 -- this same ordinal; whoever writes them must not read the paragraph above as a
@@ -5665,7 +5544,7 @@ deRecordIdentTyNames ((_, tyName, _) :: rest) =
 -- left unread), which is this unit's `cross_allowed` shrink.
 --
 -- WHAT IS STILL NOT READ: `ieInst`/`InstRef` and `ieMethods`, both payload for
--- A-3.7 (coherence) and B-2.  The Flat path is untouched and still builds its own
+-- A-3.7 (coherence) and B-2. The standalone decl-list helpers still build their own
 -- `buildImplUniverse` over its whole program — that shim retires at E-4, not here.
 
 -- The INSTANCE IDENTITY this tree does not otherwise have.  `cohClassify`'s ledger
@@ -5732,8 +5611,8 @@ instRefSeq (InstRef _ _ s) = s
 --   ./medaka build compiler/entries/wasm_emit_typed_main.mdk   -> exit 1,
 --   runtime error [E-PANIC]: llvm: CFieldAccess: unknown field 'ieOrd'
 -- reproduced in CI on the `wasm` job, which cascaded `gates (backend)` into a
--- phantom-skipped `diff_compiler_tmc_parity`.  That entry reaches `elaborateDict`
--- (the FLAT path) and therefore `checkBodyImpl` — which contains the `IE` accessor
+-- phantom-skipped `diff_compiler_tmc_parity`. Before driver collapse that entry
+-- reached the retired single-program elaborator and therefore `checkBodyImpl`,
 -- (`ieShadowCompare` at the time this was measured, `ieUniverseAt` since A-3.4 PR2;
 -- either way `checkBodyImpl` mentions `ImplRow`'s fields and the entry's closure
 -- therefore contains the field ACCESS) — but it never reaches `buildDeclEnvs`, hence never
@@ -5864,12 +5743,12 @@ buildImplEnvGo (m :: rest) ia =
     iaSnaps = ieSnapStep rows ia.iaSnaps,
   }
 
--- ── ARCH B-2.1-a2 (Stage B sprint): the FLAT arm's `ImplEnv` ─────────────────
+-- ── ARCH B-2.1-a2 history: standalone-decl-list `ImplEnv` ────────────────────
 --
 -- `buildImplEnv` above needs an ENVELOPE (`List DeclEnvModule`), which only the
 -- graph driver builds (`buildDeclEnvs` ← `graphPreamble`, reached from `driveGraphK`
 -- and from `checkModulesPreambleK`'s projection of it).
--- The FLAT path — `checkProgramSeededSplit` → `checkBodyImpl (Flat coreProg)`, reached
+-- The retired single-program path reached this helper through `checkBodyImpl`;
 -- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, and `lint`'s policy pass
 -- — never calls it, so `declEnvsRef.deImpls` is `emptyImplEnv` there.  The
 -- `snapshot` tool and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries
@@ -6522,7 +6401,7 @@ ieHeadProbeZmod : List Decl
 ieHeadProbeZmod =
   [ieSameImplIn "zmod", ieGenImplIn "zmod", ieLooseImplIn "zmod"]
 
--- the SAME four decls as one flat program — the Flat arm's input, so both once-per-row
+-- the SAME four decls as one standalone program, so both once-per-row
 -- filing paths are graded over one corpus and a drift between them is visible.
 ieHeadProbeDecls : List Decl
 ieHeadProbeDecls = ieHeadProbeAmod ++ ieHeadProbeZmod
@@ -6734,7 +6613,7 @@ ieProbeBlobHead = headKeyOfCon (OriginModule "amod") "Blob"
 -- `universeIfaceRequiredRef` writer (`insertIfaceRequired`) stored under the
 -- SAME `regKeyOfTab (ifaceTabKey ifaceOrigin name)` key, so relocating
 -- impl-completeness onto this row is a population/lifetime move on the Module
--- arm and not a re-key (the re-key is confined to the Flat arm, which was on a
+-- arm and not a re-key (the historical single-program arm was on a
 -- bare first-match scan).
 --
 -- ⚠️ NO `ceLoc` FIELD, and that is a deliberate departure from a literal
@@ -6928,7 +6807,7 @@ ceSlotKindsAt key cur i env = match ceLookupAt key cur env
 
 -- #1557 A-3.5a: interface [key]'s REQUIRED-method names at the reading module's
 -- ordinal — the relocation target of `universeIfaceRequiredRef`'s registry lookup
--- (Module arm) and of `ifaceRequiredMethods`' bare first-match scan (Flat arm).
+-- and of the retired bare first-match scan.
 --
 -- 🚨 IT MUST GO THROUGH `ceLookupAt`, NOT `regLookupK … env.ceByKey`.  A second
 -- open-coded path to `ceByKey` would bypass `declEnvVisibleAt` and silently widen
@@ -7582,15 +7461,15 @@ pushNumLitObl predicate occurrence loc scope = wPush
 -- LSP hover: every local binding (let-bound name, lambda param, function-clause
 -- param, match-arm binder) flows through inferPat's PVar/PAs arms.  Capture
 -- (name, mono var) here so hover can render a *local* variable's inferred type:
--- `checkProgramSchemes` only returns top-level + global schemes, so without this
+-- Scheme-returning entries expose only top-level + global schemes, so without this
 -- a hover over e.g. a `let input = …` name finds nothing and returns null.  The
--- mono var is union-find-solved by the time inference ends; checkProgramSeeded
+-- mono var is union-find-solved by the time inference ends; the module checker
 -- then generalizes each into `localSchemesOut`, which the LSP reads as a hover
 -- fallback.  This side-channel does NOT enter the returned env, so completion and
 -- inlay-hint output (which consume the env directly) are unaffected.
 
 -- Hover side-channel for the SEED (runtime.mdk externs: putStrLn, readLine, …).
--- checkProgramSeeded keeps the seed in scope for inference but excludes it from
+-- The module checker keeps the seed in scope for inference but excludes it from
 -- the returned env (see its comment), so externs aren't otherwise hoverable.
 
 -- Getters for the LSP (cross-module).  The raw Refs are nullary value globals
@@ -7639,7 +7518,7 @@ recordLocalBind name loc v =
 --                      constraint monos, resolved to RKey/RDict after inference.
 
 -- WS-1b: the program decls (interfaces) the supers-expansion reads.  Set by each
--- driver (elaborateDict / the module path) BEFORE inference; read by inferDictAtFound
+-- graph driver before inference; read by inferDictAtFound
 -- to expand a call site's constraint slots with their transitive supers.  Read-only
 -- during inference, so it needs no reset-lifecycle care.
 
@@ -8393,7 +8272,7 @@ data CrossRun = CrossRun {
   --      is gone with this cell; re-add neither.
   --   `universeIfaceRequiredRef` (A-3.5a, #1557) -- stage K's `CE` already holds that
   --      value under that key (`ceRowRequired`); its one reader
-  --      `implCompletenessMsgsOfMap` now calls `ceRequiredAt`, and the FLAT arm's
+  --      `implCompletenessMsgsOfMap` now calls `ceRequiredAt`, and the retired arm's
   --      separate bare-name scan `ifaceRequiredMethods` went with it, so there is now
   --      ONE impl-completeness checker for both modes.  ⚠️ It was never in the
   --      `loadDataUniverse`/`storeDataUniverse` ladder, so unlike A-3.5c its retirement
@@ -8543,10 +8422,10 @@ data RecDictApp = RecDictApp (Ref (List Route)) String String Mono ScopeId EvId
 --   dictAppFns    : (enclosing fn, a constrained-fn call's instantiated constraint
 --                   monos) — propagates a constraint to an unsignatured CALLER
 --   promotedRef   : fns discovered THIS pass to carry an inferred constraint; read
---                   by elaborateDict to grow the dict-passed set on the next pass
+--                   by the retired promotion fixpoint to grow the dict-passed set
 --   dictEligibleRef: the USER fn names eligible for promotion (the prelude's
 --                   constrained fns stay arg-tag/RKey — out of scope).  Set by
---                   elaborateDict; NOT cleared by resetState (constant per run).
+--                   the old elaborator; NOT cleared by resetState (constant per run).
 --
 -- PERF: both are INDEXED BY ENCLOSING FN rather than kept as flat (fn, mono) assoc
 -- lists.  Their sole reader, `inferredConstraintIds`, selects the entries of ONE fn,
@@ -8579,9 +8458,9 @@ sitesFor fn idx = optionOr [] (omLookup fn idx)
 -- two cannot drift.  maybeInferConstraint tests it per SCC member per discovery pass —
 -- an O(members × eligible) scan over the whole program when it was a list.
 
--- Whether checkProgramSeeded ALSO infers each parametric impl's return-position
+-- Whether the retired single-program checker also inferred each parametric impl's
 -- method bodies (instance-`requires` dict-passing, Phase 83/84 single-level).  ON
--- only for the elaborate / dict path (elaborateDict sets it); OFF for the
+-- only for the old elaborate/dict path; off for the
 -- `=== TYPES ===` golden path (checkProgram) and the multi-module path
 -- (elaborateModules) so their scheme output stays byte-identical.  Deliberately
 -- NOT reset by resetState — the entrypoint that owns the path sets it.
@@ -8774,9 +8653,11 @@ resolveArgStamps ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
 -- (inside entailInst) upgrades to the canonical full-type impl key so eval's hasTag
 -- matches the right impl's `k`.  No collision → bare head, unchanged.
 -- ⚠️ tagRef is NOT always RNone-seeded: rewriteArgScoped (~7438) seeds a standalone-shadow
--- arg site to `RLocal <sym> []`, and resolveRLocalSites (later) leaves an importer-shadow
--- site UNTOUCHED — so the pre-S3c None arm's `()` was load-bearing: it PRESERVED that
--- RLocal seed.  For EKArg `entail` yields RNone ONLY from its fallback (assum→RDict,
+-- arg site to `RLocal <sym> []`.  At an `EKArg` site, `resolveRLocalSites` leaves that
+-- importer seed untouched only for an ungrounded receiver or a grounded receiver with a
+-- visible impl; a no-impl grounded receiver is restamped `RLocal`.  So the pre-S3c None
+-- arm's `()` was load-bearing: it PRESERVED the seed until that receiver decision.  For
+-- EKArg `entail` yields RNone ONLY from its fallback (assum→RDict,
 -- inst→RKey), so guarding the stamp on RNone reproduces that do-nothing None arm exactly
 -- and never clobbers an RLocal seed.  implRef is []-seeded everywhere (every EMethodAt
 -- construction — 7313/7355/7356/7438/7441/7443 — uses `(Ref [])`, and only this resolver
@@ -9186,7 +9067,7 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- ── non-exhaustive-match warning accumulator (the type-aware `check_match`) ──
 -- `inferMatch` pushes a warning here for every `match` whose non-guarded arms
 -- don't cover the scrutinee's type.  `matchOracle` is the ctor oracle the matrix
--- recursion consults; the `checkMatchToLines` driver sets it from the program's
+-- recursion consults; `checkOneMatchToLines` seeds it from the program's
 -- data decls (so it sees the same user + builtin ctors check_match does) before
 -- inference runs.  Neither is touched by `resetState` — the driver seeds them and
 -- reads `matchWarnings` after the typecheck pass; runs that ignore match warnings
@@ -9195,7 +9076,7 @@ mainTypeIsFloat _ = match driverState.value.mainSchemeRef.value
 -- parallel `matchWarningLocs`) and the actionable-fix help (formerly the message-
 -- keyed `matchWarningHelp`) INLINE — no parallel lists, no lookup-by-message.  The
 -- `TcDiag.msg` holds the FULL "Warning: …"-prefixed string exactly as the old
--- `List String` did, so the text-rendering paths (checkMatchToLines,
+-- `List String` did, so the text-rendering paths (`checkOneMatchToLines`,
 -- checkToLinesWithRuntime, checkModulesEntryReport) stay byte-identical; only the
 -- prefix strip happens on the driver/diagnostics.mdk side.
 --
@@ -9244,10 +9125,10 @@ hadMatchWarnings _ = match driverState.value.matchWarnings.value
 -- that keep every tyvar/effvar id unique across the graph so an entry recorded in one
 -- module can never alias one recorded in another.  Minted once per graph by
 -- `resetGraphState` — from `resetCrossModuleState` (every Module driver's preamble)
--- and from `checkBodyImpl`'s Flat arm (a loader-less driver IS its whole graph).
+-- and from every graph preamble, including the one-module projection.
 --
 -- The channels are still DRAINED PER MODULE today, by the stamper sequence in
--- `elabModuleStamp` / `elaborateDict`, and that drain must see exactly this module's
+-- `elabModuleStamp`, and that drain must see exactly this module's
 -- entries: `recordModuleStart` notes each channel's length as the module begins and
 -- `moduleRanges` keeps the (module id, marks) pairs — every entry a module records is
 -- consed after its mark, contiguously, because modules are processed one at a time.
@@ -10259,7 +10140,7 @@ data PerRun = PerRun {
   pinnedLocals : Ref (List (Mono, String, String, Option Loc)),
   -- This module's marking state (`ModuleMarking`): the mark context computed once
   -- at module start, the top-level binding-id scope, and the dict-name set the
-  -- schedule grows as the module's own groups promote.  `None` on the Flat arm,
+  -- schedule grows as the module's own groups promote.
   -- whose callers mark the whole program before inference.
   markingRef : Ref (Option ModuleMarking),
 }
@@ -10355,7 +10236,7 @@ perRun = Ref (freshPerRun ())
 -- every field, so the set that resets == the set in PerRun, enforced by the constructor.
 -- #80/#201: resetState does NOT (re-)seed effect domains.  effectDomains is now owned by
 -- populateEffectDomains, called ONCE per compile over the WHOLE import graph
--- (checkProgramSeededSplit for the flat path; checkModulesPreambleK / elaborateModules driver
+-- (`checkModulesPreambleK` / `elaborateModules` driver
 -- preambles for the multi-module paths).  A per-module re-seed here would wipe module A's
 -- declared effect domains before module B is checked — a module using an effect declared in A
 -- would then see only builtins.  effectDomains has exactly ONE writer (populateEffectDomains →
@@ -10576,7 +10457,7 @@ monoSpineDepth t = match normalize t
 -- from.  They are therefore seeded, and seeded HERE rather than into the ref
 -- itself: the Module path REPLACES that whole list per module
 -- (`declEnvSeedDataUniverse`), so a value planted in `freshPerRun` would survive
--- on the Flat path and be silently wiped on the Module path — the exact
+-- on one entry path and be silently wiped on another — the exact
 -- single-file-vs-cross-module split a seed must not have.
 --
 -- ⚠️ EXACTLY TWO SEEDS, NOT FOUR.  `Vector`/`HashMap` are ordinary Medaka
@@ -11158,7 +11039,7 @@ ppSchemeNamed n s =
 -- 🚨 The gap this closes is in the OBLIGATION SIDE-CHANNEL, not in the scheme list.
 -- A `Scheme` is `Forall _ _ Mono` — it carries no context — so every `=>` on every
 -- display surface comes from `perRun.schemeObligationsRef`, which holds the
--- obligations of the ONE module last checked.  On the FLAT arm that module is
+-- obligations of the one module last checked. On a one-module graph that module is
 -- `prelude ++ buffer`, so `println` renders `Display a => a -> <IO> Unit`.  On the
 -- MODULE arm each module gets its own `resetState`, and the prelude's obligations
 -- are snapshotted out to `crossRun.coreSchemeObligationsRef` by
@@ -12649,7 +12530,7 @@ argDispatchOf name =
 -- (`universeMethodDispatchIdxRef`) are gone, along with this reader's `bare`
 -- parameter.  `argNames` — the one use of the old table that was a NAME SET rather
 -- than an index lookup — is now a pure local `map fst (argDispatchIndices …)` at both
--- of its sites (`elaborateDict`, `markSetsOf`); it needed no table storage, only the
+-- of its sites (`markSetsOf`); it needed no table storage, only the
 -- same structural walk, so no third copy of the universe survives.
 dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchIdxScoped name byId = match admittedIfaceFor name
@@ -14513,7 +14394,7 @@ resolveFieldAmbiguous te fname owners = match normalize te
 --     receiver whose head was never stamped at all matches ZERO candidates and
 --     falls through to exactly today's answer — never "the first one".
 --   * ⚠️ IT IS LIVE ON THE FLAT/SINGLE-FILE DRIVER.  The retracted claim was that
---     the flat driver, where every decl is `TkBare`, "matches ZERO candidates".
+--     the retired unstamped driver, where every decl was `TkBare`, matched zero candidates.
 --     FALSE: `TkBare Ns String` CARRIES the type name, so two bare keys naming the
 --     same type ARE equal, and the narrowing selects there.  Measured: `flat/p.mdk`
 --     (two single-ctor records sharing field `tag`, concrete receiver) goes from a
@@ -15241,19 +15122,28 @@ builtinClassesGo (_ :: rest) acc = builtinClassesGo rest acc
 -- the CLOSED spelling→member map, written once.  A name that is not one of the four
 -- contributes nothing, which is what makes `builtinClassesGo` safe to run over a decl
 -- list that may contain user declarations (the flattened-prelude arm).
--- Presence accumulates with `||`: two declarations of one spelling can only ever ADD
--- presence, so a methodless second declaration cannot un-present a real one.
+-- Presence and identity accumulate together: once a method-bearing declaration has
+-- established a class, later modules cannot replace that identity. A methodless
+-- declaration leaves the slot open for a later method-bearing declaration.
 builtinClassSet : String ->
   TyConOrigin ->
   Bool ->
   BuiltinClasses ->
   BuiltinClasses
+builtinClassSet "Num" _ _ acc
+  | acc.bcNumPresent = acc
 builtinClassSet "Num" o p acc =
   BuiltinClasses { acc | bcNum = o, bcNumPresent = acc.bcNumPresent || p }
+builtinClassSet "Eq" _ _ acc
+  | acc.bcEqPresent = acc
 builtinClassSet "Eq" o p acc =
   BuiltinClasses { acc | bcEq = o, bcEqPresent = acc.bcEqPresent || p }
+builtinClassSet "Ord" _ _ acc
+  | acc.bcOrdPresent = acc
 builtinClassSet "Ord" o p acc =
   BuiltinClasses { acc | bcOrd = o, bcOrdPresent = acc.bcOrdPresent || p }
+builtinClassSet "Semigroup" _ _ acc
+  | acc.bcSemigroupPresent = acc
 builtinClassSet "Semigroup" o p acc = BuiltinClasses { acc |
   bcSemigroup = o,
   bcSemigroupPresent = acc.bcSemigroupPresent || p,
@@ -15267,25 +15157,11 @@ builtinClassSet _ _ _ acc = acc
 -- CORRECTNESS DEPENDS ON — not for tidiness.  `insertUnivImpl` keys the impl side off
 -- `DImpl.implOrigin`, so this side must read the origin of the interface declaration
 -- that lives in the SAME universe:
---   * `Flat coreProg` with a real prelude — `coreProg`, i.e. `mod:core`
---     (`test/origin_fixtures/graph/agreement.golden`: `core iface:Num AGREE AGREE
---     AGREE`, so the prelude's occurrences carry `mod:core` on the flat arm too).
---   * `Flat []` — the prelude is FLATTENED into `prog` (the `externTyOriginScope []`
---     internal passes: elaborateDict / discoverPromoted / checkBodyImpl /
---     checkMatchToLines) or absent entirely (the bare-HM oracle).  Read
---     `prog`: whatever origin the flattened prelude's `interface Num` carries there is
---     the same one its `impl Num Int` carries, and an absent prelude yields
---     `OriginUnresolved` on both sides.  ⚠️ A user declaration CAN be the source in this
---     arm — and cannot capture anything, because a flattened program that declares a
---     second `Num` is rejected outright (`Duplicate interface: Num`) before any
---     obligation is recorded.  §7.1 U1 (prelude becomes a node) deletes this arm along
---     with the flatten.
---   * `Module` — the PRELUDE's own pass writes once and later modules read the
---     surviving `CrossRun` value.  A prelude-free graph has no such pass, so its
---     first module supplies the same local builtin declarations the Flat arm uses.
---     The `builtinClassPresent BNum` guard prevents a later user module from
---     overwriting the prelude's identities; its false branch is reachable only before
---     any `Num` declaration has seeded this run.
+--   * With a real prelude, the prelude pass installs all four identities from `core`.
+--   * In a prelude-free graph, builtin declarations can be split across modules.
+--     Each module contributes only identities not already present, so Eq→Num and
+--     Num→Eq module orders retain both identities without allowing a later duplicate
+--     declaration to replace an earlier one.
 seedBuiltinClasses : String -> List Decl -> Unit
 -- ⚠️ BOTH SPELLINGS of the prelude's module id are tested, for the same reason
 -- `declEnvsOrdOf` indexes it twice: the `graph*Exports` peers key the prelude under
@@ -15297,8 +15173,11 @@ seedBuiltinClasses : String -> List Decl -> Unit
 -- `TkIdent` impls: a false REJECT of the prelude, which is the #1112 prototype's
 -- 634-diagnostic signature.
 seedBuiltinClasses mid prog =
-  if isPreludeMid mid || not (builtinClassPresent BNum) then
+  if isPreludeMid mid then
     crossRun.value.builtinClassesRef := builtinClassesOf prog
+  else
+    crossRun.value.builtinClassesRef :=
+      builtinClassesGo prog crossRun.value.builtinClassesRef.value
 
 -- G2: arithmetic `+ - * / %` carry a `Num` obligation on their (unified) operand
 -- type — a `No impl of Num for <T>` reject.
@@ -17672,7 +17551,7 @@ standaloneShadowDomainAt name k =
 -- reading the imported standalone's scheme out of shadowStandaloneSchemesRef (the same
 -- scheme inferShadowApp's standalone arm uses, so `check` and the applied path cannot
 -- drift).  That ref is populated ONLY on the Module path (checkModuleFullImpl), so the
--- single-file Flat path finds it empty → None → byte-identical.
+-- a one-module graph finds it empty → None → byte-identical.
 --
 -- ⚠️ FORK 1 IS NOT TOUCHED.  This arm is gated on shadowHeadCtxRef = False, i.e. bare
 -- VALUE position only; every APPLIED importer occurrence goes through inferShadowApp,
@@ -21344,7 +21223,7 @@ unifyClauses env v ((pats, body) :: rest) =
 -- FULL `constrainedSigNames`), rather than taking an externally built list.  This
 -- wrapper therefore takes `coreDecls` SEPARATE (not pre-flattened into prog),
 -- exactly as elaborateModules expects.  The grader for the Flat-vs-Module relation
--- is test/diff_compiler_flat_vs_onemodule.sh (ARCH B-2.1-a): it PINS the Flat arm's
+-- is test/diff_compiler_flat_vs_onemodule.sh (ARCH B-2.1-a): it now pins the
 -- own acceptance and diagnostics, and grades the relation only through a clause
 -- true on both sides of the #1564 fix — every arm that ACCEPTS must compute the
 -- same value.  Read its header before changing either arm.
@@ -21366,13 +21245,13 @@ setDictEligible names =
   driverState.value.dictEligibleSetRef := namesToSet names omEmpty
 
 -- the USER modules' top-level fn names (NOT core/prelude) — the promotion-eligible
--- set on the build path.  Mirrors elaborateDict's eligibleNames = funNamesOf userDecls.
+-- set on the build path. Mirrors the retired elaborator's user-function eligibility.
 moduleUserFnNames : List (String, List Decl) -> List String
 moduleUserFnNames modules =
   dedup (flatMap (p => map fst (funDefs (snd p))) modules)
 
 -- the user program's top-level functions carrying a `=>` constraint in their
--- signature — the set elaborateDict dict-passes
+-- signature — the set the graph driver dictionary-passes
 export
 constrainedSigNames : List Decl -> List String
 constrainedSigNames prog = flatMap constrainedSigName prog
@@ -21820,7 +21699,7 @@ recPatFieldVarsTc (RecPatField _ _ (Some p)) = patVarsTc p
 -- interface methods carrying a method-level constraint (a `=>` over a tyvar that is
 -- NOT the interface param, e.g. foldMap's `Monoid m`) — rewritten to EMethodAt
 -- alongside the return-position methods so the method-level dict can be folded on.
--- Computed structurally (runs before checkProgramSeeded populates methodPredicateSlotsRef).
+-- Computed structurally before `checkBodyImpl` populates `methodPredicateSlotsRef`.
 methodConstraintNames : List Decl -> List String
 methodConstraintNames prog = flatMap methodConstraintNamesOfDecl prog
 
@@ -21927,9 +21806,10 @@ resolveSite : List String ->
 -- pre-S3b arm-by-arm body: assum → `(RDictFwd/RDict, [])`, inst → `(RKey key [],
 -- selected-row prerequisite routes)`, fallback → `(RNone, [])`.
 -- ⚠️ tagRef is NOT always RNone-seeded: a P0-18 standalone-shadow site seeds it to
--- `RLocal <sym> []` at rewriteArgScoped (~7438), and `resolveRLocalSites` (later) leaves
--- an importer-shadow / argDispatchOf-None / ungrounded-result site's ref UNTOUCHED — so
--- the pre-S3b None arm's `()` was load-bearing: it PRESERVED that RLocal seed.  For
+-- `RLocal <sym> []` at rewriteArgScoped (~7438).  A return-position standalone value
+-- shadow is then force-stamped `RLocal` by `resolveRLocalSites`; an argument-position
+-- importer shadow is the separate receiver-sensitive case described at `resolveArgStamp`.
+-- The pre-S3b None arm's `()` was load-bearing: it PRESERVED that RLocal seed.  For
 -- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.
@@ -23393,7 +23273,7 @@ cohImplOfRow r = match ieRowTriple r
 -- builds `declEnvModulesFrom 0 (("core", coreDecls)::modules)`, so nothing else can be.
 --
 -- ⚠️ AND A HARDCODED `/= 0` WOULD BE WRONG — IT IS THE MOST DANGEROUS LINE IN THIS
--- UNIT.  `flatImplEnvOf` builds its ONE user module at ordinal 0, so on the Flat arm
+-- UNIT. `flatImplEnvOf` is now a standalone-list helper used by internal checks;
 -- `/= 0` drops EVERY row and turns every flat coherence rejection into a silent
 -- accept.  Flat's prelude/user boundary is carried by the decl list the driver hands
 -- in (`coherenceUserDecls`), not by an ordinal, so Flat passes `False` here and there
@@ -23776,11 +23656,11 @@ cohScanInner sweep (e1@(CohImpl if1 xs mid1 _)) ((CohImpl if2 ys mid2 _) :: rest
 --
 -- How A-3.7 discharged it: coherence now DOES read `IE`, and `cohRowVisible` carves
 -- the prelude out of both sweeps explicitly — `hasPrelude` on the Module arm drops
--- ordinal 0 (structurally the prelude, per `buildDeclEnvs`), and the Flat arm keeps
+-- ordinal 0 (structurally the prelude, per `buildDeclEnvs`), while the standalone
 -- its prelude boundary in the decl list the driver stages (`coherenceUserDecls`),
 -- which is why that field does NOT retire in this unit.  Both probes were measured
 -- across the relocation: a user `impl Eq Int` α-equal to the prelude's checks at exit
--- 0 on the Flat path AND on the Module path, before and after.
+-- 0 in both representations, before and after.
 --
 -- ⚠️ THE RESIDUE IS DELIBERATELY PRESERVED, NOT FIXED.  With the carve-out in place a
 -- user impl shadowing a prelude impl stays UNCHECKED rather than merely accepted.
@@ -24141,9 +24021,9 @@ foreachUnit f (x :: xs) =
 -- mirroring superImplMsgsOf.
 --
 -- #1557 A-3.5a: there is now ONE checker for both driver modes.  There used to be
--- two — `checkImplCompleteness`, whose Flat arm looked the interface up by a BARE
+-- two — `checkImplCompleteness`, whose retired arm looked the interface up by a bare
 -- first-match scan over the decl list, and `checkImplCompletenessMap` below.  The
--- Flat arm's deletion is the unit's only genuine RE-KEY (owner RULING on #1557 OWED
+-- retired arm's deletion was the unit's only genuine re-key (owner ruling on #1557 owed
 -- 1, 2026-08-12: re-key, accept the acceptance delta, no bare-spelling compatibility
 -- leg on CE).  Its one observable consequence: on a flat program where a USER
 -- interface shadows a prelude one by spelling, the bare scan walked
@@ -25717,8 +25597,7 @@ checkInterfaceCycles ce cur =
   foreachUnit (checkOneIfaceCycle ce cur done) (ceRowsVisibleAt cur ce)
 
 -- #152: the whole-program final-checks tail, shared by all five entry points
--- (checkToLines / checkToLinesWithRuntime / checkErrorsWithRuntime /
--- checkProgramDiags / checkModuleFullDiags).  [cohDecls] feeds coherence AND
+-- (the `checkOne*` projections and `checkModuleFullDiags`). [cohDecls] feeds coherence and
 -- checkSuperImpls's impl-iteration argument; [cycDecls] USED to feed checkSuperImpls's
 -- second (whole-universe) argument and no longer does — see the A-3.5b note below.
 -- ⚠️ trap #5: coherence must see USER decls only, so
@@ -25730,7 +25609,7 @@ checkInterfaceCycles ce cur =
 -- and [cur] is the READING module's ordinal — Module passes the whole-graph
 -- `deIfaces` twice with its own ordinal; Flat passes two single-module envs built
 -- from the very lists it used to hand `checkPhantomMethods`/`checkInterfaceCycles`,
--- at ordinal 0, because `declEnvsRef` is EMPTY on the Flat arm and reading it there
+-- at ordinal 0 in the standalone-list compatibility helper; reading a graph envelope there
 -- would switch both checks silently OFF.
 --
 -- ⚠️ CALL ORDER IS UNCHANGED AND THAT IS DELIBERATE.  A-3.5c moves two members'
@@ -26115,7 +25994,7 @@ globalCoherenceConflict env =
 -- the USER decls a driver wants coherence-checked.  Set by single-file drivers
 -- (check.mdk / typecheck_main.mdk / check_batch.mdk) to the desugared USER program
 -- (NO prelude), so a user impl that overrides a prelude impl is not flagged.  []
--- (the golden/profile drivers and the no-runtime path) ⇒ checkToLines uses its own
+-- (the golden/profile drivers and the no-runtime path) use their own
 -- prelude-free arg; checkToLinesWithRuntime runs no coherence (byte-identical).
 
 -- exported so the single-file front-end drivers set the user boundary before check
@@ -26128,7 +26007,7 @@ setCoherenceUserDecls ds = driverState.value.coherenceUserDecls := ds
 -- DECLARATION in the program under check is the stdlib's extern catalog (never
 -- stamped) or a user's FFI declaration (always stamped).
 --
--- 🚨 TWO fields, not one, because the two `CheckMode` arms carry different amounts
+-- Two fields remain because graph checks carry different amounts
 -- of identity.  `Module mid _ _` has a module id, so the Module arm can ask
 -- "is THIS module stdlib-owned" of the list.  `Flat _` has NO id at all — the flat
 -- driver has already flattened the program into one anonymous decl list — so the
@@ -26981,8 +26860,7 @@ ieRowHeadMatches [] _ = False
 -- (`tyConBuiltin` builds a `Ty`; `tconBuiltin` / `tconTupleHead` / `headKeyOfCon
 -- OriginBuiltin` build type heads).  Corroborated on the binary: every interface row
 -- of the origin-agreement corpus reads `mod:…`, the prelude's `Eq`/`Ord`/`Debug`
--- included, and none reads `builtin`.  Re-derive rather than trust this:
---     grep -rn '^iface:.*builtin' test/origin_fixtures/    # must find nothing
+-- included, and none read `builtin` in the retired origin-agreement corpus.
 --
 -- The rule is factored into `ieRowIfaceMatches` rather than inlined so the SELECTION
 -- family has exactly ONE seam a supply bite has to reason about — and so it cannot be
@@ -29378,79 +29256,11 @@ tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
   (None, Some _) => monoSpineHeadIsCon a
   (None, None) => False
 
--- DRIVER-COLLAPSE Phase 5: scheme extraction for repl/lsp `:type`/hover + the
--- `=== TYPES ===` golden (checkToLines), the surviving replacement for the
--- deleted flat `checkProgram`.  The seeded path, which
--- keeps the checkLetRecDecls / LetRecNonFunction guard checkModuleFull skips.
--- Callers pass the 1-module decl list (preludeDecls ++ user buffer) and read
--- schemes by name; no eval, so this is the typecheck-only sibling of the
--- 1-module path.
-
--- Like checkProgramSchemes but ALSO seeds runtime.mdk's externs (putStrLn,
--- readLine, …) into scope, so a buffer using them type-checks instead of leaving
--- the bindings that consume them unconstrained.  Mirrors the OCaml reference's
--- `check_program`, which seeds `Runtime.entries` into the initial env — the LSP
--- hover/completion/inlay handlers run this so externs resolve and a `let input =
--- readLine ()` hovers as `String`, not a free `a`.
-
--- [seed] are extern schemes from runtime.mdk: in scope for lookup (so core.mdk's
--- use of putStrLn/etc. resolves) but NOT part of the output (mirrors the
--- reference seeding Runtime.entries into initial_env, which aren't returned).
-
--- Same pass, but told WHERE THE PRELUDE ENDS.  Every driver that flattens the prelude
--- into the program it checks (`desugar coreP ++ desugared`) hands the two halves in
--- separately instead of pre-concatenating them, which is the only thing the flat path
--- was missing to make SHADOW-SEMANTICS S1 (shadow-hood is PER-MODULE, per-name) hold:
--- with the boundary known, a user standalone that shadows an interface-method name is a
--- shadow inside the USER's decls and NOT inside the prelude's.  See flatShadowScopingRef
--- for the bug this closes.  [coreProg] = [] ⇒ prelude-free program ⇒ scoping is inert and
--- this is byte-for-byte the old checkProgramSeeded (that is the multi-module discovery,
--- elaborateDict, and probe-entry path).
--- #1110 flat-identity: the FLAT half of the resolve→typecheck channel.
--- `checkModulesPreambleK` and `elaborateModules` cover every graph driver; this is
--- the one remaining seam a program reaches typecheck through without a module graph
--- (`medaka check` on a no-import file arrives via checkToLinesWithRuntime).
---
--- 🚨 Both halves are stamped with the SAME loader-less scope, and it deliberately
--- contains NO entry for the user program's own declarations — `stampFlatTyOrigins`
--- has the full argument.  The short version: this driver has no module id (its
--- callers hold SOURCE TEXT, an editor buffer, or a repl line), an invented one is
--- made permanent by `stampTyHead`'s immunity rule, and `medaka run` on a no-import
--- file reaches this arm AND the loader-backed `elaborateModules` arm in ONE process
--- — so an id invented here directly contradicts the real one.
---
--- `coreProg0` is passed as the scope source for BOTH calls on purpose: it is the
--- prelude-boundary this "Split" entry exists to carry, so the prelude's types get
--- `core` while the user's stay unstamped.  When it is `[]` the boundary is unknown
--- (the internal `checkProgramSeeded` passes flatten the prelude into `prog`), and
--- then nothing is claimed at all — which is why the prelude can no longer be
--- attributed to the user's module.
---
--- #1227: the paragraph above is about the OCCURRENCE layer (`stampFlatTyOrigins`)
--- only.  The DECLARATION layer (`stampDeclOrigins`, resolve.mdk) is narrower still:
--- `coreProg0` is a KNOWN module id here (unlike the graph drivers' `registerData`,
--- which would have to invent one for an imported module), so this driver now also
--- stamps the prelude's own `DData`/`DNewtype`/`DTypeAlias`/`DInterface` heads
--- `core`.  ONLY `coreProg` gets this call — `userProg0` still has no module id and
--- must stay unstamped, exactly as the occurrence layer already treats it.  When
--- `coreProg0` is `[]` (the prelude-free / already-flattened callers), stamping an
--- empty list is a no-op, so this adds nothing on those paths.
-
--- #80: the SINGLE whole-program typecheck body, shared by the flat/single-file path
--- (checkProgramSeededSplit, `Flat coreProg`) and the per-module path
--- (checkModuleFullImpl, `Module mid accData implDecls`).  Institutionalizes
--- DICT-SEMANTICS §7's single-evaluator law: one elaboration ⇒ `check` and `emit`
--- cannot silently disagree on a dispatch decision.  Everything is shared EXCEPT the
--- SIX load-bearing divergences, each a `match mode` branch below:
---   (1) decl universe (prog / persistent DATA-universe / fullUniverse / groundUniverse)
---   (2) inference plan — flat's TWO-PHASE prelude-then-user vs module's single pass
---   (3) cross-module dict-threading restore + snapshot (module only; flat SKIPS)
---   (4) importer/definer shadows + the shadowMethodSchemes env layer
---   (5) the obligation channels (both on every driver since #2705)
---   (6) superDeclsRef ownership (set from the mode)
--- The mode carries the inputs each path adds on top of `seed` + `prog0`:
---   Flat   coreProg               — the prelude prefix (empty ⇒ prelude-free program)
---   Module mid accData implDecls  — module id, prior modules' public data, impl universe
+-- #80: the single per-module typecheck body, reached from the graph driver through
+-- `checkModuleFullImpl`. DICT-SEMANTICS §7's single-evaluator law means one
+-- elaboration decision serves check, run, and emit. `mid` and `implDecls` carry the
+-- current module's identity and graph-visible impl universe; single-file callers use
+-- the same function through the one-module graph projections.
 checkBodyImpl : List (String, Scheme) ->
   String ->
   List Decl ->
@@ -29510,7 +29320,7 @@ checkBodyImpl seed mid implDecls prog0 =
   -- buildDefinerShadows / registerMethodIfaceParamsAll
   -- / checkImplObligations / checkCallObligations — all Flat).  #1557 A-3.5a removed
   -- `checkImplCompleteness` from that list: impl-completeness no longer takes a decl
-  -- list on either arm, it reads `classEnvHere` (whose Flat arm is built from `prog`,
+  -- list, it reads `classEnvHere`,
   -- which IS this binding on that arm).  Medaka is STRICT, so the
   -- Module arm's `accData ++ implDecls ++ prog0` allocated an O(|accData|) list every module
   -- and discarded it unread — a dead per-module O(N) concat.  Bind `[]` on Module.
@@ -29524,7 +29334,7 @@ checkBodyImpl seed mid implDecls prog0 =
   -- folds a module into its own universe), so binding it alone EXCLUDED this module's own
   -- `interface F t requires L t` decl from ifaceSelfAndSupers/survivorObligationEntailed and
   -- false-rejected every legal superclass-default body (#1457).  Folding `prog` in matches the
-  -- Flat arm, whose universe is the whole program, self included.
+  -- graph path, whose universe includes this module itself.
   -- ⚠️ Operand order is load-bearing, BOTH ways:
   --   * cost — Medaka is strict, so `xs ++ ys` copies xs and shares ys.  [implDecls] is the
   --     growing accumulator, so it MUST be the right operand: `prog ++ implDecls` is O(|prog|)
@@ -29532,7 +29342,7 @@ checkBodyImpl seed mid implDecls prog0 =
   --     O(modules²) per-module concat.
   --   * meaning — ifaceSupersOf/ifaceSelfAndSupers is a FIRST-MATCH scan, so `prog` first makes
   --     THIS module's own same-spelled interface decl outrank an earlier module's, which is the
-  --     precedence the Flat arm already has.
+  --     precedence the old single-program path had.
   let superDecls = prog ++ implDecls
   driverState.value.superDeclsRef := superDecls
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
@@ -29542,7 +29352,7 @@ checkBodyImpl seed mid implDecls prog0 =
   let _ = checkLetRecDecls prog
   -- #154 PR1: on the Module path, grow the persistent universe accumulators by THIS
   -- module's decls BEFORE the shadow/key reads below consult them — so they see the
-  -- same universe `fullUniverse` (which appended prog0) did.  The Flat path leaves them
+  -- same universe `fullUniverse` (which appended prog0) did.
   -- untouched and rebuilds over its whole `prog` (already O(N)).
   -- #1112 A-3.4 PR2: `ieShadowCompare mid prog0` stood here, and the hard `panic`
   -- surface it put in the released compiler is GONE with it — that instrument had
@@ -29778,13 +29588,13 @@ checkBodyImpl seed mid implDecls prog0 =
           crossRun.value.universeMethodIfaceParamsRef.value)
     -- #1386: the ORIGIN name behind each of those alias-qualified keys, from the
     -- same rows, in the same module scope, on the same line as the supply they
-    -- accompany — `originMethodName`'s source.  Empty on the Flat arm, whose
+    -- accompany — `originMethodName`'s source.
     -- single file has no import graph.
     perRun.value.aliasMethodOriginsRef := omFromPairs aliasSpellings omEmpty
     -- #2188 / S2-DECL (d): the SAME ladder's whole admitted set, for the names where
     -- the winner above is a floor rather than a decision.  Written HERE, beside the
     -- projection it accompanies, so the two can never be derived from different
-    -- module scopes.  Empty on the Flat arm (a single file has no import graph, so
+    -- module scopes. A one-module graph has no imported method rows, so
     -- no name can have two admitted declarations) — `resetState` mints a fresh
     -- `PerRun`, whose default for this field is `omEmpty`.
     perRun.value.methodAdmittedIfacesRef := applyMethodAdmittedSets prog
@@ -29793,7 +29603,7 @@ checkBodyImpl seed mid implDecls prog0 =
   -- working refs, then register ONLY this module's `prog0` as a transient FRONT
   -- overlay — O(|prog0|) per module, O(N) total. Ordering must stay [prog0,
   -- pub_{k-1}..pub_1] to preserve lookupAssoc (first-wins) / omInsert (last-write-wins)
-  -- semantics. Flat arm is unchanged.
+  -- semantics.
   let dataEnv =
     -- A-3.2b (#1512): `mid` is BOUND here now — the overlay pool below is read at this
     -- module's own ordinal, so the arm can no longer discard it.
@@ -29905,7 +29715,7 @@ checkBodyImpl seed mid implDecls prog0 =
   -- `dataParamKindsRef` that `dataEnv` above has just populated.
   -- #1557 A-3.5c: the INTERFACE-slot half no longer reads a per-run table at all —
   -- it reads stage K's `CE` at this module's ordinal, mirroring `moduleImplUniv`'s
-  -- arm-gated shape exactly.  The Flat arm builds its own single-module `CE` from
+  -- arm-gated shape exactly. Standalone-list helpers build a single-module `CE` from
   -- `prog`, the very list `registerAllData initialEnv prog` walked to fill the
   -- retired table, so the check does not go silent on a no-import `medaka check`.
   -- #1557 A-3.5a: this pair is now BOUND ONCE and read by TWO consumers — the graded
@@ -30104,12 +29914,12 @@ checkBodyImpl seed mid implDecls prog0 =
   -- its reading ordinal (Flat: a single-module `CE` over `prog`, which IS `fullUniverse`
   -- on that arm, at ordinal 0; Module: stage K's whole-graph `deIfaces` at this module's
   -- ordinal).  🚨 It must NOT read `declEnvsRef` unconditionally: that envelope is
-  -- `emptyDeclEnvs` on every Flat path, so a Flat read would make `ceRequiredAt` miss on
+  -- `emptyDeclEnvs` in compatibility helpers, so reading it there would make `ceRequiredAt` miss on
   -- every interface, and the miss arm is `[]` — every live rejection here would become a
   -- silent accept.  `classEnvHere`'s `Flat _` arm is what prevents that.
   let _ = checkImplCompletenessMap (fst classEnvHere) (snd classEnvHere) prog
   -- (#5 / BREAK #2) obligation channels.  FLAT runs both channels + setNumlitFloats
-  -- here: the Flat arm has no graph-end drain, so this pass is its only chance to
+  -- here so the per-module pass can
   -- stamp the Float-typed int literals, and a Flat consumer that read them unstamped
   -- would get Int cells where the inference said Float.  MODULE runs both channels
   -- here and leaves the Float stamp to the graph-end drain (`SSNumlitFloats`), on
@@ -30806,7 +30616,7 @@ inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
 -- the three buckets `insertUnivImplAt` writes (#1112 A-3.4 PR2 deleted the three
 -- `CrossRun` refs this line used to name; the buckets are unchanged): concrete-head impls
 -- keyed "iface|tag", HEADLESS-receiver impls keyed by iface (matched against ANY
--- receiver), and iface→concrete-head-tag SET (for implCountForIfaceU).  The FLAT path
+-- receiver), and iface→concrete-head-tag set (for `implCountForIfaceU`). Standalone
 -- builds one from its whole `prog` via `buildImplUniverse` (O(N) once — the same cost
 -- as the old `implDeclsWithReqs`+`implHeadsOf` it replaces); the Module path passes the
 -- ⚠️ #1112 A-3.4 PR2: NO LONGER A PERSISTENT ACCUMULATOR.  This block's header used
@@ -30814,7 +30624,7 @@ inferDefaultMethodBody mname subject defLoc env expectedTy pats body =
 -- appendUniverseAccums)"; those three `CrossRun` refs are deleted.  The Module path
 -- now PROJECTS this value out of stage K's `IE` at the reading module's ordinal
 -- (`ieUniverseAt`, selecting from the per-ordinal `ieUnivSnaps` built once by
--- `ieBuildSnapsGo`); the Flat path still builds its own with `buildImplUniverse`.
+-- `ieBuildSnapsGo`); internal standalone-list checks use `buildImplUniverse`.
 -- Everything below about the KEYS is unchanged — the same `insertUnivImplAt` writer
 -- mints them on both paths, which is what made that flip equality-preserving.
 -- A-2.2b (#1111): all three buckets are IDENTITY-KEYED registries.  What each
@@ -30919,16 +30729,16 @@ insertUnivImpl univ (iface, tys, reqs) =
 --     imports the prelude" shape: `stampFlatTyOrigins`'s occurrence layer stamps a
 --     prelude interface occurrence `core` even in flat/no-module-graph mode
 --     (`flatTyOriginScope` carries the prelude's own interfaces), and
---     `checkProgramSeededSplit` additionally calls `stampDeclOrigins "core" coreProgTy`
+--     the former single-program checker additionally stamped core declarations
 --     — so goal and impl agree on identity `core` and no bare goal is minted at all.
 --     MEASURED on this branch (post-U1c): `check` of `main = println 1` and of
 --     `compiler/driver/medaka_cli.mdk` are BOTH clean with the leg *removed* — this
 --     shape genuinely needs no leg any more.
 --   * `medaka check stdlib/core.mdk` **directly** (the prelude checking ITSELF, not a
 --     user program importing it) is a DIFFERENT shape and is NOT closed.  Checking
---     `core.mdk` as the entry file reaches `checkProgramSeeded` with `coreProg0 = []`
+--     historically, checking `core.mdk` as the entry reached that checker without a prefix
 --     (the "prelude is already flattened into `prog`" arm — see this file's own
---     `checkProgramSeededSplit` comment), so `core.mdk`'s OWN interfaces and impls are
+--     so `core.mdk`'s own interfaces and impls were
 --     stamped with a scope that does not include core.mdk's own declarations at all —
 --     they never get an identity, on EITHER layer.  MEASURED, on this branch, with the
 --     leg *removed* (a throwaway experiment, reverted — not landed):
@@ -31109,7 +30919,7 @@ univReceiverTag [] = None
 -- and `implHeadTagsFromHeads`' successor, `implHeadTagForIface`, is the sibling
 -- census that reads `censusHeadNameTy` for exactly the same reason.
 --
--- ⚠️ TWO WRITERS, ONE HELPER, ON PURPOSE.  `insertUnivImplAt` (Flat path) and
+-- Two writers, one helper, on purpose. `insertUnivImplAt` (standalone-list helper) and
 -- `ieInsertRowAt` (`IE`, the Module path `ieUniverseAt` projects the universe
 -- out of) both write a tag set, and a fix applied to one is silently absent from
 -- the other — the parallel-driver hazard `AGENTS.md` names for
@@ -32838,7 +32648,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats 
       -- #837: schemeObligationsRef snapshot/restore window RETIRED — (name, binding-id)
       -- keying makes a where-helper name collision structurally impossible.
       -- #518: window this body's newly-added obligations, exactly as processLetGroup /
-      -- checkProgramSeeded do for a let-group, so the Num defaulting below is scoped to
+      -- `checkBodyImpl` does for a let-group, so the Num defaulting below is scoped to
       -- THIS method and can never touch an already-generalized outer var.
       let oblN0 = wMark perRun.value.implObls
       let callN0 = wMark perRun.value.obls
@@ -32998,7 +32808,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats 
       -- routed its `requires S a` to RNone (a null dict) — hence `build` silently printing
       -- the general instance's answer and `run` panicking E-NOT-A-FUNCTION.
       -- The same expression at TOP LEVEL was always correct precisely because
-      -- checkProgramSeeded's group defaulting grounded the var to Int first.
+      -- group defaulting grounded the var to Int first.
       --
       -- MUST run AFTER `unify expected actual` (so [expected] reflects the body's
       -- aliasing) and defaults ONLY BODY-LOCAL vars — see defaultBodyLocalNum, which
@@ -33979,7 +33789,7 @@ ceMethodTyIn typarams mname ((name, mty, scope) :: rest)
 
 -- Declaration identity for numeric anchors, predicate slots, and obligation keys.
 -- Resolved occurrences compare by (module, name); two unresolved occurrences in
--- the Flat driver compare by spelling. A resolved occurrence never matches an
+-- the former unstamped driver compared by spelling. A resolved occurrence never matches an
 -- unresolved one. Reuse the declaration-key comparison so these consumers agree
 -- with the identity index used by implementation-body inference.
 sameIfaceDecl : IfaceRef -> IfaceRef -> Bool
@@ -34322,7 +34132,7 @@ monoTyvarIds m = match normalize m
 -- 🚨 #1280: THE STAMPING WALK IS PART OF THIS FUNCTION, NOT OF ITS CALLERS, AND
 -- THAT IS THE FIX.  Every other tree that reaches typecheck has already been
 -- through `stampTyOrigins` at a driver (`stampGraphTyOrigins` on the module arm,
--- `stampFlatTyOrigins` inside `checkProgramSeededSplit` on the flat one).
+-- the retired single-program stamping path).
 -- `runtimeDecls` was the one tree that reached a `Scheme` without ever entering
 -- that walk on EITHER arm, so every `Mono` `fromAstTypeE` built out of an extern's
 -- declared type carried `OriginUnresolved` — the SUPPLY half of the dispatch-key
@@ -34337,7 +34147,7 @@ monoTyvarIds m = match normalize m
 -- WHY one scope is right for this population on both arms.
 --
 -- ⚠️ `externTyOriginScope []` at a call site is not a shrug: it is the same
--- "prelude boundary unknown" answer `checkProgramSeededSplit` gives when its
+-- historical "prelude boundary unknown" answer from that path when its
 -- `coreProg0` is `[]` — those callers have already FLATTENED the prelude into the
 -- program they check, so the prelude's own `Option`/`Ordering`/`Result`
 -- declarations are unstamped on that path too and the two sides stay symmetric.
@@ -34450,11 +34260,10 @@ userExternSchemes scope decls =
 -- `noteBuiltinExternNames`, inside `externSchemes … runtimeDecls`; the eight call
 -- sites that build the catalog all pass `runtimeDecls` (138 rows), so for every
 -- REAL entry point — `medaka check`/`build`/`test`/`lint`/`mcp`, the LSP, and
--- every multi-module driver — this map is non-empty and the guards fire exactly
--- as before.  It is empty only on the compiler-internal, explicitly documented
--- PRELUDE-FREE path: `checkToLines` (`checkProgramSchemes [] prog`, which takes
--- no runtime argument at all), reached by `compiler/entries/typecheck_main.mdk`
--- and `compiler/entries/selfproc_tc_probe.mdk`.  There, `ffiIsBuiltinExternName`
+-- every graph driver — this map is non-empty and the guards fire exactly as before.
+-- It is empty only when a compiler-internal one-module entry explicitly supplies no
+-- runtime declarations, as `compiler/entries/typecheck_main.mdk` and
+-- `compiler/entries/selfproc_tc_probe.mdk` do. There, `ffiIsBuiltinExternName`
 -- reads an empty map, so the catalog exemption the other three rules depend on
 -- cannot engage, and a bare HM fixture writing the catalog's own `extern Ref : a
 -- -> Ref a` (`stdlib/runtime.mdk`'s real row, borrowed by
@@ -36844,7 +36653,7 @@ annotTooGeneralMsg ty =
 -- — at one of its OWN quantified tyvars carries an INFERRED constraint.  Register
 -- it exactly as a signatured one (funConstraintsRef + activeDictVars, keyed by the
 -- *surviving* normalized id) so its body's method routes RDict and dict_pass
--- prepends a dict param; and record it in promotedRef so elaborateDict marks its
+-- prepends a dict param; and record it in `promotedRef` so scheduled marking sees its
 -- occurrences EDictAt on the next pass.  Signatured members are skipped (their
 -- constraints came from preunifySigs); prelude fns are skipped (not eligible).
 -- #1549: the deltas are threaded in so an inferred constraint that arrived as a
@@ -39477,7 +39286,7 @@ seedCheckRun oracleDecls =
   driverState.value.matchOracle := buildOracle oracleDecls
 
 -- #415 item 1: seed-and-run for the three FLAT runtime-seeded entry points
--- (checkToLinesWithRuntime / checkErrorsWithRuntime / checkProgramDiags).  All three
+-- (the `checkOne*` wrappers). They
 -- used to repeat this body verbatim under a "Mirrors checkToLinesWithRuntime's
 -- side-effects EXACTLY" comment — a mirror obligation enforced only by that comment.
 -- They now differ ONLY in what they HARVEST from the accumulators afterwards, so the
@@ -39506,7 +39315,7 @@ seedCheckRun oracleDecls =
 -- Returns each module's OWN value schemes, in load order.
 
 -- typecheck one program with seeded value schemes + accumulated data decls.
--- Like checkProgramSeeded but ALSO re-registers prior modules' public data decls
+-- Re-registers prior modules' public data declarations
 -- (`accData ++ prog`) so imported constructors AND named-field-variant record
 -- info (e.g. ast's DInterface) resolve.  Returns the module's own value schemes.
 checkModuleFull : List (String, Scheme) ->
@@ -39521,7 +39330,7 @@ checkModuleFull seedVars accData prog =
 -- its own [implDecls]; a caller that needs this module's own decls too must fold [prog] in
 -- itself, as the `superDecls` binding in checkBodyImpl does for #1457) as the impl-body
 -- inference universe.  It ALSO infers THIS module's parametric impl
--- bodies — mirroring checkProgramSeeded's inferImplBodiesIfEnabled — so their
+-- bodies, so their
 -- ARG-position ELEMENT dispatch (`eq`/`compare`/… on the impl head tyvar) reaches
 -- inferMethodAt and lands in pendingArgStamps, which elabModuleStamp's
 -- resolveArgStamps then stamps RDict (via the requires dict registered by
@@ -39572,7 +39381,7 @@ checkModuleFullImpl mid seedVars _accData implDecls prog =
 -- resetState wiped methodIfaceParamsRef; re-register it from the FULL impl
 -- universe [implDecls] (core/earlier modules ++ this prog) so resolveSite's
 -- ifaceParamMonos can recover a multi-param interface's full param monos (the
--- element grounding `e` for `FromEntries c e`).  The flat checkProgramSeeded does
+-- element grounding `e` for `FromEntries c e`). The module checker does
 -- the same against its whole-program [prog].  Without it the module path leaves the
 -- table empty → ifaceParamMonos returns None → a Set/Map-literal return-position
 -- `fromEntries` route drops its `Ord` element dict → null dict → SIGSEGV.
@@ -39595,9 +39404,9 @@ checkModuleFullImpl mid seedVars _accData implDecls prog =
 
 -- C8(b): also infer THIS module's interface DEFAULT bodies (gated identically to
 -- the single-file path's inferDefaultBodiesIfEnabled) so a default body's type
--- error is caught on the module path too — mirrors checkProgramSeeded.
+-- error is caught on every path.
 
--- Phase 4.55 (mirror checkProgramSeeded): infer this
+-- Phase 4.55: infer this
 -- module's prop bodies so their prepass-marked EDictAt/EMethodAt routes resolve.
 -- The multi-module test path (runPropsMulti) evaluates the ELABORATED prop body
 -- against the dict-passed env, so the body's calls into the file's own promoted
@@ -43734,7 +43543,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
   )
 -- Seed the ctor oracle over ALL data decls in scope (prelude + every imported
 -- module via accData, plus this module's own prog), NOT just `prog`.  The
--- single-file path (checkProgramDiags:5826) sees a flat prelude+user dump, so
+-- one-module path sees the same module-scoped dump, so
 -- its `buildOracle prog` already includes Option/Result; the multi-module path
 -- keeps modules separate, so prelude ADTs live in accData.  Seeding with only
 -- `prog` left the oracle missing Some/None|Ok/Err → exhaustive matches on
@@ -43744,7 +43553,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- checkModuleFull → checkModuleFullImpl runs resetState () first (clears
 -- typeErrors + currentLevel), so the snapshot below is this module's own errors.
 
--- coherence over THIS module's own decls (mirrors checkProgramDiags's
+-- coherence over this module's own decls (mirrors the one-module projection's
 -- checkCoherence coherenceUserDecls.value, which moduleTypeDiags set to the
 -- module decls).  Pushes any conflict into typeErrors AFTER the resetState above.
 
@@ -43788,7 +43597,7 @@ checkModuleFullDiags mid seedVars accData accAll prog =
 -- Get c v` + `impl Get (Box a) a` + `main = println (get1 (Box 42))`): with bare
 -- `accAll` the return-only `v` never grounds, so the enclosing `Display v` rejects with
 -- `Ambiguous instance for `Display``; with `accAll ++ prog` it grounds to `Int` and the
--- program checks, builds and prints `42`, as it does on the Flat arm.  The 2+-module
+-- program checks, builds and prints `42`, as it does on a one-module graph. The 2+-module
 -- promotion of the same shape — the grounding impl in the ENTRY module of a graph — is
 -- `test/run_check_agreement_fixtures/accept_own_module_impl_return_only_dispatch.mdk`.
 -- Cost: the accumulator grows on the RIGHT, so O(|prog|) per module; this is not the
@@ -44538,7 +44347,7 @@ checkOneScheme runtimeDecls coreDecls (rootId, prog) =
 
 -- FULL-ENVIRONMENT sibling of `checkOneScheme` (S-full-env-scheme-entry, #1116):
 -- `(preludeSchemes, ownSchemes)` for a ONE-MODULE program, the Module-arm
--- replacement for the Flat `checkProgramSchemesWithRuntime` env that the
+-- replacement for the retired single-program environment that the
 -- introspection consumers (LSP hover/completion/inlayHint, the playground's
 -- hover/complete query, `check-policy --fn <name>`) need: they look names up by
 -- BARE NAME with no idea whether the name is the user's or the prelude's, so
@@ -44576,7 +44385,7 @@ checkOneSchemeFullK preludeKey runtimeDecls coreDecls (rootId, prog) =
     [(rootId, prog)]
   (coreSchemes, schemes)
 
--- diagnostics-returning sibling of `checkOneScheme`, matching `checkProgramDiags`'s
+-- diagnostics-returning sibling of `checkOneScheme`, matching the former wrapper's
 -- return shape (`(errs, warns)`) exactly, so a call site can swap targets with no
 -- shape change (this slice's own acceptance bar — see the packet).
 export
@@ -44660,7 +44469,7 @@ checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
 
--- Module-arm sibling of the `Flat` `checkMatchToLines`: the type-aware
+-- One-module match-report wrapper: the type-aware
 -- non-exhaustive-match report for ONE module, runtime externs seeded and NO
 -- prelude, rendered as one `Warning: non-exhaustive match …` line per warning.
 --
@@ -44791,12 +44600,12 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- dispatch, which type-checks the goldens).  Seeded on every path (single
 -- elaboration mode) so
 -- elaborateModules promotes INFERRED-constraint user fns exactly as flat
--- elaborateDict does (discoverAll runs discoverPromoted whenever eligibleNames is
+-- the retired promotion fixpoint did (it reran discovery whenever the eligible set was
 -- non-empty).  The TYPECHECK golden module drivers
 -- (checkModulesEntryLines/checkModulesDiags) never reach elaborateModules, so their
 -- goldens are unaffected; the eval goldens are captured from the OCaml oracle's
 -- run, which dict-passes prelude+modules unconditionally — so promotion-on-eval
--- matches them.  Mirrors elaborateDict's dictEligibleRef seed.
+-- matches them. Mirrors the graph driver's dictionary-eligibility seed.
 
 -- Cause A / Phase 2: promotion discovery — an unsignatured fn whose body dispatches
 -- a method in ARG position (`f s = println s` → inferred `Display a => …`) OR uses a
@@ -44808,7 +44617,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- group's close, and the schedule marks with its result (`markRecursiveOccurrences`
 -- for the group's own occurrences, `beginModuleMarking` for every later group and
 -- module); the joint-flattened Flat-arm scratch pass survives only in
--- `elaborateDict`'s single-file `discoverPromoted`.
+-- the retired single-program promotion discovery.
 
 -- E6: dict-name set for the `=>`-constrained-function layer, mirroring the
 -- single-file emit driver's assembly (llvm_emit_typed_main.runEmit): prelude
@@ -44822,7 +44631,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- Cause A: promoted (inferred-constraint) user fns join the set.
 
 -- ARGSTAMP-UNIFY Phase 4: the eval-dict layer is now PERMANENTLY active on both
--- paths (flag retired).  Flat elaborateDict runs its resolve chain + dictPass
+-- paths (flag retired). The former elaborator ran its resolve chain and dict pass
 -- UNCONDITIONALLY; the 1-module / multi-module eval path matches, so method-level
 -- constraints (`build : Num e =>`) and parametric-impl `requires` (`impl Default
 -- (List a) requires Default a`) — which leave dictNames EMPTY (no top-level
@@ -44838,7 +44647,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- etc. consume) so other passes are unchanged.
 -- DRIVER-COLLAPSE Phase 2: ALSO include methodConstraintNames (methods with their OWN
 -- method-level `=>` constraint, e.g. `build : Num e => e -> t`), mirroring flat
--- elaborateDict's prePass mark set (`returnPosMethodNames prog ++ methodConstraintNames
+-- the former pre-pass mark set (`returnPosMethodNames prog ++ methodConstraintNames
 -- prog`).  Without it the method-constraint occurrence stays unmarked → its impl
 -- clause's leading method-dict param is dropped/mis-bound → `non-exhaustive match`
 -- (method_constraint_impl_offset).
@@ -44848,7 +44657,7 @@ elaborateModules runtimeDecls coreDecls0 modulesIn =
 -- `requires` element dict.  core2 seeds it.
 
 -- E5: dict-pass each module's now-stamped
--- trees, mirroring elaborateDict's final `dictPass`.  A parametric `requires`
+-- trees, preserving the former final `dictPass`. A parametric `requires`
 -- impl whose body element-dispatch E5 routed RDict needs its leading
 -- `$dict_<m>_<slot>` PARAM (dictPassDecl's DImpl arm) so the emitter can bind the
 -- witness the route references; the call site's impl-dict route (filled by
@@ -44936,7 +44745,7 @@ dictPassModulesIfEnabled dictNames core2 modules2 =
 -- constrained fn).  Eval: same — a parametric-impl `requires` whose DImpl body needs
 -- its leading element-dict param (nested_instance_dicts: `impl Default (List a)
 -- requires Default a`) gets dict-passed even with no top-level constrained FUNCTION.
--- Mirrors flat elaborateDict's unconditional final dictPass.  No-op when nothing was
+-- Runs the unconditional final dict pass. No-op when nothing was
 -- marked → byte-identical golden trees.  scopePredicateSlots sizes each define's leading
 -- dict params to its surviving-constraint count.
 
@@ -45425,7 +45234,7 @@ moduleDictNames bodyVars rpNames modules =
 -- EVAL path: even with arg-position stamping OFF, the constrained prelude/module
 -- fns MUST be dict-passed.  DRIVER-COLLAPSE Phase 2: the MODULE part now uses the
 -- FULL constrainedSigNames (every `=>`-constrained module signature), mirroring flat
--- elaborateDict's caller (constrainedSigNames userDecls) — NOT the return-position
+-- the former caller's `constrainedSigNames userDecls` set — not the return-position
 -- subset.  Rationale: dictPass adds a leading dict PARAM to every fn whose
 -- constrained signature is in scopePredicateSlots (all constrained sigs), so the prePass
 -- MARK set must match or a fn like `quad : Monoid a => a -> a` (body calls another
@@ -45903,7 +45712,7 @@ markModules coreDecls modules =
 -- E4: ALSO stamp this module's ARG-position sites
 -- (the `GKArgStamp` goals in the same window) from their now-
 -- resolved discriminating-argument monos — the multi-module analogue of
--- elaborateDict's resolveArgStamps.  [implDecls] is core + every EARLIER module +
+-- the shared `resolveArgStamps`. [implDecls] is core + every earlier module +
 -- this module, so a cross-module parametric `requires` element dict resolves; a
 -- still-unresolvable case stays RNone (arg-tag fallback).  activeDictVars (the
 -- constraint-var → dict-param map registerConstraintRegs built in checkModuleFull)
@@ -45931,7 +45740,7 @@ elabModuleStamp mid seedVars accData implDecls prog =
 -- coherence over it would be a new population, not a shared one.
 -- DRIVER-COLLAPSE Phase 2: pass the return-position method names (was `[]`) so
 -- resolveSite's RDict-case routes a RETURN-position method site RDictFwd (forward the
--- enclosing dict's nested reqs) rather than RDict (arg-position).  Flat elaborateDict
+-- enclosing dict's nested reqs) rather than RDict (arg-position). The former path
 -- passes `returnPosMethodNames prog2`; the empty list mis-stamped a parametric-impl
 -- body's inner return-position method (`impl Default (List a) requires Default a where
 -- def = [def]` — the inner `def` must be RDictFwd:$dict_def_0, not RDict) → eval
@@ -45940,7 +45749,7 @@ elabModuleStamp mid seedVars accData implDecls prog =
 -- whole-program `prog2`.
 
 -- Phase 151 / Gap G: stamp this module's comparison-operator binop sites.
--- UNGATED (mirrors flat elaborateDict, which calls resolveBinopSites
+-- ungated (preserving the former path's call to `resolveBinopSites`
 -- unconditionally) so the EVAL path also dispatches `==`/`<`/… to user/derived
 -- Eq/Ord impls (adt_deriving_ord / record_deriving_ord).  No-op when
 -- pendingBinopSites is empty (no comparison-operator site) → golden type-only
@@ -45970,7 +45779,7 @@ elabModuleStamp mid seedVars accData implDecls prog =
 -- Independent of the body-side dict routing (the emitter restamps the body's
 -- cross-interface `empty` to its `$dict_<method>_<slot>` param directly).
 -- ARGSTAMP-UNIFY Phase 4: run unconditionally on every path (single elaboration
--- mode), mirroring flat elaborateDict (which
+-- mode), preserving the former path (which
 -- calls resolveMethodDicts unconditionally) — a method with its OWN method-level
 -- constraint (`build : Num e => e -> t`) needs its method-dict route filled so its
 -- impl clause binds the leading dict param instead of mis-binding it into the first
@@ -48935,13 +48744,17 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassesGo" ((PCons (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "builtinClassSet") (EVar "name")) (EVar "o")) (EApp (EVar "isNonEmptyL") (EVar "methods"))) (EVar "acc"))))
 (DFunDef false "builtinClassesGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EVar "acc")))
 (DTypeSig false "builtinClassSet" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "Bool") (TyFun (TyCon "BuiltinClasses") (TyCon "BuiltinClasses"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Num")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcNumPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Num")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcNum" (EVar "o")) (fa "bcNumPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcNumPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Eq")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcEqPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Eq")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcEq" (EVar "o")) (fa "bcEqPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcEqPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Ord")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcOrd" (EVar "o")) (fa "bcOrdPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
+(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EApp (EVar "builtinClassesGo") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value")))))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EVar "lt"))) (DoExpr (EVar "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
@@ -56019,13 +55832,17 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassesGo" ((PCons (PRec "DInterface" ((rf "name" None) (rf "ifaceOrigin" (PVar "o")) (rf "methods" None)) true) (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EApp (EApp (EApp (EApp (EVar "builtinClassSet") (EVar "name")) (EVar "o")) (EApp (EVar "isNonEmptyL") (EVar "methods"))) (EVar "acc"))))
 (DFunDef false "builtinClassesGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "builtinClassesGo") (EVar "rest")) (EVar "acc")))
 (DTypeSig false "builtinClassSet" (TyFun (TyCon "String") (TyFun (TyCon "TyConOrigin") (TyFun (TyCon "Bool") (TyFun (TyCon "BuiltinClasses") (TyCon "BuiltinClasses"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Num")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcNumPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Num")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcNum" (EVar "o")) (fa "bcNumPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcNumPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Eq")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcEqPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Eq")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcEq" (EVar "o")) (fa "bcEqPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcEqPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Ord")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcOrd" (EVar "o")) (fa "bcOrdPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "p"))))))
+(DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) PWild PWild (PVar "acc")) (EIf (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "acc") (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
+(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EApp (EVar "builtinClassesGo") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef") "value")))))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EMethodRef "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EMethodRef "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EMethodRef "lt"))) (DoExpr (EMethodRef "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))

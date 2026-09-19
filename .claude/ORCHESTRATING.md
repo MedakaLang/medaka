@@ -1668,8 +1668,8 @@ four merged 12/12 green and was reviewed adversarially. In all four the finding 
 code** — it was a *claim*, in a comment or a PR body, that asserted more than had been measured.
 Different surface each time:
 
-- **#1234** — the PR's own first commit (`e8b2483f`) never touched `compiler/entries/
-  origin_agreement_main.mdk` or `test/diff_compiler_origin_agreement.sh`, so both still quoted
+- **#1234** — the PR's own first commit (`e8b2483f`) never touched the now-retired
+  origin-agreement entry or its gate, so both still quoted
   `resolve.mdk`'s old *"FLAT (loader-less) DRIVERS GET NOTHING HERE"* text verbatim and described
   #1227 as still open, after the fix landed. Invisible to every gate: `compiler/entries/*.mdk` is
   not in the snapshot corpus (no `origin_agreement_main.md` under `test/snapshots/`), and a gate
@@ -2254,7 +2254,7 @@ looked like coverage was actually structurally unable to fail on the bug it clai
   controls (mutate → confirm red → restore → confirm 29/29 green) before merge.
 - **#1526 round 2 — a vacuity tripwire disarmed by the pin meant to strengthen it.** The new
   `entry_residual` gate section shared the main loop's `fixtures` counter, so moving the whole
-  `test/origin_fixtures/` corpus aside still exited 0 — the addition meant to catch a residual
+  origin fixture corpus aside still exited 0 — the addition meant to catch a residual
   bug had silently defeated the check that catches an empty corpus. Fixed with a section-local
   guard, verified by moving the corpus aside and confirming exit 1 ("checked NOTHING").
 - **#1526 round 2 — a live closing keyword in a commit message**, surviving after the PR body,

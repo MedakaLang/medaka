@@ -48,9 +48,9 @@ stages=DESUGAR,MARK
 -- directory: `canonicalPathId`'s last-containing-root convention depends only
 -- on the SET OF ROOTS each file's own `entrySearchRoots` walk reaches (both
 -- walk up to the SAME `medaka.toml`, wherever each file sits under it), not on
--- the two files being siblings in one directory.  `test/origin_fixtures/nested`
--- is the CROSS-DIRECTORY witness: `main_nested.mdk` sits at the fixture root
--- and `src/leaf.mdk` is nested a directory below it, and the two AGREE.
+-- the two files being siblings in one directory.  The retired nested-origin
+-- fixture was the CROSS-DIRECTORY witness: its main sat at the fixture root
+-- and its leaf was nested a directory below it, and the two agreed.
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at every
 -- single-file call site below.
 
@@ -1013,8 +1013,8 @@ renderOneExample env i ex = match lookupBinding (synthName i) env
 -- (`dirOf` here is that same "parent directory of the target" computation, just
 -- imported from `support.path` rather than loader's private copy).
 --
--- EXPORTED (#1526 blocker-2 follow-up): `origin_agreement_main.mdk`'s `single`
--- probe arm imports and calls this DIRECTLY, rather than reimplementing the id
+-- EXPORTED (#1526 blocker-2 follow-up): the retired origin-agreement probe's
+-- single arm imported and called this DIRECTLY, rather than reimplementing the id
 -- derivation independently — a prior version recomputed it inline, which meant
 -- the gate could drift out of sync with this function silently (a change here
 -- with no matching probe update would go undetected). Calling this export means

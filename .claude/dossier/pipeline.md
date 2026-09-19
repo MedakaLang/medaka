@@ -26,15 +26,15 @@ through, over roots derived from the target's own directory.
 ⚠️ A first pass at this fix used plain `moduleIdOfPath` (first-root) instead, which agrees
 with the loader only when a project has ONE root and still diverged the moment a target sat
 below its own `medaka.toml` — caught in adversarial review before merge (#1526); see
-`test/origin_fixtures/nested` for the discriminating fixture.
+the now-retired nested-origin fixture for the discriminating witness.
 
 Orthogonal to the flatten: the prelude-only arm was already on the Module path; only the
 node's NAME was wrong. **This closes only the NO-IMPORT case.** `driver/loader.mdk:662-669`
 documents a separate, still-open residual for IMPORT-BEARING files (`prepareMulti`'s
 `loadProgramFilesLocatedE`, untouched by this fix):
 an entry's own id is first-root while the same file reached as another target's dependency
-is last-root — MEASURED still reproducing (`test/origin_entry_residual_fixture`, pinned as
-`diff_compiler_origin_agreement.sh`'s `entry_residual` section). #1223 stays OPEN.
+is last-root — MEASURED still reproducing in the residual-origin fixture. The dedicated
+origin-agreement control has since been retired; #1223 stays OPEN.
 
 Derive rather than trust this row: `grep -n 'SAME multi-module path' compiler/tools/test_cmd.mdk`
 
@@ -50,7 +50,7 @@ Also for the record on import forms: an alias-qualified name (`import map as M` 
 works for **values only** — an alias-qualified name in *type* position is a parse error, so
 types must be imported by name (`import map.{Map}`), never through the alias.
 
-## `compiler/entries/origin_agreement_main.mdk` — F1/F2, two S0s through 12/12 green CI (#1110)
+## Retired origin-agreement entry — F1/F2, two S0s through 12/12 green CI (#1110)
 
 The `Ty` constructor `TyCon` carries a `TyConOrigin` stamped by resolve, in its
 `tyConOrigin` field, and so do the four type-declaration nodes — `DData`, `DNewtype`,
@@ -69,7 +69,7 @@ correct for its own arguments in both cases; the bug was a caller (a hardcoded l
 of three call sites for F1, an empty prelude list for F2). A repro: `data A = A { p, k }`
 SIGSEGVs on `Module`, prints `5` on `Flat`, with byte-identical IR between the two — the
 disagreement is invisible unless something reads the origin stamps back and compares arms.
-`origin_agreement_main.mdk` is that something: it drives the three real elaboration entry
+The retired origin-agreement probe was that something: it drove the three real elaboration entry
 points (flat/single/graph) rather than hand-picking arguments, and reports an agreement
 table rather than the origins themselves, because a golden of the origins would churn on
 every module added and would not have caught F1 (each arm's claim was individually

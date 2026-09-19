@@ -228,8 +228,8 @@ public export data Ns =
 --
 -- ⚠️ CONSEQUENCE FOR STAGE A-2, stated because it bounds what the arc
 -- delivers: on the FLAT / single-file driver path every user declaration
--- still carries `OriginUnresolved` (`stampDeclOrigins`' comment below; the
--- RESIDUAL section of `test/origin_fixtures/graph/agreement.golden`), so
+-- still carries `OriginUnresolved` (`stampDeclOrigins`' comment below; this was
+-- covered by the retired origin-agreement control), so
 -- `identOriginOf` returns `None` there and no `Ident` can be built.  A-2's
 -- re-keying is therefore **Module-path-only**: the flat path keeps its
 -- bare-name tables until #1115 (E-1) gives it module ids.  That residual is
@@ -1482,7 +1482,7 @@ public export data Decl =
   --
   -- ⚠️ `implOrigin` is an OCCURRENCE carrier, not a decl-layer one: an `impl` is
   -- not a declaration of the interface it names, it is a USE of one — which is
-  -- why `declHeadOf` (`compiler/entries/origin_agreement_main.mdk`) deliberately
+  -- why the retired origin-agreement carrier census deliberately
   -- has no `DImpl` arm and must not grow one.  It is the identity of `iface`,
   -- the peer of `Constraint`/`Require`/`Super` above.  The identity of the
   -- TYPE(s) being implemented is already carried by the `Ty`s in `tys`.
