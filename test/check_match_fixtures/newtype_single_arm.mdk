@@ -1,0 +1,10 @@
+-- A `newtype` has exactly one constructor, so a one-arm match over it covers
+-- its whole signature: NO warning.  The oracle has to carry a `newtype`'s
+-- constructor for that to be decidable at all — with no row for `Wrap` the
+-- coverage check falls back to the open-type path and every such match looks
+-- incomplete.
+newtype Wrap = Wrap Int
+
+unwrap : Wrap -> Int
+unwrap w = match w
+  Wrap n => n

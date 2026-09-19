@@ -71,6 +71,9 @@ letGroupWarnings : Oracle -> Expr -> List (String, Option Loc)
 litEq : Lit -> Lit -> Bool
 lookupRecField : Oracle -> List RecPatField -> String -> Pat
 missingCtorPat : Oracle -> List String -> List String -> Pat
+newtypeArity : Decl -> List (String, Int)
+newtypeCtorType : Decl -> List (String, TabKey)
+newtypeTypeCtors : Decl -> List (TabKey, List String)
 nonExhaustiveClausesMsg : Oracle -> String -> Int -> List (List Pat) -> String
 oGetArity : Oracle -> String -> Int
 oGetCtorFields : Oracle -> String -> Option (List String)

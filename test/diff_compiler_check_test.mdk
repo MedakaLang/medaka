@@ -276,7 +276,7 @@ rows = [
         pairedWith = None,
         golden = SiblingExpected,
         grade = SortedEqual,
-        fixtures = 12,
+        fixtures = 14,
       },
     ],
     batched = False,

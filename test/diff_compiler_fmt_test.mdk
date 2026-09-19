@@ -145,7 +145,7 @@ rows = [
     goldenSuffix = ".analyze.golden",
     sorted = True,
     stripUnit = True,
-    fixtures = 40,
+    fixtures = 42,
   },
   Row {
     gate = "diff_compiler_exhaust",

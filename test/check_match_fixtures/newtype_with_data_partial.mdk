@@ -1,0 +1,18 @@
+-- The blast-radius control for `newtype_single_arm`: a `newtype` match that is
+-- genuinely covered sits in the same file as a `data` match that genuinely is
+-- not, so a change that makes the newtype arm quiet by making the coverage
+-- check answer "covered" more often shows up here as a LOST warning rather
+-- than as silence nobody reads.  Exactly one warning is expected, naming
+-- 'Blue'.
+newtype Wrap = Wrap Int
+
+data Color = Red | Green | Blue
+
+unwrap : Wrap -> Int
+unwrap w = match w
+  Wrap n => n
+
+name : Color -> Int
+name c = match c
+  Red => 1
+  Green => 2
