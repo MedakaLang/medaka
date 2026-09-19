@@ -40,6 +40,7 @@ import types.typecheck.{
   beginMethodReturnTrace,
   beginNumericPredicateTrace,
   checkModulesDiagsChain,
+  checkModulesEntryReport,
   checkOneDiags,
   checkOneSchemeFullK,
   elaborateOne,
@@ -380,6 +381,51 @@ test "numeric predicates survive module and import order permutations" =
         (view => (view.ntvInterface, view.ntvSelected, view.ntvRoute))
         (filter (view => view.ntvStage == NPTReturn) (snd forward))),
   ]
+
+test "prelude-free split graphs retain every builtin class identity" =
+  let eqSource = joinNl [
+    "export interface Eq a where",
+    "  eq : a -> a -> Bool",
+    "export impl Eq Int where",
+    "  eq x y = x == y",
+  ]
+  let numSource = joinNl [
+    "import eq.{Eq}",
+    "export interface Num a requires Eq a where",
+    "  fromInt : Int -> a",
+    "export impl Num Int where",
+    "  fromInt x = x",
+  ]
+  let useSource = joinNl [
+    "import eq",
+    "import num",
+    "data Box = Box Int",
+    "main = (Box 1) == (Box 2)",
+  ]
+  let oneSource = joinNl [
+    "interface Eq a where",
+    "  eq : a -> a -> Bool",
+    "interface Num a requires Eq a where",
+    "  fromInt : Int -> a",
+    "impl Eq Int where",
+    "  eq x y = x == y",
+    "impl Num Int where",
+    "  fromInt x = x",
+    "data Box = Box Int",
+    "main = (Box 1) == (Box 2)",
+  ]
+  let expected =
+    "TYPE ERROR: No impl of Eq for Box; add 'deriving Eq' to the 'Box' type, or write an 'impl Eq Box'."
+  expectEqual
+    (expected, expected)
+    (
+      checkModulesEntryReport [] [] [("one", desugar (parse oneSource))],
+      checkModulesEntryReport [] [] [
+        ("eq", desugar (parse eqSource)),
+        ("num", desugar (parse numSource)),
+        ("use", desugar (parse useSource)),
+      ],
+    )
 
 test "finalized scheme queries drain numeric predicates on cold and keyed calls" =
   let source = numericValueSource True

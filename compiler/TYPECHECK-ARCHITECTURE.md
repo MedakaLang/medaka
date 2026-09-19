@@ -469,11 +469,11 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 | Subsystem | Gateway | Owns / lines / cells | Spec |
 |---|---|---|---|
 | **The spine** | `checkBodyImpl` | **835 / 10,917 / 110** | — |
-| **Promotion, on the schedule** | `beginModuleMarking` → `markGroupClauses` per SCC → `markRecursiveOccurrences` at group close (ARCH §E; the Module-arm `elabPromotionFixpoint` re-sweep is gone). `discoverAll` → `discoverPromoted` → `discoverNext` survives on the Flat arm only (`elaborateDict`) | ~250 lines | — |
+| **Promotion, on the schedule** | `beginModuleMarking` → `markGroupClauses` per SCC → `markRecursiveOccurrences` at group close (ARCH §E; the re-sweep machinery is gone) | ~250 lines | — |
 | Inferred-constraint registration | `registerInferredConstraints`, `setDictEligible` | ~204 lines | DICT §4 `gen` |
 | Per-module fold | `foldModules` | 10 / 201 / **0** | — |
-| Multi-module check drivers | `checkModules`, `checkModuleFullImpl`, `checkProgramSeededSplit` + the `check*` tails | ~590 lines | — |
-| Typed elaboration | `elaborateModules` (a projection of `driveGraphK GOutTrees DrainKeep`) → `graphPreamble` → `graphModuleWorker` per module → `graphCollect` → `graphDrainFinish`; `elaborateDict` | 53 / 892 / 30 | DICT §4, §8 |
+| Check drivers | `checkModules`, `checkModuleFullImpl`, and the `checkOne*` projections | ~590 lines | — |
+| Typed elaboration | `elaborateModules` (a projection of `driveGraphK GOutTrees DrainKeep`) → `graphPreamble` → `graphModuleWorker` per module → `graphCollect` → `graphDrainFinish`; `elaborateOne` is its one-module projection | 53 / 892 / 30 | DICT §4, §8 |
 | Cross-module universe marshalling | `loadDataUniverse`, `storeDataUniverse`, `appendUniverseAccums` — ⚠️ **derive the cell counts from the three bodies, never from this table**: it said `14`/`14`/`11`, and #1512 slices 1–3 plus #1557 A-3.5c retired cells out of the first two inside four days | 3 fns | DICT §6 C4, §8 I2 |
 | Import seeding / aliasing / ctor overlay | `importFormSchemes`, `aliasSchemes`, `aliasConstraintEntries` | ~370 lines | DICT §8 I2 |
 
@@ -483,7 +483,7 @@ lack. (SHADOW §6 is a *residuals bug list*, not governing semantics — do not 
 |---|---|---|---|
 | Type-error accumulator | `pushTypeError` family; cells `typeErrors`, `typeErrorsSticky` | ~175 lines | — |
 | Structured diagnostic | `tcCode`, `tcLoc`, `tcMsg`, `tcHelp`, `tcFix` | ~39 lines | `compiler/DIAGNOSTIC-CODES-DESIGN.md` |
-| Exhaustiveness bridge | `checkMatchToLines`; cells `matchOracle`, `matchWarnings` → `compiler/frontend/exhaust.mdk` | ~185 lines | — |
+| Exhaustiveness bridge | `checkOneMatchToLines`; cells `matchOracle`, `matchWarnings` → `compiler/frontend/exhaust.mdk` | ~185 lines | — |
 | Unreachable-arm warning | `W-UNREACHABLE-ARM` walk | ~147 lines | — |
 | **Num mis-framing provenance** | banner-scoped, error-path only | ~446 lines | `compiler/ERROR-QUALITY.md` |
 | **Cascade suppression** | `poisonMismatchVars`; cell `poisonedVars` | 5 call sites (`:3489` `:5581` `:7715` `:7716` `:7762`), consumed at `:13926` | — |
@@ -564,10 +564,6 @@ shape makes true that a linear reading does not:
   group close and the group's own occurrences are rewritten (`markRecursiveOccurrences`).
   So a promoted callee's call sites are marked in the sweep that promoted it, and there is
   nothing to re-run. `elabPromotionFixpoint` is gone (#2705, ARCH §E clause (1)).
-- **The `Flat` mode is not on this path at all.** `elaborateDict` — the single-file arm —
-  still discovers promotion by re-running `discoverPromoted` until the set stabilizes, and
-  it is the only remaining caller of `checkBodyImpl`'s `Flat` mode.
-
 `foldModules` calls the worker **head-first**, so `graphModuleWorker` reads a module's
 promotion set before the recursion into `rest` resets it.
 
@@ -579,35 +575,32 @@ either fold is owed to both.
 
 ### 5.2 `checkBodyImpl` itself
 
-One function, 347 lines, **two call sites** — one `Flat`, one `Module` (§0's third
-command locates both). It
-dominates **835 functions / 10,917 lines — 58% of the file — and 110 of 118 state cells
-(93%)**. It directly touches 46 cells.
+One function, 347 lines, reached from `checkModuleFullImpl`. It dominates **835
+functions / 10,917 lines — 58% of the file — and 110 of 118 state cells (93%)**.
+It directly touches 46 cells.
 
-It opens with `resetState ()` and is parameterised by
-`data CheckMode = Flat (List Decl) | Module String (List Decl) (List Decl)`. The author's
-own numbering (`#1`–`#6`, **three** `BREAK` points) marks the phases:
+It opens with `resetState ()`; `mid`, `implDecls`, and `prog0` carry the current
+module and its graph-visible declaration universe. The phases are:
 
 ```
-resetState → stampBindingIds → decl universes (#1) → superDecls (#6)
-  → effect domains          ← [BREAK #3] Flat populates inline; Module relies on the driver
-  → checkEffectParams / checkLetRecDecls → shadows (#4) → mode-specific ref setup
+resetState → stampBindingIds → decl universes → superDecls
+  → effect domains supplied by graphPreamble
+  → checkEffectParams / checkLetRecDecls → shadows → per-module ref setup
   → dataEnv → checkUndeterminedRetEffVars → checkGradedImplHeads → rejectCyclicAliases
   → currentMethodRows = ifaceMethodSchemeRows prog
   → imported method admission → declaration-owned bindings + externSchemes → env1
-  → processTopGroups            ← [BREAK #1] inference plan; Flat is two-phase
-  → cross-module dict snapshot (#3, Module only)
+  → processTopGroups
+  → cross-module dict snapshot
   → groundMultiParamObligations
-  → obligation gate (#5)        ← [BREAK #2] incl. setNumlitFloats, ordered differently per mode
+  → obligation gate, including setNumlitFloats
   → localSchemesOut / seedSchemesOut
 ```
 
 (`stampBindingIds` is not local — the spine calls out to `compiler/frontend/resolve.mdk`.)
 
 Method declaration rows now pair identity, scheme and method predicate slots in
-one allocation. Flat retains its second row construction for `methodNames` and
-the first-write slot registry; Module constructs visible rows from `implDecls`
-for admitted lookup and Num seeding. Numeric seeding retains the selected
+one allocation. The module constructs visible rows from `implDecls` for admitted
+lookup and Num seeding. Numeric seeding retains the selected
 `MethodSchemeRow`, which owns the scheme, raw method type, interface parameters,
 identity and method predicate slots. Each numeric occurrence derives its
 `ClassPredicate` from that row's instantiation for checking and return stamping.
@@ -623,36 +616,28 @@ that row's descriptor and method slots directly. The legacy spelling tables rema
 for compatibility populations, rather than becoming a second authority for exact
 return consumers.
 
-This sequence runs ONCE per module on the Module arm: marking happens inside it, per
+This sequence runs once per module: marking happens inside it, per
 binding group, after the group's callees have generalized (ARCH §E), so a promoted callee's
 call sites are marked in the same sweep that promoted it and no re-run is needed. The
-Flat arm (`elaborateDict`) still discovers promotion by re-running `discoverPromoted` over
-the whole single-file program until the set stabilizes.
-
-**`Flat` vs `Module` bimodality is threaded through 20 `match mode` branches inside this
-one function** — the #992 fork shape, one level up and unfiled.
+One-file consumers enter through the same graph driver with a one-module list.
 
 ### 5.3 The stamper sequence after it — where order is semantics
 
-The two elaboration paths run **different stampers in different orders**:
+The graph-end drain has one stamper order, replayed by `drainStampQueue`:
 
-| # | `flatStampOrder` (Flat, `elaborateDict`) | `moduleStampOrder` (Module, replayed by `drainStampQueue`) |
-|---|---|---|
-| 1 | `resolveSites` | `resolveSites` |
-| 2 | `resolveOpSites` (binop) | `resolveOpSites` (binop) |
-| 3 | `resolveOpSites` (unop) | `resolveOpSites` (unop) |
-| 4 | `resolveArithSites` | `resolveArithSites` |
-| 5 | `realizeRecDictApps` | **`resolveArgStamps`** |
-| 6 | `resolveDictApps` | **`resolveRLocalSites`** ← absent on Flat |
-| 7 | `resolveMethodDicts` | `realizeRecDictApps` |
-| 8 | **`resolveArgStamps`** (last) | `resolveDictApps` |
-| 9 | — | `resolveMethodDicts` |
+1. `resolveSites`
+2. `resolveOpSites` (binop)
+3. `resolveOpSites` (unop)
+4. `resolveArithSites`
+5. `resolveArgStamps`
+6. `resolveRLocalSites`
+7. `realizeRecDictApps`
+8. `resolveDictApps`
+9. `resolveMethodDicts`
 
-**8 stampers vs 9.** `resolveRLocalSites` runs only on the Module path. `resolveArgStamps`
-is last on Flat but fifth on Module. The source states the ordering is semantic — C5
-requires `resolveRLocalSites` to run *after* `resolveSites` and `resolveArgStamps` so the
-receiver-grounded route overrides what those stamped on the **same ref** (grep
-`C5: LAST among the route-stampers` — whose own wording is stale: it is 6th of 9).
+The source states the ordering is semantic: C5 requires `resolveRLocalSites` to run
+after `resolveSites` and `resolveArgStamps` so the receiver-grounded route overrides
+what those stamped on the same ref.
 
 This is the sharpest instance of "order is semantics" in the file, and it is where
 #1040/#1052/#1082 live.
@@ -688,7 +673,8 @@ missed two open S0s sitting in subsystems mapped here. Follow the code, not the 
 worked. But one function dominates 58% of the file and **93%** of the state, is re-entered to a
 fixpoint, and is followed by a 9-step ordered stamper pass that differs between the two
 paths. `ARCH-REVIEW.md` diagnosed "a god module with concentrated mutable state" and the fix
-addressed the state half. **No open issue names what is left.**
+addressed the state half. The single graph driver removed the former driver fork, but
+the central spine remains the dominant control-flow owner.
 
 **2. The densest S0 cluster sits in the layer whose spec coverage is narrative, not tabular.**
 Effects (Layer 1) carries 6 of the 11 open `ws:typecheck` S0s. EFFECTS-SEMANTICS *does* cover
@@ -756,10 +742,6 @@ exists" is a finding:
 - **Numeric-literal defaulting** — decides runtime representation, ordered differently per
   path, wholly unspecified.
 - **Impl completeness and phantom-method rejection** — enforced, never specified.
-- **The `Flat`/`Module` bimodality** — `compiler/DRIVER-COLLAPSE-PLAN.md` is marked
-  **IMPLEMENTED** and asserts the flat path is the degenerate 1-module case whose invariants
-  are automatically satisfied. §5 measures 20 `match mode` branches, two `BREAK` points, and
-  two divergent stamper orders. **A stated invariant with a measured counterexample.**
 
 **7. The seams, inbound and outbound.** 11 modules are imported; 31 import this one. Four
 edges constrain refactors and none was named before:
@@ -771,8 +753,8 @@ edges constrain refactors and none was named before:
 | → `frontend/marker.mdk` (`localBoundNames`) | `localBoundNames` only. The mark pass is **not** on any production verb, so **no `EMethodRef` reaches this file**: `run`/`build` mark dicts in this file's own `prePassDict`/`prePassDictArg`, which mint `EMethodAt`/`EDictAt`, and `check` sees the unmarked tree |
 | ← `tools/lsp.mdk` (`currentLocalSchemes`, `currentSeedSchemes`) | the LSP reads `PerRun` state **after** a run completes, so `localSchemesOut`/`seedSchemesOut` are a **live external contract on reset timing** |
 
-Also: `driver/diagnostics.mdk` consumes `checkProgramDiags`/`checkModulesDiags`/
-`entryOwnSchemes`/`setCoherenceUserDecls`; `ir/` reaches this file only through
+Also: `driver/diagnostics.mdk` consumes the `checkOne*` and `checkModules*`
+projections plus `entryOwnSchemes`; `ir/` reaches this file only through
 `elaborateModules`/`elaborateOne`, which is the whole typed-Core-IR boundary.
 
 ---

@@ -34,10 +34,8 @@ on this tier's behalf** — the dependency is one-way.
 
 **Tier 1's** dependency was the Stage E Flat-consumer migration (**#1115**), and
 it has **drained**: #1115 closed and shipped the one-module Module-arm wrappers
-Tier 1 harvests through (§4.2, §10.1). Tier 1 is schedulable. The `CheckMode`
-deletion (**#1116**) is downstream of #1115 and is deferred past 0.1.0, but Tier 1
-does not wait on it — see §10.1's scope note on what "drained" does and does not
-claim.
+Tier 1 harvests through (§4.2, §10.1). The later single-driver collapse (#1116)
+has landed too. Tier 1 is schedulable and introduces no checking-driver fork.
 
 ---
 
@@ -265,10 +263,9 @@ off, because it is just a syntactic scan of constructors.
 Run the existing non-aborting analysis once and harvest schemes the same way the
 LSP does.
 
-🚨 **Rewritten 2026-08-30 at `33c7247a`. The previous recipe said "mirror
-`docSchemes` → `checkProgramSchemesWithRuntime`" — that is a FLAT-path entry
-point, and following it today would add the tree's only second Flat consumer
-back after E-1 finished removing them (§10.1).** Call the Module-arm one-module
+🚨 **Rewritten 2026-08-30 at `33c7247a`. The previous recipe named the retired
+single-file checking path, which would have reintroduced a second driver after
+E-1 finished migrating consumers (§10.1).** Call the one-module graph
 wrappers instead. `docSchemes` itself has already been migrated onto them
 (`lsp.mdk:710-719` now calls `checkOneSchemeFull`), so "mirror `docSchemes`" and the
 recipe below no longer differ — but the old wording named the Flat function
@@ -296,13 +293,9 @@ explicitly and would have been copied.
   removed with #100 — these return `Result LoadError`, so a dependency's parse
   error arrives attributed to ITS file; flatten with `loadErrorMessage` if the
   caller only wants text).
-- **`typechecked` flag:** harvest errors via
-  `checkProgramDiags : … -> <Mut> (List (String,Option Loc), List (String,Option Loc))`
-  (`typecheck.mdk:9314`) or the boolean `checkErrorsWithRuntime`
-  (`typecheck.mdk:9279`), or — preferred, and matching the wrappers above —
-  `checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)`
-  (`typecheck.mdk:36795`), whose `(errs, warns)` shape matches `checkProgramDiags`
-  exactly so a call site can swap targets with no shape change. Set
+- **`typechecked` flag:** harvest errors through
+  `checkOneDiags : List Decl -> List Decl -> (String, List Decl) -> (List TcDiag, List TcDiag)`.
+  Set
   `typechecked = (errors == [])`. Crucially, the scheme harvest returns
   **best-effort schemes even when the file has type errors** (it only fails to
   produce an env if the file doesn't *parse* — `docSchemes` returns `None` only
@@ -400,7 +393,7 @@ This is a **third pass** in the lint run, after the per-file `Rule` pass and the
 | `compiler/tools/lint.mdk` | New `import frontend.exhaust.{Oracle(..), buildOracle, oGetCtors, oGetCtorType, oGetCtorFields}` and `import types.typecheck.{Scheme(..), Mono(..)}` (Tier 1). |
 | `compiler/driver/medaka_cli.mdk` | In `runLintCmd` (`:764-781`): `let typeAware = hasFlag "--type-aware" argv` (`:765-769`; `lintTargets` at `:942` already strips any `--`-prefixed token, so no change there). When set, build the `TypeOracle` (Tier 0 always; Tier 1 via the harvest below) and call `lintTypedProgram` after the existing per-file/cross-file passes. |
 | `compiler/driver/medaka_cli.mdk` | New oracle-build helper near the lint helpers (`lintOneFileReport` `:899`, `parseLintFiles` `:813`): single-file calls `checkOneSchemeFull` + `currentLocalSchemes`; project calls `checkModules` fed by `loadProgramFilesE`. Reads runtime/core like `runCheckCmd` (`:115-128`). |
-| (reuse, no edit) | `compiler/frontend/exhaust.mdk` `buildOracle`/accessors (`:108-190`); `compiler/types/typecheck.mdk` `checkOneSchemeFull` (`:36786`), `checkOneDiags` (`:36795`), `currentLocalSchemes` (`:1458`), `checkModules` (`:9807`); `compiler/driver/diagnostics.mdk` `analyzeProject` (`:340`). ⚠️ **Not** `checkProgramSchemesWithRuntime`/`checkProgramDiags` — those are the Flat entry points this table named before 2026-08-30; see §10.1. |
+| (reuse, no edit) | `compiler/frontend/exhaust.mdk` `buildOracle`/accessors (`:108-190`); `compiler/types/typecheck.mdk` `checkOneSchemeFull` (`:36786`), `checkOneDiags` (`:36795`), `currentLocalSchemes` (`:1458`), `checkModules` (`:9807`); `compiler/driver/diagnostics.mdk` `analyzeProject` (`:340`). See §10.1 for the retired-driver history. |
 
 No seed re-mint expected: `lint` is outside the self-compile graph (per
 MEMORY.md "medaka lint" note — adding rules surfaced emitter gaps but the tool
@@ -604,65 +597,25 @@ re-derive at implementation time, not as settled facts.
 ### 10.1 Tier 1's Stage E-1 (#1115) dependency — DISCHARGED 2026-08-30
 
 **Historical form of this section (2026-08-19, `8b7b5517`).** §4.2 told the
-implementer to build the single-file harvest by mirroring `docSchemes`
-(`lsp.mdk`), which was then a **Flat-path** consumer. Component E's stated target
-is *"One driver … The target deletes `CheckMode` entirely,"* and its migration is
-explicitly *consumer-by-consumer*, naming "the repl, LSP hover/single-file env,
-playground, single-file doctests, `snapshot`/`check_policy`/`doc`" as consumers
-*"whose golden families pin Flat behavior."* Building Tier 1 as written would
-therefore have **added a new consumer to the set E-1 had to drain**, and pinned
-another golden family to Flat behaviour on the way out. The recommendation was to
-hold Tier 1 until #1115 drained.
+implementer to mirror `docSchemes`, which then used the retired single-file
+driver. Building Tier 1 as written would have added another consumer to E-1's
+migration set, so the recommendation was to wait until #1115 drained.
 
-The census then read: `tools/repl.mdk`, `tools/lsp.mdk`, `tools/check_policy.mdk`,
-`tools/doc.mdk`, `entries/playground_main.mdk`, `entries/origin_agreement_main.mdk`
-— **Tier 1 would have been the seventh.** That section closed by saying *"re-derive
-the set before relying on it; do not read the list above as durable either."* That
-warning was correct, and the set has moved.
-
-#### Re-derived at `33c7247a`
-
-```sh
-grep -rn 'checkProgramSeededSplit\|checkProgramSeeded\|checkProgramSchemes' \
-  --include=*.mdk . | grep -v '^\./compiler/types/typecheck.mdk'
-```
-
-**One live call site outside `typecheck.mdk`: `entries/origin_agreement_main.mdk:282`**
-(`checkProgramSchemesWithRuntime`, imported at `:137`). Every other hit in the tree is a
-comment. That site is **not** a consumer awaiting migration — it is the deliberate flat
-arm of the origin-agreement differential, whose entire job is to compare the two drivers
-(`test/diff_compiler_origin_agreement.sh:366`: *"the flat drivers still route through
-`checkProgramSeededSplit`"*). It should stay.
-
-The other five have migrated onto E-1's one-module Module-arm wrappers:
+The historical census included the repl, LSP, check policy, docs, playground, and
+the now-retired origin-agreement control. All surviving consumers migrated onto
+E-1's one-module Module-arm wrappers:
 `lsp.mdk`'s `docSchemes` (`:710-719`) now calls `checkOneSchemeFull`; `repl.mdk`
 imports `checkOneDiags`/`checkOneScheme` (`:33-39`); `doc.mdk` imports
 `checkOneScheme` (`:39`); `check_policy.mdk` and `playground_main.mdk` likewise.
 
-**Both of §4.2's harvest routes are already Module-arm.** §4.2 routes through
+**Both of §4.2's harvest routes use the graph driver.** §4.2 routes through
 `diagnostics.analyze`/`analyzeProject`, and `driver/diagnostics.mdk:51-63` imports
-`checkOneDiags`, `checkModulesDiags`, `checkModules`, `entryOwnSchemes` — no Flat
-entry point at all. Tier 1 needs no new driver, single-file or project.
+`checkOneDiags`, `checkModulesDiags`, `checkModules`, `entryOwnSchemes`. Tier 1
+needs no new driver, single-file or project.
 
-**Consequence: the hold is discharged.** Tier 1 adds no new Flat consumer and pins
-no golden family to Flat behaviour. §4.2 has been rewritten to name
-`checkOneSchemeFull` directly rather than "mirror `docSchemes`" — the two now
-denote the same thing, but the old wording named the Flat function explicitly and
-would have been copied.
-
-#### ⚠️ Scope of the "drained" claim — what it does NOT say
-
-**The Flat path is not gone.** `CheckMode`/`Flat` is alive inside `typecheck.mdk`:
-the probe entries `checkToLines` / `checkMatchToLines` route through
-`checkProgramSchemes` / `checkProgramSeededSplit` / `checkProgramSeeded`
-(`typecheck.mdk:33258`, `:33329`, `:33398`), and the whole `Flat` arm of
-`checkBodyImpl` remains. **#1116 (E-2) is open and deferred past 0.1.0.**
-
-The claim here is exactly the one this section originally made and no wider: *the
-external consumer set E-1 was draining is drained.* Tier 1's dependency was on
-that set, not on `CheckMode`'s deletion — #1116's own body depends on *"E-1 (no
-Flat consumers left except the promotion fallback)"*, i.e. E-2 is downstream of
-the condition Tier 1 needed, not a peer of it.
+**Consequence: the hold is discharged.** Tier 1 adds no checking mode and pins no
+golden family to a retired path. §4.2 names `checkOneSchemeFull` directly; all
+one-file APIs are projections of the same graph driver used for projects.
 
 ### 10.2 The harvest read-point is dictated by E — and getting it wrong is silent
 

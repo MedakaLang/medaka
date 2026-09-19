@@ -174,16 +174,16 @@ shadow-hood (S1) genuinely holds on the multi-module path.**
 ### 1.3 Why
 
 * **Multi-module:** `checkModuleFullImpl` (`typecheck.mdk:11199-11201`) seeds `definerShadowNamesRef` **per module**, and `core` is checked in **isolation**. Prelude bodies never see a user shadow.
-* **Flat / single-file:** `checkProgramSeeded` (`typecheck.mdk:9314`) does
-  `setRef definerShadowNamesRef (buildDefinerShadows prog prog)` where `prog = core ++ user`.
+* **Historical Flat / single-file path (retired 2026-09-19):** the old checker built
+  `definerShadowNamesRef` over `prog = core ++ user`.
   The *set* is correct (core's methods live in `DImpl`, not `funDefs`, so only genuine
   user shadows are collected) — but the set is then applied to **every occurrence in the
   flattened program, core's included**. `definerShadowVarHead` (`:5243`) fires on any
   `EVar "map"` anywhere, so `inferDefinerShadowVarApp` → `groundShadowReceiver` forces
   the prelude's receiver to the user's declared domain.
 
-Two ad-hoc patches contain the damage today, and both are stand-ins for the missing
-module boundary:
+Two ad-hoc patches contained the damage before the single-file route moved onto the
+module driver:
 
 1. **`methodShadowNamesRef` + `dropSchemesNamed`** (`:9307`, `:9334`, `:10867`) — keeps user schemes out of the env threaded into prelude impl/default/prop/test bodies. The source comment calls itself the *"FLAT-PATH SHADOW FIX"*.
 2. **`definerReceiverIsDictVar`** (`:5276`) — an ungrounded receiver that is a dict-bound constraint var **dispatches**. The header of `test/run_check_agreement_fixtures/accept_constrained_receiver_shadow.mdk` states the stakes plainly:

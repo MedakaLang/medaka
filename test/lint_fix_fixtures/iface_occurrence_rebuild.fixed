@@ -17,10 +17,10 @@
 -- claiming past the evidence.  What the `.fixed` golden does prove is the half that
 -- is checkable at this stage and is the one that would destroy source: the fixers
 -- still produce the right text over interface-occurrence-dense decls, and the
--- printer does not leak an identity field into the output.  The runtime half — that
--- an acquired origin survives to the trees `elaborateModules` returns — is asserted
--- by test/diff_compiler_origin_agreement.sh's per-carrier `iface-occs-*`
--- anti-vacuity guards, which go to 0 the moment a rebuild blanks a carrier.
+-- printer does not leak an identity field into the output.  The retired
+-- origin-agreement control used to assert the runtime half: that an acquired origin
+-- survives to the trees `elaborateModules` returns.  This lint fixture makes no claim
+-- about that later stage.
 --
 -- The `.fixed` golden was derived from the rules' own contracts BEFORE it was
 -- captured, not read off the tool: rule-if-max-min turns `if p > q then p else q`
