@@ -42,7 +42,6 @@ import types.typecheck.{
   checkModulesDiagsChain,
   checkOneDiags,
   checkOneSchemeFullK,
-  checkProgramDiags,
   elaborateOne,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
@@ -1180,7 +1179,7 @@ test "wrapped return checking rejects an instance for only the result wrapper" =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
-  let (flatErrors, _) = checkProgramDiags [] core program
+  let (flatErrors, _) = checkOneDiags [] core ("__user__", program)
   expectAll [
     expectEqual
       True
@@ -2510,7 +2509,7 @@ mixedDirectFirstSource = joinNl [
 
 flatMessages : String -> List String
 flatMessages source =
-  let (errors, _) = checkProgramDiags [] [] (desugar (parse source))
+  let (errors, _) = checkOneDiags [] [] ("__user__", desugar (parse source))
   map tcMsg errors
 
 test "attributed-direct Num declarations reject mismatches without cross-pairing rows" =
