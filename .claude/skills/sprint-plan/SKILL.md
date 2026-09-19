@@ -74,6 +74,10 @@ deeper than this measured ~75% rework.
    right call for genuinely tricky slices: cross-cutting semantics, coupled
    sites, anything where a wrong-but-plausible transform is easy. When
    unsure, start sonnet; the orchestrator upgrades on a refusal.
+   **Codex:** apply `.codex/SPRINT.md` § "Choosing an implementation tier":
+   Terra/high is the default, including coupled-site work with a settled remedy.
+   A Sol/high choice must name the unresolved semantic or algorithmic decision,
+   not merely the severity, subsystem, file count, or test volume.
 6. **Depends-on / parallel-ok** — landing order by ID. Slices are executed
    SERIALLY by default. A pair may be marked `parallel-ok` ONLY with
    disjointness evidence in the contract: the two surface lists, a
