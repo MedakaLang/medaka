@@ -356,10 +356,10 @@ lowerAscii input start end =
 -- `allTokenBytes`, `validFieldValueBytes`, `findByteBytes`,
 -- `trimLeftOwsBytes`, `trimRightOwsBytes`, `skipOwsBytes`,
 -- `scanTokenEndBytes` — is its body over a `Bytes` rather than an
--- `Array Int`. The duplication is deliberate and temporary: `Index` is
+-- `Array` of `Int`. The duplication is deliberate and temporary: `Index` is
 -- resolved per element, so one shared body would have to be constrained
 -- over the container and dispatch on every byte of every header scanned.
--- `Array Int` originals stay for the callers not yet migrated; B5 removes
+-- The `Array`-based originals stay for callers not yet migrated; B5 removes
 -- them, and the duplication with them (`docs/design/BYTES-DESIGN.md`).
 lowerAsciiBytes : Bytes -> Int -> Int -> String
 lowerAsciiBytes input start end =
