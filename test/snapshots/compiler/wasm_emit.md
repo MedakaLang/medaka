@@ -1,5 +1,5 @@
 # META
-source_lines=12564
+source_lines=12604
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -1988,6 +1988,7 @@ externArityW name =
       "byteBlockFromIntArray",
       "byteBlockToIntArray",
       "byteBlockFromString",
+      "byteBlockToString",
     ] then
     -- W11: charCode : Char -> Int (1-arg leaf); W11b: char classification + case-mapping (1-arg).
 
@@ -2058,8 +2059,9 @@ externArityW name =
     name
     ["stringSlice", "arraySetUnsafe", "byteBlockSetUnsafe"] then
     3
-  else if name == "arrayBlit" then
-    -- stage-A: arrayBlit src srcOff dst dstOff len (5 args).
+  else if contains name ["arrayBlit", "byteBlockBlit"] then
+    -- stage-A: arrayBlit src srcOff dst dstOff len (5 args); byteBlockBlit is
+    -- its byte-block peer, same argument order.
     5
   else
     1
@@ -2098,8 +2100,8 @@ isArrayExternW name = contains
     "bytesToFloat64",
   ]
 
--- ── the `ByteBlock` builtin's eight primitives ──────────────────────
--- Peer of llvm_emit's `isByteBlockExtern`, over the same eight names.  A block IS
+-- ── the `ByteBlock` builtin's primitives ──────────────────────────────────
+-- Peer of llvm_emit's `isByteBlockExtern`, over the same names.  A block IS
 -- a `$u8arr`, so these force the $str rep (which declares $u8arr) and the $arr rep
 -- (which the two Array-crossing prims name) — see noteW8Extern below.
 -- NOTE the arg orders, which follow stdlib/runtime.mdk, not the receiver-last
@@ -2108,7 +2110,7 @@ isByteBlockExternW : String -> Bool
 -- Deliberately a per-backend copy of llvm_emit.mdk's `isByteBlockExtern`, not a
 -- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
 -- implemented-extern column by extracting the family binding's own quoted names
--- out of that engine's own file, so hoisting the eight names into a module both
+-- out of that engine's own file, so hoisting the names into a module both
 -- backends import would leave the gate reading neither engine as implementing
 -- them -- the duplication is what keeps the two columns independently derivable.
 -- lint-disable-next-line rule-duplicate-body
@@ -2118,9 +2120,12 @@ isByteBlockExternW name = contains name [
   "byteBlockGetUnsafe",
   "byteBlockSetUnsafe",
   "byteBlockCopyUnsafe",
+  "byteBlockBlit",
   "byteBlockFromIntArray",
   "byteBlockToIntArray",
   "byteBlockFromString",
+  "byteBlockToString",
+  "byteBlockWriteStdout",
 ]
 
 -- ── W8b: the ONE residual deferred extern ────────────────────────────────────
@@ -2475,7 +2480,7 @@ noteW8Extern emit name =
   let _ = if name == "arrayFromList" then setRef emit.useList True
   -- the `ByteBlock` builtin: a block IS a `$u8arr`, which is declared with the $str
   -- rep, so useStr.  byteBlockFromIntArray/ToIntArray also name $arr, and the runtime
-  -- block is emitted whole, so every one of the eight forces both reps rather than
+  -- block is emitted whole, so every one of them forces both reps rather than
   -- letting a make-only program emit a body referencing an undeclared $arr.
   let _ =
     if isByteBlockExternW name then
@@ -3552,7 +3557,7 @@ emitRefProgram prog groups =
   -- the codec nor strLeaf, so its runtime fn is gated independently.
   let strCodecRt =
     if (progEmit prog).useStrCodec.value then strCodecRuntimeLines else []
-  -- the `ByteBlock` builtin's four loop/copy helpers.  Needs $u8arr + $str (forced
+  -- the `ByteBlock` builtin's loop/copy helpers.  Needs $u8arr + $str (forced
   -- via useStr) and $arr (useArray), both set with useByteBlock in noteW8Extern.
   let byteBlockRt =
     if (progEmit prog).useByteBlock.value then byteBlockRuntimeLines else []
@@ -8345,7 +8350,7 @@ emitArrayExternRef prog env d "bytesToFloat64" _ =
 emitArrayExternRef prog _ _ name _ =
   gapLP prog ("wasm W10: unsupported array extern '" ++ name ++ "'")
 
--- ── the `ByteBlock` builtin's eight primitives ──────────────────────
+-- ── the `ByteBlock` builtin's primitives ──────────────────────────────────
 -- A block is a bare `$u8arr`; the four that loop or copy call into
 -- byteBlockRuntimeLines, the four that don't are inline.  Arg orders follow
 -- stdlib/runtime.mdk (index/size FIRST, block LAST), mirroring the $arr family:
@@ -8354,9 +8359,12 @@ emitArrayExternRef prog _ _ name _ =
 --   byteBlockGetUnsafe    i b          → (i FIRST) cast b, array.get_u → i31
 --   byteBlockSetUnsafe    i v b        → array.set (low 8 bits of v); result Unit
 --   byteBlockCopyUnsafe   n b          → $mdk_bb_copy (a COPY — freeze's engine half)
+--   byteBlockBlit         s so d do n  → array.copy (memmove-equivalent; may overlap)
 --   byteBlockFromIntArray a            → $mdk_bb_from_int_array
 --   byteBlockToIntArray   b            → $mdk_bb_to_int_array
 --   byteBlockFromString   s            → $mdk_bb_from_string
+--   byteBlockToString     b            → $mdk_bb_to_string
+--   byteBlockWriteStdout  b            → $mdk_bb_write_stdout
 emitByteBlockExternRef : Prog ->
   List String ->
   Int ->
@@ -8396,6 +8404,21 @@ emitByteBlockExternRef prog env d "byteBlockCopyUnsafe" [n, b] =
     ++ ["ref.cast (ref $u8arr)", "call $mdk_bb_copy"]
 emitByteBlockExternRef prog env d "byteBlockCopyUnsafe" _ =
   gapLP prog "wasm: byteBlockCopyUnsafe takes exactly two arguments"
+-- array.copy takes (dst, dstOff, src, srcOff, len), so the destination operands
+-- are pushed before the source ones even though the extern's argument order is
+-- source-first; `byteBlockSetUnsafe` above reorders for the same reason.  The
+-- copy is overlap-safe by the WasmGC spec, matching native's memmove.
+emitByteBlockExternRef prog env d "byteBlockBlit" [src, srcOff, dst, dstOff, len] =
+  emitRefExpr prog env d dst
+    ++ ["ref.cast (ref $u8arr)"]
+    ++ bbIntArg prog env d dstOff
+    ++ emitRefExpr prog env d src
+    ++ ["ref.cast (ref $u8arr)"]
+    ++ bbIntArg prog env d srcOff
+    ++ bbIntArg prog env d len
+    ++ ["array.copy $u8arr $u8arr", "i32.const 0", "ref.i31"]
+emitByteBlockExternRef prog env d "byteBlockBlit" _ =
+  gapLP prog "wasm: byteBlockBlit takes exactly five arguments"
 emitByteBlockExternRef prog env d "byteBlockFromIntArray" [a] =
   emitRefExpr prog env d a
     ++ ["ref.cast (ref $arr)", "call $mdk_bb_from_int_array"]
@@ -8411,6 +8434,23 @@ emitByteBlockExternRef prog env d "byteBlockFromString" [sv] =
     ++ ["ref.cast (ref $str)", "call $mdk_bb_from_string"]
 emitByteBlockExternRef prog env d "byteBlockFromString" _ =
   gapLP prog "wasm: byteBlockFromString takes exactly one argument"
+emitByteBlockExternRef prog env d "byteBlockToString" [b] =
+  emitRefExpr prog env d b
+    ++ ["ref.cast (ref $u8arr)", "call $mdk_bb_to_string"]
+emitByteBlockExternRef prog env d "byteBlockToString" _ =
+  gapLP prog "wasm: byteBlockToString takes exactly one argument"
+-- byteBlockWriteStdout: writes the block's bytes to stdout byte-for-byte via
+-- the same $mdk_write_byte host import putStr's $mdk_print_str loop uses,
+-- then returns Unit -- the operand is a $u8arr, so this dispatches through
+-- the byte-block family rather than isStrExternW's $str-typed IO externs.
+emitByteBlockExternRef prog env d "byteBlockWriteStdout" [b] =
+  emitRefExpr prog env d b
+    ++ [
+      "ref.cast (ref $u8arr)", "call $mdk_bb_write_stdout", "i32.const 0",
+      "ref.i31"
+    ]
+emitByteBlockExternRef prog env d "byteBlockWriteStdout" _ =
+  gapLP prog "wasm: byteBlockWriteStdout takes exactly one argument"
 emitByteBlockExternRef prog _ _ name _ =
   gapLP prog ("wasm: unsupported byte-block extern '" ++ name ++ "'")
 
@@ -12849,13 +12889,13 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "isNetExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isNetExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "netResolve")) (ELit (LString "netTcpConnect")) (ELit (LString "netTcpListen")) (ELit (LString "netListenPort")) (ELit (LString "netTcpAccept")) (ELit (LString "netSend")) (ELit (LString "netSendFrom")) (ELit (LString "netRecv")) (ELit (LString "netShutdown")) (ELit (LString "netClose")) (ELit (LString "netSetTimeout")) (ELit (LString "ioPoll")) (ELit (LString "netSetNonblock")) (ELit (LString "netConnectStart")) (ELit (LString "netConnectCheck")) (ELit (LString "netTryAccept")) (ELit (LString "netTryRecv")) (ELit (LString "netTrySend")) (ELit (LString "netTrySendFrom")))))
 (DTypeSig false "externArityW" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "readFileBytes")) (ELit (LString "bitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "writeFileBytes")) (ELit (LString "sliceError")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")))) (ELit (LInt 3)) (EIf (EBinOp "==" (EVar "name") (ELit (LString "arrayBlit"))) (ELit (LInt 5)) (ELit (LInt 1))))))))
+(DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "readFileBytes")) (ELit (LString "bitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "writeFileBytes")) (ELit (LString "sliceError")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")))) (ELit (LInt 3)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayBlit")) (ELit (LString "byteBlockBlit")))) (ELit (LInt 5)) (ELit (LInt 1))))))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isWasmEtaExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EVar "isLeafExternW") (EVar "name"))) (EApp (EVar "isArrayExternW") (EVar "name"))) (EApp (EVar "isByteBlockExternW") (EVar "name"))))
 (DTypeSig false "isArrayExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isArrayExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayLength")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "arrayCopy")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayFromList")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))))
 (DTypeSig false "isByteBlockExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isByteBlockExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")))))
+(DFunDef false "isByteBlockExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout")))))
 (DTypeSig false "isDeferredFloatExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDeferredFloatExternW" (PWild) (EVar "False"))
 (DTypeSig false "floatExternStub" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -14109,12 +14149,18 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockSetUnsafe")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockSetUnsafe takes exactly three arguments"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockCopyUnsafe")) (PList (PVar "n") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_copy")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockCopyUnsafe")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockCopyUnsafe takes exactly two arguments"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockBlit")) (PList (PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dst")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")))) (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dstOff"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "src"))) (EListLit (ELit (LString "ref.cast (ref $u8arr)")))) (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "srcOff"))) (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "len"))) (EListLit (ELit (LString "array.copy $u8arr $u8arr")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockBlit")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockBlit takes exactly five arguments"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromIntArray")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $arr)")) (ELit (LString "call $mdk_bb_from_int_array")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromIntArray")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockFromIntArray takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToIntArray")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_to_int_array")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToIntArray")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockToIntArray takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromString")) (PList (PVar "sv"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "sv")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_bb_from_string")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockFromString takes exactly one argument"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_to_string")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockToString takes exactly one argument"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_write_stdout")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockWriteStdout takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") PWild PWild (PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: unsupported byte-block extern '")) (EVar "name")) (ELit (LString "'")))))
 (DTypeSig false "bbIntArg" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "bbIntArg" ((PVar "prog") (PVar "env") (PVar "d") (PVar "e")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "e")) (EListLit (ELit (LString "call $mdk_unbox_int")) (ELit (LString "i32.wrap_i64")))))
@@ -15164,13 +15210,13 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "isNetExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isNetExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "netResolve")) (ELit (LString "netTcpConnect")) (ELit (LString "netTcpListen")) (ELit (LString "netListenPort")) (ELit (LString "netTcpAccept")) (ELit (LString "netSend")) (ELit (LString "netSendFrom")) (ELit (LString "netRecv")) (ELit (LString "netShutdown")) (ELit (LString "netClose")) (ELit (LString "netSetTimeout")) (ELit (LString "ioPoll")) (ELit (LString "netSetNonblock")) (ELit (LString "netConnectStart")) (ELit (LString "netConnectCheck")) (ELit (LString "netTryAccept")) (ELit (LString "netTryRecv")) (ELit (LString "netTrySend")) (ELit (LString "netTrySendFrom")))))
 (DTypeSig false "externArityW" (TyFun (TyCon "String") (TyCon "Int")))
-(DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "readFileBytes")) (ELit (LString "bitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "writeFileBytes")) (ELit (LString "sliceError")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")))) (ELit (LInt 3)) (EIf (EBinOp "==" (EVar "name") (ELit (LString "arrayBlit"))) (ELit (LInt 5)) (ELit (LInt 1))))))))
+(DFunDef false "externArityW" ((PVar "name")) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "flushStdout")) (ELit (LString "randomBool")))) (ELit (LInt 0)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "intToString")) (ELit (LString "charToStr")) (ELit (LString "stringLength")) (ELit (LString "putStr")) (ELit (LString "putStrLn")) (ELit (LString "ePutStr")) (ELit (LString "ePutStrLn")) (ELit (LString "stringToUpper")) (ELit (LString "stringToLower")) (ELit (LString "hashString")) (ELit (LString "stringConcat")) (ELit (LString "setSeed")) (ELit (LString "randomChar")) (ELit (LString "hashInt")) (ELit (LString "hashChar")) (ELit (LString "hashBool")) (ELit (LString "charCode")) (ELit (LString "charIsAlpha")) (ELit (LString "charIsSpace")) (ELit (LString "charIsUpper")) (ELit (LString "charIsLower")) (ELit (LString "charIsPunct")) (ELit (LString "charToUpper")) (ELit (LString "charToLower")) (ELit (LString "floatToString")) (ELit (LString "intToFloat")) (ELit (LString "floatToInt")) (ELit (LString "hashFloat")) (ELit (LString "randomFloat")) (ELit (LString "panic")) (ELit (LString "arrayLength")) (ELit (LString "arrayFromList")) (ELit (LString "arrayCopy")) (ELit (LString "indexError")) (ELit (LString "indexErrorAt")) (ELit (LString "floatToBytes64")) (ELit (LString "stringToChars")) (ELit (LString "stringFromChars")) (ELit (LString "charFromCode")) (ELit (LString "stringToUtf8Bytes")) (ELit (LString "stringFromUtf8Bytes")) (ELit (LString "readFile")) (ELit (LString "fileExists")) (ELit (LString "getEnv")) (ELit (LString "exit")) (ELit (LString "args")) (ELit (LString "readFileBytes")) (ELit (LString "bitNot")) (ELit (LString "intBitsToFloat")) (ELit (LString "sqrt")) (ELit (LString "floor")) (ELit (LString "ceil")) (ELit (LString "trunc")) (ELit (LString "round")) (ELit (LString "cbrt")) (ELit (LString "exp")) (ELit (LString "log")) (ELit (LString "log2")) (ELit (LString "log10")) (ELit (LString "sin")) (ELit (LString "cos")) (ELit (LString "tan")) (ELit (LString "asin")) (ELit (LString "acos")) (ELit (LString "atan")) (ELit (LString "sinh")) (ELit (LString "cosh")) (ELit (LString "tanh")) (ELit (LString "stringToFloat")) (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")))) (ELit (LInt 1)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "randomInt")) (ELit (LString "stringIndexOf")) (ELit (LString "stringCompare")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "bitAnd")) (ELit (LString "shiftLeft")) (ELit (LString "shiftRight")) (ELit (LString "arrayFill")) (ELit (LString "bytesToFloat64")) (ELit (LString "bitOr")) (ELit (LString "bitXor")) (ELit (LString "pow")) (ELit (LString "atan2")) (ELit (LString "hypot")) (ELit (LString "floatRem")) (ELit (LString "writeFileBytes")) (ELit (LString "sliceError")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")))) (ELit (LInt 2)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "stringSlice")) (ELit (LString "arraySetUnsafe")) (ELit (LString "byteBlockSetUnsafe")))) (ELit (LInt 3)) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayBlit")) (ELit (LString "byteBlockBlit")))) (ELit (LInt 5)) (ELit (LInt 1))))))))
 (DTypeSig false "isWasmEtaExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isWasmEtaExtern" ((PVar "name")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EVar "isStrExternW") (EVar "name")) (EApp (EVar "isLeafExternW") (EVar "name"))) (EApp (EVar "isArrayExternW") (EVar "name"))) (EApp (EVar "isByteBlockExternW") (EVar "name"))))
 (DTypeSig false "isArrayExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isArrayExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "arrayLength")) (ELit (LString "arrayGetUnsafe")) (ELit (LString "arrayMake")) (ELit (LString "arrayMakeWith")) (ELit (LString "arrayCopy")) (ELit (LString "arraySetUnsafe")) (ELit (LString "arrayFromList")) (ELit (LString "arrayBlit")) (ELit (LString "arrayFill")) (ELit (LString "floatToBytes64")) (ELit (LString "bytesToFloat64")))))
 (DTypeSig false "isByteBlockExternW" (TyFun (TyCon "String") (TyCon "Bool")))
-(DFunDef false "isByteBlockExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")))))
+(DFunDef false "isByteBlockExternW" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockBlit")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")) (ELit (LString "byteBlockToString")) (ELit (LString "byteBlockWriteStdout")))))
 (DTypeSig false "isDeferredFloatExternW" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isDeferredFloatExternW" (PWild) (EVar "False"))
 (DTypeSig false "floatExternStub" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
@@ -16424,12 +16470,18 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockSetUnsafe")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockSetUnsafe takes exactly three arguments"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockCopyUnsafe")) (PList (PVar "n") (PVar "b"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "n")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b"))) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_copy")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockCopyUnsafe")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockCopyUnsafe takes exactly two arguments"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockBlit")) (PList (PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dst")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")))) (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "dstOff"))) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "src"))) (EListLit (ELit (LString "ref.cast (ref $u8arr)")))) (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "srcOff"))) (EApp (EApp (EApp (EApp (EVar "bbIntArg") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "len"))) (EListLit (ELit (LString "array.copy $u8arr $u8arr")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockBlit")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockBlit takes exactly five arguments"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromIntArray")) (PList (PVar "a"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")) (EListLit (ELit (LString "ref.cast (ref $arr)")) (ELit (LString "call $mdk_bb_from_int_array")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromIntArray")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockFromIntArray takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToIntArray")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_to_int_array")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToIntArray")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockToIntArray takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromString")) (PList (PVar "sv"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "sv")) (EListLit (ELit (LString "ref.cast (ref $str)")) (ELit (LString "call $mdk_bb_from_string")))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockFromString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockFromString takes exactly one argument"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_to_string")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockToString")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockToString takes exactly one argument"))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) (PList (PVar "b"))) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "b")) (EListLit (ELit (LString "ref.cast (ref $u8arr)")) (ELit (LString "call $mdk_bb_write_stdout")) (ELit (LString "i32.const 0")) (ELit (LString "ref.i31")))))
+(DFunDef false "emitByteBlockExternRef" ((PVar "prog") (PVar "env") (PVar "d") (PLit (LString "byteBlockWriteStdout")) PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (ELit (LString "wasm: byteBlockWriteStdout takes exactly one argument"))))
 (DFunDef false "emitByteBlockExternRef" ((PVar "prog") PWild PWild (PVar "name") PWild) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm: unsupported byte-block extern '")) (EVar "name")) (ELit (LString "'")))))
 (DTypeSig false "bbIntArg" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "CExpr") (TyApp (TyCon "List") (TyCon "String")))))))
 (DFunDef false "bbIntArg" ((PVar "prog") (PVar "env") (PVar "d") (PVar "e")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "e")) (EListLit (ELit (LString "call $mdk_unbox_int")) (ELit (LString "i32.wrap_i64")))))

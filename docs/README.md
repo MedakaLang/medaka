@@ -73,7 +73,7 @@ Live design docs: **OPEN** = not started, **PARTIAL** = in progress. Read before
 | [`ATPROTO-PDS-CONSTANT-TIME.md`](design/ATPROTO-PDS-CONSTANT-TIME.md) | atproto PDS field/scalar constant-time reduction contract | implemented and landed for #1724 |
 | [`ATPROTO-PDS-DESIGN.md`](design/ATPROTO-PDS-DESIGN.md) | A self-hosted atproto PDS in Medaka | ACTIVE |
 | [`ATPROTO-PDS-SIGNING-CONTRACT.md`](design/ATPROTO-PDS-SIGNING-CONTRACT.md) | atproto PDS native signing and public-key contract | accepted implementation contract for #1700, prerequisite #1877 |
-| [`BYTES-DESIGN.md`](design/BYTES-DESIGN.md) | Bytes — a packed byte string for Medaka | B1 and B2 have both shipped |
+| [`BYTES-DESIGN.md`](design/BYTES-DESIGN.md) | Bytes — a packed byte string for Medaka | B1, B2 and B3 have all shipped |
 | [`CAPABILITY-EFFECTS.md`](design/CAPABILITY-EFFECTS.md) | Capability-safe effects — Medaka's headline direction | PARTIAL |
 | [`CAPABILITY-PLATFORM.md`](design/CAPABILITY-PLATFORM.md) | The capability platform — runtime/product architecture | OPEN |
 | [`EFFECTS-CONFORMANCE-ROADMAP.md`](design/EFFECTS-CONFORMANCE-ROADMAP.md) | Effect-and-Capability Conformance Roadmap | PARTIAL |

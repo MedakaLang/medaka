@@ -1,0 +1,41 @@
+-- `Hashable Bytes` exists so that a byte string can key a hash container, and
+-- a round-trip through one is what shows it does: three distinct keys go in,
+-- each reads back its own value, a key absent from the map reads back the
+-- default, and a key rebuilt from the same bytes by a different route finds
+-- the entry the first one stored.  A `hash` that agreed with `Eq Bytes` on
+-- neither would still satisfy a one-key fixture, so the absent key and the
+-- rebuilt key are the whole point.
+--
+-- This lives here rather than in a `stdlib/bytes.mdk` doctest because the
+-- doctest would have to import this module into `bytes`, and an import there
+-- reaches every module that imports `bytes`: it drags the `Ref` internals in
+-- here into their builds, which the wasm backend cannot assemble.
+--
+-- Every printed value is an Int: `findWithDefault` answers one directly, so no
+-- engine has to render a `Bytes` or a `HashMap` cell, and the absent key reads
+-- as -1 rather than through an `Option`.
+
+-- Wildcard because a `newtype`'s TYPE name cannot be named in a selective
+-- import list: `import bytes.{Bytes}` is read as a request for the
+-- module-private constructor and refused.
+import bytes.*
+import hash_map.{HashMap, fromList, findWithDefault, size}
+
+main =
+  let m = fromList [
+    (toUtf8Bytes "one", 1),
+    (toUtf8Bytes "two", 2),
+    (toUtf8Bytes "three", 3),
+  ]
+  (
+    (
+      size m,
+      findWithDefault (-1) (toUtf8Bytes "one") m,
+      findWithDefault (-1) (toUtf8Bytes "two") m,
+    ),
+    (
+      findWithDefault (-1) (toUtf8Bytes "three") m,
+      findWithDefault (-1) (toUtf8Bytes "four") m,
+      findWithDefault (-1) (fromArrayAssumeByteDomain [|116, 119, 111|]) m,
+    ),
+  )

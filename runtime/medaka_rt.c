@@ -661,6 +661,19 @@ static void mdk_fwrite_str(long long w, FILE *out, int nl) {
   }
 }
 
+/* mdk_byteblock_write_stdout writes a ByteBlock cell's bytes ([i64 tag | i64
+   count | count bytes], count at offset 8, bytes at offset 16 -- no
+   string-specific fields) straight to stdout, byte-for-byte, no NUL or UTF-8
+   assumption. Tracks the write into the fatal-signal safety-net buffer above,
+   same as mdk_fwrite_str, so a crash right after this call still flushes
+   these bytes via the existing stack-overflow/signal path. */
+void mdk_byteblock_write_stdout(long long bb) {
+  const char *cell = (const char *)bb;
+  long long n = ((const long long *)cell)[1];
+  mdk_build_stdout_track(cell + 16, n);
+  fwrite(cell + 16, 1, (size_t)n, stdout);
+}
+
 void mdk_putstr(long long w)    { mdk_fwrite_str(w, stdout, 0); }
 void mdk_putstrln(long long w)  { mdk_fwrite_str(w, stdout, 1); }
 void mdk_eputstr(long long w)   { mdk_fwrite_str(w, stderr, 0); }
@@ -1000,10 +1013,13 @@ long long mdk_list_slice(long long xs, long long lo, long long hi) {
 long long mdk_append(long long a, long long b) {
   if ((a & 1) == 0 && ((const long long *)a)[0] == MDK_STR_TAG)
     return mdk_string_append(a, b);
-  /* A byte block is the third even-boxed header this discriminator can meet.
-   * Nothing gives `ByteBlock` a Semigroup, so this is unreachable from a
-   * well-typed program; without the arm it would fall to mdk_list_append and
-   * walk the packed payload as Cons cells. */
+  /* A byte block is the third even-boxed header this discriminator can meet,
+   * and it is reachable: `stdlib/bytes.mdk`'s `Bytes` is a newtype over
+   * `ByteBlock` with a Semigroup instance, so a byte block arrives here
+   * whenever a `++` on bytes misses that instance and lands on this untyped
+   * fallback.  The arm fails closed -- mdk_byteblock_append_unsupported exits
+   * 1 with E-BYTEBLOCK-APPEND -- rather than falling to mdk_list_append, which
+   * would walk the packed payload as Cons cells. */
   if (mdk_is_byteblock(a)) mdk_byteblock_append_unsupported();
   return mdk_list_append(a, b);
 }
@@ -1113,6 +1129,16 @@ long long mdk_byteblock_copy(long long n_tagged, long long bb) {
                     (size_t)n);
   return (long long)cell;
 }
+/* byteBlockBlit src srcOff dst dstOff len.  memmove, not memcpy: src and dst
+   may be the same cell with overlapping regions, and the interpreter's arm
+   delegates to arrayBlit, which is memmove too. */
+void mdk_byteblock_blit(long long src, long long so_t, long long dst,
+                        long long dof_t, long long len_t) {
+  long long len = len_t >> 1;
+  if (len > 0)
+    memmove(mdk_byteblock_bytes(dst) + (dof_t >> 1),
+            mdk_byteblock_bytes(src) + (so_t >> 1), (size_t)len);
+}
 long long mdk_byteblock_from_int_array(long long arr) {
   const long long *a = (const long long *)arr;
   long long n = a[0];
@@ -1135,6 +1161,14 @@ long long mdk_byteblock_from_string(long long s) {
   if (n > 0) memcpy((unsigned char *)cell + 16, (const char *)s + 24,
                     (size_t)n);
   return (long long)cell;
+}
+/* byteBlockToString: the block's bytes as a fresh String cell.  PERMISSIVE,
+   byte-for-byte the same route as mdk_string_from_utf8_bytes: the bytes are
+   copied verbatim and mdk_str_lit recomputes cp_count by the
+   non-continuation-byte rule, so invalid UTF-8 is preserved, not rejected. */
+long long mdk_byteblock_to_string(long long bb) {
+  return mdk_str_lit((const char *)mdk_byteblock_bytes(bb),
+                     mdk_byteblock_count(bb));
 }
 
 

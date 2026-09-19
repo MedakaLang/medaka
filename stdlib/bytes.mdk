@@ -16,8 +16,20 @@
 
    `fromArray` and `toArray` convert; `bytesLength` is the byte count and
    `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
-   `Option`-returning form. Two byte strings compare lexicographically, as the
-   arrays of their bytes do.
+   `Option`-returning form. `slice` copies out a sub-range and panics on a
+   range that runs outside the byte string, and `indexOf` finds the first
+   byte equal to a given value. Two byte strings compare lexicographically,
+   as the arrays of their bytes do, and hash as the arrays of their bytes do,
+   so `Bytes` is a `HashMap`/`HashSet` key.
+
+   `append` joins two byte strings, and `b1 ++ b2` reaches it: `++` is
+   `Semigroup`'s `append`, so it dispatches on `Bytes` and allocates the
+   joined length once. Applied where the operand type is known -- infix, in
+   a section, or under a `Semigroup` constraint -- it dispatches. Bound to a
+   name first, as `let f = (++)` or `let f = (x y => x ++ y)`, it does not:
+   it falls through to the runtime's untyped concatenation, which has no
+   byte-buffer case, and fails at run time. Bind `append` instead, which
+   dispatches from either position.
 
    `MutBytes` is the mutable, fixed-length sibling, and the way to build a
    byte string a byte at a time: `mutBytesMake` allocates `n` zero bytes,
@@ -35,15 +47,34 @@
 -- No growable buffer lives here.  `bytebuilder` is the byte accumulator, and
 -- a `Bytes`-producing one belongs beside it rather than beside the immutable
 -- type.
+--
+-- The round-trip that shows a byte string really keys a hash container lives
+-- in `test/engine_fixtures/bytes_hashmap_key.mdk`, not in a doctest on the
+-- `Hashable Bytes` instance.  That doctest would have to import the
+-- hash-container module, and an import here reaches every module that imports
+-- this one: it would drag that module's `Ref` internals into their builds,
+-- which the wasm backend cannot assemble, and cost them work they spend on
+-- nothing they use.
+--
+-- The `++` gap the module doc describes is issue #3204: a `let`-bound `++`
+-- reaches the runtime's untyped concatenation instead of this module's
+-- `Semigroup` instance.  It dispatches from infix position, an operator
+-- section, an immediately applied lambda, a signature-carrying function body,
+-- and a `Semigroup a =>` constrained body.  It does not from `let f = (++)`
+-- or `let f = (x y => x ++ y)`, the latter even when a later annotated call
+-- site pins the operand type.  `append` bound to a name dispatches, which is
+-- why the doc points a caller at it.
 
-import core.{Eq, Ord, Ordering, Debug, Option, Index}
+import core.{
+  Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Hashable
+}
 import array.{findIndex}
 
 {- | The byte-string type.
 
    The constructor is module-private, so `fromArray`,
-   `fromArrayAssumeByteDomain` and `toUtf8Bytes` are the ways in and `toArray`
-   and `fromUtf8Bytes` are the ways out.
+   `fromArrayAssumeByteDomain`, `fromByteBlockPrefix` and `toUtf8Bytes` are
+   the ways in and `toArray` and `fromUtf8Bytes` are the ways out.
 
    > map bytesLength (fromArray [|1, 2, 3|])
    Some 3 -}
@@ -85,6 +116,29 @@ fromArray arr = match findIndex (b => b < 0 || b > 255) arr
 export
 fromArrayAssumeByteDomain : Array Int -> Bytes
 fromArrayAssumeByteDomain arr = Bytes (byteBlockFromIntArray arr)
+
+{- | The first `n` bytes of `bb`, copied into a byte string.
+
+   No domain check runs and none is needed: a `ByteBlock` holds one byte per
+   element, so every element is already `0` to `255`. `fromArray` scans
+   because an `Array Int` element can be anything.
+
+   The result is a copy, so a later write to `bb` does not reach it. This is
+   how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
+   `buildBytes` is the caller -- which is why it takes a length rather than
+   the whole block.
+
+   Panics when `n` falls outside `0` to the block's length.
+
+   > toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
+   [|104, 105|] -}
+export
+fromByteBlockPrefix : Int -> ByteBlock -> Bytes
+fromByteBlockPrefix n bb =
+  if n < 0 || n > byteBlockLength bb then
+    panic "Bytes.fromByteBlockPrefix: length out of range"
+  else
+    Bytes (byteBlockCopyUnsafe n bb)
 
 {- | The bytes of `b` as an array, in order.
 
@@ -142,6 +196,72 @@ export impl Index Bytes Int Int where
     else
       byteBlockGetUnsafe i bb
 
+{- | The bytes over `[lo, hi)`, copied into a new byte string. The
+   `b.[lo..hi]` and `b.[lo..=hi]` syntax dispatches here.
+
+   The result is a copy, not a view onto `b`: a byte string is `n` bytes and
+   nothing more, so there is no offset and length to share one with.
+
+   Panics with a slice error when the range runs outside the byte string,
+   exactly as `Slice (Array a)` does.
+
+   > toArray (slice (fromArrayAssumeByteDomain [|10, 20, 30, 40, 50|]) 1 3)
+   [|20, 30|]
+   > toArray (slice (fromArrayAssumeByteDomain [|10, 20|]) 1 1)
+   [||] -}
+export impl Slice Bytes where
+  slice (Bytes bb) lo hi =
+    if lo < 0 || hi > byteBlockLength bb || hi - lo < 0 then
+      sliceError lo (hi - 1)
+    else
+      let dst = byteBlockMake (hi - lo)
+      let _ = byteBlockBlit bb lo dst 0 (hi - lo)
+      Bytes dst
+
+indexOfGo : Int -> ByteBlock -> Int -> Int -> Option Int
+indexOfGo v bb i n =
+  if i >= n then
+    None
+  else if byteBlockGetUnsafe i bb == v then
+    Some i
+  else
+    indexOfGo v bb (i + 1) n
+
+{- | The index of the first byte equal to `v`, or `None` when no byte is.
+
+   The needle is one byte, where `string.indexOf` takes a whole substring:
+   `Bytes` is a sequence of byte values, and this is the search for one of
+   them, as `list.elemIndex` is for a list element. A `v` outside `0` to
+   `255` equals no byte, so the answer is `None`.
+
+   > indexOf 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+   Some 1
+   > indexOf 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
+   None
+   > indexOf 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
+   None -}
+export
+indexOf : Int -> Bytes -> Option Int
+indexOf v (Bytes bb) = indexOfGo v bb 0 (byteBlockLength bb)
+
+-- # Combining
+
+{- | The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
+   Backs `++`.
+
+   > toArray (append (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|3|]))
+   [|1, 2, 3|]
+   > fromUtf8Bytes (toUtf8Bytes "hé" ++ toUtf8Bytes "llo")
+   "héllo" -}
+export impl Semigroup Bytes where
+  append (Bytes a) (Bytes b) =
+    let na = byteBlockLength a
+    let nb = byteBlockLength b
+    let dst = byteBlockMake (na + nb)
+    let _ = byteBlockBlit a 0 dst 0 na
+    let _ = byteBlockBlit b 0 dst na nb
+    Bytes dst
+
 -- # Comparison
 
 -- `eq` and `compare` walk the two blocks a byte at a time rather than
@@ -193,12 +313,43 @@ export impl Ord Bytes where
   compare (Bytes a) (Bytes b) =
     compareGo a b 0 (byteBlockLength a) (byteBlockLength b)
 
+hashGo : Int -> ByteBlock -> Int -> Int -> Int
+hashGo acc bb i n =
+  if i >= n then
+    acc
+  else
+    hashGo (acc * 33 + hashInt (byteBlockGetUnsafe i bb)) bb (i + 1) n
+
+{- | The `acc * 33 + hash byte` fold `Hashable (Array a)` runs over elements,
+   from `0` and left to right, so a byte string hashes as the `Array Int` or
+   `List Int` of its bytes does. `hashInt` is what `Hashable Int` would
+   contribute for each byte. Agrees with `Eq Bytes`, which walks the same
+   bytes in the same order.
+
+   > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
+   True -}
+export impl Hashable Bytes where
+  hash (Bytes bb) = hashGo 0 bb 0 (byteBlockLength bb)
+
+-- The rendering walks the block a byte at a time, mirroring
+-- `core.debugArrayItems` by index, rather than rendering the `Array Int` of
+-- the bytes: the array would box a machine word per byte to produce the same
+-- characters.
+debugBytesItems : ByteBlock -> Int -> Int -> String
+debugBytesItems bb i n
+  | i >= n = ""
+  | i == n - 1 = debug (byteBlockGetUnsafe i bb)
+  | otherwise =
+    "\{debug (byteBlockGetUnsafe i bb)}, \{debugBytesItems bb (i + 1) n}"
+
 {- | Renders as its bytes would as an `Array Int`.
 
    > debug (fromArrayAssumeByteDomain [|7, 8, 9|])
-   "[|7, 8, 9|]" -}
+   "[|7, 8, 9|]"
+   > debug (fromArrayAssumeByteDomain [||])
+   "[||]" -}
 export impl Debug Bytes where
-  debug (Bytes bb) = debug (byteBlockToIntArray bb)
+  debug (Bytes bb) = "[|\{debugBytesItems bb 0 (byteBlockLength bb)}|]"
 
 -- # Text
 
@@ -221,7 +372,18 @@ toUtf8Bytes s = Bytes (byteBlockFromString s)
    "héllo→" -}
 export
 fromUtf8Bytes : Bytes -> String
-fromUtf8Bytes (Bytes bb) = stringFromUtf8Bytes (byteBlockToIntArray bb)
+fromUtf8Bytes (Bytes bb) = byteBlockToString bb
+
+-- # Output
+
+{- | Writes `b`'s bytes to standard output byte-for-byte.
+
+   Unlike `putStr`, the bytes are not required to be valid UTF-8: nothing
+   here decodes or re-encodes them, so a byte sequence that would mangle or
+   get rejected on a `String` path round-trips exactly. -}
+export
+writeStdoutBytes : Bytes -> <Stdout> Unit
+writeStdoutBytes (Bytes bb) = byteBlockWriteStdout bb
 
 -- # Mutation
 

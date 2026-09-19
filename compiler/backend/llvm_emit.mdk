@@ -2674,6 +2674,7 @@ isIoExtern name = contains name [
   "flushStdout",
   "stashRunStdout",
   "enableRunStdoutFlush",
+  "byteBlockWriteStdout",
 ]
 
 emitIoExtern : Emit ->
@@ -2721,6 +2722,14 @@ emitIoExtern e env "enableRunStdoutFlush" args = match emitArgs e env args
     let _ = emit e ("  call void @mdk_enable_run_stdout_flush(i64 " ++ u ++ ")")
     ("1", LTUnit)
   _ => panic "llvm: enableRunStdoutFlush takes exactly one argument"
+-- Writes a ByteBlock's raw bytes to stdout byte-for-byte, no encoding
+-- assumption; unlike putStr/putStrLn, the argument is a block register, not a
+-- string register.
+emitIoExtern e env "byteBlockWriteStdout" args = match emitArgs e env args
+  [bb] =>
+    let _ = emit e ("  call void @mdk_byteblock_write_stdout(i64 " ++ bb ++ ")")
+    ("1", LTUnit)
+  _ => panic "llvm: byteBlockWriteStdout takes exactly one argument"
 emitIoExtern e _ name _ = gapE e ("unsupported IO extern " ++ name)
 
 -- abort externs (native extern catalog slice 4).
@@ -2855,21 +2864,23 @@ emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 -- count bytes].  Unlike the array cell there is a header word, so `length` is a
 -- C call rather than the `loadTag` intrinsic `arrayLength` uses.
 -- byteBlockMake/CopyUnsafe/FromIntArray/ToIntArray/FromString return a cell
--- (LTCon); Length/GetUnsafe return Int; SetUnsafe returns Unit.
+-- (LTCon); ToString returns a String cell (LTStr, so it is printable);
+-- Length/GetUnsafe return Int; SetUnsafe and Blit return Unit.
 -- Do NOT end a fixture with a block-returning call: emitPrint LTCon panics.
 -- Project to scalar via byteBlockGetUnsafe / byteBlockLength in every fixture.
 isByteBlockExtern : String -> Bool
 -- Deliberately a per-backend copy of wasm_emit.mdk's `isByteBlockExternW`, not a
 -- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
 -- implemented-extern column by extracting the family binding's own quoted names
--- out of that engine's own file, so hoisting the eight names into a module both
+-- out of that engine's own file, so hoisting the names into a module both
 -- backends import would leave the gate reading neither engine as implementing
 -- them -- the duplication is what keeps the two columns independently derivable.
 -- lint-disable-next-line rule-duplicate-body
 isByteBlockExtern name = contains name [
   "byteBlockMake", "byteBlockLength", "byteBlockGetUnsafe",
-  "byteBlockSetUnsafe", "byteBlockCopyUnsafe", "byteBlockFromIntArray",
-  "byteBlockToIntArray", "byteBlockFromString"
+  "byteBlockSetUnsafe", "byteBlockCopyUnsafe", "byteBlockBlit",
+  "byteBlockFromIntArray", "byteBlockToIntArray", "byteBlockFromString",
+  "byteBlockToString"
 ]
 
 emitByteBlockExtern : Emit ->
@@ -2907,6 +2918,14 @@ emitByteBlockExtern e env "byteBlockCopyUnsafe" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_copy(i64 \{n}, i64 \{bb})"
     (r, LTCon)
   _ => panic "llvm: byteBlockCopyUnsafe takes two arguments"
+emitByteBlockExtern e env "byteBlockBlit" args = match emitArgs e env args
+  [src, so, dst, dof, len] =>
+    let _ =
+      emit
+        e
+        "  call void @mdk_byteblock_blit(i64 \{src}, i64 \{so}, i64 \{dst}, i64 \{dof}, i64 \{len})"
+    ("1", LTUnit)
+  _ => panic "llvm: byteBlockBlit takes five arguments"
 emitByteBlockExtern e env "byteBlockFromIntArray" args =
   match emitArgs e env args
     [a] =>
@@ -2926,6 +2945,12 @@ emitByteBlockExtern e env "byteBlockFromString" args = match emitArgs e env args
     let _ = emit e "  \{r} = call i64 @mdk_byteblock_from_string(i64 \{s})"
     (r, LTCon)
   _ => panic "llvm: byteBlockFromString takes one argument"
+emitByteBlockExtern e env "byteBlockToString" args = match emitArgs e env args
+  [bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_to_string(i64 \{bb})"
+    (r, LTStr)
+  _ => panic "llvm: byteBlockToString takes one argument"
 emitByteBlockExtern e _ name _ =
   gapE e ("unsupported byte-block extern " ++ name)
 

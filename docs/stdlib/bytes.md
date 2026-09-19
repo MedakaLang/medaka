@@ -18,8 +18,20 @@ already established the range.
 
 `fromArray` and `toArray` convert; `bytesLength` is the byte count and
 `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
-`Option`-returning form. Two byte strings compare lexicographically, as the
-arrays of their bytes do.
+`Option`-returning form. `slice` copies out a sub-range and panics on a
+range that runs outside the byte string, and `indexOf` finds the first
+byte equal to a given value. Two byte strings compare lexicographically,
+as the arrays of their bytes do, and hash as the arrays of their bytes do,
+so `Bytes` is a `HashMap`/`HashSet` key.
+
+`append` joins two byte strings, and `b1 ++ b2` reaches it: `++` is
+`Semigroup`'s `append`, so it dispatches on `Bytes` and allocates the
+joined length once. Applied where the operand type is known -- infix, in
+a section, or under a `Semigroup` constraint -- it dispatches. Bound to a
+name first, as `let f = (++)` or `let f = (x y => x ++ y)`, it does not:
+it falls through to the runtime's untyped concatenation, which has no
+byte-buffer case, and fails at run time. Bind `append` instead, which
+dispatches from either position.
 
 `MutBytes` is the mutable, fixed-length sibling, and the way to build a
 byte string a byte at a time: `mutBytesMake` allocates `n` zero bytes,
@@ -35,15 +47,15 @@ newtype Bytes = Bytes ByteBlock
 The byte-string type.
 
 The constructor is module-private, so `fromArray`,
-`fromArrayAssumeByteDomain` and `toUtf8Bytes` are the ways in and `toArray`
-and `fromUtf8Bytes` are the ways out.
+`fromArrayAssumeByteDomain`, `fromByteBlockPrefix` and `toUtf8Bytes` are
+the ways in and `toArray` and `fromUtf8Bytes` are the ways out.
 
 ```medaka
 > map bytesLength (fromArray [|1, 2, 3|])
 Some 3
 ```
 
-Instances: [`Index`](#index-bytes-int-int), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Debug`](#debug-bytes)
+Instances: [`Index`](#index-bytes-int-int), [`Slice`](#slice-bytes), [`Semigroup`](#semigroup-bytes), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Hashable`](#hashable-bytes), [`Debug`](#debug-bytes)
 
 ## Conversion
 
@@ -88,6 +100,30 @@ the domain-checked door is the only one, alongside `toUtf8`/`fromUtf8`.
 [|104, 105|]
 > toArray (fromArrayAssumeByteDomain [|300, -1|])
 [|44, 255|]
+```
+
+### `fromByteBlockPrefix`
+
+```
+fromByteBlockPrefix : Int -> ByteBlock -> Bytes
+```
+
+The first `n` bytes of `bb`, copied into a byte string.
+
+No domain check runs and none is needed: a `ByteBlock` holds one byte per
+element, so every element is already `0` to `255`. `fromArray` scans
+because an `Array Int` element can be anything.
+
+The result is a copy, so a later write to `bb` does not reach it. This is
+how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
+`buildBytes` is the caller -- which is why it takes a length rather than
+the whole block.
+
+Panics when `n` falls outside `0` to the block's length.
+
+```medaka
+> toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
+[|104, 105|]
 ```
 
 ### `toArray`
@@ -143,6 +179,30 @@ None
 None
 ```
 
+### `indexOf`
+
+```
+indexOf : Int -> Bytes -> Option Int
+```
+
+The index of the first byte equal to `v`, or `None` when no byte is.
+
+The needle is one byte, where `string.indexOf` takes a whole substring:
+`Bytes` is a sequence of byte values, and this is the search for one of
+them, as `list.elemIndex` is for a list element. A `v` outside `0` to
+`255` equals no byte, so the answer is `None`.
+
+```medaka
+> indexOf 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+Some 1
+> indexOf 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
+None
+> indexOf 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
+None
+```
+
+## Combining
+
 ## Comparison
 
 ## Text
@@ -177,6 +237,20 @@ On valid UTF-8, `fromUtf8Bytes (toUtf8Bytes s)` is `s`.
 > fromUtf8Bytes (toUtf8Bytes "héllo→")
 "héllo→"
 ```
+
+## Output
+
+### `writeStdoutBytes`
+
+```
+writeStdoutBytes : Bytes -> <Stdout> Unit
+```
+
+Writes `b`'s bytes to standard output byte-for-byte.
+
+Unlike `putStr`, the bytes are not required to be valid UTF-8: nothing
+here decodes or re-encodes them, so a byte sequence that would mangle or
+get rejected on a `String` path round-trips exactly.
 
 ## Mutation
 
@@ -300,6 +374,44 @@ Panics with an index error when `i` is out of range; `get` is the
 8
 ```
 
+### `Slice Bytes`
+
+```
+impl Slice Bytes
+```
+
+The bytes over `[lo, hi)`, copied into a new byte string. The
+`b.[lo..hi]` and `b.[lo..=hi]` syntax dispatches here.
+
+The result is a copy, not a view onto `b`: a byte string is `n` bytes and
+nothing more, so there is no offset and length to share one with.
+
+Panics with a slice error when the range runs outside the byte string,
+exactly as `Slice (Array a)` does.
+
+```medaka
+> toArray (slice (fromArrayAssumeByteDomain [|10, 20, 30, 40, 50|]) 1 3)
+[|20, 30|]
+> toArray (slice (fromArrayAssumeByteDomain [|10, 20|]) 1 1)
+[||]
+```
+
+### `Semigroup Bytes`
+
+```
+impl Semigroup Bytes
+```
+
+The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
+Backs `++`.
+
+```medaka
+> toArray (append (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|3|]))
+[|1, 2, 3|]
+> fromUtf8Bytes (toUtf8Bytes "hé" ++ toUtf8Bytes "llo")
+"héllo"
+```
+
 ### `Eq Bytes`
 
 ```
@@ -333,6 +445,23 @@ Lt
 Lt
 ```
 
+### `Hashable Bytes`
+
+```
+impl Hashable Bytes
+```
+
+The `acc * 33 + hash byte` fold `Hashable (Array a)` runs over elements,
+from `0` and left to right, so a byte string hashes as the `Array Int` or
+`List Int` of its bytes does. `hashInt` is what `Hashable Int` would
+contribute for each byte. Agrees with `Eq Bytes`, which walks the same
+bytes in the same order.
+
+```medaka
+> hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
+True
+```
+
 ### `Debug Bytes`
 
 ```
@@ -344,5 +473,7 @@ Renders as its bytes would as an `Array Int`.
 ```medaka
 > debug (fromArrayAssumeByteDomain [|7, 8, 9|])
 "[|7, 8, 9|]"
+> debug (fromArrayAssumeByteDomain [||])
+"[||]"
 ```
 

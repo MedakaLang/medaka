@@ -616,6 +616,12 @@ extern byteBlockSetUnsafe : Int -> Int -> ByteBlock -> Unit
 -- source, so later writes to the source do not reach it.
 extern byteBlockCopyUnsafe : Int -> ByteBlock -> ByteBlock
 
+-- | Copies `len` bytes from a source block at an offset into a destination
+-- block at an offset, with no bounds check. The two blocks may be the same
+-- one and the regions may overlap; the source bytes are read as they were
+-- before any of them was written.
+extern byteBlockBlit : ByteBlock -> Int -> ByteBlock -> Int -> Int -> Unit
+
 -- | A new block holding the low eight bits of each element of an array.
 extern byteBlockFromIntArray : Array Int -> ByteBlock
 
@@ -624,6 +630,19 @@ extern byteBlockToIntArray : ByteBlock -> Array Int
 
 -- | A new block holding the UTF-8 encoding of a string.
 extern byteBlockFromString : String -> ByteBlock
+
+-- | A new string whose UTF-8 backing is the block's bytes. The inverse of
+-- `byteBlockFromString`, and permissive in the same way `stringFromUtf8Bytes`
+-- is: the bytes are copied verbatim, so an invalid or truncated sequence is
+-- neither rejected nor replaced. Restricted to the standard library and to
+-- modules compiled with `--allow-internal`.
+extern byteBlockToString : ByteBlock -> String
+
+-- | Writes the block's bytes to stdout as-is, with no bounds check and no
+-- encoding assumption: unlike `putStr`, the bytes are not required to be
+-- valid UTF-8 and are written byte-for-byte. Restricted to the standard
+-- library and to modules compiled with `--allow-internal`.
+extern byteBlockWriteStdout : ByteBlock -> <Stdout> Unit
 
 -- # Strings
 
