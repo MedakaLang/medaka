@@ -1,5 +1,5 @@
 # META
-source_lines=715
+source_lines=734
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -620,6 +620,12 @@ extern byteBlockSetUnsafe : Int -> Int -> ByteBlock -> Unit
 -- source, so later writes to the source do not reach it.
 extern byteBlockCopyUnsafe : Int -> ByteBlock -> ByteBlock
 
+-- | Copies `len` bytes from a source block at an offset into a destination
+-- block at an offset, with no bounds check. The two blocks may be the same
+-- one and the regions may overlap; the source bytes are read as they were
+-- before any of them was written.
+extern byteBlockBlit : ByteBlock -> Int -> ByteBlock -> Int -> Int -> Unit
+
 -- | A new block holding the low eight bits of each element of an array.
 extern byteBlockFromIntArray : Array Int -> ByteBlock
 
@@ -628,6 +634,19 @@ extern byteBlockToIntArray : ByteBlock -> Array Int
 
 -- | A new block holding the UTF-8 encoding of a string.
 extern byteBlockFromString : String -> ByteBlock
+
+-- | A new string whose UTF-8 backing is the block's bytes. The inverse of
+-- `byteBlockFromString`, and permissive in the same way `stringFromUtf8Bytes`
+-- is: the bytes are copied verbatim, so an invalid or truncated sequence is
+-- neither rejected nor replaced. Restricted to the standard library and to
+-- modules compiled with `--allow-internal`.
+extern byteBlockToString : ByteBlock -> String
+
+-- | Writes the block's bytes to stdout as-is, with no bounds check and no
+-- encoding assumption: unlike `putStr`, the bytes are not required to be
+-- valid UTF-8 and are written byte-for-byte. Restricted to the standard
+-- library and to modules compiled with `--allow-internal`.
+extern byteBlockWriteStdout : ByteBlock -> <Stdout> Unit
 
 -- # Strings
 
@@ -853,9 +872,12 @@ extern stringToLower : String -> String
 (DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))
 (DExtern false "byteBlockSetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Unit")))))
 (DExtern false "byteBlockCopyUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "ByteBlock"))))
+(DExtern false "byteBlockBlit" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "byteBlockFromIntArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "ByteBlock")))
 (DExtern false "byteBlockToIntArray" (TyFun (TyCon "ByteBlock") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern false "byteBlockFromString" (TyFun (TyCon "String") (TyCon "ByteBlock")))
+(DExtern false "byteBlockToString" (TyFun (TyCon "ByteBlock") (TyCon "String")))
+(DExtern false "byteBlockWriteStdout" (TyFun (TyCon "ByteBlock") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern false "stringToChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))
 (DExtern false "stringToUtf8Bytes" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))
@@ -1014,9 +1036,12 @@ extern stringToLower : String -> String
 (DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))
 (DExtern false "byteBlockSetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Unit")))))
 (DExtern false "byteBlockCopyUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "ByteBlock"))))
+(DExtern false "byteBlockBlit" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "byteBlockFromIntArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "ByteBlock")))
 (DExtern false "byteBlockToIntArray" (TyFun (TyCon "ByteBlock") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DExtern false "byteBlockFromString" (TyFun (TyCon "String") (TyCon "ByteBlock")))
+(DExtern false "byteBlockToString" (TyFun (TyCon "ByteBlock") (TyCon "String")))
+(DExtern false "byteBlockWriteStdout" (TyFun (TyCon "ByteBlock") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DExtern false "stringToChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))
 (DExtern false "stringToUtf8Bytes" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))

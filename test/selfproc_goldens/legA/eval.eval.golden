@@ -288,6 +288,7 @@ pBitXor : Value a -> Value a -> Value a
 pBuildCommit : Value a -> <Env> Value a
 pBuildDate : Value a -> <Env> Value a
 pBuildFingerprint : Value a -> <Env> Value a
+pByteBlockBlit : Value a -> Value a -> Value a -> Value a -> Value a -> Value a
 pByteBlockCopyUnsafe : Value a -> Value a -> Value a
 pByteBlockFromIntArray : Value a -> Value a
 pByteBlockFromString : Value a -> Value a
@@ -296,6 +297,8 @@ pByteBlockLength : Value a -> Value a
 pByteBlockMake : Value a -> Value a
 pByteBlockSetUnsafe : Value a -> Value a -> Value a -> Value a
 pByteBlockToIntArray : Value a -> Value a
+pByteBlockToString : Value a -> Value a
+pByteBlockWriteStdout : Value a -> Value a
 pBytesToFloat64 : Value a -> Value a -> Value a
 pCanonicalizePath : Value a -> <FileRead> Value a
 pCbrt : Value a -> Value a
