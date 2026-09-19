@@ -45226,6 +45226,28 @@ checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
 
+-- Module-arm sibling of the `Flat` `checkMatchToLines`: the type-aware
+-- non-exhaustive-match report for ONE module, runtime externs seeded and NO
+-- prelude, rendered as one `Warning: non-exhaustive match …` line per warning.
+--
+-- WARNINGS ONLY — type errors are dropped on the floor rather than rendered, which
+-- is this report's contract, not an oversight: the caller
+-- (`compiler/entries/check_match_main.mdk`) diffs against
+-- `dev/diagdump.exe --check-match`, which reports match warnings and nothing else.
+-- `checkOneDiags` is the wrapper this delegates to precisely because it hands the
+-- two halves back SEPARATE, so the split needs no new projection.
+--
+-- The empty `coreDecls` is what makes the seed identical to the `Flat` wrapper's
+-- hand-built `externSchemes (externTyOriginScope []) runtimeDecls`: `graphPreamble`
+-- computes `externSchemes (externTyOriginScope coreDecls) runtimeDecls`, which
+-- collapses to the same expression at `coreDecls = []`.  `"__user__"` mirrors
+-- `checkOneToLinesWithRuntime`'s rootId convention just above.
+export
+checkOneMatchToLines : List Decl -> List Decl -> String
+checkOneMatchToLines runtimeDecls prog =
+  let (_, warns) = checkOneDiags runtimeDecls [] ("__user__", prog)
+  joinNl (map tcMsg warns)
+
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
 export

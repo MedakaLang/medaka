@@ -18,7 +18,7 @@
 #   1. DERIVES the current caller set: for every `.mdk` file under `compiler/` (other
 #      than `compiler/types/typecheck.mdk` itself, the family's home), parse its
 #      `import types.typecheck.{ ... }` block (which may span multiple lines) and
-#      record which of the 14 wrapper-family names it imports. A name mentioned only
+#      record which of the 15 wrapper-family names it imports. A name mentioned only
 #      in a comment (not imported) is NOT a caller — this gate is keyed on the import,
 #      matching how S-migrate-tool-consumers-remainder's own investigation avoided
 #      false positives from stale prose mentioning an old function name.
@@ -67,6 +67,12 @@ WRAP_NAMES = [
     # that hand in a prelude the desugar cache did not mint.
     "checkOneDiagsK", "checkOneSchemeFullK",
     "checkOneToLinesWithRuntime", "checkOneErrorsWithRuntime",
+    # `checkOneMatchToLines` (the Module-arm match-warning report) joined the family
+    # 2026-09-19 with S-match-lines-module-arm (#1116), which migrated
+    # entries/check_match_main.mdk off the Flat `checkMatchToLines` onto it. Without
+    # this row that file censuses as a ZERO-wrapper caller and its ledger row reads
+    # as STALE — the same blindness `checkToLines` below records.
+    "checkOneMatchToLines",
     # `checkToLines` (the prelude-free Flat entry) was MISSING from this list until
     # 2026-08-26, which made the gate demonstrably blind: a new caller importing it
     # passed the census unnoticed, and `compiler/entries/selfproc_tc_probe.mdk` had
