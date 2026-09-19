@@ -1793,7 +1793,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_index_oob_test.mdk"
 oracles = []
-sources = ["test/compiler_cli_test_support.mdk"]
+sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/index_oob_fixtures"]
 toolchain = ["clang"]
 
@@ -1868,7 +1868,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_let_refute_test.mdk"
 oracles = []
-sources = ["test/compiler_cli_test_support.mdk"]
+sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/let_refute_fixtures"]
 toolchain = ["clang"]
 
@@ -2127,7 +2127,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_os_entropy_test.mdk"
 oracles = []
-sources = ["test/diff_compiler_os_entropy_test.mdk"]
+sources = ["stdlib/runtime.mdk", "compiler/eval/eval.mdk", "runtime/medaka_rt.c", "test/CAPABILITY-EXCEPTIONS.txt"]
 corpus = ["test/os_entropy_fixtures"]
 toolchain = ["clang"]
 
@@ -2367,7 +2367,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_run_stdout_flush_test.mdk"
 oracles = []
-sources = ["test/compiler_cli_test_support.mdk"]
+sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/run_stdout_flush_fixtures"]
 toolchain = []
 
@@ -2412,7 +2412,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_slice_oob_test.mdk"
 oracles = []
-sources = ["test/compiler_cli_test_support.mdk"]
+sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/slice_oob_fixtures"]
 toolchain = ["clang"]
 
@@ -2487,7 +2487,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_stack_overflow_test.mdk"
 oracles = []
-sources = ["test/compiler_cli_test_support.mdk"]
+sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/stack_overflow_fixtures"]
 toolchain = ["clang"]
 
@@ -2618,13 +2618,13 @@ shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
-kind = "exec"
-migration = "native-wrap"
-run = "test/diff_async.sh"
+kind = "native"
+migration = "done"
+run = "test/diff_async_test.mdk"
 oracles = []
-sources = []
+sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/async_fixtures"]
-toolchain = []
+toolchain = ["clang"]
 
 [[gate]]
 name = "effect_builtin_param_domain"
