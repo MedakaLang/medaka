@@ -7,7 +7,7 @@
 #   * test/bin/wasm_emit_main        — the W1–W4 PRELUDE-FREE scalar/ADT/closure
 #     spike entry (annotateProgram path; never produces CMethod/CDict).  Gate:
 #     test/wasm/diff_wasm.sh.
-#   * test/bin/wasm_emit_typed_main  — the W5 TYPED dispatch entry (elaborateDict
+#   * test/bin/wasm_emit_typed_main  — the W5 TYPED dispatch entry (elaborateModules
 #     path; produces CMethod/CDict/CImplEntry from prelude-free fixtures that define
 #     their own minimal interfaces).  Gate: test/wasm/diff_wasm_typed.sh.
 #   * test/bin/wasm_emit_modules_main — the MULTI-MODULE entry.  Gates:

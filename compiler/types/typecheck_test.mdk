@@ -1407,6 +1407,22 @@ test "ordinary return given evidence feeds checking and route publication" =
       _ => False),
   ]
 
+test "return-position standalone shadow bypasses the method-return trace" =
+  let trace =
+    methodCarrierStages
+      "zed"
+      (joinNl [
+        "interface Zed a where",
+        "  zed : a",
+        "impl Zed Int where",
+        "  zed = 777",
+        "zed : Bool",
+        "zed = True",
+        "value : Bool",
+        "value = zed",
+      ])
+  expectEqual 0 (listLen trace)
+
 test "ordinary return instance evidence retains selected prerequisites" =
   let trace =
     methodCarrierStages

@@ -1113,7 +1113,7 @@ gen_marksweep() {
 #     masking term and surfaced the true ratio, exactly the "future source change lifting r1 over 3
 #     forces a ledger decision" this note predicted — then #973 drained it.
 #   * elaborate — FIXED (#2189). Was `manyifaces:elaborate` (op r1=2.52 r2=3.04 at
-#     250/500/1000). A THIRD instance of the same class, in `elaborateDict`'s AST
+#     250/500/1000). A THIRD instance of the same class, in the retired flat elaborator's AST
 #     prepass rather than in interface registration: `rewriteRPDictArg` /
 #     `rewriteArgScoped` (typecheck.mdk) probed `rpNames`/`argNames`/`dictNames` with
 #     `util.contains` at EVERY `EVar` node, and this shape's `argNames` IS the
@@ -2358,10 +2358,10 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         stays op-graded — its imports route through the counted isPubExp path; see
 #         gen_starimports.)
 #
-#   xref:elaborate — FIXED (#907). The elaborate stage runs elaborateDict, which re-checks
+#   xref:elaborate — FIXED (#907). The retired flat elaborator re-checked
 #         the program via checkProgramSeeded -> checkBodyImpl -> stampBindingIds — so it hit
 #         the SAME O(decls^2) binding-id-stamp quadratic as xref:typecheck (the earlier
-#         "elaborateDict reference-walking dict-routing" attribution was wrong; the cost was
+#         "flat-elaboration reference-walking dict-routing" attribution was wrong; the cost was
 #         stampBindingIds). Indexing the top frame drained it: op r1/r2 ~1.9 at both the
 #         QUICK (2000/4000/8000) and DEEP (4000/8000/16000) bands. De-ledgered.
 #   manyifaces:mark — FIXED (#953, #975). Was THE HEADLINE #883 FIND: mark's
@@ -2426,7 +2426,7 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         residual is now LOCALISED.
 #         ⚠️ THE OWNING ISSUE MOVED, AND THIS LINE USED TO NAME THE OLD ONE. It read
 #         "issue #2189" until 2026-08-31 (#2331 item 4, sprint hold-the-gains S-2).
-#         #2189 is CLOSED: its bulk — the `elaborateDict` AST prepass probing
+#         #2189 is CLOSED: its bulk — the retired flat elaborator's AST prepass probing
 #         `rpNames`/`argNames`/`dictNames` with `util.contains` — was fixed and is
 #         gone, as the paragraph below already says. What is left is `localPinPairs`,
 #         which is #2030's term and #2030 is OPEN. A row whose only citation is a
@@ -2440,7 +2440,7 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         ledger entry asserts a row is ALREADY over threshold on both doublings, and
 #         this one is not" — a live instruction to DELETE the row a few lines below,
 #         which would have turned a real quadratic silent again.
-#         #2189's SITE was then localised by sub-bracketing `elaborateDict`'s op
+#         #2189's SITE was then localised by sub-bracketing the retired flat elaborator's op
 #         counter (S-3): 83% of the count was the AST prepass
 #         (`prePassDict`/`prePassDictArg` -> `rewriteRPDict`/`rewriteArgScoped`)
 #         probing `rpNames`/`argNames`/`dictNames` with `util.contains` at every
@@ -2450,7 +2450,7 @@ OP_FLOOR="${PERF_OP_FLOOR:-1000}"
 #         ⚠️ THE RATIO BARELY MOVED (3.209 -> 3.212) BECAUSE THE FIX REMOVED A
 #         QUADRATIC TERM, NOT A LINEAR ONE — the row is 88% smaller in absolute ops
 #         but the same shape. What is left is 94% the TWO `checkProgramSeeded` calls
-#         inside `elaborateDict` (1 531 210 + 1 530 741 of 3 244 831 at N=1600), i.e.
+#         inside that retired driver (1 531 210 + 1 530 741 of 3 244 831 at N=1600), i.e.
 #         `localPinPairs` — the SAME term as conlocal:typecheck, issue #2030. So the
 #         old "plausibly rides the same localPinPairs term" guess is now MEASURED and
 #         TRUE OF THE RESIDUAL (it was false of the bulk). This row drains with
@@ -2492,7 +2492,7 @@ KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 # shared generator code did it, so the property was elaborate's, not a fixture's.
 #
 # THE SITE, LOCALISED (S-3). The op counter was sub-bracketed inside
-# `elaborateDict` (types/typecheck.mdk) with a throw-away per-region counter, so
+# the retired flat elaborator (types/typecheck.mdk) with a throw-away per-region counter, so
 # each of its steps was priced separately. One family carried the bulk on BOTH
 # shapes: the EVar prepass — `prePassDict`/`prePassDictArg` ->
 # `rewriteRPDict`/`rewriteRPDictArg`/`rewriteArgScoped` — probed the three name
@@ -2518,7 +2518,7 @@ KNOWN_OCEIL_conlocal_typecheck="4.3"; KNOWN_OFIXED_conlocal_typecheck="2.60"
 # The prepass term was itself quadratic, so removing it removed numerator and
 # denominator together. What remains is a SECOND quadratic, and it is now fully
 # attributed: 3 061 951 of the residual 3 244 831 at N=1600 (94%) is the two
-# `checkProgramSeeded` calls inside `elaborateDict` — i.e. `localPinPairs`, the
+# `checkProgramSeeded` calls inside that retired driver — i.e. `localPinPairs`, the
 # SAME term as conlocal:typecheck, issue #2030. The pre-existing "elaborate
 # re-checks the program through checkProgramSeeded, so it plausibly rides the
 # same localPinPairs term" note was therefore FALSE OF THE BULK and TRUE OF THE

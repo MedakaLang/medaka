@@ -6,9 +6,7 @@ set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MEDAKA="${MEDAKA:-$ROOT/medaka}"
-ONE_BIN="$ROOT/test/bin/check_one_diags_main"
 [ -x "$MEDAKA" ] || { echo "build native first: make medaka (missing $MEDAKA)"; exit 2; }
-[ -x "$ONE_BIN" ] || { echo "build oracles first: FORCE=1 JOBS=1 sh test/build_oracles.sh --build-one check_one_diags_main (missing $ONE_BIN)"; exit 2; }
 
 run_t() { perl -e 'alarm shift; exec @ARGV' "$@"; }
 LIMIT=180
@@ -50,11 +48,11 @@ printf 'import helper.{three}\n\n%s\n\nmain = println (isEven three)\n' "$SHADOW
 
 # case | row | path | arm | expected value
 ROWS='
-default_method|onefile|default-one/main.mdk|ONE|fancy:box7
+default_method|onefile|default-one/main.mdk|MODULE|fancy:box7
 default_method|split|default-split/main.mdk|MODULE|fancy:box7
-user_shadows_prelude_standalone|onefile|shadow-diff-one/main.mdk|ONE|s3
+user_shadows_prelude_standalone|onefile|shadow-diff-one/main.mdk|MODULE|s3
 user_shadows_prelude_standalone|split|shadow-diff-split/main.mdk|MODULE|s3
-user_shadows_prelude_samesig|onefile|shadow-same-one/main.mdk|ONE|True
+user_shadows_prelude_samesig|onefile|shadow-same-one/main.mdk|MODULE|True
 user_shadows_prelude_samesig|split|shadow-same-split/main.mdk|MODULE|True'
 
 fails=0
@@ -75,13 +73,8 @@ for row in $ROWS; do
   file="$WORK/$rel"
   checked=$((checked + 1))
 
-  if [ "$arm" = ONE ]; then
-    out="$(run_t "$LIMIT" "$ONE_BIN" "$RTFILE" "$COREFILE" "$file" 2> "$WORK/.oneerr")"
-    verdict="$(printf '%s\n' "$out" | sed -n '1p')"
-  else
-    run_t "$LIMIT" "$MEDAKA" check "$file" > "$WORK/.check" 2> "$WORK/.checkerr"; ec=$?
-    case "$ec" in 0) verdict=ACCEPT ;; 1) verdict=REJECT ;; *) verdict="EXIT$ec" ;; esac
-  fi
+  run_t "$LIMIT" "$MEDAKA" check "$file" > "$WORK/.check" 2> "$WORK/.checkerr"; ec=$?
+  case "$ec" in 0) verdict=ACCEPT ;; 1) verdict=REJECT ;; *) verdict="EXIT$ec" ;; esac
 
   value='-'
   if [ "$verdict" = ACCEPT ]; then
