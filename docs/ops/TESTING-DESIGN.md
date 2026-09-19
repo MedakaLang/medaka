@@ -5,8 +5,13 @@ design authority for the testing architecture and its migration (the 2026-09-03 
 per-gate table in `docs/ops/TESTING-INVENTORY.md`). §§0–3 below stay as the diagnosis
 history they are; §§4–7 are historical (§4.4 and §4.6 shipped, §4.3/§4.7 did not — the
 new document's §3 and §10 carry their successors). ⚠️ §4.2's "the same assertions run on
-all three engines" is FALSE for `test`/`prop` today (they are eval-only); do not cite it as
-the unit tier's anti-circularity compensator until the native arm lands
+all three engines" is still FALSE for `test`/`prop`, and the reason has changed. The native
+arm exists — #2588 shipped `medaka test --native` and `--engines eval,native`, whose exit
+code is the AND — but the DEFAULT is eval alone and, measured at `ed8859d99`, no wired
+vehicle asks for more: `--engines` appears in no `Makefile` recipe and in no
+`.github/workflows/ci.yml` step, so the `make test` suite runs one engine (#3207). Wasm
+stays deferred by decision. Do not cite §4.2 as the unit tier's anti-circularity
+compensator; the differential/fixpoint floor (§4.4) is what actually supplies independence
 (TESTING-ARCHITECTURE §4). Original status line follows.
 
 **Status (2026-07-13):** PARTIAL — built 2026-07-13. §§1–3 are the diagnosis + research (unchanged).
@@ -489,9 +494,17 @@ The fix is not to abandon in-language tests — it is to **make the verdict exte
 | **Unit / property tier** | Medaka (`test`/`prop`) | **process exit code** + cross-engine agreement (§4.4) |
 
 The unit tier keeps `expectEqual` — Zig's behavior tests use `try expectEqual` too —
-but it is **never the only thing standing between a miscompile and a green run**,
-because the same assertions run on all three engines (§4.4). A miscompile has to
-corrupt the interpreter, the native backend, and wasm *identically* to hide.
+but it is **never the only thing standing between a miscompile and a green run**.
+
+⚠️ **The compensator named here is not the one that holds.** This paragraph originally
+read "because the same assertions run on all three engines (§4.4)". They do not: `test`
+and `prop` run on the engine you ask for, and the default is the interpreter alone.
+`medaka test --engines eval,native` (#2588) runs two and ANDs the exit codes, but nothing
+in `Makefile` or `ci.yml` passes it (#3207), and wasm is deferred by decision. What
+actually keeps the unit tier from being the sole oracle is the independent
+differential/fixpoint floor — `test/diff_compiler_engines.sh` and the self-compile
+fixpoint — which is a separate tier that would catch the miscompile whether or not a
+`test` block existed. See `docs/ops/TESTING-ARCHITECTURE.md` §4.
 
 ### 4.3 The snapshot tier — one fixture, all stages (steal Roc)
 
