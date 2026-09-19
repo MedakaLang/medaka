@@ -1,8 +1,9 @@
-{- | Trust-boundary PANIC guards for RUN-PDS0-036 and #1727, migrated from
-   `pds/test/trust_boundary_guards.sh` under #2592.
+{- | Trust-boundary PANIC guards for RUN-PDS0-036, #1727 and #3210, migrated
+   from `pds/test/trust_boundary_guards.sh` under #2592.
 
-   The SHA-256 and base58 byte domains and `uvarintEncode`'s non-negative
-   domain abort instead of returning a value: their result types have no
+   The SHA-256, base58 and `readBufferAppend` byte domains and
+   `uvarintEncode`'s non-negative domain abort instead of returning a value:
+   their result types have no
    `Result` channel. Medaka has no catchable panics, so they cannot be
    asserted IN PROCESS — the first abort would shadow every later assertion.
    This gate spawns `pds/test/guard_probes_main.mdk` ONE CASE PER PROCESS
@@ -58,7 +59,7 @@ expectControlCase : String -> String -> <Exec "_", IO> Expectation
 expectControlCase caseName wantLine =
   expectSpawnOkLine medakaBin ["run", probe, caseName] wantLine
 
--- The eight cells, verbatim from RUN-PDS0-036 / #1727: case name paired
+-- The cells, from RUN-PDS0-036 / #1727 and #3210: case name paired
 -- with its grading shape and the exact text that must appear. `Err` is a
 -- PANIC cell (the guard's own message); `Ok` is a CONTROL cell (its "OK …"
 -- line) — the two directions the retired script's `expect_panic`/`expect_ok`
@@ -79,10 +80,19 @@ cells = [
   ("base58-edges", Ok "OK base58-edges value=15Q"),
   ("uvarint-neg", Err "unsigned-varint encodes non-negative values only"),
   ("uvarint-ok", Ok "OK uvarint-ok len=2"),
+  (
+    "readbuffer-over",
+    Err "readBufferAppend: every element must be a byte in 0..255",
+  ),
+  (
+    "readbuffer-under",
+    Err "readBufferAppend: every element must be a byte in 0..255",
+  ),
+  ("readbuffer-edges", Ok "OK readbuffer-edges len=2"),
 ]
 
 cellFloor : Int
-cellFloor = 8
+cellFloor = 11
 
 runCell : (String, Result String String) -> <Exec "_", IO> (String, Expectation)
 runCell (name, Err wantMessage) =
@@ -121,9 +131,18 @@ test "uvarint-neg panics with the guard's own message" =
 
 test "uvarint-ok control case is unaffected" = cellExpectation "uvarint-ok"
 
+test "readbuffer-over panics with the guard's own message" =
+  cellExpectation "readbuffer-over"
+
+test "readbuffer-under panics with the guard's own message" =
+  cellExpectation "readbuffer-under"
+
+test "readbuffer-edges control case is unaffected" =
+  cellExpectation "readbuffer-edges"
+
 -- # Non-vacuity
 
-test "trust_boundary_guards ran at least CELL_FLOOR=8 cells" =
+test "trust_boundary_guards ran at least CELL_FLOOR=11 cells" =
   let n = length results
   if n >= cellFloor then
     Pass ">= \{intToString cellFloor} cells" "\{intToString n} cells"

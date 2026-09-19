@@ -10,7 +10,12 @@
    growth-boundary and zero-copy properties directly against `Vector`, whose
    doubling `bytebuilder` mirrors, then again through `ReadBuffer`'s
    end-to-end wrapping, so a regression in either the stdlib API or the fold
-   onto it shows up here. -}
+   onto it shows up here.
+
+   `readBufferAppend`'s byte-domain refusal is NOT asserted here: it aborts
+   the process, which would shadow every later assertion in this file.
+   `pds/test/trust_boundary_guards_test.mdk` grades it out of process, in
+   its `readbuffer-over`/`readbuffer-under`/`readbuffer-edges` cells. -}
 
 import array.{fromList}
 import bytes.{bytesLength, toArray}

@@ -1,5 +1,5 @@
 # META
-source_lines=422
+source_lines=424
 stages=DESUGAR,MARK
 # SOURCE
 -- net_async.mdk — the non-blocking half of `net`, over the async scheduler.
@@ -202,9 +202,11 @@ recvUntilStep dl (Connection fd) n (Ok None) = deferThen (expired dl) (late =>
 recvUntilStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
 recvUntilStep _ _ _ (Err e) = deferPure (Err e)
 
-{- | `recv` delivering the chunk as a `Bytes`: a received byte costs a byte
-   from `recv(2)` to the caller, where `recv` pays a boxed machine word per
-   byte. An empty result is end of stream. -}
+{- | `recv` delivering the chunk as a `Bytes`: a received byte costs the
+   caller one byte, where `recv` pays a boxed machine word per byte. The
+   read still needs somewhere `n` bytes wide to receive into, but that
+   buffer is transient — what the caller retains is sized to what actually
+   arrived, not to `n`. An empty result is end of stream. -}
 export
 recvBytes : Connection -> Int -> Async <Net "_" | e> (Result String Bytes)
 recvBytes conn n =

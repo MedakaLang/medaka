@@ -1249,13 +1249,21 @@ readBufferBacking (ReadBuffer b) =
    smallest doubling that holds the result, however many capacity classes a
    single delivered chunk spans.
 
-   Packing `bytes` into a `Bytes` first is the one copy this shape adds. The
-   socket read loop does not pay it: its chunk arrives packed and appends
-   through `readBufferAppendBytes`. -}
+   Packing `bytes` into a `Bytes` first is the one copy this shape adds, and
+   it goes through the CHECKED door: an element outside `0..255` aborts
+   rather than being masked to its low eight bits, so no caller can put a
+   byte on the wire that it did not supply. The socket read loop pays
+   neither the copy nor the scan: its chunk arrives packed and appends
+   through `readBufferAppendBytes`. The abort is graded out of process by
+   `pds/test/trust_boundary_guards_test.mdk`'s `readbuffer-*` cells. -}
 export
 readBufferAppend : Array Int -> ReadBuffer -> Unit
 readBufferAppend bytes (ReadBuffer b) =
-  appendBytes (fromArrayAssumeByteDomain bytes) b
+  appendBytes
+    (optionOrPanic
+      "readBufferAppend: every element must be a byte in 0..255"
+      (fromArray bytes))
+    b
 
 -- | Appends an already-packed chunk, skipping the packing copy
 -- `readBufferAppend` performs. This is `readMore`'s door: a chunk off the

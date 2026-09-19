@@ -206,7 +206,7 @@ echo "rehydrate scaling: 1000=$REHYDRATE_SMALL s 2000=$REHYDRATE_LARGE s"
 # request path (`lib.server_core.handleBytes`), pinned against a stable
 # small workload so a future ReadBuffer/parsing change that blows up
 # per-request allocation reds here rather than only in a hand-run probe.
-# Measured 2,452,720-2,455,184 bytes across three repeated runs at
+# Measured 2,390,496-2,390,928 bytes across four repeated runs at
 # N=4/bodyBytes=256 on this box; the threshold below gives >3x headroom.
 INBOUND_ALLOC_THRESHOLD=8000000
 

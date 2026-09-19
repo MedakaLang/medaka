@@ -1,5 +1,5 @@
 # META
-source_lines=2569
+source_lines=2582
 stages=DESUGAR,MARK
 # SOURCE
 {- | Pure, bounded HTTP/1.1 request framing and response building.
@@ -313,9 +313,10 @@ export
 requestTrailers : Request -> List Header
 requestTrailers (Request _ _ _ trailers _ _) = copyHeaders trailers
 
--- | The decoded body bytes, with any chunked transfer coding removed. A
--- `Bytes` cannot be written through, so this hands out the framed bytes
--- themselves rather than a copy; a caller wanting an `Array Int` writes
+-- | The decoded body bytes, with any chunked transfer coding removed. The
+-- stored body is already a private copy that framing cut out of the input
+-- (`bytes.slice` copies), and nothing else holds it, so this hands it out
+-- rather than copying again; a caller wanting an `Array Int` writes
 -- `toArray` and pays for the unpacking where it asked for it.
 export
 requestBody : Request -> Bytes
@@ -351,6 +352,15 @@ lowerAscii : Array Int -> Int -> Int -> String
 lowerAscii input start end =
   fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
 
+-- The `*Bytes` twin of each grammar predicate below — `lowerAsciiBytes`,
+-- `allTokenBytes`, `validFieldValueBytes`, `findByteBytes`,
+-- `trimLeftOwsBytes`, `trimRightOwsBytes`, `skipOwsBytes`,
+-- `scanTokenEndBytes` — is its body over a `Bytes` rather than an
+-- `Array Int`. The duplication is deliberate and temporary: `Index` is
+-- resolved per element, so one shared body would have to be constrained
+-- over the container and dispatch on every byte of every header scanned.
+-- `Array Int` originals stay for the callers not yet migrated; B5 removes
+-- them, and the duplication with them (`docs/design/BYTES-DESIGN.md`).
 lowerAsciiBytes : Bytes -> Int -> Int -> String
 lowerAsciiBytes input start end =
   fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
@@ -2550,27 +2560,30 @@ export
 decodeRequestBody : Request -> Result String DecodedBody
 decodeRequestBody (Request _ _ headers _ packed _) = do
   mediaType <- contentType headers
-  -- `DecodedBody`'s raw arm and the UTF-8 scan below both read an
-  -- `Array Int`, so the framed bytes are unpacked once here rather than
-  -- once per arm.
-  let body = toArray packed
+  -- Every arm's size cap reads only the length, which the packed body
+  -- already knows in O(1). Unpacking first would allocate a machine word
+  -- per byte of a body the very next line refuses — the endpoint caps are
+  -- far below the framer's, so the refused case is the large one.
+  let size = bytesLength packed
   match mediaType
     MediaType "application" "json" => do
-      () <- checkJsonBodyBytes (arrayLength body)
+      () <- checkJsonBodyBytes size
+      let body = toArray packed
       if not (validUtf8From body 0) then
         Err "http: JSON body is not valid UTF-8"
       else match parse (fromUtf8 body)
         Err message => Err "http: invalid JSON body: \{message}"
         Ok value => Ok (JsonBody mediaType value)
     MediaType "text" _ => do
-      () <- checkTextBodyBytes (arrayLength body)
+      () <- checkTextBodyBytes size
+      let body = toArray packed
       if not (validUtf8From body 0) then
         Err "http: text body is not valid UTF-8"
       else
         Ok (TextBody mediaType (fromUtf8 body))
     _ => do
-      () <- checkRawBodyBytes (arrayLength body)
-      Ok (RawBody mediaType body)
+      () <- checkRawBodyBytes size
+      Ok (RawBody mediaType (toArray packed))
 # DESUGAR
 (DUse false (UseGroup ("bytebuilder") ((mem "Builder" false) (mem "appendBytes" false) (mem "buildArray" false) (mem "buildBytes" false) (mem "emitU8" false) (mem "newBuilder" false))))
 (DUse false (UseWild ("bytes")))
@@ -3032,7 +3045,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "contentType" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "MediaType"))))
 (DFunDef false "contentType" ((PVar "headers")) (EBlock (DoLet false false (PVar "count") (EApp (EApp (EVar "countNamed") (ELit (LString "content-type"))) (EVar "headers"))) (DoExpr (EIf (EBinOp "==" (EVar "count") (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "http: request body requires Content-Type"))) (EIf (EBinOp ">" (EVar "count") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "http: duplicate Content-Type"))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "content-type"))) (EVar "headers")) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "http: request body requires Content-Type")))) (arm (PCon "Some" (PVar "value")) () (EApp (EVar "parseMediaType") (EVar "value")))))))))
 (DTypeSig true "decodeRequestBody" (TyFun (TyCon "Request") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "DecodedBody"))))
-(DFunDef false "decodeRequestBody" ((PCon "Request" PWild PWild (PVar "headers") PWild (PVar "packed") PWild)) (EApp (EApp (EVar "andThen") (EApp (EVar "contentType") (EVar "headers"))) (ELam ((PVar "mediaType")) (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EMatch (EVar "mediaType") (arm (PCon "MediaType" (PLit (LString "application")) (PLit (LString "json"))) () (EApp (EApp (EVar "andThen") (EApp (EVar "checkJsonBodyBytes") (EApp (EVar "arrayLength") (EVar "body")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: JSON body is not valid UTF-8"))) (EMatch (EApp (EVar "parse") (EApp (EVar "fromUtf8") (EVar "body"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "http: invalid JSON body: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "value")) () (EApp (EVar "Ok") (EApp (EApp (EVar "JsonBody") (EVar "mediaType")) (EVar "value"))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "MediaType" (PLit (LString "text")) PWild) () (EApp (EApp (EVar "andThen") (EApp (EVar "checkTextBodyBytes") (EApp (EVar "arrayLength") (EVar "body")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: text body is not valid UTF-8"))) (EApp (EVar "Ok") (EApp (EApp (EVar "TextBody") (EVar "mediaType")) (EApp (EVar "fromUtf8") (EVar "body")))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EApp (EVar "andThen") (EApp (EVar "checkRawBodyBytes") (EApp (EVar "arrayLength") (EVar "body")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EApp (EApp (EVar "RawBody") (EVar "mediaType")) (EVar "body")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
+(DFunDef false "decodeRequestBody" ((PCon "Request" PWild PWild (PVar "headers") PWild (PVar "packed") PWild)) (EApp (EApp (EVar "andThen") (EApp (EVar "contentType") (EVar "headers"))) (ELam ((PVar "mediaType")) (ELet false (PVar "size") (EApp (EVar "bytesLength") (EVar "packed")) (EMatch (EVar "mediaType") (arm (PCon "MediaType" (PLit (LString "application")) (PLit (LString "json"))) () (EApp (EApp (EVar "andThen") (EApp (EVar "checkJsonBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: JSON body is not valid UTF-8"))) (EMatch (EApp (EVar "parse") (EApp (EVar "fromUtf8") (EVar "body"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "http: invalid JSON body: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "value")) () (EApp (EVar "Ok") (EApp (EApp (EVar "JsonBody") (EVar "mediaType")) (EVar "value")))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "MediaType" (PLit (LString "text")) PWild) () (EApp (EApp (EVar "andThen") (EApp (EVar "checkTextBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: text body is not valid UTF-8"))) (EApp (EVar "Ok") (EApp (EApp (EVar "TextBody") (EVar "mediaType")) (EApp (EVar "fromUtf8") (EVar "body"))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EApp (EVar "andThen") (EApp (EVar "checkRawBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EApp (EApp (EVar "RawBody") (EVar "mediaType")) (EApp (EVar "toArray") (EVar "packed"))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
 # MARK
 (DUse false (UseGroup ("bytebuilder") ((mem "Builder" false) (mem "appendBytes" false) (mem "buildArray" false) (mem "buildBytes" false) (mem "emitU8" false) (mem "newBuilder" false))))
 (DUse false (UseWild ("bytes")))
@@ -3494,4 +3507,4 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "contentType" (TyFun (TyApp (TyCon "List") (TyCon "Header")) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "MediaType"))))
 (DFunDef false "contentType" ((PVar "headers")) (EBlock (DoLet false false (PVar "count") (EApp (EApp (EVar "countNamed") (ELit (LString "content-type"))) (EVar "headers"))) (DoExpr (EIf (EBinOp "==" (EDictApp "count") (ELit (LInt 0))) (EApp (EVar "Err") (ELit (LString "http: request body requires Content-Type"))) (EIf (EBinOp ">" (EDictApp "count") (ELit (LInt 1))) (EApp (EVar "Err") (ELit (LString "http: duplicate Content-Type"))) (EMatch (EApp (EApp (EVar "findNamed") (ELit (LString "content-type"))) (EVar "headers")) (arm (PCon "None") () (EApp (EVar "Err") (ELit (LString "http: request body requires Content-Type")))) (arm (PCon "Some" (PVar "value")) () (EApp (EVar "parseMediaType") (EVar "value")))))))))
 (DTypeSig true "decodeRequestBody" (TyFun (TyCon "Request") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "DecodedBody"))))
-(DFunDef false "decodeRequestBody" ((PCon "Request" PWild PWild (PVar "headers") PWild (PVar "packed") PWild)) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "contentType") (EVar "headers"))) (ELam ((PVar "mediaType")) (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EMatch (EVar "mediaType") (arm (PCon "MediaType" (PLit (LString "application")) (PLit (LString "json"))) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "checkJsonBodyBytes") (EApp (EVar "arrayLength") (EVar "body")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: JSON body is not valid UTF-8"))) (EMatch (EApp (EVar "parse") (EApp (EVar "fromUtf8") (EVar "body"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "http: invalid JSON body: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "value")) () (EApp (EVar "Ok") (EApp (EApp (EVar "JsonBody") (EVar "mediaType")) (EVar "value"))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "MediaType" (PLit (LString "text")) PWild) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "checkTextBodyBytes") (EApp (EVar "arrayLength") (EVar "body")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: text body is not valid UTF-8"))) (EApp (EVar "Ok") (EApp (EApp (EVar "TextBody") (EVar "mediaType")) (EApp (EVar "fromUtf8") (EVar "body")))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "checkRawBodyBytes") (EApp (EVar "arrayLength") (EVar "body")))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EApp (EApp (EVar "RawBody") (EVar "mediaType")) (EVar "body")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
+(DFunDef false "decodeRequestBody" ((PCon "Request" PWild PWild (PVar "headers") PWild (PVar "packed") PWild)) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "contentType") (EVar "headers"))) (ELam ((PVar "mediaType")) (ELet false (PVar "size") (EApp (EVar "bytesLength") (EVar "packed")) (EMatch (EVar "mediaType") (arm (PCon "MediaType" (PLit (LString "application")) (PLit (LString "json"))) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "checkJsonBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: JSON body is not valid UTF-8"))) (EMatch (EApp (EVar "parse") (EApp (EVar "fromUtf8") (EVar "body"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "http: invalid JSON body: ")) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "value")) () (EApp (EVar "Ok") (EApp (EApp (EVar "JsonBody") (EVar "mediaType")) (EVar "value")))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "MediaType" (PLit (LString "text")) PWild) () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "checkTextBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: text body is not valid UTF-8"))) (EApp (EVar "Ok") (EApp (EApp (EVar "TextBody") (EVar "mediaType")) (EApp (EVar "fromUtf8") (EVar "body"))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EApp (EMethodRef "andThen") (EApp (EVar "checkRawBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EApp (EApp (EVar "RawBody") (EVar "mediaType")) (EApp (EVar "toArray") (EVar "packed"))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))

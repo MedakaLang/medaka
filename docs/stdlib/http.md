@@ -333,9 +333,10 @@ chunked.
 requestBody : Request -> Bytes
 ```
 
-The decoded body bytes, with any chunked transfer coding removed. A
-`Bytes` cannot be written through, so this hands out the framed bytes
-themselves rather than a copy; a caller wanting an `Array Int` writes
+The decoded body bytes, with any chunked transfer coding removed. The
+stored body is already a private copy that framing cut out of the input
+(`bytes.slice` copies), and nothing else holds it, so this hands it out
+rather than copying again; a caller wanting an `Array Int` writes
 `toArray` and pays for the unpacking where it asked for it.
 
 ### `requestBodyLength`

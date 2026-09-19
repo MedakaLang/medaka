@@ -59,9 +59,11 @@ recvWithin : Duration -> Connection -> Int -> Async <Clock, Net _ | e> (Result S
 recvBytes : Connection -> Int -> Async <Net _ | e> (Result String Bytes)
 ```
 
-`recv` delivering the chunk as a `Bytes`: a received byte costs a byte
-from `recv(2)` to the caller, where `recv` pays a boxed machine word per
-byte. An empty result is end of stream.
+`recv` delivering the chunk as a `Bytes`: a received byte costs the
+caller one byte, where `recv` pays a boxed machine word per byte. The
+read still needs somewhere `n` bytes wide to receive into, but that
+buffer is transient — what the caller retains is sized to what actually
+arrived, not to `n`. An empty result is end of stream.
 
 ## `recvBytesWithin`
 
