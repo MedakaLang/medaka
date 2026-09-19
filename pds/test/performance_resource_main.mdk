@@ -6,6 +6,8 @@ import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode, carEncode}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidForRaw, cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborEncode}
+import lib.handlers.{pdsServer, serverLinksEmpty}
+import lib.jwt.{mintToken}
 import lib.mst.{
   Mst,
   mstEmpty,
@@ -21,9 +23,11 @@ import lib.mst.{
 }
 import lib.multiformats.{uvarintEncode}
 import lib.repo.{
+  Repo,
   repoCommitDataCid,
   repoExportGraph,
   repoFromBlocks,
+  repoInit,
   repoLatestCommit,
 }
 import lib.resource_limits.{
@@ -42,11 +46,21 @@ import lib.resource_limits.{
   maxMstNodeEntries,
   maxMstTraversalDepth,
 }
+import lib.server_core.{
+  Account, RequestContext(..), Server, handleBytes, makeAccount
+}
 import lib.sign.{SecretKey, secretKeyFromBytes, signDigest, signatureCompact}
+import lib.store.{
+  Store,
+  sessionFingerprint,
+  storeFromRepo,
+  storeSessionOpen,
+  storeWithServerSecret,
+}
 import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
 import sha256.{sha256}
-import string.{contains, toInt}
+import string.{contains, fromUtf8, toInt, toUtf8}
 
 mustBytes : Result String (Array Int) -> Array Int
 mustBytes (Ok bytes) = bytes
@@ -432,6 +446,123 @@ runLimits =
     let () = println "LIMITS: FAIL"
     exit 1
 
+-- ── inbound allocation probe (#3210) ────────────────────────────────────────
+--
+-- Drives the same `handleBytes` seam `cost_curve_main.mdk` drives, but
+-- against a synthetic in-memory repo/store (`repoInit`, no `FileRead`) so the
+-- route needs no corpus directory, and reports `allocBytes()` delta rather
+-- than wall time.
+
+inboundAccountSecret : Array Int
+inboundAccountSecret = arrayMakeWith 32 (i => (i * 7 + 3) % 256)
+
+inboundInstant : Int
+inboundInstant = 1700000000
+
+inboundNonce : Array Int
+inboundNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
+
+inboundContext : RequestContext
+inboundContext =
+  RequestContext { nowSeconds = inboundInstant, nonce = inboundNonce }
+
+inboundHost : String
+inboundHost = "perf.example"
+
+inboundHandle : String
+inboundHandle = "perfroute.example"
+
+inboundToken : String
+inboundToken =
+  mintToken
+    inboundAccountSecret
+    perfDid
+    inboundHost
+    "inbound-alloc-probe-token"
+    (inboundInstant - 60)
+    (inboundInstant + 3600)
+
+-- `com.atproto.repo.uploadBlob` (RawInput, any Content-Type) rather than
+-- `createRecord` (JsonInput, capped at 153,600 decoded bytes,
+-- `stdlib/http.mdk`) — a JSON-bodied write cannot reach the 5 MiB ceiling
+-- #2951 names, and that ceiling is exactly `maxBlobBytes`
+-- (`pds/lib/resource_limits.mdk`), which only `uploadBlob` admits against.
+inboundRequest : Int -> Array Int
+inboundRequest bodyBytes =
+  let bytes = arrayMake bodyBytes 0x41
+  toUtf8
+      "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+    ++ bytes
+
+inboundStatusEnd : Array Int -> Int -> Int
+inboundStatusEnd bytes i =
+  if i + 1 >= arrayLength bytes then
+    arrayLength bytes
+  else if bytes[i] == 13 && bytes[i + 1] == 10 then
+    i
+  else
+    inboundStatusEnd bytes (i + 1)
+
+inboundStatusLine : Array Int -> String
+inboundStatusLine bytes =
+  fromUtf8 (arrayMakeWith (inboundStatusEnd bytes 0) (i => bytes[i]))
+
+mustInboundAccount : Unit -> Account
+mustInboundAccount _ = match makeAccount perfDid inboundHandle inboundHost
+  Ok account => account
+  Err message =>
+    panic "performance_resource: inbound account setup failed: \{message}"
+
+mustInboundStore : Unit -> Store
+mustInboundStore _ =
+  let repo = match repoInit perfDid perfSecret perfRev
+    Ok value => value
+    Err message =>
+      panic "performance_resource: inbound repo init failed: \{message}"
+  let base = storeFromRepo repo
+  match storeWithServerSecret inboundAccountSecret base
+    Ok next =>
+      storeSessionOpen
+        (sessionFingerprint inboundToken)
+        (sessionFingerprint
+          "performance_resource: no refresh token in this probe")
+        (inboundInstant + 3600)
+        next
+    Err message =>
+      panic
+        "performance_resource: inbound session secret setup failed: \{message}"
+
+-- Answers the SAME request `n` times against the SAME store, discarding the
+-- store a write returns each time (mirrors `cost_curve_main.mdk`'s
+-- `repeatRequest` — a repetition must not grow the state it measures).
+repeatInbound : Server -> Store -> Array Int -> Int -> Int -> Int
+repeatInbound server store request n acc =
+  if n <= 0 then
+    acc
+  else
+    let (_, responseBytes) = handleBytes server inboundContext store request
+    repeatInbound server store request (n - 1) (acc + arrayLength responseBytes)
+
+{- | `retainedBytes` is not printed: this tree has no GC-forcing extern to
+   read a steady-state figure cheaply (checked: no `gc`/`collect` entry in
+   `stdlib/runtime.mdk`), so only the `allocBytes()` delta over `n` requests
+   is reported. -}
+runInboundAlloc : Int -> Int -> <IO> Unit
+runInboundAlloc n bodyBytes =
+  let request = inboundRequest bodyBytes
+  let account = mustInboundAccount ()
+  let server = match pdsServer account serverLinksEmpty "inbound-alloc-probe"
+    Ok value => value
+    Err message =>
+      panic "performance_resource: inbound server setup failed: \{message}"
+  let store = mustInboundStore ()
+  let (_, first) = handleBytes server inboundContext store request
+  let a0 = allocBytes ()
+  let checksum = repeatInbound server store request n 0
+  let a1 = allocBytes ()
+  println
+    "INBOUNDALLOC allocBytes=\{intToString (floatToInt (a1 - a0))} N=\{intToString n} bodyBytes=\{intToString bodyBytes} checksum=\{intToString checksum} status=\{inboundStatusLine first}"
+
 main : <IO, Env> Unit
 main = match args ()
   ["car", nText] => match toInt nText
@@ -450,6 +581,9 @@ main = match args ()
     Some n => runRehydrate n
     None => panic "performance_resource: invalid rehydrate size"
   ["limits"] => runLimits
+  ["inbound-alloc", nText, bodyText] => match (toInt nText, toInt bodyText)
+    (Some n, Some bodyBytes) => runInboundAlloc n bodyBytes
+    _ => panic "performance_resource: invalid inbound-alloc args"
   _ =>
     panic
-      "usage: performance_resource_main (car|mst|mst-insert|export|rehydrate) <size> | limits"
+      "usage: performance_resource_main (car|mst|mst-insert|export|rehydrate) <size> | limits | inbound-alloc <N> <bodyBytes>"
