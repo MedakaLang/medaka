@@ -200,6 +200,7 @@ An immutable string of bytes.
 - [`indexOf`](bytes.md#indexof)
 - [`toUtf8Bytes`](bytes.md#toutf8bytes)
 - [`fromUtf8Bytes`](bytes.md#fromutf8bytes)
+- [`writeStdoutBytes`](bytes.md#writestdoutbytes)
 - [`MutBytes`](bytes.md#mutbytes)
 - [`mutBytesMake`](bytes.md#mutbytesmake)
 - [`mutBytesLength`](bytes.md#mutbyteslength)

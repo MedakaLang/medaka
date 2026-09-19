@@ -26,8 +26,12 @@ so `Bytes` is a `HashMap`/`HashSet` key.
 
 `append` joins two byte strings, and `b1 ++ b2` reaches it: `++` is
 `Semigroup`'s `append`, so it dispatches on `Bytes` and allocates the
-joined length once. No `++` between byte strings falls through to the
-runtime's untyped concatenation, which has no byte-buffer case.
+joined length once. Applied where the operand type is known -- infix, in
+a section, or under a `Semigroup` constraint -- it dispatches. Bound to a
+name first, as `let f = (++)` or `let f = (x y => x ++ y)`, it does not:
+it falls through to the runtime's untyped concatenation, which has no
+byte-buffer case, and fails at run time. Bind `append` instead, which
+dispatches from either position.
 
 `MutBytes` is the mutable, fixed-length sibling, and the way to build a
 byte string a byte at a time: `mutBytesMake` allocates `n` zero bytes,
@@ -233,6 +237,20 @@ On valid UTF-8, `fromUtf8Bytes (toUtf8Bytes s)` is `s`.
 > fromUtf8Bytes (toUtf8Bytes "héllo→")
 "héllo→"
 ```
+
+## Output
+
+### `writeStdoutBytes`
+
+```
+writeStdoutBytes : Bytes -> <Stdout> Unit
+```
+
+Writes `b`'s bytes to standard output byte-for-byte.
+
+Unlike `putStr`, the bytes are not required to be valid UTF-8: nothing
+here decodes or re-encodes them, so a byte sequence that would mangle or
+get rejected on a `String` path round-trips exactly.
 
 ## Mutation
 
@@ -440,8 +458,6 @@ contribute for each byte. Agrees with `Eq Bytes`, which walks the same
 bytes in the same order.
 
 ```medaka
-> let m = fromList [(toUtf8Bytes "one", 1), (toUtf8Bytes "two", 2)] in m[toUtf8Bytes "two"]
-2
 > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
 True
 ```
