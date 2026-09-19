@@ -1013,10 +1013,13 @@ long long mdk_list_slice(long long xs, long long lo, long long hi) {
 long long mdk_append(long long a, long long b) {
   if ((a & 1) == 0 && ((const long long *)a)[0] == MDK_STR_TAG)
     return mdk_string_append(a, b);
-  /* A byte block is the third even-boxed header this discriminator can meet.
-   * Nothing gives `ByteBlock` a Semigroup, so this is unreachable from a
-   * well-typed program; without the arm it would fall to mdk_list_append and
-   * walk the packed payload as Cons cells. */
+  /* A byte block is the third even-boxed header this discriminator can meet,
+   * and it is reachable: `stdlib/bytes.mdk`'s `Bytes` is a newtype over
+   * `ByteBlock` with a Semigroup instance, so a byte block arrives here
+   * whenever a `++` on bytes misses that instance and lands on this untyped
+   * fallback.  The arm fails closed -- mdk_byteblock_append_unsupported exits
+   * 1 with E-BYTEBLOCK-APPEND -- rather than falling to mdk_list_append, which
+   * would walk the packed payload as Cons cells. */
   if (mdk_is_byteblock(a)) mdk_byteblock_append_unsupported();
   return mdk_list_append(a, b);
 }
