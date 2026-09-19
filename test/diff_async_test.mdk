@@ -1,0 +1,162 @@
+{- | Gate for the async runtime (docs/design/ASYNC-RUNTIME-DESIGN.md, #500),
+   migrated from the retired `test/diff_async.sh`.
+
+   Async I/O is native-first: the readiness externs (`ioPoll`, `netTryAccept`,
+   `netTryRecv`, `netTrySend`, `netTrySendFrom`, `netSetNonblock`,
+   `netConnectStart`, `netConnectCheck`) are bound by the LLVM backend
+   (`compiler/backend/llvm_emit.mdk`) and implemented in `runtime/medaka_rt.c`
+   only — `compiler/eval/eval.mdk` never binds any of them. There is
+   therefore no interpreter arm to run, let alone compare against a native
+   one: `medaka run` on one of these fixtures does not silently do nothing,
+   it panics on the first readiness call with "unbound identifier". The
+   corpus is graded on the native arm alone, and the absence of the other
+   arm is a declared, checked property of this file (the last test below),
+   not a call this file quietly never makes.
+
+   For each fixture under `test/async_fixtures/`, `medaka check` must accept
+   it, `medaka build` + exec must succeed, and its stdout must match the
+   committed `<name>.expected` exactly (mod trailing newlines, the same as
+   the shell predecessor's `$(...)` comparison).
+
+   What the corpus proves (guarantees G1-G9 of the design doc):
+     overlap_sleeps   G6/G7 — parked tasks overlap; the program times itself
+                      and prints "overlapped" only if three 100 ms sleeps
+                      finish in under 250 ms (an order-of-magnitude margin).
+     echo_overlap     the A3 payoff — one thread, an accept loop that spawns
+                      a handler per connection, a slow client that does not
+                      stall a fast one, a deadline that fires, and a serve
+                      loop that ends when its listener closes.
+     no_starvation    a slow sleeper and a fast ping both make progress
+                       under one event loop.
+
+   No I/O completion order is pinned beyond what the fixtures make
+   deterministic by construction (G2): every ordering claim in an `.expected`
+   rests on a sleep at least an order of magnitude longer than a loopback
+   round trip.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads the
+   corpus, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{chompNewlines}
+import fs.{expectUnitCount, fixtureFiles}
+import list.{somes, sort}
+import path.{dirname, stem}
+import string.{contains, endsWith, unlines}
+import test.{Expectation, fail, pass}
+import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, scratchDir}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/async_fixtures"
+
+-- | The size of the corpus, written down so that a corpus which silently
+-- shrank is red. Growing it is expected: add the row and raise this.
+declaredFixtureCount : Int
+declaredFixtureCount = 3
+
+-- | The fixtures this gate knows about, by name, matched against disk both
+-- ways below: a fixture with no row here is graded by nothing, and a row
+-- with no fixture would otherwise surface later as an unreadable path.
+roster : List String
+roster = ["echo_overlap", "no_starvation", "overlap_sleeps"]
+
+-- The stems of the corpus's own top-level `.mdk` files, sorted.
+fixtureStems : <FileRead "_", IO> Result String (List String)
+fixtureStems = match fixtureFiles corpus
+  Err e => Err e
+  Ok paths =>
+    let own = filter (p => endsWith ".mdk" p && dirname p == corpus) paths
+    Ok (sort (map stem own))
+
+test "diff_async: exactly 3 fixtures on disk, matching the roster" =
+  match fixtureStems
+    Err e => fail "\{corpus}: \{e}"
+    Ok found => match expectUnitCount declaredFixtureCount found
+      Err e => fail "\{corpus}: \{e} on disk"
+      Ok _ =>
+        if sort found == sort roster then
+          pass
+        else
+          fail "\{corpus}: found \{debug found}, want \{debug roster}"
+
+-- Builds `\{corpus}/\{name}.mdk` into `\{scratch}/\{name}` and executes it
+-- once, without ever invoking `medaka run` — see the file header for why.
+buildAndRun : String ->
+  String ->
+  <Exec "_", IO> Result String (Int, String, String)
+buildAndRun scratch name =
+  let entry = "\{corpus}/\{name}.mdk"
+  let binPath = "\{scratch}/\{name}"
+  match boundedVerbSeconds 30 medakaBin ["check", entry]
+    Err e => Err "\{name}: could not run `medaka check`: \{e}"
+    Ok (checkCode, _, checkErr) =>
+      if checkCode /= 0 then
+        Err
+          "\{name}: `medaka check` rejected it (exit \{intToString checkCode}): \{checkErr}"
+      else match boundedVerbSeconds 60 medakaBin ["build", entry, "-o", binPath]
+        Err e => Err "\{name}: could not run `medaka build`: \{e}"
+        Ok (buildCode, buildOut, buildErr) =>
+          if buildCode /= 0 then
+            Err
+              "\{name}: `medaka build` produced no binary (exit \{intToString buildCode}): \{buildOut ++ buildErr}"
+          else match boundedVerbSeconds 30 binPath []
+            Err e => Err "\{name}: could not run the built binary: \{e}"
+            Ok r => Ok r
+
+-- `name`'s committed expected stdout, without its trailing newlines — the
+-- same comparison the retired shell gate made via `$(cat …)`.
+wantOutput : String -> <FileRead "_", IO> Result String String
+wantOutput name = map chompNewlines (readFile "\{corpus}/\{name}.expected")
+
+gradeFixture : String -> String -> <Exec "_", FileRead "_", IO> Option String
+gradeFixture scratch name = match wantOutput name
+  Err e => Some "  \{name}: \{e}"
+  Ok want => match buildAndRun scratch name
+    Err e => Some "  \{name}: \{e}"
+    Ok (code, out, err) =>
+      let got = chompNewlines out
+      if code /= 0 then
+        Some
+          "  \{name}: exited \{intToString code}: stdout=\{debug got} stderr=\{debug err}"
+      else if got /= want then
+        Some "  \{name}: stdout mismatch: want \{debug want}, got \{debug got}"
+      else
+        None
+
+test "diff_async: build+exec matches the committed stdout for every fixture" =
+  match scratchDir
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok scratch =>
+      let failures = somes (map (gradeFixture scratch) roster)
+      let _ = boundedVerbSeconds 10 "rm" ["-rf", scratch]
+      match failures
+        [] => pass
+        _ =>
+          fail
+            "\{intToString (length failures)} of \{intToString declaredFixtureCount} fixtures under \{corpus} missed their expected stdout:\n\{unlines failures}"
+
+-- The readiness externs `echo_overlap`, `no_starvation` and
+-- `overlap_sleeps` exercise. Kept as data rather than a hardcoded count so
+-- that a future extern joining this list carries the same proof.
+readinessExterns : List String
+readinessExterns = [
+  "ioPoll",
+  "netSetNonblock",
+  "netTryAccept",
+  "netConnectStart",
+  "netConnectCheck",
+  "netTryRecv",
+  "netTrySend",
+  "netTrySendFrom",
+]
+
+test "diff_async: the readiness externs have no eval binding — the missing arm is structural" =
+  let path = "\{medakaRoot}/compiler/eval/eval.mdk"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      let leaked = filter (name => contains name src) readinessExterns
+      match leaked
+        [] => pass
+        _ =>
+          fail
+            "\{path}: readiness extern(s) \{debug leaked} now appear in eval.mdk — diff_async's native-only premise no longer holds and this gate needs a run arm, not a silent skip"
