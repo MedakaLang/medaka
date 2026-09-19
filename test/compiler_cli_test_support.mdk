@@ -394,13 +394,15 @@ abortFailure want a =
 printsFailure : String -> Agreement -> Option String
 printsFailure want a =
   let runOut = chompNewlines a.runOut
+  let runErr = chompNewlines a.runErr
   let binOut = chompNewlines a.binOut
-  if a.runCode /= 0 || runOut /= want then
+  let binErr = chompNewlines a.binErr
+  if a.runCode /= 0 || runOut /= want || runErr /= "" then
     Some
-      "\{observed "run" a.runCode runOut (chompNewlines a.runErr)}; want exit=0, stdout \{debug want}"
-  else if a.binCode /= 0 || binOut /= want then
+      "\{observed "run" a.runCode runOut runErr}; want exit=0, stdout \{debug want}, empty stderr"
+  else if a.binCode /= 0 || binOut /= want || binErr /= "" then
     Some
-      "\{observed "build+exec" a.binCode binOut (chompNewlines a.binErr)}; want exit=0, stdout \{debug want}"
+      "\{observed "build+exec" a.binCode binOut binErr}; want exit=0, stdout \{debug want}, empty stderr"
   else
     None
 

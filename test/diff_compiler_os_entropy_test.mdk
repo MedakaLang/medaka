@@ -193,12 +193,17 @@ test "os_entropy: build+exec — positive is independent, negative and too-large
 
 -- The lines of `allLines` strictly after the first line starting with
 -- `startPrefix`, up to (not including) the first later line satisfying
--- `stopWhen`. `[]` when `startPrefix` is never found.
-sectionAfter : String -> (String -> Bool) -> List String -> List String
+-- `stopWhen`. `Err` when `startPrefix` is never found — distinct from an
+-- anchor that IS found but delimits a genuinely empty section, so a
+-- reformatted anchor line fails the check instead of vacuously emptying it.
+sectionAfter : String ->
+  (String -> Bool) ->
+  List String ->
+  Result String (List String)
 sectionAfter startPrefix stopWhen allLines =
   match dropWhile (l => not (startsWith startPrefix l)) allLines
-    [] => []
-    _ :: rest => takeWhile (l => not (stopWhen l)) rest
+    [] => Err "anchor '\{startPrefix}' not found — this check needs updating"
+    _ :: rest => Ok (takeWhile (l => not (stopWhen l)) rest)
 
 test "os_entropy: extern declares the <Rand> effect exactly" =
   let path = "\{medakaRoot}/stdlib/runtime.mdk"
@@ -215,44 +220,53 @@ test "os_entropy: excluded from the deterministic externBindings table" =
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
-      let section =
+      let sectionResult =
         sectionAfter
           "externBindings _ = ["
           (startsWith "pDebugStringLit")
           (lines src)
-      if contains "\"osEntropyBytes\"" (unlines section) then
-        fail
-          "\{path}: osEntropyBytes leaked into the deterministic externBindings table"
-      else
-        pass
+      match sectionResult
+        Err e => fail "\{path}: \{e}"
+        Ok section =>
+          if contains "\"osEntropyBytes\"" (unlines section) then
+            fail
+              "\{path}: osEntropyBytes leaked into the deterministic externBindings table"
+          else
+            pass
 
 test "os_entropy: excluded from testCapableExterns" =
   let path = "\{medakaRoot}/compiler/eval/eval.mdk"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
-      let section =
+      let sectionResult =
         sectionAfter "testCapableExterns _ = [" (l => l == "]") (lines src)
-      if contains "\"osEntropyBytes\"" (unlines section) then
-        fail "\{path}: osEntropyBytes leaked into testCapableExterns"
-      else
-        pass
+      match sectionResult
+        Err e => fail "\{path}: \{e}"
+        Ok section =>
+          if contains "\"osEntropyBytes\"" (unlines section) then
+            fail "\{path}: osEntropyBytes leaked into testCapableExterns"
+          else
+            pass
 
 test "os_entropy: the C runtime helper has no deterministic SplitMix fallback" =
   let path = "\{medakaRoot}/runtime/medaka_rt.c"
   match readFile path
     Err e => fail "\{path}: \{e}"
     Ok src =>
-      let section =
+      let sectionResult =
         sectionAfter
           "long long mdk_os_entropy_bytes("
           (l => l == "}")
           (lines src)
-      if contains "mdk_next_u64" (unlines section) then
-        fail
-          "\{path}: osEntropyBytes calls the deterministic SplitMix generator"
-      else
-        pass
+      match sectionResult
+        Err e => fail "\{path}: \{e}"
+        Ok section =>
+          if contains "mdk_next_u64" (unlines section) then
+            fail
+              "\{path}: osEntropyBytes calls the deterministic SplitMix generator"
+          else
+            pass
 
 test "os_entropy: the WASM-GAP capability exception is declared" =
   let path = "\{medakaRoot}/test/CAPABILITY-EXCEPTIONS.txt"
@@ -263,3 +277,17 @@ test "os_entropy: the WASM-GAP capability exception is declared" =
         pass
       else
         fail "\{path}: explicit WASM-GAP row missing"
+
+-- A shrinking count here is the same silent-wrongness signal
+-- `rosterAgreement`'s doc comment names for a fixture roster: written down
+-- so a corpus that lost a check reads red instead of a quieter suite.
+test "os_entropy: exactly 11 `os_entropy:` checks are declared" =
+  let path = "\{medakaRoot}/test/diff_compiler_os_entropy_test.mdk"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      let n = length (filter (startsWith "test \"os_entropy:") (lines src))
+      if n == 11 then
+        pass
+      else
+        fail "\{path}: expected 11 `os_entropy:` checks, found \{intToString n}"
