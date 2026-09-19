@@ -195,6 +195,7 @@ An immutable string of bytes.
 - [`toArray`](bytes.md#toarray)
 - [`bytesLength`](bytes.md#byteslength)
 - [`get`](bytes.md#get)
+- [`indexOf`](bytes.md#indexof)
 - [`toUtf8Bytes`](bytes.md#toutf8bytes)
 - [`fromUtf8Bytes`](bytes.md#fromutf8bytes)
 - [`MutBytes`](bytes.md#mutbytes)
