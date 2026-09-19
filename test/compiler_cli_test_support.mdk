@@ -332,8 +332,40 @@ batchSection prefix key all = match dropWhile (/= "\{prefix}\{key}") (lines all)
    empty stdout takes a program that aborted for an unrelated reason; and the
    code without its tail takes a guard that fired on the wrong side of the
    boundary, which is what the number in `index 9 out of bounds` is there to
-   pin. -}
-public export data RuntimeOutcome = Aborts String String | Prints String
+   pin.
+
+   `Dies run built out` is the looser sibling `Aborts` cannot express, for a
+   corpus whose subject is the death itself rather than its wording: each
+   engine is graded separately (`EngineDeath`), the exit is required only to
+   be nonzero, and `out` is the exact stdout every graded engine must have
+   produced anyway — bytes, newline included, not a chomp and not a
+   substring. A fatal signal's exit code is the platform's to choose, and two
+   engines can die of the same program for genuinely different reasons; what
+   neither is allowed to do is die silently or print less than it already
+   had. -}
+public export data RuntimeOutcome =
+  | Aborts String String
+  | Prints String
+  | Dies EngineDeath EngineDeath String
+
+{- | What one engine owes for a `Dies` fixture.
+
+   `Coded code` is a clean coded death: a nonzero exit with `runtime error
+   [code]: ` on that engine's own stderr. `AnyCode` asks only for some
+   `E-…`, for a fixture whose two engines legitimately reach different codes.
+   `Unexercised` grades that engine not at all — for a fixture only one of
+   them can be fairly asked about, which then also excuses a build that does
+   not compile.
+
+   Containment rather than a whole line is deliberate, and is where a `Dies`
+   row is looser than an `Aborts` one: a raw signal death and a coded one are
+   told apart by that line being there at all, not by its wording, and the
+   two engines word it differently on purpose — `medaka run` prefixes a
+   `<file>:L:C: ` location onto the ones that have a source location, names
+   an unmangled binding where the emitter names a mangled one, and describes
+   the interpreter's own depth guard where the binary describes a real stack.
+   Wording is pinned per code by the corpus that owns it. -}
+public export data EngineDeath = Coded String | AnyCode | Unexercised
 
 abortLine : String -> String -> String
 abortLine code tail = "runtime error [\{code}]: \{tail}"
@@ -371,28 +403,66 @@ printsFailure want a =
   else
     None
 
+deathMarker : EngineDeath -> Option String
+deathMarker (Coded code) = Some "runtime error [\{code}]: "
+deathMarker AnyCode = Some "runtime error [E-"
+deathMarker Unexercised = None
+
+deathFailure : String ->
+  EngineDeath ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  Option String
+deathFailure engine want wantOut exitCode out err = match deathMarker want
+  None => None
+  Some marker =>
+    if exitCode == 0 || out /= wantOut || not (contains marker err) then
+      Some
+        "\{observed engine exitCode out err}; want nonzero exit, stdout \{debug wantOut}, stderr carrying \{debug marker}"
+    else
+      None
+
+diesFailure : EngineDeath -> EngineDeath -> String -> Agreement -> Option String
+diesFailure wantRun wantBuilt out a =
+  orElse
+    (deathFailure "run" wantRun out a.runCode a.runOut a.runErr)
+    (deathFailure "build+exec" wantBuilt out a.binCode a.binOut a.binErr)
+
+-- Whether the binary `medaka build` was asked to produce is evidence for
+-- `want`. A `Dies` row that does not exercise it covers a fixture the
+-- emitter cannot compile at all, so a failed build is that row's premise
+-- rather than its failure.
+gradesBuiltBinary : RuntimeOutcome -> Bool
+gradesBuiltBinary (Dies _ Unexercised _) = False
+gradesBuiltBinary _ = True
+
 {- | Why `a` is not the `want` outcome, or `None` when it is exactly that
-   outcome on both engines.
+   outcome on every engine the outcome grades.
 
    `check` and `build` answer first and on their own: a fixture the front end
    rejected, or one whose build produced no binary, has no runtime outcome to
    compare at all, and reporting that as a stderr mismatch would blame the
-   wrong stage. Both report their whole output rather than the first line
-   mentioning an error, since the reason a fatal-outcome fixture stops being
-   compilable is as often an unreadable path as a diagnostic, and that has no
-   error-shaped line to pick out. -}
+   wrong stage. The build's verdict is skipped only for a row that does not
+   exercise the built binary, where failing to compile is the row's premise.
+   Both report their whole output rather than the first line mentioning an
+   error, since the reason a fatal-outcome fixture stops being compilable is
+   as often an unreadable path as a diagnostic, and that has no error-shaped
+   line to pick out. -}
 export
 runtimeOutcomeFailure : RuntimeOutcome -> Agreement -> Option String
 runtimeOutcomeFailure want a =
   if a.checkCode /= 0 then
     Some
       "`medaka check` rejected it (exit \{intToString a.checkCode}): \{debug (chompNewlines a.checkErr)}"
-  else if a.buildCode /= 0 then
+  else if a.buildCode /= 0 && gradesBuiltBinary want then
     Some
       "`medaka build` produced no binary (exit \{intToString a.buildCode}): \{debug (chompNewlines a.buildLog)}"
   else match want
     Aborts code tail => abortFailure (abortLine code tail) a
     Prints out => printsFailure out a
+    Dies wantRun wantBuilt out => diesFailure wantRun wantBuilt out a
 
 -- # Sweeping a rostered fatal-outcome corpus
 

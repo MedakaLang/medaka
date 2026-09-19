@@ -1,0 +1,63 @@
+{- | Gate for the P0-2(a)+(b) "no silent death" regression over
+   `test/stack_overflow_fixtures`.
+
+   Deep non-tail recursion and non-productive self-referential values used to
+   die with a bare SIGBUS/SIGSEGV and zero output on both engines: `medaka
+   run`'s tree-walking interpreter recurses on the host C stack with no
+   tail-call optimisation, and a compiled binary either exhausts its 256 MB
+   worker stack or faults on a wild self-reference. Every such death is now a
+   clean, coded, nonzero-exit diagnostic. The discriminating signal is the
+   `runtime error [E-…]` line on stderr, not the exit code: a raw signal
+   death is nonzero too.
+
+   Two mechanisms are exercised. `E-STACK-OVERFLOW` is the interpreter's
+   depth guard under `run` and the native signal backstop under `build`, and
+   the two word it differently on purpose — the guard names the evaluator's
+   call-depth limit, the backstop names a real stack — so the code is what is
+   pinned, not the sentence. `E-CYCLIC-VALUE` is `forceCell`'s black-holing,
+   which only the interpreter has; the compiled binary reaches its cyclic
+   fault through the same signal backstop and is free to report a different
+   code for it, so its row asks only that the death be coded at all.
+
+   `deep_ok` is the control, and it is load-bearing: a moderately deep but
+   finite program, below the guard's limit, that must still print 10000 and
+   exit 0 on both engines. Without it, a guard "fixed" into tripping on
+   everything would read as green.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads the
+   corpus, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  EngineDeath(..), RuntimeOutcome(..), fatalOutcomeSweep, rosterAgreement
+}
+import test_process.{medakaRoot}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/stack_overflow_fixtures"
+
+-- Both engines die before anything is printed, so the stdout every row pins
+-- is the empty string rather than a sentinel line. That the printed bytes of
+-- an aborting program survive at all is `run_stdout_flush_fixtures`' subject.
+silently : String
+silently = ""
+
+-- | The size of the corpus, written down so that a corpus which silently
+-- shrank is red. Growing it is expected: add the row and raise this.
+declaredFixtureCount : Int
+declaredFixtureCount = 3
+
+overflow : EngineDeath
+overflow = Coded "E-STACK-OVERFLOW"
+
+rows : List (String, RuntimeOutcome)
+rows = [
+  ("deep_recursion", Dies overflow overflow silently),
+  ("cyclic_value", Dies (Coded "E-CYCLIC-VALUE") AnyCode silently),
+  ("deep_ok", Prints "10000"),
+]
+
+test "every fixture pins a runtime outcome" =
+  rosterAgreement corpus declaredFixtureCount rows
+
+test "run and build+exec agree with every fixture's pinned outcome" =
+  fatalOutcomeSweep corpus declaredFixtureCount rows

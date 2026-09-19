@@ -1,0 +1,93 @@
+{- | Gate for the "run drops stdout on panic" regression over
+   `test/run_stdout_flush_fixtures` (#40, #2848).
+
+   `medaka run` used to buffer a program's stdout in an in-language
+   `Ref String` and write it out with one final `putStr` after `main`
+   returned normally. Medaka panics are not catchable, so a panicking
+   program's already-printed output was silently discarded. That defeated the
+   standard probe for "did this failing program actually execute" — put a
+   `println` sentinel before the suspect expression and look for it — because
+   the sentinel was invisible whether the program ran or not, and the exit
+   code was 1 either way. #40 was nearly closed as not reproducible on
+   exactly that basis. The fix arms a flush from `run`'s own driver, snapshots
+   the buffer on every print, and flushes it from every abort path in
+   `runtime/medaka_rt.c` before that path prints its own diagnostic.
+
+   A compiled binary has the same bug in libc's shape: `println` writes
+   through buffered stdout, which every coded abort gets flushed for free by
+   `exit()`, but the fault handler must use `_exit()` — `fflush` is not
+   async-signal-safe — which skips it. `stack_overflow_build` pins that half.
+
+   Every fixture prints the literal line `SENTINEL` and then dies, and every
+   row pins that engine's stdout as exactly those bytes, newline included.
+   Byte equality is the whole assertion: a substring test passes on output
+   that lost its newline or gained a duplicate, and the defect this gate
+   exists to catch is precisely bytes going missing. stdout and stderr are
+   read as separate streams for the same reason — merged, the diagnostic the
+   abort path prints would stand in for the program's own output.
+
+   Three fixtures are graded on one engine only, and each has its reason in
+   its own file header. `stack_overflow_depth_guard` and
+   `stack_overflow_build` are the same source: under `run` it trips the
+   interpreter's synthetic depth guard, and built it exhausts a real stack
+   and faults, so each is asked about the engine whose abort path it was
+   written for. `raw_panic_site` calls `assertSnapshot`, a forward-declared
+   primitive no engine implements, to reach one of the interpreter's ~20 raw
+   `panic` call sites; the emitter rejects the same program outright, so
+   there is no binary to compare against.
+
+   Why this is not `diff_compiler_run_check_agreement`: that gate pins each
+   fixture to one `check` verdict its runtime must agree with, and cannot
+   represent a fixture `check` accepts as well typed but that panics at
+   runtime for an unrelated reason, which is this bug's whole shape.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads the
+   corpus, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  EngineDeath(..), RuntimeOutcome(..), fatalOutcomeSweep, rosterAgreement
+}
+import test_process.{medakaRoot}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/run_stdout_flush_fixtures"
+
+-- The bytes every fixture prints before dying, and the only thing any of
+-- them prints. The trailing newline is part of the pin.
+sentinel : String
+sentinel = "SENTINEL\n"
+
+-- | The size of the corpus, written down so that a corpus which silently
+-- shrank is red. Growing it is expected: add the row and raise this.
+declaredFixtureCount : Int
+declaredFixtureCount = 7
+
+-- Both engines reach the same coded abort and must both still show the
+-- sentinel.
+bothDie : String -> RuntimeOutcome
+bothDie code = Dies (Coded code) (Coded code) sentinel
+
+rows : List (String, RuntimeOutcome)
+rows = [
+  ("index_oob", bothDie "E-INDEX-OOB"),
+  ("panic", bothDie "E-PANIC"),
+  ("nonexhaustive_match", bothDie "E-NONEXHAUSTIVE-MATCH"),
+  -- #2848's silent wrongness: a reserved-spelling collision made the emitter
+  -- drop the default arm, so only `run` aborted at all.
+  ("nonexhaustive_reserved_name", bothDie "E-NONEXHAUSTIVE-MATCH"),
+  (
+    "stack_overflow_depth_guard",
+    Dies (Coded "E-STACK-OVERFLOW") Unexercised sentinel,
+  ),
+  ("raw_panic_site", Dies (Coded "E-PANIC") Unexercised sentinel),
+  (
+    "stack_overflow_build",
+    Dies Unexercised (Coded "E-STACK-OVERFLOW") sentinel,
+  ),
+]
+
+test "every fixture pins a runtime outcome" =
+  rosterAgreement corpus declaredFixtureCount rows
+
+test "run and build+exec agree with every fixture's pinned outcome" =
+  fatalOutcomeSweep corpus declaredFixtureCount rows
