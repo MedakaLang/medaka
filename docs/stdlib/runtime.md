@@ -460,6 +460,17 @@ netTryRecv : Int -> Int -> <Net _> Result String (Option (Array Int))
 `netRecv` that returns `None` instead of blocking. `Some []` is end of
 stream.
 
+### `netTryRecvBytes`
+
+```
+netTryRecvBytes : Int -> Int -> <Net _> Result String (Option ByteBlock)
+```
+
+`netTryRecv` delivering the chunk as a packed block, one byte per byte
+rather than one boxed word per byte. `Some` an empty block is end of
+stream. The block is allocated for this call alone and reaches the caller
+with no other reference to it.
+
 ### `netTrySend`
 
 ```

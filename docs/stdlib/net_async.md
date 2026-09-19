@@ -53,6 +53,24 @@ recvWithin : Duration -> Connection -> Int -> Async <Clock, Net _ | e> (Result S
 
 `recv` that gives up after `d` with `Err "timed out"`.
 
+## `recvBytes`
+
+```
+recvBytes : Connection -> Int -> Async <Net _ | e> (Result String Bytes)
+```
+
+`recv` delivering the chunk as a `Bytes`: a received byte costs a byte
+from `recv(2)` to the caller, where `recv` pays a boxed machine word per
+byte. An empty result is end of stream.
+
+## `recvBytesWithin`
+
+```
+recvBytesWithin : Duration -> Connection -> Int -> Async <Clock, Net _ | e> (Result String Bytes)
+```
+
+`recvBytes` that gives up after `d` with `Err "timed out"`.
+
 ## `send`
 
 ```

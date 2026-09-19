@@ -19,7 +19,8 @@ already established the range.
 `fromArray` and `toArray` convert; `bytesLength` is the byte count and
 `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
 `Option`-returning form. `slice` copies out a sub-range and panics on a
-range that runs outside the byte string, and `indexOf` finds the first
+range that runs outside the byte string, `sliceClamped` clamps the range
+instead, and `indexOf` finds the first
 byte equal to a given value. Two byte strings compare lexicographically,
 as the arrays of their bytes do, and hash as the arrays of their bytes do,
 so `Bytes` is a `HashMap`/`HashSet` key.
@@ -47,8 +48,9 @@ newtype Bytes = Bytes ByteBlock
 The byte-string type.
 
 The constructor is module-private, so `fromArray`,
-`fromArrayAssumeByteDomain`, `fromByteBlockPrefix` and `toUtf8Bytes` are
-the ways in and `toArray` and `fromUtf8Bytes` are the ways out.
+`fromArrayAssumeByteDomain`, `fromByteBlockPrefix`, `adoptByteBlock` and
+`toUtf8Bytes` are the ways in and `toArray`, `lendByteBlock` and
+`fromUtf8Bytes` are the ways out.
 
 ```medaka
 > map bytesLength (fromArray [|1, 2, 3|])
@@ -126,6 +128,49 @@ Panics when `n` falls outside `0` to the block's length.
 [|104, 105|]
 ```
 
+### `adoptByteBlock`
+
+```
+adoptByteBlock : ByteBlock -> Bytes
+```
+
+The byte string holding `bb` itself, with no copy.
+
+The zero-copy way in, where `fromByteBlockPrefix` copies. The byte string
+aliases the block rather than holding its own: a write to `bb` afterwards
+changes it, which every other way in rules out. Adopt a block the caller
+is done with -- one just allocated, or one whose owner has finished with
+it -- or, where the block keeps a writer, one whose writer only ever
+writes where no holder of the byte string reads.
+
+No domain check runs and none is needed: a `ByteBlock` holds one byte per
+element. The whole block becomes the byte string, so a caller whose live
+bytes are a prefix of a larger buffer wants `fromByteBlockPrefix`, or
+must slice afterwards.
+
+```medaka
+> toArray (adoptByteBlock (byteBlockFromString "hi"))
+[|104, 105|]
+```
+
+### `lendByteBlock`
+
+```
+lendByteBlock : Bytes -> ByteBlock
+```
+
+The block `b` is built on, with no copy.
+
+`adoptByteBlock`'s counterpart: the way out for a caller that reads or
+blits the bytes and would rather not pay `toArray`'s boxed machine word
+per byte. The block is the byte string's own, so a write to it changes a
+value that hands out no other way to change it. Read it; do not write it.
+
+```medaka
+> byteBlockLength (lendByteBlock (toUtf8Bytes "héllo"))
+6
+```
+
 ### `toArray`
 
 ```
@@ -177,6 +222,28 @@ Some 7
 None
 > get (-1) (fromArrayAssumeByteDomain [|7, 8, 9|])
 None
+```
+
+### `sliceClamped`
+
+```
+sliceClamped : Int -> Int -> Bytes -> Bytes
+```
+
+The bytes over `[lo, hi)`, copied into a new byte string, with both
+bounds clamped into the byte string.
+
+`slice`'s non-panicking form, and `array.sliceClamped`'s counterpart: a
+range running outside `b` yields a shorter byte string, or an empty one,
+where `b.[lo..hi]` raises a slice error.
+
+```medaka
+> toArray (sliceClamped 1 3 (fromArrayAssumeByteDomain [|10, 20, 30, 40|]))
+[|20, 30|]
+> toArray (sliceClamped (-5) 99 (fromArrayAssumeByteDomain [|10, 20|]))
+[|10, 20|]
+> toArray (sliceClamped 3 1 (fromArrayAssumeByteDomain [|10, 20|]))
+[||]
 ```
 
 ### `indexOf`
