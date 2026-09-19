@@ -1896,6 +1896,7 @@ isNetExternW name = contains name [
   "netConnectCheck",
   "netTryAccept",
   "netTryRecv",
+  "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
 ]

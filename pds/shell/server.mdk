@@ -1252,12 +1252,22 @@ readBufferBacking (ReadBuffer b) =
    smallest doubling that holds the result, however many capacity classes a
    single delivered chunk spans.
 
-   Packing `bytes` into a `Bytes` first is the one copy this transitional
-   shape adds; it leaves when the read itself delivers a `Bytes`. -}
+   Packing `bytes` into a `Bytes` first is the one copy this shape adds. The
+   socket read loop does not pay it: its chunk arrives packed and appends
+   through `readBufferBuilder`. -}
 export
 readBufferAppend : Array Int -> ReadBuffer -> Unit
 readBufferAppend bytes (ReadBuffer b) =
   appendBytes (B.fromArrayAssumeByteDomain bytes) b
+
+{- | The builder behind the buffer, for `readMore`: an already-packed chunk
+   goes into it through `appendBytes` directly, skipping the packing copy
+   above. A `Bytes -> ReadBuffer -> Unit` sibling would read better, but this
+   module cannot write that signature: `Bytes` is a `newtype`, whose name a
+   selective import cannot bring in, and `import bytes.*` would make
+   `sliceClamped` ambiguous with `array`'s. -}
+readBufferBuilder : ReadBuffer -> Builder
+readBufferBuilder (ReadBuffer b) = b
 
 {- | A fresh buffer holding the live bytes from `from` to the end — the
    leftover a finished request carries into the next one
@@ -1665,14 +1675,14 @@ readMore : Server ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
-    received <- A.recvWithin (silenceBudget scan) conn readChunkBytes
+    received <- A.recvBytesWithin (silenceBudget scan) conn readChunkBytes
     match received
       Err message => deferPure (Err message)
       Ok bytes =>
-        if arrayLength bytes == 0 then
+        if B.bytesLength bytes == 0 then
           deferPure (endOfStream buf)
         else
-          let () = readBufferAppend bytes buf
+          let () = appendBytes bytes (readBufferBuilder buf)
           frameLoop
             server
             dir

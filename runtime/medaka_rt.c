@@ -2748,6 +2748,27 @@ long long mdk_net_try_recv(long long fd_tagged, long long max_tagged) {
   return mdk_ok(mdk_some((long long)cell));
 }
 
+/* netTryRecvBytes : fd -> maxBytes -> Result String (Option ByteBlock)
+ * mdk_net_try_recv delivering a packed block instead of a boxed array: recv(2)
+ * writes straight into the block's own payload, so no scratch buffer exists
+ * and no per-byte boxing loop runs.  The block is allocated at maxBytes and
+ * its count word is then set to what arrived, so the cell may carry a few
+ * unread words past the declared count; the count is what every reader sees.
+ * None = would-block; Some (a zero-length block) = EOF (matches netTryRecv). */
+long long mdk_net_try_recv_bytes(long long fd_tagged, long long max_tagged) {
+  long long max = max_tagged >> 1;
+  if (max < 0) max = 0;
+  long long *cell = mdk_byteblock_alloc(max);
+  ssize_t r = recv(MDK_NET_UNTAG(fd_tagged),
+                   mdk_byteblock_bytes((long long)cell), (size_t)max, 0);
+  if (r < 0) {
+    if (mdk_net_would_block(errno)) return mdk_ok(mdk_none());
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  }
+  cell[1] = (long long)r;
+  return mdk_ok(mdk_some((long long)cell));
+}
+
 /* netTrySend : fd -> Array Int -> Result String (Option Int)
  * None = would-block; Some n = bytes written (may be short). */
 long long mdk_net_try_send(long long fd_tagged, long long arr) {

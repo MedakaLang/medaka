@@ -10,6 +10,10 @@
 -- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
+-- Wildcard because a `newtype`'s type name cannot be named in a selective
+-- import list: `import bytes.{Bytes}` is rejected as a request for the
+-- module-private constructor.
+import bytes.*
 import net.{Connection(..), Listener(..)}
 import net as N
 import string.{toUtf8}
@@ -21,10 +25,12 @@ import time.{Duration}
    `connect`, `accept`, `recv`, `send`, and `sendAll` mirror their `net`
    namesakes but return `Async` values that park until the socket is ready.
    `connectWithin`, `recvWithin` and `sendAllWithin` give up after a
-   `Duration` with `Err "timed out"`. `serve` is an accept loop that runs each
-   connection's handler as its own task and closes the connection when the
-   handler finishes. Use `import net_async as A` and call `A.accept`,
-   `A.recv`, and so on.
+   `Duration` with `Err "timed out"`. `recvBytes` and `recvBytesWithin` are
+   `recv` and `recvWithin` delivering a packed `Bytes` rather than an
+   `Array Int`. `serve` is an accept loop that runs each connection's
+   handler as its own task and closes the connection when the handler
+   finishes. Use `import net_async as A` and call `A.accept`, `A.recv`, and
+   so on.
 
    Every operation performs `<Net "_">`, and the deadline forms also read
    the clock. Drive the program with `runAsyncIO` or a `main : Async e Unit`.
@@ -191,6 +197,79 @@ recvUntilStep dl (Connection fd) n (Ok None) = deferThen (expired dl) (late =>
       recvUntil dl (Connection fd) n))
 recvUntilStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
 recvUntilStep _ _ _ (Err e) = deferPure (Err e)
+
+{- | `recv` delivering the chunk as a `Bytes`: a received byte costs a byte
+   from `recv(2)` to the caller, where `recv` pays a boxed machine word per
+   byte. An empty result is end of stream. -}
+export
+recvBytes : Connection -> Int -> Async <Net "_" | e> (Result String Bytes)
+recvBytes conn n =
+  deferThen (pendingRecvBytes conn n) (step => recvBytesStep conn n step)
+
+-- One non-blocking attempt as an `Async` step, shared by `recvBytes` and the
+-- deadline-bearing loop below.
+pendingRecvBytes : Connection ->
+  Int ->
+  Async <Net "_" | e> (Result String (Option Bytes))
+pendingRecvBytes conn n = liftIO (u => tryRecvBytes conn n)
+
+tryRecvBytes : Connection -> Int -> <Net "_"> Result String (Option Bytes)
+tryRecvBytes (Connection fd) n = match netSetNonblock fd True
+  -- The block was allocated by this very call and the runtime kept no
+  -- reference to it, so it has one owner and nothing can write it behind the
+  -- byte string's back: adopting it is safe where the general contract on
+  -- `adoptByteBlock` would demand a copy.
+  Ok _ => match netTryRecvBytes fd n
+    Ok (Some bb) => Ok (Some (adoptByteBlock bb))
+    Ok None => Ok None
+    Err e => Err e
+  Err e => Err e
+
+recvBytesStep : Connection ->
+  Int ->
+  Result String (Option Bytes) ->
+  Async <Net "_" | e> (Result String Bytes)
+recvBytesStep (Connection fd) n (Ok None) =
+  deferThen (awaitAny [WaitRead fd]) (_ => recvBytes (Connection fd) n)
+recvBytesStep _ _ (Ok (Some bs)) = deferPure (Ok bs)
+recvBytesStep _ _ (Err e) = deferPure (Err e)
+
+-- | `recvBytes` that gives up after `d` with `Err "timed out"`.
+export
+recvBytesWithin : Duration ->
+  Connection ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvBytesWithin d conn n =
+  deferThen (deadlineAfter d) (dl => recvUntilBytes dl conn n)
+
+recvUntilBytes : Wait ->
+  Connection ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvUntilBytes dl conn n = deferThen (pendingRecvBytes conn n) (step =>
+  recvUntilBytesStep dl conn n step)
+
+recvUntilBytesStep : Wait ->
+  Connection ->
+  Int ->
+  Result String (Option Bytes) ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvUntilBytesStep dl (Connection fd) n (Ok None) =
+  deferThen (expired dl) (late => recvBytesWake dl fd n late)
+recvUntilBytesStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
+recvUntilBytesStep _ _ _ (Err e) = deferPure (Err e)
+
+-- What the deadline-bearing loop does once `expired` has answered: give up,
+-- or park on the descriptor and ask again after any wake.
+recvBytesWake : Wait ->
+  Int ->
+  Int ->
+  Bool ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvBytesWake _ _ _ True = deferPure (Err "timed out")
+recvBytesWake dl fd n False = deferThen (awaitAny [WaitRead fd, dl]) (_ =>
+  recvUntilBytes dl (Connection fd) n)
 
 -- | Sends what the socket will take now, parking until it takes some.
 -- The count may be short; `sendAll` loops.

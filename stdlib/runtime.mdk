@@ -319,6 +319,14 @@ extern netConnectCheck : Int -> <Net "_"> Result String (Option Unit)
 -- stream.
 extern netTryRecv : Int -> Int -> <Net "_"> Result String (Option (Array Int))
 
+-- | `netTryRecv` delivering the chunk as a packed block, one byte per byte
+-- rather than one boxed word per byte. `Some` an empty block is end of
+-- stream. The block is allocated for this call alone and reaches the caller
+-- with no other reference to it.
+extern netTryRecvBytes : Int ->
+  Int ->
+  <Net "_"> Result String (Option ByteBlock)
+
 -- | `netSend` that returns `None` instead of blocking. `Some n` is the count
 -- written, which may be short.
 extern netTrySend : Int -> Array Int -> <Net "_"> Result String (Option Int)

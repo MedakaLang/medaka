@@ -1,5 +1,5 @@
 # META
-source_lines=343
+source_lines=422
 stages=DESUGAR,MARK
 # SOURCE
 -- net_async.mdk — the non-blocking half of `net`, over the async scheduler.
@@ -14,6 +14,10 @@ stages=DESUGAR,MARK
 -- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
+-- Wildcard because a `newtype`'s type name cannot be named in a selective
+-- import list: `import bytes.{Bytes}` is rejected as a request for the
+-- module-private constructor.
+import bytes.*
 import net.{Connection(..), Listener(..)}
 import net as N
 import string.{toUtf8}
@@ -25,10 +29,12 @@ import time.{Duration}
    `connect`, `accept`, `recv`, `send`, and `sendAll` mirror their `net`
    namesakes but return `Async` values that park until the socket is ready.
    `connectWithin`, `recvWithin` and `sendAllWithin` give up after a
-   `Duration` with `Err "timed out"`. `serve` is an accept loop that runs each
-   connection's handler as its own task and closes the connection when the
-   handler finishes. Use `import net_async as A` and call `A.accept`,
-   `A.recv`, and so on.
+   `Duration` with `Err "timed out"`. `recvBytes` and `recvBytesWithin` are
+   `recv` and `recvWithin` delivering a packed `Bytes` rather than an
+   `Array Int`. `serve` is an accept loop that runs each connection's
+   handler as its own task and closes the connection when the handler
+   finishes. Use `import net_async as A` and call `A.accept`, `A.recv`, and
+   so on.
 
    Every operation performs `<Net "_">`, and the deadline forms also read
    the clock. Drive the program with `runAsyncIO` or a `main : Async e Unit`.
@@ -196,6 +202,79 @@ recvUntilStep dl (Connection fd) n (Ok None) = deferThen (expired dl) (late =>
 recvUntilStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
 recvUntilStep _ _ _ (Err e) = deferPure (Err e)
 
+{- | `recv` delivering the chunk as a `Bytes`: a received byte costs a byte
+   from `recv(2)` to the caller, where `recv` pays a boxed machine word per
+   byte. An empty result is end of stream. -}
+export
+recvBytes : Connection -> Int -> Async <Net "_" | e> (Result String Bytes)
+recvBytes conn n =
+  deferThen (pendingRecvBytes conn n) (step => recvBytesStep conn n step)
+
+-- One non-blocking attempt as an `Async` step, shared by `recvBytes` and the
+-- deadline-bearing loop below.
+pendingRecvBytes : Connection ->
+  Int ->
+  Async <Net "_" | e> (Result String (Option Bytes))
+pendingRecvBytes conn n = liftIO (u => tryRecvBytes conn n)
+
+tryRecvBytes : Connection -> Int -> <Net "_"> Result String (Option Bytes)
+tryRecvBytes (Connection fd) n = match netSetNonblock fd True
+  -- The block was allocated by this very call and the runtime kept no
+  -- reference to it, so it has one owner and nothing can write it behind the
+  -- byte string's back: adopting it is safe where the general contract on
+  -- `adoptByteBlock` would demand a copy.
+  Ok _ => match netTryRecvBytes fd n
+    Ok (Some bb) => Ok (Some (adoptByteBlock bb))
+    Ok None => Ok None
+    Err e => Err e
+  Err e => Err e
+
+recvBytesStep : Connection ->
+  Int ->
+  Result String (Option Bytes) ->
+  Async <Net "_" | e> (Result String Bytes)
+recvBytesStep (Connection fd) n (Ok None) =
+  deferThen (awaitAny [WaitRead fd]) (_ => recvBytes (Connection fd) n)
+recvBytesStep _ _ (Ok (Some bs)) = deferPure (Ok bs)
+recvBytesStep _ _ (Err e) = deferPure (Err e)
+
+-- | `recvBytes` that gives up after `d` with `Err "timed out"`.
+export
+recvBytesWithin : Duration ->
+  Connection ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvBytesWithin d conn n =
+  deferThen (deadlineAfter d) (dl => recvUntilBytes dl conn n)
+
+recvUntilBytes : Wait ->
+  Connection ->
+  Int ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvUntilBytes dl conn n = deferThen (pendingRecvBytes conn n) (step =>
+  recvUntilBytesStep dl conn n step)
+
+recvUntilBytesStep : Wait ->
+  Connection ->
+  Int ->
+  Result String (Option Bytes) ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvUntilBytesStep dl (Connection fd) n (Ok None) =
+  deferThen (expired dl) (late => recvBytesWake dl fd n late)
+recvUntilBytesStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
+recvUntilBytesStep _ _ _ (Err e) = deferPure (Err e)
+
+-- What the deadline-bearing loop does once `expired` has answered: give up,
+-- or park on the descriptor and ask again after any wake.
+recvBytesWake : Wait ->
+  Int ->
+  Int ->
+  Bool ->
+  Async <Clock, Net "_" | e> (Result String Bytes)
+recvBytesWake _ _ _ True = deferPure (Err "timed out")
+recvBytesWake dl fd n False = deferThen (awaitAny [WaitRead fd, dl]) (_ =>
+  recvUntilBytes dl (Connection fd) n)
+
 -- | Sends what the socket will take now, parking until it takes some.
 -- The count may be short; `sendAll` loops.
 export
@@ -347,6 +426,7 @@ handleThenClose handle conn =
   deferThen (handle conn) (_ => deferMap (_ => ()) (close conn))
 # DESUGAR
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "Wait" true) (mem "liftIO" false) (mem "spawn" false) (mem "awaitAny" false) (mem "deadlineAfter" false) (mem "expired" false))))
+(DUse false (UseWild ("bytes")))
 (DUse false (UseGroup ("net") ((mem "Connection" true) (mem "Listener" true))))
 (DUse false (UseAlias ("net") "N"))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false))))
@@ -403,6 +483,27 @@ handleThenClose handle conn =
 (DFunDef false "recvUntilStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "n") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EVar "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitRead") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EVar "recvUntil") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "n"))))))))
 (DFunDef false "recvUntilStep" (PWild PWild PWild (PCon "Ok" (PCon "Some" (PVar "bs")))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (EVar "bs"))))
 (DFunDef false "recvUntilStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DTypeSig true "recvBytes" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))
+(DFunDef false "recvBytes" ((PVar "conn") (PVar "n")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "pendingRecvBytes") (EVar "conn")) (EVar "n"))) (ELam ((PVar "step")) (EApp (EApp (EApp (EVar "recvBytesStep") (EVar "conn")) (EVar "n")) (EVar "step")))))
+(DTypeSig false "pendingRecvBytes" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes")))))))
+(DFunDef false "pendingRecvBytes" ((PVar "conn") (PVar "n")) (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "tryRecvBytes") (EVar "conn")) (EVar "n")))))
+(DTypeSig false "tryRecvBytes" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes")))))))
+(DFunDef false "tryRecvBytes" ((PCon "Connection" (PVar "fd")) (PVar "n")) (EMatch (EApp (EApp (EVar "netSetNonblock") (EVar "fd")) (EVar "True")) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "netTryRecvBytes") (EVar "fd")) (EVar "n")) (arm (PCon "Ok" (PCon "Some" (PVar "bb"))) () (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "adoptByteBlock") (EVar "bb"))))) (arm (PCon "Ok" (PCon "None")) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig false "recvBytesStep" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes"))) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))))
+(DFunDef false "recvBytesStep" ((PCon "Connection" (PVar "fd")) (PVar "n") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitRead") (EVar "fd"))))) (ELam (PWild) (EApp (EApp (EVar "recvBytes") (EApp (EVar "Connection") (EVar "fd"))) (EVar "n")))))
+(DFunDef false "recvBytesStep" (PWild PWild (PCon "Ok" (PCon "Some" (PVar "bs")))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (EVar "bs"))))
+(DFunDef false "recvBytesStep" (PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DTypeSig true "recvBytesWithin" (TyFun (TyCon "Duration") (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))))
+(DFunDef false "recvBytesWithin" ((PVar "d") (PVar "conn") (PVar "n")) (EApp (EApp (EVar "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EVar "recvUntilBytes") (EVar "dl")) (EVar "conn")) (EVar "n")))))
+(DTypeSig false "recvUntilBytes" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))))
+(DFunDef false "recvUntilBytes" ((PVar "dl") (PVar "conn") (PVar "n")) (EApp (EApp (EVar "deferThen") (EApp (EApp (EVar "pendingRecvBytes") (EVar "conn")) (EVar "n"))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EVar "recvUntilBytesStep") (EVar "dl")) (EVar "conn")) (EVar "n")) (EVar "step")))))
+(DTypeSig false "recvUntilBytesStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))))
+(DFunDef false "recvUntilBytesStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "n") (PCon "Ok" (PCon "None"))) (EApp (EApp (EVar "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EApp (EApp (EApp (EApp (EVar "recvBytesWake") (EVar "dl")) (EVar "fd")) (EVar "n")) (EVar "late")))))
+(DFunDef false "recvUntilBytesStep" (PWild PWild PWild (PCon "Ok" (PCon "Some" (PVar "bs")))) (EApp (EVar "deferPure") (EApp (EVar "Ok") (EVar "bs"))))
+(DFunDef false "recvUntilBytesStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EVar "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DTypeSig false "recvBytesWake" (TyFun (TyCon "Wait") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))))
+(DFunDef false "recvBytesWake" (PWild PWild PWild (PCon "True")) (EApp (EVar "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))))
+(DFunDef false "recvBytesWake" ((PVar "dl") (PVar "fd") (PVar "n") (PCon "False")) (EApp (EApp (EVar "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitRead") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EVar "recvUntilBytes") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "n")))))
 (DTypeSig true "send" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "send" ((PVar "conn") (PVar "bytes")) (EApp (EApp (EVar "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "trySend") (EVar "conn")) (EVar "bytes"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EVar "sendStep") (EVar "conn")) (EVar "bytes")) (EVar "step")))))
 (DTypeSig false "trySend" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
@@ -446,6 +547,7 @@ handleThenClose handle conn =
 (DFunDef false "handleThenClose" ((PVar "handle") (PVar "conn")) (EApp (EApp (EVar "deferThen") (EApp (EVar "handle") (EVar "conn"))) (ELam (PWild) (EApp (EApp (EVar "deferMap") (ELam (PWild) (ELit LUnit))) (EApp (EVar "close") (EVar "conn"))))))
 # MARK
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "Wait" true) (mem "liftIO" false) (mem "spawn" false) (mem "awaitAny" false) (mem "deadlineAfter" false) (mem "expired" false))))
+(DUse false (UseWild ("bytes")))
 (DUse false (UseGroup ("net") ((mem "Connection" true) (mem "Listener" true))))
 (DUse false (UseAlias ("net") "N"))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false))))
@@ -502,6 +604,27 @@ handleThenClose handle conn =
 (DFunDef false "recvUntilStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "n") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EIf (EVar "late") (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitRead") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EVar "recvUntil") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "n"))))))))
 (DFunDef false "recvUntilStep" (PWild PWild PWild (PCon "Ok" (PCon "Some" (PVar "bs")))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (EVar "bs"))))
 (DFunDef false "recvUntilStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DTypeSig true "recvBytes" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))
+(DFunDef false "recvBytes" ((PVar "conn") (PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "pendingRecvBytes") (EVar "conn")) (EVar "n"))) (ELam ((PVar "step")) (EApp (EApp (EApp (EVar "recvBytesStep") (EVar "conn")) (EVar "n")) (EVar "step")))))
+(DTypeSig false "pendingRecvBytes" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes")))))))
+(DFunDef false "pendingRecvBytes" ((PVar "conn") (PVar "n")) (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "tryRecvBytes") (EVar "conn")) (EVar "n")))))
+(DTypeSig false "tryRecvBytes" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes")))))))
+(DFunDef false "tryRecvBytes" ((PCon "Connection" (PVar "fd")) (PVar "n")) (EMatch (EApp (EApp (EVar "netSetNonblock") (EVar "fd")) (EVar "True")) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EVar "netTryRecvBytes") (EVar "fd")) (EVar "n")) (arm (PCon "Ok" (PCon "Some" (PVar "bb"))) () (EApp (EVar "Ok") (EApp (EVar "Some") (EApp (EVar "adoptByteBlock") (EVar "bb"))))) (arm (PCon "Ok" (PCon "None")) () (EApp (EVar "Ok") (EVar "None"))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EVar "e")))))
+(DTypeSig false "recvBytesStep" (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes"))) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))))
+(DFunDef false "recvBytesStep" ((PCon "Connection" (PVar "fd")) (PVar "n") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitRead") (EVar "fd"))))) (ELam (PWild) (EApp (EApp (EVar "recvBytes") (EApp (EVar "Connection") (EVar "fd"))) (EVar "n")))))
+(DFunDef false "recvBytesStep" (PWild PWild (PCon "Ok" (PCon "Some" (PVar "bs")))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (EVar "bs"))))
+(DFunDef false "recvBytesStep" (PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DTypeSig true "recvBytesWithin" (TyFun (TyCon "Duration") (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))))
+(DFunDef false "recvBytesWithin" ((PVar "d") (PVar "conn") (PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "deadlineAfter") (EVar "d"))) (ELam ((PVar "dl")) (EApp (EApp (EApp (EVar "recvUntilBytes") (EVar "dl")) (EVar "conn")) (EVar "n")))))
+(DTypeSig false "recvUntilBytes" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes")))))))
+(DFunDef false "recvUntilBytes" ((PVar "dl") (PVar "conn") (PVar "n")) (EApp (EApp (EMethodRef "deferThen") (EApp (EApp (EVar "pendingRecvBytes") (EVar "conn")) (EVar "n"))) (ELam ((PVar "step")) (EApp (EApp (EApp (EApp (EVar "recvUntilBytesStep") (EVar "dl")) (EVar "conn")) (EVar "n")) (EVar "step")))))
+(DTypeSig false "recvUntilBytesStep" (TyFun (TyCon "Wait") (TyFun (TyCon "Connection") (TyFun (TyCon "Int") (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Bytes"))) (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))))
+(DFunDef false "recvUntilBytesStep" ((PVar "dl") (PCon "Connection" (PVar "fd")) (PVar "n") (PCon "Ok" (PCon "None"))) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "expired") (EVar "dl"))) (ELam ((PVar "late")) (EApp (EApp (EApp (EApp (EVar "recvBytesWake") (EVar "dl")) (EVar "fd")) (EVar "n")) (EVar "late")))))
+(DFunDef false "recvUntilBytesStep" (PWild PWild PWild (PCon "Ok" (PCon "Some" (PVar "bs")))) (EApp (EMethodRef "deferPure") (EApp (EVar "Ok") (EVar "bs"))))
+(DFunDef false "recvUntilBytesStep" (PWild PWild PWild (PCon "Err" (PVar "e"))) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (EVar "e"))))
+(DTypeSig false "recvBytesWake" (TyFun (TyCon "Wait") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock" (hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Bytes"))))))))
+(DFunDef false "recvBytesWake" (PWild PWild PWild (PCon "True")) (EApp (EMethodRef "deferPure") (EApp (EVar "Err") (ELit (LString "timed out")))))
+(DFunDef false "recvBytesWake" ((PVar "dl") (PVar "fd") (PVar "n") (PCon "False")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "awaitAny") (EListLit (EApp (EVar "WaitRead") (EVar "fd")) (EVar "dl")))) (ELam (PWild) (EApp (EApp (EApp (EVar "recvUntilBytes") (EVar "dl")) (EApp (EVar "Connection") (EVar "fd"))) (EVar "n")))))
 (DTypeSig true "send" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyApp (TyCon "Async") (TyRow ((hole "Net")) (Some "e"))) (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int"))))))
 (DFunDef false "send" ((PVar "conn") (PVar "bytes")) (EApp (EApp (EMethodRef "deferThen") (EApp (EVar "liftIO") (ELam ((PVar "u")) (EApp (EApp (EVar "trySend") (EVar "conn")) (EVar "bytes"))))) (ELam ((PVar "step")) (EApp (EApp (EApp (EVar "sendStep") (EVar "conn")) (EVar "bytes")) (EVar "step")))))
 (DTypeSig false "trySend" (TyFun (TyCon "Connection") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int")))))))
