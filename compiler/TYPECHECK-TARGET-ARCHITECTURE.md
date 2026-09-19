@@ -207,12 +207,20 @@ Seven steps, in this order, with the dependency reasons measured in the feasibil
    MODULE disagree there today, and it is the one place the change is not behaviour-preserving
    by construction. Gate on the full eight-gate + two-golden-family list, not the two headline
    fixtures.
-   ⚠️ **After this, E-2b is NOT "a deletion of a dead arm".** The Flat arm stays live for
-   `elaborateDict`'s consumers, one of which is `compiler/tools/snapshot.mdk:632` — the tool
-   that produces `test/snapshots`, a corpus that includes compiler source ([T-SNAPSHOT-SELF]).
-   E-2b is therefore a **suite-wide golden re-derivation with a per-file explanation criterion**
-   (never a bless — [WT-GOLDEN-ENSHRINES]), plus retiring `flat_vs_onemodule`'s FLAT rows and
-   `check_wrapper_callers` / `test/CHECK-WRAPPER-CALLERS.txt`. Budget it as a unit.
+   **E-2's entry condition item (ii) — every `elaborateDict` consumer migrated to the Module
+   arm, and `elaborateDict`/`discoverAll`/`discoverPromoted`/`discoverNext`/`flatStampOrder`
+   deleted outright — landed 2026-09-19** (sprint `the-arm-that-ships`, #3197, #1116). The
+   premise this paragraph priced E-2b against — that `compiler/tools/snapshot.mdk` still calls
+   `elaborateDict` and so the deletion forces a suite-wide `test/snapshots` re-derivation — was
+   already false at that sprint's cut: no blessed snapshot carries an `# LLVM` or `# WASM`
+   section (`grep -rlE '^#+ (LLVM|WASM)' test/snapshots | wc -l` → `0`), so `snapshot.mdk`'s
+   emit path reaches no golden regardless of which arm it calls. E-2b is therefore **not** a
+   suite-wide golden re-derivation — retiring `flat_vs_onemodule`'s FLAT rows and
+   `check_wrapper_callers` / `test/CHECK-WRAPPER-CALLERS.txt` (already reflecting the Module-arm
+   move) is what remains of it, and what's left of E-2 overall is collapsing `CheckMode`'s
+   `Flat` constructor itself — the checking-mode value, not the elaboration driver — which
+   still has one live call site (`checkProgramSeededSplit`) and 27 `match mode` forks in
+   `checkBodyImpl`. Full inherited-state writeup: #1116.
 3. **#2544 — report from the residual** (M4): constraint failures become obligations left
    unsolved, rendered by one pass at quiescence; `elaborateModules` returns the residual
    diagnostics alongside the decls. This is **Dg built as a phase**, and it closes the Bool-only

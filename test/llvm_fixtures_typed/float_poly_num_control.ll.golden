@@ -190,12 +190,12 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_add(i64 5, i64 7)
+  %t0 = call i64 @mdk___user____add(i64 5, i64 7)
   call void @mdk_print_num(i64 %t0)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_add(i64 %arg0, i64 %arg1) {
+define i64 @mdk___user____add(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_num_add(i64 %arg0, i64 %arg1)
   ret i64 %t0

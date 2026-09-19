@@ -1528,7 +1528,7 @@ A `C` with no impl at the receiver's type is a **located reject at `check`**
 **Why this clause exists.** Both halves of dict-passing key off the same name
 sets, and a constrained shadow is in **both**: the marking prePass is a
 first-match guard chain whose *shadow* arm is tested **before** the *dict* arm
-(`typecheck.mdk` `rewriteRPDict` / `rewriteRPDictArg` / `rewriteArgScoped`), so
+(`typecheck.mdk` `rewriteRPDict` / `rewriteArgScoped`), so
 the occurrence became `EMethodAt` and was **never marked as a dict application**
 — while `dictPassDecl`, keyed on the same dict-name set, still gave the
 **definition** its leading dict parameter. Def arity 2, call arity 1: the call

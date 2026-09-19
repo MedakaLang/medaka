@@ -195,7 +195,7 @@ entry:
   %t1 = getelementptr i8, ptr %t0, i64 8
   store double 2.5, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk_identity(i64 %t2)
+  %t3 = call i64 @mdk___user____identity(i64 %t2)
   %t4 = inttoptr i64 %t3 to ptr
   %t5 = getelementptr i8, ptr %t4, i64 8
   %t6 = load double, ptr %t5
@@ -209,9 +209,9 @@ entry:
   %t13 = getelementptr i8, ptr %t12, i64 8
   store double %t11, ptr %t13
   %t14 = ptrtoint ptr %t12 to i64
-  store i64 %t14, ptr @mdk_g_compute
-  %t15 = load i64, ptr @mdk_g_compute
-  %t16 = call i64 @mdk_fid(i64 %t15)
+  store i64 %t14, ptr @mdk_g___user____compute
+  %t15 = load i64, ptr @mdk_g___user____compute
+  %t16 = call i64 @mdk___user____fid(i64 %t15)
   %t17 = inttoptr i64 %t16 to ptr
   %t18 = getelementptr i8, ptr %t17, i64 8
   %t19 = load double, ptr %t18
@@ -219,19 +219,19 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_identity(i64 %arg0) {
+define i64 @mdk___user____identity(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
 ; mdk-module program
-define i64 @mdk_fid(i64 %arg0) {
+define i64 @mdk___user____fid(i64 %arg0) {
 entry:
   ret i64 %arg0
 }
 
 ; mdk-module program
-define double @mdk_fid__fw(double %arg0) {
+define double @mdk___user____fid__fw(double %arg0) {
 entry:
   ret double %arg0
 }
@@ -239,4 +239,4 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_compute = global i64 0
+@mdk_g___user____compute = global i64 0

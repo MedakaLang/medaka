@@ -2,9 +2,10 @@
 -- entries/llvm_emit_typed_main.mdk.  Where wasm_emit_main.mdk (the W1–W4 scalar/
 -- ADT/closure spike) runs the PRELUDE-FREE annotate path (annotateProgram), which
 -- never marks/typechecks and so NEVER produces CMethod/CDict, THIS driver runs the
--- typed front end (desugar → elaborateDict: RKey/EDictAt route stamping + dict_pass
--- leading-dict params → lower to Core IR), then emits a WasmGC WAT module.  It is
--- the ONLY WasmGC driver that produces dispatch nodes.
+-- typed front end `medaka build` ships (desugar → elaborateModules: RKey/EDictAt
+-- route stamping + dict_pass leading-dict params → mangleUnitsEv → lower to Core
+-- IR), then emits a WasmGC WAT module.  It is the ONLY WasmGC driver that
+-- produces dispatch nodes.
 --
 --   medaka run compiler/entries/wasm_emit_typed_main.mdk <runtime.mdk> <prelude.mdk>... <file.mdk>
 --   (or, OCaml-free: the compiled binary test/bin/wasm_emit_typed_main <runtime.mdk> <file.mdk>)
@@ -20,19 +21,15 @@
 -- fixture emits ~274 prelude impl functions — Debug/Display (strings), Num Float
 -- (Float arith), Char impls, tuple impls — every one an out-of-slice WasmGC gap.
 -- The prelude-free typed entry sidesteps this exactly as the LLVM spike did:
--- fixtures define their own minimal interfaces (Eq/Ord/Num-shaped), elaborateDict
+-- fixtures define their own minimal interfaces (Eq/Ord/Num-shaped), elaboration
 -- resolves every route, and the lowered program pulls in NOTHING but scalar/ADT/
 -- dispatch nodes the emitter can lower.
 
 import frontend.ast.{Decl, Lit(..), Loc(..), Pat(..), Addr(..), Route(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{
-  elaborateDict,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
-}
+import types.typecheck.{elaborateModules}
+import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir.{
   CProgram(..),
@@ -96,32 +93,36 @@ runEmit runtimeDecls preludeDecls userDecls =
     (typedInput runtimeDecls preludeDecls userDecls)
     (typedProgram runtimeDecls preludeDecls userDecls)
 
+-- The elaborated-and-mangled decls both halves below must agree on.  typedInput's
+-- side tables are looked up with names the program carried through
+-- `mangleUnitsEv`, so a table keyed off the raw decls misses every stamped
+-- receiver; deriving both from here keeps the two in one namespace.  Same order
+-- `entry_support.emitModulesWith` runs: elaborate, then mangle.
+typedElaborated : List Decl -> List Decl -> List Decl -> List Decl
+typedElaborated runtimeDecls preludeDecls userDecls =
+  let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
+  let (coreE, modulesE, _, _, _) =
+    elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  coreD ++ flatMap snd modules2
+
 typedInput : List Decl -> List Decl -> List Decl -> WasmEmitInput
 typedInput runtimeDecls preludeDecls userDecls =
-  let userNames = funNamesOf userDecls
-  let livePrelude = dropShadowedExp userNames preludeDecls
-  let combined = livePrelude ++ userDecls
+  let mangled = typedElaborated runtimeDecls preludeDecls userDecls
   makeWasmEmitInputFull
-    (methodIfaceTable combined)
-    (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
-    (ctorFieldTypeNames combined)
+    (methodIfaceTable mangled)
+    (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
+    (ctorFieldTypeNames mangled)
     False
-    (declaredRecordFieldOrders combined)
+    (declaredRecordFieldOrders mangled)
     []
-    (ifaceImplHeadTable combined)
+    (ifaceImplHeadTable mangled)
 
 typedProgram : List Decl -> List Decl -> List Decl -> CProgram
 typedProgram runtimeDecls preludeDecls userDecls =
-  let userNames = funNamesOf userDecls
-  let livePrelude = dropShadowedExp userNames preludeDecls
-  let combined = livePrelude ++ userDecls
-  let dictNames =
-    preludeReturnPosDictNames livePrelude combined
-      ++ preludeArgPosDictNames livePrelude combined
-      ++ constrainedSigNames userDecls
   lowerProgramEmit
     TargetWasm
-    (elaborateDict runtimeDecls dictNames userNames combined)
+    (typedElaborated runtimeDecls preludeDecls userDecls)
 
 -- Same-process input-isolation harness for X-W.H1. It lowers P once, then emits
 -- that exact CProgram with P's complete input, one U-derived field at a time, and
@@ -139,14 +140,21 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let pDecls = desugar (parse pSrc)
         let uDecls = desugar (parse uSrc)
         let pProgram = typedProgram runtimeDecls [] pDecls
-        let pMethods = methodIfaceTable pDecls
-        let pSigs = declSigTypeNames runtimeDecls ++ declSigTypeNames pDecls
-        let pCtors = ctorFieldTypeNames pDecls
-        let pRecords = declaredRecordFieldOrders pDecls
+        -- Both sides of every pairing below are keyed off the ELABORATED-and-
+        -- mangled decls, the namespace `typedProgram` emits into: a table built
+        -- from the raw decls misses every name in the program, which makes a
+        -- mismatched family indistinguishable from the real one and the
+        -- discrimination below vacuous.
+        let pMangled = typedElaborated runtimeDecls [] pDecls
+        let uMangled = typedElaborated runtimeDecls [] uDecls
+        let pMethods = methodIfaceTable pMangled
+        let pSigs = declSigTypeNames runtimeDecls ++ declSigTypeNames pMangled
+        let pCtors = ctorFieldTypeNames pMangled
+        let pRecords = declaredRecordFieldOrders pMangled
         -- held CONSTANT across the five inputs below: this harness varies ONE
         -- input family at a time, and the declared-impl head table is not the
         -- family under test here.
-        let pHeads = ifaceImplHeadTable pDecls
+        let pHeads = ifaceImplHeadTable pMangled
         let pInput =
           makeWasmEmitInputFull pMethods pSigs pCtors False pRecords [] pHeads
         let p1 = emitProgram pInput pProgram
@@ -156,7 +164,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
         let methodWat =
           emitProgramUnchecked
             (makeWasmEmitInputFull
-              (methodIfaceTable uDecls)
+              (methodIfaceTable uMangled)
               pSigs
               pCtors
               False
@@ -168,7 +176,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
           emitProgramUnchecked
             (makeWasmEmitInputFull
               pMethods
-              (declSigTypeNames runtimeDecls ++ declSigTypeNames uDecls)
+              (declSigTypeNames runtimeDecls ++ declSigTypeNames uMangled)
               pCtors
               False
               pRecords
@@ -180,7 +188,7 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
             (makeWasmEmitInputFull
               pMethods
               pSigs
-              (ctorFieldTypeNames uDecls)
+              (ctorFieldTypeNames uMangled)
               False
               pRecords
               []
@@ -193,27 +201,29 @@ reemitInput runtimePath pPath uPath = match readFile runtimePath
               pSigs
               pCtors
               False
-              (declaredRecordFieldOrders uDecls)
+              (declaredRecordFieldOrders uMangled)
               []
               pHeads)
             pProgram
         let mainDecls = desugar (parse "data Dummy = Dummy\n\nmain = 1\n")
+        let mainMangled = typedElaborated runtimeDecls [] mainDecls
         let mainProgram = typedProgram runtimeDecls [] mainDecls
         let mainBase =
           emitProgram (typedInput runtimeDecls [] mainDecls) mainProgram
         -- mainIsFloat=True here is deliberately mismatched against the Float-free
         -- Dummy program (proves the flag alone moves the output, P_NE_MAIN) --
-        -- unchecked for the same reason as the four above.
+        -- unchecked for the same reason as the four above.  Every other field
+        -- mirrors typedInput's, so the flag is the only thing that varies.
         let mainWat =
           emitProgramUnchecked
             (makeWasmEmitInputFull
               []
-              (declSigTypeNames runtimeDecls ++ declSigTypeNames mainDecls)
-              (ctorFieldTypeNames mainDecls)
+              (declSigTypeNames runtimeDecls ++ declSigTypeNames mainMangled)
+              (ctorFieldTypeNames mainMangled)
               True
-              (declaredRecordFieldOrders mainDecls)
+              (declaredRecordFieldOrders mainMangled)
               []
-              (ifaceImplHeadTable mainDecls))
+              (ifaceImplHeadTable mainMangled))
             mainProgram
         let pLast = emitProgram pInput pProgram
         let _ = putStrLn (if p1 == pLast then "P_EQ_PLAST" else "P_NE_PLAST")
@@ -256,11 +266,14 @@ reemitState runtimePath = match readFile runtimePath
 reemitStateFallbackInput : List Decl -> List Decl -> WasmEmitInput
 reemitStateFallbackInput runtimeDecls decls =
   -- This harness deliberately omits declaration record orders so its record probes
-  -- exercise Prog's immutable indexRecFieldsW construction fallback.
+  -- exercise Prog's immutable indexRecFieldsW construction fallback.  The three
+  -- tables it DOES supply are keyed off the elaborated-and-mangled decls, the
+  -- namespace the paired `typedProgram` emits into.
+  let mangled = typedElaborated runtimeDecls [] decls
   makeWasmEmitInput
-    (methodIfaceTable decls)
-    (declSigTypeNames runtimeDecls ++ declSigTypeNames decls)
-    (ctorFieldTypeNames decls)
+    (methodIfaceTable mangled)
+    (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
+    (ctorFieldTypeNames mangled)
     False
     []
 

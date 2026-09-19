@@ -191,8 +191,8 @@ define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk_array_make(i64 11, i64 15)
-  store i64 %t0, ptr @mdk_g_a
-  %t1 = load i64, ptr @mdk_g_a
+  store i64 %t0, ptr @mdk_g___user____a
+  %t1 = load i64, ptr @mdk_g___user____a
   %t2 = ashr i64 5, 1
   %t3 = inttoptr i64 %t1 to ptr
   %t4 = add i64 %t2, 1
@@ -206,4 +206,4 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_a = global i64 0
+@mdk_g___user____a = global i64 0

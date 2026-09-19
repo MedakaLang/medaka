@@ -190,8 +190,8 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_shade(i64 1)
-  %t1 = call i64 @mdk_shade(i64 3)
+  %t0 = call i64 @mdk___user____shade(i64 1)
+  %t1 = call i64 @mdk___user____shade(i64 3)
   %t2 = ashr i64 %t1, 1
   %t3 = ashr i64 21, 1
   %t4 = mul i64 %t2, %t3
@@ -202,7 +202,7 @@ entry:
   %t9 = add i64 %t7, %t8
   %t10 = shl i64 %t9, 1
   %t11 = or i64 %t10, 1
-  %t12 = call i64 @mdk_shade(i64 5)
+  %t12 = call i64 @mdk___user____shade(i64 5)
   %t13 = ashr i64 %t12, 1
   %t14 = ashr i64 201, 1
   %t15 = mul i64 %t13, %t14
@@ -213,7 +213,7 @@ entry:
   %t20 = add i64 %t18, %t19
   %t21 = shl i64 %t20, 1
   %t22 = or i64 %t21, 1
-  %t23 = call i64 @mdk_rank(i64 562975723225089)
+  %t23 = call i64 @mdk___user____rank(i64 562975723225089)
   %t24 = ashr i64 %t23, 1
   %t25 = ashr i64 2001, 1
   %t26 = mul i64 %t24, %t25
@@ -224,7 +224,7 @@ entry:
   %t31 = add i64 %t29, %t30
   %t32 = shl i64 %t31, 1
   %t33 = or i64 %t32, 1
-  %t34 = call i64 @mdk_rank(i64 562975723225091)
+  %t34 = call i64 @mdk___user____rank(i64 562975723225091)
   %t35 = ashr i64 %t34, 1
   %t36 = ashr i64 20001, 1
   %t37 = mul i64 %t35, %t36
@@ -235,7 +235,7 @@ entry:
   %t42 = add i64 %t40, %t41
   %t43 = shl i64 %t42, 1
   %t44 = or i64 %t43, 1
-  %t45 = call i64 @mdk_rank(i64 562975723225093)
+  %t45 = call i64 @mdk___user____rank(i64 562975723225093)
   %t46 = ashr i64 %t45, 1
   %t47 = ashr i64 200001, 1
   %t48 = mul i64 %t46, %t47
@@ -251,7 +251,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_shade(i64 %arg0) {
+define i64 @mdk___user____shade(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 1
@@ -284,7 +284,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_rank(i64 %arg0) {
+define i64 @mdk___user____rank(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562975723225089

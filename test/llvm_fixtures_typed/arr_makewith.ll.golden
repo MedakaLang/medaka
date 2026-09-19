@@ -219,8 +219,8 @@ mw_body4:
   br label %mw_cond4
 mw_done4:
   %t19 = ptrtoint ptr %t3 to i64
-  store i64 %t19, ptr @mdk_g_a
-  %t20 = load i64, ptr @mdk_g_a
+  store i64 %t19, ptr @mdk_g___user____a
+  %t20 = load i64, ptr @mdk_g___user____a
   %t21 = ashr i64 7, 1
   %t22 = inttoptr i64 %t20 to ptr
   %t23 = add i64 %t21, 1
@@ -234,7 +234,7 @@ mw_done4:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_a = global i64 0
+@mdk_g___user____a = global i64 0
 ; mdk-module program
 define i64 @mdk_lam.program.0(i64 %clos, i64 %arg0) {
 entry:

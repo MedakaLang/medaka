@@ -43,7 +43,6 @@ import types.typecheck.{
   checkOneDiags,
   checkOneSchemeFullK,
   checkProgramDiags,
-  elaborateDict,
   elaborateOne,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
@@ -1162,7 +1161,7 @@ wrappedReturnRoutes source =
 wrappedReturnFlatRoutes : String -> Option (List String)
 wrappedReturnFlatRoutes source =
   let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
-  let elaborated = elaborateDict [] [] ["value"] program
+  let elaborated = elaborateOne [] [] ("wrapped_return_flat", program)
   let (CProgram binds _ _ _) = lowerProgram elaborated
   returnBindRoutes binds
 
@@ -1456,7 +1455,7 @@ test "ordinary return template records present and absent interface formals" =
     ([True, True], [True, False])
     (methodReturnTemplatePresenceProbe ())
 
-test "ordinary return carrier distinguishes empty unknown and absent-formal boundaries" =
+test "ordinary return carrier distinguishes empty and absent-formal boundaries" =
   let empty =
     methodCarrierStages
       "token"
@@ -1468,7 +1467,6 @@ test "ordinary return carrier distinguishes empty unknown and absent-formal boun
         "value : Int",
         "value = token ()",
       ])
-  let unknown = flatMethodReturnStages returnIdentitySource
   let absent =
     methodCarrierStages
       "choose"
@@ -1489,8 +1487,8 @@ test "ordinary return carrier distinguishes empty unknown and absent-formal boun
       [Some [], Some [], Some []]
       (map (entry => map wantedArgumentStrings entry.mrtWanted) empty),
     expectEqual
-      ([], [MRTProduced, MRTChecked, MRTStamped])
-      (unknown, map (entry => entry.mrtStage) absent),
+      [MRTProduced, MRTChecked, MRTStamped]
+      (map (entry => entry.mrtStage) absent),
     expectEqual [None, None, None] (map methodTraceArgs absent),
   ]
 
@@ -1699,45 +1697,6 @@ test "alias-qualified ordinary returns keep owner identity across import orders"
       ]
       (snd forward),
   ]
-
-flatMethodReturnStages : String -> List MethodReturnTraceStage
-flatMethodReturnStages source =
-  beginMethodReturnTrace ()
-  let _ =
-    elaborateDict
-      []
-      []
-      ["value"]
-      (desugar (parse "\{numericPreludeSource}\n\{source}"))
-  map
-    (entry => entry.mrtStage)
-    (filter (entry => entry.mrtMethod == "choose") (finishMethodReturnTrace ()))
-
-test "Flat unresolved returns keep complete missing and shadow cases legacy" =
-  let missing = joinNl [
-    "interface HiddenChoice a b where",
-    "  choose : Unit -> a",
-    "impl HiddenChoice Int Bool where",
-    "  choose _ = 7",
-    "value : Int",
-    "value = choose ()",
-  ]
-  let shadow = joinNl [
-    "interface ShadowChoice a where",
-    "  choose : Unit -> a",
-    "impl ShadowChoice Int where",
-    "  choose _ = 7",
-    "choose _ = 9",
-    "value : Int",
-    "value = choose ()",
-  ]
-  expectEqual
-    ([], [], [])
-    (
-      flatMethodReturnStages returnIdentitySource,
-      flatMethodReturnStages missing,
-      flatMethodReturnStages shadow,
-    )
 
 freshMethodReturnStages : String -> List MethodReturnTraceStage
 freshMethodReturnStages moduleId =
@@ -2562,7 +2521,7 @@ test "attributed-direct Num declarations reject mismatches without cross-pairing
     )
     (flatMessages mixedAttrFirstSource, flatMessages mixedDirectFirstSource)
 
-test "Flat unresolved interface givens remain legacy" =
+test "unresolved interface givens resolve as a direct predicate" =
   let source = joinNl [
     "data Wrap a = Wrap a",
     "interface D t where",
@@ -2572,17 +2531,10 @@ test "Flat unresolved interface givens remain legacy" =
     "h : D (Wrap a) => a -> Int",
     "h x = g x",
   ]
-  beginAssumptionTrace ()
-  let _ = elaborateDict [] ["g", "h"] ["g", "h"] (desugar (parse source))
-  let flatKinds = map (entry => entry.atKind) (finishAssumptionTrace ())
   let resolved = runObserved "resolved_given" source
   expectEqual
-    (
-      [ATLegacyPredicate],
-      [context ATDirectPredicate "resolved_given" "binding:h"],
-      0,
-    )
-    (flatKinds, withoutBinderIds resolved.rvTrace, resolved.rvErrors)
+    ([context ATDirectPredicate "resolved_given" "binding:h"], 0)
+    (withoutBinderIds resolved.rvTrace, resolved.rvErrors)
 
 test "id-witnessed impl givens remain legacy" =
   let source = joinNl [

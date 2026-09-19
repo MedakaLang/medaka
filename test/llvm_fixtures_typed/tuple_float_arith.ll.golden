@@ -231,7 +231,7 @@ entry:
   %t30 = getelementptr i8, ptr %t29, i64 8
   store double %t28, ptr %t30
   %t31 = ptrtoint ptr %t29 to i64
-  store i64 %t31, ptr @mdk_g_letDes
+  store i64 %t31, ptr @mdk_g___user____letDes
   %t32 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t32
   %t33 = getelementptr i8, ptr %t32, i64 8
@@ -249,8 +249,8 @@ entry:
   %t40 = getelementptr i8, ptr %t38, i64 16
   store i64 %t37, ptr %t40
   %t41 = ptrtoint ptr %t38 to i64
-  %t42 = call double @mdk_addP__fw(i64 %t41)
-  %t43 = load i64, ptr @mdk_g_letDes
+  %t42 = call double @mdk___user____addP__fw(i64 %t41)
+  %t43 = load i64, ptr @mdk_g___user____letDes
   %t44 = inttoptr i64 %t43 to ptr
   %t45 = getelementptr i8, ptr %t44, i64 8
   %t46 = load double, ptr %t45
@@ -268,7 +268,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_addP(i64 %arg0) {
+define i64 @mdk___user____addP(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -315,7 +315,7 @@ decend1:
 }
 
 ; mdk-module program
-define double @mdk_addP__fw(i64 %arg0) {
+define double @mdk___user____addP__fw(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -367,4 +367,4 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_letDes = global i64 0
+@mdk_g___user____letDes = global i64 0

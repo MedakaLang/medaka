@@ -36,8 +36,8 @@
 # already Module-arm), plus the two CONTROL probes this gate itself drives:
 # entries/check_flat_diags_main.mdk (`checkProgramDiags`) and
 # entries/origin_agreement_main.mdk (`checkProgramSchemesWithRuntime`). The
-# `llvm_emit_typed_main` / `wasm_emit_typed_main` emit entries reach Flat via
-# `elaborateDict`, outside that wrapper family. MODULE is reached by every
+# `llvm_emit_typed_main` / `wasm_emit_typed_main` emit entries are Module-arm: they
+# elaborate through `elaborateModules`. MODULE is reached by every
 # import-bearing `check`, by `medaka check` on a no-import file since
 # S-migrate-check-route, by `doc`/`repl`/`snapshot`/`lsp`/`check_policy`/`playground`,
 # and by `run` / `build` / `test` — including on a ONE-module program, through the
@@ -170,10 +170,10 @@
 # The `value` column comes from `medaka run`, and `run` takes the MODULE arm even on
 # a single no-import file (the `elaborateOne` 1-module wrapper). So a value here is
 # never a FLAT-arm value observation: the FLAT arm is graded on ACCEPTANCE and
-# DIAGNOSTICS only. A FLAT-arm value would need `llvm_emit_typed_main` /
-# `wasm_emit_typed_main` (the `elaborateDict` entries), which are compiled probes
-# under test/bin — deliberately out of scope so this gate reads no oracle. If a
-# future bite needs the FLAT arm's emitted evidence, that is a different gate.
+# DIAGNOSTICS only. No entry produces a FLAT-arm value any more: the two typed emit
+# entries (`llvm_emit_typed_main` / `wasm_emit_typed_main`) elaborate through
+# `elaborateModules`. If a future bite needs the FLAT arm's emitted evidence, that
+# is a different gate, and it needs a probe that does not exist today.
 #
 # ── FIXTURES ARE GENERATED, NOT COMMITTED, ON PURPOSE ─────────────────────────
 #
@@ -369,8 +369,8 @@ printf 'import iface.{Box, Basic, Fancy, label, describe}\n\n%s\n\n%s\n' \
 #     MEASURED 2026-08-27 (F3, flat-exit-floor fix round): NO divergence. All
 #     three arms ACCEPT and all print `True`. The FLAT arm has no value column
 #     in this gate by construction (see "WHAT THIS GATE CANNOT SEE"), so the
-#     FLAT-arm value was taken OUT OF BAND for the investigation, via the
-#     `elaborateDict` Flat entry: `test/bin/llvm_emit_typed_main runtime.mdk
+#     FLAT-arm value was taken OUT OF BAND for the investigation, via what was
+#     then the Flat emit entry: `test/bin/llvm_emit_typed_main runtime.mdk
 #     core.mdk <file>` → clang with runtime/medaka_rt.c → the linked binary also
 #     printed `True`. Recorded here because that observation is not something
 #     these rows can re-derive; the rows below pin the parts this gate CAN see.

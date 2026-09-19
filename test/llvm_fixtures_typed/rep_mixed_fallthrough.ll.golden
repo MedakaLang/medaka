@@ -249,13 +249,13 @@ entry:
   %t32 = getelementptr i8, ptr %t30, i64 16
   store i64 %t29, ptr %t32
   %t33 = ptrtoint ptr %t30 to i64
-  %t34 = call i64 @mdk_total(i64 %t33)
+  %t34 = call i64 @mdk___user____total(i64 %t33)
   %t35 = ashr i64 %t34, 1
   call void @mdk_print_int(i64 %t35)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_score(i64 %arg0) {
+define i64 @mdk___user____score(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -367,7 +367,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_total(i64 %arg0) {
+define i64 @mdk___user____total(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562949953421315
@@ -407,8 +407,8 @@ conyes20:
   %t30 = inttoptr i64 %arg0 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = call i64 @mdk_score(i64 %t29)
-  %t34 = call i64 @mdk_total(i64 %t32)
+  %t33 = call i64 @mdk___user____score(i64 %t29)
+  %t34 = call i64 @mdk___user____total(i64 %t32)
   %t35 = ashr i64 %t33, 1
   %t36 = ashr i64 %t34, 1
   %t37 = add i64 %t35, %t36

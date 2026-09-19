@@ -1,20 +1,14 @@
 -- TYPED + DICT-PASSING Core IR pp oracle — the oracle half of the slice-6 LLVM
 -- dispatch gate (test/diff_compiler_llvm_typed.sh).  Like core_ir_typed_main.mdk
--- but (a) uses elaborateDict so a user `=>`-constrained function gets its leading
--- dict params (the RDict path), and (b) prints pp_value of `main` (cevalMain)
--- rather than its stdout — the dispatch fixtures reduce `main` to a scalar the
--- LLVM spike prints the same way.  The untyped eval_probe.exe can't be the oracle
--- here: it has no types, so it leaks the dispatch wrapper (`<impl@Int:7>`).
+-- but prints pp_value of `main` (cevalMain) rather than its stdout — the dispatch
+-- fixtures reduce `main` to a scalar the LLVM spike prints the same way.  The
+-- untyped eval_probe.exe can't be the oracle here: it has no types, so it leaks
+-- the dispatch wrapper (`<impl@Int:7>`).
 --
 --   medaka run compiler/entries/core_ir_dict_pp_main.mdk <runtime.mdk> <prelude.mdk>... <file.mdk>
 
 import frontend.ast.{Decl}
-import types.typecheck.{
-  elaborateDict,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
-}
+import types.typecheck.{elaborateOne}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{lowerProgram}
 import ir.core_ir_eval.{cevalMainOf}
@@ -30,10 +24,5 @@ runDict : List Decl -> List Decl -> List Decl -> String
 runDict runtimeDecls preludeDecls userDecls =
   let userNames = funNamesOf userDecls
   let livePrelude = dropShadowedExp userNames preludeDecls
-  let combined = livePrelude ++ userDecls
-  let dictNames =
-    preludeReturnPosDictNames livePrelude combined
-      ++ preludeArgPosDictNames livePrelude combined
-      ++ constrainedSigNames userDecls
-  let decls = elaborateDict runtimeDecls dictNames userNames combined
+  let decls = elaborateOne runtimeDecls livePrelude ("__user__", userDecls)
   cevalMainOf decls (lowerProgram decls)

@@ -1,28 +1,33 @@
 -- TYPED driver for the Stage 2.4 LLVM de-risking spike (slice 6 — typeclass
 -- dispatch).  The typed analog of llvm_emit_main.mdk: it runs the SAME front end
--- the typed Core IR gate uses (desugar → elaborateDict: RKey/EDictAt route
--- stamping + dict_pass leading-dict params → lower to Core IR), then swaps the
--- final consumer to EMIT textual LLVM IR (llvm_emit.emitProgram) instead of
+-- `medaka build` ships (desugar → elaborateModules: RKey/EDictAt route stamping
+-- + dict_pass leading-dict params → mangleUnitsEv → lower to Core IR), then swaps
+-- the final consumer to EMIT textual LLVM IR (llvm_emit.emitProgram) instead of
 -- evaluating.  This is the ONLY LLVM driver that produces CMethod/CDict nodes
 -- (the plain llvm_emit_main path never marks, so it never dispatches).
 --
 --   medaka run compiler/entries/llvm_emit_typed_main.mdk <runtime.mdk> <prelude.mdk>... <file.mdk>
 --
 -- The dispatch fixtures are prelude-free (their own interfaces + impls), so the
--- harness passes ONLY runtime.mdk: elaborateDict resolves every route without
+-- harness passes ONLY runtime.mdk: elaboration resolves every route without
 -- pulling core.mdk's machinery into the emitted module (the spike's scalar subset).
+--
+-- The mangle step is not optional decoration: typecheck stamps a receiver's
+-- record head with the name the MANGLED program will carry, so an emitter side
+-- table keyed off the unmangled decls misses every stamped lookup and
+-- `llvm_emit.recordByName` degrades to a bare-label first-match guess (the
+-- wrong-slot behaviour issue #38 closed).  Elaborate, mangle, then key every
+-- table off the mangled decls — the order `entry_support.emitModulesWith` runs.
 import frontend.ast.{Decl, Lit(..)}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
 import types.typecheck.{
-  elaborateDict,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
+  elaborateModules,
   mainTypeIsUnit,
   mainTypeIsFloat,
   checkedFfiExternTypeNames,
 }
+import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{funNamesOf, dropShadowedExp}
 import ir.core_ir_lower.{
   ifaceImplHeadTable,
@@ -97,29 +102,26 @@ emit runtimeDecls preludeDecls userDecls =
 
 runEmit : List Decl -> List Decl -> List Decl -> String
 runEmit runtimeDecls preludeDecls userDecls =
-  let userNames = funNamesOf userDecls
-  let livePrelude = dropShadowedExp userNames preludeDecls
-  let combined = livePrelude ++ userDecls
-  let dictNames =
-    preludeReturnPosDictNames livePrelude combined
-      ++ preludeArgPosDictNames livePrelude combined
-      ++ constrainedSigNames userDecls
-  let elaborated = elaborateDict runtimeDecls dictNames userNames combined
+  let livePrelude = dropShadowedExp (funNamesOf userDecls) preludeDecls
+  let (coreE, modulesE, _, _, _) =
+    elaborateModules runtimeDecls livePrelude [("__user__", userDecls)]
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let mangled = coreD ++ flatMap snd modules2
   let input =
     makeEmitInput
-      (returnsSelfTable combined)
-      (selfFnParamTable combined)
-      (methodIfaceTable combined)
-      (methodConstraintIfaces combined)
-      (ctorFieldTypeNames combined)
-      (declSigTypeNames runtimeDecls ++ declSigTypeNames combined)
+      (returnsSelfTable mangled)
+      (selfFnParamTable mangled)
+      (methodIfaceTable mangled)
+      (methodConstraintIfaces mangled)
+      (ctorFieldTypeNames mangled)
+      (declSigTypeNames runtimeDecls ++ declSigTypeNames mangled)
       (mainTypeIsUnit ())
       (mainTypeIsFloat ())
       0
       []
       []
       ""
-      (declaredRecordFieldOrders combined)
-      (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
-      (ifaceImplHeadTable elaborated)
-  emitProgram input (lowerProgramEmit TargetNative elaborated)
+      (declaredRecordFieldOrders mangled)
+      (validateFfiExternTypeNames (checkedFfiExternTypeNames mangled))
+      (ifaceImplHeadTable mangled)
+  emitProgram input (lowerProgramEmit TargetNative mangled)

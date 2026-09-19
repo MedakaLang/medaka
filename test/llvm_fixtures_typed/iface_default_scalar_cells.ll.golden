@@ -201,7 +201,7 @@ entry:
   store double 2.5, ptr %t4
   %t5 = ptrtoint ptr %t3 to i64
   %t6 = call i64 @mdk_impl_Float_ordered(i64 %t2, i64 %t5)
-  %t7 = call i64 @mdk_bit(i64 %t6)
+  %t7 = call i64 @mdk___user____bit(i64 %t6)
   %t8 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t8
   %t9 = getelementptr i8, ptr %t8, i64 8
@@ -213,7 +213,7 @@ entry:
   store double 1.5, ptr %t12
   %t13 = ptrtoint ptr %t11 to i64
   %t14 = call i64 @mdk_impl_Float_ordered(i64 %t10, i64 %t13)
-  %t15 = call i64 @mdk_bit(i64 %t14)
+  %t15 = call i64 @mdk___user____bit(i64 %t14)
   %t16 = ashr i64 5, 1
   %t17 = ashr i64 %t15, 1
   %t18 = mul i64 %t16, %t17
@@ -225,7 +225,7 @@ entry:
   %t24 = shl i64 %t23, 1
   %t25 = or i64 %t24, 1
   %t26 = call i64 @mdk_impl_String_ordered(i64 ptrtoint (ptr @.strc.program.0 to i64), i64 ptrtoint (ptr @.strc.program.1 to i64))
-  %t27 = call i64 @mdk_bit(i64 %t26)
+  %t27 = call i64 @mdk___user____bit(i64 %t26)
   %t28 = ashr i64 9, 1
   %t29 = ashr i64 %t27, 1
   %t30 = mul i64 %t28, %t29
@@ -237,7 +237,7 @@ entry:
   %t36 = shl i64 %t35, 1
   %t37 = or i64 %t36, 1
   %t38 = call i64 @mdk_impl_String_ordered(i64 ptrtoint (ptr @.strc.program.2 to i64), i64 ptrtoint (ptr @.strc.program.3 to i64))
-  %t39 = call i64 @mdk_bit(i64 %t38)
+  %t39 = call i64 @mdk___user____bit(i64 %t38)
   %t40 = ashr i64 17, 1
   %t41 = ashr i64 %t39, 1
   %t42 = mul i64 %t40, %t41
@@ -249,7 +249,7 @@ entry:
   %t48 = shl i64 %t47, 1
   %t49 = or i64 %t48, 1
   %t50 = call i64 @mdk_impl_Int_ordered(i64 3, i64 5)
-  %t51 = call i64 @mdk_bit(i64 %t50)
+  %t51 = call i64 @mdk___user____bit(i64 %t50)
   %t52 = ashr i64 33, 1
   %t53 = ashr i64 %t51, 1
   %t54 = mul i64 %t52, %t53
@@ -261,7 +261,7 @@ entry:
   %t60 = shl i64 %t59, 1
   %t61 = or i64 %t60, 1
   %t62 = call i64 @mdk_impl_Int_ordered(i64 5, i64 3)
-  %t63 = call i64 @mdk_bit(i64 %t62)
+  %t63 = call i64 @mdk___user____bit(i64 %t62)
   %t64 = ashr i64 65, 1
   %t65 = ashr i64 %t63, 1
   %t66 = mul i64 %t64, %t65
@@ -277,7 +277,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_bit(i64 %arg0) {
+define i64 @mdk___user____bit(i64 %arg0) {
 entry:
   %t0 = ashr i64 %arg0, 1
   %t1 = icmp ne i64 %t0, 0

@@ -1,5 +1,5 @@
 # META
-source_lines=47076
+source_lines=46895
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -40,11 +40,13 @@ stages=DESUGAR,MARK
 -- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
 -- permuted accepting twin).
 --
--- The FLAT arm is a separate driver and always was: `elaborateDict` /
--- `checkProgramSchemesWithRuntime` / `checkToLines` run a single program with no
--- module graph, with their own stamper order (`flatStampOrder`) and their own
+-- The FLAT arm is a separate driver and always was: `checkProgramSchemesWithRuntime`
+-- and `checkToLines` (the `Flat coreProg` case of `CheckMode`) run a single program
+-- with no module graph, with their own stamper order (`flatStampOrder`) and their own
 -- pre-pass marking.  Fix inference behaviour in whichever arm you measured, then
--- check the other.
+-- check the other.  The flat arm no longer has an ELABORATION driver of its own —
+-- `elaborateDict` is gone and every emit/eval consumer elaborates through
+-- `elaborateOne`/`elaborateModules`; what remains flat is the CHECK side.
 --
 -- History: this began as a prelude-less HM engine validated against the (since removed)
 -- OCaml reference compiler.  Both that reference and its `dev/tc_probe.exe` harness are
@@ -5874,9 +5876,11 @@ buildImplEnvGo (m :: rest) ia =
 -- graph driver builds (`buildDeclEnvs` ← `graphPreamble`, reached from `driveGraphK`
 -- and from `checkModulesPreambleK`'s projection of it).
 -- The FLAT path — `checkProgramSeededSplit` → `checkBodyImpl (Flat coreProg)`, reached
--- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, `lint`'s policy pass,
--- `snapshot`, and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries via
--- `elaborateDict` — never calls it, so `declEnvsRef.deImpls` is `emptyImplEnv` there.
+-- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, and `lint`'s policy pass
+-- — never calls it, so `declEnvsRef.deImpls` is `emptyImplEnv` there.  The
+-- `snapshot` tool and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries
+-- are NOT on this list: they elaborate through `elaborateModules`, which is the
+-- graph driver, so they build a real envelope.
 -- That emptiness is the hazard RUN-B-017 probe 3 MEASURED: FLAT is
 -- already whole-program and already CORRECT on #1564's shape (it accepts and prints
 -- `wrap(int)` where the four-module program rejects), so a later bite that repoints
@@ -21342,39 +21346,32 @@ unifyClauses env v ((pats, body) :: rest) =
 -- Rewrite each return-position method occurrence to EMethodAt (with a fresh route
 -- ref), type-check (recording the sites), then stamp each site's route from its
 -- now-resolved result type.  Returns the SAME tree (refs filled) for eval.
--- DRIVER-COLLAPSE Phase 5: the flat `elaborate` wrapper is DELETED; callers use
--- the 1-module `elaborateOne` (the typed/dict tree of the degenerate 1-module
--- multi path).  `elaborateDict` itself is RETAINED — the EMIT path
--- (core_ir_dict_pp_main / llvm_emit_*_main, argStamp mode) still uses it.
+-- There is no flat elaboration driver left: every caller goes through the
+-- 1-module `elaborateOne` (the typed/dict tree of the degenerate 1-module multi
+-- path).
 
--- ── Phase 0 (DRIVER-COLLAPSE): 1-module wrapper over the multi-module path ──
--- elaborateOne runs the SINGLE flat program [prog] (the user's decls, the live
--- prelude ALREADY shadow-dropped by the caller — same `combined` the flat
--- elaborateDict callers build, minus the joint core) through elaborateModules as
--- the degenerate 1-module list [(rootId, prog)], returning the FLAT shape the flat
--- callers consume: core2 (dict-passed core) ++ the dict-passed module's decls.
+-- ── 1-module wrapper over the multi-module path ────────────────────────────
+-- elaborateOne runs the SINGLE program [prog] (the user's decls, the live prelude
+-- ALREADY shadow-dropped by the caller) through elaborateModules as the degenerate
+-- 1-module list [(rootId, prog)], returning the flat shape its callers consume:
+-- core2 (dict-passed core) ++ the dict-passed module's decls.
 --
--- The 1-module case automatically satisfies the flat path's invariants — one
+-- The 1-module case automatically satisfies that shape's invariants — one
 -- resetState (one module ⇒ one checkModuleFullImpl), zero imports ⇒ the full
--- constraint set, and elaborateModules
--- runs the eval-dict layer unconditionally (ARGSTAMP-UNIFY Phase 4), so the
--- return-position constrained-fn dict layer matches the flat elaborateDict.
+-- constraint set, and elaborateModules runs the eval-dict layer unconditionally
+-- (ARGSTAMP-UNIFY Phase 4), so the return-position constrained-fn dict layer is
+-- present here too.
 --
--- NOTE (Phase 0 is DISCOVERY): the dict-name set differs by construction —
--- elaborateModules computes its own via `moduleDictNames` (return-position subset:
--- `preludeReturnPosDictNames coreDecls allDecls ++ returnPosConstrainedSigNames …`)
--- whereas the flat callers pass an externally-built `dictNames`
--- (`preludeReturnPosDictNames livePrelude combined ++ constrainedSigNames userDecls`,
--- the FULL constrained-sig set).  This wrapper takes `coreDecls` SEPARATE (not
--- pre-flattened into prog), exactly as elaborateModules expects, and lets the
--- module path own the dict-set.  ⚠️ This line asserted that diff_flat_vs_onemodule.sh
--- "exists" until 2026-08-13; it did not.  That was a TEMPORARY Phase-0 equivalence
--- harness, DELETED with the rest of the Phase-5 scaffolding (DRIVER-COLLAPSE-PLAN.md,
--- Phase 5), and its property was flat-vs-1-module BYTE-IDENTITY, not this one.  The
--- live grader is test/diff_compiler_flat_vs_onemodule.sh (ARCH B-2.1-a): it PINS the
--- Flat arm's own acceptance and diagnostics, and grades the Flat-vs-Module relation
--- only through a clause true on both sides of the #1564 fix — every arm that ACCEPTS
--- must compute the same value.  Read its header before changing either arm.
+-- The dict-name set is the module path's own: elaborateModules computes it via
+-- `moduleDictNames` (the prelude's constrained names — the ones whose body reaches
+-- a return-position method first, then the rest — followed by the module graph's
+-- FULL `constrainedSigNames`), rather than taking an externally built list.  This
+-- wrapper therefore takes `coreDecls` SEPARATE (not pre-flattened into prog),
+-- exactly as elaborateModules expects.  The grader for the Flat-vs-Module relation
+-- is test/diff_compiler_flat_vs_onemodule.sh (ARCH B-2.1-a): it PINS the Flat arm's
+-- own acceptance and diagnostics, and grades the relation only through a clause
+-- true on both sides of the #1564 fix — every arm that ACCEPTS must compute the
+-- same value.  Read its header before changing either arm.
 export
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 elaborateOne runtimeDecls coreDecls (rootId, prog) =
@@ -21382,19 +21379,6 @@ elaborateOne runtimeDecls coreDecls (rootId, prog) =
     elaborateModules runtimeDecls coreDecls [(rootId, prog)]
   coreD ++ flatMap snd modules
 
--- Dict-passing elaboration (the `=>`-constraint layer).  [dictNames] are the
--- *signatured* constrained functions to dict-pass (the user program's — the
--- prelude keeps arg-tag / RKey dispatch, which already type-checks the goldens).
--- [eligibleNames] are the user fn names that may additionally be PROMOTED when an
--- INFERRED (unsignatured) constraint is discovered (see registerInferredConstraints).
---
--- Two-pass / fixpoint orchestration (mirrors the reference's mark → typecheck →
--- re-mark → typecheck → dict_pass): a mark+typecheck pass discovers each eligible
--- unsignatured fn's inferred constraints (promotedRef); we grow the dict-passed
--- set and re-run until it stabilizes (one layer of a call chain promotes per
--- pass), then mark + typecheck + route + dict_pass the final set.  In the RKey
--- rewrite, each occurrence of a name in the final set becomes an EDictAt (routes
--- filled after inference) and its def gets matching leading dict params.
 -- #415 item 3: the ONLY writer of dictEligibleRef / dictEligibleSetRef.  The set is
 -- DERIVED from the list here rather than mirrored at each set site, so the two cannot
 -- drift: there is no longer a second side for a future edit to be absent from.  (Both
@@ -21404,105 +21388,6 @@ setDictEligible : List String -> Unit
 setDictEligible names =
   driverState.value.dictEligibleRef := names
   driverState.value.dictEligibleSetRef := namesToSet names omEmpty
-
-export
-elaborateDict : List Decl ->
-  List String ->
-  List String ->
-  List Decl ->
-  List Decl
-elaborateDict runtimeDecls dictNames eligibleNames prog =
-  driverState.value.superDeclsRef := prog
-  let _ = setDictEligible eligibleNames
-  let allNames = discoverAll runtimeDecls prog dictNames eligibleNames
-  driverState.value.argDispatchIdxByIdRef := argDispatchIndicesById prog
-  -- #1351 L5 (CONTRACT): the NAME SET only — `prePassDictArg` wants the names, not the
-  -- indices, and the indices are now answered exclusively by the identity-keyed table above.
-  let argNames = map fst (argDispatchIndices prog)
-  -- P0-18: [] — the confirmed definer-shadow-emit path is elaborateModules; this
-  -- single-file scratch elaborate stays shadow-map-free (byte-identical discovery).
-  let prog2 =
-    prePassDictArg
-      (returnPosMethodNames prog ++ methodConstraintNames prog)
-      allNames
-      argNames
-      []
-      prog
-  -- #1280: prelude-FLATTENED path (`prog` already carries it), so the prelude
-  -- boundary is unknown here and the scope is builtins-only — the same answer
-  -- `checkProgramSeededSplit` gives its own `coreProg0 = []` callers.
-  let _ =
-    checkProgramSeeded
-      (externSchemes (externTyOriginScope []) runtimeDecls)
-      prog2
-  let _ = expandSupersTable prog2
-  -- #2548 / #1116: the flat path's stamper sequence is the SAME steps, run from the
-  -- same table — `flatStampOrder`, whose own comment records the two places it
-  -- differs from `moduleStampOrder` and why.  One Flat module is the whole graph, so
-  -- there is no quiescence to defer to: it runs here, over this module's windows.
-  let mk = currentModuleMarks ()
-  let flatGoals = goalsSince mk.mGoals
-  let _ =
-    runStampSteps
-      (stampCtxOf
-        driverState.value.currentModuleRef.value
-        prog2
-        flatGoals
-        (numlitSince mk.mNumlit))
-      flatStampOrder
-  -- #2549 M2: the Flat arm's own copy of what `runStampCtxs` does per module and
-  -- `dictPassModulesIfEnabled` then installs.  One Flat module is the whole graph,
-  -- so its window IS the table; without these two lines every `EDictAt` this arm
-  -- marked would resolve against an empty table and dispatch on no dicts at all.
-  let _ = recordEvidence flatGoals
-  let _ = publishEvidence ()
-  let out = dictPass allNames prog2
-  -- #2705: `dictPass` minted `EMethodAt` nodes of its own; publish their cells too.
-  let _ = publishEvidence ()
-  out
-
--- With no eligible names (the RKey-only / typed path), there is nothing to
--- promote — skip discovery entirely so that path stays a single typecheck pass.
-discoverAll : List Decl ->
-  List Decl ->
-  List String ->
-  List String ->
-  List String
-discoverAll _ _ dictNames [] = dictNames
-discoverAll runtimeDecls prog dictNames _ =
-  discoverPromoted runtimeDecls prog dictNames
-
--- Grow the dict-passed set to a fixpoint.  Each pass marks occurrences of the
--- current set as EDictAt and typechecks; registerInferredConstraints populates
--- promotedRef (reset each pass by checkProgramSeeded) with eligible unsignatured
--- fns that picked up a constraint — including a CALLER that inherited one through
--- a now-marked constrained call.  Stop when no new name appears.
-discoverPromoted : List Decl -> List Decl -> List String -> List String
-discoverPromoted runtimeDecls prog current =
-  let prog1 =
-    prePassDict
-      (returnPosMethodNames prog ++ methodConstraintNames prog)
-      current
-      prog
-  -- #1280: prelude-flattened discovery pass — builtins-only scope, see `elaborateDict`.
-  let _ =
-    checkProgramSeeded
-      (externSchemes (externTyOriginScope []) runtimeDecls)
-      prog1
-  discoverNext
-    runtimeDecls
-    prog
-    current
-    (dedup (current ++ perRun.value.promotedRef.value))
-
-discoverNext : List Decl ->
-  List Decl ->
-  List String ->
-  List String ->
-  List String
-discoverNext runtimeDecls prog current next
-  | listLen next == listLen current = current
-  | otherwise = discoverPromoted runtimeDecls prog next
 
 -- the USER modules' top-level fn names (NOT core/prelude) — the promotion-eligible
 -- set on the build path.  Mirrors elaborateDict's eligibleNames = funNamesOf userDecls.
@@ -21636,62 +21521,6 @@ rewriteRPDict rpNames dictNames (EVar n)
   | otherwise = EVar n
 rewriteRPDict _ _ e = e
 
--- D3a: like prePassDict but ALSO rewrite ARG-position method occurrences (names in
--- [argNames]) to EMethodAt, so inferMethodAt can stamp their route from the
--- discriminating-argument type.  [argNames] is populated on EVERY path now (single
--- elaboration mode, #157) — an empty [argNames] would degenerate to the scope-BLIND
--- mapProg rewrite that prePassDict produced.  With argNames non-empty it instead
--- uses the SCOPE-AWARE rewriteArgScoped below:
--- an arg-position interface-method name (in argNames) that is shadowed by a local
--- binder (a parameter, let, lambda arg, or match-pattern variable) stays a plain
--- EVar rather than becoming an EMethodAt.  This is the Phase-95 `env.locals` guard:
--- the marker is scope-blind and inference RECOVERS by skipping the
--- scope-blind method table for locally-bound names.  Without it, a compiler
--- function whose parameter happens to share a method name (`arithOp lt rt`,
--- `composeOp gt ht`, `exprToPat … sub`) has that parameter mis-marked as a method
--- occurrence → arg-tag dispatch with no impl groups at emit time.  Gated on
--- argNames so the golden path is provably unchanged.  The rp/an/dn arms are ALL
--- scope-aware on this (emit + run `elaborateDict`) path: a local binder shadowing
--- a return-position method name (`let debug = 99` inside a fn body) keeps the
--- reference a plain EVar so inference resolves it to the local instead of
--- mis-stamping RKey<resultType> and dispatching to the prelude impl — the
--- `env.locals` guard, which skips the method_iface table for
--- any locally-bound name.  Byte-identical for the
--- corpus (no corpus rp/arg/constrained name is shadowed by a local — the guard
--- only changes behaviour for a genuinely-shadowing local: an arg-method
--- `lt`/`gt`/`sub`, a constrained fn `elem`, or a return-position method `debug`).
--- The non-emit `mapProg` path (argNames == []) stays scope-blind.
--- [shadowMap] (P0-18) is the mangle definer-shadow map — non-empty only on the emit
--- path (argNames non-empty).  The scope-blind `mapProg` path (argNames == []) never
--- has mangled shadows, so it ignores it and stays byte-identical.
---
--- ⚠️ #2189: the three name sets are INDEXED here for the same reason they are in
--- `prePassDict` above — see that comment.  The `argNames == []` dispatch stays on
--- the LIST, so the scope-blind/scope-aware arm choice is unchanged.
-prePassDictArg : List String ->
-  List String ->
-  List String ->
-  List (String, String) ->
-  List Decl ->
-  List Decl
-prePassDictArg rpNames dictNames [] _ prog =
-  mapProg
-    (rewriteRPDictArg
-      (omFromNames rpNames omEmpty)
-      (omFromNames dictNames omEmpty)
-      omEmpty)
-    prog
-prePassDictArg rpNames dictNames argNames shadowMap prog =
-  map
-    (prePassDeclScoped
-      (ArgRw
-        (omFromNames rpNames omEmpty)
-        (omFromNames dictNames omEmpty)
-        (omFromNames argNames omEmpty)
-        shadowMap
-        noDictHook))
-    prog
-
 -- The `ArgRw` hook that records nothing: every marker but the group-recursive one
 -- (`markRecursiveOccurrences`) reads the dict application's route out of the goal
 -- inference pushes for it, so it has nothing to do at mark time.
@@ -21704,14 +21533,6 @@ mintDictAt onDict n =
   let ev = freshEvId ()
   let _ = onDict n ev
   EDictAt n ev
-
-rewriteRPDictArg : OrdMap Unit -> OrdMap Unit -> OrdMap Unit -> Expr -> Expr
-rewriteRPDictArg rpNames dictNames argNames (EVar n)
-  | omHasKey n rpNames = EMethodAt n "" (mintMethodCell "")
-  | omHasKey n argNames = EMethodAt n "" (mintMethodCell "")
-  | omHasKey n dictNames = EDictAt n (freshEvId ())
-  | otherwise = EVar n
-rewriteRPDictArg _ _ _ e = e
 
 -- ── scope-aware arg-position prepass (emit path; D3a shadow guard) ───────────
 -- The three name sets carried through the scope-threaded rewrite (rp = return-
@@ -30361,9 +30182,9 @@ checkBodyImpl seed mode prog0 =
       let preludeBodyEnv =
         extendVars env1 (dropSchemesNamed methodNames topSchemes)
       let _ = scopeShadowsCore ()
-      -- No impl-body inference over `coreProgS` here: the one Flat entry that
-      -- elaborates (`checkProgramSeeded`, via `elaborateDict`) passes an EMPTY core
-      -- and carries the prelude inside `prog0S`, so there is nothing to walk; on the
+      -- No impl-body inference over `coreProgS` here: the Flat callers that arrive
+      -- with a FLATTENED prelude (`checkProgramSeeded`, which fixes `coreProg0 = []`
+      -- and carries the prelude inside `prog0S`) leave nothing to walk; on the
       -- Flat CHECK entries (a real prelude split) re-inferring core's parametric impl
       -- bodies against the user program raises spurious `T-AMBIGUOUS-INSTANCE`
       -- rejects (`diff_compiler_flat_vs_onemodule` pins the accepting rows).
@@ -30486,9 +30307,11 @@ checkBodyImpl seed mode prog0 =
   -- silent accept.  `classEnvHere`'s `Flat _` arm is what prevents that.
   let _ = checkImplCompletenessMap (fst classEnvHere) (snd classEnvHere) prog
   -- (#5 / BREAK #2) obligation channels.  FLAT runs both channels + setNumlitFloats
-  -- here (flat-emit via elaborateDict needs the Float int-literal stamp — its
-  -- resolve chain doesn't redo it).  MODULE runs both channels here and leaves the
-  -- Float stamp to the graph-end drain (`SSNumlitFloats`), on every driver (#2705).
+  -- here: the Flat arm has no graph-end drain, so this pass is its only chance to
+  -- stamp the Float-typed int literals, and a Flat consumer that read them unstamped
+  -- would get Int cells where the inference said Float.  MODULE runs both channels
+  -- here and leaves the Float stamp to the graph-end drain (`SSNumlitFloats`), on
+  -- every driver (#2705).
   let _ = match mode
     Flat _ =>
       -- #838 I4: impl obligations now go through the unified checkCallObligations
@@ -45230,6 +45053,28 @@ checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
 
+-- Module-arm sibling of the `Flat` `checkMatchToLines`: the type-aware
+-- non-exhaustive-match report for ONE module, runtime externs seeded and NO
+-- prelude, rendered as one `Warning: non-exhaustive match …` line per warning.
+--
+-- WARNINGS ONLY — type errors are dropped on the floor rather than rendered, which
+-- is this report's contract, not an oversight: the caller
+-- (`compiler/entries/check_match_main.mdk`) diffs against
+-- `dev/diagdump.exe --check-match`, which reports match warnings and nothing else.
+-- `checkOneDiags` is the wrapper this delegates to precisely because it hands the
+-- two halves back SEPARATE, so the split needs no new projection.
+--
+-- The empty `coreDecls` is what makes the seed identical to the `Flat` wrapper's
+-- hand-built `externSchemes (externTyOriginScope []) runtimeDecls`: `graphPreamble`
+-- computes `externSchemes (externTyOriginScope coreDecls) runtimeDecls`, which
+-- collapses to the same expression at `coreDecls = []`.  `"__user__"` mirrors
+-- `checkOneToLinesWithRuntime`'s rootId convention just above.
+export
+checkOneMatchToLines : List Decl -> List Decl -> String
+checkOneMatchToLines runtimeDecls prog =
+  let (_, warns) = checkOneDiags runtimeDecls [] ("__user__", prog)
+  joinNl (map tcMsg warns)
+
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
 export
@@ -46527,9 +46372,8 @@ elabModuleStamp mid seedVars accData implDecls prog =
 
 -- ── #2548 / DICT §6.2 T4: the stamper order, written once ────────────────────
 -- One step per route-stamping resolver, plus the Float literal stamp.  #1116: the
--- sequence is a VALUE, so the two schedules that run it (the graph-end drain and
--- `elaborateDict`'s flat path) state their order in one vocabulary instead of
--- hand-copying nine calls each.
+-- sequence is a VALUE rather than nine hand-copied calls, so the schedule that
+-- runs it states its order in one vocabulary.
 data StampStep =
   | SSNumlitFloats
   | SSReturnSites
@@ -46542,7 +46386,7 @@ data StampStep =
   | SSDictApps
   | SSMethodDicts
 
--- THE order for the module graph, run once per module by `drainStampQueue`.
+-- THE stamper order, run once per module by `drainStampQueue`.
 moduleStampOrder : List StampStep
 moduleStampOrder = [
   SSNumlitFloats,
@@ -46555,31 +46399,6 @@ moduleStampOrder = [
   SSRecDictApps,
   SSDictApps,
   SSMethodDicts,
-]
-
--- `elaborateDict`'s order, NOT the one above, and the difference is load-bearing
--- rather than accidental.  Two steps differ: the flat path runs `SSArgStamps` LAST
--- (after the three dict-realizing steps) and has no `SSRLocalSites` step at all,
--- because standalone-shadow RLocal sites are recorded only by the Module driver's
--- cross-module shadow marking (`elaborateModules`' C5 mark set) — a single-file
--- program has no importer to shadow into, so the channel is empty there by
--- construction and the step would be a no-op.  `SSNumlitFloats` is likewise absent:
--- on the Flat arm `checkBodyImpl` already stamps the literals unconditionally
--- (its `Flat _` obligation arm), so running it again here would double-stamp.
--- The two orders are therefore not a drift to be unified in this slice — unifying
--- them would move the flat path's arg stamps ahead of its dict realization, which
--- is a route change, not a schedule change.  They share this vocabulary and this
--- runner, which is what #1116 asks for; they do not share a list.
-flatStampOrder : List StampStep
-flatStampOrder = [
-  SSReturnSites,
-  SSBinopSites,
-  SSUnopSites,
-  SSArithSites,
-  SSRecDictApps,
-  SSDictApps,
-  SSMethodDicts,
-  SSArgStamps,
 ]
 
 -- Everything one module's stampers read, cut at the moment they used to run.
@@ -50575,15 +50394,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "elaborateOne" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreD") (PVar "modules") PWild PWild PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EBinOp "++" (EVar "coreD") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules"))))))
 (DTypeSig false "setDictEligible" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
 (DFunDef false "setDictEligible" ((PVar "names")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "dictEligibleRef")) (EVar "names"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "dictEligibleSetRef")) (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))))))
-(DTypeSig true "elaborateDict" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "elaborateDict" ((PVar "runtimeDecls") (PVar "dictNames") (PVar "eligibleNames") (PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "setDictEligible") (EVar "eligibleNames"))) (DoLet false false (PVar "allNames") (EApp (EApp (EApp (EApp (EVar "discoverAll") (EVar "runtimeDecls")) (EVar "prog")) (EVar "dictNames")) (EVar "eligibleNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "argDispatchIdxByIdRef")) (EApp (EVar "argDispatchIndicesById") (EVar "prog")))) (DoLet false false (PVar "argNames") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "argDispatchIndices") (EVar "prog")))) (DoLet false false (PVar "prog2") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EBinOp "++" (EApp (EVar "returnPosMethodNames") (EVar "prog")) (EApp (EVar "methodConstraintNames") (EVar "prog")))) (EVar "allNames")) (EVar "argNames")) (EListLit)) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "checkProgramSeeded") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "runtimeDecls"))) (EVar "prog2"))) (DoLet false false PWild (EApp (EVar "expandSupersTable") (EVar "prog2"))) (DoLet false false (PVar "mk") (EApp (EVar "currentModuleMarks") (ELit LUnit))) (DoLet false false (PVar "flatGoals") (EApp (EVar "goalsSince") (EFieldAccess (EVar "mk") "mGoals"))) (DoLet false false PWild (EApp (EApp (EVar "runStampSteps") (EApp (EApp (EApp (EApp (EVar "stampCtxOf") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (EVar "prog2")) (EVar "flatGoals")) (EApp (EVar "numlitSince") (EFieldAccess (EVar "mk") "mNumlit")))) (EVar "flatStampOrder"))) (DoLet false false PWild (EApp (EVar "recordEvidence") (EVar "flatGoals"))) (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoLet false false (PVar "out") (EApp (EApp (EVar "dictPass") (EVar "allNames")) (EVar "prog2"))) (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoExpr (EVar "out"))))
-(DTypeSig false "discoverAll" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "discoverAll" (PWild PWild (PVar "dictNames") (PList)) (EVar "dictNames"))
-(DFunDef false "discoverAll" ((PVar "runtimeDecls") (PVar "prog") (PVar "dictNames") PWild) (EApp (EApp (EApp (EVar "discoverPromoted") (EVar "runtimeDecls")) (EVar "prog")) (EVar "dictNames")))
-(DTypeSig false "discoverPromoted" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "discoverPromoted" ((PVar "runtimeDecls") (PVar "prog") (PVar "current")) (EBlock (DoLet false false (PVar "prog1") (EApp (EApp (EApp (EVar "prePassDict") (EBinOp "++" (EApp (EVar "returnPosMethodNames") (EVar "prog")) (EApp (EVar "methodConstraintNames") (EVar "prog")))) (EVar "current")) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "checkProgramSeeded") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "runtimeDecls"))) (EVar "prog1"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "discoverNext") (EVar "runtimeDecls")) (EVar "prog")) (EVar "current")) (EApp (EVar "dedup") (EBinOp "++" (EVar "current") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value")))))))
-(DTypeSig false "discoverNext" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "discoverNext" ((PVar "runtimeDecls") (PVar "prog") (PVar "current") (PVar "next")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "next")) (EApp (EVar "listLen") (EVar "current"))) (EVar "current") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "discoverPromoted") (EVar "runtimeDecls")) (EVar "prog")) (EVar "next")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "moduleUserFnNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "moduleUserFnNames" ((PVar "modules")) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (ELam ((PVar "p")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))))
 (DTypeSig true "constrainedSigNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -50628,16 +50438,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "rewriteRPDict" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "rewriteRPDict" ((PVar "rpNames") (PVar "dictNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "freshEvId") (ELit LUnit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "rewriteRPDict" (PWild PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "prePassDictArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PList) PWild (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "rewriteRPDictArg") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EVar "omEmpty"))) (EVar "prog")))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EVar "prePassDeclScoped") (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "argNames")) (EVar "omEmpty"))) (EVar "shadowMap")) (EVar "noDictHook")))) (EVar "prog")))
 (DTypeSig false "noDictHook" (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit"))))
 (DFunDef false "noDictHook" (PWild PWild) (ELit LUnit))
 (DTypeSig false "mintDictAt" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit"))) (TyFun (TyCon "String") (TyCon "Expr"))))
 (DFunDef false "mintDictAt" ((PVar "onDict") (PVar "n")) (EBlock (DoLet false false (PVar "ev") (EApp (EVar "freshEvId") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "onDict") (EVar "n")) (EVar "ev"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")))))
-(DTypeSig false "rewriteRPDictArg" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))
-(DFunDef false "rewriteRPDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "argNames")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "freshEvId") (ELit LUnit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DFunDef false "rewriteRPDictArg" (PWild PWild PWild (PVar "e")) (EVar "e"))
 (DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit")))))) ())
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
@@ -53999,6 +53803,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "checkOneErrorsWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
+(DTypeSig true "checkOneMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
+(DFunDef false "checkOneMatchToLines" ((PVar "runtimeDecls") (PVar "prog")) (EBlock (DoLet false false (PTuple PWild (PVar "warns")) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EListLit)) (ETuple (ELit (LString "__user__")) (EVar "prog")))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "warns"))))))
 (DTypeSig true "checkModulesEntryLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryLines" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EVar "checkModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))))
 (DTypeSig true "checkModulesAllLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
@@ -54131,8 +53937,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DData Private "StampStep" () ((variant "SSNumlitFloats" (ConPos)) (variant "SSReturnSites" (ConPos)) (variant "SSBinopSites" (ConPos)) (variant "SSUnopSites" (ConPos)) (variant "SSArithSites" (ConPos)) (variant "SSArgStamps" (ConPos)) (variant "SSRLocalSites" (ConPos)) (variant "SSRecDictApps" (ConPos)) (variant "SSDictApps" (ConPos)) (variant "SSMethodDicts" (ConPos))) ())
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
-(DTypeSig false "flatStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
-(DFunDef false "flatStampOrder" () (EListLit (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts") (EVar "SSArgStamps")))
 (DData Private "StampCtx" () ((variant "StampCtx" (ConNamed (field "scModule" (TyCon "String")) (field "scPerRun" (TyCon "PerRun")) (field "scToggles" (TyCon "Toggles")) (field "scImplDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "scRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "scGoals" (TyApp (TyCon "List") (TyCon "Obligation"))) (field "scNumlits" (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))))))) ())
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx"))))))
 (DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scPerRun" (EFieldAccess (EVar "perRun") "value")) (fa "scToggles" (EFieldAccess (EVar "toggles") "value")) (fa "scImplDecls" (EVar "implDecls")) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")))))
@@ -57716,15 +57520,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "elaborateOne" ((PVar "runtimeDecls") (PVar "coreDecls") (PTuple (PVar "rootId") (PVar "prog"))) (EBlock (DoLet false false (PTuple (PVar "coreD") (PVar "modules") PWild PWild PWild) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EListLit (ETuple (EVar "rootId") (EVar "prog"))))) (DoExpr (EBinOp "++" (EVar "coreD") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules"))))))
 (DTypeSig false "setDictEligible" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
 (DFunDef false "setDictEligible" ((PVar "names")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "dictEligibleRef")) (EVar "names"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "dictEligibleSetRef")) (EApp (EApp (EVar "namesToSet") (EVar "names")) (EVar "omEmpty"))))))
-(DTypeSig true "elaborateDict" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "elaborateDict" ((PVar "runtimeDecls") (PVar "dictNames") (PVar "eligibleNames") (PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "setDictEligible") (EVar "eligibleNames"))) (DoLet false false (PVar "allNames") (EApp (EApp (EApp (EApp (EVar "discoverAll") (EVar "runtimeDecls")) (EVar "prog")) (EVar "dictNames")) (EVar "eligibleNames"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "argDispatchIdxByIdRef")) (EApp (EVar "argDispatchIndicesById") (EVar "prog")))) (DoLet false false (PVar "argNames") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "argDispatchIndices") (EVar "prog")))) (DoLet false false (PVar "prog2") (EApp (EApp (EApp (EApp (EApp (EVar "prePassDictArg") (EBinOp "++" (EApp (EVar "returnPosMethodNames") (EVar "prog")) (EApp (EVar "methodConstraintNames") (EVar "prog")))) (EVar "allNames")) (EVar "argNames")) (EListLit)) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "checkProgramSeeded") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "runtimeDecls"))) (EVar "prog2"))) (DoLet false false PWild (EApp (EVar "expandSupersTable") (EVar "prog2"))) (DoLet false false (PVar "mk") (EApp (EVar "currentModuleMarks") (ELit LUnit))) (DoLet false false (PVar "flatGoals") (EApp (EVar "goalsSince") (EFieldAccess (EVar "mk") "mGoals"))) (DoLet false false PWild (EApp (EApp (EVar "runStampSteps") (EApp (EApp (EApp (EApp (EVar "stampCtxOf") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef") "value")) (EVar "prog2")) (EVar "flatGoals")) (EApp (EVar "numlitSince") (EFieldAccess (EVar "mk") "mNumlit")))) (EVar "flatStampOrder"))) (DoLet false false PWild (EApp (EVar "recordEvidence") (EVar "flatGoals"))) (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoLet false false (PVar "out") (EApp (EApp (EVar "dictPass") (EVar "allNames")) (EVar "prog2"))) (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoExpr (EVar "out"))))
-(DTypeSig false "discoverAll" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "discoverAll" (PWild PWild (PVar "dictNames") (PList)) (EVar "dictNames"))
-(DFunDef false "discoverAll" ((PVar "runtimeDecls") (PVar "prog") (PVar "dictNames") PWild) (EApp (EApp (EApp (EVar "discoverPromoted") (EVar "runtimeDecls")) (EVar "prog")) (EVar "dictNames")))
-(DTypeSig false "discoverPromoted" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "discoverPromoted" ((PVar "runtimeDecls") (PVar "prog") (PVar "current")) (EBlock (DoLet false false (PVar "prog1") (EApp (EApp (EApp (EVar "prePassDict") (EBinOp "++" (EApp (EVar "returnPosMethodNames") (EVar "prog")) (EApp (EVar "methodConstraintNames") (EVar "prog")))) (EVar "current")) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "checkProgramSeeded") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "runtimeDecls"))) (EVar "prog1"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "discoverNext") (EVar "runtimeDecls")) (EVar "prog")) (EVar "current")) (EApp (EVar "dedup") (EBinOp "++" (EVar "current") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "promotedRef") "value")))))))
-(DTypeSig false "discoverNext" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))))
-(DFunDef false "discoverNext" ((PVar "runtimeDecls") (PVar "prog") (PVar "current") (PVar "next")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "next")) (EApp (EVar "listLen") (EVar "current"))) (EVar "current") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "discoverPromoted") (EVar "runtimeDecls")) (EVar "prog")) (EVar "next")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "moduleUserFnNames" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "moduleUserFnNames" ((PVar "modules")) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "p")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EApp (EVar "snd") (EVar "p")))))) (EVar "modules"))))
 (DTypeSig true "constrainedSigNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -57769,16 +57564,10 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "rewriteRPDict" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr")))))
 (DFunDef false "rewriteRPDict" ((PVar "rpNames") (PVar "dictNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "freshEvId") (ELit LUnit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DFunDef false "rewriteRPDict" (PWild PWild (PVar "e")) (EVar "e"))
-(DTypeSig false "prePassDictArg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PList) PWild (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EApp (EApp (EVar "rewriteRPDictArg") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EVar "omEmpty"))) (EVar "prog")))
-(DFunDef false "prePassDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PVar "shadowMap") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EVar "prePassDeclScoped") (EApp (EApp (EApp (EApp (EApp (EVar "ArgRw") (EApp (EApp (EVar "omFromNames") (EVar "rpNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "dictNames")) (EVar "omEmpty"))) (EApp (EApp (EVar "omFromNames") (EVar "argNames")) (EVar "omEmpty"))) (EVar "shadowMap")) (EVar "noDictHook")))) (EVar "prog")))
 (DTypeSig false "noDictHook" (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit"))))
 (DFunDef false "noDictHook" (PWild PWild) (ELit LUnit))
 (DTypeSig false "mintDictAt" (TyFun (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit"))) (TyFun (TyCon "String") (TyCon "Expr"))))
 (DFunDef false "mintDictAt" ((PVar "onDict") (PVar "n")) (EBlock (DoLet false false (PVar "ev") (EApp (EVar "freshEvId") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "onDict") (EVar "n")) (EVar "ev"))) (DoExpr (EApp (EApp (EVar "EDictAt") (EVar "n")) (EVar "ev")))))
-(DTypeSig false "rewriteRPDictArg" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "Expr") (TyCon "Expr"))))))
-(DFunDef false "rewriteRPDictArg" ((PVar "rpNames") (PVar "dictNames") (PVar "argNames") (PCon "EVar" (PVar "n"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "rpNames")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "argNames")) (EApp (EApp (EApp (EVar "EMethodAt") (EVar "n")) (ELit (LString ""))) (EApp (EVar "mintMethodCell") (ELit (LString "")))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "dictNames")) (EApp (EApp (EVar "EDictAt") (EVar "n")) (EApp (EVar "freshEvId") (ELit LUnit))) (EIf (EVar "otherwise") (EApp (EVar "EVar") (EVar "n")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
-(DFunDef false "rewriteRPDictArg" (PWild PWild PWild (PVar "e")) (EVar "e"))
 (DData Private "ArgRw" () ((variant "ArgRw" (ConPos (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "EvId") (TyCon "Unit")))))) ())
 (DTypeSig false "prePassDeclScoped" (TyFun (TyCon "ArgRw") (TyFun (TyCon "Decl") (TyCon "Decl"))))
 (DFunDef false "prePassDeclScoped" ((PVar "rw") (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "ps") (PVar "e"))) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "ps")) (EApp (EApp (EApp (EVar "rewriteArgScoped") (EVar "rw")) (EApp (EVar "boundOfList") (EApp (EVar "patVarsListTc") (EVar "ps")))) (EVar "e"))))
@@ -61140,6 +60929,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "checkOneErrorsWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
+(DTypeSig true "checkOneMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
+(DFunDef false "checkOneMatchToLines" ((PVar "runtimeDecls") (PVar "prog")) (EBlock (DoLet false false (PTuple PWild (PVar "warns")) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EListLit)) (ETuple (ELit (LString "__user__")) (EVar "prog")))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "warns"))))))
 (DTypeSig true "checkModulesEntryLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryLines" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EVar "checkModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))))
 (DTypeSig true "checkModulesAllLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
@@ -61272,8 +61063,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DData Private "StampStep" () ((variant "SSNumlitFloats" (ConPos)) (variant "SSReturnSites" (ConPos)) (variant "SSBinopSites" (ConPos)) (variant "SSUnopSites" (ConPos)) (variant "SSArithSites" (ConPos)) (variant "SSArgStamps" (ConPos)) (variant "SSRLocalSites" (ConPos)) (variant "SSRecDictApps" (ConPos)) (variant "SSDictApps" (ConPos)) (variant "SSMethodDicts" (ConPos))) ())
 (DTypeSig false "moduleStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
 (DFunDef false "moduleStampOrder" () (EListLit (EVar "SSNumlitFloats") (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSArgStamps") (EVar "SSRLocalSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts")))
-(DTypeSig false "flatStampOrder" (TyApp (TyCon "List") (TyCon "StampStep")))
-(DFunDef false "flatStampOrder" () (EListLit (EVar "SSReturnSites") (EVar "SSBinopSites") (EVar "SSUnopSites") (EVar "SSArithSites") (EVar "SSRecDictApps") (EVar "SSDictApps") (EVar "SSMethodDicts") (EVar "SSArgStamps")))
 (DData Private "StampCtx" () ((variant "StampCtx" (ConNamed (field "scModule" (TyCon "String")) (field "scPerRun" (TyCon "PerRun")) (field "scToggles" (TyCon "Toggles")) (field "scImplDecls" (TyApp (TyCon "List") (TyCon "Decl"))) (field "scRpNames" (TyApp (TyCon "List") (TyCon "String"))) (field "scGoals" (TyApp (TyCon "List") (TyCon "Obligation"))) (field "scNumlits" (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))))))) ())
 (DTypeSig false "stampCtxOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Obligation")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "StampCtx"))))))
 (DFunDef false "stampCtxOf" ((PVar "mid") (PVar "implDecls") (PVar "goals") (PVar "numlits")) (ERecordCreate "StampCtx" ((fa "scModule" (EVar "mid")) (fa "scPerRun" (EFieldAccess (EVar "perRun") "value")) (fa "scToggles" (EFieldAccess (EVar "toggles") "value")) (fa "scImplDecls" (EVar "implDecls")) (fa "scRpNames" (EApp (EVar "returnPosMethodNames") (EVar "implDecls"))) (fa "scGoals" (EVar "goals")) (fa "scNumlits" (EVar "numlits")))))

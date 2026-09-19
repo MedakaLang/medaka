@@ -15,7 +15,7 @@
 import frontend.ast.{Decl}
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkMatchToLines}
+import types.typecheck.{checkOneMatchToLines}
 
 main = match args ()
   [runtimePath, targetPath] => withFiles runtimePath targetPath
@@ -35,4 +35,4 @@ withTarget rsrc targetPath = match readFile targetPath
 
 runCheckMatch : String -> String -> String
 runCheckMatch rsrc tsrc =
-  checkMatchToLines (desugar (parse rsrc)) (desugar (parse tsrc))
+  checkOneMatchToLines (desugar (parse rsrc)) (desugar (parse tsrc))

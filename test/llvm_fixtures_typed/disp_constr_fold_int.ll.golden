@@ -204,13 +204,13 @@ entry:
   %t6 = getelementptr i8, ptr %t4, i64 16
   store i64 %t3, ptr %t6
   %t7 = ptrtoint ptr %t4 to i64
-  %t8 = call i64 @mdk_total(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t7)
+  %t8 = call i64 @mdk___user____total(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 %t7)
   %t9 = ashr i64 %t8, 1
   call void @mdk_print_int(i64 %t9)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_total(i64 %arg0, i64 %arg1) {
+define i64 @mdk___user____total(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_impl_Bag_fold(i64 ptrtoint (ptr @mdk_cc.program.2 to i64), i64 1, i64 %arg1)
   ret i64 %t0

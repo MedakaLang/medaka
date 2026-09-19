@@ -195,7 +195,7 @@ entry:
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 5, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk_area(i64 %t2)
+  %t3 = call i64 @mdk___user____area(i64 %t2)
   %t4 = call ptr @mdk_alloc(i64 24)
   store i64 1, ptr %t4
   %t5 = getelementptr i8, ptr %t4, i64 8
@@ -203,7 +203,7 @@ entry:
   %t6 = getelementptr i8, ptr %t4, i64 16
   store i64 9, ptr %t6
   %t7 = ptrtoint ptr %t4 to i64
-  %t8 = call i64 @mdk_area(i64 %t7)
+  %t8 = call i64 @mdk___user____area(i64 %t7)
   %t9 = ashr i64 %t8, 1
   %t10 = ashr i64 21, 1
   %t11 = mul i64 %t9, %t10
@@ -214,7 +214,7 @@ entry:
   %t16 = add i64 %t14, %t15
   %t17 = shl i64 %t16, 1
   %t18 = or i64 %t17, 1
-  %t19 = call i64 @mdk_sumPair(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
+  %t19 = call i64 @mdk___user____sumPair(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
   %t20 = ashr i64 %t19, 1
   %t21 = ashr i64 2001, 1
   %t22 = mul i64 %t20, %t21
@@ -230,7 +230,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_area(i64 %arg0) {
+define i64 @mdk___user____area(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = and i64 %arg0, 1
@@ -298,7 +298,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_sumPair(i64 %arg0) {
+define i64 @mdk___user____sumPair(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1

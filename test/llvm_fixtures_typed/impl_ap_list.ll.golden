@@ -191,13 +191,13 @@ define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
   %t0 = call i64 @mdk_impl_List_ap(i64 ptrtoint (ptr @mdk_dc.program.5 to i64), i64 ptrtoint (ptr @mdk_dc.program.7 to i64))
-  %t1 = call i64 @mdk_sumList(i64 %t0)
+  %t1 = call i64 @mdk___user____sumList(i64 %t0)
   %t2 = ashr i64 %t1, 1
   call void @mdk_print_int(i64 %t2)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_sumList(i64 %arg0) {
+define i64 @mdk___user____sumList(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 562949953421315
@@ -237,7 +237,7 @@ conyes20:
   %t30 = inttoptr i64 %arg0 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = call i64 @mdk_sumList(i64 %t32)
+  %t33 = call i64 @mdk___user____sumList(i64 %t32)
   %t34 = call i64 @mdk_num_add(i64 %t29, i64 %t33)
   store i64 %t34, ptr %t0
   br label %decend1

@@ -207,7 +207,7 @@ entry:
   %t8 = getelementptr i8, ptr %t6, i64 16
   store i64 %t5, ptr %t8
   %t9 = ptrtoint ptr %t6 to i64
-  %t10 = call double @mdk_mag2__fw(i64 %t9)
+  %t10 = call double @mdk___user____mag2__fw(i64 %t9)
   %t11 = call ptr @mdk_alloc_atomic(i64 16)
   store i64 2, ptr %t11
   %t12 = getelementptr i8, ptr %t11, i64 8
@@ -225,7 +225,7 @@ entry:
   %t19 = getelementptr i8, ptr %t17, i64 16
   store i64 %t16, ptr %t19
   %t20 = ptrtoint ptr %t17 to i64
-  %t21 = call double @mdk_addF__fw(i64 %t20)
+  %t21 = call double @mdk___user____addF__fw(i64 %t20)
   %t22 = call double @llvm.arithmetic.fence.f64(double %t10)
   %t23 = fadd double %t22, %t21
   %t24 = call ptr @mdk_alloc_atomic(i64 16)
@@ -240,7 +240,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_mag2(i64 %arg0) {
+define i64 @mdk___user____mag2(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -281,7 +281,7 @@ entry:
 }
 
 ; mdk-module program
-define double @mdk_mag2__fw(i64 %arg0) {
+define double @mdk___user____mag2__fw(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -317,7 +317,7 @@ entry:
 }
 
 ; mdk-module program
-define i64 @mdk_addF(i64 %arg0) {
+define i64 @mdk___user____addF(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -342,7 +342,7 @@ entry:
 }
 
 ; mdk-module program
-define double @mdk_addF__fw(i64 %arg0) {
+define double @mdk___user____addF__fw(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8

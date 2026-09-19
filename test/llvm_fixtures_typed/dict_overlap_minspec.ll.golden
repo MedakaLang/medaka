@@ -190,9 +190,9 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_force_theVal()
-  %t1 = call i64 @mdk_unbox(i64 %t0)
-  %t2 = call i64 @mdk_unbox(i64 %t1)
+  %t0 = call i64 @mdk_force___user____theVal()
+  %t1 = call i64 @mdk___user____unbox(i64 %t0)
+  %t2 = call i64 @mdk___user____unbox(i64 %t1)
   %t3 = ashr i64 %t2, 1
   call void @mdk_print_int(i64 %t3)
   ret i32 0
@@ -215,44 +215,44 @@ lz_unforced:
   store i8 2, ptr @mdk_gs_$memo_Int_def
   ret i64 %t2
 }
-; mdk-module $memo_zZDefault_7c
-define i64 @mdk_force_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def() {
+; mdk-module $memo_zZ_5f
+define i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
+  %t0 = load i8, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
+  %t1 = load i64, ptr @mdk_g_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.$memo_zZDefault_7c__28_Box_20_Int_29__7c__def)
+  call void @mdk_cyclic_value(ptr @.gname.$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
-  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_Int_29__7c__def()
-  store i64 %t2, ptr @mdk_g_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
-  store i8 2, ptr @mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def
+  store i8 1, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def
+  %t2 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def()
+  store i64 %t2, ptr @mdk_g_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def
+  store i8 2, ptr @mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_force_theVal() {
+define i64 @mdk_force___user____theVal() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_theVal
+  %t0 = load i8, ptr @mdk_gs___user____theVal
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_theVal
+  %t1 = load i64, ptr @mdk_g___user____theVal
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.theVal)
+  call void @mdk_cyclic_value(ptr @.gname.__user____theVal)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_theVal
-  %t2 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
-  store i64 %t2, ptr @mdk_g_theVal
-  store i8 2, ptr @mdk_gs_theVal
+  store i8 1, ptr @mdk_gs___user____theVal
+  %t2 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_a_29__7c__def(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
+  store i64 %t2, ptr @mdk_g___user____theVal
+  store i8 2, ptr @mdk_gs___user____theVal
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_unbox(i64 %arg0) {
+define i64 @mdk___user____unbox(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -285,8 +285,8 @@ entry:
   ret i64 15
 }
 
-; mdk-module impl:zZDefault_7c__28_Box_20_a_29__7c__def
-define i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 %arg0) {
+; mdk-module impl:zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_a_29__7c__def
+define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_a_29__7c__def(i64 %arg0) {
 entry:
   %t0 = call i64 @mdk_disp_def_0_0(i64 %arg0)
   %t1 = call ptr @mdk_alloc(i64 16)
@@ -297,8 +297,8 @@ entry:
   ret i64 %t3
 }
 
-; mdk-module impl:zZDefault_7c__28_Box_20_Int_29__7c__def
-define i64 @mdk_impl_zZDefault_7c__28_Box_20_Int_29__7c__def() {
+; mdk-module impl:zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def
+define i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def() {
 entry:
   %t0 = call ptr @mdk_alloc(i64 16)
   store i64 0, ptr %t0
@@ -314,22 +314,22 @@ entry:
 @mdk_g_$memo_Int_def = global i64 0
 ; mdk-module program
 @mdk_gs_$memo_Int_def = global i8 0
-; mdk-module $memo_zZDefault_7c
-@mdk_g_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = global i64 0
-; mdk-module $memo_zZDefault_7c
-@mdk_gs_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = global i8 0
+; mdk-module $memo_zZ_5f
+@mdk_g_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def = global i64 0
+; mdk-module $memo_zZ_5f
+@mdk_gs_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def = global i8 0
 ; mdk-module program
-@mdk_g_theVal = global i64 0
+@mdk_g___user____theVal = global i64 0
 ; mdk-module program
-@mdk_gs_theVal = global i8 0
+@mdk_gs___user____theVal = global i8 0
 ; mdk-module program
 @.gname.$memo_Int_def = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
-; mdk-module $memo_zZDefault_7c
-@.gname.$memo_zZDefault_7c__28_Box_20_Int_29__7c__def = private unnamed_addr constant [46 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\44\65\66\61\75\6C\74\5F\37\63\5F\5F\32\38\5F\42\6F\78\5F\32\30\5F\49\6E\74\5F\32\39\5F\5F\37\63\5F\5F\64\65\66\00"
+; mdk-module $memo_zZ_5f
+@.gname.$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def = private unnamed_addr constant [74 x i8] c"\24\6D\65\6D\6F\5F\7A\5A\5F\35\66\5F\5F\35\66\5F\75\73\65\72\5F\35\66\5F\5F\35\66\5F\5F\33\61\5F\5F\33\61\5F\44\65\66\61\75\6C\74\5F\37\63\5F\5F\32\38\5F\42\6F\78\5F\32\30\5F\49\6E\74\5F\32\39\5F\5F\37\63\5F\5F\64\65\66\00"
 ; mdk-module program
-@.gname.theVal = private unnamed_addr constant [7 x i8] c"\74\68\65\56\61\6C\00"
+@.gname.__user____theVal = private unnamed_addr constant [17 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\74\68\65\56\61\6C\00"
 ; mdk-module program
-@mdk_dc.program.0 = internal constant [1 x i64] [i64 -308483285326192921]
+@mdk_dc.program.0 = internal constant [1 x i64] [i64 -1238170422778268714]
 ; mdk-module program
 define i64 @mdk_disp_def_0_0(i64 %dict) {
 entry:
@@ -337,7 +337,7 @@ entry:
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
   %t4 = icmp eq i64 %t1, 193460240
-  %t5 = icmp eq i64 %t1, 4168916346331191341
+  %t5 = icmp eq i64 %t1, 819135516110349788
   %t6 = or i1 %t4, %t5
   br i1 %t6, label %dispyes7, label %dispnext7
 dispyes7:
@@ -346,23 +346,23 @@ dispyes7:
   br label %dispend3
 dispnext7:
   %t9 = icmp eq i64 %t1, 193452654
-  %t10 = icmp eq i64 %t1, 1329440703857575389
+  %t10 = icmp eq i64 %t1, -3202638016853863668
   %t11 = or i1 %t9, %t10
   br i1 %t11, label %dispyes12, label %dispnext12
 dispyes12:
   %t13 = inttoptr i64 %dict to ptr
   %t14 = getelementptr i8, ptr %t13, i64 8
   %t15 = load i64, ptr %t14
-  %t16 = call i64 @mdk_impl_zZDefault_7c__28_Box_20_a_29__7c__def(i64 %t15)
+  %t16 = call i64 @mdk_impl_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_a_29__7c__def(i64 %t15)
   store i64 %t16, ptr %t2
   br label %dispend3
 dispnext12:
   %t17 = icmp eq i64 %t1, 193452654
-  %t18 = icmp eq i64 %t1, -308483285326192921
+  %t18 = icmp eq i64 %t1, -1238170422778268714
   %t19 = or i1 %t17, %t18
   br i1 %t19, label %dispyes20, label %dispnext20
 dispyes20:
-  %t21 = call i64 @mdk_force_$memo_zZDefault_7c__28_Box_20_Int_29__7c__def()
+  %t21 = call i64 @mdk_force_$memo_zZ_5f__5f_user_5f__5f__3a__3a_Default_7c__28_Box_20_Int_29__7c__def()
   store i64 %t21, ptr %t2
   br label %dispend3
 dispnext20:

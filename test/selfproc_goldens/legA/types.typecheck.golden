@@ -378,6 +378,7 @@ checkOneDiagsSynthetic : List Decl -> List Decl -> List (String, List Decl) -> (
 checkOneEffectParam : String -> String -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
+checkOneMatchToLines : List Decl -> List Decl -> String
 checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
 checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
 checkOneSchemeFullK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
@@ -733,9 +734,6 @@ directInferredPreds : List Int -> List (IfaceRef, List Mono, Option Loc) -> List
 directSupers : String -> List String
 discardedValueFix : Option Loc -> Option (Loc, String)
 discardedValueMsg : Mono -> String
-discoverAll : List Decl -> List Decl -> List String -> List String -> List String
-discoverNext : List Decl -> List Decl -> List String -> List String -> List String
-discoverPromoted : List Decl -> List Decl -> List String -> List String
 dispHeadTab : HeadKey -> TabKey
 dispatchIdxScoped : String -> List ((IfaceRef, String), Int) -> Option Int
 dispatchMonosOf : List String -> Ty -> Mono -> List Mono
@@ -793,7 +791,6 @@ effectUndeterminedMsg : String -> String -> List String -> String
 effvarIdOf : (String, Ref Effvar) -> Int
 effvarLevel : Ref Effvar -> Int
 elabModuleStamp : String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), List Decl)
-elaborateDict : List Decl -> List String -> List String -> List Decl -> List Decl
 elaborateModules : List Decl -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl), List (String, (List TcDiag, List TcDiag)), List (String, TcDiag), List EvEntry)
 elaborateOne : List Decl -> List Decl -> (String, List Decl) -> List Decl
 emitCyclicAliasErrors : List String -> Unit
@@ -967,7 +964,6 @@ firstTvar : Mono -> Mono -> Int -> Option Mono
 flatClassEnvOf : List Decl -> ClassEnv
 flatGroupIsCore : List String -> Bool
 flatImplEnvOf : List Decl -> ImplEnv
-flatStampOrder : List StampStep
 foldAppFallback : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Ty -> Mono
 foldAppKinds : List (String, Ref Effvar) -> List (String, Mono) -> Mono -> List Kind -> List Ty -> Mono
 foldModules : Bool -> Bool -> (String -> List (String, Scheme) -> List Decl -> List Decl -> List Decl -> (List (String, Scheme), a)) -> (Bool -> String -> a -> b -> b) -> b -> List (String, Scheme) -> List (String, Scheme) -> List (String, List (String, Scheme)) -> List Decl -> List Decl -> List (String, List Decl) -> b
@@ -1912,7 +1908,6 @@ ppSchemeNamed : String -> Scheme -> String
 ppSchemeNamedFull : String -> Scheme -> String
 prePassDeclScoped : ArgRw -> Decl -> Decl
 prePassDict : List String -> List String -> List Decl -> List Decl
-prePassDictArg : List String -> List String -> List String -> List (String, String) -> List Decl -> List Decl
 prePassFunClauseScoped : ArgRw -> FunClause -> FunClause
 prePassIfaceMethodScoped : ArgRw -> IfaceMethod -> IfaceMethod
 prePassImplMethodScoped : ArgRw -> ImplMethod -> ImplMethod
@@ -2219,7 +2214,6 @@ rewriteArgScoped : ArgRw -> Map String Unit -> Expr -> Expr
 rewriteArgStmts : ArgRw -> Map String Unit -> List DoStmt -> List DoStmt
 rewriteBinopExpr : Expr -> Expr
 rewriteRPDict : Map String Unit -> Map String Unit -> Expr -> Expr
-rewriteRPDictArg : Map String Unit -> Map String Unit -> Map String Unit -> Expr -> Expr
 rootIdOf : Mono -> Int
 rootVarId : Mono -> Int
 routeLocalSym : Route -> String
