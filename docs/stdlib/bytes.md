@@ -43,8 +43,8 @@ newtype Bytes = Bytes ByteBlock
 The byte-string type.
 
 The constructor is module-private, so `fromArray`,
-`fromArrayAssumeByteDomain` and `toUtf8Bytes` are the ways in and `toArray`
-and `fromUtf8Bytes` are the ways out.
+`fromArrayAssumeByteDomain`, `fromByteBlockPrefix` and `toUtf8Bytes` are
+the ways in and `toArray` and `fromUtf8Bytes` are the ways out.
 
 ```medaka
 > map bytesLength (fromArray [|1, 2, 3|])
@@ -96,6 +96,30 @@ the domain-checked door is the only one, alongside `toUtf8`/`fromUtf8`.
 [|104, 105|]
 > toArray (fromArrayAssumeByteDomain [|300, -1|])
 [|44, 255|]
+```
+
+### `fromByteBlockPrefix`
+
+```
+fromByteBlockPrefix : Int -> ByteBlock -> Bytes
+```
+
+The first `n` bytes of `bb`, copied into a byte string.
+
+No domain check runs and none is needed: a `ByteBlock` holds one byte per
+element, so every element is already `0` to `255`. `fromArray` scans
+because an `Array Int` element can be anything.
+
+The result is a copy, so a later write to `bb` does not reach it. This is
+how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
+`buildBytes` is the caller -- which is why it takes a length rather than
+the whole block.
+
+Panics when `n` falls outside `0` to the block's length.
+
+```medaka
+> toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
+[|104, 105|]
 ```
 
 ### `toArray`

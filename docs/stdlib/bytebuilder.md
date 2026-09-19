@@ -4,9 +4,9 @@ A buffer for building byte arrays.
 
 A `Builder` collects bytes in emission order. Create one with
 `newBuilder`, append with the `emit` functions, and take the result with
-`buildArray`. Each `emit` function writes the byte order that
-`byteparser`'s matching reader expects, so a value written here and read
-there comes back unchanged.
+`buildArray` or `buildBytes`. Each `emit` function writes the byte order
+that `byteparser`'s matching reader expects, so a value written here and
+read there comes back unchanged.
 
 ## The builder
 
@@ -14,7 +14,7 @@ there comes back unchanged.
 
 ```
 data Builder
-  = Builder (Vector Int)
+  = Builder (Ref ByteBlock) (Ref Int)
 ```
 
 A byte buffer. Build one with `newBuilder`.
@@ -25,7 +25,7 @@ A byte buffer. Build one with `newBuilder`.
 newBuilder : Unit -> Builder
 ```
 
-A new, empty builder.
+A new, empty builder. The backing block grows on the first `emit`.
 
 ### `buildArray`
 
@@ -34,6 +34,25 @@ buildArray : Builder -> Array Int
 ```
 
 The bytes emitted so far, as an array.
+
+### `buildBytes`
+
+```
+buildBytes : Builder -> Bytes
+```
+
+The bytes emitted so far, as a `Bytes`.
+
+The packed counterpart of `buildArray`: the same bytes in the same order,
+one byte each rather than one boxed machine word each. The result is a
+copy, so emitting more afterwards does not reach it.
+
+```medaka
+> let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
+"[|0, 128, 255|]"
+> let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) == debug (buildArray buf)
+True
+```
 
 ## Emitting
 

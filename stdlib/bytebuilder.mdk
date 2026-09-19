@@ -2,39 +2,79 @@
 
    A `Builder` collects bytes in emission order. Create one with
    `newBuilder`, append with the `emit` functions, and take the result with
-   `buildArray`. Each `emit` function writes the byte order that
-   `byteparser`'s matching reader expects, so a value written here and read
-   there comes back unchanged. -}
+   `buildArray` or `buildBytes`. Each `emit` function writes the byte order
+   that `byteparser`'s matching reader expects, so a value written here and
+   read there comes back unchanged. -}
 
--- Backed by a `Vector Int` (growable, amortized-O(1) `push`); `buildArray`
--- freezes the live range into a fixed-size `Array Int` in emission order,
--- with no reverse pass.
+-- Representation: `Builder backing len` where `!backing` is a packed
+-- `ByteBlock` (its `byteBlockLength` is the capacity) and `!len` is the
+-- number of bytes emitted so far (`0 <= len <= capacity`).  Both are `Ref`s,
+-- mutated in place.  This is `vector.Vector`'s growth shape with a byte block
+-- standing in for the element array, so a byte costs a byte rather than a
+-- boxed machine word.  Bytes `[len, capacity)` are scratch, never read; they
+-- hold whatever a previous grow left there.  Both `build` functions copy
+-- exactly `[0, len)`, in emission order, with no reverse pass.
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
-import vector.{Vector, new, push, toArray}
+-- Wildcard, not `bytes.{Bytes, fromByteBlockPrefix}`: a `newtype`'s name is
+-- not selectively importable -- the import list reads a bare uppercase name
+-- as a constructor request, and a `newtype`'s constructor is always
+-- module-private -- so a wildcard is the only way to name `Bytes` in the
+-- signature of `buildBytes`.
+import bytes.*
 import list.{reverse}
 
 -- # The builder
 
 -- | A byte buffer. Build one with `newBuilder`.
-export data Builder = Builder (Vector Int)
+export data Builder = Builder (Ref ByteBlock) (Ref Int)
 
--- | A new, empty builder.
+-- | A new, empty builder. The backing block grows on the first `emit`.
 export
 newBuilder : Unit -> Builder
-newBuilder _ = Builder (new ())
+newBuilder _ = Builder (Ref (byteBlockMake 0)) (Ref 0)
 
 -- | The bytes emitted so far, as an array.
 export
 buildArray : Builder -> Array Int
-buildArray (Builder a) = toArray a
+buildArray (Builder backing len) =
+  let bb = !backing
+  arrayMakeWith !len (i => byteBlockGetUnsafe i bb)
+
+{- | The bytes emitted so far, as a `Bytes`.
+
+   The packed counterpart of `buildArray`: the same bytes in the same order,
+   one byte each rather than one boxed machine word each. The result is a
+   copy, so emitting more afterwards does not reach it.
+
+   > let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
+   "[|0, 128, 255|]"
+   > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) == debug (buildArray buf)
+   True -}
+export
+buildBytes : Builder -> Bytes
+buildBytes (Builder backing len) = fromByteBlockPrefix !len !backing
 
 -- # Emitting
 
 -- | Appends one byte. Only the low eight bits of the value are used.
 export
 emitU8 : Int -> Builder -> Unit
-emitU8 b (Builder a) = push (bitAnd b 255) a
+emitU8 b (Builder backing len)
+  | !len < byteBlockLength !backing =
+    byteBlockSetUnsafe !len (bitAnd b 255) !backing
+    len := !len + 1
+  | otherwise =
+    -- Capacity doubles, so the blit cost amortizes to O(1) per byte, exactly
+    -- as `vector.push`'s does.
+    let oldBlock = !backing
+    let oldLen = !len
+    let newCap = if oldLen == 0 then 1 else oldLen * 2
+    let newBlock = byteBlockMake newCap
+    byteBlockBlit oldBlock 0 newBlock 0 oldLen
+    byteBlockSetUnsafe oldLen (bitAnd b 255) newBlock
+    backing := newBlock
+    len := oldLen + 1
 
 -- | Appends each value in the list as one byte. The inverse of
 -- `byteparser.takeBytes`.
@@ -161,6 +201,14 @@ build1 f =
 -- Ok 255
 -- > runByteParser (beUint 1) (build1 (emitU8 127))
 -- Ok 127
+
+-- emitU8 keeps only the low eight bits: 300 & 255 == 44.  The write is a
+-- mask, never a refusal -- `bytes.mutBytesSet` is the door that panics
+-- instead, and this one is deliberately not it.
+-- > runByteParser (beUint 1) (build1 (emitU8 300))
+-- Ok 44
+-- > runByteParser (beUint 1) (build1 (emitU8 (-1)))
+-- Ok 255
 
 -- emitU16BE ↔ beUint 2
 -- > runByteParser (beUint 2) (build1 (emitU16BE 0))
