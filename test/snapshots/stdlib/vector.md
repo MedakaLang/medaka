@@ -1,5 +1,5 @@
 # META
-source_lines=526
+source_lines=530
 stages=DESUGAR,MARK
 # SOURCE
 {- | A growable, mutable array.
@@ -384,8 +384,12 @@ export impl Display (Vector a) requires Display a where
 -- when `cap` is 0. `push` only ever needs one `* 2` step because it adds one
 -- element at a time; `pushArray` can jump several capacity classes in a
 -- single call, so this loops the same way `push`'s own doubling would if it
--- had to.
+-- had to. `bytebuilder` runs the same arithmetic over a byte block's
+-- capacity and keeps its own copy: this one is module-private, and an import
+-- of this module there would put `Vector` and its instances into dispatch
+-- scope for every module that imports `bytebuilder`.
 growTo : Int -> Int -> Int
+-- lint-disable-next-line rule-duplicate-body
 growTo cap needed =
   if cap >= needed then cap else growTo (if cap == 0 then 1 else cap * 2) needed
 
