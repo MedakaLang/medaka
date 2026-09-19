@@ -60,6 +60,15 @@ their final path, promoted via same-filesystem `mv`.
 
 ## Authoring a gate case
 
+🚦 **[WT-VEHICLE-FIRST] This section starts one step too late — check that a gate is the
+vehicle at all before you author one.** The default for a new check is native Medaka (a
+doctest, a `prop`, or a `test` block in a `*_test.mdk` sibling); when the subject is the
+compiled binary the vehicle is a `*_test.mdk` registered with `kind = "native"`, not a new
+shell script. Shell is for a trust anchor, external harness, or instrumentation, and then
+the script carries a `shell-because:` header that `medaka gate verify` pairs against its
+registry row. **Load the `write-tests` skill for the dispatch table**; come back here for
+the authoring half. Epic #2600; design `docs/ops/TESTING-ARCHITECTURE.md`.
+
 **[WT-STEPS]** Each `test/diff_compiler_*.sh` runs a stage against `test/*_fixtures/` or
 `*_goldens/`.
 1. Add a fixture (first read [T-SHARED-CORPUS] in `AGENTS.md`).
@@ -67,7 +76,8 @@ their final path, promoted via same-filesystem `mv`.
    `sh test/capture_goldens.sh <tag>` narrows; `--check` dry-runs.
 3. Verify: `bash test/diff_compiler_<name>.sh` passes.
 
-Add cases to the gate matching the stage changed (parser → `diff_compiler_parse*.sh`).
+Add cases to the gate matching the stage changed (parser → `diff_compiler_parse*.sh`) —
+that is where a case goes once [WT-VEHICLE-FIRST] has settled that a gate is the vehicle.
 
 🚨 **[WT-GOLDEN-ENSHRINES]** A captured golden records what the engine DID, not what's CORRECT —
 `eval` is a known-wrong oracle in several open S0s. Before `CAPTURE=1`:

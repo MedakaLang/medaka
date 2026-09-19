@@ -8,8 +8,38 @@
 gh issue list --label "ws:testing" --state open
 ```
 
-**Baseline:** `run_gates.sh` = 83 passed / 0 failed / 0 skipped. Fixpoint C3a+C3b YES. Compiler source
-type-clean.
+**Baseline:** derive it, never read it here — a count written into this file rots.
+Registry size and composition: `./medaka gate list --json`;
+shard packing and the CI pole/floor: `./medaka gate balance --check`; registry health:
+`./medaka gate verify`.
+
+---
+
+## The vehicle ladder — pick it BEFORE you write the check
+
+Epic **#2600**; design authority `docs/ops/TESTING-ARCHITECTURE.md` §3. The one-line rule:
+**native Medaka by default, shell only with a stated reason.**
+
+| Rung | The check's subject | Where it lives |
+|---|---|---|
+| Doctest | a short exported function's real return value, shown as documentation | in-file, in the doc comment |
+| `prop` | an algebraic law over generated inputs | in-file |
+| `test` block in a `*_test.mdk` sibling | a specific case, especially against internal machinery | `<module>_test.mdk` beside its subject |
+| **Gate-test** (`kind = "native"`) | the compiled binary — CLI contract, golden, fixture sweep | `test/<name>_test.mdk` + a `test/gates.toml` row; support in `test/compiler_cli_test_support.mdk` |
+| Shell gate | a trust anchor, an external harness (node/clang/sqlite3), or Callgrind instrumentation | `test/diff_compiler_*.sh` with a `shell-because:` header |
+
+**Load the `write-tests` skill** for the dispatch table and its negative space; load `gates`
+only once the vehicle is settled. `medaka gate verify` pairs every `shell-because:` header
+against its registry row, and a shell gate written because the vehicle cannot yet express
+the check is debt with a name — `migration = "native-wrap"`.
+
+⚠️ **`docs/ops/TESTING-INVENTORY.md` is HISTORY**, frozen at the 2026-09-03 survey. The live
+classification lives in `test/gates.toml`'s `migration` field, where `gate verify` keeps it
+honest. Never quote the inventory's counts as current.
+
+⚠️ **Known capability walls** — these three shapes cannot be expressed natively today, so
+shell is the honest answer for them: a long-lived detached process (#3147), an interactive
+process handle (#2896), several processes in flight at once (#2897).
 
 ---
 
@@ -83,26 +113,17 @@ Known multi-consumer dirs:
 
 ## The agent loop — do NOT run the full suite locally
 
-```sh
-make preflight                                       # ✅ THE LOOP — derives the gate set from YOUR diff
-sh test/run_gates.sh 'diff_compiler_parse*'          # ✅ targeted, by name
-sh test/build_oracles.sh --for 'diff_compiler_*'     # ✅ fresh-worktree recipe (~2 min)
-sh test/run_gates.sh                                 # ❌ all 83
-FORCE=1 sh test/build_oracles.sh                     # ❌ all 54 oracles. Almost never right.
-```
+**`AGENTS.md` § "THE AGENT LOOP" owns this, and the `gates` skill owns the authoring half.**
+Both carried a copy of the commands, the shared-box cost argument, the
+filter-not-authority rule and the full-run justifications; a third copy here drifted (it
+still quoted "all 83" gates and "all 54 oracles", counts that rotted). Read
+`[L-PREFLIGHT]`, `[L-SHARED-BOX]`, `[L-PREFLIGHT-IS-FILTER]` and `[L-BLAST-RADIUS]` there.
 
-**This is a real cost, not an aesthetic preference.** Several agents share this box. One full suite +
-oracle build takes the load average past 10 and **turns a 30-second gate run into several minutes for
-everyone else.** Worse, a bare `FORCE=1 build_oracles.sh` spawns an `xargs -P` pool that **outlives the
-agent's turn and gets RESPAWNED by the harness** — it has killed several agents.
-
-⚠️ **`preflight` is a FILTER, NOT AN AUTHORITY.** It runs a subset and prints what it skipped. **CI on
-the PR is the authority. Nothing merges on a green preflight.**
-
-**A full local run IS justified when:** you changed `compiler/backend/*` (run `selfcompile_fixpoint.sh`)
-· `compiler/support/*` or `stdlib/core.mdk` (blast radius genuinely is everything) · you are merging two
-branches that touched the same subsystem (pre-merge greens do not carry over) · CI says something you
-cannot reproduce.
+The one thing that is this workstream's own and not duplicated: when you change the gate
+machinery itself, `preflight` derives its set from your diff, so a change to
+`test/preflight.sh` or `test/gates.toml` can narrow the very run that was meant to check
+it. Verify the shard actually ran what you think — `[L-PREFLIGHT-IS-FILTER]` carries the
+`gh api .../jobs` recipe.
 
 ---
 
