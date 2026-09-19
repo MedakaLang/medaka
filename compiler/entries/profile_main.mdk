@@ -12,7 +12,8 @@
 --   resolve         name resolution (resolveToLines; raw prelude, desugared target)
 --   mark            method-reference marking (markWithPrelude; desugared core)
 --   typecheck       HM type inference (checkOneToLinesWithRuntime; desugared runtime+core)
---   elaborate       install* dict-route table builders + elaborateOne (issue #882)
+--   elaborate       elaborateModules + mangleUnitsEv + the install* dict-route
+--                   table builders over their output (issue #882)
 --   dce             dead-code filter over the elaborated program (dceFilter; #882)
 --   mangle          universal per-module private-name de-collision (mangleUnits; #882)
 --                   ADDITIVE: run standalone for measurement and DISCARDED — it does
@@ -41,10 +42,7 @@ import frontend.resolve.{resolveToLines}
 import frontend.marker.{markWithPrelude}
 import types.typecheck.{
   checkOneToLinesWithRuntime,
-  elaborateOne,
-  constrainedSigNames,
-  preludeReturnPosDictNames,
-  preludeArgPosDictNames,
+  elaborateModules,
   mainTypeIsUnit,
   mainTypeIsFloat,
   checkedFfiExternTypeNames,
@@ -64,7 +62,7 @@ import ir.core_ir_lower.{
   validateFfiExternTypeNames,
 }
 import ir.dce.{dceFilter}
-import backend.private_mangle.{mangleUnits}
+import backend.private_mangle.{mangleUnits, mangleUnitsEv}
 import backend.llvm_emit.{emitProgram, makeEmitInput}
 -- `backend.wasm_emit` is the SECOND backend, and it exports its own `emitProgram` —
 -- that name collides with the LLVM
@@ -260,50 +258,57 @@ runStaged on targetPath rsrc csrc tsrc =
   --     baseline, so that fixed cost dilutes a `lower`/`emit` ratio DOWNWARD.
   --   * Single-file only: no loader, no multi-module link, no clang. `medaka build`
   --     also links (and `--gc-sections` prunes again at the object level).
-  -- elaborate: the dict-route STAMPING pass (issue #882). The eight install* table-
-  -- builders (returnsSelfTable, methodIfaceTable, …) + the dictNames scans
-  -- (preludeReturnPosDictNames, …) + elaborateOne itself all ran here UNTIMED — the
-  -- "elaboration is deliberately OUTSIDE both timers" gap between typecheck and lower.
-  -- Any of those table-builds is a candidate List-as-set quadratic; this stage puts the
-  -- whole block on the CI map as ONE [perf] row. It is measurement-only bracketing: the
-  -- exact same computation runs, in the same order, so `elaborated`/`live` and every
-  -- downstream stage are byte-unchanged.
+  -- elaborate: the dict-route STAMPING pass (issue #882), in the shape every
+  -- production emit driver uses — `elaborateModules`, then `mangleUnitsEv` over its
+  -- output (#2809: entries/entry_support.runEmitWith,
+  -- entries/llvm_emit_typed_main.runEmit, tools/snapshot.emitBoth). The eight
+  -- install* table-builders (returnsSelfTable, methodIfaceTable, …) read those
+  -- MANGLED decls for the same reason those drivers do: a table keyed on the
+  -- pre-elaboration decl names cannot answer a lookup against a module-qualified
+  -- tree, and the miss falls back to the emitter's bare-label first match — issue
+  -- #38's wrong-slot record miscompile, which this driver would then be timing
+  -- instead of the emit a real build performs. Any of these table-builds is a
+  -- candidate List-as-set quadratic; this stage puts the whole block on the CI map
+  -- as ONE [perf] row, and grades elaboration + its mangle, nothing past it.
   let tEl0 = now ()
   let aEl0 = allocSnap ()
   let oEl0 = opSnap ()
   let userNames = funNamesOf desugared
   let livePrelude = dropShadowedExp userNames cDecls
-  let combined = livePrelude ++ desugared
-  let dictNames =
-    preludeReturnPosDictNames livePrelude combined
-      ++ preludeArgPosDictNames livePrelude combined
-      ++ constrainedSigNames desugared
-  let elaborated = elaborateOne rDecls livePrelude ("__user__", desugared)
+  -- The per-module schemes and residual diagnostics `elaborateModules` also returns
+  -- have no consumer here: this driver measures stages and throws its emitted IR
+  -- away, so it has no diagnostic surface to route them to — entry_support's own
+  -- `emitModulesWith` names the same slots `_`.
+  let (coreE, modulesE, _, _, _) =
+    elaborateModules rDecls livePrelude (("__user__", desugared) :: [])
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let elaborated = coreD ++ flatMap snd modules2
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
   -- projection is post-elaboration so it consumes the same canonical alias shape
   -- the declaration guards accepted.
   let input =
     makeEmitInput
-      (returnsSelfTable combined)
-      (selfFnParamTable combined)
-      (methodIfaceTable combined)
-      (methodConstraintIfaces combined)
-      (ctorFieldTypeNames combined)
-      (declSigTypeNames rDecls ++ declSigTypeNames combined)
+      (returnsSelfTable elaborated)
+      (selfFnParamTable elaborated)
+      (methodIfaceTable elaborated)
+      (methodConstraintIfaces elaborated)
+      (ctorFieldTypeNames elaborated)
+      (declSigTypeNames rDecls ++ declSigTypeNames elaborated)
       (mainTypeIsUnit ())
       (mainTypeIsFloat ())
       0
       []
       []
       targetPath
-      (declaredRecordFieldOrders combined)
-      (validateFfiExternTypeNames (checkedFfiExternTypeNames combined))
-      -- `combined`, not `live`: this driver builds every other input table from
-      -- `combined` too, and DCE (which produces `live`) runs in its OWN timed stage
-      -- below, so reading it here would move that stage's work into `elaborate`.  The
-      -- head table is a strict superset of `live`'s, and this driver DISCARDS its
-      -- emitted IR (it measures stages), so the difference is unobservable.
-      (ifaceImplHeadTable combined)
+      (declaredRecordFieldOrders elaborated)
+      (validateFfiExternTypeNames (checkedFfiExternTypeNames elaborated))
+      -- `elaborated`, not `live`: this driver builds every other input table from
+      -- the elaborated decls too, and DCE (which produces `live`) runs in its OWN
+      -- timed stage below, so reading it here would move that stage's work into
+      -- `elaborate`.  The head table is a strict superset of `live`'s, and this
+      -- driver DISCARDS its emitted IR (it measures stages), so the difference is
+      -- unobservable.
+      (ifaceImplHeadTable elaborated)
   let tEl1 = now ()
   let _ =
     emitPhaseAO
@@ -335,12 +340,15 @@ runStaged on targetPath rsrc csrc tsrc =
   -- renaming a unit's PRIVATE defs to `<mid>__name` so cross-module bare-name collisions
   -- cannot alias at emit; #352 flags its `pubFnNames` list-as-set. This stage stays on
   -- the plain `mangleUnits` entry and on the RAW decls, so it prices the rename alone
-  -- and not the elaboration ahead of it. profile_main never
-  -- called it — a whole production pass was off the CI map. ADDITIVE (mirrors #881's
+  -- and not the elaboration ahead of it — the `elaborate` stage above pays for the
+  -- `mangleUnitsEv` the decls that reach lower/emit actually go through, and a stage
+  -- that graded the two together could not tell a rename quadratic from an
+  -- elaboration one. ADDITIVE (mirrors #881's
   -- resolve stage): run it standalone over (cDecls, [("target", desugared)]) — the same
   -- core-plus-one-module shape the emit drivers feed it — and DISCARD the result; it
-  -- does NOT transform the decls that reach lower/emit, so those stages are byte-
-  -- unchanged. The tuple is forced (listLen both halves) so the work is not a thunk.
+  -- does NOT transform the decls that reach lower/emit, so those stages see exactly
+  -- what `elaborate` produced. The tuple is forced (listLen both halves) so the work is
+  -- not a thunk.
   let tMg0 = now ()
   let aMg0 = allocSnap ()
   let oMg0 = opSnap ()

@@ -36,11 +36,13 @@
 -- (`test/run_check_agreement_fixtures/reject_1812_alias_import_order.mdk` and its
 -- permuted accepting twin).
 --
--- The FLAT arm is a separate driver and always was: `elaborateDict` /
--- `checkProgramSchemesWithRuntime` / `checkToLines` run a single program with no
--- module graph, with their own stamper order (`flatStampOrder`) and their own
+-- The FLAT arm is a separate driver and always was: `checkProgramSchemesWithRuntime`
+-- and `checkToLines` (the `Flat coreProg` case of `CheckMode`) run a single program
+-- with no module graph, with their own stamper order (`flatStampOrder`) and their own
 -- pre-pass marking.  Fix inference behaviour in whichever arm you measured, then
--- check the other.
+-- check the other.  The flat arm no longer has an ELABORATION driver of its own —
+-- `elaborateDict` is gone and every emit/eval consumer elaborates through
+-- `elaborateOne`/`elaborateModules`; what remains flat is the CHECK side.
 --
 -- History: this began as a prelude-less HM engine validated against the (since removed)
 -- OCaml reference compiler.  Both that reference and its `dev/tc_probe.exe` harness are
@@ -5870,9 +5872,11 @@ buildImplEnvGo (m :: rest) ia =
 -- graph driver builds (`buildDeclEnvs` ← `graphPreamble`, reached from `driveGraphK`
 -- and from `checkModulesPreambleK`'s projection of it).
 -- The FLAT path — `checkProgramSeededSplit` → `checkBodyImpl (Flat coreProg)`, reached
--- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, `lint`'s policy pass,
--- `snapshot`, and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries via
--- `elaborateDict` — never calls it, so `declEnvsRef.deImpls` is `emptyImplEnv` there.
+-- by `medaka check <no-import file>`, `lsp`, `repl`, `doc`, and `lint`'s policy pass
+-- — never calls it, so `declEnvsRef.deImpls` is `emptyImplEnv` there.  The
+-- `snapshot` tool and the `llvm_emit_typed_main` / `wasm_emit_typed_main` entries
+-- are NOT on this list: they elaborate through `elaborateModules`, which is the
+-- graph driver, so they build a real envelope.
 -- That emptiness is the hazard RUN-B-017 probe 3 MEASURED: FLAT is
 -- already whole-program and already CORRECT on #1564's shape (it accepts and prints
 -- `wrap(int)` where the four-module program rejects), so a later bite that repoints
@@ -30174,9 +30178,9 @@ checkBodyImpl seed mode prog0 =
       let preludeBodyEnv =
         extendVars env1 (dropSchemesNamed methodNames topSchemes)
       let _ = scopeShadowsCore ()
-      -- No impl-body inference over `coreProgS` here: the one Flat entry that
-      -- elaborates (`checkProgramSeeded`, via `elaborateDict`) passes an EMPTY core
-      -- and carries the prelude inside `prog0S`, so there is nothing to walk; on the
+      -- No impl-body inference over `coreProgS` here: the Flat callers that arrive
+      -- with a FLATTENED prelude (`checkProgramSeeded`, which fixes `coreProg0 = []`
+      -- and carries the prelude inside `prog0S`) leave nothing to walk; on the
       -- Flat CHECK entries (a real prelude split) re-inferring core's parametric impl
       -- bodies against the user program raises spurious `T-AMBIGUOUS-INSTANCE`
       -- rejects (`diff_compiler_flat_vs_onemodule` pins the accepting rows).
@@ -30299,9 +30303,11 @@ checkBodyImpl seed mode prog0 =
   -- silent accept.  `classEnvHere`'s `Flat _` arm is what prevents that.
   let _ = checkImplCompletenessMap (fst classEnvHere) (snd classEnvHere) prog
   -- (#5 / BREAK #2) obligation channels.  FLAT runs both channels + setNumlitFloats
-  -- here (flat-emit via elaborateDict needs the Float int-literal stamp — its
-  -- resolve chain doesn't redo it).  MODULE runs both channels here and leaves the
-  -- Float stamp to the graph-end drain (`SSNumlitFloats`), on every driver (#2705).
+  -- here: the Flat arm has no graph-end drain, so this pass is its only chance to
+  -- stamp the Float-typed int literals, and a Flat consumer that read them unstamped
+  -- would get Int cells where the inference said Float.  MODULE runs both channels
+  -- here and leaves the Float stamp to the graph-end drain (`SSNumlitFloats`), on
+  -- every driver (#2705).
   let _ = match mode
     Flat _ =>
       -- #838 I4: impl obligations now go through the unified checkCallObligations
