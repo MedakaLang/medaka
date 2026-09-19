@@ -8770,9 +8770,11 @@ resolveArgStamps ((PendingEntry name tagRef am encl kind loc scope _) :: rest) =
 -- (inside entailInst) upgrades to the canonical full-type impl key so eval's hasTag
 -- matches the right impl's `k`.  No collision → bare head, unchanged.
 -- ⚠️ tagRef is NOT always RNone-seeded: rewriteArgScoped (~7438) seeds a standalone-shadow
--- arg site to `RLocal <sym> []`, and resolveRLocalSites (later) leaves an importer-shadow
--- site UNTOUCHED — so the pre-S3c None arm's `()` was load-bearing: it PRESERVED that
--- RLocal seed.  For EKArg `entail` yields RNone ONLY from its fallback (assum→RDict,
+-- arg site to `RLocal <sym> []`.  At an `EKArg` site, `resolveRLocalSites` leaves that
+-- importer seed untouched only for an ungrounded receiver or a grounded receiver with a
+-- visible impl; a no-impl grounded receiver is restamped `RLocal`.  So the pre-S3c None
+-- arm's `()` was load-bearing: it PRESERVED the seed until that receiver decision.  For
+-- EKArg `entail` yields RNone ONLY from its fallback (assum→RDict,
 -- inst→RKey), so guarding the stamp on RNone reproduces that do-nothing None arm exactly
 -- and never clobbers an RLocal seed.  implRef is []-seeded everywhere (every EMethodAt
 -- construction — 7313/7355/7356/7438/7441/7443 — uses `(Ref [])`, and only this resolver
@@ -21923,9 +21925,10 @@ resolveSite : List String ->
 -- pre-S3b arm-by-arm body: assum → `(RDictFwd/RDict, [])`, inst → `(RKey key [],
 -- selected-row prerequisite routes)`, fallback → `(RNone, [])`.
 -- ⚠️ tagRef is NOT always RNone-seeded: a P0-18 standalone-shadow site seeds it to
--- `RLocal <sym> []` at rewriteArgScoped (~7438), and `resolveRLocalSites` (later) leaves
--- an importer-shadow / argDispatchOf-None / ungrounded-result site's ref UNTOUCHED — so
--- the pre-S3b None arm's `()` was load-bearing: it PRESERVED that RLocal seed.  For
+-- `RLocal <sym> []` at rewriteArgScoped (~7438).  A return-position standalone value
+-- shadow is then force-stamped `RLocal` by `resolveRLocalSites`; an argument-position
+-- importer shadow is the separate receiver-sensitive case described at `resolveArgStamp`.
+-- The pre-S3b None arm's `()` was load-bearing: it PRESERVED that RLocal seed.  For
 -- EKReturn `entail` yields RNone ONLY from its fallback (assum→RDict/RDictFwd, inst→RKey),
 -- so guarding the stamp on RNone reproduces that do-nothing None arm exactly and never
 -- clobbers an RLocal seed.  implRef is []-seeded everywhere, so []-over-[] needs no guard.

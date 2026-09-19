@@ -81,7 +81,7 @@ does not have as units. The amended set is eight:
 | **K** — declaration analysis | whole-graph CE/IE/DataEnv **and the per-module seed layer it has not absorbed** | R folded in; the "assembled once" clause corrected (SA-2) |
 | **I** — inference | the `infer` recursion, kept structurally intact | unchanged |
 | **Sh** — shadow resolution | definer/importer shadow dispatch, value-position pinning, standalone dict computation | **NEW.** 1,043 code lines, larger than ENTAIL (556) and COHERENCE (265) combined, today split four ways: I (the six-arm `inferAppExpr` ladder), K (shadow sets from `universeIfaceMethodsRef`), E (per-module `prePassModulePairArg` filtering), S (`resolveRLocalSites`). L1 already names "the shadow resolution function" as a spec judgment and SHADOW-SEMANTICS §3 already has its table; §2 gave it no home |
-| **S** — solving | ONE entailment engine **and the stamper schedule as one owned contract** | the schedule is now inside S's contract, not adjacent to it: there are two stamper sequences (`elabModuleStamp:42870-42890` vs `elaborateDict:19956-19966`), they run in different orders, and the flat one omits `resolveRLocalSites` entirely, so L15's stated override rule is unenforceable there |
+| **S** — solving | ONE entailment engine **and the stamper schedule as one owned contract** | the schedule is inside S's contract, not adjacent to it: `moduleStampOrder` is the sole graph-level sequence, including `resolveRLocalSites`, so L15's override rule has one enforceable order |
 | **E** — elaboration / driver | one driver, one mode, marking on the schedule | unchanged in intent; re-sequenced (SA-4) |
 | **G** — global checks | coherence, escape/launder, kinds, exhaustiveness bridge | unchanged |
 | **Dg** — diagnostics | **an owned region of `typecheck.mdk` with a single gateway, not an extracted module** | **replaces the withdrawn D.** 1,471 code lines, the largest single orphan, created by F-2's withdrawal and never re-homed. D failed as a *module* extraction because every pass pushes; the phase form is buildable (SA-4 step 3) |
@@ -163,14 +163,16 @@ the tree** (`:28660-28663`). **Re-pin I5 consequence class 3 before #2548** (SA-
 
 ### SA-4. Stage E, re-sequenced by leverage
 
-The **only production consumer of the `Flat` arm** is `elaborateModules`'s own promotion
-fallback re-entering it (`:41945` → `discoverPromotedJoint:20159` → `checkProgramSeeded:20175`
-→ `checkProgramSeededSplit:28465` → `checkBodyImpl (Flat …)` at `:28519`). Every other Flat
-consumer is a gate or probe entry plus `medaka snapshot`. E-1's premise at §6 is also wrong in
-the reader's favour: `medaka check <file>` never reaches Flat — the single-file front door wraps
-the file as `[("__user__", prog)]` and takes the **Module** arm (`:33356-33365`,
-`checkOneToLinesWithRuntime:41667-41670`). E-2 is therefore cheaper than §6 prices it, and E-1's
-residual surface is test infrastructure.
+**E-2 status update (2026-09-19).** `CheckMode`, its `Flat` constructor, the
+flat fallback, and the second stamper sequence are deleted.  Every retained
+checking route uses the Module path; the retained one-file/split pins compare
+that one route.  The pre-collapse analysis below is historical rationale, not
+a description of live code.
+
+At the time of the survey, the promotion fallback was the only production Flat
+consumer.  The Module one-file route was already the CLI path; E-2 completed
+the deletion and retired the obsolete controls rather than preserving a second
+checking mode.
 
 Seven steps, in this order, with the dependency reasons measured in the feasibility analysis:
 
