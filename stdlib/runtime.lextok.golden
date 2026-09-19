@@ -1430,6 +1430,21 @@ ARROW
 UPPER "ByteBlock"
 NEWLINE
 EXTERN
+IDENT "byteBlockBlit"
+COLON
+UPPER "ByteBlock"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "ByteBlock"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Unit"
+NEWLINE
+EXTERN
 IDENT "byteBlockFromIntArray"
 COLON
 UPPER "Array"
@@ -1451,6 +1466,13 @@ COLON
 UPPER "String"
 ARROW
 UPPER "ByteBlock"
+NEWLINE
+EXTERN
+IDENT "byteBlockToString"
+COLON
+UPPER "ByteBlock"
+ARROW
+UPPER "String"
 NEWLINE
 EXTERN
 IDENT "stringToChars"

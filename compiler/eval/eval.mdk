@@ -3391,9 +3391,11 @@ externBindings _ = [
   ("byteBlockGetUnsafe", prim2 pByteBlockGetUnsafe),
   ("byteBlockSetUnsafe", prim3M pByteBlockSetUnsafe),
   ("byteBlockCopyUnsafe", prim2 pByteBlockCopyUnsafe),
+  ("byteBlockBlit", prim5M pByteBlockBlit),
   ("byteBlockFromIntArray", prim1 pByteBlockFromIntArray),
   ("byteBlockToIntArray", prim1 pByteBlockToIntArray),
   ("byteBlockFromString", prim1 pByteBlockFromString),
+  ("byteBlockToString", prim1 pByteBlockToString),
   ("Ref", prim1 pRef),
   ("setRef", prim2M pSetRef),
   ("putStr", prim1M pPutStr),
@@ -3848,6 +3850,21 @@ pByteBlockCopyUnsafe (VInt n) (VByteBlock b) =
   VByteBlock (arrayMakeWith n (i => arrayGetUnsafe i b))
 pByteBlockCopyUnsafe _ _ = panic "byteBlockCopyUnsafe: bad operands"
 
+-- byteBlockBlit : ByteBlock -> Int -> ByteBlock -> Int -> Int -> Unit — copies
+-- len bytes from src[srcOff..] into dst[dstOff..] in place.  The backing here is
+-- an Array Int, so this delegates to `arrayBlit`, whose memmove matches the
+-- native half's; both blocks may be the same one with overlapping regions.
+pByteBlockBlit : Value e ->
+  Value e ->
+  Value e ->
+  Value e ->
+  Value e ->
+  <e> Value e
+pByteBlockBlit (VByteBlock src) (VInt srcOff) (VByteBlock dst) (VInt dstOff) (VInt len) =
+  let _ = arrayBlit src srcOff dst dstOff len
+  VUnit
+pByteBlockBlit _ _ _ _ _ = panic "byteBlockBlit: bad operands"
+
 pByteBlockFromIntArray : Value e -> <e> Value e
 pByteBlockFromIntArray (VArray vs) =
   VByteBlock (arrayFromList (map (v => lowByte (unInt v)) (arrayToListG vs)))
@@ -3861,6 +3878,13 @@ pByteBlockToIntArray _ = panic "byteBlockToIntArray: not a ByteBlock"
 pByteBlockFromString : Value e -> <e> Value e
 pByteBlockFromString (VString s) = VByteBlock (stringToUtf8Bytes s)
 pByteBlockFromString _ = panic "byteBlockFromString: not a String"
+
+-- byteBlockToString : ByteBlock -> String — the block's bytes read as UTF-8.
+-- The same permissive route as `stringFromUtf8Bytes`: bytes are copied verbatim
+-- and the codepoint count is recomputed, so invalid UTF-8 survives unchanged.
+pByteBlockToString : Value e -> <e> Value e
+pByteBlockToString (VByteBlock b) = VString (stringFromUtf8Bytes b)
+pByteBlockToString _ = panic "byteBlockToString: not a ByteBlock"
 
 buildWith : Value e -> Int -> Int -> <e> List (Value e)
 buildWith f i n =

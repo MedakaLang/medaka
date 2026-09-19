@@ -1,6 +1,6 @@
 -- The `ByteBlock` builtin's whole kernel, exercised end to end: allocate zeroed,
 -- length, read, write, copy-in from `Array Int`, copy-out to `Array Int`, copy-in
--- from `String`, and the freeze copy.
+-- from `String`, copy-out to `String`, the freeze copy, and the blit.
 --
 -- Every printed value is an Int projected out of a block or an array, never a
 -- block itself: the native backend cannot print a cell (emitPrint panics on
@@ -14,6 +14,19 @@
 --   * `byteBlockFromIntArray` keeps the low eight bits of 258, i.e. 2.
 -- And one aliasing fact: the freeze copy shares nothing with its source, so the
 -- write that follows it does not reach the frozen block.
+--
+-- The blit is asserted at BOTH offsets non-zero and, separately, as a
+-- forward-overlapping move within one block: the three engines reach it by
+-- memmove (native), `arrayBlit` over the Array Int backing (interpreter) and
+-- `array.copy` (wasm), all of which read a source byte as it was before any
+-- byte was written.  A naive ascending element loop would leave [1,1,1,1,1]
+-- where all three must leave [1,1,2,3,4].
+--
+-- `byteBlockToString` is asserted against `stringFromUtf8Bytes` over the SAME
+-- bytes rather than printed, because the bytes include invalid UTF-8 (a lone
+-- continuation byte, then a truncated three-byte lead) and what a host does
+-- with those on stdout is not what this fixture is about.  The codepoint count
+-- is printed, since all three recompute it by the non-continuation-byte rule.
 
 sumBytes : ByteBlock -> Int -> Int -> Int
 sumBytes b i n
@@ -31,6 +44,15 @@ main =
   let out = byteBlockToIntArray fromArr
   -- "he" + U+00E9, which is two UTF-8 bytes: 0xC3 0xA9.
   let fromStr = byteBlockFromString "hé"
+  let src = byteBlockFromIntArray [|10, 20, 30, 40, 50|]
+  let dst = byteBlockMake 6
+  let _ = byteBlockBlit src 1 dst 2 3
+  let ov = byteBlockFromIntArray [|1, 2, 3, 4, 5|]
+  let _ = byteBlockBlit ov 0 ov 1 4
+  -- 'h', a lone continuation byte, a three-byte lead truncated after one
+  -- continuation, 'i'.
+  let badBytes = [|104, 191, 226, 130, 105|]
+  let badStr = byteBlockToString (byteBlockFromIntArray badBytes)
   (
     (
       byteBlockLength blk,
@@ -45,5 +67,15 @@ main =
       byteBlockGetUnsafe 1 fromStr,
       byteBlockGetUnsafe 2 fromStr,
     ),
-    (byteBlockLength frozen, byteBlockGetUnsafe 0 frozen),
+    (
+      byteBlockLength frozen,
+      byteBlockGetUnsafe 0 frozen,
+      byteBlockToString (byteBlockFromString "hi"),
+      byteBlockToString (byteBlockFromString "hé") == "hé",
+      badStr == stringFromUtf8Bytes badBytes,
+    ),
+    (
+      (byteBlockGetUnsafe 2 dst, byteBlockGetUnsafe 4 dst, sumBytes dst 0 6),
+      (sumBytes ov 0 5, byteBlockGetUnsafe 4 ov, stringLength badStr),
+    ),
   )

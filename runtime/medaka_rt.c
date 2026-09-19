@@ -1113,6 +1113,16 @@ long long mdk_byteblock_copy(long long n_tagged, long long bb) {
                     (size_t)n);
   return (long long)cell;
 }
+/* byteBlockBlit src srcOff dst dstOff len.  memmove, not memcpy: src and dst
+   may be the same cell with overlapping regions, and the interpreter's arm
+   delegates to arrayBlit, which is memmove too. */
+void mdk_byteblock_blit(long long src, long long so_t, long long dst,
+                        long long dof_t, long long len_t) {
+  long long len = len_t >> 1;
+  if (len > 0)
+    memmove(mdk_byteblock_bytes(dst) + (dof_t >> 1),
+            mdk_byteblock_bytes(src) + (so_t >> 1), (size_t)len);
+}
 long long mdk_byteblock_from_int_array(long long arr) {
   const long long *a = (const long long *)arr;
   long long n = a[0];
@@ -1135,6 +1145,14 @@ long long mdk_byteblock_from_string(long long s) {
   if (n > 0) memcpy((unsigned char *)cell + 16, (const char *)s + 24,
                     (size_t)n);
   return (long long)cell;
+}
+/* byteBlockToString: the block's bytes as a fresh String cell.  PERMISSIVE,
+   byte-for-byte the same route as mdk_string_from_utf8_bytes: the bytes are
+   copied verbatim and mdk_str_lit recomputes cp_count by the
+   non-continuation-byte rule, so invalid UTF-8 is preserved, not rejected. */
+long long mdk_byteblock_to_string(long long bb) {
+  return mdk_str_lit((const char *)mdk_byteblock_bytes(bb),
+                     mdk_byteblock_count(bb));
 }
 
 

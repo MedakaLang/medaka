@@ -1784,6 +1784,23 @@ byteBlockRuntimeLines = [
   "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
   "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
   "    (local.get $out))",
+  "  ;; byteBlockToString: the block's bytes as a fresh $str.  The backing is COPIED",
+  "  ;; because a block is mutable and a $str's bytes are shared by every reference to",
+  "  ;; it.  cp_count is recomputed by the non-continuation-byte rule, byte-identical",
+  "  ;; to $mdk_utf8_bytes_to_str and to medaka_rt.c's mdk_str_lit, so an invalid",
+  "  ;; sequence is preserved rather than rejected.",
+  "  (func $mdk_bb_to_string (param $b (ref $u8arr)) (result (ref $str))",
+  "    (local $n i32) (local $buf (ref $u8arr)) (local $i i32) (local $cpc i32)",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $buf (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (array.copy $u8arr $u8arr (local.get $buf) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
+  "    (local.set $i (i32.const 0)) (local.set $cpc (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (if (i32.ne (i32.and (array.get_u $u8arr (local.get $b) (local.get $i)) (i32.const 192)) (i32.const 128))",
+  "        (then (local.set $cpc (i32.add (local.get $cpc) (i32.const 1)))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (struct.new $str (local.get $cpc) (local.get $buf)))",
 ]
 
 -- ── W11b charFromCode : Int -> Option Char ───────────────────────────────────────
