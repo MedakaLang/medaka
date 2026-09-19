@@ -512,6 +512,13 @@ trap 'rm -rf "$TMP"' EXIT
 #     (the #1155 closedness pair); without it that pair is inert.
 TABLE='s1-nary-predicate-enforced.mdk|§1/§4 an n-ary predicate is ONE joint obligation: an unsatisfiable `Ix String Bool` is a located reject (#607 regression pin -- was exit 0 + a run-time panic)|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
 s1-nary-predicate-scheme-kept.mdk|§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|3|
+return-absent-given-char-first.mdk|#2981 absent ordinary-return formal: the enclosing Hidden Int Bool given supplies b even when Char is declared first|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|12|
+return-absent-given-bool-first.mdk|#2981 declaration-order twin: the same qualified given still supplies Hidden Int Bool|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|12|
+return-absent-complete-vector-control.mdk|#2981 retained must-fail control: both interface formals occur in the method type and the ambient Hidden Int Bool given produces 12|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|12|
+return-absent-given-prerequisite.mdk|#2981 completed predicate retains the selected Hidden Int Bool row Seed Bool prerequisite|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|42|
+return-absent-given-missing-prerequisite.mdk|#2981 negative prerequisite control: Hidden Int Bool requires the absent Seed Bool implementation|REJECT|REJECT|REJECT|NONE||T-NO-IMPL
+return-absent-undetermined-char-first.mdk|#2981 no enclosing evidence: two rows matching the visible Int position reject instead of choosing Char first|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE
+return-absent-undetermined-bool-first.mdk|#2981 no enclosing evidence, reversed declarations: the same partial goal rejects instead of choosing Bool first|REJECT|REJECT|REJECT|NONE||T-AMBIGUOUS-INSTANCE
 s6-d1-test-body-num-default/main.mdk|§6.3 D1/D4: closed test-body Num defaults before Eq/Debug checking; explicit Float and generalized local variables retain their determination channels|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|0|!T-AMBIGUOUS-INSTANCE
 s6-d1-prop-body-num-default.mdk|§6.3 D1/D4: property-body Num defaults, while a Float parameter and generalized local function remain caller selected|ACCEPT|ACCEPT|ACCEPT|ALL_EXACT|0|!T-AMBIGUOUS-INSTANCE
 s6-d2-test-body-num-unsatisfied.mdk|§6.3 D2: substituting Int leaves Need Int unsatisfied and must reject before execution|REJECT|REJECT|REJECT|NONE||T-NO-IMPL

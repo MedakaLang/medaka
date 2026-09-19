@@ -1,5 +1,5 @@
 # META
-source_lines=126
+source_lines=190
 stages=DESUGAR,MARK
 # SOURCE
 -- Request-local contracts for scoped class solving and qualified-scheme
@@ -67,6 +67,19 @@ public export data InstantiationServices subst = InstantiationServices {
   freshDestination : GoalOrigin -> ScopeId -> EvId,
 }
 
+-- An adapter that already instantiated the HM scheme supplies that exact
+-- substitution here.  Wanted targets are supplied separately so migrating a
+-- producer never mints a second evidence destination.
+public export data ExistingInstantiationServices subst = ExistingInstantiationServices {
+  substituteExistingBody : subst -> Mono -> Mono,
+  substituteExistingArgument : subst -> Mono -> Mono,
+}
+
+public export data WantedTarget = WantedTarget {
+  targetGoal : GoalId,
+  targetDestination : EvId,
+}
+
 -- The deferred form preserves the original wanted and classifies why it cannot
 -- yet be decided.  Whole-graph finalization is explicit rather than encoded as
 -- an empty blocker list.
@@ -114,6 +127,57 @@ instantiateQualifiers services subst scope origin (qualifier :: rest) =
   InstantiationArgument { formal = qualifier.formal, wanted = wanted }
     :: instantiateQualifiers services subst scope origin rest
 
+instantiateExistingQualifiers : ExistingInstantiationServices subst ->
+  subst ->
+  ScopeId ->
+  GoalOrigin ->
+  List Qualifier ->
+  List WantedTarget ->
+  Option (List InstantiationArgument)
+instantiateExistingQualifiers _ _ _ _ [] [] = Some []
+instantiateExistingQualifiers services subst scope origin (qualifier :: rest) (target :: targets) =
+  let wanted = Wanted {
+    id = target.targetGoal,
+    predicate = ClassPredicate {
+      predicateInterface = qualifier.predicate.predicateInterface,
+      predicateArguments =
+        map
+          (services.substituteExistingArgument subst)
+          qualifier.predicate.predicateArguments,
+    },
+    origin = origin,
+    scope = scope,
+    destination = target.targetDestination,
+  }
+  map
+    (InstantiationArgument { formal = qualifier.formal, wanted = wanted } :: _)
+    (instantiateExistingQualifiers services subst scope origin rest targets)
+instantiateExistingQualifiers _ _ _ _ _ _ = None
+
+export
+instantiateQualifiedAt : ExistingInstantiationServices subst ->
+  subst ->
+  ScopeId ->
+  GoalOrigin ->
+  List WantedTarget ->
+  QualifiedScheme ->
+  Option Instantiation
+instantiateQualifiedAt services subst scope origin targets qualified =
+  match qualified.hm
+    Forall _ _ schemeBody =>
+      map
+        (arguments => Instantiation {
+          body = services.substituteExistingBody subst schemeBody,
+          arguments = arguments,
+        })
+        (instantiateExistingQualifiers
+          services
+          subst
+          scope
+          origin
+          qualified.qualifiers
+          targets)
+
 export
 instantiateQualified : InstantiationServices subst ->
   ScopeId ->
@@ -140,6 +204,8 @@ instantiateQualified services scope origin qualified = match qualified.hm
 (DData Public "InstantiationArgument" () ((variant "InstantiationArgument" (ConNamed (field "formal" (TyCon "EvidenceBinderId")) (field "wanted" (TyCon "Wanted"))))) ())
 (DData Public "Instantiation" () ((variant "Instantiation" (ConNamed (field "body" (TyCon "Mono")) (field "arguments" (TyApp (TyCon "List") (TyCon "InstantiationArgument")))))) ())
 (DData Public "InstantiationServices" ("subst") ((variant "InstantiationServices" (ConNamed (field "makeSubstitution" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyVar "subst")))) (field "substituteBody" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono")))) (field "substituteArgument" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono")))) (field "freshGoal" (TyFun (TyCon "GoalOrigin") (TyFun (TyCon "ScopeId") (TyCon "GoalId")))) (field "freshDestination" (TyFun (TyCon "GoalOrigin") (TyFun (TyCon "ScopeId") (TyCon "EvId"))))))) ())
+(DData Public "ExistingInstantiationServices" ("subst") ((variant "ExistingInstantiationServices" (ConNamed (field "substituteExistingBody" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono")))) (field "substituteExistingArgument" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono"))))))) ())
+(DData Public "WantedTarget" () ((variant "WantedTarget" (ConNamed (field "targetGoal" (TyCon "GoalId")) (field "targetDestination" (TyCon "EvId"))))) ())
 (DData Public "SolverBlocker" () ((variant "BlockingTypeVariable" (ConPos (TyCon "Int"))) (variant "BlockingEffectVariable" (ConPos (TyCon "Int"))) (variant "BlockingScope" (ConPos (TyCon "ScopeId"))) (variant "BlockingFinalization" (ConPos))) ())
 (DData Public "SolverFailure" () ((variant "MissingInstance" (ConPos)) (variant "AmbiguousInstances" (ConPos (TyApp (TyCon "List") (TyCon "RequestInstanceId")))) (variant "ResolutionCycle" (ConPos (TyApp (TyCon "List") (TyCon "GoalId"))))) ())
 (DData Public "SolverOutcome" () ((variant "Solved" (ConPos (TyCon "SolverEvidence"))) (variant "Deferred" (ConPos (TyCon "Wanted") (TyApp (TyCon "List") (TyCon "SolverBlocker")))) (variant "Insoluble" (ConPos (TyCon "Wanted") (TyCon "SolverFailure")))) ())
@@ -148,6 +214,12 @@ instantiateQualified services scope origin qualified = match qualified.hm
 (DTypeSig false "instantiateQualifiers" (TyFun (TyApp (TyCon "InstantiationServices") (TyVar "subst")) (TyFun (TyVar "subst") (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Qualifier")) (TyApp (TyCon "List") (TyCon "InstantiationArgument"))))))))
 (DFunDef false "instantiateQualifiers" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "instantiateQualifiers" ((PVar "services") (PVar "subst") (PVar "scope") (PVar "origin") (PCons (PVar "qualifier") (PVar "rest"))) (EBlock (DoLet false false (PVar "wanted") (ERecordCreate "Wanted" ((fa "id" (EApp (EApp (EFieldAccess (EVar "services") "freshGoal") (EVar "origin")) (EVar "scope"))) (fa "predicate" (EApp (EApp (EApp (EVar "substitutePredicate") (EVar "services")) (EVar "subst")) (EFieldAccess (EVar "qualifier") "predicate"))) (fa "origin" (EVar "origin")) (fa "scope" (EVar "scope")) (fa "destination" (EApp (EApp (EFieldAccess (EVar "services") "freshDestination") (EVar "origin")) (EVar "scope")))))) (DoExpr (EBinOp "::" (ERecordCreate "InstantiationArgument" ((fa "formal" (EFieldAccess (EVar "qualifier") "formal")) (fa "wanted" (EVar "wanted")))) (EApp (EApp (EApp (EApp (EApp (EVar "instantiateQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EVar "rest"))))))
+(DTypeSig false "instantiateExistingQualifiers" (TyFun (TyApp (TyCon "ExistingInstantiationServices") (TyVar "subst")) (TyFun (TyVar "subst") (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Qualifier")) (TyFun (TyApp (TyCon "List") (TyCon "WantedTarget")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "InstantiationArgument"))))))))))
+(DFunDef false "instantiateExistingQualifiers" (PWild PWild PWild PWild (PList) (PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "instantiateExistingQualifiers" ((PVar "services") (PVar "subst") (PVar "scope") (PVar "origin") (PCons (PVar "qualifier") (PVar "rest")) (PCons (PVar "target") (PVar "targets"))) (EBlock (DoLet false false (PVar "wanted") (ERecordCreate "Wanted" ((fa "id" (EFieldAccess (EVar "target") "targetGoal")) (fa "predicate" (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "qualifier") "predicate") "predicateInterface")) (fa "predicateArguments" (EApp (EApp (EVar "map") (EApp (EFieldAccess (EVar "services") "substituteExistingArgument") (EVar "subst"))) (EFieldAccess (EFieldAccess (EVar "qualifier") "predicate") "predicateArguments")))))) (fa "origin" (EVar "origin")) (fa "scope" (EVar "scope")) (fa "destination" (EFieldAccess (EVar "target") "targetDestination"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PVar "_s")) (EBinOp "::" (ERecordCreate "InstantiationArgument" ((fa "formal" (EFieldAccess (EVar "qualifier") "formal")) (fa "wanted" (EVar "wanted")))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "instantiateExistingQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EVar "rest")) (EVar "targets"))))))
+(DFunDef false "instantiateExistingQualifiers" (PWild PWild PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig true "instantiateQualifiedAt" (TyFun (TyApp (TyCon "ExistingInstantiationServices") (TyVar "subst")) (TyFun (TyVar "subst") (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyApp (TyCon "List") (TyCon "WantedTarget")) (TyFun (TyCon "QualifiedScheme") (TyApp (TyCon "Option") (TyCon "Instantiation")))))))))
+(DFunDef false "instantiateQualifiedAt" ((PVar "services") (PVar "subst") (PVar "scope") (PVar "origin") (PVar "targets") (PVar "qualified")) (EMatch (EFieldAccess (EVar "qualified") "hm") (arm (PCon "Forall" PWild PWild (PVar "schemeBody")) () (EApp (EApp (EVar "map") (ELam ((PVar "arguments")) (ERecordCreate "Instantiation" ((fa "body" (EApp (EApp (EFieldAccess (EVar "services") "substituteExistingBody") (EVar "subst")) (EVar "schemeBody"))) (fa "arguments" (EVar "arguments")))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "instantiateExistingQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EFieldAccess (EVar "qualified") "qualifiers")) (EVar "targets"))))))
 (DTypeSig true "instantiateQualified" (TyFun (TyApp (TyCon "InstantiationServices") (TyVar "subst")) (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyCon "QualifiedScheme") (TyCon "Instantiation"))))))
 (DFunDef false "instantiateQualified" ((PVar "services") (PVar "scope") (PVar "origin") (PVar "qualified")) (EMatch (EFieldAccess (EVar "qualified") "hm") (arm (PCon "Forall" (PVar "typeVariables") (PVar "effectVariables") (PVar "schemeBody")) () (EBlock (DoLet false false (PVar "subst") (EApp (EApp (EFieldAccess (EVar "services") "makeSubstitution") (EVar "typeVariables")) (EVar "effectVariables"))) (DoExpr (ERecordCreate "Instantiation" ((fa "body" (EApp (EApp (EFieldAccess (EVar "services") "substituteBody") (EVar "subst")) (EVar "schemeBody"))) (fa "arguments" (EApp (EApp (EApp (EApp (EApp (EVar "instantiateQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EFieldAccess (EVar "qualified") "qualifiers"))))))))))
 # MARK
@@ -162,6 +234,8 @@ instantiateQualified services scope origin qualified = match qualified.hm
 (DData Public "InstantiationArgument" () ((variant "InstantiationArgument" (ConNamed (field "formal" (TyCon "EvidenceBinderId")) (field "wanted" (TyCon "Wanted"))))) ())
 (DData Public "Instantiation" () ((variant "Instantiation" (ConNamed (field "body" (TyCon "Mono")) (field "arguments" (TyApp (TyCon "List") (TyCon "InstantiationArgument")))))) ())
 (DData Public "InstantiationServices" ("subst") ((variant "InstantiationServices" (ConNamed (field "makeSubstitution" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyVar "subst")))) (field "substituteBody" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono")))) (field "substituteArgument" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono")))) (field "freshGoal" (TyFun (TyCon "GoalOrigin") (TyFun (TyCon "ScopeId") (TyCon "GoalId")))) (field "freshDestination" (TyFun (TyCon "GoalOrigin") (TyFun (TyCon "ScopeId") (TyCon "EvId"))))))) ())
+(DData Public "ExistingInstantiationServices" ("subst") ((variant "ExistingInstantiationServices" (ConNamed (field "substituteExistingBody" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono")))) (field "substituteExistingArgument" (TyFun (TyVar "subst") (TyFun (TyCon "Mono") (TyCon "Mono"))))))) ())
+(DData Public "WantedTarget" () ((variant "WantedTarget" (ConNamed (field "targetGoal" (TyCon "GoalId")) (field "targetDestination" (TyCon "EvId"))))) ())
 (DData Public "SolverBlocker" () ((variant "BlockingTypeVariable" (ConPos (TyCon "Int"))) (variant "BlockingEffectVariable" (ConPos (TyCon "Int"))) (variant "BlockingScope" (ConPos (TyCon "ScopeId"))) (variant "BlockingFinalization" (ConPos))) ())
 (DData Public "SolverFailure" () ((variant "MissingInstance" (ConPos)) (variant "AmbiguousInstances" (ConPos (TyApp (TyCon "List") (TyCon "RequestInstanceId")))) (variant "ResolutionCycle" (ConPos (TyApp (TyCon "List") (TyCon "GoalId"))))) ())
 (DData Public "SolverOutcome" () ((variant "Solved" (ConPos (TyCon "SolverEvidence"))) (variant "Deferred" (ConPos (TyCon "Wanted") (TyApp (TyCon "List") (TyCon "SolverBlocker")))) (variant "Insoluble" (ConPos (TyCon "Wanted") (TyCon "SolverFailure")))) ())
@@ -170,5 +244,11 @@ instantiateQualified services scope origin qualified = match qualified.hm
 (DTypeSig false "instantiateQualifiers" (TyFun (TyApp (TyCon "InstantiationServices") (TyVar "subst")) (TyFun (TyVar "subst") (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Qualifier")) (TyApp (TyCon "List") (TyCon "InstantiationArgument"))))))))
 (DFunDef false "instantiateQualifiers" (PWild PWild PWild PWild (PList)) (EListLit))
 (DFunDef false "instantiateQualifiers" ((PVar "services") (PVar "subst") (PVar "scope") (PVar "origin") (PCons (PVar "qualifier") (PVar "rest"))) (EBlock (DoLet false false (PVar "wanted") (ERecordCreate "Wanted" ((fa "id" (EApp (EApp (EFieldAccess (EVar "services") "freshGoal") (EVar "origin")) (EVar "scope"))) (fa "predicate" (EApp (EApp (EApp (EVar "substitutePredicate") (EVar "services")) (EVar "subst")) (EFieldAccess (EVar "qualifier") "predicate"))) (fa "origin" (EVar "origin")) (fa "scope" (EVar "scope")) (fa "destination" (EApp (EApp (EFieldAccess (EVar "services") "freshDestination") (EVar "origin")) (EVar "scope")))))) (DoExpr (EBinOp "::" (ERecordCreate "InstantiationArgument" ((fa "formal" (EFieldAccess (EVar "qualifier") "formal")) (fa "wanted" (EVar "wanted")))) (EApp (EApp (EApp (EApp (EApp (EVar "instantiateQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EVar "rest"))))))
+(DTypeSig false "instantiateExistingQualifiers" (TyFun (TyApp (TyCon "ExistingInstantiationServices") (TyVar "subst")) (TyFun (TyVar "subst") (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyApp (TyCon "List") (TyCon "Qualifier")) (TyFun (TyApp (TyCon "List") (TyCon "WantedTarget")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "InstantiationArgument"))))))))))
+(DFunDef false "instantiateExistingQualifiers" (PWild PWild PWild PWild (PList) (PList)) (EApp (EVar "Some") (EListLit)))
+(DFunDef false "instantiateExistingQualifiers" ((PVar "services") (PVar "subst") (PVar "scope") (PVar "origin") (PCons (PVar "qualifier") (PVar "rest")) (PCons (PVar "target") (PVar "targets"))) (EBlock (DoLet false false (PVar "wanted") (ERecordCreate "Wanted" ((fa "id" (EFieldAccess (EVar "target") "targetGoal")) (fa "predicate" (ERecordCreate "ClassPredicate" ((fa "predicateInterface" (EFieldAccess (EFieldAccess (EVar "qualifier") "predicate") "predicateInterface")) (fa "predicateArguments" (EApp (EApp (EMethodRef "map") (EApp (EFieldAccess (EVar "services") "substituteExistingArgument") (EVar "subst"))) (EFieldAccess (EFieldAccess (EVar "qualifier") "predicate") "predicateArguments")))))) (fa "origin" (EVar "origin")) (fa "scope" (EVar "scope")) (fa "destination" (EFieldAccess (EVar "target") "targetDestination"))))) (DoExpr (EApp (EApp (EMethodRef "map") (ELam ((PVar "_s")) (EBinOp "::" (ERecordCreate "InstantiationArgument" ((fa "formal" (EFieldAccess (EVar "qualifier") "formal")) (fa "wanted" (EVar "wanted")))) (EVar "_s")))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "instantiateExistingQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EVar "rest")) (EVar "targets"))))))
+(DFunDef false "instantiateExistingQualifiers" (PWild PWild PWild PWild PWild PWild) (EVar "None"))
+(DTypeSig true "instantiateQualifiedAt" (TyFun (TyApp (TyCon "ExistingInstantiationServices") (TyVar "subst")) (TyFun (TyVar "subst") (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyApp (TyCon "List") (TyCon "WantedTarget")) (TyFun (TyCon "QualifiedScheme") (TyApp (TyCon "Option") (TyCon "Instantiation")))))))))
+(DFunDef false "instantiateQualifiedAt" ((PVar "services") (PVar "subst") (PVar "scope") (PVar "origin") (PVar "targets") (PVar "qualified")) (EMatch (EFieldAccess (EVar "qualified") "hm") (arm (PCon "Forall" PWild PWild (PVar "schemeBody")) () (EApp (EApp (EMethodRef "map") (ELam ((PVar "arguments")) (ERecordCreate "Instantiation" ((fa "body" (EApp (EApp (EFieldAccess (EVar "services") "substituteExistingBody") (EVar "subst")) (EVar "schemeBody"))) (fa "arguments" (EVar "arguments")))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "instantiateExistingQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EFieldAccess (EVar "qualified") "qualifiers")) (EVar "targets"))))))
 (DTypeSig true "instantiateQualified" (TyFun (TyApp (TyCon "InstantiationServices") (TyVar "subst")) (TyFun (TyCon "ScopeId") (TyFun (TyCon "GoalOrigin") (TyFun (TyCon "QualifiedScheme") (TyCon "Instantiation"))))))
 (DFunDef false "instantiateQualified" ((PVar "services") (PVar "scope") (PVar "origin") (PVar "qualified")) (EMatch (EFieldAccess (EVar "qualified") "hm") (arm (PCon "Forall" (PVar "typeVariables") (PVar "effectVariables") (PVar "schemeBody")) () (EBlock (DoLet false false (PVar "subst") (EApp (EApp (EFieldAccess (EVar "services") "makeSubstitution") (EVar "typeVariables")) (EVar "effectVariables"))) (DoExpr (ERecordCreate "Instantiation" ((fa "body" (EApp (EApp (EFieldAccess (EVar "services") "substituteBody") (EVar "subst")) (EVar "schemeBody"))) (fa "arguments" (EApp (EApp (EApp (EApp (EApp (EVar "instantiateQualifiers") (EVar "services")) (EVar "subst")) (EVar "scope")) (EVar "origin")) (EFieldAccess (EVar "qualified") "qualifiers"))))))))))

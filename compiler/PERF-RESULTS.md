@@ -1562,3 +1562,49 @@ the existing live occurrence Mono, and `checkOneSchemeFullK` still returns live
 Scheme cells after draining its graph. Predicate ownership and evidence consumption
 are tested separately through checker verdicts, canonical routes, slot collisions,
 and a three-engine value pin.
+
+### Ordinary-return request fence (2026-09-18)
+
+Measured against exact predecessor `8b5e4c219e3e0d0c82d45c4d5e1c324f5e36aa13`
+with an independently built strict-freshness binary
+(`f6f290983bcf556b6d1020b230c07b8e165e5e986e5420942768a671c4652146`).
+The candidate binary was
+`eda42eb797bae338aa442f839d865446a0b591df8d84dbe08d1d4ab212820772`;
+the candidate `compiler/types/typecheck.mdk` was
+`6bd9d0c317db3fbee60692cab707becd1e1c99fb994af6b7d92ca50121713d54`.
+Both arms used the fixed M2 N0--N3 LSP streams under a 1 GiB address-space
+ceiling, with strict freshness, empty diagnostics, and successful shutdown.
+Allocation totals were byte-identical across two repetitions.
+
+| Stream / metric | Arm | Cold N1-N0 | Warm N2-N1 | Warm N3-N2 |
+|---|---|---:|---:|---:|
+| Integer document / instructions | baseline | 322,753,065 | 26,937,077 | 26,955,656 |
+| Integer document / instructions | candidate | 323,791,830 | 26,926,989 | 26,976,782 |
+| Import document / instructions | baseline | 557,646,170 | 40,654,239 | 40,608,088 |
+| Import document / instructions | candidate | 560,040,736 | 40,649,900 | 40,604,273 |
+| Integer document / allocated bytes | baseline | 50,689,776 | 4,833,744 | 4,845,936 |
+| Integer document / allocated bytes | candidate | 50,755,312 | 4,837,760 | 4,846,000 |
+| Import document / allocated bytes | baseline | 95,230,336 | 7,205,440 | 7,196,528 |
+| Import document / allocated bytes | candidate | 95,376,192 | 7,218,320 | 7,200,816 |
+
+The largest instruction increase is 0.43%, and the largest allocation increase
+is 0.18%, both below the existing 25% soft budget. Warm instruction changes range
+from -0.04% to +0.08%; warm allocation changes range from +0.001% to +0.18%.
+
+A separately compiled external Boehm-GC shim forced collection after shutdown and
+reported `heap_size - free_bytes` for the same streams:
+
+| Stream | Arm | N0 live bytes | N1 live bytes | N2 live bytes | N3 live bytes |
+|---|---|---:|---:|---:|---:|
+| Integer document | baseline | 21,745,664 | 38,363,136 | 39,518,208 | 39,530,496 |
+| Integer document | candidate | 21,745,664 | 38,424,576 | 39,366,656 | 39,354,368 |
+| Import document | baseline | 21,745,664 | 54,714,368 | 56,074,240 | 56,209,408 |
+| Import document | candidate | 21,745,664 | 54,853,632 | 56,025,088 | 56,156,160 |
+
+At N3 the candidate retains 176,128 fewer bytes for the integer stream and 53,248
+fewer bytes for the import stream. This process-exit sample does not observe the
+instant between requests. The focused lifecycle pin supplies that boundary:
+memo-reachable live request carriers remain zero while two immutable summaries and
+one chain step are retained, and explicit session teardown reduces all three counts
+to zero. General cache replacement, eager defaulting/open-goal behavior, and solver
+claims outside this ordinary-return fence remain out of scope.

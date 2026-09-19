@@ -1,0 +1,11 @@
+-- Declaration-order twin of return-absent-undetermined-char-first.mdk.
+interface Hidden a b where
+  hidden : Unit -> a
+
+impl Hidden Int Bool where
+  hidden _ = 12
+
+impl Hidden Int Char where
+  hidden _ = 22
+
+main = println (hidden () : Int)

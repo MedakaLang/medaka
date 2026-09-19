@@ -1,5 +1,5 @@
 # META
-source_lines=33
+source_lines=48
 stages=DESUGAR,MARK
 # SOURCE
 -- Request-owned identities and semantic evidence for the scoped solver.
@@ -10,10 +10,17 @@ stages=DESUGAR,MARK
 -- `RequestInstanceId` is deliberately request-local.  It is not a stable cache
 -- identity and must not be persisted across typechecking requests.
 
-import frontend.ast.{EvId}
-import types.repr.{Mono}
+import frontend.ast.{EvId(..)}
+import types.repr.{IfaceRef, Mono}
 
 public export data GoalId = GoalId String Int deriving (Eq, Ord, Debug)
+
+-- A migrated goal and its existing evidence destination share the request-local
+-- ordinal.  Keeping the conversion here prevents adapters from allocating a
+-- competing identity or reconstructing one from ambient module state.
+export
+goalIdForDestination : EvId -> GoalId
+goalIdForDestination (EvId moduleId ordinal) = GoalId moduleId ordinal
 
 public export data ScopeId = ScopeId Int deriving (Eq, Ord, Debug)
 
@@ -27,21 +34,31 @@ public export data RequestInstanceId =
   | RequestInstanceId Int
   deriving (Eq, Ord, Debug)
 
+-- The semantic prerequisite set selected with an instance.  The interface identity
+-- and complete substituted vector travel together; route lowering may consume this
+-- data but may not repeat selection to rediscover it.
+public export data PrerequisiteEvidence = PrerequisiteEvidence {
+  prerequisiteInterface : IfaceRef,
+  prerequisiteArguments : List Mono,
+}
+
 -- Request evidence forms a DAG: prerequisite and superclass edges name other
 -- request nodes by `EvId`.  No constructor embeds a recursively copied proof
 -- tree.  `Mono` is permitted here because this value is request-owned; a later
 -- frozen contract must translate it to immutable templates before publication.
 public export data SolverEvidence =
   | GivenEvidence EvidenceBinderId
-  | InstanceEvidence RequestInstanceId (List Mono) (List EvId)
+  | InstanceEvidence RequestInstanceId (List Mono) (List PrerequisiteEvidence)
   | SuperclassEvidence EvId (List Int)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "EvId" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Mono" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EvId" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false))))
 (DData Public "GoalId" () ((variant "GoalId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "GoalId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "GoalId" (PVar "__a0") (PVar "__a1")) (PCon "GoalId" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EVar "eq") (EVar "__a1")) (EVar "__b1"))))))))
 (DImpl true "Ord" ((TyCon "GoalId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "GoalId" (PVar "__a0") (PVar "__a1")) (PCon "GoalId" (PVar "__b0") (PVar "__b1"))) () (EMatch (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EApp (EApp (EVar "compare") (EVar "__a1")) (EVar "__b1"))) (arm (PVar "__c") () (EVar "__c"))))))))
 (DImpl true "Debug" ((TyCon "GoalId")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "GoalId" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "GoalId ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a1")))))))))
+(DTypeSig true "goalIdForDestination" (TyFun (TyCon "EvId") (TyCon "GoalId")))
+(DFunDef false "goalIdForDestination" ((PCon "EvId" (PVar "moduleId") (PVar "ordinal"))) (EApp (EApp (EVar "GoalId") (EVar "moduleId")) (EVar "ordinal")))
 (DData Public "ScopeId" () ((variant "ScopeId" (ConPos (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "ScopeId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ScopeId" (PVar "__a0")) (PCon "ScopeId" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Ord" ((TyCon "ScopeId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ScopeId" (PVar "__a0")) (PCon "ScopeId" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
@@ -54,14 +71,17 @@ public export data SolverEvidence =
 (DImpl true "Eq" ((TyCon "RequestInstanceId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RequestInstanceId" (PVar "__a0")) (PCon "RequestInstanceId" (PVar "__b0"))) () (EApp (EApp (EVar "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Ord" ((TyCon "RequestInstanceId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RequestInstanceId" (PVar "__a0")) (PCon "RequestInstanceId" (PVar "__b0"))) () (EApp (EApp (EVar "compare") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Debug" ((TyCon "RequestInstanceId")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RequestInstanceId" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RequestInstanceId ")) (EApp (EVar "derivedShowWrap") (EApp (EVar "debug") (EVar "__a0")))))))))
-(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "EvId")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Int"))))) ())
+(DData Public "PrerequisiteEvidence" () ((variant "PrerequisiteEvidence" (ConNamed (field "prerequisiteInterface" (TyCon "IfaceRef")) (field "prerequisiteArguments" (TyApp (TyCon "List") (TyCon "Mono")))))) ())
+(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Int"))))) ())
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "EvId" false))))
-(DUse false (UseGroup ("types" "repr") ((mem "Mono" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "EvId" true))))
+(DUse false (UseGroup ("types" "repr") ((mem "IfaceRef" false) (mem "Mono" false))))
 (DData Public "GoalId" () ((variant "GoalId" (ConPos (TyCon "String") (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "GoalId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "GoalId" (PVar "__a0") (PVar "__a1")) (PCon "GoalId" (PVar "__b0") (PVar "__b1"))) () (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")) (EApp (EApp (EMethodRef "eq") (EVar "__a1")) (EVar "__b1"))))))))
 (DImpl true "Ord" ((TyCon "GoalId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "GoalId" (PVar "__a0") (PVar "__a1")) (PCon "GoalId" (PVar "__b0") (PVar "__b1"))) () (EMatch (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")) (arm (PCon "Eq") () (EApp (EApp (EMethodRef "compare") (EVar "__a1")) (EVar "__b1"))) (arm (PVar "__c") () (EVar "__c"))))))))
 (DImpl true "Debug" ((TyCon "GoalId")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "GoalId" (PVar "__a0") (PVar "__a1")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "GoalId ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))) (ELit (LString " "))) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a1")))))))))
+(DTypeSig true "goalIdForDestination" (TyFun (TyCon "EvId") (TyCon "GoalId")))
+(DFunDef false "goalIdForDestination" ((PCon "EvId" (PVar "moduleId") (PVar "ordinal"))) (EApp (EApp (EVar "GoalId") (EVar "moduleId")) (EVar "ordinal")))
 (DData Public "ScopeId" () ((variant "ScopeId" (ConPos (TyCon "Int")))) ())
 (DImpl true "Eq" ((TyCon "ScopeId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ScopeId" (PVar "__a0")) (PCon "ScopeId" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Ord" ((TyCon "ScopeId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "ScopeId" (PVar "__a0")) (PCon "ScopeId" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
@@ -74,4 +94,5 @@ public export data SolverEvidence =
 (DImpl true "Eq" ((TyCon "RequestInstanceId")) () ((im "eq" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RequestInstanceId" (PVar "__a0")) (PCon "RequestInstanceId" (PVar "__b0"))) () (EApp (EApp (EMethodRef "eq") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Ord" ((TyCon "RequestInstanceId")) () ((im "compare" ((PVar "__x") (PVar "__y")) (EMatch (ETuple (EVar "__x") (EVar "__y")) (arm (PTuple (PCon "RequestInstanceId" (PVar "__a0")) (PCon "RequestInstanceId" (PVar "__b0"))) () (EApp (EApp (EMethodRef "compare") (EVar "__a0")) (EVar "__b0")))))))
 (DImpl true "Debug" ((TyCon "RequestInstanceId")) () ((im "debug" ((PVar "__x")) (EMatch (EVar "__x") (arm (PCon "RequestInstanceId" (PVar "__a0")) () (EBinOp "++" (ELit (LString "RequestInstanceId ")) (EApp (EVar "derivedShowWrap") (EApp (EMethodRef "debug") (EVar "__a0")))))))))
-(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "EvId")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Int"))))) ())
+(DData Public "PrerequisiteEvidence" () ((variant "PrerequisiteEvidence" (ConNamed (field "prerequisiteInterface" (TyCon "IfaceRef")) (field "prerequisiteArguments" (TyApp (TyCon "List") (TyCon "Mono")))))) ())
+(DData Public "SolverEvidence" () ((variant "GivenEvidence" (ConPos (TyCon "EvidenceBinderId"))) (variant "InstanceEvidence" (ConPos (TyCon "RequestInstanceId") (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))) (variant "SuperclassEvidence" (ConPos (TyCon "EvId") (TyApp (TyCon "List") (TyCon "Int"))))) ())
