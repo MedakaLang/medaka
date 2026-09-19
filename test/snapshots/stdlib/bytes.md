@@ -1,5 +1,5 @@
 # META
-source_lines=466
+source_lines=480
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -28,8 +28,12 @@ stages=DESUGAR,MARK
 
    `append` joins two byte strings, and `b1 ++ b2` reaches it: `++` is
    `Semigroup`'s `append`, so it dispatches on `Bytes` and allocates the
-   joined length once. No `++` between byte strings falls through to the
-   runtime's untyped concatenation, which has no byte-buffer case.
+   joined length once. Applied where the operand type is known -- infix, in
+   a section, or under a `Semigroup` constraint -- it dispatches. Bound to a
+   name first, as `let f = (++)` or `let f = (x y => x ++ y)`, it does not:
+   it falls through to the runtime's untyped concatenation, which has no
+   byte-buffer case, and fails at run time. Bind `append` instead, which
+   dispatches from either position.
 
    `MutBytes` is the mutable, fixed-length sibling, and the way to build a
    byte string a byte at a time: `mutBytesMake` allocates `n` zero bytes,
@@ -47,16 +51,28 @@ stages=DESUGAR,MARK
 -- No growable buffer lives here.  `bytebuilder` is the byte accumulator, and
 -- a `Bytes`-producing one belongs beside it rather than beside the immutable
 -- type.
+--
+-- The round-trip that shows a byte string really keys a hash container lives
+-- in `test/engine_fixtures/bytes_hashmap_key.mdk`, not in a doctest on the
+-- `Hashable Bytes` instance.  That doctest would have to import the
+-- hash-container module, and an import here reaches every module that imports
+-- this one: it would drag that module's `Ref` internals into their builds,
+-- which the wasm backend cannot assemble, and cost them work they spend on
+-- nothing they use.
+--
+-- The `++` gap the module doc describes is issue #3204: a `let`-bound `++`
+-- reaches the runtime's untyped concatenation instead of this module's
+-- `Semigroup` instance.  It dispatches from infix position, an operator
+-- section, an immediately applied lambda, a signature-carrying function body,
+-- and a `Semigroup a =>` constrained body.  It does not from `let f = (++)`
+-- or `let f = (x y => x ++ y)`, the latter even when a later annotated call
+-- site pins the operand type.  `append` bound to a name dispatches, which is
+-- why the doc points a caller at it.
 
 import core.{
   Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Hashable
 }
 import array.{findIndex}
--- `hash_map` is here for one doctest: the `Hashable Bytes` instance exists so
--- that a byte string can key a hash container, and the round-trip through one
--- is what shows it does.  Only `fromList` is named -- the lookup goes through
--- `m[k]`, since `hash_map.get` would collide with this module's own `get`.
-import hash_map.{fromList}
 
 {- | The byte-string type.
 
@@ -314,8 +330,6 @@ hashGo acc bb i n =
    contribute for each byte. Agrees with `Eq Bytes`, which walks the same
    bytes in the same order.
 
-   > let m = fromList [(toUtf8Bytes "one", 1), (toUtf8Bytes "two", 2)] in m[toUtf8Bytes "two"]
-   2
    > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
    True -}
 export impl Hashable Bytes where
@@ -471,7 +485,6 @@ freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Hashable" false))))
 (DUse false (UseGroup ("array") ((mem "findIndex" false))))
-(DUse false (UseGroup ("hash_map") ((mem "fromList" false))))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())
 (DTypeSig true "fromArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Bytes"))))
 (DFunDef false "fromArray" ((PVar "arr")) (EMatch (EApp (EApp (EVar "findIndex") (ELam ((PVar "b")) (EBinOp "||" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 255)))))) (EVar "arr")) (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr")))))))
@@ -524,7 +537,6 @@ freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Hashable" false))))
 (DUse false (UseGroup ("array") ((mem "findIndex" false))))
-(DUse false (UseGroup ("hash_map") ((mem "fromList" false))))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())
 (DTypeSig true "fromArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Bytes"))))
 (DFunDef false "fromArray" ((PVar "arr")) (EMatch (EApp (EApp (EVar "findIndex") (ELam ((PVar "b")) (EBinOp "||" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 255)))))) (EVar "arr")) (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr")))))))
