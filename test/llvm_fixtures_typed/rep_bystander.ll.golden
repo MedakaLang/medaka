@@ -187,20 +187,20 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_untouched(i64 11)
-  %t1 = call i64 @mdk_untouched(i64 3)
+  %t0 = call i64 @mdk___user____untouched(i64 11)
+  %t1 = call i64 @mdk___user____untouched(i64 3)
   %t2 = ashr i64 %t0, 1
   %t3 = ashr i64 %t1, 1
   %t4 = add i64 %t2, %t3
   %t5 = shl i64 %t4, 1
   %t6 = or i64 %t5, 1
-  %t7 = call i64 @mdk_tri(i64 7)
+  %t7 = call i64 @mdk___user____tri(i64 7)
   %t8 = ashr i64 %t6, 1
   %t9 = ashr i64 %t7, 1
   %t10 = add i64 %t8, %t9
   %t11 = shl i64 %t10, 1
   %t12 = or i64 %t11, 1
-  %t13 = call i64 @mdk_flagBit(i64 3)
+  %t13 = call i64 @mdk___user____flagBit(i64 3)
   %t14 = ashr i64 %t12, 1
   %t15 = ashr i64 %t13, 1
   %t16 = add i64 %t14, %t15
@@ -211,13 +211,13 @@ entry:
   %t20 = getelementptr i8, ptr %t19, i64 8
   store i64 1, ptr %t20
   %t21 = ptrtoint ptr %t19 to i64
-  %t22 = call i64 @mdk_unwrap(i64 %t21)
+  %t22 = call i64 @mdk___user____unwrap(i64 %t21)
   %t23 = ashr i64 %t18, 1
   %t24 = ashr i64 %t22, 1
   %t25 = add i64 %t23, %t24
   %t26 = shl i64 %t25, 1
   %t27 = or i64 %t26, 1
-  %t28 = call i64 @mdk_mixv(i64 17179869185)
+  %t28 = call i64 @mdk___user____mixv(i64 17179869185)
   %t29 = ashr i64 %t27, 1
   %t30 = ashr i64 %t28, 1
   %t31 = add i64 %t29, %t30
@@ -228,7 +228,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_flagBit(i64 %arg0) {
+define i64 @mdk___user____flagBit(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg0, 1
@@ -253,7 +253,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_unwrap(i64 %arg0) {
+define i64 @mdk___user____unwrap(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -281,7 +281,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_mixv(i64 %arg0) {
+define i64 @mdk___user____mixv(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -373,7 +373,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_untouched(i64 %arg0) {
+define i64 @mdk___user____untouched(i64 %arg0) {
 entry:
   %t0 = icmp sgt i64 %arg0, 7
   %t1 = zext i1 %t0 to i64
@@ -399,7 +399,7 @@ else6:
 }
 
 ; mdk-module program
-define i64 @mdk_tri(i64 %arg0) {
+define i64 @mdk___user____tri(i64 %arg0) {
 entry:
   %t0 = icmp sle i64 %arg0, 1
   %t1 = zext i1 %t0 to i64
@@ -416,7 +416,7 @@ else6:
   %t9 = sub i64 %t7, %t8
   %t10 = shl i64 %t9, 1
   %t11 = or i64 %t10, 1
-  %t12 = call i64 @mdk_tri(i64 %t11)
+  %t12 = call i64 @mdk___user____tri(i64 %t11)
   %t13 = ashr i64 %arg0, 1
   %t14 = ashr i64 %t12, 1
   %t15 = add i64 %t13, %t14

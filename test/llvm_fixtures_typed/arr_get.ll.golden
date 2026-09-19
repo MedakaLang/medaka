@@ -196,8 +196,8 @@ entry:
   %t3 = getelementptr i8, ptr %t0, i64 24
   store i64 61, ptr %t3
   %t4 = ptrtoint ptr %t0 to i64
-  store i64 %t4, ptr @mdk_g_arr
-  %t5 = load i64, ptr @mdk_g_arr
+  store i64 %t4, ptr @mdk_g___user____arr
+  %t5 = load i64, ptr @mdk_g___user____arr
   %t6 = ashr i64 3, 1
   %t7 = inttoptr i64 %t5 to ptr
   %t8 = add i64 %t6, 1
@@ -211,4 +211,4 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_arr = global i64 0
+@mdk_g___user____arr = global i64 0

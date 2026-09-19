@@ -187,7 +187,7 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_force_base()
+  %t0 = call i64 @mdk_force___user____base()
   %t1 = ashr i64 %t0, 1
   call void @mdk_print_int(i64 %t1)
   ret i32 0
@@ -211,21 +211,21 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_force_base() {
+define i64 @mdk_force___user____base() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_base
+  %t0 = load i8, ptr @mdk_gs___user____base
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_base
+  %t1 = load i64, ptr @mdk_g___user____base
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.base)
+  call void @mdk_cyclic_value(ptr @.gname.__user____base)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_base
+  store i8 1, ptr @mdk_gs___user____base
   %t2 = call i64 @mdk_force_$memo_Int_def()
-  store i64 %t2, ptr @mdk_g_base
-  store i8 2, ptr @mdk_gs_base
+  store i64 %t2, ptr @mdk_g___user____base
+  store i8 2, ptr @mdk_gs___user____base
   ret i64 %t2
 }
 ; mdk-module impl:Int_def
@@ -241,10 +241,10 @@ entry:
 ; mdk-module program
 @mdk_gs_$memo_Int_def = global i8 0
 ; mdk-module program
-@mdk_g_base = global i64 0
+@mdk_g___user____base = global i64 0
 ; mdk-module program
-@mdk_gs_base = global i8 0
+@mdk_gs___user____base = global i8 0
 ; mdk-module program
 @.gname.$memo_Int_def = private unnamed_addr constant [14 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\64\65\66\00"
 ; mdk-module program
-@.gname.base = private unnamed_addr constant [5 x i8] c"\62\61\73\65\00"
+@.gname.__user____base = private unnamed_addr constant [15 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\62\61\73\65\00"

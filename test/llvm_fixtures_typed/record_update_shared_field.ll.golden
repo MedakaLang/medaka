@@ -187,10 +187,10 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  store i64 ptrtoint (ptr @mdk_dc.program.0 to i64), ptr @mdk_g_sel
-  %t0 = call i64 @mdk_withGroupBy(i64 7, i64 ptrtoint (ptr @mdk_dc.program.1 to i64))
-  store i64 %t0, ptr @mdk_g_agg
-  %t1 = load i64, ptr @mdk_g_agg
+  store i64 ptrtoint (ptr @mdk_dc.program.0 to i64), ptr @mdk_g___user____sel
+  %t0 = call i64 @mdk___user____withGroupBy(i64 7, i64 ptrtoint (ptr @mdk_dc.program.1 to i64))
+  store i64 %t0, ptr @mdk_g___user____agg
+  %t1 = load i64, ptr @mdk_g___user____agg
   %t2 = inttoptr i64 %t1 to ptr
   %t3 = getelementptr i8, ptr %t2, i64 8
   %t4 = load i64, ptr %t3
@@ -199,7 +199,7 @@ entry:
   %t7 = mul i64 %t5, %t6
   %t8 = shl i64 %t7, 1
   %t9 = or i64 %t8, 1
-  %t10 = load i64, ptr @mdk_g_agg
+  %t10 = load i64, ptr @mdk_g___user____agg
   %t11 = inttoptr i64 %t10 to ptr
   %t12 = getelementptr i8, ptr %t11, i64 16
   %t13 = load i64, ptr %t12
@@ -213,7 +213,7 @@ entry:
   %t21 = add i64 %t19, %t20
   %t22 = shl i64 %t21, 1
   %t23 = or i64 %t22, 1
-  %t24 = load i64, ptr @mdk_g_sel
+  %t24 = load i64, ptr @mdk_g___user____sel
   %t25 = inttoptr i64 %t24 to ptr
   %t26 = getelementptr i8, ptr %t25, i64 16
   %t27 = load i64, ptr %t26
@@ -227,7 +227,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_withGroupBy(i64 %arg0, i64 %arg1) {
+define i64 @mdk___user____withGroupBy(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = inttoptr i64 %arg1 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 16
@@ -245,9 +245,9 @@ entry:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_sel = global i64 0
+@mdk_g___user____sel = global i64 0
 ; mdk-module program
-@mdk_g_agg = global i64 0
+@mdk_g___user____agg = global i64 0
 ; mdk-module program
 @mdk_dc.program.0 = internal constant [3 x i64] [i64 0, i64 19, i64 15]
 ; mdk-module program

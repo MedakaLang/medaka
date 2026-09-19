@@ -187,13 +187,13 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_blend(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
+  %t0 = call i64 @mdk___user____blend(i64 ptrtoint (ptr @mdk_dc.program.0 to i64))
   %t1 = call ptr @mdk_alloc(i64 16)
   store i64 12884901888, ptr %t1
   %t2 = getelementptr i8, ptr %t1, i64 8
   store i64 9, ptr %t2
   %t3 = ptrtoint ptr %t1 to i64
-  %t4 = call i64 @mdk_unbox(i64 %t3)
+  %t4 = call i64 @mdk___user____unbox(i64 %t3)
   %t5 = ashr i64 %t0, 1
   %t6 = ashr i64 %t4, 1
   %t7 = add i64 %t5, %t6
@@ -204,14 +204,14 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_sidesOf(i64 %arg0, i64 %arg1) {
+define i64 @mdk___user____sidesOf(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_disp_sides_0_1(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
 ; mdk-module program
-define i64 @mdk_unbox(i64 %arg0) {
+define i64 @mdk___user____unbox(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t2 = and i64 %arg0, 1
@@ -239,7 +239,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_blend(i64 %arg0) {
+define i64 @mdk___user____blend(i64 %arg0) {
 entry:
   %t0 = inttoptr i64 %arg0 to ptr
   %t1 = getelementptr i8, ptr %t0, i64 8
@@ -334,7 +334,7 @@ entry:
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
   %t4 = icmp eq i64 %t1, 193472340
-  %t5 = icmp eq i64 %t1, -977942814708859939
+  %t5 = icmp eq i64 %t1, -3521892669517540916
   %t6 = or i1 %t4, %t5
   br i1 %t6, label %dispyes7, label %dispnext7
 dispyes7:
@@ -343,7 +343,7 @@ dispyes7:
   br label %dispend3
 dispnext7:
   %t9 = icmp eq i64 %t1, 6384694879
-  %t10 = icmp eq i64 %t1, 2967523645138980570
+  %t10 = icmp eq i64 %t1, -3877719009564839383
   %t11 = or i1 %t9, %t10
   br i1 %t11, label %dispyes12, label %dispnext12
 dispyes12:

@@ -187,8 +187,8 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_isNil(i64 562949953421315)
-  %t1 = call i64 @mdk_isNil(i64 3)
+  %t0 = call i64 @mdk___user____isNil(i64 562949953421315)
+  %t1 = call i64 @mdk___user____isNil(i64 3)
   %t2 = ashr i64 %t1, 1
   %t3 = ashr i64 21, 1
   %t4 = mul i64 %t2, %t3
@@ -204,7 +204,7 @@ entry:
   %t13 = getelementptr i8, ptr %t12, i64 8
   store i64 ptrtoint (ptr @.strc.program.0 to i64), ptr %t13
   %t14 = ptrtoint ptr %t12 to i64
-  %t15 = call i64 @mdk_isNil(i64 %t14)
+  %t15 = call i64 @mdk___user____isNil(i64 %t14)
   %t16 = ashr i64 %t15, 1
   %t17 = ashr i64 201, 1
   %t18 = mul i64 %t16, %t17
@@ -215,7 +215,7 @@ entry:
   %t23 = add i64 %t21, %t22
   %t24 = shl i64 %t23, 1
   %t25 = or i64 %t24, 1
-  %t26 = call i64 @mdk_render(i64 562949953421315)
+  %t26 = call i64 @mdk___user____render(i64 562949953421315)
   %t27 = ashr i64 %t26, 1
   %t28 = ashr i64 2001, 1
   %t29 = mul i64 %t27, %t28
@@ -226,7 +226,7 @@ entry:
   %t34 = add i64 %t32, %t33
   %t35 = shl i64 %t34, 1
   %t36 = or i64 %t35, 1
-  %t37 = call i64 @mdk_render(i64 3)
+  %t37 = call i64 @mdk___user____render(i64 3)
   %t38 = ashr i64 %t37, 1
   %t39 = ashr i64 20001, 1
   %t40 = mul i64 %t38, %t39
@@ -237,7 +237,7 @@ entry:
   %t45 = add i64 %t43, %t44
   %t46 = shl i64 %t45, 1
   %t47 = or i64 %t46, 1
-  %t48 = call i64 @mdk_render(i64 5)
+  %t48 = call i64 @mdk___user____render(i64 5)
   %t49 = ashr i64 %t48, 1
   %t50 = ashr i64 200001, 1
   %t51 = mul i64 %t49, %t50
@@ -253,7 +253,7 @@ entry:
   %t60 = getelementptr i8, ptr %t59, i64 8
   store i64 ptrtoint (ptr @.strc.program.1 to i64), ptr %t60
   %t61 = ptrtoint ptr %t59 to i64
-  %t62 = call i64 @mdk_render(i64 %t61)
+  %t62 = call i64 @mdk___user____render(i64 %t61)
   %t63 = ashr i64 %t62, 1
   %t64 = ashr i64 2000001, 1
   %t65 = mul i64 %t63, %t64
@@ -271,7 +271,7 @@ entry:
   %t75 = getelementptr i8, ptr %t73, i64 16
   store i64 3, ptr %t75
   %t76 = ptrtoint ptr %t73 to i64
-  %t77 = call i64 @mdk_render(i64 %t76)
+  %t77 = call i64 @mdk___user____render(i64 %t76)
   %t78 = ashr i64 %t77, 1
   %t79 = ashr i64 20000001, 1
   %t80 = mul i64 %t78, %t79
@@ -282,7 +282,7 @@ entry:
   %t85 = add i64 %t83, %t84
   %t86 = shl i64 %t85, 1
   %t87 = or i64 %t86, 1
-  %t88 = call i64 @mdk_sumL(i64 ptrtoint (ptr @mdk_dc.program.4 to i64))
+  %t88 = call i64 @mdk___user____sumL(i64 ptrtoint (ptr @mdk_dc.program.4 to i64))
   %t89 = ashr i64 %t88, 1
   %t90 = ashr i64 200000001, 1
   %t91 = mul i64 %t89, %t90
@@ -298,7 +298,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_isNil(i64 %arg0) {
+define i64 @mdk___user____isNil(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -329,7 +329,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_render(i64 %arg0) {
+define i64 @mdk___user____render(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -456,7 +456,7 @@ decend1:
 }
 
 ; mdk-module program
-define i64 @mdk_sumL(i64 %arg0) {
+define i64 @mdk___user____sumL(i64 %arg0) {
 entry:
   %t0 = alloca i64
   %t4 = and i64 %arg0, 1
@@ -501,7 +501,7 @@ conyes20:
   %t30 = inttoptr i64 %arg0 to ptr
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
-  %t33 = call i64 @mdk_sumL(i64 %t32)
+  %t33 = call i64 @mdk___user____sumL(i64 %t32)
   %t34 = call i64 @mdk_num_add(i64 %t29, i64 %t33)
   store i64 %t34, ptr %t0
   br label %decend1

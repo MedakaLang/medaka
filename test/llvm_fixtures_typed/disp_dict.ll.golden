@@ -187,12 +187,12 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_firstZero(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 1)
+  %t0 = call i64 @mdk___user____firstZero(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 1)
   %t1 = alloca i64
   %t3 = icmp eq i64 %t0, 3
   br i1 %t3, label %conyes4, label %connext4
 conyes4:
-  %t5 = call i64 @mdk_firstZero(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 11)
+  %t5 = call i64 @mdk___user____firstZero(i64 ptrtoint (ptr @mdk_dc.program.1 to i64), i64 11)
   store i64 %t5, ptr %t1
   br label %decend2
 connext4:
@@ -247,7 +247,7 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_firstZero(i64 %arg0, i64 %arg1) {
+define i64 @mdk___user____firstZero(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = call i64 @mdk_disp_zero_0_0(i64 %arg0)
   ret i64 %t0
@@ -290,7 +290,7 @@ entry:
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
   %t4 = icmp eq i64 %t1, 193460240
-  %t5 = icmp eq i64 %t1, 249871230526469896
+  %t5 = icmp eq i64 %t1, -1783691015315715305
   %t6 = or i1 %t4, %t5
   br i1 %t6, label %dispyes7, label %dispnext7
 dispyes7:
@@ -299,7 +299,7 @@ dispyes7:
   br label %dispend3
 dispnext7:
   %t9 = icmp eq i64 %t1, 6384077407
-  %t10 = icmp eq i64 %t1, -977621429484920137
+  %t10 = icmp eq i64 %t1, -3521571284293601114
   %t11 = or i1 %t9, %t10
   br i1 %t11, label %dispyes12, label %dispnext12
 dispyes12:

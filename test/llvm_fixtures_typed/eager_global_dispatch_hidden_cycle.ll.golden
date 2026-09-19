@@ -187,34 +187,34 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_force_cell()
+  %t0 = call i64 @mdk_force___user____cell()
   %t1 = ashr i64 %t0, 1
   call void @mdk_print_int(i64 %t1)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_force_cell() {
+define i64 @mdk_force___user____cell() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_cell
+  %t0 = load i8, ptr @mdk_gs___user____cell
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_cell
+  %t1 = load i64, ptr @mdk_g___user____cell
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.cell)
+  call void @mdk_cyclic_value(ptr @.gname.__user____cell)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_cell
+  store i8 1, ptr @mdk_gs___user____cell
   %t2 = call i64 @mdk_impl_Bool_mk(i64 3)
-  store i64 %t2, ptr @mdk_g_cell
-  store i8 2, ptr @mdk_gs_cell
+  store i64 %t2, ptr @mdk_g___user____cell
+  store i8 2, ptr @mdk_gs___user____cell
   ret i64 %t2
 }
 ; mdk-module impl:Bool_mk
 define i64 @mdk_impl_Bool_mk(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t2 = call i64 @mdk_force_cell()
+  %t2 = call i64 @mdk_force___user____cell()
   %t3 = ashr i64 %t2, 1
   %t4 = ashr i64 3, 1
   %t5 = add i64 %t3, %t4
@@ -230,8 +230,8 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_cell = global i64 0
+@mdk_g___user____cell = global i64 0
 ; mdk-module program
-@mdk_gs_cell = global i8 0
+@mdk_gs___user____cell = global i8 0
 ; mdk-module program
-@.gname.cell = private unnamed_addr constant [5 x i8] c"\63\65\6C\6C\00"
+@.gname.__user____cell = private unnamed_addr constant [15 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\63\65\6C\6C\00"

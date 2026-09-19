@@ -411,7 +411,7 @@ entry:
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
   %t4 = icmp eq i64 %t1, 193460240
-  %t5 = icmp eq i64 %t1, 7571402922439117
+  %t5 = icmp eq i64 %t1, -54051695436414980
   %t6 = or i1 %t4, %t5
   br i1 %t6, label %dispyes7, label %dispnext7
 dispyes7:
@@ -420,7 +420,7 @@ dispyes7:
   br label %dispend3
 dispnext7:
   %t9 = icmp eq i64 %t1, 6952548912359
-  %t10 = icmp eq i64 %t1, -1049513157619632682
+  %t10 = icmp eq i64 %t1, 1328616224531323173
   %t11 = or i1 %t9, %t10
   br i1 %t11, label %dispyes12, label %dispnext12
 dispyes12:

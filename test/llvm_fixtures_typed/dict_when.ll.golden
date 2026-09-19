@@ -192,7 +192,7 @@ entry:
   %t1 = getelementptr i8, ptr %t0, i64 8
   store i64 1, ptr %t1
   %t2 = ptrtoint ptr %t0 to i64
-  %t3 = call i64 @mdk_when(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 3, i64 %t2)
+  %t3 = call i64 @mdk___user____when(i64 ptrtoint (ptr @mdk_dc.program.0 to i64), i64 3, i64 %t2)
   %t4 = alloca i64
   %t6 = icmp eq i64 %t3, 562958543355907
   %t7 = and i64 %t3, 1
@@ -228,7 +228,7 @@ decend5:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_when(i64 %arg0, i64 %arg1, i64 %arg2) {
+define i64 @mdk___user____when(i64 %arg0, i64 %arg1, i64 %arg2) {
 entry:
   %t0 = ashr i64 %arg1, 1
   %t1 = icmp ne i64 %t0, 0

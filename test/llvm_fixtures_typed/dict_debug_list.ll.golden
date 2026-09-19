@@ -214,7 +214,7 @@ entry:
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_debugListItems(i64 %arg0, i64 %arg1) {
+define i64 @mdk___user____debugListItems(i64 %arg0, i64 %arg1) {
 entry:
   %t0 = alloca i64
   %t3 = icmp eq i64 %arg1, 562949953421315
@@ -255,7 +255,7 @@ conyes20:
   %t31 = getelementptr i8, ptr %t30, i64 16
   %t32 = load i64, ptr %t31
   %t33 = call i64 @mdk_disp_debug_0_1(i64 %arg0, i64 %t29)
-  %t34 = call i64 @mdk_debugListItems(i64 %arg0, i64 %t32)
+  %t34 = call i64 @mdk___user____debugListItems(i64 %arg0, i64 %t32)
   %t35 = ashr i64 %t33, 1
   %t36 = ashr i64 %t34, 1
   %t37 = add i64 %t35, %t36
@@ -280,7 +280,7 @@ entry:
 ; mdk-module impl:MyList_debug
 define i64 @mdk_impl_MyList_debug(i64 %arg0, i64 %arg1) {
 entry:
-  %t0 = call i64 @mdk_debugListItems(i64 %arg0, i64 %arg1)
+  %t0 = call i64 @mdk___user____debugListItems(i64 %arg0, i64 %arg1)
   ret i64 %t0
 }
 
@@ -295,7 +295,7 @@ entry:
   %t1 = load i64, ptr %t0
   %t2 = alloca i64
   %t4 = icmp eq i64 %t1, 193460240
-  %t5 = icmp eq i64 %t1, -978643157047089649
+  %t5 = icmp eq i64 %t1, -3522593011855770626
   %t6 = or i1 %t4, %t5
   br i1 %t6, label %dispyes7, label %dispnext7
 dispyes7:
@@ -304,7 +304,7 @@ dispyes7:
   br label %dispend3
 dispnext7:
   %t9 = icmp eq i64 %t1, 6952548912359
-  %t10 = icmp eq i64 %t1, -542574003985527848
+  %t10 = icmp eq i64 %t1, -2527219197786603801
   %t11 = or i1 %t9, %t10
   br i1 %t11, label %dispyes12, label %dispnext12
 dispyes12:

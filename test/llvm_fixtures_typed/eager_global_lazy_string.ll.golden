@@ -187,35 +187,35 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  store i64 ptrtoint (ptr @.strc.program.0 to i64), ptr @mdk_g_base
-  %t0 = call i64 @mdk_force_cell()
+  store i64 ptrtoint (ptr @.strc.program.0 to i64), ptr @mdk_g___user____base
+  %t0 = call i64 @mdk_force___user____cell()
   %t1 = call i64 @mdk_append(i64 %t0, i64 ptrtoint (ptr @.strc.program.1 to i64))
   call void @mdk_print_str(i64 %t1)
   ret i32 0
 }
 ; mdk-module program
-define i64 @mdk_force_cell() {
+define i64 @mdk_force___user____cell() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_cell
+  %t0 = load i8, ptr @mdk_gs___user____cell
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_cell
+  %t1 = load i64, ptr @mdk_g___user____cell
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.cell)
+  call void @mdk_cyclic_value(ptr @.gname.__user____cell)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_cell
+  store i8 1, ptr @mdk_gs___user____cell
   %t2 = call i64 @mdk_impl_Int_mkS(i64 1)
-  store i64 %t2, ptr @mdk_g_cell
-  store i8 2, ptr @mdk_gs_cell
+  store i64 %t2, ptr @mdk_g___user____cell
+  store i8 2, ptr @mdk_gs___user____cell
   ret i64 %t2
 }
 ; mdk-module impl:Int_mkS
 define i64 @mdk_impl_Int_mkS(i64 %arg0) {
 entry:
   %t0 = alloca i64
-  %t2 = load i64, ptr @mdk_g_base
+  %t2 = load i64, ptr @mdk_g___user____base
   store i64 %t2, ptr %t0
   br label %decend1
 decend1:
@@ -226,14 +226,14 @@ decend1:
 ; mdk-module program
 @mdk_disc_none = private unnamed_addr constant i64 -1
 ; mdk-module program
-@mdk_g_cell = global i64 0
+@mdk_g___user____cell = global i64 0
 ; mdk-module program
-@mdk_gs_cell = global i8 0
+@mdk_gs___user____cell = global i8 0
 ; mdk-module program
-@mdk_g_base = global i64 0
+@mdk_g___user____base = global i64 0
 ; mdk-module program
 @.strc.program.0 = private unnamed_addr constant { i64, i64, i64, [6 x i8] } { i64 1, i64 5, i64 5, [6 x i8] c"\68\65\6C\6C\6F\00" }
 ; mdk-module program
 @.strc.program.1 = private unnamed_addr constant { i64, i64, i64, [7 x i8] } { i64 1, i64 6, i64 6, [7 x i8] c"\20\77\6F\72\6C\64\00" }
 ; mdk-module program
-@.gname.cell = private unnamed_addr constant [5 x i8] c"\63\65\6C\6C\00"
+@.gname.__user____cell = private unnamed_addr constant [15 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\63\65\6C\6C\00"

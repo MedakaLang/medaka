@@ -2227,7 +2227,7 @@ require_fn_arity() {
 }
 require_ctor_fields() {
   awk -v want="$2" '
-    /\(type \$C_SharedCtor / {
+    /\(type \$C___user____SharedCtor / {
       n = gsub(/\(field /, "&")
       if (n == want) found = 1
     }
@@ -2241,7 +2241,7 @@ require_ctor_ordinal() {
       sub(/^[[:space:]]+/, "", line)
       sub(/[[:space:]]+$/, "", line)
       if (line == "i32.const 0" || line == "i32.const 1") last = line
-      if (line == "struct.new $C_SharedCtor") {
+      if (line == "struct.new $C___user____SharedCtor") {
         found = 1
         if (last != "i32.const " want) mismatch = 1
       }
@@ -2252,45 +2252,52 @@ require_ctor_ordinal() {
 
 P1_WAT="$INPUT_WORK/p1.wat"
 U_WAT="$INPUT_WORK/u.wat"
-require_wat fn-names "$P1_WAT" 'call $pOnlyFn'
-forbid_wat fn-names "$P1_WAT" 'call $uOnlyFn'
-require_wat fn-names "$U_WAT" 'call $uOnlyFn'
-forbid_wat fn-names "$U_WAT" 'call $pOnlyFn'
-require_wat value-names "$P1_WAT" 'global.get $pOnlyValue'
-forbid_wat value-names "$P1_WAT" 'global.get $uOnlyValue'
-require_wat value-names "$U_WAT" 'global.get $uOnlyValue'
-forbid_wat value-names "$U_WAT" 'global.get $pOnlyValue'
-require_fn_arity fn-arity sharedArity 1 "$P1_WAT"
-require_wat fn-arity "$P1_WAT" 'call $sharedArity'
-require_fn_arity fn-arity sharedArity 2 "$U_WAT"
-require_wat fn-arity "$U_WAT" 'call $sharedArity'
+# Every top-level binding and every non-reserved constructor below carries the
+# `<mid>__<name>` qualifier mangleUnitsEv stamps on, with `__user__` the synthetic
+# unit id this entry elaborates its single source under; interface/impl method
+# names and data type names are their own naming and stay unqualified, which is
+# why $mdk_impl_PSubject_mark and $T_PSubject appear bare. The qualifier is
+# identical on both halves, so it can neither create nor erase a P/U distinction:
+# each name below still differs between the two only where its source name does.
+require_wat fn-names "$P1_WAT" 'call $__user____pOnlyFn'
+forbid_wat fn-names "$P1_WAT" 'call $__user____uOnlyFn'
+require_wat fn-names "$U_WAT" 'call $__user____uOnlyFn'
+forbid_wat fn-names "$U_WAT" 'call $__user____pOnlyFn'
+require_wat value-names "$P1_WAT" 'global.get $__user____pOnlyValue'
+forbid_wat value-names "$P1_WAT" 'global.get $__user____uOnlyValue'
+require_wat value-names "$U_WAT" 'global.get $__user____uOnlyValue'
+forbid_wat value-names "$U_WAT" 'global.get $__user____pOnlyValue'
+require_fn_arity fn-arity __user____sharedArity 1 "$P1_WAT"
+require_wat fn-arity "$P1_WAT" 'call $__user____sharedArity'
+require_fn_arity fn-arity __user____sharedArity 2 "$U_WAT"
+require_wat fn-arity "$U_WAT" 'call $__user____sharedArity'
 require_wat impl-buckets "$P1_WAT" '(func $mdk_impl_PSubject_mark'
 require_wat impl-buckets "$P1_WAT" 'call $mdk_impl_PSubject_mark'
 require_wat impl-buckets "$U_WAT" '(func $mdk_impl_USubject_mark'
 require_wat impl-buckets "$U_WAT" 'call $mdk_impl_USubject_mark'
-require_wat lazy-globals "$P1_WAT" '(global $gs_pLazy'
-require_wat lazy-globals "$P1_WAT" '(func $force_pLazy'
-require_wat lazy-globals "$P1_WAT" 'call $force_pLazy'
-require_wat lazy-globals "$U_WAT" '(global $gs_uLazy'
-require_wat lazy-globals "$U_WAT" '(func $force_uLazy'
-require_wat lazy-globals "$U_WAT" 'call $force_uLazy'
-require_wat record-fallback-field-slots "$P1_WAT" 'struct.get $C_SharedRecord 2'
-require_wat record-fallback-field-slots "$U_WAT" 'struct.get $C_SharedRecord 1'
-require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w_sharedArity'
-require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w_sharedArity'
-require_wat function-value-wrappers "$U_WAT" '(func $mdk_w_sharedArity'
-require_wat function-value-wrappers "$U_WAT" 'ref.func $mdk_w_sharedArity'
-require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w_sharedValueFn'
-require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w_sharedValueFn'
-forbid_wat function-value-wrappers "$U_WAT" '(func $mdk_w_sharedValueFn'
-require_wat function-value-wrappers "$U_WAT" 'call $sharedValueFn'
+require_wat lazy-globals "$P1_WAT" '(global $gs___user____pLazy'
+require_wat lazy-globals "$P1_WAT" '(func $force___user____pLazy'
+require_wat lazy-globals "$P1_WAT" 'call $force___user____pLazy'
+require_wat lazy-globals "$U_WAT" '(global $gs___user____uLazy'
+require_wat lazy-globals "$U_WAT" '(func $force___user____uLazy'
+require_wat lazy-globals "$U_WAT" 'call $force___user____uLazy'
+require_wat record-fallback-field-slots "$P1_WAT" 'struct.get $C___user____SharedRecord 2'
+require_wat record-fallback-field-slots "$U_WAT" 'struct.get $C___user____SharedRecord 1'
+require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w___user____sharedArity'
+require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w___user____sharedArity'
+require_wat function-value-wrappers "$U_WAT" '(func $mdk_w___user____sharedArity'
+require_wat function-value-wrappers "$U_WAT" 'ref.func $mdk_w___user____sharedArity'
+require_wat function-value-wrappers "$P1_WAT" '(func $mdk_w___user____sharedValueFn'
+require_wat function-value-wrappers "$P1_WAT" 'ref.func $mdk_w___user____sharedValueFn'
+forbid_wat function-value-wrappers "$U_WAT" '(func $mdk_w___user____sharedValueFn'
+require_wat function-value-wrappers "$U_WAT" 'call $__user____sharedValueFn'
 require_ctor_fields ctor-arity 2 "$P1_WAT"
-require_wat ctor-arity "$P1_WAT" 'struct.new $C_SharedCtor'
+require_wat ctor-arity "$P1_WAT" 'struct.new $C___user____SharedCtor'
 require_ctor_fields ctor-arity 3 "$U_WAT"
-require_wat ctor-arity "$U_WAT" 'struct.new $C_SharedCtor'
-require_wat ctor-owner-type "$P1_WAT" '(type $C_SharedCtor (sub $T_PSubject'
+require_wat ctor-arity "$U_WAT" 'struct.new $C___user____SharedCtor'
+require_wat ctor-owner-type "$P1_WAT" '(type $C___user____SharedCtor (sub $T_PSubject'
 require_wat ctor-owner-type "$P1_WAT" 'ref.cast (ref $T_PSubject)'
-require_wat ctor-owner-type "$U_WAT" '(type $C_SharedCtor (sub $T_USubject'
+require_wat ctor-owner-type "$U_WAT" '(type $C___user____SharedCtor (sub $T_USubject'
 require_wat ctor-owner-type "$U_WAT" 'ref.cast (ref $T_USubject)'
 require_ctor_ordinal ctor-ordinal 1 "$P1_WAT"
 require_ctor_ordinal ctor-ordinal 0 "$U_WAT"

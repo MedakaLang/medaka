@@ -187,12 +187,12 @@ declare void @mdk_enable_run_stdout_flush(i64)
 define i32 @mdk_program_main(i32 %argc, ptr %argv) {
 entry:
   call void @mdk_set_args(i32 %argc, ptr %argv)
-  %t0 = call i64 @mdk_force_flagZero()
+  %t0 = call i64 @mdk_force___user____flagZero()
   %t1 = alloca i64
   %t3 = icmp eq i64 %t0, 1
   br i1 %t3, label %conyes4, label %connext4
 conyes4:
-  %t5 = call i64 @mdk_force_intZero()
+  %t5 = call i64 @mdk_force___user____intZero()
   store i64 %t5, ptr %t1
   br label %decend2
 connext4:
@@ -247,39 +247,39 @@ lz_unforced:
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_force_intZero() {
+define i64 @mdk_force___user____intZero() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_intZero
+  %t0 = load i8, ptr @mdk_gs___user____intZero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_intZero
+  %t1 = load i64, ptr @mdk_g___user____intZero
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.intZero)
+  call void @mdk_cyclic_value(ptr @.gname.__user____intZero)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_intZero
+  store i8 1, ptr @mdk_gs___user____intZero
   %t2 = call i64 @mdk_force_$memo_Int_zero()
-  store i64 %t2, ptr @mdk_g_intZero
-  store i8 2, ptr @mdk_gs_intZero
+  store i64 %t2, ptr @mdk_g___user____intZero
+  store i8 2, ptr @mdk_gs___user____intZero
   ret i64 %t2
 }
 ; mdk-module program
-define i64 @mdk_force_flagZero() {
+define i64 @mdk_force___user____flagZero() {
 entry:
-  %t0 = load i8, ptr @mdk_gs_flagZero
+  %t0 = load i8, ptr @mdk_gs___user____flagZero
   switch i8 %t0, label %lz_unforced [ i8 2, label %lz_forced i8 1, label %lz_forcing ]
 lz_forced:
-  %t1 = load i64, ptr @mdk_g_flagZero
+  %t1 = load i64, ptr @mdk_g___user____flagZero
   ret i64 %t1
 lz_forcing:
-  call void @mdk_cyclic_value(ptr @.gname.flagZero)
+  call void @mdk_cyclic_value(ptr @.gname.__user____flagZero)
   unreachable
 lz_unforced:
-  store i8 1, ptr @mdk_gs_flagZero
+  store i8 1, ptr @mdk_gs___user____flagZero
   %t2 = call i64 @mdk_force_$memo_Flag_zero()
-  store i64 %t2, ptr @mdk_g_flagZero
-  store i8 2, ptr @mdk_gs_flagZero
+  store i64 %t2, ptr @mdk_g___user____flagZero
+  store i8 2, ptr @mdk_gs___user____flagZero
   ret i64 %t2
 }
 ; mdk-module impl:Int_zero
@@ -305,18 +305,18 @@ entry:
 ; mdk-module program
 @mdk_gs_$memo_Flag_zero = global i8 0
 ; mdk-module program
-@mdk_g_intZero = global i64 0
+@mdk_g___user____intZero = global i64 0
 ; mdk-module program
-@mdk_gs_intZero = global i8 0
+@mdk_gs___user____intZero = global i8 0
 ; mdk-module program
-@mdk_g_flagZero = global i64 0
+@mdk_g___user____flagZero = global i64 0
 ; mdk-module program
-@mdk_gs_flagZero = global i8 0
+@mdk_gs___user____flagZero = global i8 0
 ; mdk-module program
 @.gname.$memo_Int_zero = private unnamed_addr constant [15 x i8] c"\24\6D\65\6D\6F\5F\49\6E\74\5F\7A\65\72\6F\00"
 ; mdk-module program
 @.gname.$memo_Flag_zero = private unnamed_addr constant [16 x i8] c"\24\6D\65\6D\6F\5F\46\6C\61\67\5F\7A\65\72\6F\00"
 ; mdk-module program
-@.gname.intZero = private unnamed_addr constant [8 x i8] c"\69\6E\74\5A\65\72\6F\00"
+@.gname.__user____intZero = private unnamed_addr constant [18 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\69\6E\74\5A\65\72\6F\00"
 ; mdk-module program
-@.gname.flagZero = private unnamed_addr constant [9 x i8] c"\66\6C\61\67\5A\65\72\6F\00"
+@.gname.__user____flagZero = private unnamed_addr constant [19 x i8] c"\5F\5F\75\73\65\72\5F\5F\5F\5F\66\6C\61\67\5A\65\72\6F\00"
