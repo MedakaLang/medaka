@@ -165,12 +165,6 @@ fi
 #                         snapshot runner calls the stages in-process, so those five
 #                         gates need no probe binary at all.  parse_main survives only
 #                         because diff_compiler_check still drives it.)
-#   origin_agreement_main — diff_compiler_origin_agreement.sh (#1110): drives the
-#                           flat / single-module / graph elaboration entry points over
-#                           ONE loader graph and diffs the resulting agreement table.
-#                           It must be a compiled probe, not `./medaka`: the fact it
-#                           reads (`Ty.TyCon`'s `TyConOrigin`) is deliberately not
-#                           surfaced by any CLI verb.
 #   draft_semantic_main   — test/diff_compiler_fmt_test.mdk's `draftSemanticFixtureFailure`
 #                           (#1399 X-0D): builds the non-authoritative comparison carrier on
 #                           the real multi-module emit seam and prints transport receipts.
@@ -221,10 +215,10 @@ core_ir_dict_pp_main \
 llvm_emit_main llvm_emit_typed_main llvm_emit_modules_main \
 llvm_bootstrap_lex_main \
 lex_main parse_main parse_result_main \
-resolve_main resolve_batch resolve_modules_main origin_agreement_main draft_semantic_main anf_identity_main \
+resolve_main resolve_batch resolve_modules_main draft_semantic_main anf_identity_main \
 typecheck_main check_main check_batch \
 check_modules_main check_all_main check_match_main exhaust_main lint_main lint_fix_main \
-check_one_diags_main check_flat_diags_main \
+check_one_diags_main \
 diagnostics_main diagnostics_project_main \
 fmt_main new_main test_main repl_main fuzz_gen_main \
  profile_main profile_modules_main profile_eval_main refindex_main"
