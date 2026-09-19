@@ -1,5 +1,5 @@
 # META
-source_lines=46895
+source_lines=46886
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -15286,26 +15286,12 @@ builtinClassSet _ _ _ acc = acc
 --     second `Num` is rejected outright (`Duplicate interface: Num`) before any
 --     obligation is recorded.  §7.1 U1 (prelude becomes a node) deletes this arm along
 --     with the flatten.
---   * `Module` — only the PRELUDE's own pass writes, and it writes once; later modules
---     read the surviving `CrossRun` value.  A user module is never the source.
---     ⚠️ That last sentence became TRUE ON BOTH DRIVERS only with #1508 (U2a).  Before
---     it, `cmCheckWorker` handed every user module `mid = ""`, so on the `checkModules`
---     driver each one re-entered this arm and OVERWROTE the table with
---     `builtinClassesOf` of its own decls — normally `emptyBuiltinClasses`, i.e. it
---     wiped the prelude's four origins to `OriginUnresolved` for every module after the
---     first.  It was survivable — and therefore invisible to every gate — only because
---     `oblIfaceKeys` indexes each impl under its identity key AND a bare-spelling
---     COMPATIBILITY leg, so an `OriginUnresolved` synthetic goal keys `TkBare` and still
---     lands on the impl.  In other words the clobber was masked by the very leg U1b/#1507
---     are draining, which is precisely why it had to be fixed before that leg goes: the
---     fix simply stops the write, restoring the invariant this bullet always claimed.
---     ⚠️ There is a SECOND, independent reason it was unobservable, and it is the one
---     that bounds the severity: `checkModules` — the ONLY driver on which the clobber
---     occurred — harvests no diagnostics at all (`cmCheckWorker`, "no diagnostics
---     harvest"; `perRun.typeErrors` is discarded), so even a false reject produced by an
---     `OriginUnresolved` key had no channel to reach a caller. Both reasons are needed:
---     the compatibility leg explains why dispatch still resolved, the discarded error
---     list explains why a failure to resolve would have been silent anyway.
+--   * `Module` — the PRELUDE's own pass writes once and later modules read the
+--     surviving `CrossRun` value.  A prelude-free graph has no such pass, so its
+--     first module supplies the same local builtin declarations the Flat arm uses.
+--     The `builtinClassPresent BNum` guard prevents a later user module from
+--     overwriting the prelude's identities; its false branch is reachable only before
+--     any `Num` declaration has seeded this run.
 seedBuiltinClasses : CheckMode -> List Decl -> Unit
 seedBuiltinClasses (Flat coreProg) prog =
   let classes =
@@ -15321,7 +15307,7 @@ seedBuiltinClasses (Flat coreProg) prog =
 -- `TkIdent` impls: a false REJECT of the prelude, which is the #1112 prototype's
 -- 634-diagnostic signature.
 seedBuiltinClasses (Module mid _ _) prog =
-  if isPreludeMid mid then
+  if isPreludeMid mid || not (builtinClassPresent BNum) then
     crossRun.value.builtinClassesRef := builtinClassesOf prog
 
 -- G2: arithmetic `+ - * / %` carry a `Num` obligation on their (unified) operand
@@ -45049,6 +45035,11 @@ checkOneToLinesWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryReport runtimeDecls coreProg [("__user__", userProg)]
 
 export
+checkOneToLines : List Decl -> String
+checkOneToLines userProg =
+  checkModulesEntryReport [] [] [("__user__", userProg)]
+
+export
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
@@ -49337,7 +49328,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "seedBuiltinClasses" ((PCon "Flat" (PVar "coreProg")) (PVar "prog")) (EBlock (DoLet false false (PVar "classes") (EApp (EVar "builtinClassesOf") (EIf (EApp (EVar "declsNonEmpty") (EVar "coreProg")) (EVar "coreProg") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EVar "classes")))))
-(DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
+(DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EVar "lt"))) (DoExpr (EVar "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
@@ -53801,6 +53792,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneDiagsSynthetic" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "savedMain") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value")) (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EVar "savedMain"))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
+(DTypeSig true "checkOneToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
+(DFunDef false "checkOneToLines" ((PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EListLit)) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "checkOneErrorsWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
@@ -56463,7 +56456,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
 (DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "seedBuiltinClasses" ((PCon "Flat" (PVar "coreProg")) (PVar "prog")) (EBlock (DoLet false false (PVar "classes") (EApp (EVar "builtinClassesOf") (EIf (EApp (EVar "declsNonEmpty") (EVar "coreProg")) (EVar "coreProg") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EVar "classes")))))
-(DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
+(DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EMethodRef "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EMethodRef "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EMethodRef "lt"))) (DoExpr (EMethodRef "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
@@ -60927,6 +60920,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneDiagsSynthetic" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PVar "savedMain") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef") "value")) (DoLet false false (PTuple PWild (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mainSchemeRef")) (EVar "savedMain"))) (DoExpr (ETuple (EVar "errs") (EVar "warns")))))
 (DTypeSig true "checkOneToLinesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))))
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
+(DTypeSig true "checkOneToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
+(DFunDef false "checkOneToLines" ((PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EListLit)) (EListLit)) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "checkOneErrorsWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
