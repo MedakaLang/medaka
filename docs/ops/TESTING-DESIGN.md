@@ -7,10 +7,12 @@ history they are; §§4–7 are historical (§4.4 and §4.6 shipped, §4.3/§4.7
 new document's §3 and §10 carry their successors). ⚠️ §4.2's "the same assertions run on
 all three engines" is still FALSE for `test`/`prop`, and the reason has changed. The native
 arm exists — #2588 shipped `medaka test --native` and `--engines eval,native`, whose exit
-code is the AND — but the DEFAULT is eval alone and, measured at `ed8859d99`, no wired
-vehicle asks for more: `--engines` appears in no `Makefile` recipe and in no
-`.github/workflows/ci.yml` step, so the `make test` suite runs one engine (#3207). Wasm
-stays deferred by decision. Do not cite §4.2 as the unit tier's anti-circularity
+code is the AND — but the DEFAULT is eval alone and almost nothing asks for more. Measured
+at `ed8859d99`: `--engines` appears in no `Makefile` recipe and in no
+`.github/workflows/ci.yml` step, so the `make test` suite itself runs one engine (#3207).
+Exactly one gate asks for both, `test/diff_compiler_test_native.sh`, over three named
+modules (`stdlib/string.mdk`, `stdlib/list.mdk`, `stdlib/map.mdk`). Wasm stays deferred by
+decision. Do not cite §4.2 as the unit tier's anti-circularity
 compensator; the differential/fixpoint floor (§4.4) is what actually supplies independence
 (TESTING-ARCHITECTURE §4). Original status line follows.
 
