@@ -12,7 +12,7 @@
 --   resolve         name resolution (resolveToLines; raw prelude, desugared target)
 --   mark            method-reference marking (markWithPrelude; desugared core)
 --   typecheck       HM type inference (checkOneToLinesWithRuntime; desugared runtime+core)
---   elaborate       install* dict-route table builders + elaborateDict (issue #882)
+--   elaborate       install* dict-route table builders + elaborateOne (issue #882)
 --   dce             dead-code filter over the elaborated program (dceFilter; #882)
 --   mangle          universal per-module private-name de-collision (mangleUnits; #882)
 --                   ADDITIVE: run standalone for measurement and DISCARDED — it does
@@ -41,7 +41,7 @@ import frontend.resolve.{resolveToLines}
 import frontend.marker.{markWithPrelude}
 import types.typecheck.{
   checkOneToLinesWithRuntime,
-  elaborateDict,
+  elaborateOne,
   constrainedSigNames,
   preludeReturnPosDictNames,
   preludeArgPosDictNames,
@@ -236,7 +236,7 @@ runStaged on targetPath rsrc csrc tsrc =
   -- stages". Same lesson as `exhaust-guards` above, one pipeline half later: an
   -- unprofiled stage is an unprofilable bug.
   --
-  -- Mirrors entries/llvm_emit_typed_main.mdk (the typed LLVM driver): elaborateDict
+  -- Mirrors entries/llvm_emit_typed_main.mdk (the typed LLVM driver): elaboration
   -- stamps dict routes, lowerProgramEmit produces Core IR, emitProgram renders the
   -- textual LLVM IR. The elaboration is deliberately OUTSIDE both timers — it is
   -- typecheck-side work, and rule 1 of the gate says grade a stage, never a sum.
@@ -262,7 +262,7 @@ runStaged on targetPath rsrc csrc tsrc =
   --     also links (and `--gc-sections` prunes again at the object level).
   -- elaborate: the dict-route STAMPING pass (issue #882). The eight install* table-
   -- builders (returnsSelfTable, methodIfaceTable, …) + the dictNames scans
-  -- (preludeReturnPosDictNames, …) + elaborateDict itself all ran here UNTIMED — the
+  -- (preludeReturnPosDictNames, …) + elaborateOne itself all ran here UNTIMED — the
   -- "elaboration is deliberately OUTSIDE both timers" gap between typecheck and lower.
   -- Any of those table-builds is a candidate List-as-set quadratic; this stage puts the
   -- whole block on the CI map as ONE [perf] row. It is measurement-only bracketing: the
@@ -278,7 +278,7 @@ runStaged on targetPath rsrc csrc tsrc =
     preludeReturnPosDictNames livePrelude combined
       ++ preludeArgPosDictNames livePrelude combined
       ++ constrainedSigNames desugared
-  let elaborated = elaborateDict rDecls dictNames userNames combined
+  let elaborated = elaborateOne rDecls livePrelude ("__user__", desugared)
   -- Input indexing is elaboration work; keep it outside the emit timer.  The FFI
   -- projection is post-elaboration so it consumes the same canonical alias shape
   -- the declaration guards accepted.
@@ -524,7 +524,7 @@ wasmStage on True runtimeDecls live cprog declsOp =
 
 -- typecheck: HM inference over desugared runtime + core ++ target
 
--- elaborate: install* dict-route table builders + elaborateDict (dict-route stamping)
+-- elaborate: install* dict-route table builders + elaborateOne (dict-route stamping)
 
 -- dce: dead-code filter over the elaborated program (reachable-name closure)
 

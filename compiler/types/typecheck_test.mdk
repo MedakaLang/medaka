@@ -1162,7 +1162,7 @@ wrappedReturnRoutes source =
 wrappedReturnFlatRoutes : String -> Option (List String)
 wrappedReturnFlatRoutes source =
   let program = desugar (parseLocated "\{numericPreludeSource}\n\{source}")
-  let elaborated = elaborateDict [] [] ["value"] program
+  let elaborated = elaborateOne [] [] ("wrapped_return_flat", program)
   let (CProgram binds _ _ _) = lowerProgram elaborated
   returnBindRoutes binds
 

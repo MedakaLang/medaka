@@ -6,9 +6,11 @@
 --
 --   medaka run compiler/entries/eval_dict_main.mdk <runtime.mdk> <prelude.mdk>... <source.mdk>
 --
--- The shared tree is: desugar → elaborateDict (RKey rewrite + EDictAt rewrite of
--- the user's constrained fns, typecheck stamps every route, then dict_pass
--- prepends the matching leading dict params) → eval.
+-- The shared tree is: desugar → `evalDictString` (`entries.entry_support`),
+-- which elaborates via `elaborateOne` — the same Module-arm pipeline
+-- `evalTypedString` calls for the typed path; entry_support's own comment
+-- notes the two are byte-identical here, the dict-passing/typed distinction
+-- being elaboration-internal — then eval.
 
 import frontend.ast.{Decl}
 import entries.entry_support.{driveRuntime, evalDictString}

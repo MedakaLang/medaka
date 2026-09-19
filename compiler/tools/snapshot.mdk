@@ -185,14 +185,14 @@ import types.typecheck.{
   checkOneToLinesWithRuntime,
   setCoherenceUserDecls,
   elaborateOne,
-  elaborateDict,
-  constrainedSigNames,
+  elaborateModules,
   mainTypeIsUnit,
   mainTypeIsFloat,
   hadTypeErrors,
   hadMatchWarnings,
   resetTypeErrorsSticky,
 }
+import backend.private_mangle.{mangleUnitsEv}
 import eval.eval.{evalOneOutput, funNamesOf, dropShadowedExp, noMainMsg}
 import backend.llvm_emit.{emitProgramRecord, makeEmitInput}
 -- A member alias gives the Wasm emitter a distinct local name, so BOTH backends are driven from ONE process
@@ -584,7 +584,7 @@ evalOf runtimeDecls coreDecls d =
 
 -- ── the emit path (BOTH backends, ONE lowered CProgram) ──────────────────────
 --
--- `elaborateDict` -> `lowerProgramEmit` runs ONCE and the resulting CProgram feeds
+-- `elaborateModules` + `mangleUnitsEv` -> `lowerProgramEmit` runs ONCE and the resulting CProgram feeds
 -- llvm_emit AND wasm_emit (whose colliding `emitProgram` is import-aliased to
 -- `wasmRecord` above).
 --
@@ -607,9 +607,14 @@ evalOf runtimeDecls coreDecls d =
 -- point: wasm coverage drift becomes a visible diff instead of silence.
 emitBoth : String -> List String -> List Decl -> List Decl -> <IO> Unit
 emitBoth root sel runtimeDecls userDecls =
-  let userNames = funNamesOf userDecls
-  let dictNames = constrainedSigNames userDecls
-  let allDecls = elaborateDict runtimeDecls dictNames userNames userDecls
+  -- Elaborate then mangle, keyed off the MANGLED decls -- the order
+  -- `entry_support.emitModulesWith` runs (mirrors `llvm_emit_typed_main.mdk`'s
+  -- `runEmit`), so a name-keyed table below (`ifaceImplHeadTable`, …) sees the
+  -- same stamped names a real build's tables do.
+  let (coreE, modulesE, _, _, _) =
+    elaborateModules runtimeDecls [] [("__user__", userDecls)]
+  let (coreD, modules2) = mangleUnitsEv coreE modulesE
+  let allDecls = coreD ++ flatMap snd modules2
   -- #1970: this ONE lowered CProgram feeds BOTH backends below (`llvmOf`/`wasmOf`),
   -- so it cannot pass `TargetNative` or `TargetWasm` -- either would narrow the
   -- guard for the backend that does not get to see it here.
