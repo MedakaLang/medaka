@@ -1,5 +1,5 @@
 # META
-source_lines=47076
+source_lines=47098
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -45230,6 +45230,28 @@ checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneErrorsWithRuntime runtimeDecls coreProg userProg =
   checkModulesEntryHasErrors runtimeDecls coreProg [("__user__", userProg)]
 
+-- Module-arm sibling of the `Flat` `checkMatchToLines`: the type-aware
+-- non-exhaustive-match report for ONE module, runtime externs seeded and NO
+-- prelude, rendered as one `Warning: non-exhaustive match …` line per warning.
+--
+-- WARNINGS ONLY — type errors are dropped on the floor rather than rendered, which
+-- is this report's contract, not an oversight: the caller
+-- (`compiler/entries/check_match_main.mdk`) diffs against
+-- `dev/diagdump.exe --check-match`, which reports match warnings and nothing else.
+-- `checkOneDiags` is the wrapper this delegates to precisely because it hands the
+-- two halves back SEPARATE, so the split needs no new projection.
+--
+-- The empty `coreDecls` is what makes the seed identical to the `Flat` wrapper's
+-- hand-built `externSchemes (externTyOriginScope []) runtimeDecls`: `graphPreamble`
+-- computes `externSchemes (externTyOriginScope coreDecls) runtimeDecls`, which
+-- collapses to the same expression at `coreDecls = []`.  `"__user__"` mirrors
+-- `checkOneToLinesWithRuntime`'s rootId convention just above.
+export
+checkOneMatchToLines : List Decl -> List Decl -> String
+checkOneMatchToLines runtimeDecls prog =
+  let (_, warns) = checkOneDiags runtimeDecls [] ("__user__", prog)
+  joinNl (map tcMsg warns)
+
 -- run the multi-module front-end and render the ENTRY module's own bindings as
 -- `name : scheme` per line (the harness sorts) — diffs vs dev/tc_module_probe.
 export
@@ -53999,6 +54021,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "checkOneErrorsWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
+(DTypeSig true "checkOneMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
+(DFunDef false "checkOneMatchToLines" ((PVar "runtimeDecls") (PVar "prog")) (EBlock (DoLet false false (PTuple PWild (PVar "warns")) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EListLit)) (ETuple (ELit (LString "__user__")) (EVar "prog")))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "warns"))))))
 (DTypeSig true "checkModulesEntryLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryLines" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EVar "checkModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))))
 (DTypeSig true "checkModulesAllLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
@@ -61140,6 +61164,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkOneToLinesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryReport") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
 (DTypeSig true "checkOneErrorsWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))))
 (DFunDef false "checkOneErrorsWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkModulesEntryHasErrors") (EVar "runtimeDecls")) (EVar "coreProg")) (EListLit (ETuple (ELit (LString "__user__")) (EVar "userProg")))))
+(DTypeSig true "checkOneMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
+(DFunDef false "checkOneMatchToLines" ((PVar "runtimeDecls") (PVar "prog")) (EBlock (DoLet false false (PTuple PWild (PVar "warns")) (EApp (EApp (EApp (EVar "checkOneDiags") (EVar "runtimeDecls")) (EListLit)) (ETuple (ELit (LString "__user__")) (EVar "prog")))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "warns"))))))
 (DTypeSig true "checkModulesEntryLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))
 (DFunDef false "checkModulesEntryLines" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EApp (EVar "entryOwnSchemes") (EApp (EApp (EApp (EVar "checkModules") (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))))))
 (DTypeSig true "checkModulesAllLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "String")))))

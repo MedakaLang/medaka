@@ -378,6 +378,7 @@ checkOneDiagsSynthetic : List Decl -> List Decl -> List (String, List Decl) -> (
 checkOneEffectParam : String -> String -> Unit
 checkOneErrorsWithRuntime : List Decl -> List Decl -> List Decl -> Bool
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (Map String Unit) -> CeRow -> Unit
+checkOneMatchToLines : List Decl -> List Decl -> String
 checkOneScheme : List Decl -> List Decl -> (String, List Decl) -> List (String, Scheme)
 checkOneSchemeFull : List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
 checkOneSchemeFullK : Option (Int, Int) -> List Decl -> List Decl -> (String, List Decl) -> (List (String, Scheme), List (String, Scheme))
