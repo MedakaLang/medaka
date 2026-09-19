@@ -1,0 +1,54 @@
+{- | Gate for the P0-2c refutable-`let` soundness regression over
+   `test/let_refute_fixtures`.
+
+   A refutable block-`let` with no `else` (`let (Some y) = None`) is well
+   typed — `check` accepts it, since you cannot statically reject every
+   failing refutable let — so it does not fit the three-verb agreement gate.
+   The invariant is purely runtime: `medaka run` traps `[E-LET-REFUTE]`,
+   while `medaka build` plus exec used to segfault (exit 139) because the
+   emitter destructured a mismatching cell with no tag check. A stdout probe
+   cannot tell those apart: stdout is empty for a trap and for a segfault
+   alike, which is how the bug hid. The exit code and the stderr line are the
+   observables that differ, so both are pinned, and pinned exactly — `1`
+   rather than "nonzero", and the whole `runtime error [E-LET-REFUTE]: let
+   pattern match failed` line rather than the code alone, which the shell
+   gate this module replaces graded only loosely.
+
+   `p0_2c_refutable_let_ok` is the control: a matching scrutinee takes the
+   fast path through the same tag check and must still print 7 on both
+   engines. The irrefutable fast path (tuple, single-ctor `PCon`) is locked
+   separately by `run_check_agreement_fixtures/p0_2c_irrefutable_let_ok`,
+   byte for byte, through the LLVM differential.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads the
+   corpus, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  RuntimeOutcome(..), fatalOutcomeSweep, rosterAgreement
+}
+import test_process.{medakaRoot}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/let_refute_fixtures"
+
+refutes : RuntimeOutcome
+refutes = Aborts "E-LET-REFUTE" "let pattern match failed"
+
+-- | The size of the corpus, written down so that a corpus which silently
+-- shrank is red. Growing it is expected: add the row and raise this.
+declaredFixtureCount : Int
+declaredFixtureCount = 3
+
+rows : List (String, RuntimeOutcome)
+rows = [
+  ("p0_2c_refutable_let", refutes),
+  -- The expression-level `let pat = e in body` analog of the same trap.
+  ("p0_2c_refutable_let_expr", refutes),
+  ("p0_2c_refutable_let_ok", Prints "7"),
+]
+
+test "every fixture pins a runtime outcome" =
+  rosterAgreement corpus declaredFixtureCount rows
+
+test "run and build+exec agree with every fixture's pinned outcome" =
+  fatalOutcomeSweep corpus declaredFixtureCount rows

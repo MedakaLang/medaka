@@ -1,0 +1,97 @@
+{- | Gate for `E-INDEX-OOB` message parity between `medaka run` and
+   `medaka build` + exec over `test/index_oob_fixtures` (#1787, #3187, #3185,
+   and #676 part A).
+
+   The prelude's `impl Index (Array a) Int a` / `impl IndexMut …` — and
+   String's, and Vector's — guard every `a[i]` and `a[i] := v`. Until #1787
+   they raised `indexError` with an interpolated message the native backend
+   then threw away: `@mdk_oob` takes no argument, so the same program printed
+   `index 7 out of bounds` under `run` and `index out of bounds` from its
+   built binary, for years, and nothing noticed. #1787 routes the guards
+   through `indexErrorAt`, whose abort formats the index itself; #3187 gave
+   `setInPlace`'s own guard the same treatment, in place of a bare `panic`
+   carrying no index; #3185 kept List's recursive impl from reporting the
+   leftover 0 it decremented to instead of the original index, and taught
+   Map/HashMap to name the absent key. Every row here locks that the two
+   engines print the same line, down to that number or key.
+
+   `nonexhaustive_guard_chain` is the one row whose code is not
+   `E-INDEX-OOB`, and it belongs here precisely because `E-INDEX-OOB` is what
+   native wrongly printed for it: a guard chain with no `otherwise` ends in a
+   bare fall-through sentinel, which `emitFallthrough` lowered to the same
+   argument-less `@mdk_oob`, so a program that indexes nothing aborted as an
+   out-of-bounds index (#676 part A). The code is per row, never the gate's.
+
+   Why this is not a doctest: every doctest runs under the interpreter, and
+   the interpreter was the engine that was already right. A doctest asserting
+   `index 9 out of bounds` passed throughout the years native printed
+   something else — which is how the divergence survived. Only a real `build`
+   plus exec can see it, and `checkRunBuild` does one per row.
+   `diff_compiler_engines` cannot cover it either: its eval arm classifies any
+   interpreter `runtime error [E-` as `na`, so these fixtures are ledgered
+   `eval:intended-abort` and never compared (`test/ENGINE-DIVERGENCE.md`).
+
+   `index_ok` is load-bearing, not decoration: it pins that every in-bounds
+   index at the exact boundaries the guards must not reject — first (0) and
+   last (len - 1), read as well as write, Array and String and Vector — still
+   returns its value on both engines. Without it, "fixing" this gate by
+   making a guard reject everything would read as green. If it alone breaks,
+   the environment broke rather than the bug returning.
+
+   Out of scope by choice: the WasmGC arm. `--target wasm` needs a separately
+   built emitter this gate's shard does not build. Wasm's side of the same
+   parity is `test/wasm/fixtures_modules/w7_array_oob.mdk` under
+   `test/wasm/diff_wasm_modules.sh`, which compares stderr and exit code.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads the
+   corpus, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  RuntimeOutcome(..), fatalOutcomeSweep, rosterAgreement
+}
+import test_process.{medakaRoot}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/index_oob_fixtures"
+
+-- The numeric guards' own wording: the abort formats the offending index.
+oob : String -> RuntimeOutcome
+oob i = Aborts "E-INDEX-OOB" "index \{i} out of bounds"
+
+-- | The size of the corpus, written down so that a corpus which silently
+-- shrank is red. Growing it is expected: add the row and raise this.
+declaredFixtureCount : Int
+declaredFixtureCount = 15
+
+rows : List (String, RuntimeOutcome)
+rows = [
+  ("index_oob_read", oob "9"),
+  ("index_oob_write", oob "9"),
+  ("index_oob_negative", oob "-3"),
+  ("index_oob_string", oob "10"),
+  ("index_oob_vector", oob "4"),
+  ("index_oob_array_set_in_place", oob "9"),
+  ("index_oob_vector_set_in_place", oob "4"),
+  -- The prose arm: `indexError "…"` straight from source, with no number
+  -- anywhere in the line. Its whole assertion is that the caller's own words
+  -- survive to both engines.
+  ("index_oob_message", Aborts "E-INDEX-OOB" "custom message"),
+  ("index_oob_list", oob "5"),
+  -- Map/HashMap name the absent key via `debug`: ordinary, empty-string and
+  -- whitespace-only keys must each be visibly, correctly quoted.
+  ("index_oob_map_key", Aborts "E-INDEX-OOB" "key not found: \"gamma\""),
+  ("index_oob_map_key_empty", Aborts "E-INDEX-OOB" "key not found: \"\""),
+  ("index_oob_map_key_whitespace", Aborts "E-INDEX-OOB" "key not found: \" \""),
+  ("index_oob_hash_map_key", Aborts "E-INDEX-OOB" "key not found: \"gamma\""),
+  (
+    "nonexhaustive_guard_chain",
+    Aborts "E-NONEXHAUSTIVE-MATCH" "non-exhaustive match",
+  ),
+  ("index_ok", Prints "5\n7\n50\n70\na\nc\n8\n9"),
+]
+
+test "every fixture pins a runtime outcome" =
+  rosterAgreement corpus declaredFixtureCount rows
+
+test "run and build+exec agree with every fixture's pinned outcome" =
+  fatalOutcomeSweep corpus declaredFixtureCount rows

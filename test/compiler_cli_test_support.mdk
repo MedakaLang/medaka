@@ -4,9 +4,20 @@
    contracts, and match diagnostics without tying those mechanics to one test
    corpus. -}
 
+import fs.{expectUnitCount, fixtureFiles}
 import io.{getEnvOr, runVerb}
-import list.{dropWhile, reverse, somes, takeWhile}
-import string.{contains, lines, startsWith, stripSuffix, toLower, unlines}
+import list.{dropWhile, reverse, somes, sort, takeWhile}
+import path.{dirname, stem}
+import string.{
+  contains,
+  endsWith,
+  lines,
+  padRight,
+  startsWith,
+  stripSuffix,
+  toLower,
+  unlines,
+}
 import regex.{Regex, mustCompile, isMatch}
 import test_process.{boundedVerb, boundedVerbSeconds, medakaBin, scratchDir}
 import test.{
@@ -227,9 +238,10 @@ binaryRanClean a = a.binCode == 0 && not (contains "E-PANIC" a.binErr)
    collects each row's failure message via `rowFailure`, then hands the
    whole batch to `summarize`.
 
-   The two agreement gates share this exact outer dance and differ only in
-   their row shape and `summarize`'s wording, so those stay the caller's own
-   `gradeOne`/`rowFailure`/`summarize` rather than being unified here. -}
+   Every gate that sweeps a corpus shares this exact outer dance and differs
+   only in its row shape and `summarize`'s wording, so those stay the
+   caller's own `gradeOne`/`rowFailure`/`summarize` rather than being
+   unified here. -}
 export
 sweepUnits : List unit ->
   (String -> unit -> <Exec "_", FileRead "_", IO> row) ->
@@ -303,3 +315,240 @@ batchSection : String -> String -> String -> String
 batchSection prefix key all = match dropWhile (/= "\{prefix}\{key}") (lines all)
   [] => ""
   _ :: rest => unlines (takeWhile (l => not (startsWith prefix l)) rest)
+
+-- # Grading a fatal runtime outcome
+
+{- | What both runtime engines owe for one fixture of a corpus whose subject
+   is a program that aborts.
+
+   `Aborts code tail` is a clean diagnostic abort: exit 1, nothing on
+   stdout, and `runtime error [code]: tail` on stderr — that whole line from
+   a built binary, and the same line behind the `<file>:L:C: ` prefix only
+   `medaka run` emits. `Prints out` is the control an aborting corpus needs:
+   exit 0 on both engines with exactly `out` on stdout, so that a guard
+   "fixed" into rejecting everything cannot read as green.
+
+   The three observables are graded together because each one alone admits a
+   different wrong answer. "Nonzero" takes a SIGSEGV's 139 for the trap; an
+   empty stdout takes a program that aborted for an unrelated reason; and the
+   code without its tail takes a guard that fired on the wrong side of the
+   boundary, which is what the number in `index 9 out of bounds` is there to
+   pin.
+
+   `Dies run built out` is the looser sibling `Aborts` cannot express, for a
+   corpus whose subject is the death itself rather than its wording: each
+   engine is graded separately (`EngineDeath`), the exit is required only to
+   be nonzero, and `out` is the exact stdout every graded engine must have
+   produced anyway — bytes, newline included, not a chomp and not a
+   substring. A fatal signal's exit code is the platform's to choose, and two
+   engines can die of the same program for genuinely different reasons; what
+   neither is allowed to do is die silently or print less than it already
+   had. -}
+public export data RuntimeOutcome =
+  | Aborts String String
+  | Prints String
+  | Dies EngineDeath EngineDeath String
+
+{- | What one engine owes for a `Dies` fixture.
+
+   `Coded code` is a clean coded death: a nonzero exit with `runtime error
+   [code]: ` on that engine's own stderr. `AnyCode` asks only for some
+   `E-…`, for a fixture whose two engines legitimately reach different codes.
+   `Unexercised` grades that engine not at all — for a fixture only one of
+   them can be fairly asked about, which then also excuses a build that does
+   not compile.
+
+   Containment rather than a whole line is deliberate, and is where a `Dies`
+   row is looser than an `Aborts` one: a raw signal death and a coded one are
+   told apart by that line being there at all, not by its wording, and the
+   two engines word it differently on purpose — `medaka run` prefixes a
+   `<file>:L:C: ` location onto the ones that have a source location, names
+   an unmangled binding where the emitter names a mangled one, and describes
+   the interpreter's own depth guard where the binary describes a real stack.
+   Wording is pinned per code by the corpus that owns it. -}
+public export data EngineDeath = Coded String | AnyCode | Unexercised
+
+abortLine : String -> String -> String
+abortLine code tail = "runtime error [\{code}]: \{tail}"
+
+observed : String -> Int -> String -> String -> String
+observed engine exitCode out err =
+  "\{engine} exit=\{intToString exitCode} stdout=\{debug out} stderr=\{debug err}"
+
+abortFailure : String -> Agreement -> Option String
+abortFailure want a =
+  let suffix = ": \{want}"
+  let runOut = chompNewlines a.runOut
+  let runErr = chompNewlines a.runErr
+  let binOut = chompNewlines a.binOut
+  let binErr = chompNewlines a.binErr
+  if a.runCode /= 1 || runOut /= "" || not (endsWith suffix runErr) then
+    Some
+      "\{observed "run" a.runCode runOut runErr}; want exit=1, empty stdout, stderr ending \{debug suffix}"
+  else if a.binCode /= 1 || binOut /= "" || binErr /= want then
+    Some
+      "\{observed "build+exec" a.binCode binOut binErr}; want exit=1, empty stdout, stderr \{debug want}"
+  else
+    None
+
+printsFailure : String -> Agreement -> Option String
+printsFailure want a =
+  let runOut = chompNewlines a.runOut
+  let runErr = chompNewlines a.runErr
+  let binOut = chompNewlines a.binOut
+  let binErr = chompNewlines a.binErr
+  if a.runCode /= 0 || runOut /= want || runErr /= "" then
+    Some
+      "\{observed "run" a.runCode runOut runErr}; want exit=0, stdout \{debug want}, empty stderr"
+  else if a.binCode /= 0 || binOut /= want || binErr /= "" then
+    Some
+      "\{observed "build+exec" a.binCode binOut binErr}; want exit=0, stdout \{debug want}, empty stderr"
+  else
+    None
+
+deathMarker : EngineDeath -> Option String
+deathMarker (Coded code) = Some "runtime error [\{code}]: "
+deathMarker AnyCode = Some "runtime error [E-"
+deathMarker Unexercised = None
+
+deathFailure : String ->
+  EngineDeath ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  Option String
+deathFailure engine want wantOut exitCode out err = match deathMarker want
+  None => None
+  Some marker =>
+    if exitCode == 0 || out /= wantOut || not (contains marker err) then
+      Some
+        "\{observed engine exitCode out err}; want nonzero exit, stdout \{debug wantOut}, stderr carrying \{debug marker}"
+    else
+      None
+
+diesFailure : EngineDeath -> EngineDeath -> String -> Agreement -> Option String
+diesFailure wantRun wantBuilt out a =
+  orElse
+    (deathFailure "run" wantRun out a.runCode a.runOut a.runErr)
+    (deathFailure "build+exec" wantBuilt out a.binCode a.binOut a.binErr)
+
+-- Whether the binary `medaka build` was asked to produce is evidence for
+-- `want`. A `Dies` row that does not exercise it covers a fixture the
+-- emitter cannot compile at all, so a failed build is that row's premise
+-- rather than its failure.
+gradesBuiltBinary : RuntimeOutcome -> Bool
+gradesBuiltBinary (Dies _ Unexercised _) = False
+gradesBuiltBinary _ = True
+
+{- | Why `a` is not the `want` outcome, or `None` when it is exactly that
+   outcome on every engine the outcome grades.
+
+   `check` and `build` answer first and on their own: a fixture the front end
+   rejected, or one whose build produced no binary, has no runtime outcome to
+   compare at all, and reporting that as a stderr mismatch would blame the
+   wrong stage. The build's verdict is skipped only for a row that does not
+   exercise the built binary, where failing to compile is the row's premise.
+   Both report their whole output rather than the first line mentioning an
+   error, since the reason a fatal-outcome fixture stops being compilable is
+   as often an unreadable path as a diagnostic, and that has no error-shaped
+   line to pick out. -}
+export
+runtimeOutcomeFailure : RuntimeOutcome -> Agreement -> Option String
+runtimeOutcomeFailure want a =
+  if a.checkCode /= 0 then
+    Some
+      "`medaka check` rejected it (exit \{intToString a.checkCode}): \{debug (chompNewlines a.checkErr)}"
+  else if a.buildCode /= 0 && gradesBuiltBinary want then
+    Some
+      "`medaka build` produced no binary (exit \{intToString a.buildCode}): \{debug (chompNewlines a.buildLog)}"
+  else match want
+    Aborts code tail => abortFailure (abortLine code tail) a
+    Prints out => printsFailure out a
+    Dies wantRun wantBuilt out => diesFailure wantRun wantBuilt out a
+
+-- # Sweeping a rostered fatal-outcome corpus
+
+-- The stems of `corpus`'s own fixtures: its top-level `.mdk` files. A
+-- subdirectory holds modules the fixtures import, which are not entry points
+-- and pin no outcome of their own.
+export
+fixtureStems : String -> <FileRead "_", IO> Result String (List String)
+fixtureStems corpus = match fixtureFiles corpus
+  Err e => Err e
+  Ok paths =>
+    let own = filter (p => endsWith ".mdk" p && dirname p == corpus) paths
+    Ok (sort (map stem own))
+
+unmatchedNames : String -> List String -> List String -> List String
+unmatchedNames what haves wants =
+  map (n => "  \{n}: \{what}") (filter (n => not (elem n haves)) wants)
+
+{- | That `rows` names exactly the fixtures on disk, exactly `want` of them.
+
+   The count is written down rather than discovered so that a corpus which
+   silently SHRANK is red rather than green over whatever is left — the
+   anti-vacuity floor inside `fixtureFiles` only catches one that emptied.
+   Growing the corpus is expected: add the row and raise the number in the
+   same commit. The two set directions are checked as well as the count,
+   since a fixture swapped for a differently named one keeps the count: a
+   fixture with no row is graded by nothing at all, and a row with no fixture
+   would otherwise surface later as an unreadable path, naming the spawn
+   instead of the roster. -}
+export
+rosterAgreement : String ->
+  Int ->
+  List (String, RuntimeOutcome) ->
+  <FileRead "_", IO> Expectation
+rosterAgreement corpus want rows = match fixtureStems corpus
+  Err e => fail "\{corpus}: \{e}"
+  Ok found => match expectUnitCount want rows
+    Err e => fail "\{corpus}: roster \{e}"
+    Ok _ => match expectUnitCount want found
+      Err e => fail "\{corpus}: \{e} on disk"
+      Ok _ =>
+        let roster = map fst rows
+        match (unmatchedNames
+            "on disk, but no row pins its outcome"
+            roster
+            found
+          ++ unmatchedNames "pinned by a row, but no such fixture" found roster)
+          [] => pass
+          problems => fail "\{corpus}:\n\{unlines problems}"
+
+gradeOutcome : String ->
+  String ->
+  (String, RuntimeOutcome) ->
+  <Exec "_", FileRead "_", IO> Option String
+gradeOutcome corpus scratch (name, want) =
+  match checkRunBuild "\{corpus}/\{name}.mdk" "\{scratch}/\{name}.bin"
+    Err e => Some "  \{padRight 30 ' ' name} \{e}"
+    Ok a =>
+      map
+        (why => "  \{padRight 30 ' ' name} \{why}")
+        (runtimeOutcomeFailure want a)
+
+-- The whole disagreeing-fixture table goes into the failure message rather
+-- than to stdout: `medaka test --native` parses a test body's own stdout back
+-- as a sentinel transcript, so anything printed there never reaches a reader.
+summarizeOutcomes : String -> Int -> Int -> List String -> Expectation
+summarizeOutcomes corpus want graded failures =
+  if graded /= want then
+    fail
+      "\{corpus}: graded \{intToString graded} fixtures, want exactly \{intToString want}"
+  else match failures
+    [] => pass
+    _ =>
+      fail
+        "\{intToString (length failures)} of \{intToString graded} fixtures under \{corpus} missed their pinned runtime outcome:\n\{unlines failures}"
+
+{- | Grades every row of `rows` against its fixture under `corpus`, failing
+   with one line per fixture that missed its pinned outcome, and failing on
+   the count alone unless exactly `want` rows were graded. -}
+export
+fatalOutcomeSweep : String ->
+  Int ->
+  List (String, RuntimeOutcome) ->
+  <Exec "_", FileRead "_", IO> Expectation
+fatalOutcomeSweep corpus want rows =
+  sweepUnits rows (gradeOutcome corpus) (r => r) (summarizeOutcomes corpus want)

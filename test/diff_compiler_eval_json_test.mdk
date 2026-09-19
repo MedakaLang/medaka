@@ -1,0 +1,125 @@
+{- | Differential validation for `medaka run --json` (RUNTIME-DIAGNOSTIC-
+   CHANNEL-DESIGN.md Fork C, Stage 4), over
+   `test/error_quality_fixtures/eval/*.mdk`.
+
+   Each fixture must emit a JSON diagnostic envelope through the SAME
+   `driver.diagnostics.cjAllToJson` serializer `medaka check --json` uses —
+   `{"files":[{"file":...,"diagnostics":[{code,kind,message,range,severity,
+   source}]}]}` — byte-identical in shape, just carrying the runtime E-*
+   code. `panic` (the noreturn C-abort `runtimePanic` hands the JSON string
+   to) writes the envelope to STDERR, never stdout, on this path.
+
+   #1542: `cross_module_panic.mdk` / `cross_module_panic_nested.mdk` pin the
+   `"file"` field itself — a panic raised inside an IMPORTED module (helper
+   modules under `xmod1542/`, kept in a subdirectory so the top-level fixture
+   roster below never picks them up as standalone fixtures) must name the
+   RAISING module, not the entry file. `cross_module_panic_nested.mdk` adds a
+   third module (entry -> lib_b -> lib_a) so an intermediate, non-panicking
+   frame doesn't leave a stale attribution behind. Both fixtures' committed
+   `.json.out` goldens already pin the exact `xmod1542/lib_a.mdk` path, so
+   the byte-exact comparison below carries this assertion without a separate
+   check.
+
+   Drives the freshly-built `./medaka` CLI directly, one spawn per fixture
+   (no `build`+exec arm — this path lives only in the CLI driver, not the
+   emitted binary). Absolute `MEDAKA_ROOT` prefixes are stripped from the
+   spawned stderr before comparing, mirroring the retired shell gate's own
+   path-stability convention; every committed golden is already root-
+   relative, so this only fires when `MEDAKA_ROOT` is exported absolute (as
+   `medaka gate run` does).
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   source files and goldens, none of which the interpreter binds. -}
+
+import compiler_cli_test_support.{chompNewlines, fixtureStems}
+import fs.{expectUnitCount}
+import list.{somes}
+import string.{contains, lines, replaceAll, split, startsWith, trim, unlines}
+import test.{fail, pass}
+import test_process.{boundedVerb, medakaBin, medakaRoot}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/error_quality_fixtures/eval"
+
+declaredFixtureCount : Int
+declaredFixtureCount = 12
+
+{- | The fixed prefix of the source-staleness warning
+   (`checkSourceStaleness`, `compiler/driver/medaka_cli.mdk`), read live from
+   that module rather than hand-copied — so a wording change never rots this
+   file, only changes what a stale-binary failure message says. `""` when
+   that source no longer has this shape, in which case `staleNote` appends
+   nothing (never a guess either way). -}
+staleMarker : <FileRead "_", IO> String
+staleMarker = match readFile "\{medakaRoot}/compiler/driver/medaka_cli.mdk"
+  Err _ => ""
+  Ok src => markerBefore "" (lines src)
+
+markerBefore : String -> List String -> String
+markerBefore _ [] = ""
+markerBefore prev (l :: rest) =
+  if startsWith "++ compilerDir" (trim l) then
+    quotedIn prev
+  else
+    markerBefore l rest
+
+quotedIn : String -> String
+quotedIn s = match split "\"" s
+  _ :: q :: _ => q
+  _ => ""
+
+-- A note to append to a mismatch message when the spawn's own stderr says
+-- the binary predates the tree — the likeliest explanation for a mismatch
+-- that a raw text diff never spells out on its own.
+staleNote : String -> String -> String
+staleNote marker text =
+  if marker /= "" && contains marker text then
+    " [ALSO: this ./medaka reports itself stale — run 'make medaka' and retry]"
+  else
+    ""
+
+-- `None` when `name`'s `medaka run --json` output matches its committed
+-- `.json.out` golden exactly, AND `medaka run` exited nonzero — every
+-- fixture in this corpus pins at least one diagnostic, and `medaka run`
+-- exits nonzero whenever it has one to report (warning-severity diagnostics
+-- included, since `W-MAIN-SHAPE` means the run never happened), so a clean
+-- exit here is itself a sign the diagnostic path silently stopped firing —
+-- the process boundary the byte comparison alone never inspects.
+gradeOne : String -> String -> <Exec "_", FileRead "_", IO> Option String
+gradeOne marker name =
+  let entry = "\{corpus}/\{name}.mdk"
+  let golden = "\{corpus}/\{name}.json.out"
+  match boundedVerb medakaBin ["run", "--json", entry]
+    Err e => Some "  \{name}: could not run `medaka run --json`: \{e}"
+    Ok (code, _, err) =>
+      let actual = chompNewlines (replaceAll "\{medakaRoot}/" "" err)
+      match readFile golden
+        Err e => Some "  \{name}: missing golden \{golden}: \{e}"
+        Ok goldenRaw =>
+          let want = chompNewlines goldenRaw
+          if code == 0 then
+            Some
+              "  \{name}: golden pins a diagnostic but `medaka run --json` exited 0"
+          else if actual == want then
+            None
+          else
+            Some
+              "  \{name}\{staleNote marker actual}\n    want: \{debug want}\n    got:  \{debug actual}"
+
+test "eval_json: exactly 12 fixtures on disk" = match fixtureStems corpus
+  Err e => fail "\{corpus}: \{e}"
+  Ok names => match expectUnitCount declaredFixtureCount names
+    Err e => fail "\{corpus}: \{e}"
+    Ok _ => pass
+
+test "eval_json: `medaka run --json` agrees with the committed goldens, byte for byte" =
+  let marker = staleMarker
+  match fixtureStems corpus
+    Err e => fail "\{corpus}: \{e}"
+    Ok names =>
+      let failures = somes (map (gradeOne marker) names)
+      match failures
+        [] => pass
+        _ =>
+          fail
+            "\{intToString (length failures)} of \{intToString (length names)} fixtures under \{corpus} disagreed with their committed golden:\n\{unlines failures}"

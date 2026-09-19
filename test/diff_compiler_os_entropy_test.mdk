@@ -1,0 +1,293 @@
+{- | #1726: native/eval OS-entropy contract and anti-rot structure, over
+   `test/os_entropy_fixtures`.
+
+   The bytes `osEntropyBytes` returns are deliberately nondeterministic, so
+   this gate cannot pin a value. It grades a SHAPE instead: `positive.mdk`
+   must run clean and print two DIFFERENT results across two fresh spawns
+   of each engine — independence must hold across real processes, since a
+   fixture that sampled twice inside one process could pass by calling the
+   same in-process RNG state twice without ever exercising a fresh OS call.
+   `negative.mdk`/`too_large.mdk` must be rejected, by name, on both
+   engines. Six structural checks below protect the security contract that
+   the executable checks alone cannot see: the exact effect annotation, that
+   the extern never leaks into a deterministic dispatch table, that the C
+   helper never falls back to the runtime's seeded SplitMix generator, and
+   that the WASM gap is a declared decision rather than a silent omission.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads
+   source files, neither of which the interpreter binds. -}
+
+import fs.{expectUnitCount, fixtureFiles}
+import list.{dropWhile, takeWhile}
+import string.{contains, endsWith, lines, startsWith, unlines}
+import test.{Expectation, expectAll, fail, pass}
+import test_process.{
+  boundedVerb,
+  boundedVerbSeconds,
+  medakaBin,
+  medakaRoot,
+  scratchDir,
+}
+
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/os_entropy_fixtures"
+
+positiveFixture : <IO> String
+positiveFixture = "\{corpus}/positive.mdk"
+
+negativeFixture : <IO> String
+negativeFixture = "\{corpus}/negative.mdk"
+
+tooLargeFixture : <IO> String
+tooLargeFixture = "\{corpus}/too_large.mdk"
+
+-- `medakaBin` under `MEDAKA_STRICT=1`, via the same double-`env` device
+-- `compiler_cli_test_support.boundedInTree` uses to pass a variable through
+-- to an execed process: a stale binary must fail loudly here rather than
+-- print a right-looking answer over a compiler that no longer matches disk.
+strictSpawn : Int ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+strictSpawn secs args =
+  boundedVerbSeconds secs "env" (["MEDAKA_STRICT=1", medakaBin] ++ args)
+
+-- Removes a scratch directory a build wrote into. The exit code is read and
+-- discarded on purpose — cleanup failing is never the reason a check reports
+-- red.
+cleanup : String -> <Exec "_", IO> Unit
+cleanup scratch = match boundedVerb "rm" ["-rf", scratch]
+  Ok (code, _, _) =>
+    let _ = code == 0
+    ()
+  Err _ => ()
+
+okShape : (Int, String, String) -> Bool
+okShape (code, out, _) = code == 0 && startsWith "ok:" out
+
+spawnSummary : String -> (Int, String, String) -> String
+spawnSummary tag (code, out, err) =
+  "\{tag} exit=\{intToString code} stdout=\{debug out} stderr=\{debug err}"
+
+-- The independence claim two fresh spawns of the same program owe: both
+-- clean and well-shaped, and NOT byte-identical to each other.
+freshSpawnsIndependent : String ->
+  (Int, String, String) ->
+  (Int, String, String) ->
+  Expectation
+freshSpawnsIndependent tag a (bc, bo, be) =
+  let b = (bc, bo, be)
+  if not (okShape a) then
+    fail (spawnSummary "\{tag} first" a)
+  else if not (okShape b) then
+    fail (spawnSummary "\{tag} second" b)
+  else
+    let (_, ao, _) = a
+    if ao == bo then
+      fail "\{tag}: two fresh spawns produced identical entropy: \{debug ao}"
+    else
+      pass
+
+test "os_entropy: exactly 3 fixtures on disk" = match fixtureFiles corpus
+  Err e => fail "\{corpus}: \{e}"
+  Ok paths => match expectUnitCount 3 (filter (endsWith ".mdk") paths)
+    Err e => fail "\{corpus}: \{e}"
+    Ok _ => pass
+
+test "os_entropy: positive fixture — `medaka run` is well-shaped and independent across fresh spawns" =
+  match strictSpawn 30 ["run", positiveFixture]
+    Err e => fail "first `medaka run` spawn: \{e}"
+    Ok a => match strictSpawn 30 ["run", positiveFixture]
+      Err e => fail "second `medaka run` spawn: \{e}"
+      Ok b => freshSpawnsIndependent "run" a b
+
+-- The rejection `medaka run` owes for a fixture whose `osEntropyBytes` call
+-- is out of contract: nonzero exit with `wantSubstring` on stderr.
+runRejected : String -> String -> <Exec "_", IO> Expectation
+runRejected fixture wantSubstring = match strictSpawn 30 ["run", fixture]
+  Err e => fail "medaka run: \{e}"
+  Ok (code, ro, re) =>
+    if code == 0 then
+      fail "medaka run unexpectedly succeeded: stdout=\{debug ro}"
+    else if not (contains wantSubstring re) then
+      fail
+        "medaka run: expected stderr containing \{debug wantSubstring}, got \{debug re}"
+    else
+      pass
+
+test "os_entropy: negative length is rejected by `medaka run`" =
+  runRejected negativeFixture "osEntropyBytes: length must be non-negative"
+
+test "os_entropy: too-large length is rejected by `medaka run`" =
+  runRejected tooLargeFixture "osEntropyBytes: requested length is too large"
+
+-- Builds `fixture` into `\{scratch}/\{name}` and executes it once. `scratch`
+-- is `test_process.scratchDir`'s memoized directory — one per process, never
+-- a fresh one per call — so every build below shares it and is keyed apart
+-- by `name` alone; deleting it between builds (rather than once, after the
+-- last one) would hand the next build a directory that no longer exists.
+builtOnce : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String (Int, String, String)
+builtOnce scratch name fixture =
+  let binPath = "\{scratch}/\{name}"
+  match strictSpawn 60 ["build", fixture, "-o", binPath]
+    Err e => Err "medaka build \{name}: \{e}"
+    Ok (code, bo, be) =>
+      if code /= 0 then
+        Err
+          "medaka build \{name} failed: exit=\{intToString code} \{debug (bo ++ be)}"
+      else match boundedVerb binPath []
+        Err e => Err "\{name}: exec: \{e}"
+        Ok r => Ok r
+
+-- `fixture`, built once into `scratch` under `name` and executed TWICE:
+-- both runs must be well-shaped and must differ from each other.
+buildIndependence : String -> String -> String -> <Exec "_", IO> Expectation
+buildIndependence scratch name fixture = match builtOnce scratch name fixture
+  Err e => fail e
+  Ok a => match boundedVerb "\{scratch}/\{name}" []
+    Err e => fail "\{name}: second exec: \{e}"
+    Ok b => freshSpawnsIndependent name a b
+
+-- `fixture`, built once into `scratch` under `name` and executed once: the
+-- binary must fail nonzero with `wantSubstring` on stderr.
+buildRejected : String ->
+  String ->
+  String ->
+  String ->
+  <Exec "_", IO> Expectation
+buildRejected scratch name fixture wantSubstring =
+  match builtOnce scratch name fixture
+    Err e => fail e
+    Ok (nc, no, ne) =>
+      if nc == 0 then
+        fail "\{name}: built binary unexpectedly succeeded: stdout=\{debug no}"
+      else if not (contains wantSubstring ne) then
+        fail
+          "\{name}: expected stderr containing \{debug wantSubstring}, got \{debug ne}"
+      else
+        pass
+
+test "os_entropy: build+exec — positive is independent, negative and too-large are rejected" =
+  match scratchDir
+    Err e => fail "could not make a scratch directory: \{e}"
+    Ok scratch =>
+      let result = expectAll [
+        buildIndependence scratch "positive" positiveFixture,
+        buildRejected
+          scratch
+          "negative"
+          negativeFixture
+          "osEntropyBytes: length must be non-negative",
+        buildRejected
+          scratch
+          "too_large"
+          tooLargeFixture
+          "osEntropyBytes: requested length is too large",
+      ]
+      let _ = cleanup scratch
+      result
+
+-- # Structural anti-rot checks — none of these touch a spawn
+
+-- The lines of `allLines` strictly after the first line starting with
+-- `startPrefix`, up to (not including) the first later line satisfying
+-- `stopWhen`. `Err` when `startPrefix` is never found — distinct from an
+-- anchor that IS found but delimits a genuinely empty section, so a
+-- reformatted anchor line fails the check instead of vacuously emptying it.
+sectionAfter : String ->
+  (String -> Bool) ->
+  List String ->
+  Result String (List String)
+sectionAfter startPrefix stopWhen allLines =
+  match dropWhile (l => not (startsWith startPrefix l)) allLines
+    [] => Err "anchor '\{startPrefix}' not found — this check needs updating"
+    _ :: rest => Ok (takeWhile (l => not (stopWhen l)) rest)
+
+test "os_entropy: extern declares the <Rand> effect exactly" =
+  let path = "\{medakaRoot}/stdlib/runtime.mdk"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      if elem "extern osEntropyBytes : Int -> <Rand> Array Int" (lines src) then
+        pass
+      else
+        fail "\{path}: exact <Rand> declaration missing"
+
+test "os_entropy: excluded from the deterministic externBindings table" =
+  let path = "\{medakaRoot}/compiler/eval/eval.mdk"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      let sectionResult =
+        sectionAfter
+          "externBindings _ = ["
+          (startsWith "pDebugStringLit")
+          (lines src)
+      match sectionResult
+        Err e => fail "\{path}: \{e}"
+        Ok section =>
+          if contains "\"osEntropyBytes\"" (unlines section) then
+            fail
+              "\{path}: osEntropyBytes leaked into the deterministic externBindings table"
+          else
+            pass
+
+test "os_entropy: excluded from testCapableExterns" =
+  let path = "\{medakaRoot}/compiler/eval/eval.mdk"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      let sectionResult =
+        sectionAfter "testCapableExterns _ = [" (l => l == "]") (lines src)
+      match sectionResult
+        Err e => fail "\{path}: \{e}"
+        Ok section =>
+          if contains "\"osEntropyBytes\"" (unlines section) then
+            fail "\{path}: osEntropyBytes leaked into testCapableExterns"
+          else
+            pass
+
+test "os_entropy: the C runtime helper has no deterministic SplitMix fallback" =
+  let path = "\{medakaRoot}/runtime/medaka_rt.c"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      let sectionResult =
+        sectionAfter
+          "long long mdk_os_entropy_bytes("
+          (l => l == "}")
+          (lines src)
+      match sectionResult
+        Err e => fail "\{path}: \{e}"
+        Ok section =>
+          if contains "mdk_next_u64" (unlines section) then
+            fail
+              "\{path}: osEntropyBytes calls the deterministic SplitMix generator"
+          else
+            pass
+
+test "os_entropy: the WASM-GAP capability exception is declared" =
+  let path = "\{medakaRoot}/test/CAPABILITY-EXCEPTIONS.txt"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      if any (startsWith "osEntropyBytes\twasm\tWASM-GAP\t") (lines src) then
+        pass
+      else
+        fail "\{path}: explicit WASM-GAP row missing"
+
+-- A shrinking count here is the same silent-wrongness signal
+-- `rosterAgreement`'s doc comment names for a fixture roster: written down
+-- so a corpus that lost a check reads red instead of a quieter suite.
+test "os_entropy: exactly 11 `os_entropy:` checks are declared" =
+  let path = "\{medakaRoot}/test/diff_compiler_os_entropy_test.mdk"
+  match readFile path
+    Err e => fail "\{path}: \{e}"
+    Ok src =>
+      let n = length (filter (startsWith "test \"os_entropy:") (lines src))
+      if n == 11 then
+        pass
+      else
+        fail "\{path}: expected 11 `os_entropy:` checks, found \{intToString n}"

@@ -1,4 +1,4 @@
--- "run drops stdout on panic" regression (test/diff_compiler_run_stdout_flush.sh).
+-- "run drops stdout on panic" regression (gate diff_compiler_run_stdout_flush).
 -- Before the fix, `medaka run` buffered a program's stdout in an in-language
 -- Ref<String> and only wrote it out after `main` returned NORMALLY -- so a
 -- panicking program's already-printed output was silently discarded (Medaka
