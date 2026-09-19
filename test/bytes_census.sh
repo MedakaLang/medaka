@@ -107,10 +107,13 @@ if [ "${1:-}" = "--write" ]; then
   [ "$#" -gt 0 ] || { echo "bytes_census: --write needs at least one <file>" >&2; exit 2; }
 
   allow_increase=0
+  allow_drop=0
   files_to_write=""
   for a in "$@"; do
     if [ "$a" = "--allow-increase" ]; then
       allow_increase=1
+    elif [ "$a" = "--allow-drop" ]; then
+      allow_drop=1
     else
       if [ -z "$files_to_write" ]; then
         files_to_write="$a"
@@ -155,9 +158,38 @@ $a"
       exit 1
     fi
   fi
+
+  # Ratchet, second half (#3210/F5): a --write that names only SOME of the
+  # currently-enrolled files must not silently drop the rest — the first
+  # half (#3177, above) stops a count from silently RISING; this stops a
+  # row from silently VANISHING. Any file with an old row that is not named
+  # in this invocation is carried into the new output unchanged, unless
+  # --allow-drop says to actually drop it.
+  tab="$(printf '\t')"
+  preserved_rows=""
+  if [ "$allow_drop" -eq 0 ] && [ -n "$old_parsed" ]; then
+    while IFS="$tab" read -r pf pc; do
+      [ -n "$pf" ] || continue
+      named=0
+      for wf in $files_to_write; do
+        [ "$wf" = "$pf" ] && { named=1; break; }
+      done
+      if [ "$named" -eq 0 ]; then
+        row="$pf$tab$pc"
+        if [ -z "$preserved_rows" ]; then
+          preserved_rows="$row"
+        else
+          preserved_rows="$preserved_rows
+$row"
+        fi
+      fi
+    done <"$old_parsed"
+  fi
   rm -f "$old_parsed"
 
+  set -f
   set -- $files_to_write
+  set +f
   {
     echo "# test/bytes_census_baseline.toml — Array Int position count baseline,"
     echo "# GENERATED, never hand-edited (epic #3134)."
@@ -184,6 +216,19 @@ $a"
       echo "file = \"$f\""
       echo "count = $n"
     done
+    if [ -n "$preserved_rows" ]; then
+      set -f
+      while IFS="$tab" read -r pf pc; do
+        [ -n "$pf" ] || continue
+        echo ""
+        echo "[[entry]]"
+        echo "file = \"$pf\""
+        echo "count = $pc"
+      done <<EOF_PRESERVED
+$preserved_rows
+EOF_PRESERVED
+      set +f
+    fi
   } >"$outpath"
   exit 0
 fi

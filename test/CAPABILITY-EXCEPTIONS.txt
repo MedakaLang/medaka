@@ -128,6 +128,7 @@ netConnectStart	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netSetNonblock	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTryAccept	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTryRecv	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
+netTryRecvBytes	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTrySend	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTrySendFrom	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 
@@ -205,6 +206,7 @@ netConnectStart	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_e
 netSetNonblock	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTryAccept	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTryRecv	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+netTryRecvBytes	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTrySend	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTrySendFrom	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 
