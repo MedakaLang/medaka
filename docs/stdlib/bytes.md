@@ -2,38 +2,45 @@
 
 An immutable string of bytes.
 
-`Bytes` wraps a sequence of byte values, each meant to be `0` to `255`,
-and hands out no way to change it once built. Use it for data that is
-bytes, such as a file's contents, a hash digest, or a UTF-8 encoding, and
-`Array Int` for a sequence of numbers that happen to be small.
+`Bytes` wraps a sequence of byte values, each `0` to `255`, and hands out
+no way to change it once built. Use it for data that is bytes, such as a
+file's contents, a hash digest, or a UTF-8 encoding, and `Array Int` for a
+sequence of numbers that happen to be small.
 
-At B1 the `0` to `255` domain is not enforced. `fromArray` accepts any
-`Int`, and `get`, `b[i]`, `eq`, and `compare` all read an out-of-range
-element back unchanged, with no masking. Some byte-consuming code
-elsewhere (`hex.encodeBytes`, for one) masks to the low eight bits before
-use, so the same out-of-range value can render differently depending on
-which operation reads it. Masking or rejecting out-of-range elements is
-left to `Bytes`'s packed B2 representation.
+The bytes are packed one per byte rather than one per machine word, so a
+byte string of `n` bytes occupies `n` bytes.
+
+The `0` to `255` domain is enforced at the way in. `fromArray` answers
+`None` on an element outside it, so no `Bytes` value holds anything else,
+and `get`, `b[i]`, `eq`, and `compare` all read a byte back.
+`fromArrayAssumeByteDomain` is the unchecked way in, for a caller that has
+already established the range.
 
 `fromArray` and `toArray` convert; `bytesLength` is the byte count and
 `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
 `Option`-returning form. Two byte strings compare lexicographically, as the
 arrays of their bytes do.
 
+`MutBytes` is the mutable, fixed-length sibling, and the way to build a
+byte string a byte at a time: `mutBytesMake` allocates `n` zero bytes,
+`mutBytesSet` writes one, and `freeze` hands back a `Bytes`. The freeze
+copies, so a write after it never reaches the byte string it produced.
+
 ### `Bytes`
 
 ```
-newtype Bytes = Bytes (Array Int)
+newtype Bytes = Bytes ByteBlock
 ```
 
 The byte-string type.
 
-The constructor is module-private, so `fromArray` and `toUtf8Bytes` are the
-ways in and `toArray` and `fromUtf8Bytes` are the ways out.
+The constructor is module-private, so `fromArray`,
+`fromArrayAssumeByteDomain` and `toUtf8Bytes` are the ways in and `toArray`
+and `fromUtf8Bytes` are the ways out.
 
 ```medaka
-> bytesLength (fromArray [|1, 2, 3|])
-3
+> map bytesLength (fromArray [|1, 2, 3|])
+Some 3
 ```
 
 Instances: [`Index`](#index-bytes-int-int), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Debug`](#debug-bytes)
@@ -43,17 +50,44 @@ Instances: [`Index`](#index-bytes-int-int), [`Eq`](#eq-bytes), [`Ord`](#ord-byte
 ### `fromArray`
 
 ```
-fromArray : Array Int -> Bytes
+fromArray : Array Int -> Option Bytes
 ```
 
-The byte string holding the elements of `arr`, in order.
-
-Nothing here masks or rejects an element outside `0` to `255`: `get`,
-`b[i]`, `eq`, and `compare` all read such an element back unchanged.
+The byte string holding the elements of `arr`, or `None` when any element
+falls outside `0` to `255`.
 
 ```medaka
-> toArray (fromArray [|104, 105|])
+> map toArray (fromArray [|104, 105|])
+Some [|104, 105|]
+> fromArray [|104, 256|]
+None
+> fromArray [|-1|]
+None
+```
+
+### `fromArrayAssumeByteDomain`
+
+```
+fromArrayAssumeByteDomain : Array Int -> Bytes
+```
+
+The byte string holding the elements of `arr`, keeping only the low eight
+bits of each.
+
+Every element of `arr` must already be in `0` to `255`. Nothing here checks
+that, and an element outside the range is silently masked rather than
+refused, so `-1` and `511` both store as `255`. Prefer `fromArray` unless
+the elements come from a source that already guarantees the range.
+
+This is transitional. It exists so that callers holding bytes by
+construction move to `Bytes` without paying a scan, and it is removed once
+the domain-checked door is the only one, alongside `toUtf8`/`fromUtf8`.
+
+```medaka
+> toArray (fromArrayAssumeByteDomain [|104, 105|])
 [|104, 105|]
+> toArray (fromArrayAssumeByteDomain [|300, -1|])
+[|44, 255|]
 ```
 
 ### `toArray`
@@ -101,11 +135,11 @@ The byte at index `i`, or `None` when `i` is out of range.
 answers `None` where `b[i]` raises an index error.
 
 ```medaka
-> get 0 (fromArray [|7, 8, 9|])
+> get 0 (fromArrayAssumeByteDomain [|7, 8, 9|])
 Some 7
-> get 3 (fromArray [|7, 8, 9|])
+> get 3 (fromArrayAssumeByteDomain [|7, 8, 9|])
 None
-> get (-1) (fromArray [|7, 8, 9|])
+> get (-1) (fromArrayAssumeByteDomain [|7, 8, 9|])
 None
 ```
 
@@ -137,12 +171,115 @@ fromUtf8Bytes : Bytes -> String
 
 The string encoded by `b`, read as UTF-8.
 
-Only the low eight bits of each byte are used. On valid UTF-8,
-`fromUtf8Bytes (toUtf8Bytes s)` is `s`.
+On valid UTF-8, `fromUtf8Bytes (toUtf8Bytes s)` is `s`.
 
 ```medaka
 > fromUtf8Bytes (toUtf8Bytes "héllo→")
 "héllo→"
+```
+
+## Mutation
+
+### `MutBytes`
+
+```
+newtype MutBytes = MutBytes ByteBlock
+```
+
+A mutable string of bytes, fixed at its allocated length.
+
+The constructor is module-private, so `mutBytesMake` is the way in and
+`freeze` the way out, and nothing observes the buffer except through the
+functions below.
+
+Reach for it to build a byte string a byte at a time. The alternative --
+filling an `Array Int` and handing it to `fromArray` -- boxes a machine
+word per byte before packing them, which is the cost `Bytes` exists to
+avoid.
+
+```medaka
+> mutBytesLength (mutBytesMake 3)
+3
+```
+
+### `mutBytesMake`
+
+```
+mutBytesMake : Int -> MutBytes
+```
+
+A mutable byte string of `n` zero bytes.
+
+Panics when `n` is negative.
+
+```medaka
+> mutBytesGet 2 (mutBytesMake 3)
+Some 0
+```
+
+### `mutBytesLength`
+
+```
+mutBytesLength : MutBytes -> Int
+```
+
+The number of bytes in `mb`, fixed when it was allocated.
+
+```medaka
+> mutBytesLength (mutBytesMake 4)
+4
+```
+
+### `mutBytesGet`
+
+```
+mutBytesGet : Int -> MutBytes -> Option Int
+```
+
+The byte at index `i` of `mb`, or `None` when `i` is out of range.
+
+```medaka
+> mutBytesGet 1 (mutBytesMake 2)
+Some 0
+> mutBytesGet 2 (mutBytesMake 2)
+None
+> mutBytesGet (-1) (mutBytesMake 2)
+None
+```
+
+### `mutBytesSet`
+
+```
+mutBytesSet : Int -> Int -> MutBytes -> Unit
+```
+
+Replaces the byte at index `i` of `mb` with `v`.
+
+Panics when `i` is out of range, as `array.setInPlace` does, and panics
+when `v` falls outside `0` to `255` rather than keeping its low eight
+bits. A masked write would put a byte into a `Bytes` that no caller asked
+for, and this is the door every byte written here goes through.
+
+```medaka
+> let mb = mutBytesMake 2 in let _ = mutBytesSet 0 65 mb in mutBytesGet 0 mb
+Some 65
+```
+
+### `freeze`
+
+```
+freeze : MutBytes -> Bytes
+```
+
+The bytes of `mb` as an immutable `Bytes`.
+
+The result is a copy, so a write to `mb` afterwards does not reach it.
+
+```medaka
+> let mb = mutBytesMake 2 in let _ = mutBytesSet 1 9 mb in toArray (freeze mb)
+[|0, 9|]
+> let m = mutBytesMake 1 in let b = freeze m in let _ = mutBytesSet 0 7 m in toArray b
+[|0|]
 ```
 
 ## Instances
@@ -159,7 +296,7 @@ Panics with an index error when `i` is out of range; `get` is the
 `Option`-returning form.
 
 ```medaka
-> let b = fromArray [|7, 8, 9|] in b[1]
+> let b = fromArrayAssumeByteDomain [|7, 8, 9|] in b[1]
 8
 ```
 
@@ -173,9 +310,9 @@ Two byte strings are equal when they hold the same bytes in the same
 order.
 
 ```medaka
-> eq (fromArray [|1, 2|]) (fromArray [|1, 2|])
+> eq (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|1, 2|])
 True
-> eq (fromArray [|1, 2|]) (fromArray [|1, 2, 3|])
+> eq (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|1, 2, 3|])
 False
 ```
 
@@ -190,9 +327,9 @@ bytes do: byte by byte from the front, and a prefix sorts before what
 extends it.
 
 ```medaka
-> compare (fromArray [|1, 2|]) (fromArray [|1, 3|])
+> compare (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|1, 3|])
 Lt
-> compare (fromArray [|1, 2|]) (fromArray [|1, 2, 0|])
+> compare (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|1, 2, 0|])
 Lt
 ```
 
@@ -205,7 +342,7 @@ impl Debug Bytes
 Renders as its bytes would as an `Array Int`.
 
 ```medaka
-> debug (fromArray [|7, 8, 9|])
+> debug (fromArrayAssumeByteDomain [|7, 8, 9|])
 "[|7, 8, 9|]"
 ```
 

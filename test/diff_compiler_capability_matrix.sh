@@ -167,7 +167,8 @@ sort -u -o "$WORK/interp_impl.txt" "$WORK/interp_impl.txt"
 # ── 3. LLVM ──────────────────────────────────────────────────────────────────
 : > "$WORK/llvm_impl.txt"
 for fam in isStrExtern isNumExtern isMathUnary isMathBinary isIoExtern isAbortExtern \
-           isArrIntrinsic isArrLeafExtern isCharExtern isStrCharExtern isUnicodeExtern \
+           isArrIntrinsic isArrLeafExtern isByteBlockExtern isCharExtern \
+           isStrCharExtern isUnicodeExtern \
            isAdtExtern isEnvExtern isFileExtern isNetExtern isRngExtern isPerfExtern \
            isBitExtern isHashExtern isDebugLitExtern; do
   extract_family "$LLVMMDK" "$fam" | quoted_names >> "$WORK/llvm_impl.txt"
@@ -179,7 +180,7 @@ sort -u -o "$WORK/llvm_impl.txt" "$WORK/llvm_impl.txt"
 
 # ── 4. Wasm ──────────────────────────────────────────────────────────────────
 : > "$WORK/wasm_impl.txt"
-for fam in isStrExternW isLeafExternW isArrayExternW; do
+for fam in isStrExternW isLeafExternW isArrayExternW isByteBlockExternW; do
   extract_family "$WASMMDK" "$fam" | quoted_names >> "$WORK/wasm_impl.txt"
 done
 # Comment-only quoted examples that are NOT extern names leak into the

@@ -301,6 +301,19 @@ UPPER "String"
 UPPER "Unit"
 NEWLINE
 EXTERN
+IDENT "fsync"
+COLON
+UPPER "String"
+ARROW
+LT
+UPPER "FileWrite"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Unit"
+NEWLINE
+EXTERN
 IDENT "removeDir"
 COLON
 UPPER "String"
@@ -570,6 +583,24 @@ COLON
 UPPER "Int"
 ARROW
 UPPER "Array"
+UPPER "Int"
+ARROW
+LT
+UPPER "Net"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "netSendFrom"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Array"
+UPPER "Int"
+ARROW
 UPPER "Int"
 ARROW
 LT
@@ -1354,6 +1385,72 @@ IDENT "a"
 ARROW
 UPPER "Array"
 IDENT "a"
+NEWLINE
+EXTERN
+IDENT "byteBlockMake"
+COLON
+UPPER "Int"
+ARROW
+UPPER "ByteBlock"
+NEWLINE
+EXTERN
+IDENT "byteBlockLength"
+COLON
+UPPER "ByteBlock"
+ARROW
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "byteBlockGetUnsafe"
+COLON
+UPPER "Int"
+ARROW
+UPPER "ByteBlock"
+ARROW
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "byteBlockSetUnsafe"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "ByteBlock"
+ARROW
+UPPER "Unit"
+NEWLINE
+EXTERN
+IDENT "byteBlockCopyUnsafe"
+COLON
+UPPER "Int"
+ARROW
+UPPER "ByteBlock"
+ARROW
+UPPER "ByteBlock"
+NEWLINE
+EXTERN
+IDENT "byteBlockFromIntArray"
+COLON
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "ByteBlock"
+NEWLINE
+EXTERN
+IDENT "byteBlockToIntArray"
+COLON
+UPPER "ByteBlock"
+ARROW
+UPPER "Array"
+UPPER "Int"
+NEWLINE
+EXTERN
+IDENT "byteBlockFromString"
+COLON
+UPPER "String"
+ARROW
+UPPER "ByteBlock"
 NEWLINE
 EXTERN
 IDENT "stringToChars"

@@ -1,5 +1,5 @@
 # META
-source_lines=15078
+source_lines=15165
 stages=DESUGAR,MARK
 # SOURCE
 -- Core IR -> textual LLVM IR — Stage 2.4 NATIVE BACKEND (slices 1–8+).
@@ -2854,6 +2854,85 @@ emitArrLeafExtern e env "arrayFill" args = match emitArgs e env args
   _ => panic "llvm: arrayFill takes two arguments"
 emitArrLeafExtern e _ name _ = gapE e ("unsupported array leaf extern " ++ name)
 
+-- byte-block leaf externs (the `ByteBlock` builtin).
+-- C helpers in runtime/medaka_rt.c; byte-block cell = [i64 tag | i64 count |
+-- count bytes].  Unlike the array cell there is a header word, so `length` is a
+-- C call rather than the `loadTag` intrinsic `arrayLength` uses.
+-- byteBlockMake/CopyUnsafe/FromIntArray/ToIntArray/FromString return a cell
+-- (LTCon); Length/GetUnsafe return Int; SetUnsafe returns Unit.
+-- Do NOT end a fixture with a block-returning call: emitPrint LTCon panics.
+-- Project to scalar via byteBlockGetUnsafe / byteBlockLength in every fixture.
+isByteBlockExtern : String -> Bool
+-- Deliberately a per-backend copy of wasm_emit.mdk's `isByteBlockExternW`, not a
+-- shared list.  test/diff_compiler_capability_matrix.sh derives each engine's
+-- implemented-extern column by extracting the family binding's own quoted names
+-- out of that engine's own file, so hoisting the eight names into a module both
+-- backends import would leave the gate reading neither engine as implementing
+-- them -- the duplication is what keeps the two columns independently derivable.
+-- lint-disable-next-line rule-duplicate-body
+isByteBlockExtern name = contains name [
+  "byteBlockMake", "byteBlockLength", "byteBlockGetUnsafe",
+  "byteBlockSetUnsafe", "byteBlockCopyUnsafe", "byteBlockFromIntArray",
+  "byteBlockToIntArray", "byteBlockFromString"
+]
+
+emitByteBlockExtern : Emit ->
+  OrdMap (String, LTy) ->
+  String ->
+  List CExpr ->
+  (String, LTy)
+emitByteBlockExtern e env "byteBlockMake" args = match emitArgs e env args
+  [n] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_make(i64 \{n})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockMake takes one argument"
+emitByteBlockExtern e env "byteBlockLength" args = match emitArgs e env args
+  [bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_length(i64 \{bb})"
+    (r, LTInt)
+  _ => panic "llvm: byteBlockLength takes one argument"
+emitByteBlockExtern e env "byteBlockGetUnsafe" args = match emitArgs e env args
+  [i, bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_get(i64 \{i}, i64 \{bb})"
+    (r, LTInt)
+  _ => panic "llvm: byteBlockGetUnsafe takes two arguments"
+emitByteBlockExtern e env "byteBlockSetUnsafe" args = match emitArgs e env args
+  [i, v, bb] =>
+    let _ =
+      emit e "  call void @mdk_byteblock_set(i64 \{i}, i64 \{v}, i64 \{bb})"
+    ("1", LTUnit)
+  _ => panic "llvm: byteBlockSetUnsafe takes three arguments"
+emitByteBlockExtern e env "byteBlockCopyUnsafe" args = match emitArgs e env args
+  [n, bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_copy(i64 \{n}, i64 \{bb})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockCopyUnsafe takes two arguments"
+emitByteBlockExtern e env "byteBlockFromIntArray" args =
+  match emitArgs e env args
+    [a] =>
+      let r = freshReg e
+      let _ = emit e "  \{r} = call i64 @mdk_byteblock_from_int_array(i64 \{a})"
+      (r, LTCon)
+    _ => panic "llvm: byteBlockFromIntArray takes one argument"
+emitByteBlockExtern e env "byteBlockToIntArray" args = match emitArgs e env args
+  [bb] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_to_int_array(i64 \{bb})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockToIntArray takes one argument"
+emitByteBlockExtern e env "byteBlockFromString" args = match emitArgs e env args
+  [s] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_byteblock_from_string(i64 \{s})"
+    (r, LTCon)
+  _ => panic "llvm: byteBlockFromString takes one argument"
+emitByteBlockExtern e _ name _ =
+  gapE e ("unsupported byte-block extern " ++ name)
+
 -- char scalar externs (native extern catalog slice 8).
 -- charCode is INTRINSIC: Char and Int share the same tagged word encoding, so
 -- charCode is a pure re-type — emit the operand as-is and return LTInt.
@@ -3660,6 +3739,7 @@ externCatalog = [
   (isAbortExtern, emitAbortExtern),
   (isArrIntrinsic, emitArrIntrinsic),
   (isArrLeafExtern, emitArrLeafExtern),
+  (isByteBlockExtern, emitByteBlockExtern),
   (isCharExtern, emitCharExtern),
   (isStrCharExtern, emitStrCharExtern),
   (isUnicodeExtern, emitUnicodeExtern),
@@ -9960,6 +10040,13 @@ ctorTagShift = 4294967296
 -- merely "consistent." If that resolver check is ever removed, THIS is the place a
 -- silent tag collision would resurface — worth an emit-time assertion, not just a
 -- comment (EMITTER-SEMANTICS M2).
+-- Reserved type-id slots, so the next one added takes the first FREE id rather
+-- than a used one: 0 List, 1 Option, 2 Result, 3 Ordering, 4 ByteBlock.  Slot 4
+-- is NOT an ADT and deliberately has no `reservedTag` arm -- `ByteBlock` is a
+-- type name, and an arm here would hand its cell header to a user CONSTRUCTOR
+-- that happened to be spelled `ByteBlock`.  Its one construction site is
+-- mdk_byteblock_alloc in runtime/medaka_rt.c, which spells the same composite as
+-- MDK_BYTEBLOCK_TAG and pins it to `MDK_TAG(4, 0)` with a _Static_assert.
 reservedTypeBase : Int
 reservedTypeBase = 65536
 
@@ -15550,6 +15637,18 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "emitArrLeafExtern" ((PVar "e") (PVar "env") (PLit (LString "arrayBlit")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "src") (PVar "so") (PVar "dst") (PVar "dof") (PVar "len")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_array_blit(i64 ")) (EApp (EVar "display") (EVar "src"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "so"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "dst"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "dof"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "len"))) (ELit (LString ")"))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: arrayBlit takes five arguments"))))))
 (DFunDef false "emitArrLeafExtern" ((PVar "e") (PVar "env") (PLit (LString "arrayFill")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "x") (PVar "arr")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_array_fill(i64 ")) (EApp (EVar "display") (EVar "x"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "arr"))) (ELit (LString ")"))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: arrayFill takes two arguments"))))))
 (DFunDef false "emitArrLeafExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported array leaf extern ")) (EVar "name"))))
+(DTypeSig false "isByteBlockExtern" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isByteBlockExtern" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")))))
+(DTypeSig false "emitByteBlockExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockMake")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "n")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_make(i64 "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockMake takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockLength")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_length(i64 "))) (EApp (EVar "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockLength takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockGetUnsafe")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "i") (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_get(i64 "))) (EApp (EVar "display") (EVar "i"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockGetUnsafe takes two arguments"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockSetUnsafe")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "i") (PVar "v") (PVar "bb")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_byteblock_set(i64 ")) (EApp (EVar "display") (EVar "i"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "v"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockSetUnsafe takes three arguments"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockCopyUnsafe")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "n") (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_copy(i64 "))) (EApp (EVar "display") (EVar "n"))) (ELit (LString ", i64 "))) (EApp (EVar "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockCopyUnsafe takes two arguments"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockFromIntArray")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_from_int_array(i64 "))) (EApp (EVar "display") (EVar "a"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockFromIntArray takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockToIntArray")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_to_int_array(i64 "))) (EApp (EVar "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockToIntArray takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockFromString")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "s")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EVar "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_from_string(i64 "))) (EApp (EVar "display") (EVar "s"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockFromString takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported byte-block extern ")) (EVar "name"))))
 (DTypeSig false "isCharExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isCharExtern" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "charCode")) (ELit (LString "charToStr")))))
 (DTypeSig false "emitCharExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
@@ -15691,7 +15790,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "emitDebugLitExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported debug-lit extern ")) (EVar "name"))))
 (DTypeAlias false "ExternEmitter" () (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DTypeSig false "externCatalog" (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))))
-(DFunDef false "externCatalog" () (EListLit (ETuple (EVar "isStrExtern") (EVar "emitStrExtern")) (ETuple (EVar "isNumExtern") (EVar "emitNumExtern")) (ETuple (EVar "isIoExtern") (EVar "emitIoExtern")) (ETuple (EVar "isAbortExtern") (EVar "emitAbortExtern")) (ETuple (EVar "isArrIntrinsic") (EVar "emitArrIntrinsic")) (ETuple (EVar "isArrLeafExtern") (EVar "emitArrLeafExtern")) (ETuple (EVar "isCharExtern") (EVar "emitCharExtern")) (ETuple (EVar "isStrCharExtern") (EVar "emitStrCharExtern")) (ETuple (EVar "isUnicodeExtern") (EVar "emitUnicodeExtern")) (ETuple (EVar "isAdtExtern") (EVar "emitAdtExtern")) (ETuple (EVar "isEnvExtern") (EVar "emitEnvExtern")) (ETuple (EVar "isFileExtern") (EVar "emitFileExtern")) (ETuple (EVar "isNetExtern") (EVar "emitNetExtern")) (ETuple (EVar "isRngExtern") (EVar "emitRngExtern")) (ETuple (EVar "isHashExtern") (EVar "emitHashExtern")) (ETuple (EVar "isBitExtern") (EVar "emitBitExtern")) (ETuple (EVar "isDebugLitExtern") (EVar "emitDebugLitExtern")) (ETuple (EVar "isPerfExtern") (EVar "emitPerfExtern"))))
+(DFunDef false "externCatalog" () (EListLit (ETuple (EVar "isStrExtern") (EVar "emitStrExtern")) (ETuple (EVar "isNumExtern") (EVar "emitNumExtern")) (ETuple (EVar "isIoExtern") (EVar "emitIoExtern")) (ETuple (EVar "isAbortExtern") (EVar "emitAbortExtern")) (ETuple (EVar "isArrIntrinsic") (EVar "emitArrIntrinsic")) (ETuple (EVar "isArrLeafExtern") (EVar "emitArrLeafExtern")) (ETuple (EVar "isByteBlockExtern") (EVar "emitByteBlockExtern")) (ETuple (EVar "isCharExtern") (EVar "emitCharExtern")) (ETuple (EVar "isStrCharExtern") (EVar "emitStrCharExtern")) (ETuple (EVar "isUnicodeExtern") (EVar "emitUnicodeExtern")) (ETuple (EVar "isAdtExtern") (EVar "emitAdtExtern")) (ETuple (EVar "isEnvExtern") (EVar "emitEnvExtern")) (ETuple (EVar "isFileExtern") (EVar "emitFileExtern")) (ETuple (EVar "isNetExtern") (EVar "emitNetExtern")) (ETuple (EVar "isRngExtern") (EVar "emitRngExtern")) (ETuple (EVar "isHashExtern") (EVar "emitHashExtern")) (ETuple (EVar "isBitExtern") (EVar "emitBitExtern")) (ETuple (EVar "isDebugLitExtern") (EVar "emitDebugLitExtern")) (ETuple (EVar "isPerfExtern") (EVar "emitPerfExtern"))))
 (DTypeSig false "findExternFamily" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))) (TyApp (TyCon "Option") (TyCon "ExternEmitter")))))
 (DFunDef false "findExternFamily" (PWild (PList)) (EVar "None"))
 (DFunDef false "findExternFamily" ((PVar "name") (PCons (PTuple (PVar "pred") (PVar "fn")) (PVar "rest"))) (EIf (EApp (EVar "pred") (EVar "name")) (EApp (EVar "Some") (EVar "fn")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findExternFamily") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -18094,6 +18193,18 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "emitArrLeafExtern" ((PVar "e") (PVar "env") (PLit (LString "arrayBlit")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "src") (PVar "so") (PVar "dst") (PVar "dof") (PVar "len")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_array_blit(i64 ")) (EApp (EMethodRef "display") (EVar "src"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "so"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "dst"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "dof"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "len"))) (ELit (LString ")"))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: arrayBlit takes five arguments"))))))
 (DFunDef false "emitArrLeafExtern" ((PVar "e") (PVar "env") (PLit (LString "arrayFill")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "x") (PVar "arr")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_array_fill(i64 ")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "arr"))) (ELit (LString ")"))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: arrayFill takes two arguments"))))))
 (DFunDef false "emitArrLeafExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported array leaf extern ")) (EVar "name"))))
+(DTypeSig false "isByteBlockExtern" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "isByteBlockExtern" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "byteBlockMake")) (ELit (LString "byteBlockLength")) (ELit (LString "byteBlockGetUnsafe")) (ELit (LString "byteBlockSetUnsafe")) (ELit (LString "byteBlockCopyUnsafe")) (ELit (LString "byteBlockFromIntArray")) (ELit (LString "byteBlockToIntArray")) (ELit (LString "byteBlockFromString")))))
+(DTypeSig false "emitByteBlockExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockMake")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "n")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_make(i64 "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockMake takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockLength")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_length(i64 "))) (EApp (EMethodRef "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockLength takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockGetUnsafe")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "i") (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_get(i64 "))) (EApp (EMethodRef "display") (EVar "i"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTInt"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockGetUnsafe takes two arguments"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockSetUnsafe")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "i") (PVar "v") (PVar "bb")) () (EBlock (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  call void @mdk_byteblock_set(i64 ")) (EApp (EMethodRef "display") (EVar "i"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "v"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (ELit (LString "1")) (EVar "LTUnit"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockSetUnsafe takes three arguments"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockCopyUnsafe")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "n") (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_copy(i64 "))) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString ", i64 "))) (EApp (EMethodRef "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockCopyUnsafe takes two arguments"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockFromIntArray")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "a")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_from_int_array(i64 "))) (EApp (EMethodRef "display") (EVar "a"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockFromIntArray takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockToIntArray")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "bb")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_to_int_array(i64 "))) (EApp (EMethodRef "display") (EVar "bb"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockToIntArray takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") (PVar "env") (PLit (LString "byteBlockFromString")) (PVar "args")) (EMatch (EApp (EApp (EApp (EVar "emitArgs") (EVar "e")) (EVar "env")) (EVar "args")) (arm (PList (PVar "s")) () (EBlock (DoLet false false (PVar "r") (EApp (EVar "freshReg") (EVar "e"))) (DoLet false false PWild (EApp (EApp (EVar "emit") (EVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "  ")) (EApp (EMethodRef "display") (EVar "r"))) (ELit (LString " = call i64 @mdk_byteblock_from_string(i64 "))) (EApp (EMethodRef "display") (EVar "s"))) (ELit (LString ")"))))) (DoExpr (ETuple (EVar "r") (EVar "LTCon"))))) (arm PWild () (EApp (EVar "panic") (ELit (LString "llvm: byteBlockFromString takes one argument"))))))
+(DFunDef false "emitByteBlockExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported byte-block extern ")) (EVar "name"))))
 (DTypeSig false "isCharExtern" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isCharExtern" ((PVar "name")) (EApp (EApp (EVar "contains") (EVar "name")) (EListLit (ELit (LString "charCode")) (ELit (LString "charToStr")))))
 (DTypeSig false "emitCharExtern" (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
@@ -18235,7 +18346,7 @@ emitTopBindsGaps e env ((CBind name _) :: rest) =
 (DFunDef false "emitDebugLitExtern" ((PVar "e") PWild (PVar "name") PWild) (EApp (EApp (EVar "gapE") (EVar "e")) (EBinOp "++" (ELit (LString "unsupported debug-lit extern ")) (EVar "name"))))
 (DTypeAlias false "ExternEmitter" () (TyFun (TyCon "Emit") (TyFun (TyApp (TyCon "OrdMap") (TyTuple (TyCon "String") (TyCon "LTy"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyTuple (TyCon "String") (TyCon "LTy")))))))
 (DTypeSig false "externCatalog" (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))))
-(DFunDef false "externCatalog" () (EListLit (ETuple (EVar "isStrExtern") (EVar "emitStrExtern")) (ETuple (EVar "isNumExtern") (EVar "emitNumExtern")) (ETuple (EVar "isIoExtern") (EVar "emitIoExtern")) (ETuple (EVar "isAbortExtern") (EVar "emitAbortExtern")) (ETuple (EVar "isArrIntrinsic") (EVar "emitArrIntrinsic")) (ETuple (EVar "isArrLeafExtern") (EVar "emitArrLeafExtern")) (ETuple (EVar "isCharExtern") (EVar "emitCharExtern")) (ETuple (EVar "isStrCharExtern") (EVar "emitStrCharExtern")) (ETuple (EVar "isUnicodeExtern") (EVar "emitUnicodeExtern")) (ETuple (EVar "isAdtExtern") (EVar "emitAdtExtern")) (ETuple (EVar "isEnvExtern") (EVar "emitEnvExtern")) (ETuple (EVar "isFileExtern") (EVar "emitFileExtern")) (ETuple (EVar "isNetExtern") (EVar "emitNetExtern")) (ETuple (EVar "isRngExtern") (EVar "emitRngExtern")) (ETuple (EVar "isHashExtern") (EVar "emitHashExtern")) (ETuple (EVar "isBitExtern") (EVar "emitBitExtern")) (ETuple (EVar "isDebugLitExtern") (EVar "emitDebugLitExtern")) (ETuple (EVar "isPerfExtern") (EVar "emitPerfExtern"))))
+(DFunDef false "externCatalog" () (EListLit (ETuple (EVar "isStrExtern") (EVar "emitStrExtern")) (ETuple (EVar "isNumExtern") (EVar "emitNumExtern")) (ETuple (EVar "isIoExtern") (EVar "emitIoExtern")) (ETuple (EVar "isAbortExtern") (EVar "emitAbortExtern")) (ETuple (EVar "isArrIntrinsic") (EVar "emitArrIntrinsic")) (ETuple (EVar "isArrLeafExtern") (EVar "emitArrLeafExtern")) (ETuple (EVar "isByteBlockExtern") (EVar "emitByteBlockExtern")) (ETuple (EVar "isCharExtern") (EVar "emitCharExtern")) (ETuple (EVar "isStrCharExtern") (EVar "emitStrCharExtern")) (ETuple (EVar "isUnicodeExtern") (EVar "emitUnicodeExtern")) (ETuple (EVar "isAdtExtern") (EVar "emitAdtExtern")) (ETuple (EVar "isEnvExtern") (EVar "emitEnvExtern")) (ETuple (EVar "isFileExtern") (EVar "emitFileExtern")) (ETuple (EVar "isNetExtern") (EVar "emitNetExtern")) (ETuple (EVar "isRngExtern") (EVar "emitRngExtern")) (ETuple (EVar "isHashExtern") (EVar "emitHashExtern")) (ETuple (EVar "isBitExtern") (EVar "emitBitExtern")) (ETuple (EVar "isDebugLitExtern") (EVar "emitDebugLitExtern")) (ETuple (EVar "isPerfExtern") (EVar "emitPerfExtern"))))
 (DTypeSig false "findExternFamily" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyFun (TyCon "String") (TyCon "Bool")) (TyCon "ExternEmitter"))) (TyApp (TyCon "Option") (TyCon "ExternEmitter")))))
 (DFunDef false "findExternFamily" (PWild (PList)) (EVar "None"))
 (DFunDef false "findExternFamily" ((PVar "name") (PCons (PTuple (PVar "pred") (PVar "fn")) (PVar "rest"))) (EIf (EApp (EVar "pred") (EVar "name")) (EApp (EVar "Some") (EVar "fn")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findExternFamily") (EVar "name")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))

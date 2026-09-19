@@ -1725,6 +1725,67 @@ strCodecRuntimeLines = [
   "    (struct.new $str (local.get $cpc) (local.get $buf)))",
 ]
 
+-- ── the `ByteBlock` builtin's byte-block runtime ─────────────────────────────
+-- A ByteBlock IS a bare `$u8arr` — the same packed byte array that backs a $str,
+-- not a second packed representation.  Where the native cell needs a [tag |
+-- count | bytes] header (medaka_rt.c), WasmGC discriminates by nominal type and
+-- `array.len` already carries the count, so the block needs neither: `$u8arr` is
+-- to `ByteBlock` what `$arr` is to `Array`.  The element domain is 0..255 by
+-- representation — an i8 slot keeps the low eight bits of any store, which is
+-- what the native `(unsigned char)(v >> 1)` truncation does, and `array.get_u`
+-- zero-extends, so a read is always in range.
+-- Gated by `WasmEmit.useByteBlock`, which also forces useStr ($u8arr/$str) and
+-- useArray ($arr), the two reps these bodies name.
+export
+byteBlockRuntimeLines : List String
+byteBlockRuntimeLines = [
+  "  ;; -- the `ByteBlock` builtin (peer of the mdk_byteblock_* C helpers) --",
+  "  ;; byteBlockCopyUnsafe: the first $n bytes into a FRESH block.  A COPY, never a",
+  "  ;; view: this is freeze's engine half, so a later write to the source must not",
+  "  ;; reach the result (matching mdk_byteblock_copy's memcpy).",
+  "  (func $mdk_bb_copy (param $n i32) (param $b (ref $u8arr)) (result (ref $u8arr))",
+  "    (local $out (ref $u8arr))",
+  "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
+  "    (local.get $out))",
+  "  ;; byteBlockFromIntArray: the low eight bits of each element.  Unboxes through",
+  "  ;; $mdk_unbox_int rather than the i31 fast path so an element outside the i31",
+  "  ;; range (a $boxint) masks instead of trapping -- native has no boxed Int, so",
+  "  ;; the i31-only route would diverge on exactly those elements.",
+  "  (func $mdk_bb_from_int_array (param $a (ref $arr)) (result (ref $u8arr))",
+  "    (local $n i32) (local $out (ref $u8arr)) (local $i i32)",
+  "    (local.set $n (array.len (local.get $a)))",
+  "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $u8arr (local.get $out) (local.get $i)",
+  "        (i32.and (i32.wrap_i64 (call $mdk_unbox_int (ref.as_non_null (array.get $arr (local.get $a) (local.get $i))))) (i32.const 255)))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.get $out))",
+  "  ;; byteBlockToIntArray: each byte as an Int in 0..255 (array.get_u zero-extends).",
+  "  (func $mdk_bb_to_int_array (param $b (ref $u8arr)) (result (ref $arr))",
+  "    (local $n i32) (local $out (ref $arr)) (local $i i32)",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $out (array.new $arr (ref.i31 (i32.const 0)) (local.get $n)))",
+  "    (local.set $i (i32.const 0))",
+  "    (block $d (loop $l",
+  "      (br_if $d (i32.ge_s (local.get $i) (local.get $n)))",
+  "      (array.set $arr (local.get $out) (local.get $i) (ref.i31 (array.get_u $u8arr (local.get $b) (local.get $i))))",
+  "      (local.set $i (i32.add (local.get $i) (i32.const 1))) (br $l)))",
+  "    (local.get $out))",
+  "  ;; byteBlockFromString: the string's UTF-8 bytes, COPIED.  A $str's backing is",
+  "  ;; shared by every reference to that string and a block is mutable, so handing",
+  "  ;; the backing back unaliased would let a write edit the string.",
+  "  (func $mdk_bb_from_string (param $s (ref $str)) (result (ref $u8arr))",
+  "    (local $b (ref $u8arr)) (local $n i32) (local $out (ref $u8arr))",
+  "    (local.set $b (struct.get $str $bytes (local.get $s)))",
+  "    (local.set $n (array.len (local.get $b)))",
+  "    (local.set $out (array.new $u8arr (i32.const 0) (local.get $n)))",
+  "    (array.copy $u8arr $u8arr (local.get $out) (i32.const 0) (local.get $b) (i32.const 0) (local.get $n))",
+  "    (local.get $out))",
+]
+
 -- ── W11b charFromCode : Int -> Option Char ───────────────────────────────────────
 -- Range-check the i32 codepoint (valid = 0..0x10FFFF EXCLUDING surrogates 0xD800..
 -- 0xDFFF, byte-identical to medaka_rt.c mdk_char_from_code) → Some <char i31>

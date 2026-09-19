@@ -218,6 +218,7 @@ lookupMethod : EvalEnv (Value a) -> String -> Value a
 lookupMethodFrames : List (List (String, Ref (Value a))) -> List (List (String, Ref (Value a))) -> String -> Value a
 lookupMethodReqCountOpt : String -> String -> Option Int
 lookupPositions : String -> String -> String -> List ((String, String, String), List Int) -> List Int
+lowByte : Int -> Int
 makeCtor : String -> Int -> Value a
 makeCtorGo : String -> Int -> List (Value a) -> Value a
 mapResultOk : (a -> b) -> Result String a -> Result String b
@@ -287,6 +288,14 @@ pBitXor : Value a -> Value a -> Value a
 pBuildCommit : Value a -> <Env> Value a
 pBuildDate : Value a -> <Env> Value a
 pBuildFingerprint : Value a -> <Env> Value a
+pByteBlockCopyUnsafe : Value a -> Value a -> Value a
+pByteBlockFromIntArray : Value a -> Value a
+pByteBlockFromString : Value a -> Value a
+pByteBlockGetUnsafe : Value a -> Value a -> Value a
+pByteBlockLength : Value a -> Value a
+pByteBlockMake : Value a -> Value a
+pByteBlockSetUnsafe : Value a -> Value a -> Value a -> Value a
+pByteBlockToIntArray : Value a -> Value a
 pBytesToFloat64 : Value a -> Value a -> Value a
 pCanonicalizePath : Value a -> <FileRead> Value a
 pCbrt : Value a -> Value a

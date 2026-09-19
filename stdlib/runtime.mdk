@@ -585,6 +585,46 @@ extern arrayFill : a -> Array a -> Unit
 -- | A new array holding the elements of a list.
 extern arrayFromList : List a -> Array a
 
+-- # Byte blocks
+
+-- `ByteBlock` is a mutable buffer holding one byte per element, so a block of
+-- `n` bytes occupies `n` bytes rather than `n` machine words.  Elements are
+-- read and written as `Int` in the range 0 to 255; a written value outside
+-- that range keeps only its low eight bits.
+--
+-- This is a kernel, not a public collection: there is no bounds checking and
+-- no ordering, equality, or rendering surface here.  The unsafe variants are
+-- restricted to the standard library and to modules compiled with
+-- `--allow-internal`.
+
+-- | A new block of `n` zero bytes.
+extern byteBlockMake : Int -> ByteBlock
+
+-- | The number of bytes.
+extern byteBlockLength : ByteBlock -> Int
+
+-- | The byte at an index, with no bounds check. For library internals that
+-- have already checked the index.
+extern byteBlockGetUnsafe : Int -> ByteBlock -> Int
+
+-- | Replaces the byte at an index with the low eight bits of a value, with no
+-- bounds check. For library internals that have already checked the index.
+extern byteBlockSetUnsafe : Int -> Int -> ByteBlock -> Unit
+
+-- | A new block holding the first `n` bytes, with no bounds check. This is
+-- how a finished builder is frozen: the result shares nothing with its
+-- source, so later writes to the source do not reach it.
+extern byteBlockCopyUnsafe : Int -> ByteBlock -> ByteBlock
+
+-- | A new block holding the low eight bits of each element of an array.
+extern byteBlockFromIntArray : Array Int -> ByteBlock
+
+-- | A new array holding each byte as an `Int` in the range 0 to 255.
+extern byteBlockToIntArray : ByteBlock -> Array Int
+
+-- | A new block holding the UTF-8 encoding of a string.
+extern byteBlockFromString : String -> ByteBlock
+
 -- # Strings
 
 -- String is a sequence of Unicode codepoints, UTF-8 backed; Char is one

@@ -1,0 +1,38 @@
+-- `freeze` copies: a `Bytes` never observes a write made to the `MutBytes` it
+-- came from.  An implementation that aliased the backing block instead would
+-- agree with this one on every other program in the tree -- both answer the
+-- same bytes for a buffer that is finished before it is frozen -- so the write
+-- AFTER the freeze is the whole fixture.
+--
+-- Every printed value is an Int: `byteAt` projects the `Option` out so that no
+-- engine has to render a `Bytes` or a `MutBytes` cell.  An index past the end
+-- reads as -1, which pins the `None` arm of `mutBytesGet` at the same time.
+
+-- Wildcard because a `newtype`'s TYPE name cannot be named in a selective
+-- import list: `import bytes.{MutBytes}` is read as a request for the
+-- module-private constructor and refused.  `stdlib/hex.mdk` imports this
+-- module the same way.
+import bytes.*
+
+byteAt : Int -> MutBytes -> Int
+byteAt i mb = match mutBytesGet i mb
+  Some v => v
+  None => -1
+
+main =
+  let mb = mutBytesMake 4
+  let _ = mutBytesSet 0 10 mb
+  let _ = mutBytesSet 1 20 mb
+  let b = freeze mb
+  let _ = mutBytesSet 0 99 mb
+  let _ = mutBytesSet 3 255 mb
+  (
+    (bytesLength b, b[0], b[1], b[2], b[3]),
+    (
+      mutBytesLength mb,
+      byteAt 0 mb,
+      byteAt 1 mb,
+      byteAt 3 mb,
+      byteAt 9 mb,
+    ),
+  )

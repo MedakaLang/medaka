@@ -8,6 +8,9 @@ the same form `readFileBytes` and `writeFileBytes` use; `encodeBytes`/
 digits, most significant first. Encoding produces lowercase digits and
 decoding accepts either case.
 
+An element outside `0` to `255` is masked to its low eight bits on the way
+in rather than refused, so `-1` and `511` both encode as `ff`.
+
 ## Encoding
 
 ### `encodeBytes`
@@ -19,7 +22,7 @@ encodeBytes : Bytes -> String
 `b` as lowercase hex, two digits per byte.
 
 ```medaka
-> encodeBytes (fromArray [|255, 0, 16|])
+> encodeBytes (fromArrayAssumeByteDomain [|255, 0, 16|])
 "ff0010"
 ```
 

@@ -1,9 +1,11 @@
 # Bytes — a packed byte string for Medaka
 
-**Status:** B1 shipped — `stdlib/bytes.mdk` exists as a `newtype` staging
-wrapper over `Array Int`, with no representation change. The packed
-representation, the mutable and growable siblings, and the caller migration
-are later milestones of the Bytes epic (#3134).
+**Status:** B1 and B2 have both shipped. `stdlib/bytes.mdk` is a `newtype`
+over the runtime's packed `ByteBlock` buffer, so a byte string costs one byte
+per byte, and the minimal mutable sibling `MutBytes` (allocate, write, read,
+freeze) shipped alongside it. The growable sibling (`ByteBuf`,
+`slice`/`view`/`compact`) and the caller migration are later milestones of the
+Bytes epic (#3134).
 
 This document records the decisions the epic is built on, so later waves cite
 a written ruling instead of a recollection. Each section below is one ruling
@@ -26,6 +28,27 @@ eventually change is already a compile error rather than a silent mismatch.
 
 `Array Int` survives the epic. It is the FFI-crossable sequence type, and
 nothing here retires it.
+
+---
+
+## The B2 shape — a `newtype` over the runtime's packed block
+
+B2 keeps the wrapper and swaps the payload: `newtype Bytes = Bytes ByteBlock`,
+where `ByteBlock` is the runtime's packed byte buffer — one byte per byte,
+eight primitives, implemented by all three engines.
+
+The wrapper is not what makes dispatch work. `Eq`, `Ord`, `Debug`, `Index`,
+`Hashable` and `Display` all attach to a builtin type head directly, so a
+`Bytes` that *was* the builtin head would still dispatch. The wrapper is what
+makes `Bytes` behave like a library type:
+
+- A builtin head claims its identifier in every program at once, so any user's
+  own `data Bytes = …` becomes a hard `Duplicate type` error.
+- A builtin head cannot be constructed or pattern-matched by name.
+- A builtin head must be listed in the compiler frontend's hardcoded
+  `primitiveTypes`, which puts a library type's name inside the frontend.
+
+So the payload is a builtin and the name is not.
 
 ---
 
@@ -137,6 +160,13 @@ export fromUtf8Bytes : Bytes -> String
 There is deliberately no `fromList` and no builder. `Foldable`, `Mappable` and
 `Filterable` are declined at the kind level, per ruling 5.
 
+B2 moves two rows of that surface. `fromArray` becomes
+`Array Int -> Option Bytes` and answers `None` on an element outside `0` to
+`255`, and a transitional `fromArrayAssumeByteDomain : Array Int -> Bytes`
+joins it, masking to the low eight bits instead of refusing, for callers whose
+elements are bytes by construction. The transitional door is removed at B6,
+alongside `toUtf8`/`fromUtf8`.
+
 `stdlib/bytes.mdk` is not imported by `stdlib/core.mdk` (the only
 auto-prelude) or by any `compiler/` module at B1 — `stdlib/hex.mdk` does
 import it. Keeping it out of the compiler's import closure is what makes B1
@@ -149,8 +179,8 @@ free of a seed re-mint.
 | Milestone | Content |
 |---|---|
 | B1 | `newtype` staging wrapper over `Array Int`, no representation change |
-| B2 | Packed representation behind the same surface |
-| B3 | `MutBytes`, `ByteBuf`, `slice`/`view`/`compact` — the full 46-name surface |
+| B2 | Packed representation behind the same surface, plus the minimal `MutBytes` (allocate, write, read, freeze) |
+| B3 | `ByteBuf`, `slice`/`view`/`compact` — the remainder of the full 46-name surface |
 | B4–B5 | Caller migration, module by module, in wave order |
 | B6 | Delete `toUtf8`/`fromUtf8` and the remaining `Array Int`-as-bytes uses |
 
@@ -158,10 +188,40 @@ B1's whole job is that every later mistake is a compile error.
 
 ---
 
-## Open for B2 — domain enforcement
+## Ruling 6 — the byte domain has three doors, chosen by what the caller can know
 
-The `0` to `255` domain `Bytes` documents is not enforced at B1: `fromArray`
-accepts any `Int`, and `get`/`b[i]`/`eq`/`compare` all read an out-of-range
-element back unchanged. Whether B2's packed representation masks
-out-of-range elements, rejects them, or leaves the discipline to the caller
-is not decided here.
+The `0` to `255` domain `Bytes` documents was not enforced at B1: `fromArray`
+accepted any `Int`, and `get`/`b[i]`/`eq`/`compare` all read an out-of-range
+element back unchanged. B2 decides this, rather than leaving it open, with
+three doors — which one applies is decided by what the caller can know about
+its input, not by convenience:
+
+- **Unvouched bulk data** — `fromArray : Array Int -> Option Bytes`, exactly
+  like `charFromCode : Int -> Option Char`. Not masking, not a panic: an
+  element outside `0`–`255` makes the whole call answer `None`.
+- **Vouched-for bulk data** — `fromArrayAssumeByteDomain : Array Int -> Bytes`,
+  naming the caller's promise the way `sha256AssumeByteDomain` already does. A
+  broken promise truncates (masks to the low eight bits), because a packed
+  byte cannot hold `300`. This door is **transitional**: its own doc block
+  names B6 as its removal, alongside `toUtf8`/`fromUtf8`.
+- **A positional write** — `MutBytes`'s `mutBytesSet` **panics** on an
+  out-of-range value, exactly as `array.setInPlace` already panics on an
+  out-of-range index. Ruling 3 made this split for the index dimension; this
+  extends it to the value dimension. An `Option`-returning write was
+  considered and rejected: an unfireable `None` arm would land in every
+  decoder loop in the tree that builds bytes one at a time.
+
+Two corrections to this milestone's earlier description, each with its
+mechanism:
+
+- **No FFI-crossable-set change.** `ffiCrossableTy` governs user `extern`
+  declarations only — `ffiCheckExternsGo` skips any name for which
+  `ffiIsBuiltinExternName` holds (`compiler/types/typecheck.mdk:34389-34397`).
+  Every primitive this milestone added is builtin, so none of them consults
+  the predicate, and `Array Int` remains the crossable set unchanged.
+- **No seed re-mint forced.** `test/bootstrap_from_seed.sh:44-77` is tolerant
+  by default: the seed must still *compile* HEAD (required), not be
+  byte-current with it (a drift detector). A re-mint is forced only if the old
+  seed emitter can no longer compile HEAD, which happens only if
+  `compiler/**` or `stdlib/core.mdk` adopts `Bytes` — out of scope for this
+  epic (see "The B1 surface" above).

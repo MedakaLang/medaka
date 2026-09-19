@@ -986,6 +986,32 @@ arrayFromList : List a -> Array a
 
 A new array holding the elements of a list.
 
+## Byte blocks
+
+### `byteBlockLength`
+
+```
+byteBlockLength : ByteBlock -> Int
+```
+
+The number of bytes.
+
+### `byteBlockToIntArray`
+
+```
+byteBlockToIntArray : ByteBlock -> Array Int
+```
+
+A new array holding each byte as an `Int` in the range 0 to 255.
+
+### `byteBlockFromString`
+
+```
+byteBlockFromString : String -> ByteBlock
+```
+
+A new block holding the UTF-8 encoding of a string.
+
 ## Strings
 
 ### `stringToChars`

@@ -175,6 +175,11 @@ test: medaka
 	## entry's import closure ([W-MODULE-BLIND]) and is not in
 	## test/diff_compiler_fmt_test.mdk's testReportCorpus list either.
 	./medaka test stdlib/bytes.mdk
+	## stdlib/hex.mdk's doctests, including the out-of-domain masking pin
+	## (`encode` on bytes outside 0..255). pds imports hex.mdk but that only
+	## exercises it as ordinary code, never runs its doctests; without this
+	## line nothing does ([W-MODULE-BLIND]).
+	./medaka test stdlib/hex.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
 	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's

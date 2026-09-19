@@ -300,8 +300,9 @@ public export data Env = Env {
 -- module under `--allow-internal`).  checkVar flags a reference to one of these.
 
 -- ── internal-only externs ──────────────────────────────────────────────────
--- Array-kernel primitives declared in stdlib/runtime.mdk that bypass bounds
--- checks / mutate in place.  They are globally in scope (runtime.mdk is the
+-- Array-kernel and byte-block-kernel primitives declared in stdlib/runtime.mdk
+-- that bypass bounds checks / mutate in place.
+-- They are globally in scope (runtime.mdk is the
 -- implicit prelude), so a module that is neither part of the standard library
 -- nor compiled with `--allow-internal` must not reference them.  Mirrors the
 -- hardcoded-set pattern of builtInEffects.  `__fallthrough__` is deliberately
@@ -310,7 +311,9 @@ public export data Env = Env {
 export
 internalExterns : List String
 internalExterns = [
-  "arrayGetUnsafe", "arraySetUnsafe", "arrayBlit", "arrayFill", "bytesToFloat64"
+  "arrayGetUnsafe", "arraySetUnsafe", "arrayBlit", "arrayFill",
+  "bytesToFloat64", "byteBlockGetUnsafe", "byteBlockSetUnsafe",
+  "byteBlockCopyUnsafe", "byteBlockMake", "byteBlockFromIntArray"
 ]
 
 -- The internal-extern guard list for a module given whether internal access is
@@ -1612,8 +1615,10 @@ tupleCtorTyNames : List String
 tupleCtorTyNames = ["__tuple2__", "__tuple3__", "__tuple4__", "__tuple5__"]
 
 primitiveTypes : List String
-primitiveTypes =
-  ["Int", "Float", "String", "Char", "Bool", "Unit", "List", "Ref", "Array"]
+primitiveTypes = [
+  "Int", "Float", "String", "Char", "Bool", "Unit", "List", "Ref", "Array",
+  "ByteBlock"
+]
 
 primitiveConstructors : List String
 primitiveConstructors = ["True", "False"]

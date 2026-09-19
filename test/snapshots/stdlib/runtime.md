@@ -1,5 +1,5 @@
 # META
-source_lines=675
+source_lines=715
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -589,6 +589,46 @@ extern arrayFill : a -> Array a -> Unit
 -- | A new array holding the elements of a list.
 extern arrayFromList : List a -> Array a
 
+-- # Byte blocks
+
+-- `ByteBlock` is a mutable buffer holding one byte per element, so a block of
+-- `n` bytes occupies `n` bytes rather than `n` machine words.  Elements are
+-- read and written as `Int` in the range 0 to 255; a written value outside
+-- that range keeps only its low eight bits.
+--
+-- This is a kernel, not a public collection: there is no bounds checking and
+-- no ordering, equality, or rendering surface here.  The unsafe variants are
+-- restricted to the standard library and to modules compiled with
+-- `--allow-internal`.
+
+-- | A new block of `n` zero bytes.
+extern byteBlockMake : Int -> ByteBlock
+
+-- | The number of bytes.
+extern byteBlockLength : ByteBlock -> Int
+
+-- | The byte at an index, with no bounds check. For library internals that
+-- have already checked the index.
+extern byteBlockGetUnsafe : Int -> ByteBlock -> Int
+
+-- | Replaces the byte at an index with the low eight bits of a value, with no
+-- bounds check. For library internals that have already checked the index.
+extern byteBlockSetUnsafe : Int -> Int -> ByteBlock -> Unit
+
+-- | A new block holding the first `n` bytes, with no bounds check. This is
+-- how a finished builder is frozen: the result shares nothing with its
+-- source, so later writes to the source do not reach it.
+extern byteBlockCopyUnsafe : Int -> ByteBlock -> ByteBlock
+
+-- | A new block holding the low eight bits of each element of an array.
+extern byteBlockFromIntArray : Array Int -> ByteBlock
+
+-- | A new array holding each byte as an `Int` in the range 0 to 255.
+extern byteBlockToIntArray : ByteBlock -> Array Int
+
+-- | A new block holding the UTF-8 encoding of a string.
+extern byteBlockFromString : String -> ByteBlock
+
 -- # Strings
 
 -- String is a sequence of Unicode codepoints, UTF-8 backed; Char is one
@@ -808,6 +848,14 @@ extern stringToLower : String -> String
 (DExtern false "arrayBlit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "arrayFill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
 (DExtern false "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
+(DExtern false "byteBlockMake" (TyFun (TyCon "Int") (TyCon "ByteBlock")))
+(DExtern false "byteBlockLength" (TyFun (TyCon "ByteBlock") (TyCon "Int")))
+(DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))
+(DExtern false "byteBlockSetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Unit")))))
+(DExtern false "byteBlockCopyUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "ByteBlock"))))
+(DExtern false "byteBlockFromIntArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "ByteBlock")))
+(DExtern false "byteBlockToIntArray" (TyFun (TyCon "ByteBlock") (TyApp (TyCon "Array") (TyCon "Int"))))
+(DExtern false "byteBlockFromString" (TyFun (TyCon "String") (TyCon "ByteBlock")))
 (DExtern false "stringToChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))
 (DExtern false "stringToUtf8Bytes" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))
@@ -961,6 +1009,14 @@ extern stringToLower : String -> String
 (DExtern false "arrayBlit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
 (DExtern false "arrayFill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
 (DExtern false "arrayFromList" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyApp (TyCon "Array") (TyVar "a"))))
+(DExtern false "byteBlockMake" (TyFun (TyCon "Int") (TyCon "ByteBlock")))
+(DExtern false "byteBlockLength" (TyFun (TyCon "ByteBlock") (TyCon "Int")))
+(DExtern false "byteBlockGetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Int"))))
+(DExtern false "byteBlockSetUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Unit")))))
+(DExtern false "byteBlockCopyUnsafe" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "ByteBlock"))))
+(DExtern false "byteBlockFromIntArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "ByteBlock")))
+(DExtern false "byteBlockToIntArray" (TyFun (TyCon "ByteBlock") (TyApp (TyCon "Array") (TyCon "Int"))))
+(DExtern false "byteBlockFromString" (TyFun (TyCon "String") (TyCon "ByteBlock")))
 (DExtern false "stringToChars" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Char"))))
 (DExtern false "stringFromChars" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "String")))
 (DExtern false "stringToUtf8Bytes" (TyFun (TyCon "String") (TyApp (TyCon "Array") (TyCon "Int"))))

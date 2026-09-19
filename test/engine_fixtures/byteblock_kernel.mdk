@@ -1,0 +1,49 @@
+-- The `ByteBlock` builtin's whole kernel, exercised end to end: allocate zeroed,
+-- length, read, write, copy-in from `Array Int`, copy-out to `Array Int`, copy-in
+-- from `String`, and the freeze copy.
+--
+-- Every printed value is an Int projected out of a block or an array, never a
+-- block itself: the native backend cannot print a cell (emitPrint panics on
+-- LTCon), so a block-valued main would be a spurious disagreement rather than a
+-- semantic one.
+--
+-- Two domain facts are asserted rather than assumed, because the two engines
+-- reach them by different routes -- native truncates a store to the low eight
+-- bits, the interpreter masks -- and they have to agree:
+--   * `byteBlockSetUnsafe 3 300` stores 44, not 300;
+--   * `byteBlockFromIntArray` keeps the low eight bits of 258, i.e. 2.
+-- And one aliasing fact: the freeze copy shares nothing with its source, so the
+-- write that follows it does not reach the frozen block.
+
+sumBytes : ByteBlock -> Int -> Int -> Int
+sumBytes b i n
+  | i >= n = 0
+  | otherwise = byteBlockGetUnsafe i b + sumBytes b (i + 1) n
+
+main =
+  let blk = byteBlockMake 4
+  let zeroSum = sumBytes blk 0 (byteBlockLength blk)
+  let _ = byteBlockSetUnsafe 0 65 blk
+  let _ = byteBlockSetUnsafe 3 300 blk
+  let frozen = byteBlockCopyUnsafe 2 blk
+  let _ = byteBlockSetUnsafe 0 9 blk
+  let fromArr = byteBlockFromIntArray [|1, 2, 3, 258|]
+  let out = byteBlockToIntArray fromArr
+  -- "he" + U+00E9, which is two UTF-8 bytes: 0xC3 0xA9.
+  let fromStr = byteBlockFromString "hé"
+  (
+    (
+      byteBlockLength blk,
+      zeroSum,
+      byteBlockGetUnsafe 0 blk,
+      byteBlockGetUnsafe 3 blk,
+    ),
+    (arrayLength out, arrayGetUnsafe 0 out, arrayGetUnsafe 3 out),
+    (
+      byteBlockLength fromStr,
+      byteBlockGetUnsafe 0 fromStr,
+      byteBlockGetUnsafe 1 fromStr,
+      byteBlockGetUnsafe 2 fromStr,
+    ),
+    (byteBlockLength frozen, byteBlockGetUnsafe 0 frozen),
+  )

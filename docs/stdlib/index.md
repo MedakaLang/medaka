@@ -191,11 +191,18 @@ An immutable string of bytes.
 
 - [`Bytes`](bytes.md#bytes)
 - [`fromArray`](bytes.md#fromarray)
+- [`fromArrayAssumeByteDomain`](bytes.md#fromarrayassumebytedomain)
 - [`toArray`](bytes.md#toarray)
 - [`bytesLength`](bytes.md#byteslength)
 - [`get`](bytes.md#get)
 - [`toUtf8Bytes`](bytes.md#toutf8bytes)
 - [`fromUtf8Bytes`](bytes.md#fromutf8bytes)
+- [`MutBytes`](bytes.md#mutbytes)
+- [`mutBytesMake`](bytes.md#mutbytesmake)
+- [`mutBytesLength`](bytes.md#mutbyteslength)
+- [`mutBytesGet`](bytes.md#mutbytesget)
+- [`mutBytesSet`](bytes.md#mutbytesset)
+- [`freeze`](bytes.md#freeze)
 
 ## [`core`](core.md)
 
@@ -837,6 +844,9 @@ The host primitives.
 - [`arrayMakeWith`](runtime.md#arraymakewith)
 - [`arrayCopy`](runtime.md#arraycopy)
 - [`arrayFromList`](runtime.md#arrayfromlist)
+- [`byteBlockLength`](runtime.md#byteblocklength)
+- [`byteBlockToIntArray`](runtime.md#byteblocktointarray)
+- [`byteBlockFromString`](runtime.md#byteblockfromstring)
 - [`stringToChars`](runtime.md#stringtochars)
 - [`stringFromChars`](runtime.md#stringfromchars)
 - [`stringToUtf8Bytes`](runtime.md#stringtoutf8bytes)

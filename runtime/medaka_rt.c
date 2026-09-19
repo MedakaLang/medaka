@@ -420,6 +420,33 @@ void mdk_print_float(double d) {
  * native-owned buffer.  mdk_int_to_string is the first such extern. */
 #define MDK_STR_TAG 1
 
+/* BYTEBLOCK REPRESENTATION — the packed byte buffer behind the `ByteBlock`
+ * builtin (stdlib/runtime.mdk, "Byte blocks"), boxed as one GC cell:
+ *
+ *   offset  0:  i64 header     MDK_BYTEBLOCK_TAG
+ *   offset  8:  i64 count      number of bytes (raw / untagged)
+ *   offset 16:  count bytes, padded up to a whole word
+ *
+ * The header sits at offset 0, unlike the array cell, whose word 0 is its raw
+ * element count -- so a length-1 array is indistinguishable from a String cell
+ * and a byte block must not be given that shape.  The value is a composite in
+ * the reserved type-id range (slot 4; see the MDK_TAG block below and
+ * `reservedTag` in compiler/backend/llvm_emit.mdk), which no user constructor
+ * tag and no other cell header can reach.  The _Static_assert beside MDK_TAG
+ * pins this spelling to that formula.
+ *
+ * The payload holds no pointers and the two header words are integers, so the
+ * cell is allocated pointer-free through mdk_alloc_atomic, exactly as a String
+ * cell is; mdk_alloc_atomic does not zero, so mdk_byteblock_alloc memsets. */
+#define MDK_BYTEBLOCK_TAG ((65536LL + 4LL) * 4294967296LL)
+
+/* Byte-block content discriminators, used by mdk_value_eq / mdk_value_cmp_raw /
+ * mdk_append below; defined with the rest of the byte-block family, beside the
+ * array leaf helpers it mirrors. */
+static int mdk_is_byteblock(long long w);
+static long long mdk_byteblock_cmp_bytes(long long a, long long b);
+noreturn static void mdk_byteblock_append_unsupported(void);
+
 /* Count UTF-8 codepoints in the first `n` bytes of `p`: every byte that is not a
  * 0b10xxxxxx continuation byte starts a new codepoint. */
 static long long mdk_utf8_cp_count(const char *p, long long n) {
@@ -515,6 +542,12 @@ long long mdk_value_eq(long long a, long long b) {
   int a_str = ((a & 1) == 0) && ((const long long *)a)[0] == MDK_STR_TAG;
   int b_str = ((b & 1) == 0) && ((const long long *)b)[0] == MDK_STR_TAG;
   if (a_str && b_str) return mdk_string_eq(a, b);
+  /* A byte block compares by CONTENT, matching the interpreter's
+   * `valueEq (VByteBlock …)`; the word compare below would compare heap
+   * addresses, so the engines would disagree on every pair of distinct cells
+   * holding the same bytes. */
+  if (mdk_is_byteblock(a) && mdk_is_byteblock(b))
+    return mdk_byteblock_cmp_bytes(a, b) == 0 ? 3 : 1;
   int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
   if (a_flt) {
     double da = ((const double *)a)[1], db = ((const double *)b)[1];
@@ -967,6 +1000,11 @@ long long mdk_list_slice(long long xs, long long lo, long long hi) {
 long long mdk_append(long long a, long long b) {
   if ((a & 1) == 0 && ((const long long *)a)[0] == MDK_STR_TAG)
     return mdk_string_append(a, b);
+  /* A byte block is the third even-boxed header this discriminator can meet.
+   * Nothing gives `ByteBlock` a Semigroup, so this is unreachable from a
+   * well-typed program; without the arm it would fall to mdk_list_append and
+   * walk the packed payload as Cons cells. */
+  if (mdk_is_byteblock(a)) mdk_byteblock_append_unsupported();
   return mdk_list_append(a, b);
 }
 
@@ -1007,6 +1045,95 @@ long long mdk_array_from_list(long long list) {
   long long i = 0;
   for (long long w = list; (w & 1) == 0; w = ((const long long *)w)[2])
     cell[++i] = ((const long long *)w)[1];
+  return (long long)cell;
+}
+
+/* ── byte-block leaf externs (the `ByteBlock` builtin) ──────────────────────
+   Cell = [i64 MDK_BYTEBLOCK_TAG | i64 count | count bytes, word-padded]; see the
+   BYTEBLOCK REPRESENTATION note beside MDK_STR_TAG.  These mirror the array leaf
+   helpers above, one byte per element instead of one tagged word.  Int args are
+   tagged (>> 1 to untag); Int results are tagged ((x << 1) | 1).  The Unsafe
+   variants take no bounds check -- `internalExterns` (compiler/frontend/
+   resolve.mdk) keeps them out of user programs. */
+static unsigned char *mdk_byteblock_bytes(long long bb) {
+  return (unsigned char *)bb + 16;
+}
+static long long mdk_byteblock_count(long long bb) {
+  return ((const long long *)bb)[1];
+}
+static int mdk_is_byteblock(long long w) {
+  return ((w & 1) == 0) && ((const long long *)w)[0] == MDK_BYTEBLOCK_TAG;
+}
+noreturn static void mdk_byteblock_append_unsupported(void) {
+  mdk_flush_run_stdout_on_abort();
+  fputs("runtime error [E-BYTEBLOCK-APPEND]: ++ is not defined on ByteBlock\n",
+        stderr);
+  exit(1);
+}
+
+/* Fresh zeroed cell of `n` bytes.  mdk_alloc_atomic leaves the block
+   uninitialised, so the whole cell is memset before the header is stamped. */
+static long long *mdk_byteblock_alloc(long long n) {
+  long long bytes = 16 + ((n + 7) / 8) * 8;
+  long long *cell = (long long *)mdk_alloc_atomic(bytes);
+  memset(cell, 0, (size_t)bytes);
+  cell[0] = MDK_BYTEBLOCK_TAG;
+  cell[1] = n;
+  return cell;
+}
+
+/* Lexicographic over the bytes, shorter prefix first -- the ordering half of
+   mdk_value_eq / mdk_value_cmp_raw's byte-block arms. */
+static long long mdk_byteblock_cmp_bytes(long long a, long long b) {
+  long long na = mdk_byteblock_count(a), nb = mdk_byteblock_count(b);
+  long long n = na < nb ? na : nb;
+  int c = n > 0 ? memcmp(mdk_byteblock_bytes(a), mdk_byteblock_bytes(b),
+                         (size_t)n)
+                : 0;
+  if (c != 0) return c < 0 ? -1 : 1;
+  return na < nb ? -1 : na > nb ? 1 : 0;
+}
+
+long long mdk_byteblock_make(long long n_tagged) {
+  return (long long)mdk_byteblock_alloc(n_tagged >> 1);
+}
+long long mdk_byteblock_length(long long bb) {
+  return (mdk_byteblock_count(bb) << 1) | 1;
+}
+long long mdk_byteblock_get(long long i_tagged, long long bb) {
+  return ((long long)mdk_byteblock_bytes(bb)[i_tagged >> 1] << 1) | 1;
+}
+void mdk_byteblock_set(long long i_tagged, long long v_tagged, long long bb) {
+  mdk_byteblock_bytes(bb)[i_tagged >> 1] = (unsigned char)(v_tagged >> 1);
+}
+long long mdk_byteblock_copy(long long n_tagged, long long bb) {
+  long long n = n_tagged >> 1;
+  long long *cell = mdk_byteblock_alloc(n);
+  if (n > 0) memcpy((unsigned char *)cell + 16, mdk_byteblock_bytes(bb),
+                    (size_t)n);
+  return (long long)cell;
+}
+long long mdk_byteblock_from_int_array(long long arr) {
+  const long long *a = (const long long *)arr;
+  long long n = a[0];
+  long long *cell = mdk_byteblock_alloc(n);
+  unsigned char *p = (unsigned char *)cell + 16;
+  for (long long i = 0; i < n; i++) p[i] = (unsigned char)(a[i + 1] >> 1);
+  return (long long)cell;
+}
+long long mdk_byteblock_to_int_array(long long bb) {
+  long long n = mdk_byteblock_count(bb);
+  const unsigned char *p = mdk_byteblock_bytes(bb);
+  long long *cell = (long long *)mdk_alloc(8 * (n + 1));
+  cell[0] = n;
+  for (long long i = 0; i < n; i++) cell[i + 1] = ((long long)p[i] << 1) | 1;
+  return (long long)cell;
+}
+long long mdk_byteblock_from_string(long long s) {
+  long long n = ((const long long *)s)[1];
+  long long *cell = mdk_byteblock_alloc(n);
+  if (n > 0) memcpy((unsigned char *)cell + 16, (const char *)s + 24,
+                    (size_t)n);
   return (long long)cell;
 }
 
@@ -1280,6 +1407,12 @@ long long mdk_string_to_lower(long long s) {
 #define MDK_TAG_EQ   MDK_TAG(3, 1)
 #define MDK_TAG_GT   MDK_TAG(3, 2)
 
+/* Reserved type-id 4 is the `ByteBlock` cell header, not an ADT: it is stamped by
+ * mdk_byteblock_alloc, which runs long before this block, so it carries its own
+ * spelling.  The two must be the same word, and the next runtime ADT takes id 5. */
+_Static_assert(MDK_BYTEBLOCK_TAG == MDK_TAG(4, 0),
+               "ByteBlock header must be reserved type-id 4, ordinal 0");
+
 /* Nullary ctors — immediate words. */
 long long mdk_none(void) { return (MDK_TAG_NONE << 1) | 1; }
 long long mdk_nil(void)  { return (MDK_TAG_NIL  << 1) | 1; }
@@ -1480,6 +1613,10 @@ long long mdk_string_compare_raw(long long a, long long b) {
 long long mdk_value_cmp_raw(long long a, long long b) {
   int a_str = ((a & 1) == 0) && ((const long long *)a)[0] == MDK_STR_TAG;
   if (a_str) return mdk_string_compare_raw(a, b);
+  /* Lockstep with mdk_value_eq's byte-block arm and with the interpreter's
+   * `valueCompare (VByteBlock …)`: lexicographic over the bytes, shorter
+   * prefix first. */
+  if (mdk_is_byteblock(a)) return mdk_byteblock_cmp_bytes(a, b);
   int a_flt = ((a & 1) == 0) && ((const long long *)a)[0] == 2;
   if (a_flt) {
     double da = ((const double *)a)[1], db = ((const double *)b)[1];
