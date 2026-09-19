@@ -4,6 +4,7 @@
    pinned XRPC error envelope. They are intentionally not captured from an
    engine. -}
 
+import bytes.{fromArray}
 import http.{
   Header,
   makeHeader,
@@ -45,6 +46,19 @@ import lib.xrpc.{
   procedureEndpoint,
   queryEndpoint,
 }
+
+-- | `handleBytes` over a request fixture this driver still holds as an
+-- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
+-- door into one: a fixture element outside the byte domain stops here rather
+-- than reaching the framer.
+handleFixture : Server ->
+  RequestContext ->
+  Store ->
+  Array Int ->
+  (Store, Array Int)
+handleFixture httpServer context store request = match fromArray request
+  Some packed => handleBytes httpServer context store packed
+  None => panic "protocol_all_engines: request fixture holds a non-byte element"
 
 mustHeader : String -> String -> Header
 mustHeader name value =
@@ -258,7 +272,7 @@ resourceRequest =
 
 checkFixedQuery : <IO> Unit
 checkFixedQuery =
-  let (next, response) = handleBytes server testContext seededStore fixedQuery
+  let (next, response) = handleFixture server testContext seededStore fixedQuery
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "fixed" then
@@ -269,7 +283,7 @@ checkFixedQuery =
 checkChunkedUpdate : <IO> Unit
 checkChunkedUpdate =
   let expectedBody = toUtf8 "abc"
-  let (next, response) = handleBytes server testContext seededStore chunkedPut
+  let (next, response) = handleFixture server testContext seededStore chunkedPut
   if storeSize next == 2
     && seedPreserved next
     && storeGet (cidForRaw expectedBody) next == Some expectedBody
@@ -281,7 +295,7 @@ checkChunkedUpdate =
 checkMalformed : <IO> Unit
 checkMalformed =
   let (next, response) =
-    handleBytes server testContext seededStore malformedRequest
+    handleFixture server testContext seededStore malformedRequest
   if storeSize next == 1
     && seedPreserved next
     && response
@@ -296,7 +310,7 @@ checkMalformed =
 
 malformedIsUnchanged : Array Int -> Bool
 malformedIsUnchanged request =
-  let (next, response) = handleBytes server testContext seededStore request
+  let (next, response) = handleFixture server testContext seededStore request
   storeSize next == 1
     && seedPreserved next
     && response
@@ -331,7 +345,7 @@ checkInvalidTarget =
 checkRawText : <IO> Unit
 checkRawText =
   let (next, response) =
-    handleBytes server testContext seededStore rawTextRequest
+    handleFixture server testContext seededStore rawTextRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-text" then
@@ -342,7 +356,7 @@ checkRawText =
 checkRawJson : <IO> Unit
 checkRawJson =
   let (next, response) =
-    handleBytes server testContext seededStore rawJsonRequest
+    handleFixture server testContext seededStore rawJsonRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-json" then
@@ -354,7 +368,7 @@ checkRawJson =
 checkRawOpaque : <IO> Unit
 checkRawOpaque =
   let (next, response) =
-    handleBytes server testContext seededStore rawOpaqueRequest
+    handleFixture server testContext seededStore rawOpaqueRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "raw-opaque" then
@@ -366,7 +380,7 @@ checkRawOpaque =
 checkProcedureParams : <IO> Unit
 checkProcedureParams =
   let (next, response) =
-    handleBytes server testContext seededStore procedureParamsRequest
+    handleFixture server testContext seededStore procedureParamsRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "params-ordered" then
@@ -378,7 +392,7 @@ checkProcedureParams =
 checkUppercaseAuthority : <IO> Unit
 checkUppercaseAuthority =
   let (next, response) =
-    handleBytes server testContext seededStore uppercaseAuthorityRequest
+    handleFixture server testContext seededStore uppercaseAuthorityRequest
   if storeSize next == 1
     && seedPreserved next
     && response == expectedTextResponse 200 "OK" "authority-case" then
@@ -407,7 +421,7 @@ checkAuthorityDuplicateIdentity =
 checkEmptyRegPort : <IO> Unit
 checkEmptyRegPort =
   let (next, response) =
-    handleBytes server testContext seededStore emptyRegPortRequest
+    handleFixture server testContext seededStore emptyRegPortRequest
   if response == expectedTextResponse 200 "OK" "fixed"
     && storeSize next == 1
     && seedPreserved next then
@@ -418,7 +432,7 @@ checkEmptyRegPort =
 checkEmptyIpPort : <IO> Unit
 checkEmptyIpPort =
   let (next, response) =
-    handleBytes server testContext seededStore emptyIpPortRequest
+    handleFixture server testContext seededStore emptyIpPortRequest
   if seedPreserved next
     && response == expectedTextResponse 200 "OK" "fixed"
     && storeSize next == 1 then
@@ -429,7 +443,7 @@ checkEmptyIpPort =
 checkUnknown : <IO> Unit
 checkUnknown =
   let (next, response) =
-    handleBytes server testContext seededStore unknownRequest
+    handleFixture server testContext seededStore unknownRequest
   if storeSize next == 1
     && seedPreserved next
     && response
@@ -445,7 +459,7 @@ checkUnknown =
 checkResource : <IO> Unit
 checkResource =
   let (next, response) =
-    handleBytes server testContext seededStore resourceRequest
+    handleFixture server testContext seededStore resourceRequest
   if storeSize next == 1
     && seedPreserved next
     && response

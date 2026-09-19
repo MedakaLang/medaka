@@ -1,6 +1,7 @@
 {- | Native scaling and resource-limit probe for the Phase 1 MST/CAR gates. -}
 
 import array.{drop}
+import bytes.*
 import hex.{decode}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode, carEncode}
@@ -487,12 +488,24 @@ inboundToken =
 -- `stdlib/http.mdk`) — a JSON-bodied write cannot reach the 5 MiB ceiling
 -- #2951 names, and that ceiling is exactly `maxBlobBytes`
 -- (`pds/lib/resource_limits.mdk`), which only `uploadBlob` admits against.
-inboundRequest : Int -> Array Int
+inboundRequest : Int -> Bytes
 inboundRequest bodyBytes =
-  let bytes = arrayMake bodyBytes 0x41
-  toUtf8
-      "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+  -- A body of `bodyBytes` 'A's, built straight into a packed block: an
+  -- `Array Int` of the same length would box a machine word per byte before
+  -- `fromArray` packed it, and the probe would then be measuring its own
+  -- fixture.
+  let bytes = freeze (fillA (mutBytesMake bodyBytes) 0)
+  toUtf8Bytes
+      "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (bytesLength bytes)}\r\n\r\n"
     ++ bytes
+
+fillA : MutBytes -> Int -> MutBytes
+fillA mb i =
+  if i >= mutBytesLength mb then
+    mb
+  else
+    let () = mutBytesSet i 0x41 mb
+    fillA mb (i + 1)
 
 inboundStatusEnd : Array Int -> Int -> Int
 inboundStatusEnd bytes i =
@@ -535,7 +548,7 @@ mustInboundStore _ =
 -- Answers the SAME request `n` times against the SAME store, discarding the
 -- store a write returns each time (mirrors `cost_curve_main.mdk`'s
 -- `repeatRequest` — a repetition must not grow the state it measures).
-repeatInbound : Server -> Store -> Array Int -> Int -> Int -> Int
+repeatInbound : Server -> Store -> Bytes -> Int -> Int -> Int
 repeatInbound server store request n acc =
   if n <= 0 then
     acc

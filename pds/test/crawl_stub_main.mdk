@@ -20,6 +20,7 @@
    connection this server's announce attempts is refused by the kernel. -}
 
 import array.{concat, sliceClamped}
+import bytes.{fromArray, toArray}
 import http.{
   Header,
   Request,
@@ -94,6 +95,14 @@ recvBody conn buffer need =
       else
         recvBody conn (concat [|buffer, chunk|]) need
 
+-- | The framed head and body, parsed. `recv` hands back an `Array Int` and
+-- the framer reads a packed `Bytes`; `fromArray` is the only door between
+-- them.
+parseFramed : Array Int -> Result String Request
+parseFramed framed = match fromArray framed
+  Some packed => parseRequest packed
+  None => Err "crawl_stub: a byte read off the socket fell outside 0..255"
+
 -- ── the answer ───────────────────────────────────────────────────────────
 
 findHeaderName : String -> List Header -> Bool
@@ -142,12 +151,12 @@ answerCall path status conn =
     Err message =>
       let () = logLine path "unreadable \{message}"
       answerBytes status "<unreadable>" "<unreadable>"
-    Ok framed => match parseRequest framed
+    Ok framed => match parseFramed framed
       Err message =>
         let () = logLine path "unreadable \{message}"
         answerBytes status "<unreadable>" "<unreadable>"
       Ok request =>
-        let hostname = hostnameField (requestBody request)
+        let hostname = hostnameField (toArray (requestBody request))
         let authorization =
           if findHeaderName "authorization" (requestHeaders request) then
             "present"

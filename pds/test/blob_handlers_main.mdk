@@ -20,6 +20,7 @@
 
 import hex.{decode}
 import io.{readLines}
+import bytes.{fromArray}
 import json.{Json(..), get, parse, stringify}
 import list.{sort}
 import string.{contains, drop, fromUtf8, indexOf, split, startsWith, toUtf8}
@@ -128,7 +129,9 @@ getQuery nsid query =
     "GET /xrpc/\{nsid}\{query} HTTP/1.1\r\nHost: \{accountHostText}\r\n\r\n"
 
 send : Store -> Array Int -> (Store, Array Int)
-send store bytes = handleBytes server testContext store bytes
+send store bytes = match fromArray bytes
+  Some packed => handleBytes server testContext store packed
+  None => panic "blob_handlers: request fixture holds a non-byte element"
 
 -- ── response reading ────────────────────────────────────────────────────────
 

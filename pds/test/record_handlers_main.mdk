@@ -17,6 +17,7 @@
    `validationStatus: "unknown"` — this server grades nothing against a
    lexicon and says so rather than claiming a check it never ran. -}
 
+import bytes.{fromArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode}
 import io.{readLines}
@@ -49,6 +50,19 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidParse}
+
+-- | `handleBytes` over a request fixture this driver still holds as an
+-- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
+-- door into one: a fixture element outside the byte domain stops here rather
+-- than reaching the framer.
+handleFixture : Server ->
+  RequestContext ->
+  Store ->
+  Array Int ->
+  (Store, Array Int)
+handleFixture httpServer context store request = match fromArray request
+  Some packed => handleBytes httpServer context store packed
+  None => panic "record_handlers: request fixture holds a non-byte element"
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -233,7 +247,7 @@ runStep did server store opLine commitLine = match (
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "record_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleBytes server testContext store (procedureRequest did nsid body)
+      handleFixture server testContext store (procedureRequest did nsid body)
     let value = responseJson responseBytes
     let expectedUri = "at://\{did}/\{collection}/\{rkey}"
     let uriOk = kind == "DELETE" || fieldText "uri" value == expectedUri
@@ -279,7 +293,7 @@ acceptValidateCell : String ->
 acceptValidateCell label did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleBytes server testContext store (procedureRequest did nsid body)
+    handleFixture server testContext store (procedureRequest did nsid body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let status = fieldText "validationStatus" value
@@ -311,7 +325,7 @@ rejectCell : String ->
 rejectCell label expectedCode did nsid server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleBytes server testContext store (procedureRequest did nsid body)
+    handleFixture server testContext store (procedureRequest did nsid body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let code = fieldText "error" value

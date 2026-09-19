@@ -1,5 +1,6 @@
 {- | Focused structural XRPC registry, routing, and canonical-error tests. -}
 
+import bytes.{fromArray}
 import http.{
   maxJsonBodyBytes,
   maxRawBodyBytes,
@@ -46,9 +47,14 @@ appendBytes left right =
   arrayMakeWith (leftSize + arrayLength right) (i =>
     if i < leftSize then left[i] else right[i - leftSize])
 
+-- The framer reads a packed `Bytes`; this driver's fixtures are still
+-- `Array Int`, and `fromArray` is the only door between them. A fixture
+-- element outside the byte domain stops here rather than reaching the parser.
 mustRequest : Array Int -> Request
-mustRequest bytes =
-  resultOrPanic "xrpc_test: request setup failed" (parseRequest bytes)
+mustRequest bytes = match fromArray bytes
+  Some packed =>
+    resultOrPanic "xrpc_test: request setup failed" (parseRequest packed)
+  None => panic "xrpc_test: request fixture holds a non-byte element"
 
 noBodyRequest : String -> String -> Request
 noBodyRequest method target =

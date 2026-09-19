@@ -33,6 +33,7 @@
    OWN `did:web` carries the repository's signing key, so that arm needs a
    repository and is graded here, against the corpus's key. -}
 
+import bytes.{fromArray}
 import json.{Json(..), jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
@@ -59,6 +60,19 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidParse}
+
+-- | `handleBytes` over a request fixture this driver still holds as an
+-- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
+-- door into one: a fixture element outside the byte domain stops here rather
+-- than reaching the framer.
+handleFixture : Server ->
+  RequestContext ->
+  Store ->
+  Array Int ->
+  (Store, Array Int)
+handleFixture httpServer context store request = match fromArray request
+  Some packed => handleBytes httpServer context store packed
+  None => panic "read_handlers: request fixture holds a non-byte element"
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -269,7 +283,7 @@ runStep did server store opLine = match split "\t" opLine
         ("com.atproto.repo.deleteRecord", deleteBody did collection rkey)
       _ => panic "read_handlers: unknown transcript operation \{kind}"
     let (next, responseBytes) =
-      handleBytes server testContext store (procedureRequest did nsid body)
+      handleFixture server testContext store (procedureRequest did nsid body)
     if errorCode responseBytes == "<missing:error>" then
       next
     else
@@ -292,13 +306,13 @@ check label ok detail =
 readJson : Server -> Store -> String -> Json
 readJson server store target =
   let (_, responseBytes) =
-    handleBytes server testContext store (queryRequest target)
+    handleFixture server testContext store (queryRequest target)
   responseJson responseBytes
 
 readError : Server -> Store -> String -> String
 readError server store target =
   let (_, responseBytes) =
-    handleBytes server testContext store (queryRequest target)
+    handleFixture server testContext store (queryRequest target)
   errorCode responseBytes
 
 recordRoute : String -> String -> String
@@ -315,7 +329,7 @@ listRoute did suffix =
 carCell : Server -> Store -> String -> String -> <IO> Int
 carCell server store did corpusHex =
   let (_, responseBytes) =
-    handleBytes
+    handleFixture
       server
       testContext
       store
@@ -373,7 +387,7 @@ responseStatus bytes =
 wellKnownDidJsonBytes : Server -> Store -> Array Int
 wellKnownDidJsonBytes server store =
   let (_, responseBytes) =
-    handleBytes server testContext store (pathRequest "/.well-known/did.json")
+    handleFixture server testContext store (pathRequest "/.well-known/did.json")
   responseBytes
 
 {- | What a resolver gets from `/.well-known/did.json`, in the three

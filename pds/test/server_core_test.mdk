@@ -1,5 +1,6 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
+import bytes.*
 import http.{
   Header,
   HttpParseFailure(..),
@@ -13,7 +14,7 @@ import http.{
 }
 import array as A
 import string.{repeat, toUtf8}
-import test.{expectEqual, expectTrue}
+import test.{expectAll, expectEqual, expectTrue}
 import lib.cid.{cidForRaw}
 import lib.server_core.{
   Account,
@@ -126,37 +127,64 @@ expectedError status reason code message =
   toUtf8
     "HTTP/1.1 \{intToString status} \{reason}\r\naccess-control-allow-origin: *\r\ncontent-type: application/json\r\ncontent-length: \{intToString (arrayLength (toUtf8 body))}\r\n\r\n\{body}"
 
-fixedQuery : Array Int
+fixedQuery : Bytes
 fixedQuery =
-  toUtf8
+  toUtf8Bytes
     "GET /xrpc/com.example.query.fixed?one=1&one=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-fixedPut : Array Int
+fixedPut : Bytes
 fixedPut =
-  toUtf8
+  toUtf8Bytes
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\nabc"
 
-chunkedPut : Array Int
+chunkedPut : Bytes
 chunkedPut =
-  toUtf8
+  toUtf8Bytes
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n2\r\nbc\r\n0\r\n\r\n"
 
-malformedRequest : Array Int
+malformedRequest : Bytes
 malformedRequest =
-  toUtf8
+  toUtf8Bytes
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
 
-unknownRequest : Array Int
+unknownRequest : Bytes
 unknownRequest =
-  toUtf8
+  toUtf8Bytes
     "GET /xrpc/com.example.query.unknown HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
-resourceRequest : Array Int
+resourceRequest : Bytes
 resourceRequest =
-  toUtf8
+  toUtf8Bytes
     ("GET /"
       ++ repeat maxHttpRequestLineBytes "a"
       ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+
+-- The same bytes as `fixedQuery`, with one element outside 0..255 appended.
+-- RFC 9112 s2.1 defines an HTTP message as a sequence of octets, so this is
+-- not an HTTP message at all. `Bytes` carries that property by construction
+-- and `fromArray` is its sole door, which is where the refusal belongs.
+outOfDomainQuery : Array Int
+outOfDomainQuery =
+  toUtf8
+      "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"
+    ++ [|256|]
+
+{- | The door refuses, and the control shows what it is refusing.
+
+   `handleBytes` and `parseRequest` both take a `Bytes`, so an out-of-domain
+   array has no route into either: `fromArray` answers `None` and there is no
+   value to hand on. The control below is the same request without the
+   out-of-domain element, which the door admits — so the refusal is about
+   that element and not about the request. -}
+test "an out-of-domain request array is refused at the door, not framed" = expectAll
+  [
+    expectTrue (isNone (fromArray outOfDomainQuery)),
+    expectTrue
+      (isSome
+        (fromArray
+          (toUtf8
+            "GET /xrpc/com.example.query.fixed HTTP/1.1\r\nHost: pds.example\r\n\r\n"))),
+  ]
 
 test "Store starts empty and delegates verified immutable insertion" =
   let bytes = [|1, 2, 3|]

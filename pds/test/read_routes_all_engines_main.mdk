@@ -46,6 +46,7 @@
    corpus it claims to copy — which is why this driver takes that corpus as its
    one argument. -}
 
+import bytes.{fromArray}
 import http.{Request, parseRequest, serializeResponse}
 import io.{readLines}
 import json.{Json(..), jObject, get, parse}
@@ -85,6 +86,19 @@ import lib.store.{
   storeSize,
   storeWithServerSecret,
 }
+
+-- | `handleBytes` over a request fixture this driver still holds as an
+-- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
+-- door into one: a fixture element outside the byte domain stops here rather
+-- than reaching the framer.
+handleFixture : Server ->
+  RequestContext ->
+  Store ->
+  Array Int ->
+  (Store, Array Int)
+handleFixture httpServer context store request = match fromArray request
+  Some packed => handleBytes httpServer context store packed
+  None => panic "read_routes: request fixture holds a non-byte element"
 
 accountDidText : String
 accountDidText = "did:key:zQ3shVc2UkAfJCdc1TR8E66J85h48P43r93q8jGPkPpjF9Ef9"
@@ -234,7 +248,7 @@ check label ok detail =
 
 okCell : String -> Array Int -> String -> String -> <IO> Int
 okCell label request contentType expectedBody =
-  let (next, response) = handleBytes mustServer testContext storeEmpty request
+  let (next, response) = handleFixture mustServer testContext storeEmpty request
   let status = statusText response
   let ok =
     status == "200"
@@ -248,7 +262,7 @@ okCell label request contentType expectedBody =
 
 failCell : String -> Array Int -> String -> String -> <IO> Int
 failCell label request expectedStatus expectedCode =
-  let (next, response) = handleBytes mustServer testContext storeEmpty request
+  let (next, response) = handleFixture mustServer testContext storeEmpty request
   let status = statusText response
   let code = errorCode response
   let ok = status == expectedStatus && code == expectedCode && storeIsEmpty next
@@ -260,7 +274,7 @@ failCell label request expectedStatus expectedCode =
 preflightCell : String -> String -> String -> <IO> Int
 preflightCell label target requestedHeaders =
   let (next, response) =
-    handleBytes
+    handleFixture
       mustServer
       testContext
       storeEmpty
@@ -293,7 +307,11 @@ preflightCell label target requestedHeaders =
 preflightDroppedCell : String -> String -> <IO> Int
 preflightDroppedCell label target =
   let (next, response) =
-    handleBytes mustServer testContext storeEmpty (optionsRequest target "a\tb")
+    handleFixture
+      mustServer
+      testContext
+      storeEmpty
+      (optionsRequest target "a\tb")
   let status = statusText response
   let head = headText response
   let ok =
@@ -315,7 +333,7 @@ preflightDroppedCell label target =
 preflightRepeatedCell : String -> String -> <IO> Int
 preflightRepeatedCell label target =
   let (next, response) =
-    handleBytes
+    handleFixture
       mustServer
       testContext
       storeEmpty
@@ -338,7 +356,7 @@ preflightRepeatedCell label target =
 -- form it must never send.
 originOnlyCell : String -> Array Int -> String -> <IO> Int
 originOnlyCell label request expectedStatus =
-  let (next, response) = handleBytes mustServer testContext storeEmpty request
+  let (next, response) = handleFixture mustServer testContext storeEmpty request
   let status = statusText response
   let head = headText response
   let ok =
@@ -507,10 +525,12 @@ proxyRepeatedRequest target =
     "GET \{target} HTTP/1.1\r\nHost: \{accountHostText}\r\n\{proxyAuthField}atproto-proxy: \{configuredAppviewDid}\r\natproto-proxy: \{foreignServiceDid}\r\n\r\n"
 
 mustRequest : Array Int -> Request
-mustRequest bytes = match parseRequest bytes
-  Ok request => request
-  Err message =>
-    panic "read_routes: proxy cell request did not frame: \{message}"
+mustRequest bytes = match fromArray bytes
+  None => panic "read_routes: proxy cell request holds a non-byte element"
+  Some packed => match parseRequest packed
+    Ok request => request
+    Err message =>
+      panic "read_routes: proxy cell request did not frame: \{message}"
 
 lxmText : Option String -> String
 lxmText None = "<absent>"
