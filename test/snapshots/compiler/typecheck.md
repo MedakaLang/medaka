@@ -1,5 +1,5 @@
 # META
-source_lines=46886
+source_lines=46502
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -489,12 +489,6 @@ domainParam (Some "Prefix") = PPrefix None
 domainParam (Some "Set") = PSet None
 domainParam (Some "Product") = PProduct []  -- WS-4: structured (multi-axis) domain ⊤
 domainParam _ = PUnit
-
--- re-seed to the builtins, then register every `effect …` decl in the program.
-populateEffectDomains : List Decl -> Unit
-populateEffectDomains decls =
-  let _ = seedEffectDomains ()
-  populateGo decls
 
 -- The same thing over a module GRAPH, in `deAllDecls` order (prelude first, then
 -- the loader's dependency-first modules) but without flattening it: the Module-mode
@@ -15292,11 +15286,7 @@ builtinClassSet _ _ _ acc = acc
 --     The `builtinClassPresent BNum` guard prevents a later user module from
 --     overwriting the prelude's identities; its false branch is reachable only before
 --     any `Num` declaration has seeded this run.
-seedBuiltinClasses : CheckMode -> List Decl -> Unit
-seedBuiltinClasses (Flat coreProg) prog =
-  let classes =
-    builtinClassesOf (if declsNonEmpty coreProg then coreProg else prog)
-  crossRun.value.builtinClassesRef := classes
+seedBuiltinClasses : String -> List Decl -> Unit
 -- ⚠️ BOTH SPELLINGS of the prelude's module id are tested, for the same reason
 -- `declEnvsOrdOf` indexes it twice: the `graph*Exports` peers key the prelude under
 -- `"core"`, but the `mid` `graphPreamble` actually PASSES for the core pass is `""` on
@@ -15306,7 +15296,7 @@ seedBuiltinClasses (Flat coreProg) prog =
 -- because an unseeded table yields `OriginUnresolved`, i.e. a `TkBare` goal key against
 -- `TkIdent` impls: a false REJECT of the prelude, which is the #1112 prototype's
 -- 634-diagnostic signature.
-seedBuiltinClasses (Module mid _ _) prog =
+seedBuiltinClasses mid prog =
   if isPreludeMid mid || not (builtinClassPresent BNum) then
     crossRun.value.builtinClassesRef := builtinClassesOf prog
 
@@ -25829,27 +25819,6 @@ ordinalSentinelMsg : String
 ordinalSentinelMsg =
   "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete"
 
--- #1557 A-3.5c: the FLAT arm's single-module `CE`.  `buildDeclEnvs` runs only at the
--- one Module-mode driver entry, `graphPreamble`, so `driverState.declEnvsRef` is
--- `emptyDeclEnvs` on every flat path — reading it here would make `ceLookupAt` miss on
--- every interface and turn two live rejections into silent accepts on
--- `medaka check <one file>`.
--- Ordinal 0 with `cur = 0` makes "visible at" and "owned by" coincide, which is
--- correct: a flat program is exactly one module.
-flatClassEnvOf : List Decl -> ClassEnv
-flatClassEnvOf decls = buildClassEnv [declEnvModule 0 "" decls]
-
--- #1557 A-3.5b: `flatClassEnvOf`'s `IE` peer, and it exists for the SAME reason and
--- with the same fail-direction.  `buildDeclEnvs` runs only at the two Module-mode
--- driver entries, so `driverState.declEnvsRef.deImpls` is `emptyImplEnv` on every flat
--- path — handing that to `checkSuperImpls` would make every super-existence query miss,
--- and a miss there reports a superinterface as MISSING.  So the failure on Flat is a
--- false REJECT of every `impl Sub T`, not a silent accept; loud either way, but wrong.
--- Ordinal 0 with `cur = 0` makes "visible at" and "owned by" coincide, which is
--- correct: a flat program is exactly one module.
-flatImplEnvOf : List Decl -> ImplEnv
-flatImplEnvOf decls = buildImplEnv [declEnvModule 0 "" decls]
-
 checkOneIfaceCycle : ClassEnv -> Int -> Ref (OrdMap Unit) -> CeRow -> Unit
 checkOneIfaceCycle ce cur done row =
   if not (omHasKey (ceRowDoneKey row) !done) then
@@ -29416,9 +29385,6 @@ tupleUnifyClash a b = match (tupleSpine a, tupleSpine b)
 -- Callers pass the 1-module decl list (preludeDecls ++ user buffer) and read
 -- schemes by name; no eval, so this is the typecheck-only sibling of the
 -- 1-module path.
-checkProgramSchemes : List Decl -> List Decl -> List (String, Scheme)
-checkProgramSchemes coreProg userProg =
-  checkProgramSeededSplit [] coreProg userProg
 
 -- Like checkProgramSchemes but ALSO seeds runtime.mdk's externs (putStrLn,
 -- readLine, …) into scope, so a buffer using them type-checks instead of leaving
@@ -29426,24 +29392,10 @@ checkProgramSchemes coreProg userProg =
 -- `check_program`, which seeds `Runtime.entries` into the initial env — the LSP
 -- hover/completion/inlay handlers run this so externs resolve and a `let input =
 -- readLine ()` hovers as `String`, not a free `a`.
-export
-checkProgramSchemesWithRuntime : List Decl ->
-  List Decl ->
-  List Decl ->
-  List (String, Scheme)
-checkProgramSchemesWithRuntime runtimeDecls coreProg userProg =
-  -- #1280: `coreProg` IS the prelude boundary this entry exists to carry, so the
-  -- extern scope can attribute `Option`/`Ordering`/`Result` to `core` here.
-  checkProgramSeededSplit
-    (externSchemes (externTyOriginScope coreProg) runtimeDecls)
-    coreProg
-    userProg
 
 -- [seed] are extern schemes from runtime.mdk: in scope for lookup (so core.mdk's
 -- use of putStrLn/etc. resolves) but NOT part of the output (mirrors the
 -- reference seeding Runtime.entries into initial_env, which aren't returned).
-checkProgramSeeded : List (String, Scheme) -> List Decl -> List (String, Scheme)
-checkProgramSeeded seed prog = checkProgramSeededSplit seed [] prog
 
 -- Same pass, but told WHERE THE PRELUDE ENDS.  Every driver that flattens the prelude
 -- into the program it checks (`desugar coreP ++ desugared`) hands the two halves in
@@ -29483,21 +29435,6 @@ checkProgramSeeded seed prog = checkProgramSeededSplit seed [] prog
 -- must stay unstamped, exactly as the occurrence layer already treats it.  When
 -- `coreProg0` is `[]` (the prelude-free / already-flattened callers), stamping an
 -- empty list is a no-op, so this adds nothing on those paths.
-checkProgramSeededSplit : List (String, Scheme) ->
-  List Decl ->
-  List Decl ->
-  List (String, Scheme)
-checkProgramSeededSplit seed coreProg0 userProg0 =
-  let coreProgTy = stampFlatTyOrigins coreProg0 coreProg0
-  let coreProg = stampDeclOrigins "core" coreProgTy
-  let userProg = stampFlatTyOrigins coreProg0 userProg0
-  -- #1110 agreement tap.  OFF unless a probe enabled it (`noteOriginTrace` is a
-  -- `Bool` read and a return otherwise).  It is here, at the DRIVER, rather than
-  -- inside the stamper, because the two defects it exists to catch were both in
-  -- the ARGUMENTS a driver passed, not in the stamping.
-  let _ = noteOriginTrace "core" coreProg
-  let _ = noteOriginTrace "user" userProg
-  fst (checkBodyImpl seed (Flat coreProg) userProg)
 
 -- #80: the SINGLE whole-program typecheck body, shared by the flat/single-file path
 -- (checkProgramSeededSplit, `Flat coreProg`) and the per-module path
@@ -29514,58 +29451,37 @@ checkProgramSeededSplit seed coreProg0 userProg0 =
 -- The mode carries the inputs each path adds on top of `seed` + `prog0`:
 --   Flat   coreProg               — the prelude prefix (empty ⇒ prelude-free program)
 --   Module mid accData implDecls  — module id, prior modules' public data, impl universe
-data CheckMode = Flat (List Decl) | Module String (List Decl) (List Decl)
-
-modeModuleId : CheckMode -> String
-modeModuleId (Flat _) = ""
-modeModuleId (Module mid _ _) = mid
-
-scopeModuleId : CheckMode -> String
-scopeModuleId (Flat _) = "<flat>"
-scopeModuleId (Module mid _ _) = mid
-
 checkBodyImpl : List (String, Scheme) ->
-  CheckMode ->
+  String ->
+  List Decl ->
   List Decl ->
   (List (String, Scheme), List Decl)
 -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
 -- lint-disable-next-line rule-prefer-assign-op
-checkBodyImpl seed mode prog0 =
+checkBodyImpl seed mid implDecls prog0 =
   let _ = resetState ()
-  driverState.value.currentModuleRef := modeModuleId mode
-  -- #2547 unit 1: a loader-less (Flat) driver is its whole graph; a Module driver's
-  -- graph state was minted by its preamble.  Either way this module's channel marks
-  -- are noted now, before any body pushes.
-  let _ = match mode
-    Flat _ => resetGraphState ()
-    Module _ _ _ => ()
+  driverState.value.currentModuleRef := mid
   let moduleScope =
     Scopes.freshScope
       (currentScopeStore ())
       None
       perRun.value.currentLevel.value
-      (scopeModuleId mode)
+      mid
       ModuleOwner
   let _ = openScope moduleScope
-  let _ = recordModuleStart (modeModuleId mode)
+  let _ = recordModuleStart mid
   -- #1675: this module's own `import`/`export import` decls, checked for a name the
   -- named dependency exports under two different definitions.  Here rather than in
   -- `importSeed` because the seed is built BEFORE this `resetState ()` — see
   -- `reportAmbiguousImports`.  Reads only `deAmbigValues`, so a driver with no graph
   -- envelope (Flat, single-file) is a no-op.
   let _ = reportAmbiguousImports prog0
-  -- (#1) decl universes, derived from the mode.  On Flat, prog = coreProg ++ userProg
-  -- and every universe collapses to it; on Module they fan out over accData/implDecls.
-  let prog = match mode
-    Flat coreProg => coreProg ++ prog0
-    Module _ _ _ => prog0
-  let aliasSpellings = match mode
-    Flat _ => []
-    Module _ _ _ => aliasMethodSpellings prog
+  let prog = prog0
+  let aliasSpellings = aliasMethodSpellings prog
   -- P1 (#1446) / DICT §8 I7: the four operator-and-literal classes' identities, read
   -- off the PRELUDE's own `DInterface` decls before any body is inferred (the operator
   -- handlers consult them during inference).  See `seedBuiltinClasses`.
-  let _ = seedBuiltinClasses mode prog
+  let _ = seedBuiltinClasses mid prog
   -- #837: stamp binding ids on the program the bodies are INFERRED from.  `prog`
   -- itself stays unstamped for the pre-inference analyses (shadows/key table/…),
   -- which do not need ids; only the inferred bodies (defs + impl/default/prop/test)
@@ -29577,23 +29493,16 @@ checkBodyImpl seed mode prog0 =
   -- schedule reaches it (`processSCC`), and the tail bodies after the groups, so
   -- `progS` is the module's UNMARKED, unstamped tree and `progT` below its inferred
   -- twin.  The Flat callers marked their whole program before this call.
-  let stampRes = match mode
-    Flat _ => stampBindingIds prog
-    Module mid _ _ =>
-      let (top, ids) = stampTopScope prog
-      let _ = beginModuleMarking mid prog top
-      (prog, ids)
+  let stampRes =
+    let (top, ids) = stampTopScope prog
+    let _ = beginModuleMarking mid prog top
+    (prog, ids)
   let progS = fst stampRes
   -- #907: index name→id as an OrdMap (was a List scanned linearly per rendered
   -- scheme in ppSchemeNamed / per SCC member in registerSchemeObligations → O(decls²)).
   -- Built from the REVERSED pairs so omFromPairs' last-write-wins reproduces the old
   -- `lookupAssoc` first-match-wins on a duplicated binder name (same pattern as sigTyMapRef).
   perRun.value.schemeDefIdsRef := omFromPairs (reverseL (snd stampRes)) omEmpty
-  let coreLen = match mode
-    Flat coreProg => listLen coreProg
-    Module _ _ _ => 0
-  let coreProgS = takeFirst coreLen progS
-  let prog0S = dropFirst coreLen progS
   -- the full visible universe (shadows / key table / iface-param registration /
   -- completeness / obligations): Flat = whole flattened program; Module = imported
   -- data + impl universe + this module.
@@ -29605,16 +29514,11 @@ checkBodyImpl seed mode prog0 =
   -- which IS this binding on that arm).  Medaka is STRICT, so the
   -- Module arm's `accData ++ implDecls ++ prog0` allocated an O(|accData|) list every module
   -- and discarded it unread — a dead per-module O(N) concat.  Bind `[]` on Module.
-  let fullUniverse = match mode
-    Flat _ => prog
-    Module _ _ _ => []
   -- registerAllData universe (#154 PR-A): the Module path no longer builds `accData ++ prog0`
   -- here — prior modules' public data lives in the persistent DATA-universe accumulators
   -- (universeRecordByName/…/universeDataEnv), copied+overlaid at the `dataEnv` binding below.
   -- groundMultiParamObligations universe: Flat grounds over prog; Module over implDecls.
-  let groundUniverse = match mode
-    Flat _ => prog
-    Module _ _ implDecls => implDecls
+  let groundUniverse = implDecls
   -- (#6, #1457) superDeclsRef: unified body OWNS it — Flat = coreProg ++ userProg, Module =
   -- `prog ++ implDecls`.  [implDecls] is core + every EARLIER module ONLY (foldModules never
   -- folds a module into its own universe), so binding it alone EXCLUDED this module's own
@@ -29629,37 +29533,28 @@ checkBodyImpl seed mode prog0 =
   --   * meaning — ifaceSupersOf/ifaceSelfAndSupers is a FIRST-MATCH scan, so `prog` first makes
   --     THIS module's own same-spelled interface decl outrank an earlier module's, which is the
   --     precedence the Flat arm already has.
-  let superDecls = match mode
-    Flat _ => prog
-    Module _ _ implDecls => prog ++ implDecls
+  let superDecls = prog ++ implDecls
   driverState.value.superDeclsRef := superDecls
   -- (BREAK #3) effect domains: FLAT populates inline; MODULE relies on the driver
   -- preamble (checkModulesPreambleK / elaborateModules) populating ONCE over the whole
   -- import graph — a per-module populate would wipe another module's domains.
-  let _ = match mode
-    Flat _ =>
-      let _ = populateEffectDomains prog
-      ()
-    Module _ _ _ => ()
   let _ = checkEffectParams prog
   let _ = checkLetRecDecls prog
   -- #154 PR1: on the Module path, grow the persistent universe accumulators by THIS
   -- module's decls BEFORE the shadow/key reads below consult them — so they see the
   -- same universe `fullUniverse` (which appended prog0) did.  The Flat path leaves them
   -- untouched and rebuilds over its whole `prog` (already O(N)).
-  let _ = match mode
-    Flat _ => ()
-    -- #1112 A-3.4 PR2: `ieShadowCompare mid prog0` stood here, and the hard `panic`
-    -- surface it put in the released compiler is GONE with it — that instrument had
-    -- exactly one job, measuring the §9.5 equality before the flip committed to it,
-    -- and the flip has now been made on a strictly stronger measurement (see
-    -- `moduleImplUniv` just below for what was measured and how it was shown
-    -- fail-capable).  `appendUniverseAccums` no longer grows an impl universe either,
-    -- so there is nothing left here for `IE` to be compared against.
-    -- #1499 clause (b) / S1-PRELUDE (a): `mid` is BOUND here now — `appendUniverseAccums`
-    -- must know whether this pass is the PRELUDE's, because the prelude contributes to
-    -- S1's INTERFACE operand but NOT to its STANDALONE one.  See its header.
-    Module mid _ _ => appendUniverseAccums mid prog0
+  -- #1112 A-3.4 PR2: `ieShadowCompare mid prog0` stood here, and the hard `panic`
+  -- surface it put in the released compiler is GONE with it — that instrument had
+  -- exactly one job, measuring the §9.5 equality before the flip committed to it,
+  -- and the flip has now been made on a strictly stronger measurement (see
+  -- `moduleImplUniv` just below for what was measured and how it was shown
+  -- fail-capable).  `appendUniverseAccums` no longer grows an impl universe either,
+  -- so there is nothing left here for `IE` to be compared against.
+  -- #1499 clause (b) / S1-PRELUDE (a): `mid` is BOUND here now — `appendUniverseAccums`
+  -- must know whether this pass is the PRELUDE's, because the prelude contributes to
+  -- S1's INTERFACE operand but NOT to its STANDALONE one.  See its header.
+  let _ = appendUniverseAccums mid prog0
   -- 🚨 #1112 A-3.4 PR2 — THE `IE` READER FLIP.  A production read of stage K's `IE`
   -- (A-3.5b added a second, `ieRowsVisibleAt`; do NOT re-instate "the ONE place" here).
   -- It replaced the three `obUniv*` `CrossRun` accumulators, which are GONE rather than
@@ -29698,11 +29593,9 @@ checkBodyImpl seed mode prog0 =
   -- accumulator these replaced was likewise grown once, above, and read at both sites).
   -- A third consumer should take this binding too, or say in writing why it needs a
   -- different ordinal.
-  let moduleImplUniv = match mode
-    Flat _ => emptyImplUniverse
-    Module mid _ _ =>
-      let envs = driverState.value.declEnvsRef.value
-      ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls
+  let moduleImplUniv =
+    let envs = driverState.value.declEnvsRef.value
+    ieUniverseAt (declEnvsOrdOf mid envs) envs.deImpls
   -- #1549: stash the impl universe the RESIDUAL REDUCER entails against
   -- (`residualPredsOf`, called from each generalizing group's close).  This is NOT a
   -- third source: it is the SAME two arm-gated sources the end-of-body obligation
@@ -29711,11 +29604,7 @@ checkBodyImpl seed mode prog0 =
   -- included by `declEnvVisibleAt`, exactly as the retired accumulator did after the
   -- `appendUniverseAccums` above).  Built ONCE per module rather than per group:
   -- rebuilding it inside the reducer would be O(decls) per SCC, i.e. quadratic.
-  let _ = setRef
-    perRun.value.residualUnivRef
-    (match mode
-      Flat _ => buildImplUniverse prog
-      Module _ _ _ => moduleImplUniv)
+  let _ = setRef perRun.value.residualUnivRef moduleImplUniv
   -- (#4) shadows.  definerShadows uses the SHARED form — buildDefinerShadows over the
   -- full visible universe, scoped to THIS module's decls (prog0).  On Flat, prog0 =
   -- userProg and fullUniverse = prog, so this is exactly the old flat `buildDefinerShadows
@@ -29729,18 +29618,14 @@ checkBodyImpl seed mode prog0 =
   -- either filter (the result is single-digit; `fnSet` is every fn name in the graph), and
   -- fail-open when the graph index is absent.  See `nameableIfaceShadows`.  The Flat arms
   -- are untouched: a single file is one module and its own interfaces are nameable in it.
-  let definerShadows = match mode
-    Flat _ => buildDefinerShadows fullUniverse prog0
-    Module _ _ _ =>
-      nameableIfaceShadows
-        prog0
-        (definerShadowsFromSet
-          crossRun.value.universeIfaceMethodsRef.value
-          prog0)
-  let importerShadows = match mode
-    Flat _ => []
-    Module _ _ [] => []
-    Module _ _ _ =>
+  let definerShadows =
+    nameableIfaceShadows
+      prog0
+      (definerShadowsFromSet crossRun.value.universeIfaceMethodsRef.value prog0)
+  let importerShadows =
+    if isEmptyL implDecls then
+      []
+    else
       nameableIfaceShadows
         prog0
         (standaloneShadowsFromSet
@@ -29770,108 +29655,100 @@ checkBodyImpl seed mode prog0 =
   -- read this ref.  Derive the set: `grep -n bodyImplEnvRef compiler/types/typecheck.mdk`.
   -- The Module arm is a pointer copy of the env `buildDeclEnvs` already built; it
   -- deliberately does NOT re-derive, for the reason `moduleImplUniv` gives above.
-  let _ = match mode
-    Flat _ => perRun.value.bodyImplEnvRef := buildFlatImplEnv fullUniverse
-    Module _ _ _ =>
-      perRun.value.bodyImplEnvRef := driverState.value.declEnvsRef.value.deImpls
+  perRun.value.bodyImplEnvRef := driverState.value.declEnvsRef.value.deImpls
   -- (#4 + #3-restore) mode-specific pre-inference ref setup (all pure/independent of the
   -- register+globalS block below, so order-safe).  Flat arms the per-body shadow-scoping
   -- toggles; Module installs importer-shadow state and restores the cross-module dict
   -- accumulators resetState just wiped.
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
-  let _ = match mode
-    Flat coreProg =>
-      perRun.value.flatShadowScopingRef := declsNonEmpty coreProg
-      perRun.value.flatUserShadowNamesRef := namesToSet definerShadows omEmpty
-      perRun.value.flatCoreFnNamesRef :=
-        namesToSet (map fst (funDefs coreProg)) omEmpty
-      ()
-    -- #1425 site 2: `mid` is BOUND here now — the three lockstep re-keys at the end of this
-    -- arm need this module's identity, and the arm can no longer discard it.
-    Module mid _ _ =>
-      driverState.value.standaloneValuesRef :=
-        namesToSet (importerShadows ++ definerShadows) omEmpty
-      perRun.value.shadowStandaloneSchemesRef :=
-        omFromPairs
-          (reverseL (pickStandaloneSchemes importerShadows seed))
-          omEmpty
-      -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
-      -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
-      driverState.value.methodDispatchIdxByIdRef :=
-        crossRun.value.universeMethodDispatchIdxByIdRef.value
-      perRun.value.funPredicateSlotsRef :=
-        crossRun.value.crossModuleFunPredicateSlotsRef.value
-      -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
-      -- whole-table replacement of `funConstraintsRef` owes one of these.
-      perRun.value.funConstraintDeclaredRef :=
-        crossRun.value.crossModuleFunConstraintDeclaredRef.value
-      -- A module alias (`import m as A`) has no `currentImportDefinersRef` row for
-      -- each dotted member, so its call sites resolve through these alias-local rows.
-      -- The source is nevertheless exact: `aliasConstraintEntries` selects only the
-      -- `(defining module, exported name)` row admitted by that alias. Preserve the
-      -- complete predicate vectors here; stripping them reduces distinct predicates
-      -- such as `Tweak a Int` and `Tweak a Bool` to the ambiguous goal `Tweak a`.
-      -- The graph-wide bare-name snapshot below remains vector-free because it lacks
-      -- this source identity.
-      let _ =
-        setRef
-          perRun.value.funPredicateSlotsRef
-          (aliasConstraintEntries
-              prog
-              crossRun.value.crossModuleFunPredicateSlotsQualRef.value
-            ++ perRun.value.funPredicateSlotsRef.value)
-      let _ =
-        setRef
-          perRun.value.funConstraintDeclaredRef
-          (aliasConstraintEntries
-              prog
-              crossRun.value.crossModuleFunConstraintDeclaredQualRef.value
-            ++ perRun.value.funConstraintDeclaredRef.value)
-      -- #1425 site 2: the three tables above were just seeded WHOLESALE from graph-wide
-      -- BARE-NAME accumulators, so every name this module declares is currently answered by
-      -- whichever module's same-named binding the topological order happened to put first.
-      -- Re-key those names — and only those — onto this module's own `(mid, name)` rows.
-      -- Three writes, in lockstep, per B-2.2-f (#1113): the declared-prefix sidecar rides the
-      -- IDS table, and this is a whole-table replacement of all three.
-      let _ =
-        setRef
-          perRun.value.funPredicateSlotsRef
-          (selfDeclArities
-            mid
+
+  -- #1425 site 2: `mid` is BOUND here now — the three lockstep re-keys at the end of this
+  -- arm need this module's identity, and the arm can no longer discard it.
+
+  let _ =
+    driverState.value.standaloneValuesRef :=
+      namesToSet (importerShadows ++ definerShadows) omEmpty
+    perRun.value.shadowStandaloneSchemesRef :=
+      omFromPairs
+        (reverseL (pickStandaloneSchemes importerShadows seed))
+        omEmpty
+    -- #1351: the per-module copy of the identity-keyed dispatch-index universe, read by
+    -- `methodDispatchIdx` through `dispatchIdxScoped`.  Its bare-name peer was retired at L5.
+    driverState.value.methodDispatchIdxByIdRef :=
+      crossRun.value.universeMethodDispatchIdxByIdRef.value
+    perRun.value.funPredicateSlotsRef :=
+      crossRun.value.crossModuleFunPredicateSlotsRef.value
+    -- B-2.2-f (#1113): the declared-prefix sidecar rides the IDS table — every
+    -- whole-table replacement of `funConstraintsRef` owes one of these.
+    perRun.value.funConstraintDeclaredRef :=
+      crossRun.value.crossModuleFunConstraintDeclaredRef.value
+    -- A module alias (`import m as A`) has no `currentImportDefinersRef` row for
+    -- each dotted member, so its call sites resolve through these alias-local rows.
+    -- The source is nevertheless exact: `aliasConstraintEntries` selects only the
+    -- `(defining module, exported name)` row admitted by that alias. Preserve the
+    -- complete predicate vectors here; stripping them reduces distinct predicates
+    -- such as `Tweak a Int` and `Tweak a Bool` to the ambiguous goal `Tweak a`.
+    -- The graph-wide bare-name snapshot below remains vector-free because it lacks
+    -- this source identity.
+    let _ =
+      setRef
+        perRun.value.funPredicateSlotsRef
+        (aliasConstraintEntries
             prog
             crossRun.value.crossModuleFunPredicateSlotsQualRef.value
-            perRun.value.funPredicateSlotsRef.value)
-      let _ =
-        setRef
-          perRun.value.funConstraintDeclaredRef
-          (selfDeclArities
-            mid
+          ++ perRun.value.funPredicateSlotsRef.value)
+    let _ =
+      setRef
+        perRun.value.funConstraintDeclaredRef
+        (aliasConstraintEntries
             prog
             crossRun.value.crossModuleFunConstraintDeclaredQualRef.value
-            perRun.value.funConstraintDeclaredRef.value)
-      -- RUN-XMOD-062: ONE derivation, two projections.  The two refs are read together
-      -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
-      -- must not be derived by two independent walks that could admit different rows.
-      let admitted = importDefinersOf prog
-      perRun.value.currentImportDefinersRef :=
-        omFromPairs (reverseL (definerRowsOf admitted)) omEmpty
-      perRun.value.currentImportOriginsRef :=
-        omFromPairs (reverseL (originRowsOf admitted)) omEmpty
-      -- #1114 (#845): this module's imported SCHEME CONTEXTS, keyed by local spelling.
-      -- `reverseL` before `omFromPairs` so the FIRST entry wins a duplicate key, matching
-      -- the first-match policy of the sibling tables set just above
-      -- (`omFromPairs` is last-write-wins; see its own note in support/ordmap.mdk).
-      let _ =
-        setRef
-          perRun.value.importedSchemeOblsRef
-          (omFromPairs
-            (reverseL
-              (importedSchemeOblEntries
-                prog
-                crossRun.value.crossModuleSchemeOblsQualRef.value))
-            omEmpty)
-      ()
+          ++ perRun.value.funConstraintDeclaredRef.value)
+    -- #1425 site 2: the three tables above were just seeded WHOLESALE from graph-wide
+    -- BARE-NAME accumulators, so every name this module declares is currently answered by
+    -- whichever module's same-named binding the topological order happened to put first.
+    -- Re-key those names — and only those — onto this module's own `(mid, name)` rows.
+    -- Three writes, in lockstep, per B-2.2-f (#1113): the declared-prefix sidecar rides the
+    -- IDS table, and this is a whole-table replacement of all three.
+    let _ =
+      setRef
+        perRun.value.funPredicateSlotsRef
+        (selfDeclArities
+          mid
+          prog
+          crossRun.value.crossModuleFunPredicateSlotsQualRef.value
+          perRun.value.funPredicateSlotsRef.value)
+    let _ =
+      setRef
+        perRun.value.funConstraintDeclaredRef
+        (selfDeclArities
+          mid
+          prog
+          crossRun.value.crossModuleFunConstraintDeclaredQualRef.value
+          perRun.value.funConstraintDeclaredRef.value)
+    -- RUN-XMOD-062: ONE derivation, two projections.  The two refs are read together
+    -- (`qualConstraintKey` assembles a `(definer, origin)` key out of both), so they
+    -- must not be derived by two independent walks that could admit different rows.
+    let admitted = importDefinersOf prog
+    perRun.value.currentImportDefinersRef :=
+      omFromPairs (reverseL (definerRowsOf admitted)) omEmpty
+    perRun.value.currentImportOriginsRef :=
+      omFromPairs (reverseL (originRowsOf admitted)) omEmpty
+    -- #1114 (#845): this module's imported SCHEME CONTEXTS, keyed by local spelling.
+    -- `reverseL` before `omFromPairs` so the FIRST entry wins a duplicate key, matching
+    -- the first-match policy of the sibling tables set just above
+    -- (`omFromPairs` is last-write-wins; see its own note in support/ordmap.mdk).
+    let _ =
+      setRef
+        perRun.value.importedSchemeOblsRef
+        (omFromPairs
+          (reverseL
+            (importedSchemeOblEntries
+              prog
+              crossRun.value.crossModuleSchemeOblsQualRef.value))
+          omEmpty)
+    ()
   -- #11 soundness: the interface-method→iface-param map.  (⚠️ #1569 retired the
   -- registered-iface set this comment used to describe as its sibling — see
   -- `PerRun.registeredIfacesRef`'s retirement note.)
@@ -29891,141 +29768,130 @@ checkBodyImpl seed mode prog0 =
   -- why nothing caught it.  `applyMethodScopeOverrides` re-decides those (normally zero)
   -- names from THIS module's own import scope; every other name still takes the shared
   -- map unchanged.
-  let _ = match mode
-    Flat _ => registerMethodIfaceParamsAll fullUniverse
-    Module _ _ _ =>
-      perRun.value.methodIfaceParamsRef :=
-        aliasQualifiedMethodEntries
+
+  let _ =
+    perRun.value.methodIfaceParamsRef :=
+      aliasQualifiedMethodEntries
+        prog
+        (applyMethodScopeOverrides
           prog
-          (applyMethodScopeOverrides
-            prog
-            crossRun.value.universeMethodIfaceParamsRef.value)
-      -- #1386: the ORIGIN name behind each of those alias-qualified keys, from the
-      -- same rows, in the same module scope, on the same line as the supply they
-      -- accompany — `originMethodName`'s source.  Empty on the Flat arm, whose
-      -- single file has no import graph.
-      perRun.value.aliasMethodOriginsRef := omFromPairs aliasSpellings omEmpty
-      -- #2188 / S2-DECL (d): the SAME ladder's whole admitted set, for the names where
-      -- the winner above is a floor rather than a decision.  Written HERE, beside the
-      -- projection it accompanies, so the two can never be derived from different
-      -- module scopes.  Empty on the Flat arm (a single file has no import graph, so
-      -- no name can have two admitted declarations) — `resetState` mints a fresh
-      -- `PerRun`, whose default for this field is `omEmpty`.
-      perRun.value.methodAdmittedIfacesRef := applyMethodAdmittedSets prog
+          crossRun.value.universeMethodIfaceParamsRef.value)
+    -- #1386: the ORIGIN name behind each of those alias-qualified keys, from the
+    -- same rows, in the same module scope, on the same line as the supply they
+    -- accompany — `originMethodName`'s source.  Empty on the Flat arm, whose
+    -- single file has no import graph.
+    perRun.value.aliasMethodOriginsRef := omFromPairs aliasSpellings omEmpty
+    -- #2188 / S2-DECL (d): the SAME ladder's whole admitted set, for the names where
+    -- the winner above is a floor rather than a decision.  Written HERE, beside the
+    -- projection it accompanies, so the two can never be derived from different
+    -- module scopes.  Empty on the Flat arm (a single file has no import graph, so
+    -- no name can have two admitted declarations) — `resetState` mints a fresh
+    -- `PerRun`, whose default for this field is `omEmpty`.
+    perRun.value.methodAdmittedIfacesRef := applyMethodAdmittedSets prog
   -- Module arm: copy the seven persistent DATA-universe accumulators (prior modules'
   -- public data + ctor env, each minted exactly once) into the resetState-wiped
   -- working refs, then register ONLY this module's `prog0` as a transient FRONT
   -- overlay — O(|prog0|) per module, O(N) total. Ordering must stay [prog0,
   -- pub_{k-1}..pub_1] to preserve lookupAssoc (first-wins) / omInsert (last-write-wins)
   -- semantics. Flat arm is unchanged.
-  let dataEnv = match mode
-    Flat _ => registerAllData initialEnv prog
+  let dataEnv =
     -- A-3.2b (#1512): `mid` is BOUND here now — the overlay pool below is read at this
     -- module's own ordinal, so the arm can no longer discard it.
-    Module mid _ _ =>
-      -- A-3.2b residual (#1512): `envs`/`cur` are bound BEFORE the reload, not
-      -- after, because the reload's alias half is now a projection of `envs` at
-      -- `cur`.  Both bindings are pure reads of `driverState`, so hoisting them
-      -- above `loadDataUniverse` changes nothing else.
-      let envs = driverState.value.declEnvsRef.value
-      let cur = declEnvsOrdOf mid envs
-      let _ = loadDataUniverse cur
-      -- #674: OVERLAY the ctors of the types THIS module imports so a bare ctor name
-      -- resolves to the module the unit imports it from, not the universe's load-order
-      -- winner.  Reads the persistent universe DECLS (not the Module `accData` field —
-      -- that is dead `[]` on the elaborate/emit path, #154 PR-C), so the overlay fires
-      -- on the run/build gate too, not just `check`.
-      --
-      -- 🚨 THREE LAYERS, and the order is the whole contract:
-      --     universe  <  imported-ctor overlay  <  this module's OWN `prog0`.
-      -- The overlay registers AFTER the universe (that is #674's requirement — it must
-      -- win the `omInsert` tie-break over the load-order winner) and BEFORE `prog0`
-      -- (this module's own declarations outrank anything it imports — ordinary
-      -- shadowing, and the SHADOW spec's S1 per-module scoping).
-      --
-      -- ⚠️ Registering the overlay LAST, over `prog0`, is a REGRESSION and shipped as
-      -- one: an imported decl's constructors then beat locally-declared ones, so
-      -- `import json.{Json, JNull}` + a local `data Tok = JString String` was rejected
-      -- `Type mismatch: Json vs Tok` — clobbered by a SIBLING constructor of `Json`
-      -- that the program never imported.  It reaches the stdlib and it is not narrow:
-      -- every selective constructor-naming import carries it.  Pinned by
-      -- `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk` (the
-      -- stdlib `json` shape, on all three engines) and
-      -- `test/llvm_fixtures_modules/ctor_scope_local_decl_wins/` (`{Ext, Other}` plus
-      -- a local decl, prelude-free).
-      --
-      -- 🚨 THE SET OF ORDER-OBSERVABLE STRUCTURES — enumerate it, because #674's root
-      -- cause was exactly two of them disagreeing, and a FUTURE edit re-creates that by
-      -- moving ONE.  This note used to name a PAIR ("both structures agree"), and the
-      -- pair it named was the one that cannot disagree — while omitting the one that can.
-      --
-      -- Registration order here is  universe < overlay < prog0.  Under it:
-      --   * the `TcEnv` ctor scheme map (`addCtor` → `omInsert`, BARE ctor name) —
-      --     LAST-write-wins → prog0.  BARE-keyed, so two modules genuinely collide here;
-      --     this is #1259's table and the one the overlay exists for.
-      --   * `recordByNameRef` (`registerRecordInfoKeyed` → `omInsert`, BARE ctor name) —
-      --     LAST-write-wins → prog0.  #1256's table, same keying, same hazard.
-      --   * `dataParamKindsRef` (`recordParamKinds`, a consed list read FIRST-match) —
-      --     prepend order [prog0, overlay, universe] → prog0.  ⚠️ This one is
-      --     IDENTITY-keyed since A-2.3 (`tyTabKey o name`), so two modules' same-named
-      --     types get DIFFERENT keys and registration order cannot decide between them
-      --     at all.  It is order-observable only for a decl registered twice, where it
-      --     agrees.  It is NOT evidence about the bare-keyed tables above.
-      --   * the exhaust ctor ORACLE — and it is built at a DIFFERENT CALL SITE
-      --     (`checkModuleFullDiags`: `seedCheckRun (prog ++ importedCtorTypeDeclsFirstWins prog …
-      --     ++ accData)`), from a LIST, with `oracleMap` = `omFromPairs (reverseL …)`,
-      --     i.e. FIRST-wins on that list → prog0 > overlay > universe.  Same verdict,
-      --     opposite mechanism, and reached through none of the code on this line.
-      --     THIS is the one a future edit can silently flip, so check it too.
-      -- All four land on prog0 > overlay > universe.  Getting any two to disagree is
-      -- #674's root cause.
-      -- #1111 A-2.11 (#1319 unit 1): a FIFTH layer, and it is a per-NAME overlay rather
-      -- than a fifth registration — `applyCtorScopeOverrides` re-points the (normally
-      -- empty) set of COLLIDED constructor names at the declaration THIS module's import
-      -- scope selects.  It sits ABOVE prog0 and declines for any name prog0 declares, so
-      -- the ladder above is unchanged: own > import scope > import overlay > universe.
-      -- A collision-free program returns this very env unchanged and unallocated.
-      -- #1111 A-2.12 (#1319 unit 2): the two RECORD-table overlays are the same fifth
-      -- layer one namespace-half over, and they must run HERE — after `registerAllData …
-      -- prog0` has written the floor into `recordByNameRef` / `fieldOwnersRef` — for the
-      -- same reason `applyCtorScopeOverrides` wraps that call.  They are statements rather
-      -- than an env transform only because those two tables are per-run REFS, not `TcEnv`
-      -- fields; the ladder they implement is identical.  See applyRecordScopeOverrides.
-      -- #1112 A-3.2b (#1512), absorbing #1319 unit 4: THE OVERLAY POOL IS NOW STAGE K.
-      -- `crossRun.universeDataDecls` — a positional `List Decl` accumulated by
-      -- `appendDataUniverse`, carrying no key at all — is RETIRED; the pool is the
-      -- whole-graph envelope read at THIS module's ordinal through
-      -- `declEnvRowVisible`/`declEnvVisibleTo`.
-      --
-      -- 🚨 THE READ KEY IS `mid`, THE LOADER'S MODULE ID — the same string
-      -- `buildDeclEnvs` indexed the row under, threaded here by the driver
-      -- (`elabModuleStamp mid` on the emit path; `cmCheckWorker mid` since #1508).  It
-      -- is NOT re-derived from import syntax, which is why the emit path's
-      -- `private_mangle` rewriting cannot break it: mangling renames top-level
-      -- bindings, never a loader module id, and the decls in the pool are the very
-      -- objects the accumulator held before.  (Re-deriving a read key by re-walking
-      -- `DUse` syntax is what made #1425's four-site change resolve on eval and MISS on
-      -- emit — `DUse` decls are never mangled.  This key does not go through that
-      -- channel.)
-      -- #1112 A-3.2b (#1512) slices 2+3: the KIND and FIELD-OWNER halves of the seed
-      -- `loadDataUniverse` used to copy out of two `crossRun` accumulators.  Same
-      -- position in the ladder (it is the UNIVERSE layer, under the overlay and under
-      -- `prog0`), same content, one ordinal-aware source.  See `declEnvSeedChain` for
-      -- why the reader's OWN row is excluded here and registered by the two
-      -- `registerAllData` calls below instead.
-      let _ = declEnvSeedDataUniverse mid envs
-      -- 🚨 `…LastWins`, NOT the `…FirstWins` sibling: `registerAllData` folds LEFT into
-      -- `omInsert` tables, so the LAST row wins, and the overlay's named-outranks-wildcard
-      -- rule therefore needs the `UseGroup` rows LAST.  The oracle call site takes the
-      -- opposite order for the opposite reason — see the partition note at
-      -- `importedCtorTypeDeclsFirstWins`.  Swapping these two inverts the rule silently.
-      let base =
-        registerAllData
-          crossRun.value.universeDataEnv.value
-          (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
-      let env0 = registerAllData base prog0
-      let _ = applyRecordScopeOverrides prog0
-      applyCtorScopeOverrides prog0 env0
+    -- A-3.2b residual (#1512): `envs`/`cur` are bound BEFORE the reload, not
+    -- after, because the reload's alias half is now a projection of `envs` at
+    -- `cur`.  Both bindings are pure reads of `driverState`, so hoisting them
+    -- above `loadDataUniverse` changes nothing else.
+    let envs = driverState.value.declEnvsRef.value
+    let cur = declEnvsOrdOf mid envs
+    let _ = loadDataUniverse cur
+    -- #674: OVERLAY the ctors of the types THIS module imports so a bare ctor name
+    -- resolves to the module the unit imports it from, not the universe's load-order
+    -- winner.  Reads the persistent universe DECLS (not the Module `accData` field —
+    -- that is dead `[]` on the elaborate/emit path, #154 PR-C), so the overlay fires
+    -- on the run/build gate too, not just `check`.
+    --
+    --     universe  <  imported-ctor overlay  <  this module's OWN `prog0`.
+    -- The overlay registers AFTER the universe (that is #674's requirement — it must
+    -- win the `omInsert` tie-break over the load-order winner) and BEFORE `prog0`
+    -- (this module's own declarations outrank anything it imports — ordinary
+    -- shadowing, and the SHADOW spec's S1 per-module scoping).
+    --
+    -- one: an imported decl's constructors then beat locally-declared ones, so
+    -- `import json.{Json, JNull}` + a local `data Tok = JString String` was rejected
+    -- `Type mismatch: Json vs Tok` — clobbered by a SIBLING constructor of `Json`
+    -- that the program never imported.  It reaches the stdlib and it is not narrow:
+    -- every selective constructor-naming import carries it.  Pinned by
+    -- `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk` (the
+    -- stdlib `json` shape, on all three engines) and
+    -- `test/llvm_fixtures_modules/ctor_scope_local_decl_wins/` (`{Ext, Other}` plus
+    -- a local decl, prelude-free).
+    --
+    -- cause was exactly two of them disagreeing, and a FUTURE edit re-creates that by
+    -- moving ONE.  This note used to name a PAIR ("both structures agree"), and the
+    -- pair it named was the one that cannot disagree — while omitting the one that can.
+    --
+    -- Registration order here is  universe < overlay < prog0.  Under it:
+    --   * the `TcEnv` ctor scheme map (`addCtor` → `omInsert`, BARE ctor name) —
+    --     LAST-write-wins → prog0.  BARE-keyed, so two modules genuinely collide here;
+    --     this is #1259's table and the one the overlay exists for.
+    --   * `recordByNameRef` (`registerRecordInfoKeyed` → `omInsert`, BARE ctor name) —
+    --     LAST-write-wins → prog0.  #1256's table, same keying, same hazard.
+    --   * `dataParamKindsRef` (`recordParamKinds`, a consed list read FIRST-match) —
+    --     IDENTITY-keyed since A-2.3 (`tyTabKey o name`), so two modules' same-named
+    --     types get DIFFERENT keys and registration order cannot decide between them
+    --     at all.  It is order-observable only for a decl registered twice, where it
+    --     agrees.  It is NOT evidence about the bare-keyed tables above.
+    --     (`checkModuleFullDiags`: `seedCheckRun (prog ++ importedCtorTypeDeclsFirstWins prog …
+    --     ++ accData)`), from a LIST, with `oracleMap` = `omFromPairs (reverseL …)`,
+    --     i.e. FIRST-wins on that list → prog0 > overlay > universe.  Same verdict,
+    --     opposite mechanism, and reached through none of the code on this line.
+    --     THIS is the one a future edit can silently flip, so check it too.
+    -- All four land on prog0 > overlay > universe.  Getting any two to disagree is
+    -- #674's root cause.
+    -- #1111 A-2.11 (#1319 unit 1): a FIFTH layer, and it is a per-NAME overlay rather
+    -- than a fifth registration — `applyCtorScopeOverrides` re-points the (normally
+    -- empty) set of COLLIDED constructor names at the declaration THIS module's import
+    -- scope selects.  It sits ABOVE prog0 and declines for any name prog0 declares, so
+    -- the ladder above is unchanged: own > import scope > import overlay > universe.
+    -- A collision-free program returns this very env unchanged and unallocated.
+    -- #1111 A-2.12 (#1319 unit 2): the two RECORD-table overlays are the same fifth
+    -- layer one namespace-half over, and they must run HERE — after `registerAllData …
+    -- prog0` has written the floor into `recordByNameRef` / `fieldOwnersRef` — for the
+    -- same reason `applyCtorScopeOverrides` wraps that call.  They are statements rather
+    -- than an env transform only because those two tables are per-run REFS, not `TcEnv`
+    -- fields; the ladder they implement is identical.  See applyRecordScopeOverrides.
+    -- `crossRun.universeDataDecls` — a positional `List Decl` accumulated by
+    -- `appendDataUniverse`, carrying no key at all — is RETIRED; the pool is the
+    -- whole-graph envelope read at THIS module's ordinal through
+    -- `declEnvRowVisible`/`declEnvVisibleTo`.
+    --
+    -- `buildDeclEnvs` indexed the row under, threaded here by the driver
+    -- (`elabModuleStamp mid` on the emit path; `cmCheckWorker mid` since #1508).  It
+    -- is NOT re-derived from import syntax, which is why the emit path's
+    -- `private_mangle` rewriting cannot break it: mangling renames top-level
+    -- bindings, never a loader module id, and the decls in the pool are the very
+    -- objects the accumulator held before.  (Re-deriving a read key by re-walking
+    -- `DUse` syntax is what made #1425's four-site change resolve on eval and MISS on
+    -- emit — `DUse` decls are never mangled.  This key does not go through that
+    -- channel.)
+    -- #1112 A-3.2b (#1512) slices 2+3: the KIND and FIELD-OWNER halves of the seed
+    -- `loadDataUniverse` used to copy out of two `crossRun` accumulators.  Same
+    -- position in the ladder (it is the UNIVERSE layer, under the overlay and under
+    -- `prog0`), same content, one ordinal-aware source.  See `declEnvSeedChain` for
+    -- why the reader's OWN row is excluded here and registered by the two
+    -- `registerAllData` calls below instead.
+    let _ = declEnvSeedDataUniverse mid envs
+    -- `omInsert` tables, so the LAST row wins, and the overlay's named-outranks-wildcard
+    -- rule therefore needs the `UseGroup` rows LAST.  The oracle call site takes the
+    -- opposite order for the opposite reason — see the partition note at
+    -- `importedCtorTypeDeclsFirstWins`.  Swapping these two inverts the rule silently.
+    let base =
+      registerAllData
+        crossRun.value.universeDataEnv.value
+        (importedCtorTypeDeclsLastWins prog0 cur envs.deModules)
+    let env0 = registerAllData base prog0
+    let _ = applyRecordScopeOverrides prog0
+    applyCtorScopeOverrides prog0 env0
   -- #784: reject under-determined return-only effect vars on interface methods.
   -- MUST run AFTER `dataEnv` above populated `dataParamKindsRef` — the kind-aware
   -- predicate (rowArgNames) reads that table to distinguish a row-kinded ctor arg
@@ -30049,11 +29915,9 @@ checkBodyImpl seed mode prog0 =
   -- pay that fold twice per flat compile, and the two copies could drift.  On Flat
   -- `fullUniverse = prog` (see its binding above), so `flatClassEnvOf prog` IS the
   -- `flatClassEnvOf fullUniverse` the completeness relocation calls for.
-  let classEnvHere = match mode
-    Flat _ => (flatClassEnvOf prog, 0)
-    Module mid _ _ =>
-      let envs = driverState.value.declEnvsRef.value
-      (envs.deIfaces, declEnvsOrdOf mid envs)
+  let classEnvHere =
+    let envs = driverState.value.declEnvsRef.value
+    (envs.deIfaces, declEnvsOrdOf mid envs)
   let _ = checkGradedImplHeads (fst classEnvHere) (snd classEnvHere) prog
   let _ = rejectCyclicAliases ()
   -- #1280: `prog` reached here through a driver's stamping walk already, and
@@ -30064,15 +29928,13 @@ checkBodyImpl seed mode prog0 =
   -- DECLARATION site (the program under check).  It builds the declared type
   -- verbatim; the two guards below are what hold a user extern to its row.
   let currentMethodRows = ifaceMethodSchemeRows prog
-  let visibleMethodRows = match mode
-    Flat _ => []
-    Module _ _ implDecls => ifaceMethodSchemeRows implDecls
+  let visibleMethodRows = ifaceMethodSchemeRows implDecls
   let visibleMethodRowIndex =
     methodRowsByIdentity
       (isNonEmptyL importerShadows)
       visibleMethodRows
       regEmpty
-  let externS = userExternSchemes mode (externTyOriginScope []) prog
+  let externS = userExternSchemes (externTyOriginScope []) prog
   let globalS = legacyMethodSchemes currentMethodRows ++ externS
   -- #2074 / F1 (epic #2070): the USER-EXTERN DECLARATION guards, all gated on
   -- the same `ffiStampMode` ownership Bool — a stdlib-owned program's externs ARE
@@ -30087,11 +29949,11 @@ checkBodyImpl seed mode prog0 =
   -- nothing at all, and the fifth fires ONLY on a catalog name), and folding them
   -- together would force one `if` to speak for five different notions of "this
   -- declaration is not mine".
-  let _ = ffiCheckExternsCrossable (ffiStampMode mode) prog
-  let _ = ffiCheckExternsLabelled (ffiStampMode mode) prog
-  let _ = ffiCheckExternsShadow (ffiStampMode mode) prog
-  let _ = ffiCheckExternsReserved (ffiStampMode mode) prog
-  let _ = ffiCheckExternsCatalogRow (ffiStampMode mode) prog
+  let _ = ffiCheckExternsCrossable (ffiStampMode mid) prog
+  let _ = ffiCheckExternsLabelled (ffiStampMode mid) prog
+  let _ = ffiCheckExternsShadow (ffiStampMode mid) prog
+  let _ = ffiCheckExternsReserved (ffiStampMode mid) prog
+  let _ = ffiCheckExternsCatalogRow (ffiStampMode mid) prog
   -- methodNames: FLAT's SECOND ifaceMethodSchemeRows call over prog — dedup-skipped by
   -- installMethodPredicateSlots so globalS's registered (first-call) ids stay authoritative.
   -- Module checks core in isolation and never needs it, so NO extra call there.
@@ -30100,48 +29962,34 @@ checkBodyImpl seed mode prog0 =
   -- List `dropSchemesNamed`'s `contains (fst s) names` scanned this whole interface-method
   -- list once per scheme → O(schemes x methods), a flat-path `manyifaces:typecheck` quadratic
   -- (once here over topSchemes, once PER SCC group).  omHasKey is byte-identical membership.
-  let methodNames = match mode
-    Flat _ =>
-      namesToSet (map (row => row.msrName) (ifaceMethodSchemeRows prog)) omEmpty
-    Module _ _ _ => omEmpty
   -- (#4 cont) post-globalS mode setup.  Module: shadowMethodSchemes env layer (rebinding
   -- imported method names to the interface-method scheme) + the method-constraint cross
   -- seed (AFTER globalS's row registration, per installMethodPredicateSlots).
   -- Flat: record the interface-method names for processSCC's method-shadow scoping.
-  let shadowLayer = match mode
-    Flat _ =>
-      perRun.value.methodShadowNamesRef := methodNames
-      -- #259: anchor the numeric literal's `fromInt` to the PRELUDE `Num` DECLARATION.
-      -- `currentMethodRows` is the interface-method prefix projected into `globalS`, so
-      -- this reuses the schemes already minted above rather than eliciting new ids.
-      let _ = seedNumLitFromIntAnchor currentMethodRows
-      []
-    Module _ _ _ =>
-      -- The rows remain local: they carry live scheme cells needed only by setup and
-      -- must not become another graph-lived authority.
-      let ifaceSchemes = legacyMethodSchemes visibleMethodRows
-      -- #259/#2157: seed both halves from the same already-minted row selection.
-      let _ = seedNumLitFromIntAnchor visibleMethodRows
-      -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
-      -- name to the scheme of the declaration THIS module's import scope admits
-      -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
-      -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
-      let sm =
-        pickSchemesByDecl importerShadows ifaceSchemes visibleMethodRowIndex
-      perRun.value.methodPredicateSlotsRef :=
-        perRun.value.methodPredicateSlotsRef.value
-          ++ crossRun.value.crossModuleMethodPredicateSlotsRef.value
-      sm
+  let shadowLayer =
+    -- The rows remain local: they carry live scheme cells needed only by setup and
+    -- must not become another graph-lived authority.
+    let ifaceSchemes = legacyMethodSchemes visibleMethodRows
+    -- #259/#2157: seed both halves from the same already-minted row selection.
+    let _ = seedNumLitFromIntAnchor visibleMethodRows
+    -- #1351 L2 MIGRATE.  The importer-shadow layer now binds each shadowed method
+    -- name to the scheme of the declaration THIS module's import scope admits
+    -- (`applyMethodScopeOverrides`), not to `lookupAssoc`'s decl-walk first match.
+    -- Falls back to the bare-name answer on a miss — see `pickSchemesByDecl`.
+    let sm =
+      pickSchemesByDecl importerShadows ifaceSchemes visibleMethodRowIndex
+    perRun.value.methodPredicateSlotsRef :=
+      perRun.value.methodPredicateSlotsRef.value
+        ++ crossRun.value.crossModuleMethodPredicateSlotsRef.value
+    sm
   let envSeed = extendVars dataEnv seed
-  let envImported = match mode
-    Flat _ => envSeed
-    Module _ _ _ =>
-      annotateImportedMethodRows
-        envSeed
-        (importedMethodBindingNames prog0 aliasSpellings)
-        (nameableIfaceMethodSet prog0)
-        (namesToSet importerShadows omEmpty)
-        visibleMethodRowIndex
+  let envImported =
+    annotateImportedMethodRows
+      envSeed
+      (importedMethodBindingNames prog0 aliasSpellings)
+      (nameableIfaceMethodSet prog0)
+      (namesToSet importerShadows omEmpty)
+      visibleMethodRowIndex
   let envGlobal =
     extendVars (extendMethodRows envImported currentMethodRows) externS
   let env1 = extendBindings envGlobal shadowLayer
@@ -30163,124 +30011,92 @@ checkBodyImpl seed mode prog0 =
   -- set) — reproducing the isolation the module path gets by checking core as its own
   -- invocation.  Collapsing this to one pass reintroduces the prelude-method-shadow
   -- miscompile (List Int vs Int).  MODULE runs the single pass.
-  let _ = match mode
-    Flat coreProg =>
-      let preludeBodyEnv =
-        extendVars env1 (dropSchemesNamed methodNames topSchemes)
-      let _ = scopeShadowsCore ()
-      -- No impl-body inference over `coreProgS` here: the Flat callers that arrive
-      -- with a FLATTENED prelude (`checkProgramSeeded`, which fixes `coreProg0 = []`
-      -- and carries the prelude inside `prog0S`) leave nothing to walk; on the
-      -- Flat CHECK entries (a real prelude split) re-inferring core's parametric impl
-      -- bodies against the user program raises spurious `T-AMBIGUOUS-INSTANCE`
-      -- rejects (`diff_compiler_flat_vs_onemodule` pins the accepting rows).
-      let _ = inferDefaultBodiesIfEnabled preludeBodyEnv coreProgS
-      let _ = inferPropBodies preludeBodyEnv coreProgS
-      let _ = inferTestBodies preludeBodyEnv coreProgS
-      let _ = scopeShadowsUser ()
-      -- #2705: ONE impl-body inference form on the Flat arm too (the Module arm's
-      -- #2546 unification, extended): `inferUserImplBodies` infers parametric heads
-      -- and keeps its diagnostics, on every driver.
-      let _ =
-        inferUserImplBodies
-          preludeBodyEnv
-          prog
-          (fst classEnvHere)
-          (snd classEnvHere)
-          prog0S
-      let _ = inferDefaultBodiesIfEnabled preludeBodyEnv prog0S
-      let _ = inferPropBodies preludeBodyEnv prog0S
-      let _ = inferTestBodies preludeBodyEnv prog0S
-      ()
-    Module _ _ implDecls =>
-      let bodyEnv = extendVars env1 topSchemes
-      -- Unified impl-body inference form (Module arm, both drivers): inferUserImplBodies
-      -- infers parametric heads and preserves diagnostics. allProg = implDecls
-      -- (interfaces + accumulated impls) grounds the field types. See
-      -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "SA-10a. Landing log" (#2546, ARCH Q3a).
-      let _ =
-        inferUserImplBodies
-          bodyEnv
-          implDecls
-          (fst classEnvHere)
-          (snd classEnvHere)
-          progT
-      let _ = inferDefaultBodiesIfEnabled bodyEnv progT
-      let _ = inferPropBodies bodyEnv progT
-      let _ = inferTestBodies bodyEnv progT
-      ()
+
+  let _ =
+    let bodyEnv = extendVars env1 topSchemes
+    -- Unified impl-body inference form (Module arm, both drivers): inferUserImplBodies
+    -- infers parametric heads and preserves diagnostics. allProg = implDecls
+    -- (interfaces + accumulated impls) grounds the field types. See
+    -- compiler/TYPECHECK-TARGET-ARCHITECTURE.md § "SA-10a. Landing log" (#2546, ARCH Q3a).
+    let _ =
+      inferUserImplBodies
+        bodyEnv
+        implDecls
+        (fst classEnvHere)
+        (snd classEnvHere)
+        progT
+    let _ = inferDefaultBodiesIfEnabled bodyEnv progT
+    let _ = inferPropBodies bodyEnv progT
+    let _ = inferTestBodies bodyEnv progT
+    ()
   -- (#3) cross-module dict-threading SNAPSHOT — MODULE ONLY (flat SKIPS: running it would
   -- pollute the cross-module accumulators with a phantom single-file attribution).
   -- multi-line RHS: the indented `:=` form is legal but not seed-parseable yet (#1744)
   -- lint-disable-next-line rule-prefer-assign-op
-  let _ = match mode
-    Flat _ => ()
-    Module mid _ _ =>
-      let _ = expandSupersTable driverState.value.superDeclsRef.value
-      -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
-      -- must not propagate as a graph-wide deletion into the next module's seed.
-      let _ =
-        setRef
-          crossRun.value.crossModuleFunPredicateSlotsRef
-          (predicateSlotTableWithoutArgs
-            (perRun.value.funPredicateSlotsRef.value
-              ++ selfNameRows
-                prog
-                crossRun.value.crossModuleFunPredicateSlotsRef.value))
-      let _ =
-        setRef
-          crossRun.value.crossModuleFunPredicateSlotsQualRef
-          (attributeModuleEntries
-              mid
-              prog
-              perRun.value.funPredicateSlotsRef.value
-            ++ crossRun.value.crossModuleFunPredicateSlotsQualRef.value)
-      -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
-      let _ =
-        setRef
-          crossRun.value.crossModuleFunConstraintDeclaredRef
-          (perRun.value.funConstraintDeclaredRef.value
+
+  let _ =
+    let _ = expandSupersTable driverState.value.superDeclsRef.value
+    -- #1425: restore the rows the per-module view masked (see `selfNameRows`) — the view
+    -- must not propagate as a graph-wide deletion into the next module's seed.
+    let _ =
+      setRef
+        crossRun.value.crossModuleFunPredicateSlotsRef
+        (predicateSlotTableWithoutArgs
+          (perRun.value.funPredicateSlotsRef.value
             ++ selfNameRows
               prog
-              crossRun.value.crossModuleFunConstraintDeclaredRef.value)
-      let _ =
-        setRef
-          crossRun.value.crossModuleFunConstraintDeclaredQualRef
-          (attributeModuleEntries
-              mid
-              prog
-              perRun.value.funConstraintDeclaredRef.value
-            ++ crossRun.value.crossModuleFunConstraintDeclaredQualRef.value)
-      crossRun.value.crossModuleMethodPredicateSlotsRef :=
-        perRun.value.methodPredicateSlotsRef.value
-      let _ =
-        setRef
-          crossRun.value.crossModuleMethodPredicateSlotsQualRef
-          (emptyMethodModulePredicateSlots mid prog
-            ++ attributeMethodModulePredicateSlots
-              mid
-              prog
-              perRun.value.methodPredicateSlotsRef.value
-            ++ crossRun.value.crossModuleMethodPredicateSlotsQualRef.value)
-      -- #1114 (#845, DICT-SEMANTICS §4.2 D6(a)): snapshot THIS module's scheme contexts
-      -- alongside the three arity tables above.  The arity tables carry only what
-      -- `funConstraintsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
-      -- and is therefore EMPTY on the check path (see that ref's comment) — so an
-      -- UNSIGNATURED constrained export was invisible to every importer at check time
-      -- while `run`/`build` threaded its dict anyway.  `schemeObligationsRef` is the
-      -- always-on store of the same fact and is what the SAME-module use site already
-      -- reads; this makes the cross-module use site read it too, under the same
-      -- source-exact (mid, name) key.
-      let _ =
-        setRef
-          crossRun.value.crossModuleSchemeOblsQualRef
-          (attributeModuleSchemeObls
-              mid
-              prog
-              crossRun.value.crossModuleSchemeOblsQualRef.value
-              perRun.value.schemeObligationsRef.value
-            ++ crossRun.value.crossModuleSchemeOblsQualRef.value)
-      ()
+              crossRun.value.crossModuleFunPredicateSlotsRef.value))
+    let _ =
+      setRef
+        crossRun.value.crossModuleFunPredicateSlotsQualRef
+        (attributeModuleEntries mid prog perRun.value.funPredicateSlotsRef.value
+          ++ crossRun.value.crossModuleFunPredicateSlotsQualRef.value)
+    -- B-2.2-f (#1113): the sidecar's two snapshots, paired with the ids snapshots above.
+    let _ =
+      setRef
+        crossRun.value.crossModuleFunConstraintDeclaredRef
+        (perRun.value.funConstraintDeclaredRef.value
+          ++ selfNameRows
+            prog
+            crossRun.value.crossModuleFunConstraintDeclaredRef.value)
+    let _ =
+      setRef
+        crossRun.value.crossModuleFunConstraintDeclaredQualRef
+        (attributeModuleEntries
+            mid
+            prog
+            perRun.value.funConstraintDeclaredRef.value
+          ++ crossRun.value.crossModuleFunConstraintDeclaredQualRef.value)
+    crossRun.value.crossModuleMethodPredicateSlotsRef :=
+      perRun.value.methodPredicateSlotsRef.value
+    let _ =
+      setRef
+        crossRun.value.crossModuleMethodPredicateSlotsQualRef
+        (emptyMethodModulePredicateSlots mid prog
+          ++ attributeMethodModulePredicateSlots
+            mid
+            prog
+            perRun.value.methodPredicateSlotsRef.value
+          ++ crossRun.value.crossModuleMethodPredicateSlotsQualRef.value)
+    -- #1114 (#845, DICT-SEMANTICS §4.2 D6(a)): snapshot THIS module's scheme contexts
+    -- alongside the three arity tables above.  The arity tables carry only what
+    -- `funConstraintsRef` holds, whose INFERRED half is gated on `dictEligibleSetRef`
+    -- and is therefore EMPTY on the check path (see that ref's comment) — so an
+    -- UNSIGNATURED constrained export was invisible to every importer at check time
+    -- while `run`/`build` threaded its dict anyway.  `schemeObligationsRef` is the
+    -- always-on store of the same fact and is what the SAME-module use site already
+    -- reads; this makes the cross-module use site read it too, under the same
+    -- source-exact (mid, name) key.
+    let _ =
+      setRef
+        crossRun.value.crossModuleSchemeOblsQualRef
+        (attributeModuleSchemeObls
+            mid
+            prog
+            crossRun.value.crossModuleSchemeOblsQualRef.value
+            perRun.value.schemeObligationsRef.value
+          ++ crossRun.value.crossModuleSchemeOblsQualRef.value)
+    ()
   let _ =
     groundMultiParamObligations groundUniverse perRun.value.implObls.items.value
   -- P0-17: impl missing a required method.  #1557 A-3.5a: ONE call, both modes — the
@@ -30298,45 +30114,30 @@ checkBodyImpl seed mode prog0 =
   -- would get Int cells where the inference said Float.  MODULE runs both channels
   -- here and leaves the Float stamp to the graph-end drain (`SSNumlitFloats`), on
   -- every driver (#2705).
-  let _ = match mode
-    Flat _ =>
-      -- #838 I4: impl obligations now go through the unified checkCallObligations
-      -- (projected via implOblToU), same universe/order as before the checker swap.
-      -- Impl channel = (deferNonGround=True) — retired checkImplObligationsU semantics:
-      -- defer non-ground, and check EVERY obligation (no seen skip; S0 #863).
-      -- Call channel = (deferNonGround=False): RULE 2/3.  #1925: both channels used to
-      -- also thread a `dedup` flag; #1330 made every obligation checked regardless, so
-      -- the flag was dead and is removed.
-      let _ =
-        checkCallObligations True fullUniverse perRun.value.implObls.items.value
-      let _ =
-        checkCallObligations False fullUniverse perRun.value.obls.items.value
-      let _ = setNumlitFloats ()  -- PLAN.md #11: stamp Float-typed int literals
-      let _ = checkAdmittedOccObls ()
-      ()
-    Module _ _ _ =>
-      -- #1112 A-3.4 PR2: the obligation universe is now the `IE` projection bound ONCE
-      -- as `moduleImplUniv` far above (see its block for the flip, the measurement, and
-      -- why re-deriving it here would be a second whole-prefix rebuild for a value that
-      -- cannot have changed).  The three `obUniv*` accumulators this used to read are
-      -- deleted from `CrossRun`.
-      --
-      -- Site #8 (`groundMultiParamObligations groundUniverse`) is still on the list path
-      -- above, unchanged: `groundUniverse = implDecls` EXCLUDES this module's `prog0`,
-      -- which this projection (like the accumulator before it) includes.
-      let obUniv = moduleImplUniv
-      -- #838 I4: unified checker, same `obUniv`.  Impl channel = (deferNonGround=True);
-      -- call channel = (deferNonGround=False).
-      -- #2705: BOTH channels run on EVERY driver.  A driver that infers impl
-      -- bodies without checking their obligations lets a program `check` rejects
-      -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
-      -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
-      -- first step of the graph-end drain every Module-arm driver now runs.
-      let _ =
-        checkCallObligationsU True obUniv perRun.value.implObls.items.value
-      let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
-      let _ = checkAdmittedOccObls ()
-      ()
+
+  -- #1112 A-3.4 PR2: the obligation universe is now the `IE` projection bound ONCE
+  -- as `moduleImplUniv` far above (see its block for the flip, the measurement, and
+  -- why re-deriving it here would be a second whole-prefix rebuild for a value that
+  -- cannot have changed).  The three `obUniv*` accumulators this used to read are
+  -- deleted from `CrossRun`.
+  --
+  -- Site #8 (`groundMultiParamObligations groundUniverse`) is still on the list path
+  -- above, unchanged: `groundUniverse = implDecls` EXCLUDES this module's `prog0`,
+  -- which this projection (like the accumulator before it) includes.
+
+  let _ =
+    let obUniv = moduleImplUniv
+    -- #838 I4: unified checker, same `obUniv`.  Impl channel = (deferNonGround=True);
+    -- call channel = (deferNonGround=False).
+    -- #2705: BOTH channels run on EVERY driver.  A driver that infers impl
+    -- bodies without checking their obligations lets a program `check` rejects
+    -- reach codegen through `build`'s own elaboration.  `setNumlitFloats` is not called
+    -- here on any driver any more: the Float literal stamp is `SSNumlitFloats`,
+    -- first step of the graph-end drain every Module-arm driver now runs.
+    let _ = checkCallObligationsU True obUniv perRun.value.implObls.items.value
+    let _ = checkCallObligationsU False obUniv perRun.value.obls.items.value
+    let _ = checkAdmittedOccObls ()
+    ()
   perRun.value.localSchemesOut :=
     mapLocalSchemes perRun.value.localBindRefs.value
   perRun.value.seedSchemesOut := seed
@@ -30345,11 +30146,10 @@ checkBodyImpl seed mode prog0 =
   -- module's own pub twice) — the register-time mirror of foldModules' `accData ++
   -- publicDataDecls prog` threading.  appendDataUniverse clobbers the working table refs,
   -- which are DEAD here (the next module's resetState wipes them).  Flat leaves it untouched.
-  let _ = match mode
-    Flat _ => ()
+  let _ =
     -- A-3.2b residual (#1512): `mid` is BOUND here now — `appendDataUniverse`'s
     -- reload reads the alias universe at this module's own ordinal.
-    Module mid _ _ => appendDataUniverse mid prog0
+    appendDataUniverse mid prog0
   let result = (globalS ++ topSchemes, progOut)
   let _ = closeScope ()
   result
@@ -31574,10 +31374,6 @@ univHeadless (ImplUniverse _ hl _) iface =
 -- `oblDedupKey` call that fed `seen` were left in place but unread (#1925: removed).
 -- The ONLY dedup left is at EMISSION: `checkOneCallObligation`'s `pushTypeErrorOnceAt`
 -- collapses two IDENTICAL rendered messages to one report — DICT-SEMANTICS §4.2 OD5.
-checkCallObligations : Bool -> List Decl -> List UObligation -> Unit
-checkCallObligations deferNonGround prog obligations =
-  checkCallObligationsU deferNonGround (buildImplUniverse prog) obligations
-
 -- #1925: the CHECK-level dedup key that used to be minted here (`oblDedupKey`,
 -- A-2.2b #1111's identity-keyed encoding through `dispKeyRender`/`regKeyNTabAt`) fed
 -- only a `seen` accumulator that #1330 (above) left unread — every obligation is
@@ -32216,10 +32012,6 @@ checkUndeterminedObligation univ iface occ loc scope
 --     through the runtime Num dict (Int→identity, Float→intToFloat).  A dref left
 --     RNone (route never filled, e.g. unreachable position) falls to Int below.
 -- Reads numlitRefs (populated by inferNumLit during THIS run/module's inference).
-setNumlitFloats : Unit -> Unit
-setNumlitFloats _ =
-  setNumlitFloatsGo (numlitSince (currentModuleMarks ()).mNumlit)
-
 setNumlitFloatsGo : List (Mono, Ref (Option Float), Int, Ref Route) -> Unit
 setNumlitFloatsGo [] = ()
 setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
@@ -34646,11 +34438,8 @@ externSigsToMap (_ :: rest) m = externSigsToMap rest m
 --
 -- `mode` is still taken because every caller has one and the sibling guards read
 -- it; the ownership gate now lives entirely on those guards.
-userExternSchemes : CheckMode ->
-  OrdMap TyConOrigin ->
-  List Decl ->
-  List (String, Scheme)
-userExternSchemes _ scope decls =
+userExternSchemes : OrdMap TyConOrigin -> List Decl -> List (String, Scheme)
+userExternSchemes scope decls =
   externSchemesGo (stampTyOrigins scope (externDecls decls))
 
 -- Apply the four user-extern declaration rules unless the program under check is
@@ -34675,15 +34464,14 @@ userExternSchemes _ scope decls =
 -- crossable rule.  Exempting the whole no-catalog run restores that driver to its
 -- pre-FFI behaviour — it accepted every `extern` — rather than half-applying a
 -- rule whose exemption test is structurally blind on that path.
-ffiStampMode : CheckMode -> Bool
-ffiStampMode mode =
+ffiStampMode : String -> Bool
+ffiStampMode mid =
   omSize driverState.value.builtinExternNamesRef.value > 0
-    && ffiStampModeOwned mode
+    && ffiStampModeOwned mid
 
 -- The ownership half, unchanged.  See `setStdlibOwnership` for why the two arms
 -- read two different fields and why the default is "apply them".
-ffiStampModeOwned : CheckMode -> Bool
-ffiStampModeOwned (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
+ffiStampModeOwned : String -> Bool
 -- 🚨 `"__user__"` IS THE FLAT ENTRY, NOT A LOADED MODULE, and this arm is what
 -- actually fires on `medaka check <file>`.  The single-file front door does not
 -- reach the `Flat` arm at all: `runCheck` → `checkOneToLinesWithRuntime` wraps the
@@ -34694,9 +34482,8 @@ ffiStampModeOwned (Flat _) = not driverState.value.flatEntryIsStdlibRef.value
 -- `medaka check stdlib/runtime.mdk` into a wall of declaration errors — the 132
 -- catalog rows that do not name `FFI` (the same 132 that used to GAIN the atom
 -- here, back when this Bool gated a stamp) would each fail the label rule.
-ffiStampModeOwned (Module "__user__" _ _) =
-  not driverState.value.flatEntryIsStdlibRef.value
-ffiStampModeOwned (Module mid _ _) =
+ffiStampModeOwned "__user__" = not driverState.value.flatEntryIsStdlibRef.value
+ffiStampModeOwned mid =
   not (omHasKey mid driverState.value.stdlibOwnedModsRef.value)
 
 -- Make an alias-NAMED arrow structurally visible, at the `Ty` (pre-`Mono`) level.
@@ -36115,22 +35902,6 @@ scopeShadowsForGroup members
   | otherwise =
     perRun.value.definerShadowNamesRef :=
       perRun.value.flatUserShadowNamesRef.value
-
-scopeShadowsCore : Unit -> Unit
-scopeShadowsCore _ =
-  if perRun.value.flatShadowScopingRef.value then
-    perRun.value.definerShadowNamesRef := omEmpty
-
-scopeShadowsUser : Unit -> Unit
-scopeShadowsUser _ =
-  if perRun.value.flatShadowScopingRef.value then
-    perRun.value.definerShadowNamesRef :=
-      perRun.value.flatUserShadowNamesRef.value
-
--- did the caller prepend a prelude?  (`listLen ds > 0` without walking the list.)
-declsNonEmpty : List Decl -> Bool
-declsNonEmpty [] = False
-declsNonEmpty _ = True
 
 processSCC : TcEnv ->
   List (String, Ty) ->
@@ -39693,35 +39464,6 @@ typeErrorLines : List String -> List String
 typeErrorLines [] = []
 typeErrorLines (e :: rest) = "TYPE ERROR: " ++ e :: typeErrorLines rest
 
-export
-checkToLines : List Decl -> String
-checkToLines prog =
-  -- #1468 residual fix: `ctorSiblingWithholds` now reads the full ctor list off
-  -- `matchOracle` (via `oGetCtors`) instead of `recordByNameRef`, so this flat,
-  -- prelude-free entry point — the ONLY one of the `checkToLines`/`checkMatch-
-  -- ToLines` family that used to leave `matchOracle` at `resetState`'s empty
-  -- default — must seed it too, exactly as `checkMatchToLines` already does for
-  -- its own no-prelude path (`buildOracle prog`, unstamped: this path has no
-  -- prelude boundary to stamp). `resetState` clears `perRun`/`toggles` only, not
-  -- `driverState`, so seeding here is not wiped by the reset inside
-  -- `checkProgramSchemes`.
-  driverState.value.matchOracle := buildOracle prog
-  let schemes = checkProgramSchemes [] prog
-  let progCe = flatClassEnvOf prog
-  let progIe = flatImplEnvOf prog
-  -- #1559 A-3.7: ONE `IE`, passed for both roles — this path is prelude-free (see the
-  -- note below), so its coherence population and its cycle/super population are the
-  -- same `prog`, exactly as the two `CE` arguments already were.  `hasPrelude = False`:
-  -- `flatImplEnvOf` puts this single module at ordinal 0, so filtering ordinal 0 here
-  -- would drop every row and silently switch flat coherence off.
-  let _ = runFinalChecks prog prog progCe progCe progIe progIe 0 False
-  let errs = reverseL perRun.value.typeErrors.items.value
-  match errs
-    [] => joinNl (schemeLines schemes)
-    _ => joinNl (typeErrorLines (map tcMsg errs))
--- coherence over the WHOLE prog: this path (typecheck_main single-arg) is
--- prelude-free, so every impl is a user impl (mirrors check_program_no_prelude).
-
 -- #415 item 1: the seeding PREAMBLE every runtime-seeded entry point runs before its
 -- typecheck pass — the head half of the sandwich whose tail is `runFinalChecks`.
 -- [oracleDecls] is the decl set the ctor oracle is built from: the ONE axis the callers
@@ -39743,73 +39485,6 @@ seedCheckRun oracleDecls =
 -- ⚠️ trap #5, same as runFinalChecks: coherence sees the driver-staged USER decls only,
 -- NEVER `prog`.  A user impl deliberately overrides a seeded prelude impl, so feeding
 -- the seeded set to checkCoherence false-positives on the stdlib itself.
-seedAndCheckSplit : List Decl -> List Decl -> List Decl -> List (String, Scheme)
-seedAndCheckSplit runtimeDecls coreProg userProg =
-  let prog = coreProg ++ userProg
-  -- ⚠️ THE ORACLE'S PRELUDE HALF IS STAMPED HERE AND `prog`'s IS NOT, AND THE
-  -- ASYMMETRY IS THE POINT.  `matchOracle`'s `typeCtors` is the one table keyed
-  -- by DECLARATION IDENTITY (`frontend/exhaust.mdk`), so its rows have to be
-  -- minted from the SAME origin the READER's key is minted from.  The reader's
-  -- key comes from `matchCol0Type` → `headTyconMono` → the scrutinee `Mono`'s
-  -- `TCon` origin, and on THIS path that origin is written by the
-  -- `stampDeclOrigins "core" coreProgTy` call inside `checkProgramSeededSplit`
-  -- (`frontend/resolve.mdk`'s #1227 note) — on the very next line, over this
-  -- same `coreProg`.  Feeding `buildOracle` the UNstamped copy therefore made
-  -- the writer mint `TkBare NsType "Option"` for a type whose reader mints
-  -- `TkIdent (Ident NsType (IdentModule "core") "Option")`; `tabKeyEq` never
-  -- equates those, so under the ONE ABSENCE RULE every prelude-typed column-0
-  -- lookup MISSED — and a `bindCtors` miss is LOUD, not silent (`defaultMatrix`
-  -- keeps only wildcard-headed rows, so an all-ctor-headed matrix goes empty and
-  -- `useful _ _ [] _ = True`), which is why the unstamped form put a spurious
-  -- `non-exhaustive match of 'Ordering'` on `main = println 1`.
-  --
-  -- ⚠️ Same id, same decls, same call — NOT an invented module id, so the
-  -- "over-supplying is not correctable" bound in `stampDeclOrigins`' comment is
-  -- not being widened.  `fillDeclOrigin` fills only a still-`OriginUnresolved`
-  -- origin, so this is idempotent and cannot re-stamp an identity-bearing decl.
-  --
-  -- ⚠️ `prog` itself is deliberately left alone: its readers here
-  -- (`runFinalChecks`' cycle walk, `flatClassEnvOf`, `flatImplEnvOf`) are the
-  -- ones that work today, and widening the stamp to them is a separate question
-  -- with its own blast radius.  `buildOracle` reads `DData` only, and of its four
-  -- tables only `typeCtors` reads an origin — the other three stay name-keyed —
-  -- so the blast radius of this line is exactly that one table's keys.
-  let _ = seedCheckRun (stampDeclOrigins "core" coreProg ++ userProg)
-  -- #1280: prelude boundary in hand — see `checkProgramSchemesWithRuntime`.
-  let schemes =
-    checkProgramSeededSplit
-      (externSchemes (externTyOriginScope coreProg) runtimeDecls)
-      coreProg
-      userProg
-  -- #1557 A-3.5c: TWO envs, because the two decl lists differ here and always have —
-  -- phantom-methods sees the driver-staged USER decls (trap #5, the same set
-  -- coherence sees), the cycle walk sees the whole seeded `prog` so a user interface
-  -- can close a cycle through a PRELUDE superinterface.
-  let userDecls = driverState.value.coherenceUserDecls.value
-  -- #1557 A-3.5b: the `IE` peer is built from `prog` — the SAME list this call passes
-  -- as [cycDecls], i.e. the whole seeded universe the super-existence query used to
-  -- scan — so the population question is "does IE over that list equal that list",
-  -- not a new one.
-  -- #1559 A-3.7: TWO `IE`s, because the two decl lists differ here — the same split
-  -- the two `CE`s above already carry.  Coherence's env is built from [userDecls], the
-  -- driver-staged USER boundary (trap #5); handing it `flatImplEnvOf prog` instead
-  -- would feed it the seeded prelude and false-positive on the stdlib itself.
-  -- `hasPrelude = False` on both counts: there is no prelude in [userDecls], and
-  -- `flatImplEnvOf` seats its one module at ordinal 0, which the carve-out must not
-  -- filter.  This is the Flat arm's prelude boundary, and it is a DECL LIST, which is
-  -- why `coherenceUserDecls` does not retire in this unit.
-  let _ =
-    runFinalChecks
-      userDecls
-      prog
-      (flatClassEnvOf userDecls)
-      (flatClassEnvOf prog)
-      (flatImplEnvOf userDecls)
-      (flatImplEnvOf prog)
-      0
-      False
-  schemes
-
 -- ── type-aware non-exhaustive-match check (the `check_match` driver) ────────
 -- Run the full typecheck pass over [prog] (runtime externs seeded, NO prelude —
 -- mirrors the reference's check_program_no_prelude oracle) and return one
@@ -39817,35 +39492,11 @@ seedAndCheckSplit runtimeDecls coreProg userProg =
 -- The oracle is built from the program's own data decls + the syntactic builtins
 -- (same set check_match's env-backed oracle has in the no-prelude path).  Diffs
 -- against `dev/diagdump.exe --check-match` (the harness sorts).
-export
-checkMatchToLines : List Decl -> List Decl -> String
-checkMatchToLines runtimeDecls prog =
-  driverState.value.matchWarnings := []
-  driverState.value.matchOracle := buildOracle prog
-  -- #1280: prelude-flattened probe entry — builtins-only scope, see `elaborateDict`.
-  let _ =
-    checkProgramSeeded
-      (externSchemes (externTyOriginScope []) runtimeDecls)
-      prog
-  joinNl (map tcMsg (reverseL driverState.value.matchWarnings.value))
-
 -- ── diagnostics entry point (compiler/driver/diagnostics.mdk bridge) ────────────
 -- Run the full typecheck pass (runtime-seeded) over [prog] and return the
 -- accumulated errors and non-exhaustive-match warnings as `TcDiag`s — each
 -- carrying its own code, span (B.10.2b / S4), message, and optional help/fix —
 -- so diagnostics.mdk maps them straight to structured `Diag` values.
-export
-checkProgramDiags : List Decl ->
-  List Decl ->
-  List Decl ->
-  (List TcDiag, List TcDiag)
-checkProgramDiags runtimeDecls coreProg userProg =
-  let _ = seedAndCheckSplit runtimeDecls coreProg userProg
-  (
-    reverseL perRun.value.typeErrors.items.value,
-    reverseL driverState.value.matchWarnings.value,
-  )
-
 -- ── multi-module typecheck (bootstrap front-end) ───────────────────────────
 -- Threads per-module exports in dependency order.  The prelude (core) is checked
 -- ONCE and ALL its schemes + ctors seed every module (it's implicitly visible);
@@ -39882,8 +39533,8 @@ checkModuleFullImpl : String ->
   List Decl ->
   List Decl ->
   (List (String, Scheme), List Decl)
-checkModuleFullImpl mid seedVars accData implDecls prog =
-  let result = checkBodyImpl seedVars (Module mid accData implDecls) prog
+checkModuleFullImpl mid seedVars _accData implDecls prog =
+  let result = checkBodyImpl seedVars mid implDecls prog
   -- #2705 (M2 phase 2): solving is not optional.  Every module a Module-arm driver
   -- checks — `check`, `run`, `build`, the LSP alike — cuts its stamping context
   -- here, at the point its stampers used to run, for the one graph-end drain
@@ -40002,41 +39653,6 @@ allIfaceMethodNames (_ :: rest) = allIfaceMethodNames rest
 -- RESULT-type RKey and the method dispatches on the WRONG impl.
 -- Unlike importer shadows these keep their LOCAL standalone scheme (NOT rebound to the
 -- method scheme), since the impl bodies apply them to the concrete receiver.
-buildDefinerShadows : List Decl -> List Decl -> List String
-buildDefinerShadows implDecls prog =
-  -- A method name that is ALSO bound by a LOCAL pattern anywhere in the module (a
-  -- clause/lambda param, a let/match binder) is NOT a definer shadow at that
-  -- occurrence: lexical scope resolves it to the local.  Without this guard the
-  -- definer-shadow application path (inferDefinerShadowVarApp / inferDefinerShadowApp)
-  -- types `applyEq eq x y = eq x y` — where `eq` is a PARAMETER — against the TOP-LEVEL
-  -- standalone `eq : Int -> Int -> Int`, ignoring the binder entirely.  Mirrors the
-  -- MARK pass's identical exclusion (marker.mdk's shadowRenames `keepNotIn
-  -- (localBoundNames prog)`), so check/run/build agree on which occurrences are shadows.
-  --
-  -- #973: `methodNames` is an OrdMap-backed SET (omHasKey), NOT a growing `List` scanned by
-  -- `contains`.  As a list, `filter (n => contains n methodNames) localNames` was
-  -- O(funDefs x methods) — the flat single-file path's `manyifaces:typecheck` O(interfaces^2)
-  -- quadratic (each of the module's funDefs forced a full scan of the interface-method list,
-  -- which grows with the interface count).  Keyed into a set the membership test is O(log n)
-  -- with BYTE-IDENTICAL output: `omHasKey n methodNames` is a point-for-point substitute for
-  -- `contains n methodNames` (same membership over the same names, same declaration order),
-  -- exactly the substitution #154 made for the Module path's `definerShadowsFromSet`.
-  let methodNames = namesToSet (allIfaceMethodNames implDecls) omEmpty
-  let localNames = dedup (map fst (funDefs prog))
-  let direct = filter (n => omHasKey n methodNames) localNames
-  -- P0-18: on the EMIT path this module's funDefs are MANGLED, so `direct` finds no
-  -- shadow.  For each mangled funDef that the mangle map flags as an iface-method
-  -- shadow, register the BARE method name — that is the name the mark pass stamped
-  -- on the `EMethodAt`, which `definerShadowArgHead`/`resolveRLocalSite` key off.
-  let sm = driverState.value.mangledShadowMapRef.value
-  let bares =
-    flatMap
-      (n => match lookupAssoc n sm
-        Some bare => [bare]
-        None => [])
-      localNames
-  removeAllS (localBoundNames prog) (dedup (direct ++ bares))
-
 -- #154 PR1: fold THIS module's decls into the persistent universe accumulators
 -- (declared in `CrossRun`).  Called from checkBodyImpl's Module arm BEFORE the shadow
 -- reads, so this module's own decls are visible there — exactly as `fullUniverse` (which
@@ -43906,7 +43522,7 @@ cmCheckWorker : String ->
   List Decl ->
   List Decl ->
   (List (String, Scheme), List (String, Scheme))
-cmCheckWorker mid seed accData _accAll prog =
+cmCheckWorker mid seed _accData _accAll prog =
   -- #2705: this is the SCHEMES-ONLY query driver — LSP hover/completion
   -- (`projectEntrySchemes`) and the linear-time perf gate — and it does NOT solve:
   -- it types the marked tree (`checkBodyImpl` directly, so no stamping context is
@@ -43915,7 +43531,7 @@ cmCheckWorker mid seed accData _accAll prog =
   -- to red `diff_compiler_perf_scaling`'s `modules` row at 4.48 against a 4.2
   -- ceiling) and would re-solve the whole graph per hover.  The memoized solve that
   -- makes this path one driver with the others is #2719.
-  let (schemes, _) = checkBodyImpl seed (Module mid accData []) prog
+  let (schemes, _) = checkBodyImpl seed mid [] prog
   (schemes, schemes)
 
 -- check every module in dependency order against a shared prelude + runtime.
@@ -46928,8 +46544,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Set")))) (EApp (EVar "PSet") (EVar "None")))
 (DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Product")))) (EApp (EVar "PProduct") (EListLit)))
 (DFunDef false "domainParam" (PWild) (EVar "PUnit"))
-(DTypeSig false "populateEffectDomains" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "populateEffectDomains" ((PVar "decls")) (EBlock (DoLet false false PWild (EApp (EVar "seedEffectDomains") (ELit LUnit))) (DoExpr (EApp (EVar "populateGo") (EVar "decls")))))
 (DTypeSig false "populateEffectDomainsGraph" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit"))))
 (DFunDef false "populateEffectDomainsGraph" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EApp (EVar "seedEffectDomains") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "populateGo") (EVar "coreDecls"))) (DoExpr (EApp (EVar "populateUnitsGo") (EVar "modules")))))
 (DTypeSig false "populateUnitsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))
@@ -49326,9 +48940,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcOrd" (EVar "o")) (fa "bcOrdPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
-(DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "seedBuiltinClasses" ((PCon "Flat" (PVar "coreProg")) (PVar "prog")) (EBlock (DoLet false false (PVar "classes") (EApp (EVar "builtinClassesOf") (EIf (EApp (EVar "declsNonEmpty") (EVar "coreProg")) (EVar "coreProg") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EVar "classes")))))
-(DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
+(DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EVar "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EVar "lt"))) (DoExpr (EVar "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
@@ -51113,10 +50726,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ordinalIsSentinel" ((PVar "cur")) (EBinOp "<" (EVar "cur") (ELit (LInt 0))))
 (DTypeSig false "ordinalSentinelMsg" (TyCon "String"))
 (DFunDef false "ordinalSentinelMsg" () (ELit (LString "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete")))
-(DTypeSig false "flatClassEnvOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ClassEnv")))
-(DFunDef false "flatClassEnvOf" ((PVar "decls")) (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString ""))) (EVar "decls")))))
-(DTypeSig false "flatImplEnvOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ImplEnv")))
-(DFunDef false "flatImplEnvOf" ((PVar "decls")) (EApp (EVar "buildImplEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString ""))) (EVar "decls")))))
 (DTypeSig false "checkOneIfaceCycle" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "CeRow") (TyCon "Unit"))))))
 (DFunDef false "checkOneIfaceCycle" ((PVar "ce") (PVar "cur") (PVar "done") (PVar "row")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "ceRowDoneKey") (EVar "row"))) (EUnOp "!" (EVar "done")))) (EApp (EApp (EVar "foreachUnit") (EApp (EVar "pushTypeError") (ELit (LString "T-CYCLIC-SUPERINTERFACE")))) (EApp (EApp (EApp (EApp (EApp (EVar "ifaceDfsCycle") (EVar "ce")) (EVar "cur")) (EVar "done")) (EListLit (EVar "row"))) (EVar "row"))) (ELit LUnit)))
 (DTypeSig false "collectIfaceNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -51706,23 +51315,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tupleSpineOf" ((PVar "acc") (PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "tupleSpineOf") (EApp (EApp (EVar "TApp") (EVar "acc")) (EVar "t"))) (EVar "rest")))
 (DTypeSig false "tupleUnifyClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "tupleUnifyClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "tupleSpine") (EVar "a")) (EApp (EVar "tupleSpine") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "xs")) (PCon "Some" (PVar "ys"))) () (EBinOp "/=" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys")))) (arm (PTuple (PCon "Some" PWild) (PCon "None")) () (EApp (EVar "monoSpineHeadIsCon") (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" PWild)) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "False"))))
-(DTypeSig false "checkProgramSchemes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "checkProgramSchemes" ((PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EListLit)) (EVar "coreProg")) (EVar "userProg")))
-(DTypeSig true "checkProgramSchemesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "checkProgramSchemesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg")))
-(DTypeSig false "checkProgramSeeded" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "checkProgramSeeded" ((PVar "seed") (PVar "prog")) (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EVar "seed")) (EListLit)) (EVar "prog")))
-(DTypeSig false "checkProgramSeededSplit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "checkProgramSeededSplit" ((PVar "seed") (PVar "coreProg0") (PVar "userProg0")) (EBlock (DoLet false false (PVar "coreProgTy") (EApp (EApp (EVar "stampFlatTyOrigins") (EVar "coreProg0")) (EVar "coreProg0"))) (DoLet false false (PVar "coreProg") (EApp (EApp (EVar "stampDeclOrigins") (ELit (LString "core"))) (EVar "coreProgTy"))) (DoLet false false (PVar "userProg") (EApp (EApp (EVar "stampFlatTyOrigins") (EVar "coreProg0")) (EVar "userProg0"))) (DoLet false false PWild (EApp (EApp (EVar "noteOriginTrace") (ELit (LString "core"))) (EVar "coreProg"))) (DoLet false false PWild (EApp (EApp (EVar "noteOriginTrace") (ELit (LString "user"))) (EVar "userProg"))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EApp (EVar "Flat") (EVar "coreProg"))) (EVar "userProg"))))))
-(DData Private "CheckMode" () ((variant "Flat" (ConPos (TyApp (TyCon "List") (TyCon "Decl")))) (variant "Module" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
-(DTypeSig false "modeModuleId" (TyFun (TyCon "CheckMode") (TyCon "String")))
-(DFunDef false "modeModuleId" ((PCon "Flat" PWild)) (ELit (LString "")))
-(DFunDef false "modeModuleId" ((PCon "Module" (PVar "mid") PWild PWild)) (EVar "mid"))
-(DTypeSig false "scopeModuleId" (TyFun (TyCon "CheckMode") (TyCon "String")))
-(DFunDef false "scopeModuleId" ((PCon "Flat" PWild)) (ELit (LString "<flat>")))
-(DFunDef false "scopeModuleId" ((PCon "Module" (PVar "mid") PWild PWild)) (EVar "mid"))
-(DTypeSig false "checkBodyImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "checkBodyImpl" ((PVar "seed") (PVar "mode") (PVar "prog0")) (EBlock (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EApp (EVar "modeModuleId") (EVar "mode")))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "resetGraphState") (ELit LUnit))) (arm (PCon "Module" PWild PWild PWild) () (ELit LUnit)))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EApp (EVar "scopeModuleId") (EVar "mode"))) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EApp (EVar "modeModuleId") (EVar "mode")))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EBinOp "++" (EVar "coreProg") (EVar "prog0"))) (arm (PCon "Module" PWild PWild PWild) () (EVar "prog0")))) (DoLet false false (PVar "aliasSpellings") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EListLit)) (arm (PCon "Module" PWild PWild PWild) () (EApp (EVar "aliasMethodSpellings") (EVar "prog"))))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mode")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "stampBindingIds") (EVar "prog"))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "coreLen") (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EApp (EVar "listLen") (EVar "coreProg"))) (arm (PCon "Module" PWild PWild PWild) () (ELit (LInt 0))))) (DoLet false false (PVar "coreProgS") (EApp (EApp (EVar "takeFirst") (EVar "coreLen")) (EVar "progS"))) (DoLet false false (PVar "prog0S") (EApp (EApp (EVar "dropFirst") (EVar "coreLen")) (EVar "progS"))) (DoLet false false (PVar "fullUniverse") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "prog")) (arm (PCon "Module" PWild PWild PWild) () (EListLit)))) (DoLet false false (PVar "groundUniverse") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "prog")) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EVar "implDecls")))) (DoLet false false (PVar "superDecls") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "prog")) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EBinOp "++" (EVar "prog") (EVar "implDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "populateEffectDomains") (EVar "prog"))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" PWild PWild PWild) () (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ELit LUnit)) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))))) (DoLet false false (PVar "moduleImplUniv") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "emptyImplUniverse")) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "buildImplUniverse") (EVar "prog"))) (arm (PCon "Module" PWild PWild PWild) () (EVar "moduleImplUniv"))))) (DoLet false false (PVar "definerShadows") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "buildDefinerShadows") (EVar "fullUniverse")) (EVar "prog0"))) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EVar "prog0")))))) (DoLet false false (PVar "importerShadows") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EListLit)) (arm (PCon "Module" PWild PWild (PList)) () (EListLit)) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef") "value")) (EVar "prog0")))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EApp (EVar "buildFlatImplEnv") (EVar "fullUniverse")))) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef")) (EApp (EVar "declsNonEmpty") (EVar "coreProg")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatUserShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatCoreFnNamesRef")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "coreProg")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "shadowStandaloneSchemesRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "pickStandaloneSchemes") (EVar "importerShadows")) (EVar "seed")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "registerMethodIfaceParamsAll") (EVar "fullUniverse"))) (arm (PCon "Module" PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EApp (EApp (EVar "applyMethodScopeOverrides") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIfaceParamsRef") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAdmittedIfacesRef")) (EApp (EVar "applyMethodAdmittedSets") (EVar "prog")))))))) (DoLet false false (PVar "dataEnv") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "registerAllData") (EVar "initialEnv")) (EVar "prog"))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ETuple (EApp (EVar "flatClassEnvOf") (EVar "prog")) (ELit (LInt 0)))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false (PVar "visibleMethodRows") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EListLit)) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EApp (EVar "userExternSchemes") (EVar "mode")) (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false (PVar "methodNames") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (ELam ((PVar "row")) (EFieldAccess (EVar "row") "msrName"))) (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog")))) (EVar "omEmpty"))) (arm (PCon "Module" PWild PWild PWild) () (EVar "omEmpty")))) (DoLet false false (PVar "shadowLayer") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodShadowNamesRef")) (EVar "methodNames"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "currentMethodRows"))) (DoExpr (EListLit)))) (arm (PCon "Module" PWild PWild PWild) () (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EVar "sm")))))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "envImported") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "envSeed")) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EBlock (DoLet false false (PVar "preludeBodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EApp (EApp (EVar "dropSchemesNamed") (EVar "methodNames")) (EVar "topSchemes")))) (DoLet false false PWild (EApp (EVar "scopeShadowsCore") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "preludeBodyEnv")) (EVar "coreProgS"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "preludeBodyEnv")) (EVar "coreProgS"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "preludeBodyEnv")) (EVar "coreProgS"))) (DoLet false false PWild (EApp (EVar "scopeShadowsUser") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "preludeBodyEnv")) (EVar "prog")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog0S"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "preludeBodyEnv")) (EVar "prog0S"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "preludeBodyEnv")) (EVar "prog0S"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "preludeBodyEnv")) (EVar "prog0S"))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ELit LUnit)) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false PWild (EApp (EVar "expandSupersTable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligations") (EVar "True")) (EVar "fullUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligations") (EVar "False")) (EVar "fullUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "setNumlitFloats") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" PWild PWild PWild) () (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ELit LUnit)) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))))) (DoLet false false (PVar "result") (ETuple (EBinOp "++" (EVar "globalS") (EVar "topSchemes")) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
+(DTypeSig false "checkBodyImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "checkBodyImpl" ((PVar "seed") (PVar "mid") (PVar "implDecls") (PVar "prog0")) (EBlock (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "mid"))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "mid")) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EVar "mid"))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EVar "prog0")) (DoLet false false (PVar "aliasSpellings") (EApp (EVar "aliasMethodSpellings") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "groundUniverse") (EVar "implDecls")) (DoLet false false (PVar "superDecls") (EBinOp "++" (EVar "prog") (EVar "implDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "moduleImplUniv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EVar "moduleImplUniv"))) (DoLet false false (PVar "definerShadows") (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EVar "prog0")))) (DoLet false false (PVar "importerShadows") (EIf (EApp (EVar "isEmptyL") (EVar "implDecls")) (EListLit) (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef") "value")) (EVar "prog0"))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "shadowStandaloneSchemesRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "pickStandaloneSchemes") (EVar "importerShadows")) (EVar "seed")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EApp (EApp (EVar "applyMethodScopeOverrides") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIfaceParamsRef") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAdmittedIfacesRef")) (EApp (EVar "applyMethodAdmittedSets") (EVar "prog")))))) (DoLet false false (PVar "dataEnv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false (PVar "visibleMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EVar "userExternSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false (PVar "shadowLayer") (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EVar "sm")))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "envImported") (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoLet false false PWild (EApp (EVar "expandSupersTable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "result") (ETuple (EBinOp "++" (EVar "globalS") (EVar "topSchemes")) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
 (DTypeSig false "inferPropBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferPropBodies" ((PVar "env") (PVar "prog")) (EBlock (DoLet false false (PVar "mark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "dropGoalsSince") (EVar "mark")) (EListLit (EVar "GKBinopSite") (EVar "GKUnopSite") (EVar "GKArithSite"))))))
 (DTypeSig false "inferPropBodiesGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
@@ -51835,8 +51429,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "univConcreteBucket" (PWild PWild (PCon "None")) (EListLit))
 (DTypeSig false "univHeadless" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))))
 (DFunDef false "univHeadless" ((PCon "ImplUniverse" PWild (PVar "hl") PWild) (PVar "iface")) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "iface")))) (EVar "hl")))
-(DTypeSig false "checkCallObligations" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
-(DFunDef false "checkCallObligations" ((PVar "deferNonGround") (PVar "prog") (PVar "obligations")) (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EApp (EVar "buildImplUniverse") (EVar "prog"))) (EVar "obligations")))
 (DTypeSig false "checkCallObligationsU" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "checkCallObligationsU" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "univ") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false PWild (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "consumeExactReturnOutcome") (EVar "univ")) (EVar "request")) (EVar "resolution"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EApp (EVar "methodReturnAmbiguousWithoutGiven") (EVar "request")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EFieldAccess (EVar "request") "mrrIface") "irName"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))))) (DoLet false false PWild (EApp (EApp (EVar "noteNumericObligationChecked") (EVar "o")) (EVar "occs"))) (DoExpr (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "univ")) (EVar "rest")))))
@@ -51908,8 +51500,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")) (EVar "scope")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
 (DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc") (PVar "scope")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "activeDictVarOf") (EVar "occ")) (EVar "scope"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "setNumlitFloats" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "setNumlitFloats" (PWild) (EApp (EVar "setNumlitFloatsGo") (EApp (EVar "numlitSince") (EFieldAccess (EApp (EVar "currentModuleMarks") (ELit LUnit)) "mNumlit"))))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))
 (DFunDef false "setNumlitFloatsGo" ((PList)) (ELit LUnit))
 (DFunDef false "setNumlitFloatsGo" ((PCons (PTuple (PVar "var") (PVar "fref") (PVar "n") (PVar "dref")) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EVar "normalize") (EVar "var")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "fref")) (EApp (EVar "Some") (EApp (EVar "intToFloat") (EVar "n"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "dref")) (EVar "RNone"))))) (arm (PCon "TCon" (PLit (LString "Int")) PWild) () (EApp (EApp (EVar "setRef") (EVar "dref")) (EVar "RNone"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EVar "setNumlitFloatsGo") (EVar "rest")))))
@@ -52299,14 +51889,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "externSigsToMap" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "externSigsToMap" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "externSigsToMap") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ETuple (EApp (EVar "ffiSigShapeKey") (EVar "ty")) (EApp (EVar "ffiWrittenRow") (EVar "ty")))) (EVar "m"))))
 (DFunDef false "externSigsToMap" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "externSigsToMap") (EVar "rest")) (EVar "m")))
-(DTypeSig false "userExternSchemes" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "userExternSchemes" (PWild (PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
-(DTypeSig false "ffiStampMode" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
-(DFunDef false "ffiStampMode" ((PVar "mode")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EVar "ffiStampModeOwned") (EVar "mode"))))
-(DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
-(DFunDef false "ffiStampModeOwned" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
+(DTypeSig false "userExternSchemes" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
+(DFunDef false "userExternSchemes" ((PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
+(DTypeSig false "ffiStampMode" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "ffiStampMode" ((PVar "mid")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EVar "ffiStampModeOwned") (EVar "mid"))))
+(DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "ffiStampModeOwned" ((PLit (LString "__user__"))) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
+(DFunDef false "ffiStampModeOwned" ((PVar "mid")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
 (DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "expandAliasHeadTy" ((PVar "ty")) (EApp (EApp (EVar "expandAliasHeadTyWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
 (DTypeSig false "expandAliasHeadTyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
@@ -52629,13 +52218,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allCoreFns" ((PCons (PVar "m") (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatCoreFnNamesRef") "value")) (EApp (EVar "allCoreFns") (EVar "rest")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scopeShadowsForGroup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
 (DFunDef false "scopeShadowsForGroup" ((PVar "members")) (EIf (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef") "value")) (ELit LUnit) (EIf (EApp (EVar "flatGroupIsCore") (EVar "members")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EVar "omEmpty")) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatUserShadowNamesRef") "value")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "scopeShadowsCore" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "scopeShadowsCore" (PWild) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef") "value") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EVar "omEmpty")) (ELit LUnit)))
-(DTypeSig false "scopeShadowsUser" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "scopeShadowsUser" (PWild) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef") "value") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatUserShadowNamesRef") "value")) (ELit LUnit)))
-(DTypeSig false "declsNonEmpty" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
-(DFunDef false "declsNonEmpty" ((PList)) (EVar "False"))
-(DFunDef false "declsNonEmpty" (PWild) (EVar "True"))
 (DTypeSig false "processSCC" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "TcEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
 (DFunDef false "processSCC" ((PVar "env") (PVar "sigs") (PVar "grouped0") (PVar "members")) (EBlock (DoLet false false (PVar "marking") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value")) (DoLet false false (PVar "grouped") (EMatch (EVar "marking") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "markGroupClauses") (EVar "mm")) (EVar "members")) (EVar "grouped0"))) (arm (PCon "None") () (EVar "grouped0")))) (DoLet false false (PVar "groupedStamped") (EMatch (EVar "marking") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "stampGroupClauses") (EVar "mm")) (EVar "members")) (EVar "grouped"))) (arm (PCon "None") () (EVar "grouped")))) (DoLet false false PWild (EApp (EVar "scopeShadowsForGroup") (EVar "members"))) (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false (PVar "placeholders") (EApp (EApp (EVar "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EApp (EVar "freshVar") (ELit LUnit))))) (EVar "members"))) (DoLet false false (PVar "scopedMembers") (EApp (EApp (EVar "scopeMembers") (EApp (EVar "captureScope") (ELit LUnit))) (EVar "placeholders"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendVars") (EVar "env")) (EApp (EApp (EVar "map") (EVar "placeholderBinding")) (EVar "placeholders")))) (DoLet false false (PTuple (PVar "regs") (PVar "sigTvMaps")) (EApp (EApp (EVar "preunifySigsEx") (EVar "sigs")) (EVar "scopedMembers"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef")) (EApp (EApp (EVar "flatMap") (ELam ((PVar "r")) (EApp (EApp (EVar "flatMap") (EVar "ifaceMonoName")) (EApp (EVar "regIfaceMonosOf") (EVar "r"))))) (EVar "regs")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "inferMembers") (EVar "env2")) (EVar "sigs")) (EVar "groupedStamped")) (EVar "scopedMembers"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef")) (EListLit))) (DoLet false false PWild (EApp (EVar "checkSigsTooGeneral") (EVar "sigTvMaps"))) (DoLet false false PWild (EApp (EVar "registerConstraintRegs") (EVar "regs"))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "protectedSigIds") (EApp (EApp (EApp (EApp (EVar "sccProtectedSignatureIds") (EVar "env2")) (EVar "groupedStamped")) (EVar "placeholders")) (EVar "sigTvMaps"))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false (PVar "extraNumObls") (EBinOp "++" (EApp (EVar "numCallObls") (EApp (EVar "callUOblsWindow") (EVar "callN0"))) (EApp (EVar "numDictObls") (EApp (EVar "dictAppsSince") (EVar "dictN0"))))) (DoLet false false (PVar "defaultObls") (EBinOp "++" (EVar "addedObls") (EVar "extraNumObls"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultGroupNum") (EVar "protectedSigIds")) (EVar "defaultObls")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultEachMember") (EVar "protectedSigIds")) (EVar "defaultObls")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EVar "map") (EVar "snd")) (EVar "placeholders")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env2")) (EVar "sigs")) (EVar "groupedStamped")) (EApp (EVar "isLetrecGroup") (EVar "members"))) (EVar "placeholders"))) (DoLet false false (PVar "scopedSchemes") (EApp (EApp (EVar "alignScopedSchemes") (EVar "scopedMembers")) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSigsOverExpansive") (EVar "env2")) (EVar "groupedStamped")) (EVar "sigTvMaps"))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")) (EVar "sigTvMaps")) (EVar "callOblsDelta")) (EVar "addedObls")) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSigConstraintCoverage") (EVar "regs")) (EVar "sigs")) (EVar "sigTvMaps")) (EVar "callOblsDelta")) (EVar "addedObls")) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerInferredConstraints") (EVar "sigs")) (EVar "callOblsDelta")) (EVar "addedObls")) (EVar "scopedSchemes"))) (DoLet false false (PVar "groupedOut") (EMatch (EVar "marking") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EApp (EVar "markRecursiveOccurrences") (EVar "mm")) (EVar "placeholders")) (EVar "scopedMembers")) (EVar "grouped"))) (arm (PCon "None") () (EVar "grouped")))) (DoExpr (ETuple (EApp (EApp (EVar "extendVars") (EVar "env")) (EApp (EApp (EVar "dropSchemesNamed") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodShadowNamesRef") "value")) (EVar "schemes"))) (EVar "schemes") (EVar "groupedOut")))))
 (DTypeSig false "isLetrecGroup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
@@ -53130,20 +52712,12 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeErrorLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "typeErrorLines" ((PList)) (EListLit))
 (DFunDef false "typeErrorLines" ((PCons (PVar "e") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (ELit (LString "TYPE ERROR: ")) (EVar "e")) (EApp (EVar "typeErrorLines") (EVar "rest"))))
-(DTypeSig true "checkToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
-(DFunDef false "checkToLines" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "prog")))) (DoLet false false (PVar "schemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "prog"))) (DoLet false false (PVar "progCe") (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (DoLet false false (PVar "progIe") (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EVar "prog")) (EVar "progCe")) (EVar "progCe")) (EVar "progIe")) (EVar "progIe")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EVar "schemes")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig false "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "oracleDecls"))))))
-(DTypeSig false "seedAndCheckSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "seedAndCheckSplit" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "prog") (EBinOp "++" (EVar "coreProg") (EVar "userProg"))) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EApp (EApp (EVar "stampDeclOrigins") (ELit (LString "core"))) (EVar "coreProg")) (EVar "userProg")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "userDecls") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls") "value")) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "userDecls")) (EVar "prog")) (EApp (EVar "flatClassEnvOf") (EVar "userDecls"))) (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (EApp (EVar "flatImplEnvOf") (EVar "userDecls"))) (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (EVar "schemes"))))
-(DTypeSig true "checkMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
-(DFunDef false "checkMatchToLines" ((PVar "runtimeDecls") (PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "prog")))) (DoLet false false PWild (EApp (EApp (EVar "checkProgramSeeded") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "runtimeDecls"))) (EVar "prog"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (EVar "tcMsg")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
-(DTypeSig true "checkProgramDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
-(DFunDef false "checkProgramDiags" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "seedAndCheckSplit") (EVar "runtimeDecls")) (EVar "coreProg")) (EVar "userProg"))) (DoExpr (ETuple (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "checkModuleFull" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "checkModuleFull" ((PVar "seedVars") (PVar "accData") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (ELit (LString ""))) (EVar "seedVars")) (EVar "accData")) (EListLit)) (EVar "prog")))
 (DTypeSig false "checkModuleFullImpl" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "checkModuleFullImpl" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seedVars")) (EApp (EApp (EApp (EVar "Module") (EVar "mid")) (EVar "accData")) (EVar "implDecls"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "enqueueStampCtx") (EVar "mid")) (EVar "implDecls"))) (DoExpr (EVar "result"))))
+(DFunDef false "checkModuleFullImpl" ((PVar "mid") (PVar "seedVars") (PVar "_accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seedVars")) (EVar "mid")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "enqueueStampCtx") (EVar "mid")) (EVar "implDecls"))) (DoExpr (EVar "result"))))
 (DTypeSig false "publicValNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "publicValNames" ((PList)) (EListLit))
 (DFunDef false "publicValNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "publicValNames") (EListLit (EVar "d"))) (EApp (EVar "publicValNames") (EVar "rest"))))
@@ -53160,8 +52734,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allIfaceMethodNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "allIfaceMethodNames") (EListLit (EVar "d"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
 (DFunDef false "allIfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EVar "ifaceMethodNames") (EVar "methods")) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
 (DFunDef false "allIfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest")))
-(DTypeSig false "buildDefinerShadows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "buildDefinerShadows" ((PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "allIfaceMethodNames") (EVar "implDecls"))) (EVar "omEmpty"))) (DoLet false false (PVar "localNames") (EApp (EVar "dedup") (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))))) (DoLet false false (PVar "direct") (EApp (EApp (EVar "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "methodNames")))) (EVar "localNames"))) (DoLet false false (PVar "sm") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value")) (DoLet false false (PVar "bares") (EApp (EApp (EVar "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EListLit (EVar "bare"))) (arm (PCon "None") () (EListLit))))) (EVar "localNames"))) (DoExpr (EApp (EApp (EVar "removeAllS") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "bares")))))))
 (DTypeSig false "isPreludeMid" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isPreludeMid" ((PVar "mid")) (EBinOp "||" (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "==" (EVar "mid") (ELit (LString "")))))
 (DTypeSig false "appendUniverseAccums" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
@@ -53691,7 +53263,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "checkModulesPreambleK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModulesPreambleK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EVar "graphPreamble") (EVar "GOutDiags")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EApp (EApp (EApp (EVar "Module") (EVar "mid")) (EVar "accData")) (EListLit))) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
+(DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "_accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EVar "mid")) (EListLit)) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
 (DTypeSig true "checkModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
 (DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
@@ -54056,8 +53628,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Set")))) (EApp (EVar "PSet") (EVar "None")))
 (DFunDef false "domainParam" ((PCon "Some" (PLit (LString "Product")))) (EApp (EVar "PProduct") (EListLit)))
 (DFunDef false "domainParam" (PWild) (EVar "PUnit"))
-(DTypeSig false "populateEffectDomains" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
-(DFunDef false "populateEffectDomains" ((PVar "decls")) (EBlock (DoLet false false PWild (EApp (EVar "seedEffectDomains") (ELit LUnit))) (DoExpr (EApp (EVar "populateGo") (EVar "decls")))))
 (DTypeSig false "populateEffectDomainsGraph" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit"))))
 (DFunDef false "populateEffectDomainsGraph" ((PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false PWild (EApp (EVar "seedEffectDomains") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "populateGo") (EVar "coreDecls"))) (DoExpr (EApp (EVar "populateUnitsGo") (EVar "modules")))))
 (DTypeSig false "populateUnitsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyCon "Unit")))
@@ -56454,9 +56024,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "builtinClassSet" ((PLit (LString "Ord")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcOrd" (EVar "o")) (fa "bcOrdPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcOrdPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" ((PLit (LString "Semigroup")) (PVar "o") (PVar "p") (PVar "acc")) (EVariantUpdate "BuiltinClasses" (EVar "acc") ((fa "bcSemigroup" (EVar "o")) (fa "bcSemigroupPresent" (EBinOp "||" (EFieldAccess (EVar "acc") "bcSemigroupPresent") (EVar "p"))))))
 (DFunDef false "builtinClassSet" (PWild PWild PWild (PVar "acc")) (EVar "acc"))
-(DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
-(DFunDef false "seedBuiltinClasses" ((PCon "Flat" (PVar "coreProg")) (PVar "prog")) (EBlock (DoLet false false (PVar "classes") (EApp (EVar "builtinClassesOf") (EIf (EApp (EVar "declsNonEmpty") (EVar "coreProg")) (EVar "coreProg") (EVar "prog")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EVar "classes")))))
-(DFunDef false "seedBuiltinClasses" ((PCon "Module" (PVar "mid") PWild PWild) (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
+(DTypeSig false "seedBuiltinClasses" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
+(DFunDef false "seedBuiltinClasses" ((PVar "mid") (PVar "prog")) (EIf (EBinOp "||" (EApp (EVar "isPreludeMid") (EVar "mid")) (EApp (EVar "not") (EApp (EVar "builtinClassPresent") (EVar "BNum")))) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "builtinClassesRef")) (EApp (EVar "builtinClassesOf") (EVar "prog"))) (ELit LUnit)))
 (DTypeSig false "numArithOp" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Mono"))))
 (DFunDef false "numArithOp" ((PVar "lt") (PVar "rt")) (EBlock (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EMethodRef "lt"))) (DoLet false false PWild (EApp (EVar "markNumlitOpTaint") (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "unify") (EMethodRef "lt")) (EVar "rt"))) (DoLet false false PWild (EApp (EApp (EVar "recordIfaceObligation") (EVar "BNum")) (EMethodRef "lt"))) (DoExpr (EMethodRef "lt"))))
 (DTypeSig false "inferNumLit" (TyFun (TyCon "TcEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Mono"))))))
@@ -58241,10 +57810,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "ordinalIsSentinel" ((PVar "cur")) (EBinOp "<" (EVar "cur") (ELit (LInt 0))))
 (DTypeSig false "ordinalSentinelMsg" (TyCon "String"))
 (DFunDef false "ordinalSentinelMsg" () (ELit (LString "internal error: the whole-program final checks (coherence, interface cycles, phantom methods, superinterface existence) were reached with an unknown module ordinal, so they cannot say what is in scope here. This is a compiler bug, not a problem with this program — please report it. The checks below this point may be incomplete")))
-(DTypeSig false "flatClassEnvOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ClassEnv")))
-(DFunDef false "flatClassEnvOf" ((PVar "decls")) (EApp (EVar "buildClassEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString ""))) (EVar "decls")))))
-(DTypeSig false "flatImplEnvOf" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "ImplEnv")))
-(DFunDef false "flatImplEnvOf" ((PVar "decls")) (EApp (EVar "buildImplEnv") (EListLit (EApp (EApp (EApp (EVar "declEnvModule") (ELit (LInt 0))) (ELit (LString ""))) (EVar "decls")))))
 (DTypeSig false "checkOneIfaceCycle" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyCon "CeRow") (TyCon "Unit"))))))
 (DFunDef false "checkOneIfaceCycle" ((PVar "ce") (PVar "cur") (PVar "done") (PVar "row")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "ceRowDoneKey") (EVar "row"))) (EUnOp "!" (EVar "done")))) (EApp (EApp (EVar "foreachUnit") (EApp (EVar "pushTypeError") (ELit (LString "T-CYCLIC-SUPERINTERFACE")))) (EApp (EApp (EApp (EApp (EApp (EVar "ifaceDfsCycle") (EVar "ce")) (EVar "cur")) (EVar "done")) (EListLit (EVar "row"))) (EVar "row"))) (ELit LUnit)))
 (DTypeSig false "collectIfaceNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
@@ -58834,23 +58399,8 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "tupleSpineOf" ((PVar "acc") (PCons (PVar "t") (PVar "rest"))) (EApp (EApp (EVar "tupleSpineOf") (EApp (EApp (EVar "TApp") (EVar "acc")) (EVar "t"))) (EVar "rest")))
 (DTypeSig false "tupleUnifyClash" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyCon "Bool"))))
 (DFunDef false "tupleUnifyClash" ((PVar "a") (PVar "b")) (EMatch (ETuple (EApp (EVar "tupleSpine") (EVar "a")) (EApp (EVar "tupleSpine") (EVar "b"))) (arm (PTuple (PCon "Some" (PVar "xs")) (PCon "Some" (PVar "ys"))) () (EBinOp "/=" (EApp (EVar "listLen") (EVar "xs")) (EApp (EVar "listLen") (EVar "ys")))) (arm (PTuple (PCon "Some" PWild) (PCon "None")) () (EApp (EVar "monoSpineHeadIsCon") (EVar "b"))) (arm (PTuple (PCon "None") (PCon "Some" PWild)) () (EApp (EVar "monoSpineHeadIsCon") (EVar "a"))) (arm (PTuple (PCon "None") (PCon "None")) () (EVar "False"))))
-(DTypeSig false "checkProgramSchemes" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "checkProgramSchemes" ((PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EListLit)) (EVar "coreProg")) (EVar "userProg")))
-(DTypeSig true "checkProgramSchemesWithRuntime" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "checkProgramSchemesWithRuntime" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg")))
-(DTypeSig false "checkProgramSeeded" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
-(DFunDef false "checkProgramSeeded" ((PVar "seed") (PVar "prog")) (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EVar "seed")) (EListLit)) (EVar "prog")))
-(DTypeSig false "checkProgramSeededSplit" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "checkProgramSeededSplit" ((PVar "seed") (PVar "coreProg0") (PVar "userProg0")) (EBlock (DoLet false false (PVar "coreProgTy") (EApp (EApp (EVar "stampFlatTyOrigins") (EVar "coreProg0")) (EVar "coreProg0"))) (DoLet false false (PVar "coreProg") (EApp (EApp (EVar "stampDeclOrigins") (ELit (LString "core"))) (EVar "coreProgTy"))) (DoLet false false (PVar "userProg") (EApp (EApp (EVar "stampFlatTyOrigins") (EVar "coreProg0")) (EVar "userProg0"))) (DoLet false false PWild (EApp (EApp (EVar "noteOriginTrace") (ELit (LString "core"))) (EVar "coreProg"))) (DoLet false false PWild (EApp (EApp (EVar "noteOriginTrace") (ELit (LString "user"))) (EVar "userProg"))) (DoExpr (EApp (EVar "fst") (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EApp (EVar "Flat") (EVar "coreProg"))) (EVar "userProg"))))))
-(DData Private "CheckMode" () ((variant "Flat" (ConPos (TyApp (TyCon "List") (TyCon "Decl")))) (variant "Module" (ConPos (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))) ())
-(DTypeSig false "modeModuleId" (TyFun (TyCon "CheckMode") (TyCon "String")))
-(DFunDef false "modeModuleId" ((PCon "Flat" PWild)) (ELit (LString "")))
-(DFunDef false "modeModuleId" ((PCon "Module" (PVar "mid") PWild PWild)) (EVar "mid"))
-(DTypeSig false "scopeModuleId" (TyFun (TyCon "CheckMode") (TyCon "String")))
-(DFunDef false "scopeModuleId" ((PCon "Flat" PWild)) (ELit (LString "<flat>")))
-(DFunDef false "scopeModuleId" ((PCon "Module" (PVar "mid") PWild PWild)) (EVar "mid"))
-(DTypeSig false "checkBodyImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "checkBodyImpl" ((PVar "seed") (PVar "mode") (PVar "prog0")) (EBlock (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EApp (EVar "modeModuleId") (EVar "mode")))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "resetGraphState") (ELit LUnit))) (arm (PCon "Module" PWild PWild PWild) () (ELit LUnit)))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EApp (EVar "scopeModuleId") (EVar "mode"))) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EApp (EVar "modeModuleId") (EVar "mode")))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EBinOp "++" (EVar "coreProg") (EVar "prog0"))) (arm (PCon "Module" PWild PWild PWild) () (EVar "prog0")))) (DoLet false false (PVar "aliasSpellings") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EListLit)) (arm (PCon "Module" PWild PWild PWild) () (EApp (EVar "aliasMethodSpellings") (EVar "prog"))))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mode")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "stampBindingIds") (EVar "prog"))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "coreLen") (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EApp (EVar "listLen") (EVar "coreProg"))) (arm (PCon "Module" PWild PWild PWild) () (ELit (LInt 0))))) (DoLet false false (PVar "coreProgS") (EApp (EApp (EVar "takeFirst") (EVar "coreLen")) (EVar "progS"))) (DoLet false false (PVar "prog0S") (EApp (EApp (EVar "dropFirst") (EVar "coreLen")) (EVar "progS"))) (DoLet false false (PVar "fullUniverse") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "prog")) (arm (PCon "Module" PWild PWild PWild) () (EListLit)))) (DoLet false false (PVar "groundUniverse") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "prog")) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EVar "implDecls")))) (DoLet false false (PVar "superDecls") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "prog")) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EBinOp "++" (EVar "prog") (EVar "implDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EBlock (DoLet false false PWild (EApp (EVar "populateEffectDomains") (EVar "prog"))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" PWild PWild PWild) () (ELit LUnit)))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ELit LUnit)) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))))) (DoLet false false (PVar "moduleImplUniv") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "emptyImplUniverse")) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "buildImplUniverse") (EVar "prog"))) (arm (PCon "Module" PWild PWild PWild) () (EVar "moduleImplUniv"))))) (DoLet false false (PVar "definerShadows") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "buildDefinerShadows") (EVar "fullUniverse")) (EVar "prog0"))) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EVar "prog0")))))) (DoLet false false (PVar "importerShadows") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EListLit)) (arm (PCon "Module" PWild PWild (PList)) () (EListLit)) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef") "value")) (EVar "prog0")))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EApp (EVar "buildFlatImplEnv") (EVar "fullUniverse")))) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef")) (EApp (EVar "declsNonEmpty") (EVar "coreProg")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatUserShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatCoreFnNamesRef")) (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "coreProg")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "shadowStandaloneSchemesRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "pickStandaloneSchemes") (EVar "importerShadows")) (EVar "seed")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EVar "registerMethodIfaceParamsAll") (EVar "fullUniverse"))) (arm (PCon "Module" PWild PWild PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EApp (EApp (EVar "applyMethodScopeOverrides") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIfaceParamsRef") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAdmittedIfacesRef")) (EApp (EVar "applyMethodAdmittedSets") (EVar "prog")))))))) (DoLet false false (PVar "dataEnv") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "registerAllData") (EVar "initialEnv")) (EVar "prog"))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ETuple (EApp (EVar "flatClassEnvOf") (EVar "prog")) (ELit (LInt 0)))) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false (PVar "visibleMethodRows") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EListLit)) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EApp (EVar "userExternSchemes") (EVar "mode")) (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mode"))) (EVar "prog"))) (DoLet false false (PVar "methodNames") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (ELam ((PVar "row")) (EFieldAccess (EVar "row") "msrName"))) (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog")))) (EVar "omEmpty"))) (arm (PCon "Module" PWild PWild PWild) () (EVar "omEmpty")))) (DoLet false false (PVar "shadowLayer") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodShadowNamesRef")) (EVar "methodNames"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "currentMethodRows"))) (DoExpr (EListLit)))) (arm (PCon "Module" PWild PWild PWild) () (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EVar "sm")))))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "envImported") (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EVar "envSeed")) (arm (PCon "Module" PWild PWild PWild) () (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" (PVar "coreProg")) () (EBlock (DoLet false false (PVar "preludeBodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EApp (EApp (EVar "dropSchemesNamed") (EVar "methodNames")) (EVar "topSchemes")))) (DoLet false false PWild (EApp (EVar "scopeShadowsCore") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "preludeBodyEnv")) (EVar "coreProgS"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "preludeBodyEnv")) (EVar "coreProgS"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "preludeBodyEnv")) (EVar "coreProgS"))) (DoLet false false PWild (EApp (EVar "scopeShadowsUser") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "preludeBodyEnv")) (EVar "prog")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog0S"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "preludeBodyEnv")) (EVar "prog0S"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "preludeBodyEnv")) (EVar "prog0S"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "preludeBodyEnv")) (EVar "prog0S"))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" PWild PWild (PVar "implDecls")) () (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ELit LUnit)) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EBlock (DoLet false false PWild (EApp (EVar "expandSupersTable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligations") (EVar "True")) (EVar "fullUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligations") (EVar "False")) (EVar "fullUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "setNumlitFloats") (ELit LUnit))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (arm (PCon "Module" PWild PWild PWild) () (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EMatch (EVar "mode") (arm (PCon "Flat" PWild) () (ELit LUnit)) (arm (PCon "Module" (PVar "mid") PWild PWild) () (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))))) (DoLet false false (PVar "result") (ETuple (EBinOp "++" (EVar "globalS") (EVar "topSchemes")) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
+(DTypeSig false "checkBodyImpl" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "checkBodyImpl" ((PVar "seed") (PVar "mid") (PVar "implDecls") (PVar "prog0")) (EBlock (DoLet false false PWild (EApp (EVar "resetState") (ELit LUnit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "currentModuleRef")) (EVar "mid"))) (DoLet false false (PVar "moduleScope") (EApp (EApp (EApp (EApp (EApp (EVar "Scopes.freshScope") (EApp (EVar "currentScopeStore") (ELit LUnit))) (EVar "None")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "mid")) (EVar "ModuleOwner"))) (DoLet false false PWild (EApp (EVar "openScope") (EVar "moduleScope"))) (DoLet false false PWild (EApp (EVar "recordModuleStart") (EVar "mid"))) (DoLet false false PWild (EApp (EVar "reportAmbiguousImports") (EVar "prog0"))) (DoLet false false (PVar "prog") (EVar "prog0")) (DoLet false false (PVar "aliasSpellings") (EApp (EVar "aliasMethodSpellings") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "seedBuiltinClasses") (EVar "mid")) (EVar "prog"))) (DoLet false false (PVar "stampRes") (EBlock (DoLet false false (PTuple (PVar "top") (PVar "ids")) (EApp (EVar "stampTopScope") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "beginModuleMarking") (EVar "mid")) (EVar "prog")) (EVar "top"))) (DoExpr (ETuple (EVar "prog") (EVar "ids"))))) (DoLet false false (PVar "progS") (EApp (EVar "fst") (EVar "stampRes"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "snd") (EVar "stampRes")))) (EVar "omEmpty")))) (DoLet false false (PVar "groundUniverse") (EVar "implDecls")) (DoLet false false (PVar "superDecls") (EBinOp "++" (EVar "prog") (EVar "implDecls"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef")) (EVar "superDecls"))) (DoLet false false PWild (EApp (EVar "checkEffectParams") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkLetRecDecls") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "appendUniverseAccums") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "moduleImplUniv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (EApp (EApp (EVar "ieUniverseAt") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (EFieldAccess (EVar "envs") "deImpls"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "residualUnivRef")) (EVar "moduleImplUniv"))) (DoLet false false (PVar "definerShadows") (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EVar "definerShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EVar "prog0")))) (DoLet false false (PVar "importerShadows") (EIf (EApp (EVar "isEmptyL") (EVar "implDecls")) (EListLit) (EApp (EApp (EVar "nameableIfaceShadows") (EVar "prog0")) (EApp (EApp (EApp (EVar "standaloneShadowsFromSet") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeIfaceMethodsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeFunNamesRef") "value")) (EVar "prog0"))))) (DoLet false false (PVar "sigs") (EApp (EVar "sigsOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EApp (EApp (EVar "namesToSet") (EVar "definerShadows")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowSigsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EVar "sigs"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value") "deImpls"))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "standaloneValuesRef")) (EApp (EApp (EVar "namesToSet") (EBinOp "++" (EVar "importerShadows") (EVar "definerShadows"))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "shadowStandaloneSchemesRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "pickStandaloneSchemes") (EVar "importerShadows")) (EVar "seed")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "methodDispatchIdxByIdRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodDispatchIdxByIdRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")))) (DoLet false false (PVar "admitted") (EApp (EVar "importDefinersOf") (EVar "prog"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportDefinersRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "definerRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentImportOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EVar "originRowsOf") (EVar "admitted")))) (EVar "omEmpty")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "importedSchemeOblsRef")) (EApp (EApp (EVar "omFromPairs") (EApp (EVar "reverseL") (EApp (EApp (EVar "importedSchemeOblEntries") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (EVar "omEmpty")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodIfaceParamsRef")) (EApp (EApp (EVar "aliasQualifiedMethodEntries") (EVar "prog")) (EApp (EApp (EVar "applyMethodScopeOverrides") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeMethodIfaceParamsRef") "value"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasMethodOriginsRef")) (EApp (EApp (EVar "omFromPairs") (EVar "aliasSpellings")) (EVar "omEmpty")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodAdmittedIfacesRef")) (EApp (EVar "applyMethodAdmittedSets") (EVar "prog")))))) (DoLet false false (PVar "dataEnv") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoLet false false (PVar "cur") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs"))) (DoLet false false PWild (EApp (EVar "loadDataUniverse") (EVar "cur"))) (DoLet false false PWild (EApp (EApp (EVar "declEnvSeedDataUniverse") (EVar "mid")) (EVar "envs"))) (DoLet false false (PVar "base") (EApp (EApp (EVar "registerAllData") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "universeDataEnv") "value")) (EApp (EApp (EApp (EVar "importedCtorTypeDeclsLastWins") (EVar "prog0")) (EVar "cur")) (EFieldAccess (EVar "envs") "deModules")))) (DoLet false false (PVar "env0") (EApp (EApp (EVar "registerAllData") (EVar "base")) (EVar "prog0"))) (DoLet false false PWild (EApp (EVar "applyRecordScopeOverrides") (EVar "prog0"))) (DoExpr (EApp (EApp (EVar "applyCtorScopeOverrides") (EVar "prog0")) (EVar "env0"))))) (DoLet false false PWild (EApp (EVar "checkUndeterminedRetEffVars") (EVar "prog"))) (DoLet false false PWild (EApp (EVar "checkDeclaredKinds") (EVar "prog"))) (DoLet false false (PVar "classEnvHere") (EBlock (DoLet false false (PVar "envs") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "declEnvsRef") "value")) (DoExpr (ETuple (EFieldAccess (EVar "envs") "deIfaces") (EApp (EApp (EVar "declEnvsOrdOf") (EVar "mid")) (EVar "envs")))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkGradedImplHeads") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EApp (EVar "rejectCyclicAliases") (ELit LUnit))) (DoLet false false (PVar "currentMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "prog"))) (DoLet false false (PVar "visibleMethodRows") (EApp (EVar "ifaceMethodSchemeRows") (EVar "implDecls"))) (DoLet false false (PVar "visibleMethodRowIndex") (EApp (EApp (EApp (EVar "methodRowsByIdentity") (EApp (EVar "isNonEmptyL") (EVar "importerShadows"))) (EVar "visibleMethodRows")) (EVar "regEmpty"))) (DoLet false false (PVar "externS") (EApp (EApp (EVar "userExternSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "prog"))) (DoLet false false (PVar "globalS") (EBinOp "++" (EApp (EVar "legacyMethodSchemes") (EVar "currentMethodRows")) (EVar "externS"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCrossable") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsLabelled") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsShadow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsReserved") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "ffiCheckExternsCatalogRow") (EApp (EVar "ffiStampMode") (EVar "mid"))) (EVar "prog"))) (DoLet false false (PVar "shadowLayer") (EBlock (DoLet false false (PVar "ifaceSchemes") (EApp (EVar "legacyMethodSchemes") (EVar "visibleMethodRows"))) (DoLet false false PWild (EApp (EVar "seedNumLitFromIntAnchor") (EVar "visibleMethodRows"))) (DoLet false false (PVar "sm") (EApp (EApp (EApp (EVar "pickSchemesByDecl") (EVar "importerShadows")) (EVar "ifaceSchemes")) (EVar "visibleMethodRowIndex"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef") "value")))) (DoExpr (EVar "sm")))) (DoLet false false (PVar "envSeed") (EApp (EApp (EVar "extendVars") (EVar "dataEnv")) (EVar "seed"))) (DoLet false false (PVar "envImported") (EApp (EApp (EApp (EApp (EApp (EVar "annotateImportedMethodRows") (EVar "envSeed")) (EApp (EApp (EVar "importedMethodBindingNames") (EVar "prog0")) (EVar "aliasSpellings"))) (EApp (EVar "nameableIfaceMethodSet") (EVar "prog0"))) (EApp (EApp (EVar "namesToSet") (EVar "importerShadows")) (EVar "omEmpty"))) (EVar "visibleMethodRowIndex"))) (DoLet false false (PVar "envGlobal") (EApp (EApp (EVar "extendVars") (EApp (EApp (EVar "extendMethodRows") (EVar "envImported")) (EVar "currentMethodRows"))) (EVar "externS"))) (DoLet false false (PVar "env1") (EApp (EApp (EVar "extendBindings") (EVar "envGlobal")) (EVar "shadowLayer"))) (DoLet false false (PVar "defs") (EApp (EVar "funDefs") (EVar "progS"))) (DoLet false false (PTuple (PVar "topSchemes") (PVar "groupedOut")) (EApp (EApp (EApp (EApp (EVar "processTopGroups") (EVar "env1")) (EVar "sigs")) (EVar "defs")) (EApp (EApp (EVar "groupNames") (EVar "defs")) (EVar "omEmpty")))) (DoLet false false (PVar "progOut") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "finishModuleMarking") (EVar "mm")) (EVar "groupedOut")) (EVar "progS"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false (PVar "progT") (EMatch (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EVar "stampTailDecls") (EFieldAccess (EVar "mm") "mmTop")) (EVar "progOut"))) (arm (PCon "None") () (EVar "progS")))) (DoLet false false PWild (EBlock (DoLet false false (PVar "bodyEnv") (EApp (EApp (EVar "extendVars") (EVar "env1")) (EVar "topSchemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "inferUserImplBodies") (EVar "bodyEnv")) (EVar "implDecls")) (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferDefaultBodiesIfEnabled") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoLet false false PWild (EApp (EApp (EVar "inferTestBodies") (EVar "bodyEnv")) (EVar "progT"))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EBlock (DoLet false false PWild (EApp (EVar "expandSupersTable") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef")) (EApp (EVar "predicateSlotTableWithoutArgs") (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsRef") "value")))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef")) (EBinOp "++" (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value") (EApp (EApp (EVar "selfNameRows") (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredRef") "value"))))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef")) (EBinOp "++" (EApp (EApp (EApp (EVar "attributeModuleEntries") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunConstraintDeclaredQualRef") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EVar "emptyMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EApp (EApp (EApp (EVar "attributeMethodModulePredicateSlots") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef") "value"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef")) (EBinOp "++" (EApp (EApp (EApp (EApp (EVar "attributeModuleSchemeObls") (EVar "mid")) (EVar "prog")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeObligationsRef") "value")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleSchemeOblsQualRef") "value")))) (DoExpr (ELit LUnit)))) (DoLet false false PWild (EApp (EApp (EVar "groundMultiParamObligations") (EVar "groundUniverse")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkImplCompletenessMap") (EApp (EVar "fst") (EVar "classEnvHere"))) (EApp (EVar "snd") (EVar "classEnvHere"))) (EVar "prog"))) (DoLet false false PWild (EBlock (DoLet false false (PVar "obUniv") (EVar "moduleImplUniv")) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "True")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls") "items") "value"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "False")) (EVar "obUniv")) (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls") "items") "value"))) (DoLet false false PWild (EApp (EVar "checkAdmittedOccObls") (ELit LUnit))) (DoExpr (ELit LUnit)))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localSchemesOut")) (EApp (EVar "mapLocalSchemes") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "localBindRefs") "value")))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "seedSchemesOut")) (EVar "seed"))) (DoLet false false PWild (EApp (EApp (EVar "appendDataUniverse") (EVar "mid")) (EVar "prog0"))) (DoLet false false (PVar "result") (ETuple (EBinOp "++" (EVar "globalS") (EVar "topSchemes")) (EVar "progOut"))) (DoLet false false PWild (EApp (EVar "closeScope") (ELit LUnit))) (DoExpr (EVar "result"))))
 (DTypeSig false "inferPropBodies" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
 (DFunDef false "inferPropBodies" ((PVar "env") (PVar "prog")) (EBlock (DoLet false false (PVar "mark") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false PWild (EApp (EApp (EVar "inferPropBodiesGo") (EVar "env")) (EVar "prog"))) (DoExpr (EApp (EApp (EVar "dropGoalsSince") (EVar "mark")) (EListLit (EVar "GKBinopSite") (EVar "GKUnopSite") (EVar "GKArithSite"))))))
 (DTypeSig false "inferPropBodiesGo" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
@@ -58963,8 +58513,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "univConcreteBucket" (PWild PWild (PCon "None")) (EListLit))
 (DTypeSig false "univHeadless" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Ty")) (TyApp (TyCon "List") (TyCon "Require")))))))
 (DFunDef false "univHeadless" ((PCon "ImplUniverse" PWild (PVar "hl") PWild) (PVar "iface")) (EApp (EApp (EVar "mregLookupK") (EApp (EVar "regKeyOfTab") (EApp (EVar "oblIfaceKey") (EVar "iface")))) (EVar "hl")))
-(DTypeSig false "checkCallObligations" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
-(DFunDef false "checkCallObligations" ((PVar "deferNonGround") (PVar "prog") (PVar "obligations")) (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EApp (EVar "buildImplUniverse") (EVar "prog"))) (EVar "obligations")))
 (DTypeSig false "checkCallObligationsU" (TyFun (TyCon "Bool") (TyFun (TyCon "ImplUniverse") (TyFun (TyApp (TyCon "List") (TyCon "UObligation")) (TyCon "Unit")))))
 (DFunDef false "checkCallObligationsU" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "checkCallObligationsU" ((PVar "deferNonGround") (PVar "univ") (PCons (PVar "o") (PVar "rest"))) (EBlock (DoLet false false (PVar "iface") (EFieldAccess (EFieldAccess (EVar "o") "pred") "iface")) (DoLet false false (PVar "occs") (EApp (EVar "uOblArgs") (EVar "o"))) (DoLet false false (PVar "loc") (EFieldAccess (EVar "o") "loc")) (DoLet false false PWild (EMatch (EFieldAccess (EVar "o") "oblProj") (arm (PCon "OpExactReturn" (PVar "request")) () (EMatch (EApp (EVar "methodReturnWanted") (EVar "request")) (arm (PCon "Some" PWild) () (EBlock (DoLet false false (PVar "resolution") (EApp (EVar "solveExactReturnOnce") (EVar "request"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "consumeExactReturnOutcome") (EVar "univ")) (EVar "request")) (EVar "resolution"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))) (arm (PCon "None") () (EBlock (DoLet false false PWild (EIf (EApp (EVar "methodReturnAmbiguousWithoutGiven") (EVar "request")) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EFieldAccess (EVar "request") "mrrIface") "irName"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "noteMethodReturnTrace") (EVar "MRTChecked")) (EVar "request")) (EVar "None")) (EListLit))))))) (arm PWild () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkOneCallObligation") (EVar "deferNonGround")) (EVar "univ")) (EVar "iface")) (EVar "occs")) (EVar "loc")) (EFieldAccess (EVar "o") "uoScope"))))) (DoLet false false PWild (EApp (EApp (EVar "noteNumericObligationChecked") (EVar "o")) (EVar "occs"))) (DoExpr (EApp (EApp (EApp (EVar "checkCallObligationsU") (EVar "deferNonGround")) (EVar "univ")) (EVar "rest")))))
@@ -59036,8 +58584,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkUndeterminedObligations" ((PVar "univ") (PVar "iface") (PCons (PVar "a") (PVar "rest")) (PVar "loc") (PVar "scope")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligation") (EVar "univ")) (EVar "iface")) (EVar "a")) (EVar "loc")) (EVar "scope"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "checkUndeterminedObligations") (EVar "univ")) (EVar "iface")) (EVar "rest")) (EVar "loc")) (EVar "scope")))))
 (DTypeSig false "checkUndeterminedObligation" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "ScopeId") (TyCon "Unit")))))))
 (DFunDef false "checkUndeterminedObligation" ((PVar "univ") (PVar "iface") (PVar "occ") (PVar "loc") (PVar "scope")) (EIf (EBinOp "==" (EFieldAccess (EVar "iface") "irName") (ELit (LString "Num"))) (ELit LUnit) (EIf (EApp (EVar "isSome") (EApp (EApp (EVar "activeDictVarOf") (EVar "occ")) (EVar "scope"))) (ELit LUnit) (EIf (EApp (EApp (EVar "anyIn") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "poisonedVars") "value")) (ELit LUnit) (EIf (EBinOp "&&" (EApp (EVar "isNonEmptyL") (EApp (EVar "monoUnboundIds") (EVar "occ"))) (EApp (EApp (EVar "allList") (ELam ((PVar "i")) (EApp (EApp (EVar "containsI") (EVar "i")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "deferrableVarIds") "value")))) (EApp (EVar "monoUnboundIds") (EVar "occ")))) (ELit LUnit) (EIf (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 2))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EBinOp "&&" (EBinOp ">=" (EApp (EApp (EVar "implCountForIfaceU") (EVar "univ")) (EVar "iface")) (ELit (LInt 1))) (EApp (EVar "isNonEmptyL") (EApp (EApp (EVar "univHeadless") (EVar "univ")) (EVar "iface")))) (EApp (EApp (EApp (EVar "pushTypeErrorOnceAt") (ELit (LString "T-AMBIGUOUS-INSTANCE"))) (EVar "loc")) (EApp (EVar "ambiguousImplMsg") (EFieldAccess (EVar "iface") "irName"))) (EIf (EVar "otherwise") (ELit LUnit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))
-(DTypeSig false "setNumlitFloats" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "setNumlitFloats" (PWild) (EApp (EVar "setNumlitFloatsGo") (EApp (EVar "numlitSince") (EFieldAccess (EApp (EVar "currentModuleMarks") (ELit LUnit)) "mNumlit"))))
 (DTypeSig false "setNumlitFloatsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Mono") (TyApp (TyCon "Ref") (TyApp (TyCon "Option") (TyCon "Float"))) (TyCon "Int") (TyApp (TyCon "Ref") (TyCon "Route")))) (TyCon "Unit")))
 (DFunDef false "setNumlitFloatsGo" ((PList)) (ELit LUnit))
 (DFunDef false "setNumlitFloatsGo" ((PCons (PTuple (PVar "var") (PVar "fref") (PVar "n") (PVar "dref")) (PVar "rest"))) (EBlock (DoLet false false PWild (EMatch (EApp (EVar "normalize") (EVar "var")) (arm (PCon "TCon" (PLit (LString "Float")) PWild) () (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EVar "fref")) (EApp (EVar "Some") (EApp (EVar "intToFloat") (EVar "n"))))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "dref")) (EVar "RNone"))))) (arm (PCon "TCon" (PLit (LString "Int")) PWild) () (EApp (EApp (EVar "setRef") (EVar "dref")) (EVar "RNone"))) (arm PWild () (ELit LUnit)))) (DoExpr (EApp (EVar "setNumlitFloatsGo") (EVar "rest")))))
@@ -59427,14 +58973,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "externSigsToMap" ((PList) (PVar "m")) (EVar "m"))
 (DFunDef false "externSigsToMap" ((PCons (PCon "DExtern" PWild (PVar "n") (PVar "ty")) (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "externSigsToMap") (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EVar "n")) (ETuple (EApp (EVar "ffiSigShapeKey") (EVar "ty")) (EApp (EVar "ffiWrittenRow") (EVar "ty")))) (EVar "m"))))
 (DFunDef false "externSigsToMap" ((PCons PWild (PVar "rest")) (PVar "m")) (EApp (EApp (EVar "externSigsToMap") (EVar "rest")) (EVar "m")))
-(DTypeSig false "userExternSchemes" (TyFun (TyCon "CheckMode") (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "userExternSchemes" (PWild (PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
-(DTypeSig false "ffiStampMode" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
-(DFunDef false "ffiStampMode" ((PVar "mode")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EVar "ffiStampModeOwned") (EVar "mode"))))
-(DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "CheckMode") (TyCon "Bool")))
-(DFunDef false "ffiStampModeOwned" ((PCon "Flat" PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PLit (LString "__user__")) PWild PWild)) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
-(DFunDef false "ffiStampModeOwned" ((PCon "Module" (PVar "mid") PWild PWild)) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
+(DTypeSig false "userExternSchemes" (TyFun (TyApp (TyCon "OrdMap") (TyCon "TyConOrigin")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
+(DFunDef false "userExternSchemes" ((PVar "scope") (PVar "decls")) (EApp (EVar "externSchemesGo") (EApp (EApp (EVar "stampTyOrigins") (EVar "scope")) (EApp (EVar "externDecls") (EVar "decls")))))
+(DTypeSig false "ffiStampMode" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "ffiStampMode" ((PVar "mid")) (EBinOp "&&" (EBinOp ">" (EApp (EVar "omSize") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "builtinExternNamesRef") "value")) (ELit (LInt 0))) (EApp (EVar "ffiStampModeOwned") (EVar "mid"))))
+(DTypeSig false "ffiStampModeOwned" (TyFun (TyCon "String") (TyCon "Bool")))
+(DFunDef false "ffiStampModeOwned" ((PLit (LString "__user__"))) (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "flatEntryIsStdlibRef") "value")))
+(DFunDef false "ffiStampModeOwned" ((PVar "mid")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EVar "mid")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "stdlibOwnedModsRef") "value"))))
 (DTypeSig false "expandAliasHeadTy" (TyFun (TyCon "Ty") (TyCon "Ty")))
 (DFunDef false "expandAliasHeadTy" ((PVar "ty")) (EApp (EApp (EVar "expandAliasHeadTyWith") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "aliasTableRef") "value")) (EVar "ty")))
 (DTypeSig false "expandAliasHeadTyWith" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "TabKey") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyCon "Ty")))) (TyFun (TyCon "Ty") (TyCon "Ty"))))
@@ -59757,13 +59302,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allCoreFns" ((PCons (PVar "m") (PVar "rest"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "m")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatCoreFnNamesRef") "value")) (EApp (EVar "allCoreFns") (EVar "rest")) (EIf (EVar "otherwise") (EVar "False") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "scopeShadowsForGroup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Unit")))
 (DFunDef false "scopeShadowsForGroup" ((PVar "members")) (EIf (EApp (EVar "not") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef") "value")) (ELit LUnit) (EIf (EApp (EVar "flatGroupIsCore") (EVar "members")) (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EVar "omEmpty")) (EIf (EVar "otherwise") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatUserShadowNamesRef") "value")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DTypeSig false "scopeShadowsCore" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "scopeShadowsCore" (PWild) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef") "value") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EVar "omEmpty")) (ELit LUnit)))
-(DTypeSig false "scopeShadowsUser" (TyFun (TyCon "Unit") (TyCon "Unit")))
-(DFunDef false "scopeShadowsUser" (PWild) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatShadowScopingRef") "value") (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "definerShadowNamesRef")) (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "flatUserShadowNamesRef") "value")) (ELit LUnit)))
-(DTypeSig false "declsNonEmpty" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Bool")))
-(DFunDef false "declsNonEmpty" ((PList)) (EVar "False"))
-(DFunDef false "declsNonEmpty" (PWild) (EVar "True"))
 (DTypeSig false "processSCC" (TyFun (TyCon "TcEnv") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr")))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyCon "TcEnv") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "OrdMap") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "List") (TyCon "Pat")) (TyCon "Expr"))))))))))
 (DFunDef false "processSCC" ((PVar "env") (PVar "sigs") (PVar "grouped0") (PVar "members")) (EBlock (DoLet false false (PVar "marking") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "markingRef") "value")) (DoLet false false (PVar "grouped") (EMatch (EVar "marking") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "markGroupClauses") (EVar "mm")) (EVar "members")) (EVar "grouped0"))) (arm (PCon "None") () (EVar "grouped0")))) (DoLet false false (PVar "groupedStamped") (EMatch (EVar "marking") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EVar "stampGroupClauses") (EVar "mm")) (EVar "members")) (EVar "grouped"))) (arm (PCon "None") () (EVar "grouped")))) (DoLet false false PWild (EApp (EVar "scopeShadowsForGroup") (EVar "members"))) (DoLet false false PWild (EApp (EVar "enterLevel") (ELit LUnit))) (DoLet false false (PVar "oblN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls"))) (DoLet false false (PVar "callN0") (EApp (EVar "wMark") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "obls"))) (DoLet false false (PVar "dictN0") (EApp (EVar "goalsMark") (ELit LUnit))) (DoLet false false (PVar "placeholders") (EApp (EApp (EMethodRef "map") (ELam ((PVar "m")) (ETuple (EVar "m") (EApp (EVar "freshVar") (ELit LUnit))))) (EVar "members"))) (DoLet false false (PVar "scopedMembers") (EApp (EApp (EVar "scopeMembers") (EApp (EVar "captureScope") (ELit LUnit))) (EVar "placeholders"))) (DoLet false false (PVar "env2") (EApp (EApp (EVar "extendVars") (EVar "env")) (EApp (EApp (EMethodRef "map") (EVar "placeholderBinding")) (EVar "placeholders")))) (DoLet false false (PTuple (PVar "regs") (PVar "sigTvMaps")) (EApp (EApp (EVar "preunifySigsEx") (EVar "sigs")) (EVar "scopedMembers"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef")) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "r")) (EApp (EApp (EDictApp "flatMap") (EVar "ifaceMonoName")) (EApp (EVar "regIfaceMonosOf") (EVar "r"))))) (EVar "regs")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "inferMembers") (EVar "env2")) (EVar "sigs")) (EVar "groupedStamped")) (EVar "scopedMembers"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "groupConstraintMonosRef")) (EListLit))) (DoLet false false PWild (EApp (EVar "checkSigsTooGeneral") (EVar "sigTvMaps"))) (DoLet false false PWild (EApp (EVar "registerConstraintRegs") (EVar "regs"))) (DoLet false false PWild (EApp (EVar "exitLevel") (ELit LUnit))) (DoLet false false (PVar "protectedSigIds") (EApp (EApp (EApp (EApp (EVar "sccProtectedSignatureIds") (EVar "env2")) (EVar "groupedStamped")) (EVar "placeholders")) (EVar "sigTvMaps"))) (DoLet false false (PVar "addedObls") (EApp (EApp (EVar "wWindow") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "implObls")) (EVar "oblN0"))) (DoLet false false (PVar "extraNumObls") (EBinOp "++" (EApp (EVar "numCallObls") (EApp (EVar "callUOblsWindow") (EVar "callN0"))) (EApp (EVar "numDictObls") (EApp (EVar "dictAppsSince") (EVar "dictN0"))))) (DoLet false false (PVar "defaultObls") (EBinOp "++" (EVar "addedObls") (EVar "extraNumObls"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultGroupNum") (EVar "protectedSigIds")) (EVar "defaultObls")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "placeholders")))) (DoLet false false PWild (EApp (EApp (EApp (EVar "defaultEachMember") (EVar "protectedSigIds")) (EVar "defaultObls")) (EVar "placeholders"))) (DoLet false false PWild (EApp (EApp (EVar "registerAmbiguousConstraints") (EVar "addedObls")) (EApp (EApp (EMethodRef "map") (EVar "snd")) (EVar "placeholders")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "sccSchemes") (EVar "env2")) (EVar "sigs")) (EVar "groupedStamped")) (EApp (EVar "isLetrecGroup") (EVar "members"))) (EVar "placeholders"))) (DoLet false false (PVar "scopedSchemes") (EApp (EApp (EVar "alignScopedSchemes") (EVar "scopedMembers")) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "checkSigsOverExpansive") (EVar "env2")) (EVar "groupedStamped")) (EVar "sigTvMaps"))) (DoLet false false (PVar "callOblsDelta") (EApp (EVar "callOblsWindow") (EVar "callN0"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerSchemeObligations") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "schemeDefIdsRef") "value")) (EVar "sigTvMaps")) (EVar "callOblsDelta")) (EVar "addedObls")) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EVar "checkSigConstraintCoverage") (EVar "regs")) (EVar "sigs")) (EVar "sigTvMaps")) (EVar "callOblsDelta")) (EVar "addedObls")) (EVar "schemes"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerInferredConstraints") (EVar "sigs")) (EVar "callOblsDelta")) (EVar "addedObls")) (EVar "scopedSchemes"))) (DoLet false false (PVar "groupedOut") (EMatch (EVar "marking") (arm (PCon "Some" (PVar "mm")) () (EApp (EApp (EApp (EApp (EVar "markRecursiveOccurrences") (EVar "mm")) (EVar "placeholders")) (EVar "scopedMembers")) (EVar "grouped"))) (arm (PCon "None") () (EVar "grouped")))) (DoExpr (ETuple (EApp (EApp (EVar "extendVars") (EVar "env")) (EApp (EApp (EVar "dropSchemesNamed") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodShadowNamesRef") "value")) (EVar "schemes"))) (EVar "schemes") (EVar "groupedOut")))))
 (DTypeSig false "isLetrecGroup" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool")))
@@ -60258,20 +59796,12 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "typeErrorLines" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "typeErrorLines" ((PList)) (EListLit))
 (DFunDef false "typeErrorLines" ((PCons (PVar "e") (PVar "rest"))) (EBinOp "::" (EBinOp "++" (ELit (LString "TYPE ERROR: ")) (EVar "e")) (EApp (EVar "typeErrorLines") (EVar "rest"))))
-(DTypeSig true "checkToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String")))
-(DFunDef false "checkToLines" ((PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "prog")))) (DoLet false false (PVar "schemes") (EApp (EApp (EVar "checkProgramSchemes") (EListLit)) (EVar "prog"))) (DoLet false false (PVar "progCe") (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (DoLet false false (PVar "progIe") (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "prog")) (EVar "prog")) (EVar "progCe")) (EVar "progCe")) (EVar "progIe")) (EVar "progIe")) (ELit (LInt 0))) (EVar "False"))) (DoLet false false (PVar "errs") (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EApp (EVar "joinNl") (EApp (EVar "schemeLines") (EVar "schemes")))) (arm PWild () (EApp (EVar "joinNl") (EApp (EVar "typeErrorLines") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EVar "errs")))))))))
 (DTypeSig false "seedCheckRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit")))
 (DFunDef false "seedCheckRun" ((PVar "oracleDecls")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "oracleDecls"))))))
-(DTypeSig false "seedAndCheckSplit" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))
-(DFunDef false "seedAndCheckSplit" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false (PVar "prog") (EBinOp "++" (EVar "coreProg") (EVar "userProg"))) (DoLet false false PWild (EApp (EVar "seedCheckRun") (EBinOp "++" (EApp (EApp (EVar "stampDeclOrigins") (ELit (LString "core"))) (EVar "coreProg")) (EVar "userProg")))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EVar "checkProgramSeededSplit") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EVar "coreProg"))) (EVar "runtimeDecls"))) (EVar "coreProg")) (EVar "userProg"))) (DoLet false false (PVar "userDecls") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "coherenceUserDecls") "value")) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runFinalChecks") (EVar "userDecls")) (EVar "prog")) (EApp (EVar "flatClassEnvOf") (EVar "userDecls"))) (EApp (EVar "flatClassEnvOf") (EVar "prog"))) (EApp (EVar "flatImplEnvOf") (EVar "userDecls"))) (EApp (EVar "flatImplEnvOf") (EVar "prog"))) (ELit (LInt 0))) (EVar "False"))) (DoExpr (EVar "schemes"))))
-(DTypeSig true "checkMatchToLines" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "String"))))
-(DFunDef false "checkMatchToLines" ((PVar "runtimeDecls") (PVar "prog")) (EBlock (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchOracle")) (EApp (EVar "buildOracle") (EVar "prog")))) (DoLet false false PWild (EApp (EApp (EVar "checkProgramSeeded") (EApp (EApp (EVar "externSchemes") (EApp (EVar "externTyOriginScope") (EListLit))) (EVar "runtimeDecls"))) (EVar "prog"))) (DoExpr (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (EVar "tcMsg")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value")))))))
-(DTypeSig true "checkProgramDiags" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag")))))))
-(DFunDef false "checkProgramDiags" ((PVar "runtimeDecls") (PVar "coreProg") (PVar "userProg")) (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "seedAndCheckSplit") (EVar "runtimeDecls")) (EVar "coreProg")) (EVar "userProg"))) (DoExpr (ETuple (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "typeErrors") "items") "value")) (EApp (EVar "reverseL") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "matchWarnings") "value"))))))
 (DTypeSig false "checkModuleFull" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl")))))))
 (DFunDef false "checkModuleFull" ((PVar "seedVars") (PVar "accData") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "checkModuleFullImpl") (ELit (LString ""))) (EVar "seedVars")) (EVar "accData")) (EListLit)) (EVar "prog")))
 (DTypeSig false "checkModuleFullImpl" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "Decl")))))))))
-(DFunDef false "checkModuleFullImpl" ((PVar "mid") (PVar "seedVars") (PVar "accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "result") (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seedVars")) (EApp (EApp (EApp (EVar "Module") (EVar "mid")) (EVar "accData")) (EVar "implDecls"))) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "enqueueStampCtx") (EVar "mid")) (EVar "implDecls"))) (DoExpr (EVar "result"))))
+(DFunDef false "checkModuleFullImpl" ((PVar "mid") (PVar "seedVars") (PVar "_accData") (PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seedVars")) (EVar "mid")) (EVar "implDecls")) (EVar "prog"))) (DoLet false false PWild (EApp (EApp (EVar "enqueueStampCtx") (EVar "mid")) (EVar "implDecls"))) (DoExpr (EVar "result"))))
 (DTypeSig false "publicValNames" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "publicValNames" ((PList)) (EListLit))
 (DFunDef false "publicValNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "publicValNames") (EListLit (EVar "d"))) (EApp (EVar "publicValNames") (EVar "rest"))))
@@ -60288,8 +59818,6 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "allIfaceMethodNames" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "allIfaceMethodNames") (EListLit (EVar "d"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
 (DFunDef false "allIfaceMethodNames" ((PCons (PRec "DInterface" ((rf "methods" None)) true) (PVar "rest"))) (EBinOp "++" (EApp (EVar "ifaceMethodNames") (EVar "methods")) (EApp (EVar "allIfaceMethodNames") (EVar "rest"))))
 (DFunDef false "allIfaceMethodNames" ((PCons PWild (PVar "rest"))) (EApp (EVar "allIfaceMethodNames") (EVar "rest")))
-(DTypeSig false "buildDefinerShadows" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String")))))
-(DFunDef false "buildDefinerShadows" ((PVar "implDecls") (PVar "prog")) (EBlock (DoLet false false (PVar "methodNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "allIfaceMethodNames") (EVar "implDecls"))) (EVar "omEmpty"))) (DoLet false false (PVar "localNames") (EApp (EVar "dedup") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EVar "funDefs") (EVar "prog"))))) (DoLet false false (PVar "direct") (EApp (EApp (EMethodRef "filter") (ELam ((PVar "n")) (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "methodNames")))) (EVar "localNames"))) (DoLet false false (PVar "sm") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "mangledShadowMapRef") "value")) (DoLet false false (PVar "bares") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "n")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "n")) (EVar "sm")) (arm (PCon "Some" (PVar "bare")) () (EListLit (EVar "bare"))) (arm (PCon "None") () (EListLit))))) (EVar "localNames"))) (DoExpr (EApp (EApp (EVar "removeAllS") (EApp (EVar "localBoundNames") (EVar "prog"))) (EApp (EVar "dedup") (EBinOp "++" (EVar "direct") (EVar "bares")))))))
 (DTypeSig false "isPreludeMid" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isPreludeMid" ((PVar "mid")) (EBinOp "||" (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EBinOp "==" (EVar "mid") (ELit (LString "")))))
 (DTypeSig false "appendUniverseAccums" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyCon "Unit"))))
@@ -60819,7 +60347,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "checkModulesPreambleK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModulesPreambleK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple (PVar "runtimeSeed") (PVar "coreSchemes") PWild PWild) (EApp (EApp (EApp (EApp (EApp (EVar "graphPreamble") (EVar "GOutDiags")) (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "runtimeSeed") (EVar "coreSchemes")))))
 (DTypeSig false "cmCheckWorker" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
-(DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EApp (EApp (EApp (EVar "Module") (EVar "mid")) (EVar "accData")) (EListLit))) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
+(DFunDef false "cmCheckWorker" ((PVar "mid") (PVar "seed") (PVar "_accData") (PVar "_accAll") (PVar "prog")) (EBlock (DoLet false false (PTuple (PVar "schemes") PWild) (EApp (EApp (EApp (EApp (EVar "checkBodyImpl") (EVar "seed")) (EVar "mid")) (EListLit)) (EVar "prog"))) (DoExpr (ETuple (EVar "schemes") (EVar "schemes")))))
 (DTypeSig true "checkModules" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme")))))))))
 (DFunDef false "checkModules" ((PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EApp (EApp (EApp (EApp (EVar "checkModulesK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls0")) (EVar "modules0")))
 (DTypeSig true "checkModulesK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))))))
