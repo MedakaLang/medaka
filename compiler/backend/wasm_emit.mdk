@@ -2121,6 +2121,7 @@ isByteBlockExternW name = contains name [
   "byteBlockToIntArray",
   "byteBlockFromString",
   "byteBlockToString",
+  "byteBlockWriteStdout",
 ]
 
 -- ── W8b: the ONE residual deferred extern ────────────────────────────────────
@@ -8359,6 +8360,7 @@ emitArrayExternRef prog _ _ name _ =
 --   byteBlockToIntArray   b            → $mdk_bb_to_int_array
 --   byteBlockFromString   s            → $mdk_bb_from_string
 --   byteBlockToString     b            → $mdk_bb_to_string
+--   byteBlockWriteStdout  b            → $mdk_bb_write_stdout
 emitByteBlockExternRef : Prog ->
   List String ->
   Int ->
@@ -8433,6 +8435,18 @@ emitByteBlockExternRef prog env d "byteBlockToString" [b] =
     ++ ["ref.cast (ref $u8arr)", "call $mdk_bb_to_string"]
 emitByteBlockExternRef prog env d "byteBlockToString" _ =
   gapLP prog "wasm: byteBlockToString takes exactly one argument"
+-- byteBlockWriteStdout: writes the block's bytes to stdout byte-for-byte via
+-- the same $mdk_write_byte host import putStr's $mdk_print_str loop uses,
+-- then returns Unit -- the operand is a $u8arr, so this dispatches through
+-- the byte-block family rather than isStrExternW's $str-typed IO externs.
+emitByteBlockExternRef prog env d "byteBlockWriteStdout" [b] =
+  emitRefExpr prog env d b
+    ++ [
+      "ref.cast (ref $u8arr)", "call $mdk_bb_write_stdout", "i32.const 0",
+      "ref.i31"
+    ]
+emitByteBlockExternRef prog env d "byteBlockWriteStdout" _ =
+  gapLP prog "wasm: byteBlockWriteStdout takes exactly one argument"
 emitByteBlockExternRef prog _ _ name _ =
   gapLP prog ("wasm: unsupported byte-block extern '" ++ name ++ "'")
 

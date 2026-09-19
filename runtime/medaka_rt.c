@@ -661,6 +661,19 @@ static void mdk_fwrite_str(long long w, FILE *out, int nl) {
   }
 }
 
+/* mdk_byteblock_write_stdout writes a ByteBlock cell's bytes ([i64 tag | i64
+   count | count bytes], count at offset 8, bytes at offset 16 -- no
+   string-specific fields) straight to stdout, byte-for-byte, no NUL or UTF-8
+   assumption. Tracks the write into the fatal-signal safety-net buffer above,
+   same as mdk_fwrite_str, so a crash right after this call still flushes
+   these bytes via the existing stack-overflow/signal path. */
+void mdk_byteblock_write_stdout(long long bb) {
+  const char *cell = (const char *)bb;
+  long long n = ((const long long *)cell)[1];
+  mdk_build_stdout_track(cell + 16, n);
+  fwrite(cell + 16, 1, (size_t)n, stdout);
+}
+
 void mdk_putstr(long long w)    { mdk_fwrite_str(w, stdout, 0); }
 void mdk_putstrln(long long w)  { mdk_fwrite_str(w, stdout, 1); }
 void mdk_eputstr(long long w)   { mdk_fwrite_str(w, stderr, 0); }

@@ -638,6 +638,12 @@ extern byteBlockFromString : String -> ByteBlock
 -- modules compiled with `--allow-internal`.
 extern byteBlockToString : ByteBlock -> String
 
+-- | Writes the block's bytes to stdout as-is, with no bounds check and no
+-- encoding assumption: unlike `putStr`, the bytes are not required to be
+-- valid UTF-8 and are written byte-for-byte. Restricted to the standard
+-- library and to modules compiled with `--allow-internal`.
+extern byteBlockWriteStdout : ByteBlock -> <Stdout> Unit
+
 -- # Strings
 
 -- String is a sequence of Unicode codepoints, UTF-8 backed; Char is one

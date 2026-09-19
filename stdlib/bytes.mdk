@@ -360,6 +360,17 @@ export
 fromUtf8Bytes : Bytes -> String
 fromUtf8Bytes (Bytes bb) = byteBlockToString bb
 
+-- # Output
+
+{- | Writes `b`'s bytes to standard output byte-for-byte.
+
+   Unlike `putStr`, the bytes are not required to be valid UTF-8: nothing
+   here decodes or re-encodes them, so a byte sequence that would mangle or
+   get rejected on a `String` path round-trips exactly. -}
+export
+writeStdoutBytes : Bytes -> <Stdout> Unit
+writeStdoutBytes (Bytes bb) = byteBlockWriteStdout bb
+
 -- # Mutation
 
 -- `MutBytes` lives beside `Bytes` rather than in its own module because

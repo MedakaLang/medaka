@@ -2674,6 +2674,7 @@ isIoExtern name = contains name [
   "flushStdout",
   "stashRunStdout",
   "enableRunStdoutFlush",
+  "byteBlockWriteStdout",
 ]
 
 emitIoExtern : Emit ->
@@ -2721,6 +2722,14 @@ emitIoExtern e env "enableRunStdoutFlush" args = match emitArgs e env args
     let _ = emit e ("  call void @mdk_enable_run_stdout_flush(i64 " ++ u ++ ")")
     ("1", LTUnit)
   _ => panic "llvm: enableRunStdoutFlush takes exactly one argument"
+-- Writes a ByteBlock's raw bytes to stdout byte-for-byte, no encoding
+-- assumption; unlike putStr/putStrLn, the argument is a block register, not a
+-- string register.
+emitIoExtern e env "byteBlockWriteStdout" args = match emitArgs e env args
+  [bb] =>
+    let _ = emit e ("  call void @mdk_byteblock_write_stdout(i64 " ++ bb ++ ")")
+    ("1", LTUnit)
+  _ => panic "llvm: byteBlockWriteStdout takes exactly one argument"
 emitIoExtern e _ name _ = gapE e ("unsupported IO extern " ++ name)
 
 -- abort externs (native extern catalog slice 4).

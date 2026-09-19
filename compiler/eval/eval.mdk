@@ -3396,6 +3396,7 @@ externBindings _ = [
   ("byteBlockToIntArray", prim1 pByteBlockToIntArray),
   ("byteBlockFromString", prim1 pByteBlockFromString),
   ("byteBlockToString", prim1 pByteBlockToString),
+  ("byteBlockWriteStdout", prim1M pByteBlockWriteStdout),
   ("Ref", prim1 pRef),
   ("setRef", prim2M pSetRef),
   ("putStr", prim1M pPutStr),
@@ -3885,6 +3886,16 @@ pByteBlockFromString _ = panic "byteBlockFromString: not a String"
 pByteBlockToString : Value e -> <e> Value e
 pByteBlockToString (VByteBlock b) = VString (stringFromUtf8Bytes b)
 pByteBlockToString _ = panic "byteBlockToString: not a ByteBlock"
+
+-- byteBlockWriteStdout : ByteBlock -> <Stdout> Unit — writes the block's bytes
+-- to stdout byte-for-byte, no encoding assumption. Routes through the SAME
+-- buffered path putStr/putStrLn use (appendOutput/outputRef), not a bypass:
+-- the permissive UTF-8 conversion here (the same one byteBlockToString uses)
+-- preserves the raw bytes verbatim even when they are not valid UTF-8, so the
+-- buffer still carries the exact byte sequence through to the CLI's flush.
+pByteBlockWriteStdout : Value e -> <e> Value e
+pByteBlockWriteStdout (VByteBlock b) = appendOutput (stringFromUtf8Bytes b)
+pByteBlockWriteStdout _ = panic "byteBlockWriteStdout: not a ByteBlock"
 
 buildWith : Value e -> Int -> Int -> <e> List (Value e)
 buildWith f i n =
