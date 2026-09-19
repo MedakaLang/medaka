@@ -208,7 +208,8 @@ first non-`String`/`List` stdlib type with one.
 | B1 | `newtype` staging wrapper over `Array Int`, no representation change |
 | B2 | Packed representation behind the same surface, plus the minimal `MutBytes` (allocate, write, read, freeze) |
 | B3 | `slice`/`append`/`indexOf`/`Hashable Bytes`, `writeStdoutBytes`, `bytebuilder.mdk`'s `Builder` re-backed on a packed `ByteBlock` (`fromByteBlockPrefix`) — **not** a separate `ByteBuf` type, which is withdrawn. `view`/`compact` deferred to a later milestone (no consumer needs the `O(1)`-aliasing opt-in yet; Ruling 4 still applies once one does) |
-| B4–B5 | Caller migration, module by module, in wave order |
+| B4 | Caller migration, first measured path: `stdlib/http.mdk`'s request scan/parse, `stdlib/net_async.mdk`'s recv chain, and the socket read loop in `pds/shell/server.mdk` — `sprint a-byte-costs-a-byte` (#3210), measured with `pds/test/performance_resource_main.mdk`'s `inbound-alloc` probe |
+| B5 | Remaining caller migration, module by module, in wave order |
 | B6 | Delete `toUtf8`/`fromUtf8` and the remaining `Array Int`-as-bytes uses |
 
 B1's whole job is that every later mistake is a compile error.
