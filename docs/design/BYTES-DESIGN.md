@@ -1,15 +1,21 @@
 # Bytes — a packed byte string for Medaka
 
-**Status:** B1 and B2 have both shipped. `stdlib/bytes.mdk` is a `newtype`
+**Status:** B1, B2 and B3 have all shipped. `stdlib/bytes.mdk` is a `newtype`
 over the runtime's packed `ByteBlock` buffer, so a byte string costs one byte
 per byte, and the minimal mutable sibling `MutBytes` (allocate, write, read,
-freeze) shipped alongside it. The growable sibling (`ByteBuf`,
-`slice`/`view`/`compact`) and the caller migration are later milestones of the
-Bytes epic (#3134).
+freeze) shipped in B2. B3 (sprint `enough-to-carry-a-path`, #3196) shipped
+`slice`/`append`/`indexOf`/`Hashable Bytes`, `writeStdoutBytes`, and
+`stdlib/bytebuilder.mdk`'s `Builder` re-backed on a packed `ByteBlock` —
+**`ByteBuf` as a distinct growable type was withdrawn**; `bytebuilder.mdk`
+became the one growable byte buffer instead of a second one being added
+alongside it (Ruling 1 below is corrected accordingly). `slice`/`view`/`compact`
+as a triad and the caller migration remain later milestones of the Bytes
+epic (#3134).
 
 This document records the decisions the epic is built on, so later waves cite
 a written ruling instead of a recollection. Each section below is one ruling
-taken on 2026-09-16, plus the one deviation accepted on 2026-09-17.
+taken on 2026-09-16, plus the one deviation accepted on 2026-09-17, plus the
+**B3 correction** noted where it applies (dated 2026-09-19).
 
 ---
 
@@ -63,13 +69,17 @@ The full surface is three types, not one:
 - **`ByteBuf`** — growable, written in pure Medaka over the other two, with
   zero new intrinsics.
 
-Together they are 46 exported names and 18 externs — the full B3 surface.
-B1 builds only the subset listed under "The B1 surface" below.
+Together they were planned as 46 exported names and 18 externs. B1 built only
+the subset listed under "The B1 surface" below.
 
-`stdlib/bytebuilder.mdk` already is a growable byte buffer (`Vector Int`
-backed, `buildArray : Builder -> Array Int`). The overlap with `ByteBuf` is
-real and is resolved in the milestone that introduces `ByteBuf`, not in B1;
-B1 adds no second growable buffer.
+**Correction, 2026-09-19 (B3):** `stdlib/bytebuilder.mdk` already was a
+growable byte buffer (`Vector Int` backed, `buildArray : Builder -> Array
+Int`) when this ruling was written, and the overlap it flags was resolved by
+re-backing `bytebuilder.mdk`'s existing `Builder` on a packed `ByteBlock`
+(`fromByteBlockPrefix : Int -> ByteBlock -> Bytes` is the new seam) rather than
+by building a separate `ByteBuf` type. `ByteBuf` as a distinct name is
+withdrawn; the "46 exported names" figure no longer describes the shipped
+surface.
 
 ---
 
@@ -106,8 +116,10 @@ instance has no `None` to return and must panic.
 
 ## Ruling 4 — `slice` copies; `view` is the explicit `O(1)` opt-in
 
-Not part of B1. `slice`, `view` and `compact` are B3 names; the ruling is
-recorded here for them to cite.
+Not part of B1. **Correction, 2026-09-19:** `slice` shipped in B3 (copying,
+per this ruling); `view` and `compact` did not — they remain deferred to a
+later milestone. The ruling is recorded here for whichever milestone ships
+them to cite.
 
 A slice that shares its parent's storage retains the whole parent. The
 concrete hazard is the pds one: a header or field value sliced out of a large
@@ -174,13 +186,28 @@ free of a seed re-mint.
 
 ---
 
+## The `++` verdict
+
+`Bytes` got a `Semigroup` instance in B3 (`append`, reached by `b1 ++ b2`).
+`append` dispatches correctly on `Bytes` through every syntactic form that
+lets the compiler recover the operand type at the call site — infix, an
+operator section, a `Semigroup a =>`-constrained function body, and an
+immediately-applied lambda all reach `append` and allocate the joined length
+once. Binding `(++)` — or a hand-written `x y => x ++ y` lambda — to a name
+with `let` and applying it through that name is a separate, pre-existing
+native-backend gap: it panics cleanly under `medaka run` but segfaults the
+compiled binary (`E-FATAL-SIGNAL`), tracked as #3204. This is not `Bytes`-
+specific — it reproduces on any hand-written `Semigroup` instance — but B3 is
+what made it reachable through ordinary stdlib use, since `Bytes` is the
+first non-`String`/`List` stdlib type with one.
+
 ## Sequencing
 
 | Milestone | Content |
 |---|---|
 | B1 | `newtype` staging wrapper over `Array Int`, no representation change |
 | B2 | Packed representation behind the same surface, plus the minimal `MutBytes` (allocate, write, read, freeze) |
-| B3 | `ByteBuf`, `slice`/`view`/`compact` — the remainder of the full 46-name surface |
+| B3 | `slice`/`append`/`indexOf`/`Hashable Bytes`, `writeStdoutBytes`, `bytebuilder.mdk`'s `Builder` re-backed on a packed `ByteBlock` (`fromByteBlockPrefix`) — **not** a separate `ByteBuf` type, which is withdrawn. `view`/`compact` deferred to a later milestone (no consumer needs the `O(1)`-aliasing opt-in yet; Ruling 4 still applies once one does) |
 | B4–B5 | Caller migration, module by module, in wave order |
 | B6 | Delete `toUtf8`/`fromUtf8` and the remaining `Array Int`-as-bytes uses |
 
