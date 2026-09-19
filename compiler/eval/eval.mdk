@@ -2980,7 +2980,7 @@ runJsonMode = Ref False
 -- non-JSON path does and it is right there — but on `--json` it produces TWO
 -- top-level documents on one stream (the warning envelope, then `runtimePanic`'s),
 -- and `{…}\n{…}` is not JSON.  The gate that grades this channel
--- (`test/diff_compiler_eval_json.sh`) captures stderr ALONE and AGENTS.md states the
+-- (`test/diff_compiler_eval_json_test.mdk`) captures stderr ALONE and AGENTS.md states the
 -- contract as *"`medaka run --json` … emit[s] the SAME `Diag` JSON envelope"* —
 -- singular.  So the driver stages them here instead: if the program panics,
 -- `runtimePanic` merges them into its own envelope; if it does not, the driver

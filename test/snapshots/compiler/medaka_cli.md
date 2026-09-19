@@ -2642,7 +2642,7 @@ finishBuildArgs _ _ _ = Err "error: medaka build takes exactly one input file"
 -- `pendingRunDiags` under `--json` instead of emitted as human caret text on a
 -- stream a machine consumer parses as JSON.  `test/error_quality_fixtures/
 -- eval/main_not_value.mdk`'s `.json.out` golden moves from caret art to a
--- `Diag` JSON envelope (`test/diff_compiler_eval_json.sh`, re-captured) — that
+-- `Diag` JSON envelope (`test/diff_compiler_eval_json_test.mdk`, re-captured) — that
 -- was the bug (#1236 defect 3), not a blessed behaviour to preserve.
 -- `postPerf` closes over the caller's phase timestamps and emits the `eval` and
 -- `total` `[perf]` lines.  It is a PARAMETER, not something the caller runs
