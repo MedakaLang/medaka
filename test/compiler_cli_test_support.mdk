@@ -238,9 +238,10 @@ binaryRanClean a = a.binCode == 0 && not (contains "E-PANIC" a.binErr)
    collects each row's failure message via `rowFailure`, then hands the
    whole batch to `summarize`.
 
-   The two agreement gates share this exact outer dance and differ only in
-   their row shape and `summarize`'s wording, so those stay the caller's own
-   `gradeOne`/`rowFailure`/`summarize` rather than being unified here. -}
+   Every gate that sweeps a corpus shares this exact outer dance and differs
+   only in its row shape and `summarize`'s wording, so those stay the
+   caller's own `gradeOne`/`rowFailure`/`summarize` rather than being
+   unified here. -}
 export
 sweepUnits : List unit ->
   (String -> unit -> <Exec "_", FileRead "_", IO> row) ->
@@ -469,6 +470,7 @@ runtimeOutcomeFailure want a =
 -- The stems of `corpus`'s own fixtures: its top-level `.mdk` files. A
 -- subdirectory holds modules the fixtures import, which are not entry points
 -- and pin no outcome of their own.
+export
 fixtureStems : String -> <FileRead "_", IO> Result String (List String)
 fixtureStems corpus = match fixtureFiles corpus
   Err e => Err e

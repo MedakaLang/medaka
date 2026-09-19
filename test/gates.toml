@@ -1628,7 +1628,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_compiler_eval_json_test.mdk"
 oracles = []
-sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "test/compiler_cli_test_support.mdk"]
+sources = ["compiler/eval/*", "compiler/frontend/desugar.mdk", "compiler/ir/core_ir_eval.mdk", "compiler/driver/*", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/error_quality_fixtures"]
 toolchain = []
 
@@ -2369,7 +2369,7 @@ run = "test/diff_compiler_run_stdout_flush_test.mdk"
 oracles = []
 sources = ["runtime/medaka_rt.c", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/run_stdout_flush_fixtures"]
-toolchain = []
+toolchain = ["clang"]
 
 [[gate]]
 name = "diff_compiler_selfproc"
@@ -2622,7 +2622,7 @@ kind = "native"
 migration = "done"
 run = "test/diff_async_test.mdk"
 oracles = []
-sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk"]
+sources = ["runtime/medaka_rt.c", "compiler/backend/llvm_emit.mdk", "compiler/eval/eval.mdk", "stdlib/runtime.mdk", "stdlib/async.mdk", "stdlib/net_async.mdk", "stdlib/net.mdk", "test/compiler_cli_test_support.mdk"]
 corpus = ["test/async_fixtures"]
 toolchain = ["clang"]
 

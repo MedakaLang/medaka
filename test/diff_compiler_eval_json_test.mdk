@@ -31,20 +31,10 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads
    source files and goldens, none of which the interpreter binds. -}
 
-import compiler_cli_test_support.{chompNewlines}
-import fs.{expectUnitCount, fixtureFiles}
-import list.{sort, somes}
-import path.{dirname, stem}
-import string.{
-  contains,
-  endsWith,
-  lines,
-  replaceAll,
-  split,
-  startsWith,
-  trim,
-  unlines,
-}
+import compiler_cli_test_support.{chompNewlines, fixtureStems}
+import fs.{expectUnitCount}
+import list.{somes}
+import string.{contains, lines, replaceAll, split, startsWith, trim, unlines}
 import test.{fail, pass}
 import test_process.{boundedVerb, medakaBin, medakaRoot}
 
@@ -53,16 +43,6 @@ corpus = "\{medakaRoot}/test/error_quality_fixtures/eval"
 
 declaredFixtureCount : Int
 declaredFixtureCount = 12
-
--- The stems of `corpus`'s own top-level fixtures — `xmod1542/`/`xmod2798/`
--- hold modules the fixtures import, which are not entry points and pin no
--- envelope of their own.
-fixtureStems : <FileRead "_", IO> Result String (List String)
-fixtureStems = match fixtureFiles corpus
-  Err e => Err e
-  Ok paths =>
-    let own = filter (p => endsWith ".mdk" p && dirname p == corpus) paths
-    Ok (sort (map stem own))
 
 {- | The fixed prefix of the source-staleness warning
    (`checkSourceStaleness`, `compiler/driver/medaka_cli.mdk`), read live from
@@ -126,7 +106,7 @@ gradeOne marker name =
             Some
               "  \{name}\{staleNote marker actual}\n    want: \{debug want}\n    got:  \{debug actual}"
 
-test "eval_json: exactly 12 fixtures on disk" = match fixtureStems
+test "eval_json: exactly 12 fixtures on disk" = match fixtureStems corpus
   Err e => fail "\{corpus}: \{e}"
   Ok names => match expectUnitCount declaredFixtureCount names
     Err e => fail "\{corpus}: \{e}"
@@ -134,7 +114,7 @@ test "eval_json: exactly 12 fixtures on disk" = match fixtureStems
 
 test "eval_json: `medaka run --json` agrees with the committed goldens, byte for byte" =
   let marker = staleMarker
-  match fixtureStems
+  match fixtureStems corpus
     Err e => fail "\{corpus}: \{e}"
     Ok names =>
       let failures = somes (map (gradeOne marker) names)

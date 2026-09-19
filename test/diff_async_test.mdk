@@ -1,5 +1,5 @@
 {- | Gate for the async runtime (docs/design/ASYNC-RUNTIME-DESIGN.md, #500),
-   migrated from the retired `test/diff_async.sh`.
+   registered as `diff_async` in test/gates.toml.
 
    Async I/O is native-first: the readiness externs (`ioPoll`, `netTryAccept`,
    `netTryRecv`, `netTrySend`, `netTrySendFrom`, `netSetNonblock`,
@@ -37,11 +37,10 @@
    Runs under `medaka test --native`: it spawns subprocesses and reads the
    corpus, neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{chompNewlines}
-import fs.{expectUnitCount, fixtureFiles}
+import compiler_cli_test_support.{chompNewlines, fixtureStems}
+import fs.{expectUnitCount}
 import list.{somes, sort}
-import path.{dirname, stem}
-import string.{contains, endsWith, unlines}
+import string.{contains, unlines}
 import test.{Expectation, fail, pass}
 import test_process.{boundedVerbSeconds, medakaBin, medakaRoot, scratchDir}
 
@@ -59,16 +58,8 @@ declaredFixtureCount = 3
 roster : List String
 roster = ["echo_overlap", "no_starvation", "overlap_sleeps"]
 
--- The stems of the corpus's own top-level `.mdk` files, sorted.
-fixtureStems : <FileRead "_", IO> Result String (List String)
-fixtureStems = match fixtureFiles corpus
-  Err e => Err e
-  Ok paths =>
-    let own = filter (p => endsWith ".mdk" p && dirname p == corpus) paths
-    Ok (sort (map stem own))
-
 test "diff_async: exactly 3 fixtures on disk, matching the roster" =
-  match fixtureStems
+  match fixtureStems corpus
     Err e => fail "\{corpus}: \{e}"
     Ok found => match expectUnitCount declaredFixtureCount found
       Err e => fail "\{corpus}: \{e} on disk"
