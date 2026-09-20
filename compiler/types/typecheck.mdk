@@ -28590,10 +28590,99 @@ argImplReqRoutes : String ->
   Int ->
   Int ->
   List Route
-argImplReqRoutes _ _ _ [] _ _ = []
-argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
+argImplReqRoutes encl useScope subst reqs prevSize spent =
+  argExpandedImplReqRoutes
+    encl
+    useScope
+    subst
+    (expandImplRequires reqs)
+    prevSize
+    spent
+
+argExpandedImplReqRoutes : String ->
+  ScopeId ->
+  List (String, Mono) ->
+  List Require ->
+  Int ->
+  Int ->
+  List Route
+argExpandedImplReqRoutes _ _ _ [] _ _ = []
+argExpandedImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
   argReqRoute rIface encl useScope subst rargs prevSize spent
-    :: argImplReqRoutes encl useScope subst rest prevSize spent
+    :: argExpandedImplReqRoutes encl useScope subst rest prevSize spent
+
+-- Impl prerequisites use the same flattened superclass representation as `=>`
+-- constraints: declared predicates stay first, then each transitive superclass gets
+-- its own dictionary slot.  Keeping this expansion in `Require` form gives routing,
+-- definition arity, and body registration one shared slot sequence.
+expandImplRequires : List Require -> List Require
+expandImplRequires reqs =
+  expandImplRequiresIn driverState.value.superDeclsRef.value reqs
+
+expandImplRequiresIn : List Decl -> List Require -> List Require
+expandImplRequiresIn allDecls reqs =
+  let rigidMap = implRequireRigidMap reqs
+  let seen = implRequireIndex rigidMap reqs omEmpty
+  reqs
+    ++ uniqueImplRequires
+      rigidMap
+      seen
+      (flatMap (implRequireSupers allDecls) reqs)
+
+implRequireSupers : List Decl -> Require -> List Require
+implRequireSupers allDecls req = match ifaceSupersOf allDecls req.requireHead
+  None => []
+  Some (typarams, supers) =>
+    let direct =
+      flatMap (implRequireSuper (zipL typarams req.requireArgs)) supers
+    direct ++ flatMap (implRequireSupers allDecls) direct
+
+implRequireSuper : List (String, Ty) -> Super -> List Require
+implRequireSuper subst (Super { superHead = name, superParams = params, superOrigin = origin }) =
+  let args = substParams params subst
+  if listLen args == listLen params then
+    [Require { requireHead = name, requireArgs = args, requireOrigin = origin }]
+  else
+    []
+
+implRequireRigidMap : List Require -> List (String, Mono)
+implRequireRigidMap reqs =
+  map (name => (name, TRigid name)) (dedup (flatMap implRequireTyvars reqs))
+
+implRequireTyvars : Require -> List String
+implRequireTyvars (Require { requireArgs = args, ... }) =
+  flatMap tyVarNames args
+
+implRequireIndex : List (String, Mono) ->
+  List Require ->
+  OrdMap Unit ->
+  OrdMap Unit
+implRequireIndex _ [] acc = acc
+implRequireIndex rigidMap (req :: rest) acc =
+  implRequireIndex rigidMap rest (omInsert (implRequireKey rigidMap req) () acc)
+
+uniqueImplRequires : List (String, Mono) ->
+  OrdMap Unit ->
+  List Require ->
+  List Require
+uniqueImplRequires _ _ [] = []
+uniqueImplRequires rigidMap seen (req :: rest) =
+  let key = implRequireKey rigidMap req
+  if omHasKey key seen then
+    uniqueImplRequires rigidMap seen rest
+  else
+    req :: uniqueImplRequires rigidMap (omInsert key () seen) rest
+
+implRequireKey : List (String, Mono) -> Require -> String
+implRequireKey rigidMap (Require { requireHead = iface, requireArgs = args, requireOrigin = origin }) =
+  let monos = map (fromAstType rigidMap) args
+  cslotVecKey (
+    CSlot {
+      csIface = IfaceRef { irName = iface, irOrigin = origin },
+      csId = firstOrZero (flatMap monoTyvarIds monos),
+    },
+    monos,
+  )
 
 argReqRoute : String ->
   String ->
@@ -28749,9 +28838,15 @@ firstTvar a b id = match findTvarInMono a id
 -- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
 -- with `omHasKey`.  Membership semantics unchanged.
 dictPass : List String -> List Decl -> List Decl
-dictPass names prog =
+dictPass names prog = dictPassIn prog names prog
+
+dictPassIn : List Decl -> List String -> List Decl -> List Decl
+dictPassIn allDecls names prog =
   map
-    (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
+    (dictPassDecl
+      (omFromNames names omEmpty)
+      (returnPosMethodNames prog)
+      allDecls)
     (mapProg rewriteBinopExpr prog)
 
 -- Routed operators become method applications, including generic arithmetic.
@@ -28850,8 +28945,8 @@ unopMethodApp op e routeRef =
   let split = binopRouteSplit !routeRef
   EApp (EMethodAt method "" (mintMethodCellWith 1 (fst split) (snd split))) e
 
-dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
-dictPassDecl names _ (DFunDef pub n pats body)
+dictPassDecl : OrdMap Unit -> List String -> List Decl -> Decl -> Decl
+dictPassDecl names _ _ (DFunDef pub n pats body)
   | omHasKey n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
   | otherwise = DFunDef pub n pats body
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
@@ -28860,7 +28955,7 @@ dictPassDecl names _ (DFunDef pub n pats body)
 -- rewritten) line up with the definition.  (Without this, a `Num a => a -> a` group member's call site
 -- supplies a leading dict the body never binds → the dict lands in the first user
 -- param → arithmetic over a dict value panics `unknown op`.)
-dictPassDecl names _ (DLetGroup pub binds) =
+dictPassDecl names _ _ (DLetGroup pub binds) =
   DLetGroup pub (map (dictPassLetBind names) binds)
 -- Phase 83/84 single-level + D3b-1: a parametric impl with `requires` gets one
 -- leading `$dict_<method>_<slot>` param on each method (return- OR argument-
@@ -28869,18 +28964,22 @@ dictPassDecl names _ (DLetGroup pub binds) =
 -- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
 -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
 -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
-dictPassDecl _ _ (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
-  methods = implDictPassMethods implOrigin (listLen reqs) methods,
+dictPassDecl _ _ allDecls (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
+  methods =
+    implDictPassMethods
+      implOrigin
+      (listLen (expandImplRequiresIn allDecls reqs))
+      methods,
 }
 -- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
 -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
 -- inferDefaultMethod).
-dictPassDecl _ _ (d@(DInterface { typarams, methods, ... })) =
+dictPassDecl _ _ _ (d@(DInterface { typarams, methods, ... })) =
   DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
-dictPassDecl names ret (DAttrib attrs d) =
-  DAttrib attrs (dictPassDecl names ret d)
-dictPassDecl _ _ d = d
+dictPassDecl names ret allDecls (DAttrib attrs d) =
+  DAttrib attrs (dictPassDecl names ret allDecls d)
+dictPassDecl _ _ _ d = d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
@@ -31448,7 +31547,9 @@ exactReturnBlockers args =
 methodReturnPrerequisites : List Mono -> ImplRow -> List PrerequisiteEvidence
 methodReturnPrerequisites args row = match selectedRowReqMatch args row
   Some (subst, reqs) =>
-    map prerequisiteEvidence (map (reqToObligation subst) reqs)
+    map
+      prerequisiteEvidence
+      (map (reqToObligation subst) (expandImplRequires reqs))
   None => []
 
 prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
@@ -34002,7 +34103,13 @@ registerImplRequires _ _ _ _ _ _ [] = ()
 registerImplRequires ce cur iface implTvMap rpNames reqs (scoped :: rest)
   | registersElementDict mname rpNames =
     let methodArity = methodDictArityInClassEnv ce cur iface mname
-    let _ = registerReqSlots scoped.simScope implTvMap methodArity reqs
+    let _ =
+      registerReqSlots
+        scoped.simScope
+        implTvMap
+        methodArity
+        (listLen reqs)
+        (expandImplRequires reqs)
     registerImplRequires ce cur iface implTvMap rpNames reqs rest
   | otherwise = registerImplRequires ce cur iface implTvMap rpNames reqs rest
   where
@@ -34021,32 +34128,38 @@ registersElementDict : String -> List String -> Bool
 registersElementDict mname rpNames =
   contains mname rpNames || isSome (argDispatchOf mname)
 
-registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
-registerReqSlots _ _ _ [] = ()
-registerReqSlots scope implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
+registerReqSlots : ScopeId ->
+  List (String, Mono) ->
+  Int ->
+  Int ->
+  List Require ->
+  Unit
+registerReqSlots _ _ _ _ [] = ()
+registerReqSlots scope implTvMap slot directLeft ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
   let binder = Scopes.binderAt scope slot
-  let _ = registerEachActive ids binder
   let reqIface = IfaceRef { irName = iface, irOrigin = ro }
-  let _ = registerPredGiven reqIface argMonos binder
-  -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
-  -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
-  -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
-  -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
-  -- SLICE-1 SUPPLY (#1182): `requireOrigin` is a field of the `Require` this arm
-  -- ALREADY destructures — `reqToObligation` reads the same pair to build a real
-  -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
-  pushGiven
-    GMIdWitnessed
-    DirectGiven
-    PredicateSlot {
-      psIface = reqIface,
-      psArgs = PSArgsKnown argMonos,
-      psBoundIds = ids,
-    }
-    binder
-  registerReqSlots scope implTvMap (slot + 1) rest
+  let slotPred = PredicateSlot {
+    psIface = reqIface,
+    psArgs = PSArgsKnown argMonos,
+    psBoundIds = ids,
+  }
+  let _ =
+    if directLeft > 0 then
+      let _ = registerEachActive ids binder
+      let _ = registerPredGiven reqIface argMonos binder
+      -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
+      -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
+      -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
+      -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
+      -- SLICE-1 SUPPLY (#1182): `requireOrigin` is a field of the `Require` this arm
+      -- ALREADY destructures — `reqToObligation` reads the same pair to build a real
+      -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
+      pushGiven GMIdWitnessed DirectGiven slotPred binder
+    else
+      pushGiven GMPredicate LegacySuperclassAlias slotPred binder
+  registerReqSlots scope implTvMap (slot + 1) (directLeft - 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
 -- by TYVAR ID, which cannot express a STRUCTURED given: `requires S (List a)` registers
@@ -44987,7 +45100,7 @@ dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, 
     scopeMethodPredicateSlots
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       scopeMods
-  (mid, dictPass dictNames prog)
+  (mid, dictPassIn scope dictNames prog)
     :: dictPassModulesScoped
       dictNames
       promotedQ
