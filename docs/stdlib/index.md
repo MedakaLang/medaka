@@ -195,9 +195,6 @@ An immutable string of bytes.
 - [`Bytes`](bytes.md#bytes)
 - [`fromArray`](bytes.md#fromarray)
 - [`fromArrayAssumeByteDomain`](bytes.md#fromarrayassumebytedomain)
-- [`fromByteBlockPrefix`](bytes.md#frombyteblockprefix)
-- [`adoptByteBlock`](bytes.md#adoptbyteblock)
-- [`lendByteBlock`](bytes.md#lendbyteblock)
 - [`toArray`](bytes.md#toarray)
 - [`bytesLength`](bytes.md#byteslength)
 - [`get`](bytes.md#get)
@@ -213,6 +210,9 @@ An immutable string of bytes.
 - [`mutBytesGet`](bytes.md#mutbytesget)
 - [`mutBytesSet`](bytes.md#mutbytesset)
 - [`freeze`](bytes.md#freeze)
+- [`fromByteBlockPrefix`](bytes.md#frombyteblockprefix)
+- [`adoptByteBlockUnsafe`](bytes.md#adoptbyteblockunsafe)
+- [`lendByteBlockUnsafe`](bytes.md#lendbyteblockunsafe)
 
 ## [`core`](core.md)
 

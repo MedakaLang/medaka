@@ -48,9 +48,11 @@ newtype Bytes = Bytes ByteBlock
 The byte-string type.
 
 The constructor is module-private, so `fromArray`,
-`fromArrayAssumeByteDomain`, `fromByteBlockPrefix`, `adoptByteBlock` and
-`encodeUtf8` are the ways in and `toArray`, `lendByteBlock`,
-`decodeUtf8` and `decodeUtf8Lossy` are the ways out.
+`fromArrayAssumeByteDomain`, `fromByteBlockPrefix`, `adoptByteBlockUnsafe`
+and `encodeUtf8` are the ways in and `toArray`, `lendByteBlockUnsafe`,
+`decodeUtf8` and `decodeUtf8Lossy` are the ways out. The three named here
+with a `ByteBlock` in their signature are the kernel doors, gathered in
+the `# Kernel doors` section at the end of this module.
 
 ```medaka
 > map bytesLength (fromArray [|1, 2, 3|])
@@ -102,73 +104,6 @@ the domain-checked door is the only one, alongside `toUtf8`/`fromUtf8`.
 [|104, 105|]
 > toArray (fromArrayAssumeByteDomain [|300, -1|])
 [|44, 255|]
-```
-
-### `fromByteBlockPrefix`
-
-```
-fromByteBlockPrefix : Int -> ByteBlock -> Bytes
-```
-
-The first `n` bytes of `bb`, copied into a byte string.
-
-No domain check runs and none is needed: a `ByteBlock` holds one byte per
-element, so every element is already `0` to `255`. `fromArray` scans
-because an `Array Int` element can be anything.
-
-The result is a copy, so a later write to `bb` does not reach it. This is
-how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
-`buildBytes` is the caller -- which is why it takes a length rather than
-the whole block.
-
-Panics when `n` falls outside `0` to the block's length.
-
-```medaka
-> toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
-[|104, 105|]
-```
-
-### `adoptByteBlock`
-
-```
-adoptByteBlock : ByteBlock -> Bytes
-```
-
-The byte string holding `bb` itself, with no copy.
-
-The zero-copy way in, where `fromByteBlockPrefix` copies. The byte string
-aliases the block rather than holding its own: a write to `bb` afterwards
-changes it, which every other way in rules out. Adopt a block the caller
-is done with -- one just allocated, or one whose owner has finished with
-it -- or, where the block keeps a writer, one whose writer only ever
-writes where no holder of the byte string reads.
-
-No domain check runs and none is needed: a `ByteBlock` holds one byte per
-element. The whole block becomes the byte string, so a caller whose live
-bytes are a prefix of a larger buffer wants `fromByteBlockPrefix`, or
-must slice afterwards.
-
-```medaka
-> toArray (adoptByteBlock (byteBlockFromString "hi"))
-[|104, 105|]
-```
-
-### `lendByteBlock`
-
-```
-lendByteBlock : Bytes -> ByteBlock
-```
-
-The block `b` is built on, with no copy.
-
-`adoptByteBlock`'s counterpart: the way out for a caller that reads or
-blits the bytes and would rather not pay `toArray`'s boxed machine word
-per byte. The block is the byte string's own, so a write to it changes a
-value that hands out no other way to change it. Read it; do not write it.
-
-```medaka
-> byteBlockLength (lendByteBlock (encodeUtf8 "héllo"))
-6
 ```
 
 ### `toArray`
@@ -381,6 +316,8 @@ avoid.
 3
 ```
 
+Instances: [`Debug`](#debug-mutbytes)
+
 ### `mutBytesMake`
 
 ```
@@ -459,6 +396,72 @@ The result is a copy, so a write to `mb` afterwards does not reach it.
 [|0, 9|]
 > let m = mutBytesMake 1 in let b = freeze m in let _ = mutBytesSet 0 7 m in toArray b
 [|0|]
+```
+
+## Kernel doors
+
+### `fromByteBlockPrefix`
+
+```
+fromByteBlockPrefix : Int -> ByteBlock -> Bytes
+```
+
+The first `n` bytes of `bb`, copied into a byte string.
+
+No domain check runs and none is needed: a `ByteBlock` holds one byte per
+element, so every element is already `0` to `255`. `fromArray` scans
+because an `Array Int` element can be anything.
+
+The result is a copy, so a later write to `bb` does not reach it. This is
+how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
+`buildBytes` is the caller -- which is why it takes a length rather than
+the whole block.
+
+Panics when `n` falls outside `0` to the block's length.
+
+```medaka
+> toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
+[|104, 105|]
+```
+
+### `adoptByteBlockUnsafe`
+
+```
+adoptByteBlockUnsafe : ByteBlock -> Bytes
+```
+
+The byte string holding `bb` itself, with no copy.
+
+Adopt a block the caller is done with -- one just allocated, or one whose
+owner has finished with it -- or, where the block keeps a writer, one
+whose writer only ever writes where no holder of the byte string reads.
+
+No domain check runs and none is needed: a `ByteBlock` holds one byte per
+element. The whole block becomes the byte string, so a caller whose live
+bytes are a prefix of a larger buffer wants `fromByteBlockPrefix`, or must
+slice afterwards.
+
+```medaka
+> toArray (adoptByteBlockUnsafe (byteBlockFromString "hi"))
+[|104, 105|]
+```
+
+### `lendByteBlockUnsafe`
+
+```
+lendByteBlockUnsafe : Bytes -> ByteBlock
+```
+
+The block `b` is built on, with no copy.
+
+`adoptByteBlockUnsafe`'s counterpart: the way out for a caller that reads
+or blits the bytes and would rather not pay `toArray`'s boxed machine word
+per byte. The block is the byte string's own, so a write to it changes a
+value that hands out no other way to change it. Read it; do not write it.
+
+```medaka
+> byteBlockLength (lendByteBlockUnsafe (encodeUtf8 "héllo"))
+6
 ```
 
 ## Instances
@@ -573,12 +576,35 @@ True
 impl Debug Bytes
 ```
 
-Renders as its bytes would as an `Array Int`.
+Renders as `Bytes "<hex>"` -- lowercase, two digits per byte, no
+separator between bytes. Distinct from `debug` of the equivalent
+`Array Int`, so a `debug` dump always tells a byte string apart from an
+array of the same numbers.
 
 ```medaka
 > debug (fromArrayAssumeByteDomain [|7, 8, 9|])
-"[|7, 8, 9|]"
+"Bytes \"070809\""
 > debug (fromArrayAssumeByteDomain [||])
-"[||]"
+"Bytes \"\""
+> debug (encodeUtf8 "hi") /= debug [|104, 105|]
+True
+> debug (fromArrayAssumeByteDomain (fromList [0..=31]))
+"Bytes \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\""
+```
+
+### `Debug MutBytes`
+
+```
+impl Debug MutBytes
+```
+
+Renders as `MutBytes "<hex>"`, in the same lowercase hex shape
+`Debug Bytes` uses -- read from the live buffer, not a `freeze`d copy.
+
+```medaka
+> debug (mutBytesMake 0)
+"MutBytes \"\""
+> let mb = mutBytesMake 2 in let _ = mutBytesSet 0 255 mb in debug mb
+"MutBytes \"ff00\""
 ```
 

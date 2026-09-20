@@ -49,8 +49,8 @@ copy, so emitting more afterwards does not reach it.
 
 ```medaka
 > let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
-"[|0, 128, 255|]"
-> let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) == debug (buildArray buf)
+"Bytes \"0080ff\""
+> let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)
 True
 ```
 
@@ -80,9 +80,9 @@ over a `List Int`.
 
 ```medaka
 > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
-"[|104, 105, 33|]"
+"Bytes \"686921\""
 > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
-"[||]"
+"Bytes \"\""
 ```
 
 ### `builderParts`

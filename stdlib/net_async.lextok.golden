@@ -25,7 +25,7 @@ IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
 COMMA
-IDENT "adoptByteBlock"
+IDENT "adoptByteBlockUnsafe"
 RBRACE
 NEWLINE
 IMPORT
@@ -1450,7 +1450,7 @@ UPPER "Ok"
 LPAREN
 UPPER "Some"
 LPAREN
-IDENT "adoptByteBlock"
+IDENT "adoptByteBlockUnsafe"
 IDENT "bb"
 RPAREN
 RPAREN

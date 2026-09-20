@@ -261,3 +261,7 @@ mechanism:
   seed emitter can no longer compile HEAD, which happens only if
   `compiler/**` or `stdlib/core.mdk` adopts `Bytes` — out of scope for this
   epic (see "The B1 surface" above).
+
+`adoptByteBlockUnsafe`, `lendByteBlockUnsafe`, and `fromByteBlockPrefix` are
+the only exports naming `ByteBlock` directly (`stdlib/bytes.mdk`'s
+`# Kernel doors` section); B5 adds no more without a ruling.

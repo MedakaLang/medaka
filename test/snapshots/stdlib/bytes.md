@@ -1,5 +1,5 @@
 # META
-source_lines=709
+source_lines=747
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -73,14 +73,17 @@ stages=DESUGAR,MARK
 import core.{
   Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Hashable
 }
-import array.{findIndex}
+import array.{findIndex, fromList}
+import string.{toDigit}
 
 {- | The byte-string type.
 
    The constructor is module-private, so `fromArray`,
-   `fromArrayAssumeByteDomain`, `fromByteBlockPrefix`, `adoptByteBlock` and
-   `encodeUtf8` are the ways in and `toArray`, `lendByteBlock`,
-   `decodeUtf8` and `decodeUtf8Lossy` are the ways out.
+   `fromArrayAssumeByteDomain`, `fromByteBlockPrefix`, `adoptByteBlockUnsafe`
+   and `encodeUtf8` are the ways in and `toArray`, `lendByteBlockUnsafe`,
+   `decodeUtf8` and `decodeUtf8Lossy` are the ways out. The three named here
+   with a `ByteBlock` in their signature are the kernel doors, gathered in
+   the `# Kernel doors` section at the end of this module.
 
    > map bytesLength (fromArray [|1, 2, 3|])
    Some 3 -}
@@ -122,62 +125,6 @@ fromArray arr = match findIndex (b => b < 0 || b > 255) arr
 export
 fromArrayAssumeByteDomain : Array Int -> Bytes
 fromArrayAssumeByteDomain arr = Bytes (byteBlockFromIntArray arr)
-
-{- | The first `n` bytes of `bb`, copied into a byte string.
-
-   No domain check runs and none is needed: a `ByteBlock` holds one byte per
-   element, so every element is already `0` to `255`. `fromArray` scans
-   because an `Array Int` element can be anything.
-
-   The result is a copy, so a later write to `bb` does not reach it. This is
-   how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
-   `buildBytes` is the caller -- which is why it takes a length rather than
-   the whole block.
-
-   Panics when `n` falls outside `0` to the block's length.
-
-   > toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
-   [|104, 105|] -}
-export
-fromByteBlockPrefix : Int -> ByteBlock -> Bytes
-fromByteBlockPrefix n bb =
-  if n < 0 || n > byteBlockLength bb then
-    panic "Bytes.fromByteBlockPrefix: length out of range"
-  else
-    Bytes (byteBlockCopyUnsafe n bb)
-
-{- | The byte string holding `bb` itself, with no copy.
-
-   The zero-copy way in, where `fromByteBlockPrefix` copies. The byte string
-   aliases the block rather than holding its own: a write to `bb` afterwards
-   changes it, which every other way in rules out. Adopt a block the caller
-   is done with -- one just allocated, or one whose owner has finished with
-   it -- or, where the block keeps a writer, one whose writer only ever
-   writes where no holder of the byte string reads.
-
-   No domain check runs and none is needed: a `ByteBlock` holds one byte per
-   element. The whole block becomes the byte string, so a caller whose live
-   bytes are a prefix of a larger buffer wants `fromByteBlockPrefix`, or
-   must slice afterwards.
-
-   > toArray (adoptByteBlock (byteBlockFromString "hi"))
-   [|104, 105|] -}
-export
-adoptByteBlock : ByteBlock -> Bytes
-adoptByteBlock bb = Bytes bb
-
-{- | The block `b` is built on, with no copy.
-
-   `adoptByteBlock`'s counterpart: the way out for a caller that reads or
-   blits the bytes and would rather not pay `toArray`'s boxed machine word
-   per byte. The block is the byte string's own, so a write to it changes a
-   value that hands out no other way to change it. Read it; do not write it.
-
-   > byteBlockLength (lendByteBlock (encodeUtf8 "héllo"))
-   6 -}
-export
-lendByteBlock : Bytes -> ByteBlock
-lendByteBlock (Bytes bb) = bb
 
 {- | The bytes of `b` as an array, in order.
 
@@ -393,25 +340,38 @@ hashGo acc bb i n =
 export impl Hashable Bytes where
   hash (Bytes bb) = hashGo 0 bb 0 (byteBlockLength bb)
 
--- The rendering walks the block a byte at a time, mirroring
--- `core.debugArrayItems` by index, rather than rendering the `Array Int` of
--- the bytes: the array would box a machine word per byte to produce the same
--- characters.
-debugBytesItems : ByteBlock -> Int -> Int -> String
-debugBytesItems bb i n
-  | i >= n = ""
-  | i == n - 1 = debug (byteBlockGetUnsafe i bb)
-  | otherwise =
-    "\{debug (byteBlockGetUnsafe i bb)}, \{debugBytesItems bb (i + 1) n}"
+-- `hex.mdk` has an encoder already, but importing it here would cycle: it
+-- imports `bytes` for `Bytes` itself. This walks the block a byte at a time,
+-- mirroring `core.debugArrayItems` by index rather than rendering the
+-- `Array Int` of the bytes, which would box a machine word per byte to
+-- produce the same characters.
+hexDigit : Int -> Char
+hexDigit n = match toDigit n
+  Some c => c
+  None => '?'
 
-{- | Renders as its bytes would as an `Array Int`.
+debugBytesHex : ByteBlock -> Int -> Int -> String
+debugBytesHex bb i n
+  | i >= n = ""
+  | otherwise =
+    let b = byteBlockGetUnsafe i bb
+    "\{hexDigit (shiftRight b 4)}\{hexDigit (bitAnd b 15)}\{debugBytesHex bb (i + 1) n}"
+
+{- | Renders as `Bytes "<hex>"` -- lowercase, two digits per byte, no
+   separator between bytes. Distinct from `debug` of the equivalent
+   `Array Int`, so a `debug` dump always tells a byte string apart from an
+   array of the same numbers.
 
    > debug (fromArrayAssumeByteDomain [|7, 8, 9|])
-   "[|7, 8, 9|]"
+   "Bytes \"070809\""
    > debug (fromArrayAssumeByteDomain [||])
-   "[||]" -}
+   "Bytes \"\""
+   > debug (encodeUtf8 "hi") /= debug [|104, 105|]
+   True
+   > debug (fromArrayAssumeByteDomain (fromList [0..=31]))
+   "Bytes \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\"" -}
 export impl Debug Bytes where
-  debug (Bytes bb) = "[|\{debugBytesItems bb 0 (byteBlockLength bb)}|]"
+  debug (Bytes bb) = "Bytes \"\{debugBytesHex bb 0 (byteBlockLength bb)}\""
 
 -- # Text
 
@@ -711,20 +671,93 @@ mutBytesSet i v (MutBytes bb) =
 export
 freeze : MutBytes -> Bytes
 freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
+
+{- | Renders as `MutBytes "<hex>"`, in the same lowercase hex shape
+   `Debug Bytes` uses -- read from the live buffer, not a `freeze`d copy.
+
+   > debug (mutBytesMake 0)
+   "MutBytes \"\""
+   > let mb = mutBytesMake 2 in let _ = mutBytesSet 0 255 mb in debug mb
+   "MutBytes \"ff00\"" -}
+export impl Debug MutBytes where
+  debug (MutBytes bb) =
+    "MutBytes \"\{debugBytesHex bb 0 (byteBlockLength bb)}\""
+
+-- # Kernel doors
+
+-- The only three exports in this module with a `ByteBlock` in their
+-- signature, gathered here rather than beside `fromArray`/`toArray` because
+-- crossing to and from the runtime's packed buffer is a different kind of
+-- operation from every other door: `adoptByteBlockUnsafe` and
+-- `lendByteBlockUnsafe` alias -- the `Bytes` and the block share storage, so
+-- a write through the block reaches the `Bytes` and vice versa, which is
+-- what the `Unsafe` suffix names -- while `fromByteBlockPrefix` copies, like
+-- every other way in or out of `Bytes`, so it carries no suffix. Call these
+-- only from a module that already holds a `ByteBlock` of its own --
+-- `bytebuilder.mdk`, `net_async.mdk` -- never to route around `Bytes`'s own
+-- operations.
+
+{- | The first `n` bytes of `bb`, copied into a byte string.
+
+   No domain check runs and none is needed: a `ByteBlock` holds one byte per
+   element, so every element is already `0` to `255`. `fromArray` scans
+   because an `Array Int` element can be anything.
+
+   The result is a copy, so a later write to `bb` does not reach it. This is
+   how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
+   `buildBytes` is the caller -- which is why it takes a length rather than
+   the whole block.
+
+   Panics when `n` falls outside `0` to the block's length.
+
+   > toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
+   [|104, 105|] -}
+export
+fromByteBlockPrefix : Int -> ByteBlock -> Bytes
+fromByteBlockPrefix n bb =
+  if n < 0 || n > byteBlockLength bb then
+    panic "Bytes.fromByteBlockPrefix: length out of range"
+  else
+    Bytes (byteBlockCopyUnsafe n bb)
+
+{- | The byte string holding `bb` itself, with no copy.
+
+   Adopt a block the caller is done with -- one just allocated, or one whose
+   owner has finished with it -- or, where the block keeps a writer, one
+   whose writer only ever writes where no holder of the byte string reads.
+
+   No domain check runs and none is needed: a `ByteBlock` holds one byte per
+   element. The whole block becomes the byte string, so a caller whose live
+   bytes are a prefix of a larger buffer wants `fromByteBlockPrefix`, or must
+   slice afterwards.
+
+   > toArray (adoptByteBlockUnsafe (byteBlockFromString "hi"))
+   [|104, 105|] -}
+export
+adoptByteBlockUnsafe : ByteBlock -> Bytes
+adoptByteBlockUnsafe bb = Bytes bb
+
+{- | The block `b` is built on, with no copy.
+
+   `adoptByteBlockUnsafe`'s counterpart: the way out for a caller that reads
+   or blits the bytes and would rather not pay `toArray`'s boxed machine word
+   per byte. The block is the byte string's own, so a write to it changes a
+   value that hands out no other way to change it. Read it; do not write it.
+
+   > byteBlockLength (lendByteBlockUnsafe (encodeUtf8 "héllo"))
+   6 -}
+export
+lendByteBlockUnsafe : Bytes -> ByteBlock
+lendByteBlockUnsafe (Bytes bb) = bb
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Hashable" false))))
-(DUse false (UseGroup ("array") ((mem "findIndex" false))))
+(DUse false (UseGroup ("array") ((mem "findIndex" false) (mem "fromList" false))))
+(DUse false (UseGroup ("string") ((mem "toDigit" false))))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())
 (DTypeSig true "fromArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Bytes"))))
 (DFunDef false "fromArray" ((PVar "arr")) (EMatch (EApp (EApp (EVar "findIndex") (ELam ((PVar "b")) (EBinOp "||" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 255)))))) (EVar "arr")) (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr")))))))
 (DTypeSig true "fromArrayAssumeByteDomain" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bytes")))
 (DFunDef false "fromArrayAssumeByteDomain" ((PVar "arr")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr"))))
-(DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))
-(DFunDef false "fromByteBlockPrefix" ((PVar "n") (PVar "bb")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "Bytes.fromByteBlockPrefix: length out of range"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "n")) (EVar "bb")))))
-(DTypeSig true "adoptByteBlock" (TyFun (TyCon "ByteBlock") (TyCon "Bytes")))
-(DFunDef false "adoptByteBlock" ((PVar "bb")) (EApp (EVar "Bytes") (EVar "bb")))
-(DTypeSig true "lendByteBlock" (TyFun (TyCon "Bytes") (TyCon "ByteBlock")))
-(DFunDef false "lendByteBlock" ((PCon "Bytes" (PVar "bb"))) (EVar "bb"))
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
 (DTypeSig true "bytesLength" (TyFun (TyCon "Bytes") (TyCon "Int")))
@@ -749,9 +782,11 @@ freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 (DTypeSig false "hashGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyCon "Bytes")) () ((im "hash" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "hashGo") (ELit (LInt 0))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))))
-(DTypeSig false "debugBytesItems" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "debugBytesItems" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EVar "debug") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "debug") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (ELit (LString ", "))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesItems") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesItems") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "|]"))))))
+(DTypeSig false "hexDigit" (TyFun (TyCon "Int") (TyCon "Char")))
+(DFunDef false "hexDigit" ((PVar "n")) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?")))))
+(DTypeSig false "debugBytesHex" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "debugBytesHex" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Bytes \"")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
 (DTypeSig true "encodeUtf8" (TyFun (TyCon "String") (TyCon "Bytes")))
 (DFunDef false "encodeUtf8" ((PVar "s")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromString") (EVar "s"))))
 (DTypeSig false "utf8Continuation" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Bool"))))
@@ -788,20 +823,22 @@ freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 (DFunDef false "mutBytesSet" ((PVar "i") (PVar "v") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "v") (ELit (LInt 0))) (EBinOp ">" (EVar "v") (ELit (LInt 255)))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: value out of range 0..255"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "v")) (EVar "bb")))))
 (DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
 (DFunDef false "freeze" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
+(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "MutBytes \"")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
+(DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))
+(DFunDef false "fromByteBlockPrefix" ((PVar "n") (PVar "bb")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "Bytes.fromByteBlockPrefix: length out of range"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "n")) (EVar "bb")))))
+(DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "Bytes")))
+(DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "Bytes") (EVar "bb")))
+(DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "Bytes") (TyCon "ByteBlock")))
+(DFunDef false "lendByteBlockUnsafe" ((PCon "Bytes" (PVar "bb"))) (EVar "bb"))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Hashable" false))))
-(DUse false (UseGroup ("array") ((mem "findIndex" false))))
+(DUse false (UseGroup ("array") ((mem "findIndex" false) (mem "fromList" false))))
+(DUse false (UseGroup ("string") ((mem "toDigit" false))))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())
 (DTypeSig true "fromArray" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Bytes"))))
 (DFunDef false "fromArray" ((PVar "arr")) (EMatch (EApp (EApp (EVar "findIndex") (ELam ((PVar "b")) (EBinOp "||" (EBinOp "<" (EVar "b") (ELit (LInt 0))) (EBinOp ">" (EVar "b") (ELit (LInt 255)))))) (EVar "arr")) (arm (PCon "Some" PWild) () (EVar "None")) (arm (PCon "None") () (EApp (EVar "Some") (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr")))))))
 (DTypeSig true "fromArrayAssumeByteDomain" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "Bytes")))
 (DFunDef false "fromArrayAssumeByteDomain" ((PVar "arr")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr"))))
-(DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))
-(DFunDef false "fromByteBlockPrefix" ((PVar "n") (PVar "bb")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "Bytes.fromByteBlockPrefix: length out of range"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "n")) (EVar "bb")))))
-(DTypeSig true "adoptByteBlock" (TyFun (TyCon "ByteBlock") (TyCon "Bytes")))
-(DFunDef false "adoptByteBlock" ((PVar "bb")) (EApp (EVar "Bytes") (EVar "bb")))
-(DTypeSig true "lendByteBlock" (TyFun (TyCon "Bytes") (TyCon "ByteBlock")))
-(DFunDef false "lendByteBlock" ((PCon "Bytes" (PVar "bb"))) (EVar "bb"))
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
 (DTypeSig true "bytesLength" (TyFun (TyCon "Bytes") (TyCon "Int")))
@@ -826,9 +863,11 @@ freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 (DTypeSig false "hashGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
 (DFunDef false "hashGo" ((PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EVar "hashGo") (EBinOp "+" (EBinOp "*" (EVar "acc") (ELit (LInt 33))) (EApp (EVar "hashInt") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DImpl true "Hashable" ((TyCon "Bytes")) () ((im "hash" ((PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "hashGo") (ELit (LInt 0))) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))))
-(DTypeSig false "debugBytesItems" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
-(DFunDef false "debugBytesItems" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EBinOp "==" (EVar "i") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EApp (EMethodRef "debug") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))) (ELit (LString ", "))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesItems") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
-(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "[|")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesItems") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "|]"))))))
+(DTypeSig false "hexDigit" (TyFun (TyCon "Int") (TyCon "Char")))
+(DFunDef false "hexDigit" ((PVar "n")) (EMatch (EApp (EVar "toDigit") (EVar "n")) (arm (PCon "Some" (PVar "c")) () (EVar "c")) (arm (PCon "None") () (ELit (LChar "?")))))
+(DTypeSig false "debugBytesHex" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "String")))))
+(DFunDef false "debugBytesHex" ((PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (ELit (LString "")) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "b") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "shiftRight") (EVar "b")) (ELit (LInt 4)))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EVar "hexDigit") (EApp (EApp (EVar "bitAnd") (EVar "b")) (ELit (LInt 15)))))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))) (ELit (LString ""))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DImpl true "Debug" ((TyCon "Bytes")) () ((im "debug" ((PCon "Bytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "Bytes \"")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
 (DTypeSig true "encodeUtf8" (TyFun (TyCon "String") (TyCon "Bytes")))
 (DFunDef false "encodeUtf8" ((PVar "s")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromString") (EVar "s"))))
 (DTypeSig false "utf8Continuation" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyCon "Bool"))))
@@ -865,3 +904,10 @@ freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 (DFunDef false "mutBytesSet" ((PVar "i") (PVar "v") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "v") (ELit (LInt 0))) (EBinOp ">" (EVar "v") (ELit (LInt 255)))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: value out of range 0..255"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "v")) (EVar "bb")))))
 (DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
 (DFunDef false "freeze" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
+(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "MutBytes \"")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
+(DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))
+(DFunDef false "fromByteBlockPrefix" ((PVar "n") (PVar "bb")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "Bytes.fromByteBlockPrefix: length out of range"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "n")) (EVar "bb")))))
+(DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "Bytes")))
+(DFunDef false "adoptByteBlockUnsafe" ((PVar "bb")) (EApp (EVar "Bytes") (EVar "bb")))
+(DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "Bytes") (TyCon "ByteBlock")))
+(DFunDef false "lendByteBlockUnsafe" ((PCon "Bytes" (PVar "bb"))) (EVar "bb"))

@@ -10,7 +10,7 @@
 -- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
-import bytes.{Bytes, adoptByteBlock}
+import bytes.{Bytes, adoptByteBlockUnsafe}
 import net.{Connection(..), Listener(..)}
 import net as N
 import string.{toUtf8}
@@ -217,9 +217,9 @@ tryRecvBytes (Connection fd) n = match netSetNonblock fd True
   -- The block was allocated by this very call and the runtime kept no
   -- reference to it, so it has one owner and nothing can write it behind the
   -- byte string's back: adopting it is safe where the general contract on
-  -- `adoptByteBlock` would demand a copy.
+  -- `adoptByteBlockUnsafe` would demand a copy.
   Ok _ => match netTryRecvBytes fd n
-    Ok (Some bb) => Ok (Some (adoptByteBlock bb))
+    Ok (Some bb) => Ok (Some (adoptByteBlockUnsafe bb))
     Ok None => Ok None
     Err e => Err e
   Err e => Err e

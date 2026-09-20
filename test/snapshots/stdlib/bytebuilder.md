@@ -1,5 +1,5 @@
 # META
-source_lines=455
+source_lines=456
 stages=DESUGAR,MARK
 # SOURCE
 {- | A buffer for building byte arrays.
@@ -21,7 +21,8 @@ stages=DESUGAR,MARK
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
 import bytes.{
-  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, encodeUtf8
+  Bytes, adoptByteBlockUnsafe, fromByteBlockPrefix, lendByteBlockUnsafe,
+  encodeUtf8
 }
 import list.{reverse}
 
@@ -49,8 +50,8 @@ buildArray (Builder backing len) =
    copy, so emitting more afterwards does not reach it.
 
    > let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
-   "[|0, 128, 255|]"
-   > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) == debug (buildArray buf)
+   "Bytes \"0080ff\""
+   > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)
    True -}
 export
 buildBytes : Builder -> Bytes
@@ -100,13 +101,13 @@ growTo cap needed =
    over a `List Int`.
 
    > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
-   "[|104, 105, 33|]"
+   "Bytes \"686921\""
    > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
-   "[||]" -}
+   "Bytes \"\"" -}
 export
 appendBytes : Bytes -> Builder -> Unit
 appendBytes src (Builder backing len) =
-  let srcBlock = lendByteBlock src
+  let srcBlock = lendByteBlockUnsafe src
   let n = byteBlockLength srcBlock
   let needed = !len + n
   let () =
@@ -133,7 +134,7 @@ appendBytes src (Builder backing len) =
    3 -}
 export
 builderParts : Builder -> (Bytes, Int)
-builderParts (Builder backing len) = (adoptByteBlock !backing, !len)
+builderParts (Builder backing len) = (adoptByteBlockUnsafe !backing, !len)
 
 -- | Appends each value in the list as one byte. The inverse of
 -- `byteparser.takeBytes`.
@@ -459,7 +460,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
         Err _ => False
 # DESUGAR
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "encodeUtf8" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
@@ -473,9 +474,9 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DTypeSig false "growTo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
 (DTypeSig true "appendBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "appendBytes" ((PVar "src") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "srcBlock") (EApp (EVar "lendByteBlock") (EVar "src"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "srcBlock"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "growTo") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EVar "needed")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "srcBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
+(DFunDef false "appendBytes" ((PVar "src") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "srcBlock") (EApp (EVar "lendByteBlockUnsafe") (EVar "src"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "srcBlock"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "growTo") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EVar "needed")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "srcBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
 (DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "Bytes") (TyCon "Int"))))
-(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlock") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
+(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
 (DTypeSig true "emitBytes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitBytes" ((PList) PWild) (ELit LUnit))
 (DFunDef false "emitBytes" ((PCons (PVar "b") (PVar "rest")) (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EVar "b")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitBytes") (EVar "rest")) (EVar "buf")))))
@@ -509,7 +510,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DProp false "emitU16BE reversed bytes, leUint agrees with beUint" ((pp "v" (TyCon "Int"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 65535)))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "takeBytes") (ELit (LInt 2)))) (EApp (EVar "build1") (EApp (EVar "emitU16BE") (EVar "w")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "bytes")) () (EBlock (DoLet false false (PVar "reversedArr") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "bytes")))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "leUint") (ELit (LInt 2)))) (EVar "reversedArr")) (arm (PCon "Ok" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "w"))) (arm (PCon "Err" PWild) () (EVar "False"))))))))))
 # MARK
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "encodeUtf8" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlockUnsafe" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlockUnsafe" false) (mem "encodeUtf8" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
@@ -523,9 +524,9 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DTypeSig false "growTo" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))
 (DFunDef false "growTo" ((PVar "cap") (PVar "needed")) (EIf (EBinOp ">=" (EVar "cap") (EVar "needed")) (EVar "cap") (EApp (EApp (EVar "growTo") (EIf (EBinOp "==" (EVar "cap") (ELit (LInt 0))) (ELit (LInt 1)) (EBinOp "*" (EVar "cap") (ELit (LInt 2))))) (EVar "needed"))))
 (DTypeSig true "appendBytes" (TyFun (TyCon "Bytes") (TyFun (TyCon "Builder") (TyCon "Unit"))))
-(DFunDef false "appendBytes" ((PVar "src") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "srcBlock") (EApp (EVar "lendByteBlock") (EVar "src"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "srcBlock"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "growTo") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EVar "needed")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "srcBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
+(DFunDef false "appendBytes" ((PVar "src") (PCon "Builder" (PVar "backing") (PVar "len"))) (EBlock (DoLet false false (PVar "srcBlock") (EApp (EVar "lendByteBlockUnsafe") (EVar "src"))) (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "srcBlock"))) (DoLet false false (PVar "needed") (EBinOp "+" (EUnOp "!" (EVar "len")) (EVar "n"))) (DoLet false false (PLit LUnit) (EIf (EBinOp ">" (EVar "needed") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EBlock (DoLet false false (PVar "newBlock") (EApp (EVar "byteBlockMake") (EApp (EApp (EVar "growTo") (EApp (EVar "byteBlockLength") (EUnOp "!" (EVar "backing")))) (EVar "needed")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EUnOp "!" (EVar "backing"))) (ELit (LInt 0))) (EVar "newBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "len")))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "backing")) (EVar "newBlock")))) (ELit LUnit))) (DoLet false false (PLit LUnit) (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "srcBlock")) (ELit (LInt 0))) (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))) (EVar "n"))) (DoExpr (EApp (EApp (EVar "setRef") (EVar "len")) (EVar "needed")))))
 (DTypeSig true "builderParts" (TyFun (TyCon "Builder") (TyTuple (TyCon "Bytes") (TyCon "Int"))))
-(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlock") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
+(DFunDef false "builderParts" ((PCon "Builder" (PVar "backing") (PVar "len"))) (ETuple (EApp (EVar "adoptByteBlockUnsafe") (EUnOp "!" (EVar "backing"))) (EUnOp "!" (EVar "len"))))
 (DTypeSig true "emitBytes" (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyCon "Builder") (TyCon "Unit"))))
 (DFunDef false "emitBytes" ((PList) PWild) (ELit LUnit))
 (DFunDef false "emitBytes" ((PCons (PVar "b") (PVar "rest")) (PVar "buf")) (EBlock (DoExpr (EApp (EApp (EVar "emitU8") (EVar "b")) (EVar "buf"))) (DoExpr (EApp (EApp (EVar "emitBytes") (EVar "rest")) (EVar "buf")))))
