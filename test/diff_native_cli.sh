@@ -382,12 +382,14 @@ else
     fail=$((fail+1)); printf 'FAIL build/main_shape_nonunit (want exit 0 + binary + W-MAIN-SHAPE on stderr, got exit %s stderr [%s])\n' "$nub_status" "$(cat "$nub_err" 2>/dev/null)"
   fi
 
-  # ── build: MutBytes panic messages (stdlib/mut_bytes.mdk) ─────────────────
-  # Three `panic` arms in stdlib/mut_bytes.mdk that no other vehicle reaches:
-  # setInPlace's value-range check, setInPlace's bounds check, and make's
-  # negative-length check. Pin the runtime abort text and exit code for each
-  # so a change to any of the three messages, or a regression that drops the
-  # guard entirely, is caught.
+  # ── build: MutBytes/Builder panic messages (stdlib/mut_bytes.mdk,
+  # stdlib/bytebuilder.mdk) ──────────────────────────────────────────────────
+  # Four `panic` arms across the two types that no other vehicle reaches:
+  # MutBytes.setInPlace's value-range check, MutBytes.setInPlace's bounds
+  # check, MutBytes.make's negative-length check, and Builder.emitU8's
+  # value-range check. Pin the runtime abort text and exit code for each so a
+  # change to any of the four messages, or a regression that drops the guard
+  # entirely, is caught.
   mb_case() {
     mb_name="$1"; mb_f="$FIX/run/$mb_name.mdk"; mb_want="$2"
     mb_bin="$TMP/nat_build_$mb_name"; mb_err="$TMP/nat_${mb_name}_run.err"
@@ -407,6 +409,7 @@ else
   mb_case mutbytes_set_range "MutBytes.setInPlace: value out of range 0..255"
   mb_case mutbytes_set_oob   "MutBytes.setInPlace: index out of bounds"
   mb_case mutbytes_make_neg  "MutBytes.make: negative length"
+  mb_case emitu8_range       "Builder.emitU8: value out of range 0..255"
 fi
 
 # error/* — RETIRED with the OCaml oracle (native canonical; oracle-coupled leg

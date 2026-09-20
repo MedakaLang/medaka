@@ -62,7 +62,7 @@ True
 emitU8 : Int -> Builder -> Unit
 ```
 
-Appends one byte. Only the low eight bits of the value are used.
+Appends one byte. Panics when `b` falls outside `0` to `255`.
 
 ### `appendBytes`
 
