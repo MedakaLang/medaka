@@ -81,7 +81,7 @@ does not have as units. The amended set is eight:
 | **K** — declaration analysis | whole-graph CE/IE/DataEnv **and the per-module seed layer it has not absorbed** | R folded in; the "assembled once" clause corrected (SA-2) |
 | **I** — inference | the `infer` recursion, kept structurally intact | unchanged |
 | **Sh** — shadow resolution | definer/importer shadow dispatch, value-position pinning, standalone dict computation | **NEW.** 1,043 code lines, larger than ENTAIL (556) and COHERENCE (265) combined, today split four ways: I (the six-arm `inferAppExpr` ladder), K (shadow sets from `universeIfaceMethodsRef`), E (per-module `prePassModulePairArg` filtering), S (`resolveRLocalSites`). L1 already names "the shadow resolution function" as a spec judgment and SHADOW-SEMANTICS §3 already has its table; §2 gave it no home |
-| **S** — solving | ONE entailment engine **and the stamper schedule as one owned contract** | the schedule is now inside S's contract, not adjacent to it: there are two stamper sequences (`elabModuleStamp:42870-42890` vs `elaborateDict:19956-19966`), they run in different orders, and the flat one omits `resolveRLocalSites` entirely, so L15's stated override rule is unenforceable there |
+| **S** — solving | ONE entailment engine **and the stamper schedule as one owned contract** | the schedule is inside S's contract, not adjacent to it: `moduleStampOrder` is the sole graph-level sequence, including `resolveRLocalSites`, so L15's override rule has one enforceable order |
 | **E** — elaboration / driver | one driver, one mode, marking on the schedule | unchanged in intent; re-sequenced (SA-4) |
 | **G** — global checks | coherence, escape/launder, kinds, exhaustiveness bridge | unchanged |
 | **Dg** — diagnostics | **an owned region of `typecheck.mdk` with a single gateway, not an extracted module** | **replaces the withdrawn D.** 1,471 code lines, the largest single orphan, created by F-2's withdrawal and never re-homed. D failed as a *module* extraction because every pass pushes; the phase form is buildable (SA-4 step 3) |
@@ -163,14 +163,16 @@ the tree** (`:28660-28663`). **Re-pin I5 consequence class 3 before #2548** (SA-
 
 ### SA-4. Stage E, re-sequenced by leverage
 
-The **only production consumer of the `Flat` arm** is `elaborateModules`'s own promotion
-fallback re-entering it (`:41945` → `discoverPromotedJoint:20159` → `checkProgramSeeded:20175`
-→ `checkProgramSeededSplit:28465` → `checkBodyImpl (Flat …)` at `:28519`). Every other Flat
-consumer is a gate or probe entry plus `medaka snapshot`. E-1's premise at §6 is also wrong in
-the reader's favour: `medaka check <file>` never reaches Flat — the single-file front door wraps
-the file as `[("__user__", prog)]` and takes the **Module** arm (`:33356-33365`,
-`checkOneToLinesWithRuntime:41667-41670`). E-2 is therefore cheaper than §6 prices it, and E-1's
-residual surface is test infrastructure.
+**E-2 status update (2026-09-19).** `CheckMode`, its `Flat` constructor, the
+flat fallback, and the second stamper sequence are deleted.  Every retained
+checking route uses the Module path; the retained one-file/split pins compare
+that one route.  The pre-collapse analysis below is historical rationale, not
+a description of live code.
+
+At the time of the survey, the promotion fallback was the only production Flat
+consumer.  The Module one-file route was already the CLI path; E-2 completed
+the deletion and retired the obsolete controls rather than preserving a second
+checking mode.
 
 Seven steps, in this order, with the dependency reasons measured in the feasibility analysis:
 
@@ -217,10 +219,9 @@ Seven steps, in this order, with the dependency reasons measured in the feasibil
    emit path reaches no golden regardless of which arm it calls. E-2b is therefore **not** a
    suite-wide golden re-derivation — retiring `flat_vs_onemodule`'s FLAT rows and
    `check_wrapper_callers` / `test/CHECK-WRAPPER-CALLERS.txt` (already reflecting the Module-arm
-   move) is what remains of it, and what's left of E-2 overall is collapsing `CheckMode`'s
-   `Flat` constructor itself — the checking-mode value, not the elaboration driver — which
-   still has one live call site (`checkProgramSeededSplit`) and 27 `match mode` forks in
-   `checkBodyImpl`. Full inherited-state writeup: #1116.
+   move) was the remaining cleanup. The later `one-checking-mode` sprint collapsed the
+   checking-mode value and its branches; every retained route now enters the graph driver.
+   Full inherited-state writeup: #1116.
 3. **#2544 — report from the residual** (M4): constraint failures become obligations left
    unsolved, rendered by one pass at quiescence; `elaborateModules` returns the residual
    diagnostics alongside the decls. This is **Dg built as a phase**, and it closes the Bool-only
@@ -236,8 +237,8 @@ Seven steps, in this order, with the dependency reasons measured in the feasibil
    at `:29134-29137`, which no longer describes the function it cites (`inferUserImplBodies`
    now infers parametric heads at `:29520` and keeps its diagnostics at `:29431-29441`).
    🚨 **The survey named the wrong instrument.** `diff_compiler_llvm_typed` and
-   `llvm_typed_ir` drive `llvm_emit_typed_main` — the `elaborateDict`/**Flat** path, the arm
-   step 2 removes from production — so green goldens there say nothing about the Module arm
+   `llvm_typed_ir` drove `llvm_emit_typed_main` through the then-live second elaboration
+   path, so green goldens there said nothing about the Module arm
    `medaka build` runs. The production instrument is `run_check_agreement` + `dict_semantics` +
    `engines` + `argtag_matrix` driven through `./medaka build`, plus the LEG A golden.
    🚨 **And this is a `build`-side ACCEPTANCE change, not "one `if` goes".** The windowed form
@@ -1767,20 +1768,11 @@ part of that task).
 The single most consequential structural change, and the one the map shows is
 missing with no issue filed (§7.1, §7.6):
 
-**One driver.** The multi-module driver is the only driver; a single file is a
-1-module graph. This is DRIVER-COLLAPSE-PLAN's own stated invariant ("the
-degenerate 1-module case automatically satisfies the flat path's invariants") —
-marked IMPLEMENTED while §5 of the map measures 20 `match mode` branches, two
-divergent stamper sequences, and a `Flat`-mode re-entry inside the promotion
-fallback. The target deletes `CheckMode` entirely — but the migration must
-respect what the Flat path *is* today: not a legacy remnant but (a) the live
-production fallback for any multi-module program with an unsignatured
-constrained function, and (b) the substrate of the repl, LSP hover/single-file
-env, playground, single-file doctests, `snapshot`/`check_policy`/`doc`, and the
-`elaborateDict`-driven gate entries (`llvm_emit_typed_main`,
-`core_ir_dict_pp_main`) whose golden families pin Flat behavior. §6 Stage E is
-therefore a consumer-by-consumer migration, then the collapse, then the
-schedule change — three separately-gated moves, not one.
+**One driver — landed 2026-09-19.** The multi-module driver is the only driver;
+a single file is a 1-module graph. The migration was executed consumer by
+consumer, then the second mode and its controls were deleted. The historical
+survey found 20 mode branches, two stamper sequences, and a promotion re-entry;
+those measurements explain the staged migration but do not describe live code.
 
 **SCC-scheduled marking dissolves the promotion fixpoint.** Precision matters
 here, because the naive framing overstates the novelty: per-module SCC ordering,
@@ -2830,7 +2822,7 @@ orders merges, and the plan does not pretend otherwise.
   `flat-exit-floor` slices 3/4). **Accepted behavior change** (Val's
   2026-08-26 decision): the front door's displayed scheme list narrows from
   Flat's folded prelude+user dump to the user's own declarations only — not
-  byte-identical, reblessed across 12 goldens. **Remaining Flat-family
+  byte-identical, reblessed across 12 goldens. **At the E-1 cut, the remaining Flat-family
   callers, each with a recorded verb (`test/CHECK-WRAPPER-CALLERS.txt` +
   `test/diff_compiler_flat_vs_onemodule.sh`'s header), none of them
   residual work — all three are terminal dispositions, not a to-do list**:
@@ -2854,24 +2846,25 @@ orders merges, and the plan does not pretend otherwise.
   — pinned RETAINED for the code-generating emit path per its own header
   comment, categorically higher-risk than the diagnostics-only wrapper family
   this stage targeted, and OUTSIDE the wrapper family this row/ledger tracks.
-- **E-2. `CheckMode` collapse. Entry condition DERIVED 2026-08-27 (#1116,
-  comment posted by the `flat-exit-floor` orchestrator, not this row).** The
-  wrapper-family reacher set is now exactly the five rows E-1 lists as
+- **E-2. `CheckMode` collapse — LANDED 2026-09-19. Historical entry condition
+  derived 2026-08-27 (#1116, comment posted by the `flat-exit-floor`
+  orchestrator, not this row).** At that cut, the wrapper-family reacher set was
+  exactly the five rows E-1 lists as
   KEEP-PINNED above (two controls, one declined-migration, two prelude-free
   dev probes) plus the `elaborateDict` family (out of this wrapper's scope
-  entirely, tracked separately). Collapsing `Flat` means: (i) deleting the two
+  entirely, tracked separately). The collapse then: (i) deleted the two
   control probes (`check_flat_diags_main.mdk`, `origin_agreement_main.mdk`)
   and their gate rows, since there is no Flat driver left to control-test; (ii)
   giving `check_match_main.mdk` and the `elaborateDict` family a Module-arm (or
-  explicitly-scoped) replacement BEFORE the constructor goes, since those two
-  classes have no Module-arm equivalent today; (iii) leaving
+  explicitly-scoped) replacement before the constructor went, since those two
+  classes had no Module-arm equivalent then; (iii) left
   `selfproc_tc_probe.mdk`/`typecheck_main.mdk`'s `withTarget` half on
   `checkToLines` only if that function itself survives the collapse as a
   prelude-free entry (i.e. `checkToLines` is NOT necessarily `Flat`-only
   plumbing — confirm its implementation doesn't route through
   `checkProgramSeededSplit`/`Flat` before assuming it survives unchanged).
-  With that set fixed, collapse the mode branches and the second stamper
-  order; the fallback is re-expressed against the Module path (this is where
+  With that set fixed, the sprint collapsed the mode branches and the second stamper
+  order; the fallback was re-expressed against the Module path (this is where
   its behavior is pinned, not changed). Byte-identical on the Module path;
   enumerated sign-off per divergence fixture for the rest. #462's
   comment-truth item dies here with the single order table.

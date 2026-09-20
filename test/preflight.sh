@@ -643,10 +643,6 @@ while IFS= read -r f; do
       # Same diff_compiler_check repoint as the lexer.mdk arm above.
       add 'diff_compiler_parse*'; add 'diff_compiler_check'
       add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'
-      # #1110: ast.mdk declares TyConOrigin and mapTyInDecl — the carrier and the
-      # traversal BOTH the stamper and the agreement probe walk; parser.mdk mints the
-      # OriginBuiltin tuple heads (DICT-SEMANTICS §8 I6.2).
-      add 'diff_compiler_origin_agreement'
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census' ;;
     # #1131: desugar.mdk is a cited DICT-SEMANTICS site.
     compiler/frontend/desugar.mdk)
@@ -655,15 +651,12 @@ while IFS= read -r f; do
     # #1131: resolve.mdk is a cited DICT-SEMANTICS site (marker.mdk is cited in
     # neither table — derived via the same grep, not assumed from the issue's
     # "plausibly").
-    # #1110: resolve.mdk OWNS the two origin stampers and the agreement tap they are
-    # observed through, so it is the primary subject of diff_compiler_origin_agreement.
     # #1319 unit 0: resolve.mdk expands every import spelling into the name set it
     # binds and attributes each to a module — the fact every import-clause ordering
     # defect in the tracker (#733/#1253/#1284) is decided by. Goldens cannot see an
     # over-widening there; the permutation differential can.
     compiler/frontend/resolve.mdk|compiler/frontend/marker.mdk)
       add 'diff_compiler_snapshot*'; add 'diff_compiler_check*'
-      add 'diff_compiler_origin_agreement'
       add 'diff_compiler_import_order'
       # G-0: the SAME argument on a different axis. resolve/marker decide which
       # interface an occurrence of a shared method name belongs to, so they own the
@@ -708,10 +701,6 @@ while IFS= read -r f; do
       add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
       # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
       add 'diff_compiler_catch_all_census'
-      # #1110: typecheck.mdk hosts BOTH ends of the resolve->typecheck channel
-      # (checkProgramSeededSplit on the flat path, elaborateModules on the graph
-      # path) — i.e. two of the three arms the agreement table compares.
-      add 'diff_compiler_origin_agreement'
       # #1319 unit 0: typecheck.mdk owns universeDataEnv, universeRecordByName and
       # the A-2.6 import-scoped overlay — the tables whose keying decides which
       # declaration an import clause's constructor name lands on.
@@ -924,9 +913,6 @@ while IFS= read -r f; do
     compiler/tools/repl.mdk)       add 'diff_compiler_fmt' ;;
     # #1131: tools/test_cmd.mdk (matched by the `*test*` glob below) is a
     # cited DICT-SEMANTICS site.
-    # #1110: test_cmd.mdk is the driver the agreement probe's `single` arm mirrors
-    # (elaborateModules over [("__user__", decls)]), so a change to how it elaborates
-    # moves which module id that arm claims.
     compiler/tools/*test*|compiler/tools/doctest.mdk|compiler/tools/prop_runner.mdk)
       add 'diff_compiler_fmt'; add 'diff_compiler_ported'
       # #1229: diff_compiler_test_typecheck.sh pins the typecheck-first gate in
@@ -935,7 +921,6 @@ while IFS= read -r f; do
       # i.e. invisible to every golden gate, and cell n, which pins that `medaka
       # test` and `medaka check` cannot reach different verdicts on one tree.
       add 'diff_compiler_test_typecheck'
-      add 'diff_compiler_origin_agreement'
       add 'diff_compiler_dict_semantics'
       # #81 Stage 4: diff_compiler_test_native.sh is the CI gate protecting the
       # native-engine half of this arm (`medaka test --native` / `--engines`);

@@ -4398,8 +4398,8 @@ useMemberBinding (m@(UseMember name _ _ _)) = (name, useMemberLocal m)
 --   * a source module that ALSO DECLARES the name yields ITSELF.  That is not a
 --     leak, it is correct: its own declaration is what a consumer's
 --     `import m.{Foo}` actually binds.
--- Measured, not argued: `test/origin_fixtures/ifaces/` chains `deep` -> `mid` ->
--- `main_ifaces` with `mid` doing both, and the golden reads `Baton 1 mod:mid` /
+-- Measured, not argued: the retired interface-origin fixture chained `deep` -> `mid` ->
+-- `main` with `mid` doing both, and its golden read `Baton 1 mod:mid` /
 -- `iface:Relay 1 mod:mid`.
 keepTypeOrigins : List (String, String) ->
   List (String, String) ->
@@ -4603,7 +4603,7 @@ fillDeclOrigin _ (o@(OriginModule _)) = o
 --
 -- The first prints only `frontend/ast.mdk` (the declarations + the
 -- `OriginUnresolved` literals), this file's own stamper/mappers, and
--- `entries/origin_agreement_main.mdk` (the agreement PROBE, which grades them —
+-- the retired origin-agreement probe (which graded them —
 -- no compile stage consumes them).  The second prints four genuine READS, and
 -- they landed with #1274 on `main`, so the old blanket negative was already false
 -- when it was written: `ir/core_ir_lower.mdk` and `eval/eval.mdk`

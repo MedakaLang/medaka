@@ -10,7 +10,7 @@
 
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkToLines, checkOneToLinesWithRuntime}
+import types.typecheck.{checkOneToLines, checkOneToLinesWithRuntime}
 
 main = match args ()
   [targetPath] => withTarget targetPath
@@ -21,7 +21,7 @@ main = match args ()
 
 withTarget : String -> <IO> Unit
 withTarget targetPath = match readFile targetPath
-  Ok src => putStr (checkToLines (desugar (parse src)))
+  Ok src => putStr (checkOneToLines (desugar (parse src)))
   Err msg => ePutStrLn msg
 
 withRuntime : String -> String -> <IO> Unit

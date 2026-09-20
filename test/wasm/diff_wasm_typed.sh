@@ -4,7 +4,7 @@
 # (diff_compiler_llvm_typed.sh): the W1–W4 scalar/ADT/closure fixtures stay on the
 # PRELUDE-FREE annotate entry (wasm_emit_main, never produces CMethod/CDict); the W5
 # DISPATCH fixtures go through the TYPED single-file entry (wasm_emit_typed_main),
-# which runs elaborateDict and so DOES produce CMethod/CDict/CImplEntry.
+# which runs elaborateModules and so DOES produce CMethod/CDict/CImplEntry.
 #
 # Entry strategy = DUAL-ENTRY (see compiler/entries/wasm_emit_typed_main.mdk header).
 # The wholesale modules+DCE switch is NOT usable: DCE retains every prelude
@@ -12,7 +12,7 @@
 # real `medaka build` of even a minimal `Eq Color` fixture emits ~274 prelude impl
 # functions (Debug/Display strings, Num Float arith, Char/tuple impls) — all
 # out-of-slice WasmGC gaps (W6/W7).  The prelude-free typed fixtures define their own
-# minimal interfaces; elaborateDict resolves every route with NO prelude surface.
+# minimal interfaces; elaboration resolves every route with NO prelude surface.
 #
 # For each fixture in test/wasm/fixtures_typed/:
 #   1. oracle = `./medaka build <fixture>` + run (the OCaml-free native-compiled

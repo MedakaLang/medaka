@@ -1,24 +1,20 @@
 #!/bin/sh
 # diff_compiler_check_wrapper_callers.sh — pins the CALLER SET of the
-# `checkProgram*`/`checkOne*` typecheck-entry wrapper family (E-1 #1115, epic #1122).
+# live `checkOne*` typecheck-entry wrapper family (E-1 #1115, epic #1122).
 #
 # WHY THIS GATE EXISTS.
-# S-flat-reacher-census found the wrapper family's own consumer census had already
+# The migration audit found the wrapper family's own consumer census had already
 # drifted UNFLAGGED once (`entries/origin_agreement_main.mdk` was added as a caller
 # 2026-08-02, four days after the issue's original enumeration, with nothing anywhere
-# noticing). The migration slices that followed (S-migrate-check-route,
-# S-migrate-tool-consumers[-remainder]) also found that not every caller can move onto
-# the Module arm safely — some are PARKED on the Flat-only members of the family for
-# measured reasons (a scheme-list-shape gap on `checkOneScheme`, a repeated-call state
-# leak on `checkOneToLinesWithRuntime`) that a future editor won't see just by reading
-# a call site. A caller set that can silently gain a new member is a caller set nobody
-# can trust an audit of.
+# noticing). The migration slices that followed moved the remaining callers onto
+# one-module projections of the graph driver. A caller set that can silently gain a
+# new member is still a caller set nobody can trust an audit of.
 #
 # WHAT IT DOES (pure text analysis — no compiler build, no oracle, fast + safe):
 #   1. DERIVES the current caller set: for every `.mdk` file under `compiler/` (other
 #      than `compiler/types/typecheck.mdk` itself, the family's home), parse its
 #      `import types.typecheck.{ ... }` block (which may span multiple lines) and
-#      record which of the 15 wrapper-family names it imports. A name mentioned only
+#      record which of the 9 live wrapper-family names it imports. A name mentioned only
 #      in a comment (not imported) is NOT a caller — this gate is keyed on the import,
 #      matching how S-migrate-tool-consumers-remainder's own investigation avoided
 #      false positives from stale prose mentioning an old function name.
@@ -48,39 +44,27 @@ import sys, re, pathlib
 root, ledger_path = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 
 WRAP_NAMES = [
-    "checkProgramSchemesWithRuntime", "checkProgramSchemes",
-    "checkProgramSeededSplit", "checkProgramSeeded",
-    "checkMatchToLines", "checkProgramDiags",
     "checkOneScheme", "checkOneDiags",
     # `checkOneSchemeFull` (the Module-arm FULL-ENVIRONMENT entry: prelude schemes
     # + the terminal module's own) joined the family 2026-08-27 with
     # S-full-env-scheme-entry (#1116), which migrated tools/lsp.mdk,
-    # entries/playground_main.mdk and tools/check_policy.mdk off
-    # `checkProgramSchemesWithRuntime` onto it. Listing it here is the point of
+    # entries/playground_main.mdk and tools/check_policy.mdk onto it. Listing it here is the point of
     # the gate: without the row those three files would census as ZERO-wrapper
     # callers and the audit trail for the family's newest member would be blind,
-    # exactly as it was for `checkToLines` below until 2026-08-26.
+    # exactly as it was for an earlier retired wrapper until 2026-08-26.
     "checkOneSchemeFull",
     # The keyed siblings (PR #2494): same entries plus the prelude key for the
     # core-check memo (`checkCoreMemoized`). `diagnostics.mdk`, `lsp.mdk` and
     # `playground_main.mdk` moved onto them; the unkeyed names stay for callers
     # that hand in a prelude the desugar cache did not mint.
     "checkOneDiagsK", "checkOneSchemeFullK",
-    "checkOneToLinesWithRuntime", "checkOneErrorsWithRuntime",
+    "checkOneToLines", "checkOneToLinesWithRuntime", "checkOneErrorsWithRuntime",
     # `checkOneMatchToLines` (the Module-arm match-warning report) joined the family
     # 2026-09-19 with S-match-lines-module-arm (#1116), which migrated
-    # entries/check_match_main.mdk off the Flat `checkMatchToLines` onto it. Without
+    # entries/check_match_main.mdk onto it. Without
     # this row that file censuses as a ZERO-wrapper caller and its ledger row reads
-    # as STALE — the same blindness `checkToLines` below records.
+    # as STALE — the same blindness the earlier wrapper migration exposed.
     "checkOneMatchToLines",
-    # `checkToLines` (the prelude-free Flat entry) was MISSING from this list until
-    # 2026-08-26, which made the gate demonstrably blind: a new caller importing it
-    # passed the census unnoticed, and `compiler/entries/selfproc_tc_probe.mdk` had
-    # in fact been such a caller all along, absent from the ledger. The
-    # family-member count in this gate's header is load-bearing: keep them in sync.
-    # (`checkToLinesWithRuntime`/`checkErrorsWithRuntime` left the family in #2552,
-    # deleted as consumer-less.)
-    "checkToLines",
 ]
 WRAP_SET = set(WRAP_NAMES)
 NAME_RE = re.compile(r"\b(" + "|".join(re.escape(n) for n in WRAP_NAMES) + r")\b")

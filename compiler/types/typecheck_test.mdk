@@ -40,9 +40,9 @@ import types.typecheck.{
   beginMethodReturnTrace,
   beginNumericPredicateTrace,
   checkModulesDiagsChain,
+  checkModulesEntryReport,
   checkOneDiags,
   checkOneSchemeFullK,
-  checkProgramDiags,
   elaborateOne,
   finishAssumptionTrace,
   finishDefaultBodyRNoneTrace,
@@ -381,6 +381,51 @@ test "numeric predicates survive module and import order permutations" =
         (view => (view.ntvInterface, view.ntvSelected, view.ntvRoute))
         (filter (view => view.ntvStage == NPTReturn) (snd forward))),
   ]
+
+test "prelude-free split graphs retain every builtin class identity" =
+  let eqSource = joinNl [
+    "export interface Eq a where",
+    "  eq : a -> a -> Bool",
+    "export impl Eq Int where",
+    "  eq x y = x == y",
+  ]
+  let numSource = joinNl [
+    "import eq.{Eq}",
+    "export interface Num a requires Eq a where",
+    "  fromInt : Int -> a",
+    "export impl Num Int where",
+    "  fromInt x = x",
+  ]
+  let useSource = joinNl [
+    "import eq",
+    "import num",
+    "data Box = Box Int",
+    "main = (Box 1) == (Box 2)",
+  ]
+  let oneSource = joinNl [
+    "interface Eq a where",
+    "  eq : a -> a -> Bool",
+    "interface Num a requires Eq a where",
+    "  fromInt : Int -> a",
+    "impl Eq Int where",
+    "  eq x y = x == y",
+    "impl Num Int where",
+    "  fromInt x = x",
+    "data Box = Box Int",
+    "main = (Box 1) == (Box 2)",
+  ]
+  let expected =
+    "TYPE ERROR: No impl of Eq for Box; add 'deriving Eq' to the 'Box' type, or write an 'impl Eq Box'."
+  expectEqual
+    (expected, expected)
+    (
+      checkModulesEntryReport [] [] [("one", desugar (parse oneSource))],
+      checkModulesEntryReport [] [] [
+        ("eq", desugar (parse eqSource)),
+        ("num", desugar (parse numSource)),
+        ("use", desugar (parse useSource)),
+      ],
+    )
 
 test "finalized scheme queries drain numeric predicates on cold and keyed calls" =
   let source = numericValueSource True
@@ -1180,7 +1225,7 @@ test "wrapped return checking rejects an instance for only the result wrapper" =
   let core = desugar (parse numericPreludeSource)
   let program = desugar (parseLocated source)
   let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
-  let (flatErrors, _) = checkProgramDiags [] core program
+  let (flatErrors, _) = checkOneDiags [] core ("__user__", program)
   expectAll [
     expectEqual
       True
@@ -1407,6 +1452,22 @@ test "ordinary return given evidence feeds checking and route publication" =
         _ => False
       _ => False),
   ]
+
+test "return-position standalone shadow bypasses the method-return trace" =
+  let trace =
+    methodCarrierStages
+      "zed"
+      (joinNl [
+        "interface Zed a where",
+        "  zed : a",
+        "impl Zed Int where",
+        "  zed = 777",
+        "zed : Bool",
+        "zed = True",
+        "value : Bool",
+        "value = zed",
+      ])
+  expectEqual 0 (listLen trace)
 
 test "ordinary return instance evidence retains selected prerequisites" =
   let trace =
@@ -2510,7 +2571,7 @@ mixedDirectFirstSource = joinNl [
 
 flatMessages : String -> List String
 flatMessages source =
-  let (errors, _) = checkProgramDiags [] [] (desugar (parse source))
+  let (errors, _) = checkOneDiags [] [] ("__user__", desugar (parse source))
   map tcMsg errors
 
 test "attributed-direct Num declarations reject mismatches without cross-pairing rows" =

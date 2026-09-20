@@ -150,23 +150,22 @@ calls becomes two unrelated TVars. When two `Ty` values must share variables (im
 head ↔ `requires`, signature ↔ its constraints), **thread one `tvs` list through
 both calls.**
 
-## Two whole-program entry points — mirror both
+## Whole-program routes — audit both
 
-Per-node `infer`/`check` arms are shared, and both paths funnel group inference
-through `processSCCs`/`processSCC`. But the *orchestration* — registration order,
-coherence, and the final passes — is duplicated in two near-identical blocks:
+Per-node `infer`/`check` arms are shared, and both routes funnel group inference
+through `processSCCs`/`processSCC`. Trace registration order, coherence, and the
+final passes through both routes:
 
-- single-file: `checkProgramDiags`, plus `checkProgramSchemes` — locate both with
-  `grep -n '^checkProgramDiags \|^checkProgramSchemes ' compiler/types/typecheck.mdk`
+- one-program: `checkOneDiags`, with `checkOneSchemeFullK` for scheme queries — locate
+  them with `grep -n '^checkOneDiags \|^checkOneSchemeFullK ' compiler/types/typecheck.mdk`
   (line numbers in this file rot; derive them)
 - multi-module: `checkModuleFullDiags`, driven by the one graph driver `driveGraphK`
   (`GOutDiags` for diagnostics and schemes, `GOutTrees` for the elaborated tree that
   `elaborateModules` projects) / `checkModules` for the schemes-only fast path
 
-Both run `checkCoherence` / `checkInterfaceCycles` / `checkPhantomMethods` /
-`checkSuperImpls`. **A new whole-program pass added to one and not the other is
-silently absent from half the compiler** — and only the multi-module path is what
-`medaka check` on a real project uses.
+Both routes reach `checkCoherence` / `checkInterfaceCycles` / `checkPhantomMethods` /
+`checkSuperImpls`. **A new whole-program pass that one route skips is silently absent
+from part of the compiler** — and real projects use the module graph path.
 
 ## Writing tests: a parameter's type is a free var during body inference
 

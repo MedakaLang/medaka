@@ -7,7 +7,7 @@
 # WRONG).  So the reference is the TYPED Core IR tree-walker value, captured into
 # <name>.eval.golden from the native oracle test/bin/core_ir_dict_pp_main (built by
 # test/build_oracles.sh from compiler/entries/core_ir_dict_pp_main.mdk: desugar ->
-# elaborateDict: route-stamp + dict_pass -> lower -> ceval, pp_value of `main`).
+# elaborateOne: route-stamp + dict_pass -> lower -> ceval, pp_value of `main`).
 # The equivalence the slice proves is exactly emit->clang->run == that typed-ceval
 # value, over one typed IR.
 #

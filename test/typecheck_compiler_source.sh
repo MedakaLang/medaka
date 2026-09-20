@@ -246,27 +246,12 @@ ratchet_producer_files() {
 # see whether a driver forgot to stamp, nor whether one stamped the WRONG id --
 # the defect class review found in the first cut.
 #
-# Both need a way to OBSERVE an origin from a compilation, and as of #1110's
-# agreement gate that way EXISTS: test/diff_compiler_origin_agreement.sh drives the
-# flat / single-module / graph elaboration entry points over one loader graph and
-# diffs the resulting agreement table, so a driver that stamps the WRONG id shows up
-# as a CONFLICT row. (This note used to end "which today does not exist" -- it did
-# not, then; it does now. The two gates are complements: this one pins WHO MAY MINT
-# the sentinel, that one pins WHAT THE DRIVERS AGREE ON.)
 echo "checking #1110 OriginUnresolved producer set ..."
 tyconun_allowed="compiler/entries/fuzz_gen_main.mdk
 compiler/frontend/ast.mdk
 compiler/frontend/desugar.mdk
 compiler/frontend/parser.mdk"
 # ⚠️ THIS LIST IS FILENAMES, so it cannot tell CONSTRUCTION from a PATTERN, and a
-# file that only READS the constructor has to be listed too. That is the case for
-# origin_agreement_main.mdk: its single mention is `originKey OriginUnresolved = "-"`,
-# an arm of a total match over `TyConOrigin` (deliberately enumerated rather than
-# wildcarded, so a fourth inhabitant is made to show up rather than silently reading
-# as "no claim"). The comment above already licenses this -- "the module that
-# CONSUMES it in a pattern may name it" -- the mechanism just cannot see the
-# difference. It mints nothing: it is a probe with no `TyCon` construction anywhere.
-#
 # ⚠️ types/typecheck.mdk IS on this list as of #1110 unit D, and it is the one entry
 # that mints the sentinel at a layer this ratchet's prose was not written for. Its
 # mentions are the `Mono` layer, NOT `Ty`: `tconUnresolved n = TCon n
@@ -301,8 +286,7 @@ compiler/frontend/parser.mdk"
 # The scope and typecheck sibling tests observe unresolved default-owner origins
 # in total matches. Their sole eliminator lines are pinned below; this grants no
 # new constructor mint.
-originun_allowed="compiler/entries/origin_agreement_main.mdk
-compiler/frontend/ast.mdk
+originun_allowed="compiler/frontend/ast.mdk
 compiler/frontend/resolve.mdk
 compiler/types/route_key.mdk
 compiler/types/scopes_test.mdk
@@ -372,9 +356,8 @@ echo "  ok: $(printf '%s\n' "$declun_actual" | grep -c .) decl-layer producer fi
 #
 # Deliberately a SEPARATE list from `declun_allowed` rather than four more names in
 # its alternation: an `impl` is not a DECLARATION of the interface it names, so
-# `DImpl` mints no decl-layer carrier and must never grow a `declHeadOf` arm (see
-# that function's own comment in compiler/entries/origin_agreement_main.mdk).
-# Merging the two lists is how that distinction gets lost.
+# `DImpl` mints no decl-layer carrier. Merging the two lists is how that distinction
+# gets lost.
 # ⚠️ `compiler/types/route_key.mdk` IS ON THIS LIST FOR ITS DOCTEST FIXTURES ALONE,
 # and it has been RED SINCE `B-2.2-a` LANDED THAT FILE (2026-08-13) — this ratchet
 # is a `git grep` over TRACKED files, not over an import closure, so the module was
@@ -867,254 +850,6 @@ if [ -n "$prim_bad" ]; then
 fi
 echo "  ok: $prim_n distinct tconBuiltin head(s), all in resolve's primitiveTypes"
 
-# ── #1110/#1226 carrier-completeness ratchet ────────────────────────────────
-# `declHeadOf` (compiler/entries/origin_agreement_main.mdk) has a wildcard fallback
-# (`declHeadOf _ = []`), and the decl-layer producer ratchet above hardcodes a
-# four-name alternation (`dDataUnresolved|dTypeAliasUnresolved|dNewtypeUnresolved|
-# dInterfaceUnresolved`). Both silently ignore any `TyConOrigin` carrier beyond
-# TODAY's five fields in compiler/frontend/ast.mdk (`tyConOrigin` on `TyCon`, the
-# occurrence carrier, plus the four decl-layer carriers above). #1110 still owes
-# three more carrier families (ctor/method/record); when one of those lands it adds
-# a SIXTH `: TyConOrigin` field that both switches above would keep ignoring --
-# populated and graded by NOTHING, under a green gate that looks like it covers the
-# layer. This pins the NAME SET (not a count -- a bare count has no derivation and a
-# rename would slip past it) so a new or renamed carrier field fails HERE instead.
-#
-# ⚠️ TWO CLASSES, PINNED SEPARATELY (#1110 PR B). A single flat name-set could be
-# kept green by adding a name to it, which is the masking move this pin exists to
-# refuse. So each carrier must declare WHICH grader owns it:
-#
-#   GRADED -- the agreement probe reads this field by name at runtime. Mechanically
-#             verified below: the name must appear OUTSIDE a comment in
-#             compiler/entries/origin_agreement_main.mdk.
-#   OWED   -- the field exists but no grader reads it yet, with the PR that owes the
-#             grading named here. Mechanically SELF-DRAINING below: the name must
-#             NOT yet appear in the probe, so the moment someone wires it in, this
-#             gate reds and forces the name to move up to the graded set.
-#
-# The OWED list held #1110 PR B's four interface-OCCURRENCE carriers, which PR B
-# could not grade: nothing stamped them yet (PR B was carrier-only), so every arm
-# would have reported `OriginUnresolved` and the only thing the probe could print
-# was a larger RESIDUAL -- a golden move on a PR whose whole contract was
-# byte-identity. PR C landed the stamping AND the grading together, which is
-# precisely what the two-sided self-drain below forces, and the four names moved to
-# GRADED.
-#
-# ⚠️ #1110 PR C DRAINED THE OWED LIST TO EMPTY, and the four names moved UP rather
-# than being deleted: resolve now stamps the interface-occurrence carriers
-# (`fillIfaceOccOrigin` through `mapOriginsInDecl`) and the agreement probe grades them as
-# `iface:<Name>` rows. Both halves of the OWED self-drain fired on that change —
-# the probe half and the stamper half — which is exactly the promotion this pin was
-# built to force. An EMPTY owed list is a legitimate steady state, not a disarmed
-# ratchet: the name-set pin below still fails on any new or renamed carrier, and a
-# newly-added one has to be classified into one of these two lists to get past it.
-carrier_graded_expected="constraintOrigin
-dataOrigin
-ifaceOrigin
-implOrigin
-newtypeOrigin
-requireOrigin
-superOrigin
-tyAliasOrigin
-tyConOrigin"
-carrier_owed_expected=""
-# ⚠️ `grep -v '^$'` is load-bearing now that the OWED list can legitimately be
-# EMPTY: `printf '%s\n%s\n'` on an empty second argument emits a blank line, which
-# sorts FIRST and would make this set comparison fail against a field list that can
-# never contain one.
-carrier_expected=$(printf '%s\n%s\n' "$carrier_graded_expected" "$carrier_owed_expected" | grep -v '^$' | sort)
-# ⚠️ `[[:space:]]+`, NOT `[[:space:]]*`, AND THE CHANGE IS A NARROWING WITH A
-# DERIVATION — not the regex-widening the sibling ratchets forbid.  A carrier is a
-# RECORD FIELD, and a record field in this file is always INDENTED: it sits inside a
-# `Ctor { … }` block, which the offside rule cannot place at column 0.  A TOP-LEVEL
-# TYPE SIGNATURE whose FIRST parameter happens to be a `TyConOrigin` is
-# indistinguishable from a field under the old `*` form — `tyConIdsConflict :
-# TyConOrigin -> TyConOrigin -> Bool` (#1111 A-2.10) was reported as a tenth carrier
-# field, and the remedy this gate prints would have had it added to
-# `carrier_graded_expected`, i.e. a NON-FIELD listed as a carrier and then required
-# to appear in the agreement probe.  Listing it would have been the lie; requiring
-# the indentation a field always has is the fix.  (`sameTyConHead` beside it never
-# matched, because its first parameter is a `String` — which is exactly why the
-# false positive is a coincidence of parameter ORDER and would have recurred.)
-carrier_actual=$(grep -oE '^[[:space:]]+[A-Za-z0-9_]+[[:space:]]*:[[:space:]]*TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
-  | sed -E 's/^[[:space:]]*//; s/[[:space:]]*:.*$//' | sort)
-if [ "$carrier_actual" != "$carrier_expected" ]; then
-  echo "FAIL: the set of \`: TyConOrigin\`-typed fields in compiler/frontend/ast.mdk changed."
-  echo "  expected:"
-  printf '    %s\n' $carrier_expected
-  echo "  actual:"
-  printf '    %s\n' $carrier_actual
-  echo "  A new (or renamed) TyConOrigin carrier is invisible to BOTH of:"
-  echo "    - declHeadOf in compiler/entries/origin_agreement_main.mdk -- its wildcard"
-  echo "      arm (\`declHeadOf _ = []\`) silently drops any carrier it doesn't name;"
-  echo "      add a match arm for the new decl constructor. (Note: an OCCURRENCE"
-  echo "      carrier does NOT belong there -- see declHeadOf's own comment.)"
-  echo "    - the producer ratchets just above in THIS file -- their hardcoded name"
-  echo "      alternations won't see the new carrier's mint helper; add it there too."
-  echo "  Update BOTH, then add the field to carrier_graded_expected (if a grader now"
-  echo "  reads it) or carrier_owed_expected (naming the PR that owes the grading)."
-  exit 1
-fi
-# GRADED: each name must be read, outside a comment, by the agreement probe.
-probe_src="$ROOT/compiler/entries/origin_agreement_main.mdk"
-for c in $carrier_graded_expected; do
-  if ! ratchet_name_live_in "$c" "$probe_src"; then
-    echo "FAIL: carrier \`$c\` is listed as GRADED but compiler/entries/origin_agreement_main.mdk"
-    echo "  no longer reads it outside a comment. Either restore the read, or move the"
-    echo "  name to carrier_owed_expected and say in the PR which PR owes the grading."
-    exit 1
-  fi
-done
-# OWED: the self-drain, pinned in BOTH directions -- the name must be absent from
-# the probe AND from the stamper.
-#
-# The probe half alone pins BOOKKEEPING, not grading, and would have a hole big
-# enough to drive the whole hazard through: a later PR could stamp an OWED carrier
-# inside compiler/frontend/resolve.mdk and never touch the probe, and EVERY ratchet
-# here stays green -- `originun_allowed` already lists resolve.mdk (it is the decl
-# stamper's home) and the producer ratchets pin only mint-helper CALL SITES, not
-# field writes. The gate would then print `ok: … (N graded, M owed)` over carriers
-# that are live, stamped, and graded by nothing -- verbatim the hazard the header
-# above says this ratchet exists to prevent. So pin the stamper too: the moment the
-# stamp lands, this reds and demands the promotion AND the probe wiring together.
-#
-# ⚠️ The comment filter is `^[[:space:]]*--`, i.e. LEADING comments only. A TRAILING
-# side comment or a string literal that merely NAMES an owed carrier would therefore
-# trip this check spuriously -- and the printed remedy would then "fix" it by moving
-# the name to the graded list, disarming the tripwire in two lines. That is the
-# remedy-disarms-the-tripwire shape, so it is stated rather than left to be
-# rediscovered. It is a note and not a code change because both files are clean of
-# that shape today (verified: no trailing `--` mentions of any carrier name in
-# either), and a looser filter would cost more than it buys.
-stamper_src="$ROOT/compiler/frontend/resolve.mdk"
-for c in $carrier_owed_expected; do
-  if ratchet_name_live_in "$c" "$probe_src"; then
-    echo "FAIL: carrier \`$c\` is listed as OWED but compiler/entries/origin_agreement_main.mdk"
-    echo "  now reads it -- the grading this list was waiting for has landed."
-    echo "  Move \`$c\` from carrier_owed_expected to carrier_graded_expected."
-    exit 1
-  fi
-  if ratchet_name_live_in "$c" "$stamper_src"; then
-    echo "FAIL: carrier \`$c\` is listed as OWED but compiler/frontend/resolve.mdk now"
-    echo "  WRITES it -- the carrier is live while nothing grades it, which is the"
-    echo "  exact state this ratchet exists to refuse."
-    echo "  Land the grading in the SAME change: extend the agreement probe"
-    echo "  (compiler/entries/origin_agreement_main.mdk) to read \`$c\`, then move it"
-    echo "  from carrier_owed_expected to carrier_graded_expected."
-    exit 1
-  fi
-done
-echo "  ok: $(printf '%s\n' "$carrier_actual" | grep -c .) TyConOrigin carrier field(s) ($(printf '%s\n' "$carrier_graded_expected" | grep -c .) graded, $(printf '%s\n' "$carrier_owed_expected" | grep -c .) owed)"
-
-# The name-set pin above matches `<name> : TyConOrigin`, so it only sees a
-# NAMED-record field -- verified by mutation: a new named field fires it, a
-# rename fires it, tab-indent fires it, but a POSITIONAL carrier (e.g.
-# `Variant String ConPayload TyConOrigin`, no field name at all) is SILENT, and
-# so is a field reached through a type alias. That gap is not academic:
-# `Variant` (ConPayload's ctor), `IfaceMethod`, and `Field` are ALL positional
-# today, and #1110's three remaining carrier families (ctor / method / record)
-# land on exactly those -- the name-set pin would stay green while reproducing
-# the very hole it exists to close. This second pin is FORM-INDEPENDENT: every
-# literal mention of `TyConOrigin` in ast.mdk (the data decl itself, plus each
-# named or positional type occurrence) moves this count, named or not. It
-# complements rather than replaces the name-set pin above: a RENAME holds this
-# count steady (same mention, different name) but changes the name set, which
-# only the pin above catches; a POSITIONAL addition holds the name set steady
-# but moves this count, which only THIS pin catches.
-# 6 -> 10 (#1110 PR B): the four interface-occurrence carriers
-# (`constraintOrigin` / `superOrigin` / `requireOrigin` / `implOrigin`). Every one is
-# a NAMED field, so the name-set pin above sees them too; this count moves for the
-# same four and is bumped for that reason and no other.
-#
-# 10 -> 11 (#1047, Stage A-2 unit A-2.9): `ifaceIdentity : TyConOrigin -> String ->
-# String`, ast.mdk's first CONSUMER of the carrier — the function that projects
-# `(originModule, name)` into the one comparable string the Core IR's
-# `CImplDefault` and eval's default cells carry.  It is a READER, not a carrier:
-# it adds no field to any node, mints no origin, and declares no new inhabitant,
-# so neither `declHeadOf` nor either producer ratchet gains an arm (adding one
-# would be the contradiction this gate's own message warns about).  The name-set
-# pin above is correctly silent — a signature is not a named record field — and
-# this form-independent count is correctly NOT, which is exactly the division of
-# labour the paragraph above describes.  Bumped for that reason and no other.
-#
-# 11 -> 13 (#1111, Stage A-2 unit A-2.0): `identOriginOf : TyConOrigin -> Option
-# IdentOrigin` and `mkIdent : Ns -> TyConOrigin -> String -> Option Ident`, the
-# substrate's two CONSUMERS of the carrier — the total conversion from a
-# pipeline-stage-marked `TyConOrigin` to the well-formed `IdentOrigin` that keys
-# every re-keyed cross-module table, and the convenience form over it.  Exactly
-# the same class as the 10 -> 11 bump above and bumped for the same reason: both
-# are READERS.  Neither adds a field to any node, mints an origin, or declares a
-# new `TyConOrigin` inhabitant, so no `declHeadOf` arm and no producer-ratchet
-# entry is owed — and the carrier field set is INDEPENDENTLY still `9 graded, 0
-# owed`, which is the pin that would have caught a real carrier sneaking in here.
-#
-# ⚠️ This bump was forced by the MERGE QUEUE, not by either branch: #1264 set this
-# to 11 and #1262 added the two signatures, so both were green alone and the
-# merged tree was red.  That is the pin working.  Any A-2 unit that adds a
-# `TyConOrigin` reader to ast.mdk while another is in flight will land here again;
-# re-derive with
-#   grep -w 'TyConOrigin' compiler/frontend/ast.mdk | grep -cvE '^[[:space:]]*--'
-# rather than trusting this number.
-#
-# 13 -> 15 (#1111, Stage A-2 unit A-2.10): `sameTyConHead : String -> TyConOrigin ->
-# String -> TyConOrigin -> Bool` and `tyConIdsConflict : TyConOrigin -> TyConOrigin
-# -> Bool` — the seam every "are these the same type?" comparison in
-# `types/typecheck.mdk` now goes through.  Same class as both bumps above and
-# bumped for the same reason: READERS.  No field on any node, no mint, no new
-# inhabitant, so no `declHeadOf` arm and no producer-ratchet entry is owed, and the
-# carrier field set is INDEPENDENTLY still `9 graded, 0 owed`.
-#
-# ⚠️ `tyConIdsConflict` ALSO tripped the NAME-SET pin above, which the paragraph
-# there says is "correctly silent — a signature is not a named record field".  That
-# claim was true of every prior reader by ACCIDENT OF PARAMETER ORDER and false for
-# this one: its first parameter is a `TyConOrigin`, so `^[[:space:]]*NAME[[:space:]]*:
-# [[:space:]]*TyConOrigin` matched the signature.  The discriminator was narrowed to
-# require the indentation a record field always has; the derivation is at that grep.
-#
-# 15 -> 16 (sprint/ctor-identity, S-ctor-oracle-identity leaf 1, the `TabKey`
-# re-home): `tabKeyOf : Ns -> TyConOrigin -> String -> TabKey`. Same class as both
-# bumps above: a READER. `TabKey = TkIdent Ident | TkBare Ns String`, `Ident = Ident
-# Ns IdentOrigin String` — no `TyConOrigin` anywhere in the result type, so
-# `tabKeyOf` provably consumes and discards; its result cannot carry an origin even
-# in principle. No field on any node, no mint, no new inhabitant, so no
-# `declHeadOf` arm and no producer-ratchet entry is owed, and the carrier field set
-# is INDEPENDENTLY still `9 graded, 0 owed`.
-carrier_count_expected=16
-# Comment-filtered, matching the idiom the three sibling ratchets above already
-# use (`grep -w … | grep -qvE '^[[:space:]]*--'`). An unfiltered count reds this
-# gate on a COMMENT-ONLY diff that merely names `TyConOrigin` in prose -- someone
-# trips on that and bumps 6->7, and the pin now has SLACK: a later PR that adds a
-# genuine positional carrier (+1) while deleting that comment (-1) lands back on 7
-# with BOTH pins silent, reopening the exact hole this pin exists to close. The
-# spurious-trip class IS the masking class -- filter it out at the source.
-carrier_count_actual=$(grep -w 'TyConOrigin' "$ROOT/compiler/frontend/ast.mdk" \
-  | grep -cvE '^[[:space:]]*--')
-if [ "$carrier_count_actual" != "$carrier_count_expected" ]; then
-  echo "FAIL: the number of \`TyConOrigin\` mentions in compiler/frontend/ast.mdk changed"
-  echo "  (expected $carrier_count_expected, got $carrier_count_actual)."
-  echo "  The name-set pin just above only sees NAMED-record fields, so it is SILENT on"
-  echo "  a POSITIONAL TyConOrigin carrier (e.g. \`Variant String ConPayload TyConOrigin\`)"
-  echo "  or one reached through a type alias -- both move THIS count instead."
-  echo "  If you added a genuine new carrier -- FIRST decide which LAYER it is on,"
-  echo "  because the remedy differs and getting it backwards is a contradiction:"
-  echo "    - DECL-layer (a type DECLARATION acquires identity): add a match arm to"
-  echo "      declHeadOf in compiler/entries/origin_agreement_main.mdk (its wildcard"
-  echo "      arm silently drops any carrier it doesn't name), and add its mint"
-  echo "      helper to the DECL-layer producer ratchet above in THIS file."
-  echo "    - OCCURRENCE-layer (a USE site names a head someone else declared): do"
-  echo "      NOT add a declHeadOf arm -- that function's own comment forbids it for"
-  echo "      exactly this case ('DImpl mints NO decl-layer carrier and must not"
-  echo "      appear here'). Add the mint helper to the OCCURRENCE-layer producer"
-  echo "      ratchet above instead, and grade it in the probe's occurrence walk."
-  echo "    - then classify the field: add it to carrier_graded_expected (a grader"
-  echo "      reads it) or carrier_owed_expected (grading owed; name the PR that owes"
-  echo "      it). Do NOT edit carrier_expected -- it is DERIVED from those two."
-  echo "    - then update carrier_count_expected here to the new mention count,"
-  echo "      and say why in the PR."
-  exit 1
-fi
-echo "  ok: $carrier_count_actual TyConOrigin mention(s) in ast.mdk (name-set + positional)"
-
 # ── #1318 B-4 predicate-slot producer-authority ratchet ─────────────────────
 # Function, impl-`requires`, method, recursive, and cross-module consumers share
 # record-valued carriers. One complete predicate owns one dict slot; argument vectors
@@ -1229,8 +964,8 @@ if ! printf '%s\n' "$any_given_scope_body" | grep -Fq "$any_given_scope_guard"; 
 fi
 
 # #2549 method-row preparation: declaration identity, scheme, and method-level slots
-# are built in one row walk.  The Flat arm deliberately performs two constructions;
-# the Module arm one.  Positional key/scheme zips and graph-lived row state are retired.
+# are built in one row walk.  The Module-only driver reads its visible rows from
+# `implDecls`; positional key/scheme zips and graph-lived row state are retired.
 method_row_required='data MethodSchemeRow = MethodSchemeRow {
   msrIface : IfaceRef,
   msrName : String,
@@ -1248,7 +983,7 @@ pickSchemesByDecl : List String ->
 admittedSchemeFor : String -> Registry MethodSchemeRow -> Option Scheme
   List MethodSchemeRow ->
   let currentMethodRows = ifaceMethodSchemeRows prog
-    Module _ _ implDecls => ifaceMethodSchemeRows implDecls'
+  let visibleMethodRows = ifaceMethodSchemeRows implDecls'
 
 printf '%s\n' "$method_row_required" | while IFS= read -r required; do
   if ! grep -Fq "$required" "$predicate_slot_src"; then
@@ -1257,14 +992,14 @@ printf '%s\n' "$method_row_required" | while IFS= read -r required; do
   fi
 done || exit 1
 
-method_row_flat_count="$(grep -Fc 'ifaceMethodSchemeRows prog' "$predicate_slot_src")"
-if [ "$method_row_flat_count" -ne 2 ]; then
-  echo "FAIL: expected exactly two Flat ifaceMethodSchemeRows constructions, got $method_row_flat_count"
+method_row_current_count="$(grep -Fc 'ifaceMethodSchemeRows prog' "$predicate_slot_src")"
+if [ "$method_row_current_count" -ne 1 ]; then
+  echo "FAIL: expected exactly one current-module ifaceMethodSchemeRows construction, got $method_row_current_count"
   exit 1
 fi
 method_row_module_count="$(grep -Fc 'ifaceMethodSchemeRows implDecls' "$predicate_slot_src")"
 if [ "$method_row_module_count" -ne 1 ]; then
-  echo "FAIL: expected exactly one Module ifaceMethodSchemeRows construction, got $method_row_module_count"
+  echo "FAIL: expected exactly one visible-module ifaceMethodSchemeRows construction, got $method_row_module_count"
   exit 1
 fi
 

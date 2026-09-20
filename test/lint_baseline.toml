@@ -42,11 +42,6 @@ rule = "rule-stdlib-reimpl"
 count = 4
 
 [[entry]]
-file = "compiler/entries/origin_agreement_main.mdk"
-rule = "rule-stdlib-reimpl"
-count = 2
-
-[[entry]]
 file = "compiler/eval/eval.mdk"
 rule = "rule-stdlib-reimpl"
 count = 1
@@ -145,4 +140,3 @@ count = 1
 file = "stdlib/string.mdk"
 rule = "rule-stdlib-reimpl"
 count = 2
-

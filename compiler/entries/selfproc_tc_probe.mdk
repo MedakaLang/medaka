@@ -3,7 +3,7 @@
 --
 -- It exercises a REAL self-hosted stage that uses the HM TYPECHECKER —
 -- typecheck.mdk — by inferring the schemes of an embedded Medaka snippet and
--- rendering them as `name : scheme` lines (the same `checkToLines` form
+-- rendering them as `name : scheme` lines (the same `checkOneToLines` form
 -- typecheck_main.mdk emits).  The harness runs this probe TWO ways and diffs:
 --   * the reference eval_modules oracle:  medaka run compiler/entries/selfproc_tc_probe.mdk
 --     (OCaml Loader -> typecheck -> eval_modules drives the probe + its imports)
@@ -21,9 +21,9 @@
 
 import frontend.parser.{parse}
 import frontend.desugar.{desugar}
-import types.typecheck.{checkToLines}
+import types.typecheck.{checkOneToLines}
 
--- A SELF-CONTAINED (prelude-free) Medaka snippet — checkToLines seeds no
+-- A SELF-CONTAINED (prelude-free) Medaka snippet — checkOneToLines seeds no
 -- prelude, so every free name must be bound in the snippet itself (like the
 -- test/typecheck_fixtures).  Covers a broad cross-section of the constructs HM
 -- inference threads through, so the self-hosted eval's mutation kernel (Ref-based
@@ -37,4 +37,4 @@ src : String
 src =
   "data Pt = { x : Int, y : Int }\ndata Opt a = Non | Som a\nmkP a b = Pt { x = a, y = b }\nmoveX p d = { p | x = p.x + d }\nfromOpt d o = match o\n  Som v => v\n  Non => d\ndist p = p.x * p.x + p.y * p.y\nswap (a, b) = (b, a)\npoly x = x\ntwice f x = f (f x)\nbig a b c = if a == b then c else a\nmain = fromOpt 0 (Som 5)\n"
 
-main = putStr (checkToLines (desugar (parse src)))
+main = putStr (checkOneToLines (desugar (parse src)))

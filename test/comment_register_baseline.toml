@@ -190,16 +190,6 @@ class = "emoji"
 count = 1
 
 [[entry]]
-file = "compiler/entries/check_flat_diags_main.mdk"
-class = "history"
-count = 1
-
-[[entry]]
-file = "compiler/entries/check_flat_diags_main.mdk"
-class = "shout"
-count = 1
-
-[[entry]]
 file = "compiler/entries/core_ir_typed_modules_main.mdk"
 class = "emoji"
 count = 1
@@ -238,16 +228,6 @@ count = 2
 file = "compiler/entries/native_doctest_probe_main.mdk"
 class = "emoji"
 count = 1
-
-[[entry]]
-file = "compiler/entries/origin_agreement_main.mdk"
-class = "emoji"
-count = 20
-
-[[entry]]
-file = "compiler/entries/origin_agreement_main.mdk"
-class = "shout"
-count = 14
 
 [[entry]]
 file = "compiler/entries/playground_main.mdk"

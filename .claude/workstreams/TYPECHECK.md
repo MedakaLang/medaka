@@ -185,8 +185,8 @@ documents, in gate-verified steps.
 
 | Family | Members |
 |---|---|
-| Orchestration bodies | `checkProgramSeededSplit` ∥ `checkModuleFullImpl` (#80) |
-| Final-check tails ×3 | `checkToLines` / `checkProgramDiags` / `checkModuleFullDiags` (#152; the two runtime-seeded flat tails were deleted as consumer-less in #2552) |
+| Orchestration body | `checkModuleFullImpl` through the one graph driver (#80/#1116) |
+| Final-check tail | `checkModuleFullDiags`; one-module entries are projections (#152/#1116) |
 | Module fold loops ×4 | ✅ LANDED (#151, completed #2705/S5): unified into one `foldModules` (worker + isLast-aware collector), then into ONE graph driver `driveGraphK` with an output selection — one `graphPreamble`, one `graphModuleWorker`, one `graphCollect`, one graph-end drain. `elaborateModules`, `checkModulesDiagsChain`'s unkeyed arm and `checkModulesEntryFullSplitK` are projections of it; the entry report is `checkModulesEntryFromDiags` over the same per-module list. Only `cmCheckWorker` (the schemes-only `checkModules` fast path) remains a separate worker |
 | Impl resolution ×6 | `resolveSite`, `resolveOpSite` (the #145-unified binop/unop resolver), `routeOf` (already unifies what were three separate routeOfMono/routeOfMonoTop/routeOfMonoEncl arms), `selectReqImpl`, arg-position mirrors (#156) |
 | Structural matchers ×4 | `cohOverlap`'s unifier, `cohSubsumes`, `tySubsumesV`, `matchTyMono` (#156 stage 1) |

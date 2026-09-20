@@ -113,7 +113,7 @@ on push but not a linear rescan.
 | compiler/tools/repl.mdk | 0 | 6 |
 | compiler/driver/loader.mdk | 0 | 4 |
 | compiler/entries/fuzz_gen_main.mdk | 0 | 4 |
-| compiler/entries/origin_agreement_main.mdk | 0 | 3 |
+| retired origin-agreement entry | 0 | 3 |
 | compiler/frontend/parser.mdk | 0 | 2 |
 | compiler/support/scc.mdk | 0 | 2 |
 | compiler/tools/lsp.mdk | 0 | 2 |
@@ -472,9 +472,9 @@ grep -n 'listLen' compiler -r --include='*.mdk' | grep -v _test.mdk | grep -v '^
 | compiler/ir/core_ir_lower.mdk:1110 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/support/scc.mdk:18 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/support/scc.mdk:26 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
-| compiler/entries/origin_agreement_main.mdk:516 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
-| compiler/entries/origin_agreement_main.mdk:522 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
-| compiler/entries/origin_agreement_main.mdk:534 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
+| retired origin-agreement entry, line 516 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
+| retired origin-agreement entry, line 522 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
+| retired origin-agreement entry, line 534 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/frontend/desugar_cache.mdk:36 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/driver/loader.mdk:588 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |
 | compiler/driver/loader.mdk:1304 | Ref (List | (type occurrence, see note) | per-decl (default) | Ref/persistent (see decl) | n/a | heuristic default, not individually verified |

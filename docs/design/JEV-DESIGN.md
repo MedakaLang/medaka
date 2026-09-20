@@ -611,7 +611,7 @@ writer, or the repository owner at a blocking check-in.
 | `c20` | S-3b | compiler/types/typecheck.mdk:26453 | 2.3 | 108 | delete | **materially changed** | writer | kept ~16 lines: a measured, unreproduced soundness shape with an explicit do-not-fix-without-a-repro |
 | `c21` | S-6 | compiler/driver/diagnostics.mdk:2301 | 2.3 | 63 | recast | unchanged | - | residue used near-verbatim |
 | `c22` | S-6 | compiler/driver/main_autoprint.mdk:222 | 2.3 | 43 | recast+delete | unchanged | - | as disposed |
-| `c23` | S-6 | compiler/entries/origin_agreement_main.mdk:1 | 2.2 | 126 | recast | unchanged | - | as disposed |
+| `c23` | S-6 | retired origin-agreement entry | 2.2 | 126 | recast | unchanged | - | as disposed |
 | `c24` | S-3b | compiler/types/typecheck.mdk:3327 | 2.2 | 118 | relocate+recast | **materially changed** | writer | section 9.6 already stated all six points; downgraded to recast, no pointer |
 | `c25` | S-3a | compiler/types/typecheck.mdk:27292 | 2.2 | 70 | relocate+recast | **minor** | writer | file right, anchor chosen by the writer; became the anchor c12 later extended |
 | `c26` | S-2 | compiler/types/typecheck.mdk:18910 | 2.2 | 9 | relocate | **minor** | writer | proposed anchor 'Section 4.1 (G1/G4)' was a sub-bullet, not a heading |
