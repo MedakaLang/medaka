@@ -876,9 +876,14 @@ data PredicateRequest = PredicateRequest {
 data PredicateSlot = PredicateSlot {
 data MethodPredicateSlot = MethodPredicateSlot {
 data PendingMethodDict = PendingMethodDict {
-registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
-      psArgs = PSArgsKnown argMonos,
-      psBoundIds = ids,
+registerReqSlots : ScopeId ->
+  List (String, Mono) ->
+  Int ->
+  Int ->
+  List Require ->
+  Unit
+    psArgs = PSArgsKnown argMonos,
+    psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
@@ -1079,7 +1084,7 @@ require_typecheck_arm() {
 
 require_typecheck_arm uOblArgs callOblsWindow 'OpNumLit _ => o.pred.args'
 require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'OpNumLit _ => []'
-require_typecheck_arm numObligIds defaultAmbiguousNum 'OpNumLit occ => monoUnboundIds occ'
+require_typecheck_arm numObligIds finalizeNumBoundary 'OpNumLit occ => monoUnboundIds occ'
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpNumLit _ => []'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'OpNumLit _ => ()'
 require_typecheck_arm liveNumVarGo takeFirst 'OpNumLit occ => match findTvarInMono occ id'
@@ -1144,7 +1149,7 @@ require_typecheck_arm recordMethodLevelSlotsOwned recordInstantiatedMethodLevelS
 # The other projection readers retain their own policies; presence in one reader
 # cannot cover an omitted arm in another reader.
 require_typecheck_arm methodOccArgIdPairs methodOccArgIdPairsAt 'request.mrrTyparams'
-require_typecheck_arm numObligIds defaultAmbiguousNum 'monoUnboundIds request.mrrOccurrence'
+require_typecheck_arm numObligIds finalizeNumBoundary 'monoUnboundIds request.mrrOccurrence'
 require_typecheck_arm oblDispatchMonos oblDispatchMonosGo 'OpExactReturn request =>'
 require_typecheck_arm registerAmbiguousGo registerOneAmbiguous 'request.mrrScope'
 require_typecheck_arm liveNumVarGo takeFirst 'findTvarInMono request.mrrOccurrence id'
@@ -1230,35 +1235,55 @@ if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
   exit 1
 fi
 
-# Local numeric defaulting uses the just-exited level. Keep the producer census
-# separate from the unrestricted SCC and implementation-body policies.
-local_num_boundaries='blockRecLet blockLet defaultAmbiguousNumOwnedBy
-blockLet inferRecordCreate defaultAmbiguousNumOwnedBy
-inferRecLet registerLocalScheme defaultAmbiguousNumOwnedBy
-inferLetSimple inferLetBody defaultAmbiguousNumOwnedBy
-processLetGroup inferLetBinds defaultGroupNumOwnedBy'
-printf '%s\n' "$local_num_boundaries" | while read -r reader next helper; do
-  require_typecheck_arm "$reader" "$next" "$helper"
+# Every numeric boundary supplies one explicit descriptor. All eight boundaries name
+# their ambiguity owner; method bodies capture it inside their own balanced inference
+# window. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
+# the just-exited level.
+numeric_boundaries='blockRecLet blockLet NumBoundaryOwnedMember
+blockLet inferRecordCreate NumBoundaryOwnedMember
+inferRecLet registerLocalScheme NumBoundaryOwnedMember
+inferLetSimple inferLetBody NumBoundaryOwnedMember
+processLetGroup inferLetBinds NumBoundaryOwnedGroup
+processSCC sccSchemes NumBoundaryOwnedScc
+inferDefaultMethod instantiateNamedMonos NumBoundaryOwnedMethodBody
+inferImplMethodBody implBodyLoc NumBoundaryOwnedMethodBody'
+printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
+  require_typecheck_arm "$reader" "$next" 'finalizeNumBoundary'
+  require_typecheck_arm "$reader" "$next" 'NumBoundary {'
+  require_typecheck_arm "$reader" "$next" 'nbDisposition ='
+  require_typecheck_arm "$reader" "$next" "$disposition"
+  require_typecheck_arm "$reader" "$next" 'nbMembers ='
+  require_typecheck_arm "$reader" "$next" 'nbSurvivingIds ='
   require_typecheck_arm "$reader" "$next" 'let _ = exitLevel ()'
-  require_typecheck_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
+  if [ "$disposition" = NumBoundaryOwnedMethodBody ]; then
+    require_typecheck_arm "$reader" "$next" 'let bodyLevel = perRun.value.currentLevel.value'
+    require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody bodyLevel'
+  else
+    require_typecheck_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
+  fi
 done || exit 1
 
-local_num_expected="$(printf '%s\n' "$local_num_boundaries" | wc -l | tr -d ' ')"
-local_num_actual="$(grep -Ec '^[[:space:]]+default(Ambiguous|Group)NumOwnedBy([[:space:]]|$)' "$predicate_slot_src")"
-if [ "$local_num_actual" -ne "$local_num_expected" ]; then
-  echo "FAIL: local numeric owner call census changed: $local_num_actual calls, $local_num_expected checked boundaries"
+numeric_boundary_expected="$(printf '%s\n' "$numeric_boundaries" | wc -l | tr -d ' ')"
+numeric_boundary_actual="$(grep -Fc 'let _ = finalizeNumBoundary' "$predicate_slot_src")"
+if [ "$numeric_boundary_actual" -ne "$numeric_boundary_expected" ]; then
+  echo "FAIL: numeric boundary descriptor census changed: $numeric_boundary_actual calls, $numeric_boundary_expected checked boundaries"
   exit 1
 fi
 
-require_typecheck_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows (Some level) m = match normalize m'
-require_typecheck_arm numDefaultOwnerAllows groundNumVars 'Unbound _ owner => owner == level'
-require_typecheck_arm numDefaultOwnerAllows groundNumVars 'numDefaultOwnerAllows None _ = True'
-require_typecheck_arm defaultAmbiguousNum defaultAmbiguousNumOwnedBy 'defaultAmbiguousNumWith None protectedIds obls t'
-require_typecheck_arm defaultGroupNum defaultGroupNumOwnedBy 'defaultGroupNumWith None protectedIds obls monos'
-require_typecheck_arm groundNumVars groundNumVarsWith 'groundNumVarsWith None obls ids'
-require_typecheck_arm defaultBodyLocalNum defaultEachMember 'groundNumVars obls'
-require_typecheck_arm defaultEachMember registerAmbiguousConstraints 'defaultAmbiguousNum protectedIds obls m'
-require_typecheck_arm processSCC isLetrecGroup 'defaultGroupNum protectedSigIds defaultObls'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedMember owner => Some owner'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedGroup owner => Some owner'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedScc _ => None'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedScc owner => Some owner'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedMethodBody owner => Some owner'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'let ambiguityOwner = match boundary.nbDisposition'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'registerAmbiguousConstraintsOwnedBy'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'None => ()'
+require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'numDefaultOwnerAllows (Some level) m = match normalize m'
+require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'Unbound _ owner => owner == level'
+require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'numDefaultOwnerAllows None _ = True'
+require_typecheck_arm defaultBodyLocalNumWith defaultEachMemberWith 'groundNumVarsWith'
+require_typecheck_arm defaultEachMemberWith registerAmbiguousConstraintsOwnedBy 'defaultAmbiguousNumWith ownerPolicy'
+require_typecheck_arm registerAmbiguousConstraintsOwnedBy oblDispatchMonos 'registerAmbiguousGo'
 
 # Impl bodies read their method declaration and graded scope from one identity-keyed
 # ClassEnv row at the module ordinal.  The spelling-keyed fast/slow pair is retired.
