@@ -216,3 +216,37 @@ CLI flag, and a representation change whose design was already settled; Sol
 for an unresolved coherence rule. It rejected upgrading for a permissions
 failure and retained the Sol end reviewer. This checks instruction uptake,
 not Terra's implementation quality on those hypothetical packets.
+
+The next real sprint, #3217 (`one-checking-mode`, 2026-09-19–20), used 1,147
+coding responses and 142.25M input tokens versus 2,718/333.72M and
+2,167/283.38M in the earlier runs. Sol's input share fell to 21.9%, and
+wait/poll-associated input to 19.8%. At the same standard token rates the
+execution cost proxy was 66–68% lower; different workloads prevent attributing
+all of that to the instruction change. Planning and automatic approval reviews
+are excluded from those comparisons, as before.
+
+Two instruction gaps survived. Fresh custom-role workers received their own
+`developer_instructions`, without the saved user-level idle override, and
+correctly fell back to one-minute waits; the generic-child probe had missed
+this. After compaction, the orchestrator omitted outer-yield pragmas and used
+full-history forks for its final two dispatches. The adapter's Resume checkpoint
+and role-level policy address those distinct paths.
+
+Five packet amendments and three S4 threads also exposed omitted direct
+consumers; the end-review fix used Sol with only "compiler state loss" as its
+justification. Packet ownership now includes direct reference consumers without
+expanding the acceptance ceiling, and the repair tier must follow the same
+remaining-reasoning rubric as planned slices. An explicit corrected-packet
+assignment after REFUSED can resume a worker; chat-only mid-task scope changes
+remain unlicensed. CI scheduling and the Sol end reviewer are unchanged.
+
+Validation of this follow-up used the actual fresh custom roles, not generic
+substitutes: Terra/high `sprint_implementer` ran `sleep 105`, and Sol/high
+`sprint_reviewer` ran the same sleep followed by exit 7. Both received the
+role-level idle override, used 30-second initial yields and one 170-second poll
+inside a 180-second outer call, needed zero cell waits, and observed the real
+exit codes (0 and 7). The compiler MCP server was disabled only for this
+read-only harness probe. An independent instruction probe also selected the
+correct repair tiers, distinguished informal amendments from post-refusal
+reassignments, and resumed a hypothetical outer cell before its process. This
+does not prove real post-compaction retention; the next sprint tests that.

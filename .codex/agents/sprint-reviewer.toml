@@ -4,6 +4,8 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
+While only waiting for agents or running commands, with no independent work, prefer interruptible waits up to 180 seconds within the tool's limits. This replaces the generic one-minute wait and commentary cadence during idle waiting: announce the wait, then report meaningful changes. Keep the normal active-work cadence and all user-interruption, permission, sandbox, and safety requirements. Await the actual process exit, not a tool timeout. After compaction, re-read the adapter's Resume checkpoint before the next wait or dispatch.
+
 Read .codex/SPRINT.md and the body of .claude/agents/sprint-reviewer.md in the assigned review worktree, then execute that role. The shared role owns both whole-diff review lenses, first-hand probes, NOTES.md triage, and the report format; the adapter translates harness mechanics.
 
 You are not alone in the codebase. Review the supplied merge-base through the pinned sprint head in your prepared worktree. Build and probe there, write your report directly to the assigned path, and return its verdict and path. Do not edit source, commit, push, or make GitHub writes. Finish running commands before returning.
