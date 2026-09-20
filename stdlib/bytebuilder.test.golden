@@ -1,9 +1,9 @@
 running doctests in stdlib/bytebuilder.mdk
   ok   stdlib/bytebuilder.mdk:47: let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
   ok   stdlib/bytebuilder.mdk:49: let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) == debug (buildArray buf)
-  ok   stdlib/bytebuilder.mdk:98: let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hi") buf in let _ = appendBytes (toUtf8Bytes "!") buf in debug (buildBytes buf)
-  ok   stdlib/bytebuilder.mdk:100: let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "") buf in debug (buildBytes buf)
-  ok   stdlib/bytebuilder.mdk:128: let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hey") buf in let (_, n) = builderParts buf in n
+  ok   stdlib/bytebuilder.mdk:98: let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
+  ok   stdlib/bytebuilder.mdk:100: let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
+  ok   stdlib/bytebuilder.mdk:128: let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
   ok   stdlib/bytebuilder.mdk:253: runByteParser (beUint 1) (build1 (emitU8 0))
   ok   stdlib/bytebuilder.mdk:255: runByteParser (beUint 1) (build1 (emitU8 255))
   ok   stdlib/bytebuilder.mdk:257: runByteParser (beUint 1) (build1 (emitU8 127))

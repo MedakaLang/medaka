@@ -26,7 +26,7 @@ IDENT "fromByteBlockPrefix"
 COMMA
 IDENT "lendByteBlock"
 COMMA
-IDENT "toUtf8Bytes"
+IDENT "encodeUtf8"
 RBRACE
 NEWLINE
 IMPORT

@@ -21,7 +21,7 @@ stages=DESUGAR,MARK
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
 import bytes.{
-  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, toUtf8Bytes
+  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, encodeUtf8
 }
 import list.{reverse}
 
@@ -99,9 +99,9 @@ growTo cap needed =
    separate single-byte grows. `emitBytes` is the one-byte-at-a-time form,
    over a `List Int`.
 
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hi") buf in let _ = appendBytes (toUtf8Bytes "!") buf in debug (buildBytes buf)
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
    "[|104, 105, 33|]"
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "") buf in debug (buildBytes buf)
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
    "[||]" -}
 export
 appendBytes : Bytes -> Builder -> Unit
@@ -129,7 +129,7 @@ appendBytes src (Builder backing len) =
    block: either way the returned byte string goes stale rather than wrong,
    and a caller reading only `[0, len)` of it reads what it was handed.
 
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hey") buf in let (_, n) = builderParts buf in n
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
    3 -}
 export
 builderParts : Builder -> (Bytes, Int)
@@ -459,7 +459,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
         Err _ => False
 # DESUGAR
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "toUtf8Bytes" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "encodeUtf8" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
@@ -509,7 +509,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DProp false "emitU16BE reversed bytes, leUint agrees with beUint" ((pp "v" (TyCon "Int"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 65535)))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "takeBytes") (ELit (LInt 2)))) (EApp (EVar "build1") (EApp (EVar "emitU16BE") (EVar "w")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "bytes")) () (EBlock (DoLet false false (PVar "reversedArr") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "bytes")))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "leUint") (ELit (LInt 2)))) (EVar "reversedArr")) (arm (PCon "Ok" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "w"))) (arm (PCon "Err" PWild) () (EVar "False"))))))))))
 # MARK
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "toUtf8Bytes" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "encodeUtf8" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
