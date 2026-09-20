@@ -128,10 +128,12 @@ import lib.server_core.{
 }
 import lib.store.{
   Store,
-  storeBlobEntries,
+  storeBlobCids,
   storeBlobMimeIndex,
   storeBlobMimeType,
   storeCredential,
+  storeGet,
+  storeHasBlob,
   storePreferences,
   storeSessionRows,
   storeRepo,
@@ -518,7 +520,10 @@ persistTransition : String ->
   Store ->
   <FileRead "_", FileWrite "_"> Result String Unit
 persistTransition dir did nowSeconds before after = do
-  () <- if blobsMoved before after then persistBlobHalf dir after else Ok ()
+  () <- if blobsMoved before after then
+    persistBlobHalf dir before after
+  else
+    Ok ()
   () <- persistRepoHalf dir did nowSeconds before after
   () <- persistCredentialHalf dir before after
   () <- persistPreferencesHalf dir before after
@@ -846,19 +851,50 @@ declaredMimeType store cid = match storeBlobMimeType cid store
   Some declared => declared
   None => "application/octet-stream"
 
-blobRows : Store -> List (Cid, String, Array Int)
-blobRows store =
-  map
-    ((cid, bytes) => (cid, declaredMimeType store cid, bytes))
-    (storeBlobEntries store)
+{- | Whether the transition owes the blob area a write for one blob: it is new
+   in `after`, or its declared type is not what it was.
 
--- Every blob is rewritten, not just the new one, exactly as `persistRepo`
--- rewrites the whole block graph: a blob file's name is its content, so
--- rewriting one already on disk promotes the same bytes over themselves.
+   A blob's name is its content and `lib.store` exposes no way to remove one,
+   so a blob `before` already held under an unchanged declared type is already
+   on disk under the very name a rewrite would promote it to — and rewriting
+   it stages, fsyncs and renames both its files to replace them with
+   themselves. -}
+blobWriteOwed : Store -> Store -> Cid -> Bool
+blobWriteOwed before after cid =
+  not (storeHasBlob cid before)
+    || storeBlobMimeType cid before /= storeBlobMimeType cid after
+
+-- The rows `blobWriteOwed` selects, read out of `after` one at a time so that
+-- only a blob actually being written has its bytes copied at all. A CID the
+-- blob half lists and then cannot produce bytes for would be a torn store, so
+-- it refuses the persist rather than promoting a blob file over an empty one.
+blobRowsOwed : Store ->
+  Store ->
+  List Cid ->
+  Result String (List (Cid, String, Array Int))
+blobRowsOwed _ _ [] = Ok []
+blobRowsOwed before after (cid :: rest) =
+  if blobWriteOwed before after cid then match storeGet cid after
+    None =>
+      Err
+        "blob \{cidToString cid} is listed by the blob half but holds no bytes"
+    Some bytes => do
+      tail <- blobRowsOwed before after rest
+      Ok ((cid, declaredMimeType after cid, bytes) :: tail)
+  else
+    blobRowsOwed before after rest
+
+-- Only the blobs the transition owes are rewritten, not the whole area: a
+-- blob file's name is its content, so promoting one already on disk writes
+-- the same bytes over themselves, and doing that for every blob makes one
+-- upload cost the account's whole stored size.
 persistBlobHalf : String ->
   Store ->
+  Store ->
   <FileRead "_", FileWrite "_"> Result String Unit
-persistBlobHalf dir store = blobFileWrite dir (blobRows store)
+persistBlobHalf dir before after = do
+  rows <- blobRowsOwed before after (storeBlobCids after)
+  blobFileWrite dir rows
 
 headText : Repo -> String
 headText repo = cidToString (repoCommitCid (repoLatestCommit repo))

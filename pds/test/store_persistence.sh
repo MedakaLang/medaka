@@ -31,6 +31,10 @@
 # barriers came after its block promotes or in between them (#3058), and
 # whether the blob area's own dentry is barriered on a write that runs no repo
 # half, where the concatenated trace lets another process pay for it.
+# Case 13 grades what one upload COSTS the disk rather than what it leaves on
+# it: the blob area is stamped either side of a single upload into an account
+# that already holds 99 blobs, and only the blob being uploaded may have been
+# written (#2692).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -1009,4 +1013,68 @@ done
 echo "barriered directory creations: block shards $BLOCK_SHARD_DIRS, blob shards $BLOB_SHARD_DIRS, entry directories $ENTRY_DIRS, staging directories $STAGING_DIRS"
 
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in, with the blob half of one transition promoted before the commit that can name it and every shard barrier of one commit taken after all of its block promotes; key absent'
+# ── 13. one upload writes one blob, not the account ────────────────────────
+# What an upload costs the DISK, which no tree comparison and no syscall order
+# can state: the blob area is stamped before and after a single upload, and a
+# file is counted as written when its inode, size or change time moved. Both
+# halves of a promote produce a new inode — the staged file is a different one
+# and `rename` replaces the dentry — so a blob rewritten over itself is
+# counted, exactly as a blob written for the first time is (#2692).
+#
+# The seed route persists the first 99 uploads one transition at a time, the
+# way a server persists them, and the add route persists the hundredth alone.
+# Stamping between the two processes is what isolates that one upload.
+file_stamp() {
+  stat -c '%i %s %Z' "$1" 2>/dev/null || stat -f '%i %z %c' "$1"
+}
+
+blob_stamps() {
+  find "$1/blobs" -type f | while read -r _f; do
+    printf '%s %s\n' "$_f" "$(file_stamp "$_f")"
+  done | LC_ALL=C sort
+}
+
+CHURN="$WORK/churn"
+mkdir -p "$CHURN"
+
+"$WORK/driver" blob-churn-seed "$CHURN" \
+  > "$WORK/churn-seed.out" 2> "$WORK/churn-seed.err"
+require_empty "$WORK/churn-seed.err" blob-churn-seed
+[ "$(tail -1 "$WORK/churn-seed.out")" = 'BLOB-CHURN-SEED: PASS' ] \
+  || fail 'case 13: the churn seed route did not pass'
+
+blob_stamps "$CHURN" > "$WORK/churn.before"
+SEEDED_FILES=$(wc -l < "$WORK/churn.before" | tr -d ' ')
+[ "$SEEDED_FILES" -eq 198 ] \
+  || fail "case 13: the seed left $SEEDED_FILES blob files, not the 198 that 99 blobs and their sidecars are"
+
+"$WORK/driver" blob-churn-add "$CHURN" \
+  > "$WORK/churn-add.out" 2> "$WORK/churn-add.err"
+require_empty "$WORK/churn-add.err" blob-churn-add
+[ "$(tail -1 "$WORK/churn-add.out")" = 'BLOB-CHURN-ADD: PASS' ] \
+  || fail 'case 13: the churn add route did not pass'
+
+blob_stamps "$CHURN" > "$WORK/churn.after"
+ADDED_FILES=$(wc -l < "$WORK/churn.after" | tr -d ' ')
+[ "$ADDED_FILES" -eq 200 ] \
+  || fail "case 13: the account holds $ADDED_FILES blob files after the hundredth upload, not 200"
+
+# Every AFTER line the BEFORE stamp list does not hold verbatim: a file this
+# upload created, or one it replaced.
+comm -13 "$WORK/churn.before" "$WORK/churn.after" > "$WORK/churn.written"
+WRITTEN_FILES=$(wc -l < "$WORK/churn.written" | tr -d ' ')
+WRITTEN_BYTES=$(awk '{ total += $3 } END { print total + 0 }' "$WORK/churn.written")
+BLOB_SIZE=$(awk '/^BLOB-CHURN-ADD size /{ print $3 }' "$WORK/churn-add.out")
+[ -n "$BLOB_SIZE" ] || fail 'case 13: the add route did not report the blob size'
+
+[ "$WRITTEN_FILES" -eq 2 ] || {
+  cat "$WORK/churn.written" >&2
+  fail "case 13: the hundredth upload wrote $WRITTEN_FILES files; only its own bytes and sidecar are owed"
+}
+[ "$WRITTEN_BYTES" -lt $((BLOB_SIZE * 3)) ] \
+  || fail "case 13: the hundredth upload wrote $WRITTEN_BYTES bytes for a blob of $BLOB_SIZE"
+
+echo "case 13: the hundredth upload wrote $WRITTEN_FILES file(s), $WRITTEN_BYTES bytes, for a blob of $BLOB_SIZE (cap ${BLOB_SIZE}x3); the other 99 blobs' inodes did not move"
+
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in, with the blob half of one transition promoted before the commit that can name it and every shard barrier of one commit taken after all of its block promotes; one upload writing its own blob and no other; key absent'

@@ -144,8 +144,8 @@ import lib.server_core.{
 import lib.store.{
   Store,
   sessionFingerprint,
+  storeBlobBytes,
   storeBlobCids,
-  storeBlobEntries,
   storeBlobMimeType,
   storeCredential,
   storeGet,
@@ -850,10 +850,6 @@ finishWrite store (Err response) = (store, response)
 finishWrite store (Ok (repo, output)) =
   (storeWithRepo repo store, jsonOkResponse output)
 
-totalBlobBytes : List (Cid, Array Int) -> Int
-totalBlobBytes [] = 0
-totalBlobBytes ((_, bytes) :: rest) = arrayLength bytes + totalBlobBytes rest
-
 {- | `com.atproto.repo.uploadBlob`: admit the raw body against `pds/lib/blob.
    mdk`'s `admitBlob` — the ONE place size/MIME admission happens — then
    record the admitted bytes and declared MIME type in the Store's blob half.
@@ -865,7 +861,7 @@ applyUploadBlob : Store ->
   Result Response (Store, Json)
 applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
-  let accountUsedBytes = totalBlobBytes (storeBlobEntries store)
+  let accountUsedBytes = storeBlobBytes store
   ref <- admitBlobRef (admitBlob accountUsedBytes mimeType bytes)
   next <- match storePutBlob (blobRefCid ref) mimeType bytes store
     Err message =>
