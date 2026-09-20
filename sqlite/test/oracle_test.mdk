@@ -26,9 +26,9 @@
 
    Run: `medaka gate run sqlite/test/oracle`. -}
 
-import io.{getEnvOr, runVerb}
+import io.{runVerb}
 import list.{lookup}
-import string.{join, trim, unwords}
+import string.{join, trim}
 import test.{Expectation(..), expectEqualLines}
 import test.oracle_support.{
   OracleRow(..),
@@ -37,11 +37,11 @@ import test.oracle_support.{
   Step(..),
   flatLines,
   outLines,
+  seedDb,
+  spawnOut,
   typedUserLine,
 }
-import test_process.{
-  boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
-}
+import test_process.{medakaBin, medakaRoot, scratchDir, underRoot}
 
 -- # Spawning
 
@@ -55,59 +55,15 @@ buildTimeoutSeconds = 600
 queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
-emitterBin : <IO> String
-emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
-
--- `MEDAKA_ROOT` and `MEDAKA_EMITTER` named explicitly, as the retired scripts
--- exported them: a gate shard does not export either, and a `medaka build`
--- left to find its own emitter is one refactor away from being graded on a
--- verb that silently did nothing.
-spawnEnv : <IO> List String
-spawnEnv = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{emitterBin}"]
-
-{- | `cmd` run with `args` under a `secs` ceiling, its stdout on exit 0, and a
-   named failure otherwise.
-
-   Every spawn in this file goes through here, so a missing toolchain has ONE
-   wording on every row — `spawn failed: <cmd> not found on PATH` — and is a
-   failure rather than a skip: the registry declares `toolchain = ["sqlite3"]`
-   and there is no skip marker to reach for (#2599 item 8).
-
-   `env` carries the two variables, which is the whole reason it is here:
-   Medaka has no `setEnv`. It ends up being `env` twice, harmlessly —
-   `boundedVerbSeconds` resolves `cmd` through an `env` of its own, which is
-   what makes a missing `cmd` report the host's 127 and its stderr rather
-   than `perl`'s failed `exec` returning as if the program had run and
-   printed nothing. -}
-spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
-spawnOut secs cmd args =
-  let line = unwords (cmd :: args)
-  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
-    Err e => Err "spawn failed: could not start `\{line}`: \{e}"
-    Ok (127, _, err) =>
-      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
-    Ok (0, out, _) => Ok out
-    Ok (code, out, err) =>
-      Err "`\{line}` exited \{intToString code}: \{debug (out ++ err)}"
+-- `spawnOut`/`seedDb` are `test.oracle_support`'s shared spawn primitives:
+-- `MEDAKA_ROOT`/`MEDAKA_EMITTER` named explicitly, as the retired scripts
+-- exported them, and every spawn's exit code and stderr read rather than
+-- reading stdout alone.
 
 -- # Running one row
 
 -- One row's two line lists, ready to compare.
 data RowOutput = RowOutput { actual : List String, expected : List String }
-
-seedSql : Seed -> <FileRead "_", IO> Result String String
-seedSql (SeedSql sql) = Ok sql
-seedSql (SeedFile rel) = match readFile (underRoot rel)
-  Err e => Err "could not read \{rel}: \{e}"
-  Ok text => Ok text
-
-seedDb : String -> List Seed -> <Exec "_", FileRead "_", IO> Result String Unit
-seedDb _ [] = Ok ()
-seedDb db (s :: rest) = match seedSql s
-  Err e => Err e
-  Ok sql => match spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
-    Err e => Err e
-    Ok _ => seedDb db rest
 
 buildDemo : OracleRow -> String -> <Exec "_", IO> Result String Unit
 buildDemo row bin =

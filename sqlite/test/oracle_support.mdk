@@ -14,17 +14,22 @@
    line — a demo that dropped the block entirely would normalize to the same
    text as one that printed it.
 
-   The spawns stay OUT of here, in each runner's own file, deliberately:
-   `medaka gate verify`'s native-grading clause reads the source text of the
-   module a gate's `run =` names (`ungradedSpawnSites`,
-   `compiler/tools/gate_cmd.mdk`), so a spawn routed through this module would
-   be invisible to it. A runner therefore spawns and grades in one file and
-   reaches here only for values.
+   The three runners' spawn primitives (`spawnRaw`/`spawnOut`/`seedDb`/
+   `spawnEnv`/`emitterBin`) live here too, not because a spawn is a value
+   this module models, but because they were three byte-identical copies
+   before this module held them. `medaka gate verify`'s native-grading
+   clause follows a gate's own project-local imports one hop
+   (`gateReaches`/`relaysFor`, `compiler/tools/gate_cmd.mdk`), so a spawn
+   routed through this module is graded via the importing gate as long as
+   the gate names the spawning binding and the grading evidence sits within
+   that one hop — a spawn here is no longer invisible to it.
 
    Import what you need: `import test.oracle_support.{OracleRow(..), Step(..)}`. -}
 
+import io.{getEnvOr}
 import list.{dropWhileEnd, intercalate}
-import string.{lines, split}
+import string.{lines, split, trim, unwords}
+import test_process.{boundedVerbSeconds, medakaRoot, underRoot}
 
 -- # One row
 
@@ -128,3 +133,82 @@ typedUserLine row = match split "|" row
 export
 flatLines : List (List String) -> List String
 flatLines parts = intercalate [] parts
+
+-- # Spawning a process under the tree
+
+{- | The Medaka native emitter binary a spawn should use: `MEDAKA_EMITTER` if
+   set, else the sibling `medaka_emitter` beside the tree's own `medaka`
+   binary. -}
+export
+emitterBin : <IO> String
+emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
+
+{- | `MEDAKA_ROOT` and `MEDAKA_EMITTER`, exported the way the retired shell
+   oracles did: a gate shard exports neither on its own, and a `medaka
+   build` left to find its own emitter is one refactor away from being
+   graded on a verb that silently did nothing. -}
+export
+spawnEnv : <IO> List String
+spawnEnv = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{emitterBin}"]
+
+{- | `cmd` run with `args` under a `secs` ceiling: the raw `(exit, stdout,
+   stderr)`, except a missing `cmd` (exit 127 through `env`) or a spawn that
+   never started, which are both reported as `Err` — "the binary was not on
+   PATH" is never read as "it printed nothing and exited 0".
+
+   `env` carries the two `spawnEnv` variables, which is the whole reason it
+   is here: Medaka has no `setEnv`. It ends up being `env` twice, harmlessly
+   — `boundedVerbSeconds` resolves `cmd` through an `env` of its own, which
+   is what makes a missing `cmd` report the host's 127 and its stderr rather
+   than `perl`'s failed `exec` returning as if the program had run and
+   printed nothing. -}
+export
+spawnRaw : Int ->
+  String ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+spawnRaw secs cmd args =
+  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
+    Err e =>
+      Err "spawn failed: could not start `\{unwords (cmd :: args)}`: \{e}"
+    Ok (127, _, err) =>
+      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
+    Ok triple => Ok triple
+
+{- | `spawnRaw`, demanding a clean exit: the row's stdout on 0, a named
+   failure otherwise. What every build/seed/build-and-run step goes
+   through: a row where the tool itself failed is not the same condition as
+   a row whose SQL was refused. -}
+export
+spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
+spawnOut secs cmd args = match spawnRaw secs cmd args
+  Err e => Err e
+  Ok (0, out, _) => Ok out
+  Ok (code, out, err) =>
+    Err
+      "`\{unwords (cmd :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+-- Every seed statement runs under the same ceiling a direct query gets: a
+-- hang here is a defect of the row, not of the harness.
+seedTimeoutSeconds : Int
+seedTimeoutSeconds = 120
+
+{- | One `Seed`'s SQL text: itself, or read from the checked-in fixture it
+   names. -}
+export
+seedSql : Seed -> <FileRead "_", IO> Result String String
+seedSql (SeedSql sql) = Ok sql
+seedSql (SeedFile rel) = match readFile (underRoot rel)
+  Err e => Err "could not read \{rel}: \{e}"
+  Ok text => Ok text
+
+{- | `db` seeded through the real `sqlite3` CLI, one `Seed` statement at a
+   time, in order. -}
+export
+seedDb : String -> List Seed -> <Exec "_", FileRead "_", IO> Result String Unit
+seedDb _ [] = Ok ()
+seedDb db (s :: rest) = match seedSql s
+  Err e => Err e
+  Ok sql => match spawnOut seedTimeoutSeconds "sqlite3" [db, sql]
+    Err e => Err e
+    Ok _ => seedDb db rest

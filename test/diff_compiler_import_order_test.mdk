@@ -713,9 +713,9 @@ section : String -> List String -> List String
 section _ [] = []
 section what failures = "\{what}:" :: failures
 
-summarize : List Case -> List String -> Expectation
-summarize _ [] = pass
-summarize cases blocks = fail "\{census cases}\n\{unlines blocks}"
+summarizeCensus : List Case -> List String -> Expectation
+summarizeCensus _ [] = pass
+summarizeCensus cases blocks = fail "\{census cases}\n\{unlines blocks}"
 
 -- # The units
 
@@ -811,7 +811,7 @@ gradedCorpus = match corpusUnits
       Ok scratch =>
         let cases = map (runCase scratch) units
         let _ = runVerb "rm" ["-rf", scratch]
-        summarize
+        summarizeCensus
           cases
           (section
               "the answer depends on import-clause order"

@@ -68,7 +68,7 @@
    Runs under `medaka test --native`: it spawns `medaka` and reads the corpora
    and the write tool, none of which the interpreter binds. -}
 
-import compiler_cli_test_support.{boundedInTree, sweepUnits}
+import compiler_cli_test_support.{boundedInTree, summarizeSweep, sweepUnits}
 import fs.{fixtureFiles}
 import list.{somes, sort}
 import path.{dirname}
@@ -85,7 +85,7 @@ import string.{
   unlines,
   words,
 }
-import test.{Expectation, fail, pass}
+import test.{fail, pass}
 import test_process.{medakaBin, medakaRoot}
 
 -- # The table
@@ -492,14 +492,8 @@ familyFailure o = match o.failures
     Some
       "  \{o.sub} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{trimRight body}"
 
-summarize : Int -> List String -> Expectation
-summarize _ [] = pass
-summarize graded failures =
-  fail
-    "\{intToString (length failures)} of \{intToString graded} snapshot families failed:\n\{unlines failures}"
-
 test "every snapshot family reproduces its committed snapshots" =
-  sweepUnits families gradeFamily familyFailure summarize
+  sweepUnits families gradeFamily familyFailure summarizeSweep
 
 -- # The write tool carries the same table
 
