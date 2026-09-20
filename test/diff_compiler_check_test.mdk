@@ -107,7 +107,7 @@ import string.{
   words,
 }
 import test.{Expectation, fail, pass}
-import test_process.{boundedVerb, medakaRoot, scratchDir}
+import test_process.{boundedVerb, medakaBin, medakaRoot, scratchDir}
 
 -- # The table
 
@@ -220,7 +220,7 @@ resolveModulesLeg = Leg {
   pairedWith = None,
   golden = InFixtureDir "expected",
   grade = SortedEqual,
-  fixtures = 18,
+  fixtures = 19,
 }
 
 rows : List Row
@@ -728,6 +728,61 @@ validModulesRun = match validModulesScratch
 
 test "a valid multi-module program resolves with no false positives" =
   validModulesRun
+
+-- # A self-named newtype: the type imports, the ctor spelling stays out
+
+{- | `import nt.{NT}` on `export newtype NT = NT Int` is a TYPE import, and
+   `resolve_module_fixtures/newtype_self_named_type` pins that it resolves
+   clean (#3205). What that corpus cannot see is the other half: the same
+   spelling used as a CONSTRUCTOR must still be refused, or the type import
+   has silently admitted a module-private ctor — #1311's failure mode — and
+   `check_main`'s ordered-modules leg grades resolve diagnostics only, where
+   this refusal surfaces one stage later as typecheck's unbound name. So this
+   witness spawns the composed `medaka check` over a synthetic pair and grades
+   its exit and stderr. -}
+selfNamedModules : List (String, String)
+selfNamedModules = [
+  ("nt.mdk", "export newtype NT = NT Int\n"),
+  ("use_nt.mdk", "import nt.{NT}\n\nbuild : Int -> NT\nbuild x = NT x\n"),
+]
+
+selfNamedScratch : <Exec "_", FileWrite "_"> Result String String
+selfNamedScratch = match scratchDir
+  Err e => Err e
+  Ok root =>
+    let dir = "\{root}/newtype_self_named_ctor"
+    map (() => dir) (mkdirAll dir)
+
+selfNamedVerdict : String -> <Exec "_", IO> Option String
+selfNamedVerdict dir =
+  match boundedVerb medakaBin ["check", "\{dir}/use_nt.mdk"]
+    Err e => Some "could not spawn \{medakaBin}: \{e}"
+    Ok (code, out, err) =>
+      -- `medaka check` reports its diagnostics on stdout; stderr carries
+      -- only the binary's own notices.
+      if code == 0 then
+        Some
+          "a self-named newtype's private ctor was admitted through its type import"
+      else if contains "Unbound variable: NT" (out ++ err) then
+        None
+      else
+        Some
+          "expected the ctor spelling to be unbound, got exit \{code}: \{debug (out ++ err)}"
+
+selfNamedRun : <Exec "_", FileWrite "_", IO> Expectation
+selfNamedRun = match selfNamedScratch
+  Err e => fail "could not make a scratch directory: \{e}"
+  Ok dir => match writeAll dir selfNamedModules
+    Err e => fail "could not write the probe modules: \{e}"
+    Ok () =>
+      let finding = selfNamedVerdict dir
+      let _ = runVerb "rm" ["-rf", dir]
+      match finding
+        None => pass
+        Some m => fail m
+
+test "a self-named newtype imports as a type and its ctor spelling stays unbound" =
+  selfNamedRun
 
 -- # parse_main — the panicking rejection path
 

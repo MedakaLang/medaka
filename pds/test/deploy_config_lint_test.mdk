@@ -39,11 +39,13 @@
 import io.{runVerb}
 import string.{
   contains,
+  countOccurrences,
   lines,
   replace,
   replaceAll,
   startsWith,
   stripSuffix,
+  trim,
   unlines,
   words,
 }
@@ -422,6 +424,69 @@ presentIn : Result String String ->
 presentIn (Err e) _ = Err e
 presentIn (Ok path) roster = presentForbidden path roster
 
+-- # Where a directive sits
+
+{- | The brace-delimited block opened by the first line satisfying `opens`,
+   through the line that closes it, or `[]` for a file that opens no such
+   block.
+
+   Brace arithmetic rather than indentation. Every roster above is a grep
+   over the whole file and so can only ask WHETHER a directive is present;
+   this asks WHERE one is, which is the question a `reverse_proxy` split
+   into a streaming half and a request half makes load-bearing. -}
+blockFrom : (String -> Bool) -> List String -> List String
+blockFrom _ [] = []
+blockFrom opens (line :: rest) =
+  if opens line then
+    line :: blockBody (braceDelta line) rest
+  else
+    blockFrom opens rest
+
+blockBody : Int -> List String -> List String
+blockBody _ [] = []
+blockBody depth (line :: rest) =
+  if depth <= 0 then [] else line :: blockBody (depth + braceDelta line) rest
+
+braceDelta : String -> Int
+braceDelta line = countOccurrences "{" line - countOccurrences "}" line
+
+boundsAStream : String -> Bool
+boundsAStream line =
+  contains "read_timeout" line || contains "write_timeout" line
+
+{- | One violation line per request timeout sitting inside the firehose
+   `reverse_proxy` block.
+
+   `read_timeout` and `write_timeout` bound the upstream connection AFTER a
+   101, not just the handshake, so either one in the block that carries the
+   upgrade is a ceiling on how long a relay may stay subscribed. The roster
+   cannot express this: the file is REQUIRED to carry both directives, for
+   the request half. What is forbidden is where they sit.
+
+   A file with no firehose block at all is the same finding, because the
+   catch-all `reverse_proxy` then serves the upgrade under its own
+   timeouts. -}
+firehoseTimeouts : String -> <FileRead "_"> Result String (List String)
+firehoseTimeouts path = match readFile path
+  Err e => Err "could not read \{path}: \{e}"
+  Ok content =>
+    match blockFrom (contains "reverse_proxy @firehose") (lines content)
+      [] => Ok [
+        "\{path}: no `reverse_proxy @firehose` block, so the upgrade is served under the request path's transport timeouts",
+      ]
+      block => Ok (map (boundedBy path) (filter boundsAStream block))
+
+boundedBy : String -> String -> String
+boundedBy path line =
+  "\{path}: the firehose block carries `\{trim line}`, which bounds a subscription rather than a request"
+
+-- | `firehoseTimeouts` over a mutant, with the mutant's own failure
+-- reported as the check's.
+firehoseTimeoutsIn : Result String String ->
+  <FileRead "_"> Result String (List String)
+firehoseTimeoutsIn (Err e) = Err e
+firehoseTimeoutsIn (Ok path) = firehoseTimeouts path
+
 -- # The real tree
 
 test "pds.service carries every required hardening directive" =
@@ -433,6 +498,11 @@ test "Caddyfile carries every required hardening directive" =
   expectNoFindings
     "pds/Caddyfile is missing a required hardening directive"
     (missingDirectives caddyfile caddyDirectives)
+
+test "Caddyfile keeps the request timeouts out of the firehose block" =
+  expectNoFindings
+    "pds/Caddyfile bounds a firehose subscription with a request timeout"
+    (firehoseTimeouts caddyfile)
 
 test "pds-egress.service carries every required hardening directive" =
   expectNoFindings
@@ -614,12 +684,53 @@ redirectOutput line =
   else
     line
 
+{- | `read_timeout` put back inside the firehose block.
+
+   The first `dial_timeout` in the file is the firehose block's, because the
+   streaming half precedes the request half, so injecting after it lands the
+   directive exactly where the split exists to keep it out of. -}
+withFirehoseTimeout : List String -> List String
+withFirehoseTimeout [] = []
+withFirehoseTimeout (line :: rest) =
+  if contains "dial_timeout" line then
+    line :: "\t\t\tread_timeout 30s" :: rest
+  else
+    line :: withFirehoseTimeout rest
+
 test "mutation control: an access log redirected away from the journal is caught" =
   expectFindings
     "an access log redirected away from the journal"
     (missingIn
       (mutantOf caddyfile "Caddyfile.log-to-file" toJournalFile)
       caddyDirectives)
+
+{- | A firehose block that bounds its own stream.
+
+   The directive roster still passes on this copy — the file carries every
+   pattern it asks for, and one more — which is the whole reason the
+   structural check exists beside it. Both halves are asserted. -}
+firehoseBounded : <Exec "_", FileRead "_", FileWrite "_", IO> Result String String
+firehoseBounded =
+  mutantOf caddyfile "Caddyfile.firehose-bounded" withFirehoseTimeout
+
+test "mutation control: a request timeout inside the firehose block is caught" =
+  expectFindings
+    "a request timeout inside the firehose block"
+    (firehoseTimeoutsIn firehoseBounded)
+
+test "mutation control: the firehose-bounded copy still passes the roster" =
+  expectNoFindings
+    "the firehose-bounded copy was expected to pass the directive roster"
+    (missingIn firehoseBounded caddyDirectives)
+
+test "mutation control: a Caddyfile with no firehose block at all is caught" =
+  expectFindings
+    "a Caddyfile serving the upgrade under the request path's timeouts"
+    (firehoseTimeoutsIn
+      (mutantOf
+        caddyfile
+        "Caddyfile.no-firehose"
+        (without (contains "reverse_proxy @firehose"))))
 
 test "mutation control: a dropped egress IPAddressDeny range is caught" =
   expectFindings
@@ -811,9 +922,9 @@ declaredAssertions =
     (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
 
 assertionFloor : Int
-assertionFloor = 39
+assertionFloor = 43
 
-test "deploy_config_lint declares at least ASSERTION_FLOOR=39 `test` blocks" =
+test "deploy_config_lint declares at least ASSERTION_FLOOR=43 `test` blocks" =
   let want = ">= \{intToString assertionFloor} `test` blocks"
   match declaredAssertions
     Err e =>

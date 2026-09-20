@@ -88,6 +88,19 @@ Every row's leaf was filed 2026-09-12; the three milestones `PDS launch: G-QUIET
 > row that proves why: #2946 closed as *not reproduced*, while the depth bound
 > its criterion actually names still does not exist. Re-derive the same way, and
 > treat a state cell older than the last landed sprint as unverified.
+>
+> **Six rows re-derived again 2026-09-20** — B14, D9, E7, F4, H2, H3 — from the
+> live box and the tracker, not from the tracking issues' state. Two had gone
+> false in the optimistic direction (B14 said "never done" when it had been run
+> on 09-18 with findings; F4 said "unverified" when `medaka lint pds` reports
+> 180), and four in the pessimistic direction (D9, E7, H2, H3 all landed with
+> #2972/#2959 and the row never moved). **The other sixty-one rows carry their
+> 2026-09-16 state and are still unverified against today's tree.**
+>
+> One structural fix went with it: **B12's #2659 was in no milestone at all**,
+> so a row this table calls a G-ANNOUNCE blocker was invisible to the burndown
+> the paragraph above calls authoritative. A row's leaf being milestoned is
+> itself a thing to check when re-deriving.
 
 ### 2.A Feature completeness
 
@@ -150,7 +163,7 @@ executing. Reproduce before fixing; closing one as not-real is a good outcome.
 | B11 | `<data>/credential` and `--password-file` are refused at a mode wider than `0600`, as `--key` and `--token-secret` already are. | G-QUIET | exists — `requirePrivateMode` refuses both the credential and `--password-file` at startup | #2944 |
 | B12 | The KDF iteration count carries a dated re-ruling stating the residual (3000 vs OWASP 600,000) as accepted for a single-owner server, or is raised. | G-ANNOUNCE | partial — stated in the design doc, not re-ruled for launch | #2659 (ruling recorded 2026-09-12) |
 | B13 | Un-framed connection admission distinguishes sources, or the shortfall is accepted for G-ANNOUNCE with a date. | G-ANNOUNCE | open, measured | #2816 |
-| B14 | An adversarial review by a fresh agent against a RUNNING instance on this box, from a written attack list covering every row of #1697's exposure table plus B2–B11, with every finding filed and nothing above S2 left open. Repeated after any S0/S1 fix that changes the request path. | G-ANNOUNCE | missing — never done; every existing attack case was written by the authors | #2945 |
+| B14 | An adversarial review by a fresh agent against a RUNNING instance on this box, from a written attack list covering every row of #1697's exposure table plus B2–B11, with every finding filed and nothing above S2 left open. Repeated after any S0/S1 fix that changes the request path. | G-ANNOUNCE | run, not signed off — carried out 2026-09-18 against `01c98b92f`, transcript on #1697. No S0. One new S1 (#3182, since closed); six rows confirmed known open issues (#2816, #2572, #2773, #2950, #2951, #2943) and #2953's consumer-enrolment obligation was explicitly not closed; three rows (9, 14, 22) are NOT EXERCISABLE locally and need a ruling, not code. The review's own verdict is that B14 cannot be signed off while those remain, and the row repeats after any S0/S1 fix that changes the request path | #2945 |
 | B15 | Every open PDS issue carries `ws:pds` and a severity label, so the exposure ledger is closed under the tracker. | G-QUIET | done 2026-09-12; re-derived 2026-09-16 and still true | done 2026-09-12 (#2572, #2904, #2816 relabeled) |
 | B16 | The signing key, session secret, and credential digest are in an encrypted off-box backup with named custody; a written "assume breach" procedure says what to do when the box is compromised, for each identity kind. | G-QUIET | missing | #2962 |
 
@@ -201,7 +214,7 @@ D5's open halves are, and it is the whole of what G-QUIET is now waiting on.
 | D6 | `SIGTERM` drains: in-flight requests finish or are cut at a bound, the event log is left consistent, and the exit is logged. | G-ANNOUNCE | missing — the runtime installs no `SIGTERM` handler; stage-then-rename is the only protection | #2963 |
 | D7 | A box-sharing rule is written: which gate/agent work may run beside the live service, and the service's cgroup weights make the rule survivable when it is broken. | G-QUIET | exists — `docs/ops/PDS-DEPLOY.md` § "Sharing the box" | #2958 |
 | D8 | `docs/ops/PDS-DEPLOY.md` describes the tree as it stands (it still says the firehose is out of scope). | G-QUIET | current — the firehose line now reads landed; one stale paragraph (the proxy method axis, still described as default-deny after ruling R1 inverted it) found and fixed 2026-09-16 | #2970 |
-| D9 | Compiler and PDS upgrades are separate procedures: rebuilding `pdsd` against a newer compiler is followed by the signing-parity and e2e gates before the swap. | G-ANNOUNCE | missing | #2972 |
+| D9 | Compiler and PDS upgrades are separate procedures: rebuilding `pdsd` against a newer compiler is followed by the signing-parity and e2e gates before the swap. | G-ANNOUNCE | exists — [`PDS-RUNBOOK.md`](PDS-RUNBOOK.md) §7 is that procedure, and names both gates as required against the rebuilt binary in addition to the per-deploy set | #2972 |
 
 ### 2.E Observability
 
@@ -220,7 +233,7 @@ Val is not looking at the terminal: nothing tells her the service is down**
 | E4 | A periodic stats line: active connections, un-framed connections, subscribers, repo rev, blocks and blobs on disk. | G-ANNOUNCE | exists — `serve: stats active=… unframed=… subscriptions=… rev=… blocks=… blobs=…` observed on a live process 2026-09-16 | #2966 |
 | E5 | A down or crash-looping service reaches Val within minutes: an `OnFailure=` unit or a probe on a timer, with the notification path named and tested by killing the service once. | G-QUIET | missing | #2967 |
 | E6 | A panic in one handler is visible as such: exit code and the panic text land in journald, and the restart count is readable. | G-QUIET | exists in principle (`Restart=on-failure`, `exit(1)` on panic), unverified live | #2967 |
-| E7 | Caddy's access log and certificate-renewal events are retained and readable beside the PDS log. | G-ANNOUNCE | missing | #2959 |
+| E7 | Caddy's access log and certificate-renewal events are retained and readable beside the PDS log. | G-ANNOUNCE | exists — `pds/Caddyfile`'s `log { output stderr }` puts the access log in the journal, and Caddy's own `tls.obtain`/`tls.cache.maintenance` lines land there too, so `journalctl -u caddy -u pds` is one timeline. Both halves read on the live box 2026-09-20 | #2959 |
 
 ### 2.F Code quality
 
@@ -236,7 +249,7 @@ instruments do not look at `pds/` at all.
 | F1 | `test/comment_register_census.sh` and `test/slop_census.sh` scope `pds/*.mdk`, and report zero issue-number citations, zero emoji shouts, and zero self-narration in `pds/lib` and `pds/shell`. | G-ANNOUNCE | missing — both scripts now scope `pds/*.mdk`, but issue-number citations in `pds/lib` are reduced, not zero | #2968 |
 | F2 | Register trims applied: `pds/lib/scalar.mdk`'s header keeps the numerical argument and loses the sprint-contract and "delete this comment" prose; `pds/lib/resource_limits.mdk`, `pds/lib/field.mdk`, `pds/lib/multiformats.mdk` cite constraints, not history. The dead `storeSessionCount` export removed; the raw `2^62-1` literal in `pds/lib/httpclient.mdk` named. | G-ANNOUNCE | done — all four headers rewritten, `storeSessionCount` gone, and the literal now reads `intMaxBound`. This row named `pds/lib/handlers.mdk` for that literal, which never held it | #2969 |
 | F3 | Every file over ~700 lines carries a section index at the top. | G-ANNOUNCE | done — all seven files over 700 lines (`repo`, `handlers`, `httpclient`, `scalar`, `server_core`, `mst`, `shell/server`) carry one, in either the `-- ──` or `-- #` house spelling | #2969 |
-| F4 | `medaka lint pds` clean under the ratcheted rule set, with every suppression carrying a reason. | G-ANNOUNCE | unverified | #2969 |
+| F4 | `medaka lint pds` clean under the ratcheted rule set, with every suppression carrying a reason. | G-ANNOUNCE | missing — measured 2026-09-20: 180 findings, every one `rule-duplicate-body` and every one under `pds/test/`. `pds/lib` and `pds/shell` are clean. #2969 closed without this clause being met; the live successor is #3143 | #2969 (successor #3143) |
 | F5 | `docs/design/ATPROTO-PDS-DESIGN.md`'s status banner agrees with its own §7 (the firehose is landed) and a short architecture overview for a non-author exists, ordered README → `pds/serve.mdk` → `server_core` → `handlers` → `shell/server`. | G-ANNOUNCE | partial, differently — the banner now agrees with §7 on the firehose and `pds/README.md` carries the module reading order, but the banner's `#1962` sentence went stale when that gate moved to the merge tier | #2970 |
 | F6 | A fresh agent, given only the docs, produces an architecture summary a maintainer grades as correct. | G-ANNOUNCE | unverified — #2970 closed with no grading recorded on it, which was its own acceptance criterion | #2970 |
 | F7 | Stdlib graduation decided per module under P11: `base58` and `multiformats` moved or explicitly kept; `field`/`scalar`/`secp256k1` decided once G1 has been stable across the soak. | G-MIGRATE | partial — hashes, base32, HTTP codec, ReadBuffer already moved | #2971 |
@@ -261,8 +274,8 @@ note.
 | ID | Criterion | Gate | State | Issue |
 |---|---|---|---|---|
 | H1 | A launch runbook: the commit is tagged, the binary's provenance (D3) matches the tag, the gates that must be green are named and derived (not listed), the soak's start and its S0/S1-reset rule are written, and the rollback is the D3 command. | G-QUIET | drafted — [`PDS-RUNBOOK.md`](PDS-RUNBOOK.md); closes only once followed step by step for a real deploy | #2972 |
-| H2 | The announcement text is drafted with its honest footnotes (§6) before the soak ends, and reviewed against the tree as it stands on the day. | G-ANNOUNCE | missing | #2972 |
-| H3 | An incident procedure: who does what when the service is down at an hour Val is asleep; the answer may be "it stays down until morning" but it is written. | G-ANNOUNCE | missing | #2972 |
+| H2 | The announcement text is drafted with its honest footnotes (§6) before the soak ends, and reviewed against the tree as it stands on the day. | G-ANNOUNCE | partial — the claim text and its TLS/runtime/reference-as-oracle footnotes are drafted, in §6 of this document, and [`PDS-RUNBOOK.md`](PDS-RUNBOOK.md) §8 directs the poster to use them verbatim. The second clause is undischarged by construction: it is the on-the-day re-read against the deployed commit | #2972 |
+| H3 | An incident procedure: who does what when the service is down at an hour Val is asleep; the answer may be "it stays down until morning" but it is written. | G-ANNOUNCE | exists — [`PDS-RUNBOOK.md`](PDS-RUNBOOK.md) §6 answers it in the criterion's own words (single operator, no pager, it stays down until morning), with a discovery order and a roll-back-before-root-cause rule; §6a covers the breach case | #2972 |
 
 ## 3. The sign-off standard
 

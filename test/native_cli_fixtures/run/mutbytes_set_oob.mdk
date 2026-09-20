@@ -1,5 +1,5 @@
-import bytes.*
+import mut_bytes.{make, setInPlace}
 
 main =
-  let mb = mutBytesMake 4
-  mutBytesSet 9 1 mb
+  let mb = make 4
+  setInPlace 9 1 mb

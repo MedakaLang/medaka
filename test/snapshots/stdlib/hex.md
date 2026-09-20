@@ -1,5 +1,5 @@
 # META
-source_lines=200
+source_lines=195
 stages=DESUGAR,MARK
 # SOURCE
 {- | Hexadecimal encoding and decoding of bytes.
@@ -22,13 +22,8 @@ stages=DESUGAR,MARK
 -- lint-disable-file rule-stdlib-reimpl
 
 import array.{fromList, get as arrGet}
--- Wildcard, not selective: `import bytes.{Bytes, ...}` cannot bring the bare
--- type name into scope here — `Bytes`'s constructor shares the type's own
--- name, and the resolver's selective-member path (`resolve.mdk`'s
--- `expandMemberNames`) reads a plain `Bytes` member as a request for that
--- (module-private) constructor, not the type, and refuses it
--- (`NewtypeCtorNotExported`). `import bytes.*` sidesteps that path entirely.
-import bytes.*
+import bytes as B
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 
@@ -68,7 +63,7 @@ encodeGo bs i upper acc
 
 encodeAs : Bytes -> Bool -> String
 encodeAs bs upper =
-  stringFromChars (arrayFromList (encodeGo bs (bytesLength bs - 1) upper []))
+  stringFromChars (arrayFromList (encodeGo bs (B.length bs - 1) upper []))
 
 {- | `b` as lowercase hex, two digits per byte.
 
@@ -204,7 +199,8 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
   decodeBytes (encodeBytes b) == Ok b
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "fromList" false) (mem "get" false "arrGet"))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseAlias ("bytes") "B"))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
@@ -216,7 +212,7 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
 (DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char")))))))
 (DFunDef false "encodeGo" ((PVar "bs") (PVar "i") (PVar "upper") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "hi") (PVar "lo")) (EApp (EApp (EVar "byteToHexChars") (EApp (EApp (EVar "index") (EVar "bs")) (EVar "i"))) (EVar "upper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "upper")) (EBinOp "::" (EVar "hi") (EBinOp "::" (EVar "lo") (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "encodeAs" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bool") (TyCon "String"))))
-(DFunDef false "encodeAs" ((PVar "bs") (PVar "upper")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EApp (EVar "bytesLength") (EVar "bs")) (ELit (LInt 1)))) (EVar "upper")) (EListLit)))))
+(DFunDef false "encodeAs" ((PVar "bs") (PVar "upper")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EApp (EVar "B.length") (EVar "bs")) (ELit (LInt 1)))) (EVar "upper")) (EListLit)))))
 (DTypeSig true "encodeBytes" (TyFun (TyCon "Bytes") (TyCon "String")))
 (DFunDef false "encodeBytes" ((PVar "b")) (EApp (EApp (EVar "encodeAs") (EVar "b")) (EVar "False")))
 (DTypeSig true "encode" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))
@@ -240,7 +236,8 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
 (DProp false "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "toByteArray") (EVar "xs")))) (DoExpr (EBinOp "==" (EApp (EVar "decodeBytes") (EApp (EVar "encodeBytes") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "fromList" false) (mem "get" false "arrGet"))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseAlias ("bytes") "B"))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
@@ -252,7 +249,7 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
 (DTypeSig false "encodeGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Char")) (TyApp (TyCon "List") (TyCon "Char")))))))
 (DFunDef false "encodeGo" ((PVar "bs") (PVar "i") (PVar "upper") (PVar "acc")) (EIf (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EVar "acc") (EIf (EVar "otherwise") (EBlock (DoLet false false (PTuple (PVar "hi") (PVar "lo")) (EApp (EApp (EVar "byteToHexChars") (EApp (EApp (EMethodRef "index") (EVar "bs")) (EVar "i"))) (EVar "upper"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EVar "i") (ELit (LInt 1)))) (EVar "upper")) (EBinOp "::" (EVar "hi") (EBinOp "::" (EVar "lo") (EVar "acc")))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "encodeAs" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bool") (TyCon "String"))))
-(DFunDef false "encodeAs" ((PVar "bs") (PVar "upper")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EApp (EVar "bytesLength") (EVar "bs")) (ELit (LInt 1)))) (EVar "upper")) (EListLit)))))
+(DFunDef false "encodeAs" ((PVar "bs") (PVar "upper")) (EApp (EVar "stringFromChars") (EApp (EVar "arrayFromList") (EApp (EApp (EApp (EApp (EVar "encodeGo") (EVar "bs")) (EBinOp "-" (EApp (EVar "B.length") (EVar "bs")) (ELit (LInt 1)))) (EVar "upper")) (EListLit)))))
 (DTypeSig true "encodeBytes" (TyFun (TyCon "Bytes") (TyCon "String")))
 (DFunDef false "encodeBytes" ((PVar "b")) (EApp (EApp (EVar "encodeAs") (EVar "b")) (EVar "False")))
 (DTypeSig true "encode" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyCon "String")))

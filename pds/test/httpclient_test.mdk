@@ -90,6 +90,17 @@ test "unsupported transfer coding remains rejected" =
       (parseResponse
         (toUtf8 "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\nhello")))
 
+test "a chunk body byte outside 0..255 is rejected, not a panic" =
+  -- Regression for the bytebuilder.emitU8 masking->panicking change: an
+  -- out-of-range byte in a chunked response body must reach the caller as
+  -- an Err, never abort the process (Medaka has no catchable panics).
+  expectTrue
+    (isErr
+      (parseResponse
+        (toUtf8 "HTTP/1.1 200 OK\r\ntransfer-encoding: chunked\r\n\r\n1\r\n"
+          ++ [|511|]
+          ++ toUtf8 "\r\n0\r\n\r\n")))
+
 test "malformed response keeps the legacy PDS diagnostic and class" =
   match parseResponseClassified [||]
     Err (HttpClientMalformed message) =>

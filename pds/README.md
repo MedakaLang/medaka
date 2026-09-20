@@ -470,8 +470,9 @@ step.
 
 ### What the shipped Caddyfile does about the header
 
-`pds/Caddyfile`'s `reverse_proxy` block carries one line that this flag
-depends on:
+Both of `pds/Caddyfile`'s `reverse_proxy` blocks — the streaming half that
+carries the firehose upgrade and the request half behind it — carry one line
+that this flag depends on:
 
 ```
 header_up X-Forwarded-For {remote_host}

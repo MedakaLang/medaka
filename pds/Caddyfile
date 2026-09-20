@@ -39,6 +39,35 @@ pds.example.com {
 		output stderr
 	}
 
+	# `com.atproto.sync.subscribeRepos` is a STREAM, not a request. A relay
+	# holds one open for as long as it is subscribed, and the transport
+	# timeouts below bound the upstream connection AFTER the 101, not just the
+	# handshake that precedes it. While they were in reach of the upgrade every
+	# firehose socket was cut at exactly 30s and every relay reconnected at
+	# once: measured on this deployment, 54,624 subscriptions over two days
+	# against a server that emitted sixteen events in four, with 54,327 of them
+	# lasting between 29 and 31 seconds.
+	#
+	# The matcher takes the path AND the upgrade, so a plain GET to the same
+	# path keeps the request timeouts and only a completed handshake escapes
+	# them. Nothing here bounds a stream once it is established, because an
+	# idle subscriber is the normal state of a firehose and the server sends
+	# nothing to an idle one (`subscriptionPollInterval`, pds/shell/
+	# subscribe.mdk). What bounds them collectively is the server's own
+	# connection cap, which counts a subscriber like any other connection.
+	@firehose {
+		path /xrpc/com.atproto.sync.subscribeRepos
+		header Connection *Upgrade*
+	}
+	reverse_proxy @firehose 127.0.0.1:8080 {
+		# The same pin the block below explains at length.
+		header_up X-Forwarded-For {remote_host}
+
+		transport http {
+			dial_timeout 5s
+		}
+	}
+
 	reverse_proxy 127.0.0.1:8080 {
 		# Caddy prints "Unnecessary header_up X-Forwarded-For" on every load of
 		# this file. That warning is accurate for the Caddy in Debian trixie

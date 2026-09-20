@@ -1,6 +1,6 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
-import bytes.*
+import bytes.{Bytes, encodeUtf8, fromArray}
 import http.{
   Header,
   HttpParseFailure(..),
@@ -129,32 +129,32 @@ expectedError status reason code message =
 
 fixedQuery : Bytes
 fixedQuery =
-  toUtf8Bytes
+  encodeUtf8
     "GET /xrpc/com.example.query.fixed?one=1&one=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
 fixedPut : Bytes
 fixedPut =
-  toUtf8Bytes
+  encodeUtf8
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\nabc"
 
 chunkedPut : Bytes
 chunkedPut =
-  toUtf8Bytes
+  encodeUtf8
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n2\r\nbc\r\n0\r\n\r\n"
 
 malformedRequest : Bytes
 malformedRequest =
-  toUtf8Bytes
+  encodeUtf8
     "POST /xrpc/com.example.block.put HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n"
 
 unknownRequest : Bytes
 unknownRequest =
-  toUtf8Bytes
+  encodeUtf8
     "GET /xrpc/com.example.query.unknown HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
 resourceRequest : Bytes
 resourceRequest =
-  toUtf8Bytes
+  encodeUtf8
     ("GET /"
       ++ repeat maxHttpRequestLineBytes "a"
       ++ " HTTP/1.1\r\nHost: pds.example\r\n\r\n")

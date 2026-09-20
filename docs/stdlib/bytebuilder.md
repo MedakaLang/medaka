@@ -49,8 +49,8 @@ copy, so emitting more afterwards does not reach it.
 
 ```medaka
 > let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
-"[|0, 128, 255|]"
-> let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) == debug (buildArray buf)
+"Bytes \"0080ff\""
+> let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)
 True
 ```
 
@@ -62,7 +62,7 @@ True
 emitU8 : Int -> Builder -> Unit
 ```
 
-Appends one byte. Only the low eight bits of the value are used.
+Appends one byte. Panics when `b` falls outside `0` to `255`.
 
 ### `appendBytes`
 
@@ -79,10 +79,10 @@ separate single-byte grows. `emitBytes` is the one-byte-at-a-time form,
 over a `List Int`.
 
 ```medaka
-> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hi") buf in let _ = appendBytes (toUtf8Bytes "!") buf in debug (buildBytes buf)
-"[|104, 105, 33|]"
-> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "") buf in debug (buildBytes buf)
-"[||]"
+> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
+"Bytes \"686921\""
+> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
+"Bytes \"\""
 ```
 
 ### `builderParts`
@@ -104,7 +104,7 @@ block: either way the returned byte string goes stale rather than wrong,
 and a caller reading only `[0, len)` of it reads what it was handed.
 
 ```medaka
-> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hey") buf in let (_, n) = builderParts buf in n
+> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
 3
 ```
 

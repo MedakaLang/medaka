@@ -16,15 +16,17 @@ IDENT "takeBytes"
 RBRACE
 NEWLINE
 IMPORT
-IDENT "vector"
+IDENT "bytes"
 DOT_LBRACE
-UPPER "Vector"
+UPPER "Bytes"
 COMMA
-IDENT "new"
+IDENT "adoptByteBlockUnsafe"
 COMMA
-IDENT "push"
+IDENT "fromByteBlockPrefix"
 COMMA
-IDENT "toArray"
+IDENT "lendByteBlockUnsafe"
+COMMA
+IDENT "encodeUtf8"
 RBRACE
 NEWLINE
 IMPORT
@@ -39,7 +41,11 @@ UPPER "Builder"
 EQUAL
 UPPER "Builder"
 LPAREN
-UPPER "Vector"
+UPPER "Ref"
+UPPER "ByteBlock"
+RPAREN
+LPAREN
+UPPER "Ref"
 UPPER "Int"
 RPAREN
 NEWLINE
@@ -56,9 +62,15 @@ UNDERSCORE
 EQUAL
 UPPER "Builder"
 LPAREN
-IDENT "new"
+UPPER "Ref"
 LPAREN
+IDENT "byteBlockMake"
+INT 0
 RPAREN
+RPAREN
+LPAREN
+UPPER "Ref"
+INT 0
 RPAREN
 NEWLINE
 EXPORT
@@ -73,11 +85,50 @@ NEWLINE
 IDENT "buildArray"
 LPAREN
 UPPER "Builder"
-IDENT "a"
+IDENT "backing"
+IDENT "len"
 RPAREN
 EQUAL
-IDENT "toArray"
-IDENT "a"
+INDENT
+LET
+IDENT "bb"
+EQUAL
+BANG
+IDENT "backing"
+NEWLINE
+IDENT "arrayMakeWith"
+BANG
+IDENT "len"
+LPAREN
+IDENT "i"
+FAT_ARROW
+IDENT "byteBlockGetUnsafe"
+IDENT "i"
+IDENT "bb"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "buildBytes"
+COLON
+UPPER "Builder"
+ARROW
+UPPER "Bytes"
+NEWLINE
+IDENT "buildBytes"
+LPAREN
+UPPER "Builder"
+IDENT "backing"
+IDENT "len"
+RPAREN
+EQUAL
+IDENT "fromByteBlockPrefix"
+BANG
+IDENT "len"
+BANG
+IDENT "backing"
 NEWLINE
 EXPORT
 NEWLINE
@@ -93,16 +144,271 @@ IDENT "emitU8"
 IDENT "b"
 LPAREN
 UPPER "Builder"
-IDENT "a"
+IDENT "backing"
+IDENT "len"
 RPAREN
+INDENT
+PIPE
+BANG
+IDENT "len"
+LT
+IDENT "byteBlockLength"
+BANG
+IDENT "backing"
 EQUAL
-IDENT "push"
+INDENT
+IDENT "byteBlockSetUnsafe"
+BANG
+IDENT "len"
 LPAREN
 IDENT "bitAnd"
 IDENT "b"
 INT 255
 RPAREN
-IDENT "a"
+BANG
+IDENT "backing"
+NEWLINE
+IDENT "len"
+COLONEQ
+BANG
+IDENT "len"
+PLUS
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+PIPE
+IDENT "otherwise"
+EQUAL
+INDENT
+LET
+IDENT "oldBlock"
+EQUAL
+BANG
+IDENT "backing"
+NEWLINE
+LET
+IDENT "oldLen"
+EQUAL
+BANG
+IDENT "len"
+NEWLINE
+LET
+IDENT "newCap"
+EQUAL
+IF
+IDENT "oldLen"
+EQ_EQ
+INT 0
+THEN
+INT 1
+ELSE
+IDENT "oldLen"
+STAR
+INT 2
+NEWLINE
+LET
+IDENT "newBlock"
+EQUAL
+IDENT "byteBlockMake"
+IDENT "newCap"
+NEWLINE
+IDENT "byteBlockBlit"
+IDENT "oldBlock"
+INT 0
+IDENT "newBlock"
+INT 0
+IDENT "oldLen"
+NEWLINE
+IDENT "byteBlockSetUnsafe"
+IDENT "oldLen"
+LPAREN
+IDENT "bitAnd"
+IDENT "b"
+INT 255
+RPAREN
+IDENT "newBlock"
+NEWLINE
+IDENT "backing"
+COLONEQ
+IDENT "newBlock"
+NEWLINE
+IDENT "len"
+COLONEQ
+IDENT "oldLen"
+PLUS
+INT 1
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "growTo"
+COLON
+UPPER "Int"
+ARROW
+UPPER "Int"
+ARROW
+UPPER "Int"
+NEWLINE
+IDENT "growTo"
+IDENT "cap"
+IDENT "needed"
+EQUAL
+INDENT
+IF
+IDENT "cap"
+GEQ
+IDENT "needed"
+THEN
+IDENT "cap"
+ELSE
+IDENT "growTo"
+LPAREN
+IF
+IDENT "cap"
+EQ_EQ
+INT 0
+THEN
+INT 1
+ELSE
+IDENT "cap"
+STAR
+INT 2
+RPAREN
+IDENT "needed"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "appendBytes"
+COLON
+UPPER "Bytes"
+ARROW
+UPPER "Builder"
+ARROW
+UPPER "Unit"
+NEWLINE
+IDENT "appendBytes"
+IDENT "src"
+LPAREN
+UPPER "Builder"
+IDENT "backing"
+IDENT "len"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "srcBlock"
+EQUAL
+IDENT "lendByteBlockUnsafe"
+IDENT "src"
+NEWLINE
+LET
+IDENT "n"
+EQUAL
+IDENT "byteBlockLength"
+IDENT "srcBlock"
+NEWLINE
+LET
+IDENT "needed"
+EQUAL
+BANG
+IDENT "len"
+PLUS
+IDENT "n"
+NEWLINE
+LET
+LPAREN
+RPAREN
+EQUAL
+INDENT
+IF
+IDENT "needed"
+GT
+IDENT "byteBlockLength"
+BANG
+IDENT "backing"
+THEN
+INDENT
+LET
+IDENT "newBlock"
+EQUAL
+IDENT "byteBlockMake"
+LPAREN
+IDENT "growTo"
+LPAREN
+IDENT "byteBlockLength"
+BANG
+IDENT "backing"
+RPAREN
+IDENT "needed"
+RPAREN
+NEWLINE
+IDENT "byteBlockBlit"
+BANG
+IDENT "backing"
+INT 0
+IDENT "newBlock"
+INT 0
+BANG
+IDENT "len"
+NEWLINE
+IDENT "backing"
+COLONEQ
+IDENT "newBlock"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+LET
+LPAREN
+RPAREN
+EQUAL
+IDENT "byteBlockBlit"
+IDENT "srcBlock"
+INT 0
+BANG
+IDENT "backing"
+BANG
+IDENT "len"
+IDENT "n"
+NEWLINE
+IDENT "len"
+COLONEQ
+IDENT "needed"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "builderParts"
+COLON
+UPPER "Builder"
+ARROW
+LPAREN
+UPPER "Bytes"
+COMMA
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "builderParts"
+LPAREN
+UPPER "Builder"
+IDENT "backing"
+IDENT "len"
+RPAREN
+EQUAL
+LPAREN
+IDENT "adoptByteBlockUnsafe"
+BANG
+IDENT "backing"
+COMMA
+BANG
+IDENT "len"
+RPAREN
 NEWLINE
 EXPORT
 NEWLINE
