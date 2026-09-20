@@ -461,8 +461,10 @@ derived; `[G-MUST-FAIL]` inverted polarity gets a field, not a rubber stamp.
   other half stays review: no gate checks that a migration PR reproduced the *specific*
   break its script caught; the PR body carries the transcript, and `style-review` §3 asks
   for it. The mechanical half reads source text, not types, so a site whose exit code is
-  interpolated into a message but never compared still reads as graded, as does one that
-  spawns only through a helper in another module.
+  interpolated into a message but never compared still reads as graded. It follows a gate
+  module's project-local imports one level, so a spawn in a helper module the gate imports
+  IS a site, reported at the helper's own file:line (#3234); the stdlib and declared
+  dependencies are never followed, and a spawn two imports deep still is not seen.
 
 ---
 

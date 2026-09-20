@@ -1,5 +1,5 @@
 # META
-source_lines=3180
+source_lines=3461
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -44,8 +44,8 @@ import json.{
   asInt as jsonAsInt,
 }
 import driver.build_cmd.{envOr, defaultMedakaRoot}
-import driver.loader.{readDeps}
-import support.path.{joinPath}
+import driver.loader.{entrySearchRoots, findProjectRootOrSelf, readDeps}
+import support.path.{dirOf, joinPath}
 import io.{runCommandOk}
 import args.{
   ArgSpec,
@@ -1688,8 +1688,16 @@ anyMarker (m :: ms) src = strContains m src || anyMarker ms src
    is named by its label instead and is called by nothing, so it carries
    `None` — two adjacent blocks would otherwise share the name `test`, fold
    into one chunk, and let either one's grading answer for the other's
-   spawn. -}
+   spawn.
+
+   `file` is the module the chunk was read from, tree-root-relative. The
+   analysis spans a gate module and the helper modules it imports, so a chunk
+   no longer implies the gate's own `run` path, and `file` is what a violation
+   message must name for the reader to open the right file. It is also half of
+   a chunk's identity: two modules routinely hold a binding at the same line
+   number. -}
 data GateChunk = GateChunk {
+  file : String,
   name : String,
   callName : Option String,
   line : Int,
@@ -1788,23 +1796,29 @@ chunkNames l =
     Some lbl => ("test \{escStr lbl}", None)
     None => (h, Some h)
 
-gateChunks : List String -> List GateChunk
-gateChunks ls = foldClauses (rawChunks ls 1)
+{- | The chunks of one module: `src` comment-stripped, split into top-level
+   bindings, each stamped with `file` so a violation can name its own module. -}
+chunksOf : String -> String -> List GateChunk
+chunksOf file src = gateChunks file (stripComments src)
 
-rawChunks : List String -> Int -> List GateChunk
-rawChunks [] _ = []
-rawChunks (l :: ls) n
-  | not (startsChunk l) = rawChunks ls (n + 1)
+gateChunks : String -> List String -> List GateChunk
+gateChunks file ls = foldClauses (rawChunks file ls 1)
+
+rawChunks : String -> List String -> Int -> List GateChunk
+rawChunks _ [] _ = []
+rawChunks file (l :: ls) n
+  | not (startsChunk l) = rawChunks file ls (n + 1)
   | otherwise = match chunkBody ls (n + 1)
     (body, rest, n2) => match chunkNames l
       (nm, cn) =>
         GateChunk {
+            file = file,
             name = nm,
             callName = cn,
             line = n,
             text = joinNl (l :: body),
           }
-          :: rawChunks rest n2
+          :: rawChunks file rest n2
 
 chunkBody : List String -> Int -> (List String, List String, Int)
 chunkBody [] n = ([], [], n)
@@ -1938,22 +1952,62 @@ startsIdent s =
    spawn's exit code legitimately leaves the binding that obtained it (graded
    here, handed to a grading helper, or returned to a grading caller). One
    level each way — the point is to see every row, not to chase a call
-   graph. -}
-ungradedSpawnSites : String -> List GateChunk
-ungradedSpawnSites src =
-  let cs = gateChunks (stripComments src)
-  filterList (c => not (spawnAnswered cs c)) (filterList spawningChunk cs)
+   graph.
+
+   `cs` spans the gate module (`gateFile`, its comment-stripped text
+   `gateText`) and the helper modules it imports, so a spawn routed through a
+   helper is seen, and a helper's spawn is answered by the caller that grades
+   it across the file boundary. -}
+ungradedSpawnSites : String -> String -> List GateChunk -> List GateChunk
+ungradedSpawnSites gateFile gateText cs =
+  let sites =
+    filterList (c => spawningChunk c && gateReaches gateFile gateText c) cs
+  filterList (c => not (spawnAnswered gateFile cs c)) sites
 
 spawningChunk : GateChunk -> Bool
 spawningChunk c = c.name /= "import" && liveSpawn c.text
 
-spawnAnswered : List GateChunk -> GateChunk -> Bool
-spawnAnswered cs c =
-  anyMarker gradeEvidenceMarkers c.text || anyList (d => gradesFor c d) cs
+{- | Is this spawning chunk one THIS gate answers for?
+
+   Everything in the gate's own module is. A followed helper's binding is only
+   when the gate names it — imports it, or calls it. One helper serves many
+   gates: `test/compiler_cli_test_support.mdk` serves eighteen, and without
+   this a spawn helper that eighteen of them never touch would be eighteen
+   violations, each demanding grading from a gate that cannot reach the
+   binding to grade it. -}
+gateReaches : String -> String -> GateChunk -> Bool
+gateReaches gateFile gateText c =
+  c.file == gateFile
+    || (match c.callName
+      None => False
+      Some nm => containsWord nm gateText)
+
+spawnAnswered : String -> List GateChunk -> GateChunk -> Bool
+spawnAnswered gateFile cs c =
+  anyMarker gradeEvidenceMarkers c.text
+    || anyList (d => gradesFor c d) cs
+    || c.file /= gateFile && anyList (d => relaysFor cs c d) cs
+
+{- | `d` hands `c`'s spawn on to something that grades it: `d` names `c`, and
+   `d` is itself answered.
+
+   The one extra hop a followed helper earns, and only a followed helper. An
+   import inserts a binding between the spawn primitive and the gate's own
+   code — `boundedInTree` (helper) ← `strictly` (gate) ← `expectWall` (gate,
+   grades) — so a helper's spawn sits one level further from its grading than
+   an in-module spawn ever does. Within the gate's own module the rule stays
+   exactly one level each way, so a gate that could report a site before still
+   reports it. -}
+relaysFor : List GateChunk -> GateChunk -> GateChunk -> Bool
+relaysFor cs c d
+  | d.file == c.file && d.line == c.line = False
+  | not (namesOther d c) = False
+  | anyMarker gradeEvidenceMarkers d.text = True
+  | otherwise = anyList (e => gradesFor d e) cs
 
 gradesFor : GateChunk -> GateChunk -> Bool
 gradesFor c d
-  | d.line == c.line = False
+  | d.file == c.file && d.line == c.line = False
   | not (anyMarker gradeEvidenceMarkers d.text) = False
   | otherwise = namesOther c d || namesOther d c
 
@@ -1962,18 +2016,245 @@ namesOther a b = match b.callName
   None => False
   Some nm => containsWord nm a.text
 
-siteError : Gate -> GateChunk -> String
-siteError g c =
-  "\{g.name}: \{g.run}:\{intToString c.line}: `\{c.name}` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"
+siteError : String -> GateChunk -> String
+siteError name c =
+  "\{name}: \{c.file}:\{intToString c.line}: `\{c.name}` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"
+
+-- ── following a gate module's helper imports ────────────────────────────────
+
+{- | Where one `import` in a gate module leads.
+
+   `Followed` is a project-local module whose source the analysis reads: its
+   spawns are the gate's spawns, and its grading is the gate's grading.
+   `Elsewhere` is the stdlib or a declared dependency — code the gate consumes
+   rather than owns, whose exported names the marker lists already speak for,
+   so reading it would turn every `runVerb` in `stdlib/io.mdk` into a gate's
+   ungraded site. `Unresolvable` is an import that names no module file at
+   all: the analysis cannot see what it does, and saying so is the difference
+   between "nothing to grade" and "nothing was looked at". -}
+public export data ImportTarget =
+  | Followed String String
+  | Elsewhere
+  | Unresolvable
+
+{- | The module ids a source file imports, in source order.
+
+   Reads the raw text rather than the chunk list: an import line is a chunk
+   too, but folding and comment-stripping are irrelevant here and a module id
+   is a prefix of the line. `import m.{a, b}`, `import m.*` and `import m as
+   A` all name `m`; a dotted `import test.oracle_support.{…}` names
+   `test.oracle_support`, because the trailing `.{`/`.*` is what ends the id. -}
+importedModules : String -> List String
+importedModules src = importedGo (splitNl src)
+
+importedGo : List String -> List String
+importedGo [] = []
+importedGo (l :: ls) = match importModuleId l
+  Some m => m :: importedGo ls
+  None => importedGo ls
+
+importModuleId : String -> Option String
+importModuleId l =
+  let rest = afterImportKeyword l
+  if stringLength rest == 0 then
+    None
+  else
+    let id = stringTrimDots (dottedPrefix rest)
+    if stringLength id == 0 then None else Some id
+
+-- The text after a column-0 `import ` (or `export import `), or "" when the
+-- line is not an import at all.  Column 0 only: an indented `import` is inside
+-- a string or a continuation line, not a declaration.
+afterImportKeyword : String -> String
+afterImportKeyword l =
+  if startsWith "import " l then
+    stringSlice 7 (stringLength l) l
+  else if startsWith "export import " l then
+    stringSlice 14 (stringLength l) l
+  else
+    ""
+
+dottedPrefix : String -> String
+dottedPrefix s =
+  let cs = stringToChars s
+  fromChars (dottedPrefixGo cs (arrayLength cs) 0)
+
+dottedPrefixGo : Array Char -> Int -> Int -> List Char
+dottedPrefixGo cs n i
+  | i >= n = []
+  | isIdentChar (arrayGetUnsafe i cs) || arrayGetUnsafe i cs == '.' =
+    arrayGetUnsafe i cs :: dottedPrefixGo cs n (i + 1)
+  | otherwise = []
+
+-- `map.` (from `map.{X}` / `map.*`) is the module `map`; a bare `map` is
+-- itself.
+stringTrimDots : String -> String
+stringTrimDots s =
+  if endsWith "." s then
+    stringTrimDots (stringSlice 0 (stringLength s - 1) s)
+  else
+    s
+
+{- | The chunks the grading clause judges for one gate module: its own, plus
+   those of every project-local module it imports, together with a message for
+   each import that could not be followed.
+
+   `resolve` is the seam. The production caller hands it a resolver over the
+   tree; a test hands it a table of fixture sources, which is why the
+   following rules are checkable without a file on disk.
+
+   One level: a followed helper's own imports are read only to recognise a
+   cycle back to the gate, never to pull in a third module. The clause exists
+   to see the spawn a gate reaches by importing one helper, not to close over
+   a program. -}
+gradeChunks : (String -> <IO> ImportTarget) ->
+  String ->
+  String ->
+  <IO> (List String, List GateChunk)
+gradeChunks resolve file src =
+  let imports = importedModules src
+  match followImports resolve file imports
+    (errs, helperChunks) => (errs, chunksOf file src ++ helperChunks)
+
+followImports : (String -> <IO> ImportTarget) ->
+  String ->
+  List String ->
+  <IO> (List String, List GateChunk)
+followImports _ _ [] = ([], [])
+followImports resolve file (m :: ms) = match followOne resolve file m
+  (errs, cs) => match followImports resolve file ms
+    (errs2, cs2) => (errs ++ errs2, cs ++ cs2)
+
+followOne : (String -> <IO> ImportTarget) ->
+  String ->
+  String ->
+  <IO> (List String, List GateChunk)
+followOne resolve file m = match resolve m
+  Elsewhere => ([], [])
+  Unresolvable => (
+    [
+      "imports '\{m}', which names no module file under the gate's own search roots, the stdlib, or a declared dependency — process grading cannot be checked through an import it cannot resolve",
+    ],
+    [],
+  )
+  Followed path src =>
+    if path == file then
+      (
+        [
+          "imports '\{m}', which resolves back to the gate module itself — an import cycle, which the loader rejects before any grading question arises",
+        ],
+        [],
+      )
+    else if importsBack resolve file (importedModules src) then
+      (
+        [
+          "imports '\{m}', which imports it back — an import cycle, which the loader rejects before any grading question arises",
+        ],
+        [],
+      )
+    else
+      ([], chunksOf path src)
+
+importsBack : (String -> <IO> ImportTarget) ->
+  String ->
+  List String ->
+  <IO> Bool
+importsBack _ _ [] = False
+importsBack resolve file (m :: ms) = match resolve m
+  Followed path _ => path == file || importsBack resolve file ms
+  _ => importsBack resolve file ms
+
+{- | `fileOfModuleId` in `compiler/driver/loader.mdk`, which is private to it:
+   a module id maps to a path under a root by splitting on `.` and joining
+   with `/`. -}
+moduleFile : String -> String -> String
+moduleFile root m = "\{root}/\{joinWith "/" (splitOnChar '.' m)}.mdk"
+
+firstModuleFile : List String -> String -> <IO> Option String
+firstModuleFile [] _ = None
+firstModuleFile (r :: rs) m =
+  let p = moduleFile r m
+  if fileExists p then Some p else firstModuleFile rs m
+
+{- | Resolve one import the way the loader would for a module sitting in
+   `roots` (its own directory, then its project root): project-local first,
+   then the stdlib, then a `[dependencies]` root, whose module ids are the
+   dep name followed by the path under that dep's own tree. -}
+resolveGateImport : String ->
+  List String ->
+  List (String, String) ->
+  String ->
+  <IO> ImportTarget
+resolveGateImport root roots deps m = match firstModuleFile roots m
+  Some p => match readFile p
+    Ok src => Followed (relToRoot root p) src
+    Err _ => Unresolvable
+  None =>
+    if fileExists (moduleFile (joinPath root "stdlib") m)
+      || depHolds deps m then
+      Elsewhere
+    else
+      Unresolvable
+
+depHolds : List (String, String) -> String -> <IO> Bool
+depHolds deps m = match splitOnChar '.' m
+  seg0 :: r0 :: rs => depHoldsGo deps seg0 (joinWith "." (r0 :: rs))
+  _ => False
+
+depHoldsGo : List (String, String) -> String -> String -> <IO> Bool
+depHoldsGo [] _ _ = False
+depHoldsGo ((nm, dr) :: rest) seg0 sub =
+  if nm == seg0 && fileExists (moduleFile dr sub) then
+    True
+  else
+    depHoldsGo rest seg0 sub
+
+relToRoot : String -> String -> String
+relToRoot root p =
+  let pre = "\{root}/"
+  if startsWith pre p then
+    stringSlice (stringLength pre) (stringLength p) p
+  else
+    p
 
 nativeGradeErrors : String -> Gate -> <IO> List String
 nativeGradeErrors root g
   | g.kind /= "native" = []
-  | otherwise = match readFile (joinPath root g.run)
-    Err m => [
-      "\{g.name}: kind 'native' but its module cannot be read to check process grading: \{g.run}: \{m}",
-    ]
-    Ok src => map (siteError g) (ungradedSpawnSites src)
+  | otherwise =
+    let path = joinPath root g.run
+    match readFile path
+      Err m => [
+        "\{g.name}: kind 'native' but its module cannot be read to check process grading: \{g.run}: \{m}",
+      ]
+      Ok src =>
+        let dir = dirOf path
+        let roots = entrySearchRoots dir
+        let deps = readDeps (findProjectRootOrSelf dir)
+        gradeViolations
+          (m => resolveGateImport root roots deps m)
+          g.name
+          g.run
+          src
+
+{- | Everything the native-grading clause has to say about one gate module,
+   given a way to resolve its imports.
+
+   The resolver is the seam the sibling test drives: a table of fixture
+   sources in place of the tree, so which imports get followed, what a cycle
+   or an unresolvable import says, and whose file:line a violation names are
+   all checkable without a gate on disk. -}
+export
+gradeViolations : (String -> <IO> ImportTarget) ->
+  String ->
+  String ->
+  String ->
+  <IO> List String
+gradeViolations resolve name file src =
+  let gateText = joinNl (stripComments src)
+  match gradeChunks resolve file src
+    (errs, cs) =>
+      map (e => "\{name}: \{file}: \{e}") errs
+        ++ map (siteError name) (ungradedSpawnSites file gateText cs)
 
 nativeGradeViolations : String -> List Gate -> <IO> List String
 nativeGradeViolations _ [] = []
@@ -3185,8 +3466,8 @@ budgetCmdBody argv = match parseBudgetArgs argv
 # DESUGAR
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "readDeps" false))))
-(DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "modePartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
@@ -3509,7 +3790,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "anyMarker" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "anyMarker" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyMarker" ((PCons (PVar "m") (PVar "ms")) (PVar "src")) (EBinOp "||" (EApp (EApp (EVar "strContains") (EVar "m")) (EVar "src")) (EApp (EApp (EVar "anyMarker") (EVar "ms")) (EVar "src"))))
-(DData Private "GateChunk" () ((variant "GateChunk" (ConNamed (field "name" (TyCon "String")) (field "callName" (TyApp (TyCon "Option") (TyCon "String"))) (field "line" (TyCon "Int")) (field "text" (TyCon "String"))))) ())
+(DData Private "GateChunk" () ((variant "GateChunk" (ConNamed (field "file" (TyCon "String")) (field "name" (TyCon "String")) (field "callName" (TyApp (TyCon "Option") (TyCon "String"))) (field "line" (TyCon "Int")) (field "text" (TyCon "String"))))) ())
 (DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlphaNum") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))))
 (DTypeSig false "charAtOr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Char")))))
@@ -3535,11 +3816,13 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "testLabel" ((PVar "l")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "\""))) (EVar "l")) (arm (PCons PWild (PCons (PVar "lbl") (PCons PWild PWild))) () (EApp (EVar "Some") (EVar "lbl"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "chunkNames" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "chunkNames" ((PVar "l")) (EBlock (DoLet false false (PVar "h") (EApp (EVar "identPrefix") (EVar "l"))) (DoExpr (EIf (EBinOp "/=" (EVar "h") (ELit (LString "test"))) (ETuple (EVar "h") (EApp (EVar "Some") (EVar "h"))) (EMatch (EApp (EVar "testLabel") (EVar "l")) (arm (PCon "Some" (PVar "lbl")) () (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "test ")) (EApp (EVar "display") (EApp (EVar "escStr") (EVar "lbl")))) (ELit (LString ""))) (EVar "None"))) (arm (PCon "None") () (ETuple (EVar "h") (EApp (EVar "Some") (EVar "h")))))))))
-(DTypeSig false "gateChunks" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))
-(DFunDef false "gateChunks" ((PVar "ls")) (EApp (EVar "foldClauses") (EApp (EApp (EVar "rawChunks") (EVar "ls")) (ELit (LInt 1)))))
-(DTypeSig false "rawChunks" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "GateChunk")))))
-(DFunDef false "rawChunks" ((PList) PWild) (EListLit))
-(DFunDef false "rawChunks" ((PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EApp (EVar "not") (EApp (EVar "startsChunk") (EVar "l"))) (EApp (EApp (EVar "rawChunks") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "chunkBody") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PTuple (PVar "body") (PVar "rest") (PVar "n2")) () (EMatch (EApp (EVar "chunkNames") (EVar "l")) (arm (PTuple (PVar "nm") (PVar "cn")) () (EBinOp "::" (ERecordCreate "GateChunk" ((fa "name" (EVar "nm")) (fa "callName" (EVar "cn")) (fa "line" (EVar "n")) (fa "text" (EApp (EVar "joinNl") (EBinOp "::" (EVar "l") (EVar "body")))))) (EApp (EApp (EVar "rawChunks") (EVar "rest")) (EVar "n2"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "chunksOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "GateChunk")))))
+(DFunDef false "chunksOf" ((PVar "file") (PVar "src")) (EApp (EApp (EVar "gateChunks") (EVar "file")) (EApp (EVar "stripComments") (EVar "src"))))
+(DTypeSig false "gateChunks" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk")))))
+(DFunDef false "gateChunks" ((PVar "file") (PVar "ls")) (EApp (EVar "foldClauses") (EApp (EApp (EApp (EVar "rawChunks") (EVar "file")) (EVar "ls")) (ELit (LInt 1)))))
+(DTypeSig false "rawChunks" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "GateChunk"))))))
+(DFunDef false "rawChunks" (PWild (PList) PWild) (EListLit))
+(DFunDef false "rawChunks" ((PVar "file") (PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EApp (EVar "not") (EApp (EVar "startsChunk") (EVar "l"))) (EApp (EApp (EApp (EVar "rawChunks") (EVar "file")) (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "chunkBody") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PTuple (PVar "body") (PVar "rest") (PVar "n2")) () (EMatch (EApp (EVar "chunkNames") (EVar "l")) (arm (PTuple (PVar "nm") (PVar "cn")) () (EBinOp "::" (ERecordCreate "GateChunk" ((fa "file" (EVar "file")) (fa "name" (EVar "nm")) (fa "callName" (EVar "cn")) (fa "line" (EVar "n")) (fa "text" (EApp (EVar "joinNl") (EBinOp "::" (EVar "l") (EVar "body")))))) (EApp (EApp (EApp (EVar "rawChunks") (EVar "file")) (EVar "rest")) (EVar "n2"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "chunkBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "chunkBody" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
 (DFunDef false "chunkBody" ((PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EApp (EVar "startsChunk") (EVar "l")) (ETuple (EListLit) (EBinOp "::" (EVar "l") (EVar "ls")) (EVar "n")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "chunkBody") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PTuple (PVar "body") (PVar "rest") (PVar "n2")) () (ETuple (EBinOp "::" (EVar "l") (EVar "body")) (EVar "rest") (EVar "n2")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -3571,20 +3854,66 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "endsIdent" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "cs")))))))
 (DTypeSig false "startsIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "startsIdent" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
-(DTypeSig false "ungradedSpawnSites" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "GateChunk"))))
-(DFunDef false "ungradedSpawnSites" ((PVar "src")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "gateChunks") (EApp (EVar "stripComments") (EVar "src")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "spawnAnswered") (EVar "cs")) (EVar "c"))))) (EApp (EApp (EVar "filterList") (EVar "spawningChunk")) (EVar "cs"))))))
+(DTypeSig false "ungradedSpawnSites" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))
+(DFunDef false "ungradedSpawnSites" ((PVar "gateFile") (PVar "gateText") (PVar "cs")) (EBlock (DoLet false false (PVar "sites") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EApp (EVar "spawningChunk") (EVar "c")) (EApp (EApp (EApp (EVar "gateReaches") (EVar "gateFile")) (EVar "gateText")) (EVar "c"))))) (EVar "cs"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "spawnAnswered") (EVar "gateFile")) (EVar "cs")) (EVar "c"))))) (EVar "sites")))))
 (DTypeSig false "spawningChunk" (TyFun (TyCon "GateChunk") (TyCon "Bool")))
 (DFunDef false "spawningChunk" ((PVar "c")) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "c") "name") (ELit (LString "import"))) (EApp (EVar "liveSpawn") (EFieldAccess (EVar "c") "text"))))
-(DTypeSig false "spawnAnswered" (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyFun (TyCon "GateChunk") (TyCon "Bool"))))
-(DFunDef false "spawnAnswered" ((PVar "cs") (PVar "c")) (EBinOp "||" (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "c") "text")) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "gradesFor") (EVar "c")) (EVar "d")))) (EVar "cs"))))
+(DTypeSig false "gateReaches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "GateChunk") (TyCon "Bool")))))
+(DFunDef false "gateReaches" ((PVar "gateFile") (PVar "gateText") (PVar "c")) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "c") "file") (EVar "gateFile")) (EMatch (EFieldAccess (EVar "c") "callName") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "nm")) () (EApp (EApp (EVar "containsWord") (EVar "nm")) (EVar "gateText"))))))
+(DTypeSig false "spawnAnswered" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyFun (TyCon "GateChunk") (TyCon "Bool")))))
+(DFunDef false "spawnAnswered" ((PVar "gateFile") (PVar "cs") (PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "c") "text")) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "gradesFor") (EVar "c")) (EVar "d")))) (EVar "cs"))) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "c") "file") (EVar "gateFile")) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "relaysFor") (EVar "cs")) (EVar "c")) (EVar "d")))) (EVar "cs")))))
+(DTypeSig false "relaysFor" (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyFun (TyCon "GateChunk") (TyFun (TyCon "GateChunk") (TyCon "Bool")))))
+(DFunDef false "relaysFor" ((PVar "cs") (PVar "c") (PVar "d")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "d") "file") (EFieldAccess (EVar "c") "file")) (EBinOp "==" (EFieldAccess (EVar "d") "line") (EFieldAccess (EVar "c") "line"))) (EVar "False") (EIf (EApp (EVar "not") (EApp (EApp (EVar "namesOther") (EVar "d")) (EVar "c"))) (EVar "False") (EIf (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "d") "text")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EApp (EApp (EVar "gradesFor") (EVar "d")) (EVar "e")))) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "gradesFor" (TyFun (TyCon "GateChunk") (TyFun (TyCon "GateChunk") (TyCon "Bool"))))
-(DFunDef false "gradesFor" ((PVar "c") (PVar "d")) (EIf (EBinOp "==" (EFieldAccess (EVar "d") "line") (EFieldAccess (EVar "c") "line")) (EVar "False") (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "d") "text"))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EApp (EVar "namesOther") (EVar "c")) (EVar "d")) (EApp (EApp (EVar "namesOther") (EVar "d")) (EVar "c"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "gradesFor" ((PVar "c") (PVar "d")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "d") "file") (EFieldAccess (EVar "c") "file")) (EBinOp "==" (EFieldAccess (EVar "d") "line") (EFieldAccess (EVar "c") "line"))) (EVar "False") (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "d") "text"))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EApp (EVar "namesOther") (EVar "c")) (EVar "d")) (EApp (EApp (EVar "namesOther") (EVar "d")) (EVar "c"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "namesOther" (TyFun (TyCon "GateChunk") (TyFun (TyCon "GateChunk") (TyCon "Bool"))))
 (DFunDef false "namesOther" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "callName") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "nm")) () (EApp (EApp (EVar "containsWord") (EVar "nm")) (EFieldAccess (EVar "a") "text")))))
-(DTypeSig false "siteError" (TyFun (TyCon "Gate") (TyFun (TyCon "GateChunk") (TyCon "String"))))
-(DFunDef false "siteError" ((PVar "g") (PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": "))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "c") "line")))) (ELit (LString ": `"))) (EApp (EVar "display") (EFieldAccess (EVar "c") "name"))) (ELit (LString "` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"))))
+(DTypeSig false "siteError" (TyFun (TyCon "String") (TyFun (TyCon "GateChunk") (TyCon "String"))))
+(DFunDef false "siteError" ((PVar "name") (PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EVar "display") (EFieldAccess (EVar "c") "file"))) (ELit (LString ":"))) (EApp (EVar "display") (EApp (EVar "intToString") (EFieldAccess (EVar "c") "line")))) (ELit (LString ": `"))) (EApp (EVar "display") (EFieldAccess (EVar "c") "name"))) (ELit (LString "` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"))))
+(DData Public "ImportTarget" () ((variant "Followed" (ConPos (TyCon "String") (TyCon "String"))) (variant "Elsewhere" (ConPos)) (variant "Unresolvable" (ConPos))) ())
+(DTypeSig false "importedModules" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importedModules" ((PVar "src")) (EApp (EVar "importedGo") (EApp (EVar "splitNl") (EVar "src"))))
+(DTypeSig false "importedGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importedGo" ((PList)) (EListLit))
+(DFunDef false "importedGo" ((PCons (PVar "l") (PVar "ls"))) (EMatch (EApp (EVar "importModuleId") (EVar "l")) (arm (PCon "Some" (PVar "m")) () (EBinOp "::" (EVar "m") (EApp (EVar "importedGo") (EVar "ls")))) (arm (PCon "None") () (EApp (EVar "importedGo") (EVar "ls")))))
+(DTypeSig false "importModuleId" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "importModuleId" ((PVar "l")) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "afterImportKeyword") (EVar "l"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "rest")) (ELit (LInt 0))) (EVar "None") (EBlock (DoLet false false (PVar "id") (EApp (EVar "stringTrimDots") (EApp (EVar "dottedPrefix") (EVar "rest")))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "id")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "id")))))))))
+(DTypeSig false "afterImportKeyword" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "afterImportKeyword" ((PVar "l")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "import "))) (EVar "l")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 7))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "export import "))) (EVar "l")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 14))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")) (ELit (LString "")))))
+(DTypeSig false "dottedPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "dottedPrefix" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EVar "fromChars") (EApp (EApp (EApp (EVar "dottedPrefixGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0)))))))
+(DTypeSig false "dottedPrefixGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))
+(DFunDef false "dottedPrefixGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EBinOp "||" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ".")))) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EApp (EApp (EApp (EVar "dottedPrefixGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "stringTrimDots" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stringTrimDots" ((PVar "s")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "."))) (EVar "s")) (EApp (EVar "stringTrimDots") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (EVar "s"))) (EVar "s")))
+(DTypeSig false "gradeChunks" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))))
+(DFunDef false "gradeChunks" ((PVar "resolve") (PVar "file") (PVar "src")) (EBlock (DoLet false false (PVar "imports") (EApp (EVar "importedModules") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "followImports") (EVar "resolve")) (EVar "file")) (EVar "imports")) (arm (PTuple (PVar "errs") (PVar "helperChunks")) () (ETuple (EVar "errs") (EBinOp "++" (EApp (EApp (EVar "chunksOf") (EVar "file")) (EVar "src")) (EVar "helperChunks"))))))))
+(DTypeSig false "followImports" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))))
+(DFunDef false "followImports" (PWild PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "followImports" ((PVar "resolve") (PVar "file") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "followOne") (EVar "resolve")) (EVar "file")) (EVar "m")) (arm (PTuple (PVar "errs") (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "followImports") (EVar "resolve")) (EVar "file")) (EVar "ms")) (arm (PTuple (PVar "errs2") (PVar "cs2")) () (ETuple (EBinOp "++" (EVar "errs") (EVar "errs2")) (EBinOp "++" (EVar "cs") (EVar "cs2"))))))))
+(DTypeSig false "followOne" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))))
+(DFunDef false "followOne" ((PVar "resolve") (PVar "file") (PVar "m")) (EMatch (EApp (EVar "resolve") (EVar "m")) (arm (PCon "Elsewhere") () (ETuple (EListLit) (EListLit))) (arm (PCon "Unresolvable") () (ETuple (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "imports '")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "', which names no module file under the gate's own search roots, the stdlib, or a declared dependency — process grading cannot be checked through an import it cannot resolve")))) (EListLit))) (arm (PCon "Followed" (PVar "path") (PVar "src")) () (EIf (EBinOp "==" (EVar "path") (EVar "file")) (ETuple (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "imports '")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "', which resolves back to the gate module itself — an import cycle, which the loader rejects before any grading question arises")))) (EListLit)) (EIf (EApp (EApp (EApp (EVar "importsBack") (EVar "resolve")) (EVar "file")) (EApp (EVar "importedModules") (EVar "src"))) (ETuple (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "imports '")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "', which imports it back — an import cycle, which the loader rejects before any grading question arises")))) (EListLit)) (ETuple (EListLit) (EApp (EApp (EVar "chunksOf") (EVar "path")) (EVar "src"))))))))
+(DTypeSig false "importsBack" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "importsBack" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "importsBack" ((PVar "resolve") (PVar "file") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EVar "resolve") (EVar "m")) (arm (PCon "Followed" (PVar "path") PWild) () (EBinOp "||" (EBinOp "==" (EVar "path") (EVar "file")) (EApp (EApp (EApp (EVar "importsBack") (EVar "resolve")) (EVar "file")) (EVar "ms")))) (arm PWild () (EApp (EApp (EApp (EVar "importsBack") (EVar "resolve")) (EVar "file")) (EVar "ms")))))
+(DTypeSig false "moduleFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "moduleFile" ((PVar "root") (PVar "m")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "m"))))) (ELit (LString ".mdk"))))
+(DTypeSig false "firstModuleFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "firstModuleFile" ((PList) PWild) (EVar "None"))
+(DFunDef false "firstModuleFile" ((PCons (PVar "r") (PVar "rs")) (PVar "m")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "moduleFile") (EVar "r")) (EVar "m"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "firstModuleFile") (EVar "rs")) (EVar "m"))))))
+(DTypeSig false "resolveGateImport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget")))))))
+(DFunDef false "resolveGateImport" ((PVar "root") (PVar "roots") (PVar "deps") (PVar "m")) (EMatch (EApp (EApp (EVar "firstModuleFile") (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "readFile") (EVar "p")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "Followed") (EApp (EApp (EVar "relToRoot") (EVar "root")) (EVar "p"))) (EVar "src"))) (arm (PCon "Err" PWild) () (EVar "Unresolvable")))) (arm (PCon "None") () (EIf (EBinOp "||" (EApp (EVar "fileExists") (EApp (EApp (EVar "moduleFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (EVar "m"))) (EApp (EApp (EVar "depHolds") (EVar "deps")) (EVar "m"))) (EVar "Elsewhere") (EVar "Unresolvable")))))
+(DTypeSig false "depHolds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool")))))
+(DFunDef false "depHolds" ((PVar "deps") (PVar "m")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "m")) (arm (PCons (PVar "seg0") (PCons (PVar "r0") (PVar "rs"))) () (EApp (EApp (EApp (EVar "depHoldsGo") (EVar "deps")) (EVar "seg0")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "r0") (EVar "rs"))))) (arm PWild () (EVar "False"))))
+(DTypeSig false "depHoldsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "depHoldsGo" ((PList) PWild PWild) (EVar "False"))
+(DFunDef false "depHoldsGo" ((PCons (PTuple (PVar "nm") (PVar "dr")) (PVar "rest")) (PVar "seg0") (PVar "sub")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nm") (EVar "seg0")) (EApp (EVar "fileExists") (EApp (EApp (EVar "moduleFile") (EVar "dr")) (EVar "sub")))) (EVar "True") (EApp (EApp (EApp (EVar "depHoldsGo") (EVar "rest")) (EVar "seg0")) (EVar "sub"))))
+(DTypeSig false "relToRoot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "relToRoot" ((PVar "root") (PVar "p")) (EBlock (DoLet false false (PVar "pre") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "root"))) (ELit (LString "/")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "pre"))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "p")) (EVar "p")))))
 (DTypeSig false "nativeGradeErrors" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "nativeGradeErrors" ((PVar "root") (PVar "g")) (EIf (EBinOp "/=" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "g") "run"))) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": kind 'native' but its module cannot be read to check process grading: "))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "map") (EApp (EVar "siteError") (EVar "g"))) (EApp (EVar "ungradedSpawnSites") (EVar "src"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "nativeGradeErrors" ((PVar "root") (PVar "g")) (EIf (EBinOp "/=" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "g") "run"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": kind 'native' but its module cannot be read to check process grading: "))) (EApp (EVar "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "dirOf") (EVar "path"))) (DoLet false false (PVar "roots") (EApp (EVar "entrySearchRoots") (EVar "dir"))) (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EVar "dir")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeViolations") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EVar "resolveGateImport") (EVar "root")) (EVar "roots")) (EVar "deps")) (EVar "m")))) (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "run")) (EVar "src")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "gradeViolations" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "gradeViolations" ((PVar "resolve") (PVar "name") (PVar "file") (PVar "src")) (EBlock (DoLet false false (PVar "gateText") (EApp (EVar "joinNl") (EApp (EVar "stripComments") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "gradeChunks") (EVar "resolve")) (EVar "file")) (EVar "src")) (arm (PTuple (PVar "errs") (PVar "cs")) () (EBinOp "++" (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "file"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (EVar "errs")) (EApp (EApp (EVar "map") (EApp (EVar "siteError") (EVar "name"))) (EApp (EApp (EApp (EVar "ungradedSpawnSites") (EVar "file")) (EVar "gateText")) (EVar "cs")))))))))
 (DTypeSig false "nativeGradeViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "nativeGradeViolations" (PWild (PList)) (EListLit))
 (DFunDef false "nativeGradeViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "nativeGradeErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gs"))))
@@ -3854,8 +4183,8 @@ budgetCmdBody argv = match parseBudgetArgs argv
 # MARK
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
-(DUse false (UseGroup ("driver" "loader") ((mem "readDeps" false))))
-(DUse false (UseGroup ("support" "path") ((mem "joinPath" false))))
+(DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false))))
+(DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("io") ((mem "runCommandOk" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "Trailing" true) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "withTrailing" false) (mem "withStrictDash" false) (mem "parseArgs" false) (mem "flag" false) (mem "flagValue" false) (mem "unknownFlagMessage" false) (mem "missingValueMessage" false))))
 (DUse false (UseGroup ("tools" "gate_registry") ((mem "Gate" false) (mem "Shard" false) (mem "Selector" false) (mem "parseRegistry" false) (mem "parseShards" false) (mem "globMatch" false) (mem "parseSelector" false) (mem "tierPartOf" false) (mem "modePartOf" false) (mem "selectGates" false) (mem "renderJson" false) (mem "renderShardsJson" false) (mem "renderShards" false) (mem "renderNames" false) (mem "joinSpace" false))))
@@ -4178,7 +4507,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "anyMarker" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyCon "Bool"))))
 (DFunDef false "anyMarker" ((PList) PWild) (EVar "False"))
 (DFunDef false "anyMarker" ((PCons (PVar "m") (PVar "ms")) (PVar "src")) (EBinOp "||" (EApp (EApp (EVar "strContains") (EVar "m")) (EVar "src")) (EApp (EApp (EVar "anyMarker") (EVar "ms")) (EVar "src"))))
-(DData Private "GateChunk" () ((variant "GateChunk" (ConNamed (field "name" (TyCon "String")) (field "callName" (TyApp (TyCon "Option") (TyCon "String"))) (field "line" (TyCon "Int")) (field "text" (TyCon "String"))))) ())
+(DData Private "GateChunk" () ((variant "GateChunk" (ConNamed (field "file" (TyCon "String")) (field "name" (TyCon "String")) (field "callName" (TyApp (TyCon "Option") (TyCon "String"))) (field "line" (TyCon "Int")) (field "text" (TyCon "String"))))) ())
 (DTypeSig false "isIdentChar" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isIdentChar" ((PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EVar "isAlphaNum") (EVar "c")) (EBinOp "==" (EVar "c") (ELit (LChar "_")))) (EBinOp "==" (EVar "c") (ELit (LChar "'")))))
 (DTypeSig false "charAtOr" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Char")))))
@@ -4204,11 +4533,13 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "testLabel" ((PVar "l")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "\""))) (EVar "l")) (arm (PCons PWild (PCons (PVar "lbl") (PCons PWild PWild))) () (EApp (EVar "Some") (EVar "lbl"))) (arm PWild () (EVar "None"))))
 (DTypeSig false "chunkNames" (TyFun (TyCon "String") (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")))))
 (DFunDef false "chunkNames" ((PVar "l")) (EBlock (DoLet false false (PVar "h") (EApp (EVar "identPrefix") (EVar "l"))) (DoExpr (EIf (EBinOp "/=" (EVar "h") (ELit (LString "test"))) (ETuple (EVar "h") (EApp (EVar "Some") (EVar "h"))) (EMatch (EApp (EVar "testLabel") (EVar "l")) (arm (PCon "Some" (PVar "lbl")) () (ETuple (EBinOp "++" (EBinOp "++" (ELit (LString "test ")) (EApp (EMethodRef "display") (EApp (EVar "escStr") (EVar "lbl")))) (ELit (LString ""))) (EVar "None"))) (arm (PCon "None") () (ETuple (EVar "h") (EApp (EVar "Some") (EVar "h")))))))))
-(DTypeSig false "gateChunks" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))
-(DFunDef false "gateChunks" ((PVar "ls")) (EApp (EVar "foldClauses") (EApp (EApp (EVar "rawChunks") (EVar "ls")) (ELit (LInt 1)))))
-(DTypeSig false "rawChunks" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "GateChunk")))))
-(DFunDef false "rawChunks" ((PList) PWild) (EListLit))
-(DFunDef false "rawChunks" ((PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EApp (EVar "not") (EApp (EVar "startsChunk") (EVar "l"))) (EApp (EApp (EVar "rawChunks") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "chunkBody") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PTuple (PVar "body") (PVar "rest") (PVar "n2")) () (EMatch (EApp (EVar "chunkNames") (EVar "l")) (arm (PTuple (PVar "nm") (PVar "cn")) () (EBinOp "::" (ERecordCreate "GateChunk" ((fa "name" (EVar "nm")) (fa "callName" (EVar "cn")) (fa "line" (EVar "n")) (fa "text" (EApp (EVar "joinNl") (EBinOp "::" (EVar "l") (EVar "body")))))) (EApp (EApp (EVar "rawChunks") (EVar "rest")) (EVar "n2"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "chunksOf" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "GateChunk")))))
+(DFunDef false "chunksOf" ((PVar "file") (PVar "src")) (EApp (EApp (EVar "gateChunks") (EVar "file")) (EApp (EVar "stripComments") (EVar "src"))))
+(DTypeSig false "gateChunks" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk")))))
+(DFunDef false "gateChunks" ((PVar "file") (PVar "ls")) (EApp (EVar "foldClauses") (EApp (EApp (EApp (EVar "rawChunks") (EVar "file")) (EVar "ls")) (ELit (LInt 1)))))
+(DTypeSig false "rawChunks" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "GateChunk"))))))
+(DFunDef false "rawChunks" (PWild (PList) PWild) (EListLit))
+(DFunDef false "rawChunks" ((PVar "file") (PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EApp (EVar "not") (EApp (EVar "startsChunk") (EVar "l"))) (EApp (EApp (EApp (EVar "rawChunks") (EVar "file")) (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "chunkBody") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PTuple (PVar "body") (PVar "rest") (PVar "n2")) () (EMatch (EApp (EVar "chunkNames") (EVar "l")) (arm (PTuple (PVar "nm") (PVar "cn")) () (EBinOp "::" (ERecordCreate "GateChunk" ((fa "file" (EVar "file")) (fa "name" (EVar "nm")) (fa "callName" (EVar "cn")) (fa "line" (EVar "n")) (fa "text" (EApp (EVar "joinNl") (EBinOp "::" (EVar "l") (EVar "body")))))) (EApp (EApp (EApp (EVar "rawChunks") (EVar "file")) (EVar "rest")) (EVar "n2"))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "chunkBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")) (TyCon "Int")))))
 (DFunDef false "chunkBody" ((PList) (PVar "n")) (ETuple (EListLit) (EListLit) (EVar "n")))
 (DFunDef false "chunkBody" ((PCons (PVar "l") (PVar "ls")) (PVar "n")) (EIf (EApp (EVar "startsChunk") (EVar "l")) (ETuple (EListLit) (EBinOp "::" (EVar "l") (EVar "ls")) (EVar "n")) (EIf (EVar "otherwise") (EMatch (EApp (EApp (EVar "chunkBody") (EVar "ls")) (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (arm (PTuple (PVar "body") (PVar "rest") (PVar "n2")) () (ETuple (EBinOp "::" (EVar "l") (EVar "body")) (EVar "rest") (EVar "n2")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -4240,20 +4571,66 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DFunDef false "endsIdent" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoLet false false (PVar "n") (EApp (EVar "arrayLength") (EVar "cs"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "cs")))))))
 (DTypeSig false "startsIdent" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "startsIdent" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EBinOp "&&" (EBinOp ">" (EApp (EVar "arrayLength") (EVar "cs")) (ELit (LInt 0))) (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "cs")))))))
-(DTypeSig false "ungradedSpawnSites" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "GateChunk"))))
-(DFunDef false "ungradedSpawnSites" ((PVar "src")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "gateChunks") (EApp (EVar "stripComments") (EVar "src")))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "spawnAnswered") (EVar "cs")) (EVar "c"))))) (EApp (EApp (EVar "filterList") (EVar "spawningChunk")) (EVar "cs"))))))
+(DTypeSig false "ungradedSpawnSites" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))
+(DFunDef false "ungradedSpawnSites" ((PVar "gateFile") (PVar "gateText") (PVar "cs")) (EBlock (DoLet false false (PVar "sites") (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EBinOp "&&" (EApp (EVar "spawningChunk") (EVar "c")) (EApp (EApp (EApp (EVar "gateReaches") (EVar "gateFile")) (EVar "gateText")) (EVar "c"))))) (EVar "cs"))) (DoExpr (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EApp (EVar "spawnAnswered") (EVar "gateFile")) (EVar "cs")) (EVar "c"))))) (EVar "sites")))))
 (DTypeSig false "spawningChunk" (TyFun (TyCon "GateChunk") (TyCon "Bool")))
 (DFunDef false "spawningChunk" ((PVar "c")) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "c") "name") (ELit (LString "import"))) (EApp (EVar "liveSpawn") (EFieldAccess (EVar "c") "text"))))
-(DTypeSig false "spawnAnswered" (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyFun (TyCon "GateChunk") (TyCon "Bool"))))
-(DFunDef false "spawnAnswered" ((PVar "cs") (PVar "c")) (EBinOp "||" (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "c") "text")) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "gradesFor") (EVar "c")) (EVar "d")))) (EVar "cs"))))
+(DTypeSig false "gateReaches" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "GateChunk") (TyCon "Bool")))))
+(DFunDef false "gateReaches" ((PVar "gateFile") (PVar "gateText") (PVar "c")) (EBinOp "||" (EBinOp "==" (EFieldAccess (EVar "c") "file") (EVar "gateFile")) (EMatch (EFieldAccess (EVar "c") "callName") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "nm")) () (EApp (EApp (EVar "containsWord") (EVar "nm")) (EVar "gateText"))))))
+(DTypeSig false "spawnAnswered" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyFun (TyCon "GateChunk") (TyCon "Bool")))))
+(DFunDef false "spawnAnswered" ((PVar "gateFile") (PVar "cs") (PVar "c")) (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "c") "text")) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EVar "gradesFor") (EVar "c")) (EVar "d")))) (EVar "cs"))) (EBinOp "&&" (EBinOp "/=" (EFieldAccess (EVar "c") "file") (EVar "gateFile")) (EApp (EApp (EVar "anyList") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "relaysFor") (EVar "cs")) (EVar "c")) (EVar "d")))) (EVar "cs")))))
+(DTypeSig false "relaysFor" (TyFun (TyApp (TyCon "List") (TyCon "GateChunk")) (TyFun (TyCon "GateChunk") (TyFun (TyCon "GateChunk") (TyCon "Bool")))))
+(DFunDef false "relaysFor" ((PVar "cs") (PVar "c") (PVar "d")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "d") "file") (EFieldAccess (EVar "c") "file")) (EBinOp "==" (EFieldAccess (EVar "d") "line") (EFieldAccess (EVar "c") "line"))) (EVar "False") (EIf (EApp (EVar "not") (EApp (EApp (EVar "namesOther") (EVar "d")) (EVar "c"))) (EVar "False") (EIf (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "d") "text")) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EVar "anyList") (ELam ((PVar "e")) (EApp (EApp (EVar "gradesFor") (EVar "d")) (EVar "e")))) (EVar "cs")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "gradesFor" (TyFun (TyCon "GateChunk") (TyFun (TyCon "GateChunk") (TyCon "Bool"))))
-(DFunDef false "gradesFor" ((PVar "c") (PVar "d")) (EIf (EBinOp "==" (EFieldAccess (EVar "d") "line") (EFieldAccess (EVar "c") "line")) (EVar "False") (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "d") "text"))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EApp (EVar "namesOther") (EVar "c")) (EVar "d")) (EApp (EApp (EVar "namesOther") (EVar "d")) (EVar "c"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "gradesFor" ((PVar "c") (PVar "d")) (EIf (EBinOp "&&" (EBinOp "==" (EFieldAccess (EVar "d") "file") (EFieldAccess (EVar "c") "file")) (EBinOp "==" (EFieldAccess (EVar "d") "line") (EFieldAccess (EVar "c") "line"))) (EVar "False") (EIf (EApp (EVar "not") (EApp (EApp (EVar "anyMarker") (EVar "gradeEvidenceMarkers")) (EFieldAccess (EVar "d") "text"))) (EVar "False") (EIf (EVar "otherwise") (EBinOp "||" (EApp (EApp (EVar "namesOther") (EVar "c")) (EVar "d")) (EApp (EApp (EVar "namesOther") (EVar "d")) (EVar "c"))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "namesOther" (TyFun (TyCon "GateChunk") (TyFun (TyCon "GateChunk") (TyCon "Bool"))))
 (DFunDef false "namesOther" ((PVar "a") (PVar "b")) (EMatch (EFieldAccess (EVar "b") "callName") (arm (PCon "None") () (EVar "False")) (arm (PCon "Some" (PVar "nm")) () (EApp (EApp (EVar "containsWord") (EVar "nm")) (EFieldAccess (EVar "a") "text")))))
-(DTypeSig false "siteError" (TyFun (TyCon "Gate") (TyFun (TyCon "GateChunk") (TyCon "String"))))
-(DFunDef false "siteError" ((PVar "g") (PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "c") "line")))) (ELit (LString ": `"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "c") "name"))) (ELit (LString "` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"))))
+(DTypeSig false "siteError" (TyFun (TyCon "String") (TyFun (TyCon "GateChunk") (TyCon "String"))))
+(DFunDef false "siteError" ((PVar "name") (PVar "c")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "c") "file"))) (ELit (LString ":"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EFieldAccess (EVar "c") "line")))) (ELit (LString ": `"))) (EApp (EMethodRef "display") (EFieldAccess (EVar "c") "name"))) (ELit (LString "` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine"))))
+(DData Public "ImportTarget" () ((variant "Followed" (ConPos (TyCon "String") (TyCon "String"))) (variant "Elsewhere" (ConPos)) (variant "Unresolvable" (ConPos))) ())
+(DTypeSig false "importedModules" (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importedModules" ((PVar "src")) (EApp (EVar "importedGo") (EApp (EVar "splitNl") (EVar "src"))))
+(DTypeSig false "importedGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "importedGo" ((PList)) (EListLit))
+(DFunDef false "importedGo" ((PCons (PVar "l") (PVar "ls"))) (EMatch (EApp (EVar "importModuleId") (EVar "l")) (arm (PCon "Some" (PVar "m")) () (EBinOp "::" (EVar "m") (EApp (EVar "importedGo") (EVar "ls")))) (arm (PCon "None") () (EApp (EVar "importedGo") (EVar "ls")))))
+(DTypeSig false "importModuleId" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))
+(DFunDef false "importModuleId" ((PVar "l")) (EBlock (DoLet false false (PVar "rest") (EApp (EVar "afterImportKeyword") (EVar "l"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "rest")) (ELit (LInt 0))) (EVar "None") (EBlock (DoLet false false (PVar "id") (EApp (EVar "stringTrimDots") (EApp (EVar "dottedPrefix") (EVar "rest")))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "stringLength") (EVar "id")) (ELit (LInt 0))) (EVar "None") (EApp (EVar "Some") (EVar "id")))))))))
+(DTypeSig false "afterImportKeyword" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "afterImportKeyword" ((PVar "l")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "import "))) (EVar "l")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 7))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")) (EIf (EApp (EApp (EVar "startsWith") (ELit (LString "export import "))) (EVar "l")) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 14))) (EApp (EVar "stringLength") (EVar "l"))) (EVar "l")) (ELit (LString "")))))
+(DTypeSig false "dottedPrefix" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "dottedPrefix" ((PVar "s")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EApp (EVar "fromChars") (EApp (EApp (EApp (EVar "dottedPrefixGo") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0)))))))
+(DTypeSig false "dottedPrefixGo" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Char"))))))
+(DFunDef false "dottedPrefixGo" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EListLit) (EIf (EBinOp "||" (EApp (EVar "isIdentChar") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ".")))) (EBinOp "::" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (EApp (EApp (EApp (EVar "dottedPrefixGo") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DTypeSig false "stringTrimDots" (TyFun (TyCon "String") (TyCon "String")))
+(DFunDef false "stringTrimDots" ((PVar "s")) (EIf (EApp (EApp (EVar "endsWith") (ELit (LString "."))) (EVar "s")) (EApp (EVar "stringTrimDots") (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EApp (EVar "stringLength") (EVar "s")) (ELit (LInt 1)))) (EVar "s"))) (EVar "s")))
+(DTypeSig false "gradeChunks" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))))
+(DFunDef false "gradeChunks" ((PVar "resolve") (PVar "file") (PVar "src")) (EBlock (DoLet false false (PVar "imports") (EApp (EVar "importedModules") (EVar "src"))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "followImports") (EVar "resolve")) (EVar "file")) (EVar "imports")) (arm (PTuple (PVar "errs") (PVar "helperChunks")) () (ETuple (EVar "errs") (EBinOp "++" (EApp (EApp (EVar "chunksOf") (EVar "file")) (EVar "src")) (EVar "helperChunks"))))))))
+(DTypeSig false "followImports" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))))
+(DFunDef false "followImports" (PWild PWild (PList)) (ETuple (EListLit) (EListLit)))
+(DFunDef false "followImports" ((PVar "resolve") (PVar "file") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EApp (EApp (EVar "followOne") (EVar "resolve")) (EVar "file")) (EVar "m")) (arm (PTuple (PVar "errs") (PVar "cs")) () (EMatch (EApp (EApp (EApp (EVar "followImports") (EVar "resolve")) (EVar "file")) (EVar "ms")) (arm (PTuple (PVar "errs2") (PVar "cs2")) () (ETuple (EBinOp "++" (EVar "errs") (EVar "errs2")) (EBinOp "++" (EVar "cs") (EVar "cs2"))))))))
+(DTypeSig false "followOne" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "GateChunk"))))))))
+(DFunDef false "followOne" ((PVar "resolve") (PVar "file") (PVar "m")) (EMatch (EApp (EVar "resolve") (EVar "m")) (arm (PCon "Elsewhere") () (ETuple (EListLit) (EListLit))) (arm (PCon "Unresolvable") () (ETuple (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "imports '")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "', which names no module file under the gate's own search roots, the stdlib, or a declared dependency — process grading cannot be checked through an import it cannot resolve")))) (EListLit))) (arm (PCon "Followed" (PVar "path") (PVar "src")) () (EIf (EBinOp "==" (EVar "path") (EVar "file")) (ETuple (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "imports '")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "', which resolves back to the gate module itself — an import cycle, which the loader rejects before any grading question arises")))) (EListLit)) (EIf (EApp (EApp (EApp (EVar "importsBack") (EVar "resolve")) (EVar "file")) (EApp (EVar "importedModules") (EVar "src"))) (ETuple (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "imports '")) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString "', which imports it back — an import cycle, which the loader rejects before any grading question arises")))) (EListLit)) (ETuple (EListLit) (EApp (EApp (EVar "chunksOf") (EVar "path")) (EVar "src"))))))))
+(DTypeSig false "importsBack" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "importsBack" (PWild PWild (PList)) (EVar "False"))
+(DFunDef false "importsBack" ((PVar "resolve") (PVar "file") (PCons (PVar "m") (PVar "ms"))) (EMatch (EApp (EVar "resolve") (EVar "m")) (arm (PCon "Followed" (PVar "path") PWild) () (EBinOp "||" (EBinOp "==" (EVar "path") (EVar "file")) (EApp (EApp (EApp (EVar "importsBack") (EVar "resolve")) (EVar "file")) (EVar "ms")))) (arm PWild () (EApp (EApp (EApp (EVar "importsBack") (EVar "resolve")) (EVar "file")) (EVar "ms")))))
+(DTypeSig false "moduleFile" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "moduleFile" ((PVar "root") (PVar "m")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/"))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "/"))) (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "m"))))) (ELit (LString ".mdk"))))
+(DTypeSig false "firstModuleFile" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "Option") (TyCon "String"))))))
+(DFunDef false "firstModuleFile" ((PList) PWild) (EVar "None"))
+(DFunDef false "firstModuleFile" ((PCons (PVar "r") (PVar "rs")) (PVar "m")) (EBlock (DoLet false false (PVar "p") (EApp (EApp (EVar "moduleFile") (EVar "r")) (EVar "m"))) (DoExpr (EIf (EApp (EVar "fileExists") (EVar "p")) (EApp (EVar "Some") (EVar "p")) (EApp (EApp (EVar "firstModuleFile") (EVar "rs")) (EVar "m"))))))
+(DTypeSig false "resolveGateImport" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget")))))))
+(DFunDef false "resolveGateImport" ((PVar "root") (PVar "roots") (PVar "deps") (PVar "m")) (EMatch (EApp (EApp (EVar "firstModuleFile") (EVar "roots")) (EVar "m")) (arm (PCon "Some" (PVar "p")) () (EMatch (EApp (EVar "readFile") (EVar "p")) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EVar "Followed") (EApp (EApp (EVar "relToRoot") (EVar "root")) (EVar "p"))) (EVar "src"))) (arm (PCon "Err" PWild) () (EVar "Unresolvable")))) (arm (PCon "None") () (EIf (EBinOp "||" (EApp (EVar "fileExists") (EApp (EApp (EVar "moduleFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (ELit (LString "stdlib")))) (EVar "m"))) (EApp (EApp (EVar "depHolds") (EVar "deps")) (EVar "m"))) (EVar "Elsewhere") (EVar "Unresolvable")))))
+(DTypeSig false "depHolds" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool")))))
+(DFunDef false "depHolds" ((PVar "deps") (PVar "m")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "m")) (arm (PCons (PVar "seg0") (PCons (PVar "r0") (PVar "rs"))) () (EApp (EApp (EApp (EVar "depHoldsGo") (EVar "deps")) (EVar "seg0")) (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EBinOp "::" (EVar "r0") (EVar "rs"))))) (arm PWild () (EVar "False"))))
+(DTypeSig false "depHoldsGo" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Bool"))))))
+(DFunDef false "depHoldsGo" ((PList) PWild PWild) (EVar "False"))
+(DFunDef false "depHoldsGo" ((PCons (PTuple (PVar "nm") (PVar "dr")) (PVar "rest")) (PVar "seg0") (PVar "sub")) (EIf (EBinOp "&&" (EBinOp "==" (EVar "nm") (EVar "seg0")) (EApp (EVar "fileExists") (EApp (EApp (EVar "moduleFile") (EVar "dr")) (EMethodRef "sub")))) (EVar "True") (EApp (EApp (EApp (EVar "depHoldsGo") (EVar "rest")) (EVar "seg0")) (EMethodRef "sub"))))
+(DTypeSig false "relToRoot" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "relToRoot" ((PVar "root") (PVar "p")) (EBlock (DoLet false false (PVar "pre") (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "root"))) (ELit (LString "/")))) (DoExpr (EIf (EApp (EApp (EVar "startsWith") (EVar "pre")) (EVar "p")) (EApp (EApp (EApp (EVar "stringSlice") (EApp (EVar "stringLength") (EVar "pre"))) (EApp (EVar "stringLength") (EVar "p"))) (EVar "p")) (EVar "p")))))
 (DTypeSig false "nativeGradeErrors" (TyFun (TyCon "String") (TyFun (TyCon "Gate") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
-(DFunDef false "nativeGradeErrors" ((PVar "root") (PVar "g")) (EIf (EBinOp "/=" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EListLit) (EIf (EVar "otherwise") (EMatch (EApp (EVar "readFile") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "g") "run"))) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": kind 'native' but its module cannot be read to check process grading: "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EApp (EApp (EMethodRef "map") (EApp (EVar "siteError") (EVar "g"))) (EApp (EVar "ungradedSpawnSites") (EVar "src"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "nativeGradeErrors" ((PVar "root") (PVar "g")) (EIf (EBinOp "/=" (EFieldAccess (EVar "g") "kind") (ELit (LString "native"))) (EListLit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "path") (EApp (EApp (EVar "joinPath") (EVar "root")) (EFieldAccess (EVar "g") "run"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "path")) (arm (PCon "Err" (PVar "m")) () (EListLit (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "name"))) (ELit (LString ": kind 'native' but its module cannot be read to check process grading: "))) (EApp (EMethodRef "display") (EFieldAccess (EVar "g") "run"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "m"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "src")) () (EBlock (DoLet false false (PVar "dir") (EApp (EVar "dirOf") (EVar "path"))) (DoLet false false (PVar "roots") (EApp (EVar "entrySearchRoots") (EVar "dir"))) (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EVar "dir")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "gradeViolations") (ELam ((PVar "m")) (EApp (EApp (EApp (EApp (EVar "resolveGateImport") (EVar "root")) (EVar "roots")) (EVar "deps")) (EVar "m")))) (EFieldAccess (EVar "g") "name")) (EFieldAccess (EVar "g") "run")) (EVar "src")))))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig true "gradeViolations" (TyFun (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "ImportTarget"))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "gradeViolations" ((PVar "resolve") (PVar "name") (PVar "file") (PVar "src")) (EBlock (DoLet false false (PVar "gateText") (EApp (EVar "joinNl") (EApp (EVar "stripComments") (EVar "src")))) (DoExpr (EMatch (EApp (EApp (EApp (EVar "gradeChunks") (EVar "resolve")) (EVar "file")) (EVar "src")) (arm (PTuple (PVar "errs") (PVar "cs")) () (EBinOp "++" (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "file"))) (ELit (LString ": "))) (EApp (EMethodRef "display") (EVar "e"))) (ELit (LString ""))))) (EVar "errs")) (EApp (EApp (EMethodRef "map") (EApp (EVar "siteError") (EVar "name"))) (EApp (EApp (EApp (EVar "ungradedSpawnSites") (EVar "file")) (EVar "gateText")) (EVar "cs")))))))))
 (DTypeSig false "nativeGradeViolations" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Gate")) (TyEffect ("IO") None (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "nativeGradeViolations" (PWild (PList)) (EListLit))
 (DFunDef false "nativeGradeViolations" ((PVar "root") (PCons (PVar "g") (PVar "gs"))) (EBinOp "++" (EApp (EApp (EVar "nativeGradeErrors") (EVar "root")) (EVar "g")) (EApp (EApp (EVar "nativeGradeViolations") (EVar "root")) (EVar "gs"))))

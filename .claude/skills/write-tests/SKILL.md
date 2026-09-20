@@ -29,6 +29,14 @@ Shell is reserved for the three cases in its row. A shell gate written because
 the vehicle genuinely cannot express the check yet is debt with a name:
 register it `migration = "native-wrap"` so the epic can find it again.
 
+**Routing a spawn through a shared helper module no longer hides it.**
+`medaka gate verify`'s native-grading clause follows a gate module's
+project-local imports one level, so a helper binding the gate imports is a
+spawn site like any other, reported at the helper's own file and line (#3234).
+The stdlib and declared dependencies are never followed. Two consequences for
+an author: a helper that spawns and grades nothing reds every gate that
+imports it, and a spawn two imports deep is still invisible.
+
 **Resolved, no longer an open question:** orchestration *by* `medaka gate` (the
 CLI subcommand) does NOT count as harness dependence for #2298's
 harness-independence exemption — `docs/ops/TESTING-ARCHITECTURE.md` §3 defines
