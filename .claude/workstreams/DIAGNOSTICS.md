@@ -52,10 +52,10 @@ moving the backlog into the issue tracker** — an issue closes; a bullet does n
 **Errors accumulate.** Phases push into `compiler/driver/diagnostics.mdk` rather than raising on the
 first error. **Do not add early-exit/raise paths.**
 
-**Two typecheck entry points** (`checkProgramSeeded` single-file ∥ `checkModuleFullImpl` per-module)
-are textually duplicated and kept in **manual** lockstep — so a diagnostic added to one is **silently
-absent from the other**. That is exactly how the 2026-06-14 imported-module bug happened. Mirror both,
-or fix the root (#80).
+**Two typecheck routes** (`checkOneDiags` one-program ∥ `checkModuleFullImpl` per-module)
+need an explicit diagnostic audit — a diagnostic added to one route can be **silently absent from the
+other**. That is exactly how the 2026-06-14 imported-module bug happened. Audit both, or fix the root
+(#80).
 
 **`medaka check --json`** is the machine-readable surface — a stable `code`, a real `range`, a
 `severity`, and for suggestion-bearing errors a `help` string plus a machine-applicable

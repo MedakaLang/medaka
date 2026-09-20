@@ -703,8 +703,8 @@ Every delegated task prompt should contain, in order:
    precedent to mirror. Hand the agent the map, not a treasure hunt — this is where your bounded
    scope-read pays off.
    ⚠️ **A *fix site* is a guess, not a verified fact — don't hand it over as if it were one.** Naming
-   a fix site converts your guess into the agent's constraint. One brief said "extend `noteHead` to
-   record the decl-layer carriers"; `noteHead` is a `Ty -> (Ty, Bool)` callback handed to
+   a fix site converts your guess into the agent's constraint. One brief said "extend the type-position callback to
+   record the decl-layer carriers"; that callback is handed to
    `mapTyInDecl`, which rewrites **Ty positions** — it can never observe a decl-node field. That
    impossibility *was* the defect's mechanism: the layer was ungraded precisely because the only
    observation hook couldn't reach it. Brief the defect and the required observation; let the agent

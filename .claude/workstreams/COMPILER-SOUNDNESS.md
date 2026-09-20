@@ -30,9 +30,9 @@ three separate incidents:
 - `evalModules` (`eval/eval.mdk`) and `cevalModules` (`ir/core_ir_eval.mdk`) are **parallel module
   drivers — fix module-frame semantics in LOCKSTEP.** That is how the P0-9 cross-module ctor-collision
   fix shipped patching only `eval.mdk`, leaving `core_ir_eval.mdk` broken for months.
-- `checkProgramSeeded` ∥ `checkModuleFullImpl` — two textually duplicated typecheck bodies whose
-  comments literally say *"mirrors …"*. **The 2026-06-14 imported-module bug was exactly a mirror
-  miss.** → **#80**, *"the highest-value soundness step."*
+- `checkOneDiags` ∥ `checkModuleFullImpl` — one-program and per-module typecheck routes whose
+  registration and diagnostic behavior need a mirror audit. **The 2026-06-14 imported-module bug was
+  exactly a route miss.** → **#80**, *"the highest-value soundness step."*
 - **A one-backend fix is a half fix** (**#59**): an LLVM fix that never reached wasm. The workaround
   was reverted on the strength of a green verifier, and only the wasm tandem gate caught it.
 
