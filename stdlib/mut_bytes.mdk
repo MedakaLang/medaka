@@ -174,9 +174,9 @@ blit (MutBytes src) srcOff (MutBytes dst) dstOff len =
     panic "MutBytes.blit: negative srcOff"
   else if dstOff < 0 then
     panic "MutBytes.blit: negative dstOff"
-  else if srcOff + len > byteBlockLength src then
+  else if len > byteBlockLength src - srcOff then
     panic "MutBytes.blit: source out of bounds"
-  else if dstOff + len > byteBlockLength dst then
+  else if len > byteBlockLength dst - dstOff then
     panic "MutBytes.blit: destination out of bounds"
   else
     byteBlockBlit src srcOff dst dstOff len
