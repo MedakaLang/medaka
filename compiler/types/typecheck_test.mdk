@@ -199,6 +199,43 @@ test "a nested numeric literal may use the declared impl prerequisite" =
   let (errors, _) = numericCheckObserved numericNestedBodySource
   expectEqual [] errors
 
+numericImplHeadSource : String -> String -> String
+numericImplHeadSource methodType methodBody = joinNl [
+  "data Acc b = MkAcc b",
+  "interface Make a where",
+  "  make : " ++ methodType,
+  "impl Make (Acc b) where",
+  "  " ++ methodBody,
+]
+
+test "numeric impl-head roots require an explicit prerequisite at nullary and return positions" =
+  let nullary =
+    fst (numericCheckObserved (numericImplHeadSource "a" "make = MkAcc 0"))
+  let returns =
+    fst
+      (numericCheckObserved
+        (numericImplHeadSource "Unit -> a" "make _ = MkAcc 0"))
+  let declared = joinNl [
+    "data Acc b = MkAcc b",
+    "interface Make a where",
+    "  make : a",
+    "impl Make (Acc b) requires Num b where",
+    "  make = MkAcc 0",
+  ]
+  expectAll [
+    expectEqual
+      [
+        "Impl of 'make' for interface 'Make' requires 'Num' on the instance-head type variable 'b', but the impl does not declare that prerequisite. Add `requires Num b` to the impl.",
+      ]
+      nullary,
+    expectEqual
+      [
+        "Impl of 'make' for interface 'Make' requires 'Num' on the instance-head type variable 'b', but the impl does not declare that prerequisite. Add `requires Num b` to the impl.",
+      ]
+      returns,
+    expectEqual [] (fst (numericCheckObserved declared)),
+  ]
+
 test "numeric return keeps the Num predicate through production checking and stamping" =
   let (errors, trace) = numericCheckObserved (numericValueSource True)
   expectAll [

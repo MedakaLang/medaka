@@ -20780,7 +20780,7 @@ numObligIds o = match o.oblProj
 --   * member: roots in one member, excluding its arguments;
 --   * group: all roots, excluding arguments of any member;
 --   * SCC: the group rule plus the existing per-member fallback;
---   * body-local: roots absent from the declared method mono.
+--   * body-local: roots absent from the boundary's explicit surviving-channel set.
 data NumBoundaryDisposition =
   | NumBoundaryOwnedMember Int
   | NumBoundaryOwnedGroup Int
@@ -20838,8 +20838,11 @@ finalizeNumBoundary boundary =
         boundary.nbDefaultObls
         boundary.nbMembers
     NumBoundaryMethodBodyPending => match boundary.nbMembers
-      [member] =>
-        defaultBodyLocalNumWith defaultOwnerPolicy boundary.nbDefaultObls member
+      [_] =>
+        defaultBodyLocalNumWith
+          defaultOwnerPolicy
+          boundary.nbSurvivingIds
+          boundary.nbDefaultObls
       _ => panic "NumBoundaryMethodBodyPending must carry exactly one member"
   match ambiguityOwner
     Some owner =>
@@ -20891,10 +20894,27 @@ unprotectedNumCandidates protectedIds obls =
     (id => not (omHasKey (intToString id) protectedIds))
     (dedupI (numConstrainedIds obls))
 
--- #518: BODY-LOCAL defaulting — ground only the Num-constrained vars that appear
--- NOWHERE in [memberMono].  Strictly narrower than group defaulting, and the
--- distinction is SOUNDNESS-CRITICAL at an impl-method body, which is why this is a
--- separate primitive rather than a reuse.
+monoRootIdSet : List Mono -> OrdMap Unit
+monoRootIdSet monos =
+  omFromNames (map intToString (dedupI (flatMap monoUnboundIds monos))) omEmpty
+
+-- The D3 channel rule is an identity intersection, not whole-type reachability:
+-- only roots constrained by this boundary's own Num obligations can survive, and
+-- only when the supplied head/dictionary channels carry that exact live root.
+numChannelRootSet : List UObligation -> List Mono -> OrdMap Unit
+numChannelRootSet obls channels =
+  let channelIds = monoRootIdSet channels
+  omFromNames
+    (filterList
+      (name => omHasKey name channelIds)
+      (map intToString (dedupI (numConstrainedIds obls))))
+    omEmpty
+
+-- #518/#563: BODY-LOCAL defaulting — ground only Num-constrained roots absent from
+-- [protectedIds], the boundary's explicit set of still-live determination channels.
+-- Strictly narrower than group defaulting, and the distinction is
+-- SOUNDNESS-CRITICAL at an impl-method body, which is why this is a separate
+-- primitive rather than a reuse.
 --
 -- Group defaulting's exclusion filter is monoArgUnboundIds, which walks ONLY the
 -- domains of the outermost arrow chain.  A var living in RETURN position — including
@@ -20910,24 +20930,18 @@ unprotectedNumCandidates protectedIds obls =
 -- typeclass dispatch concentrates, so this site's density of the triggering shape is
 -- far higher than a let-group's.
 --
--- Membership in [memberMono] — arg position OR return position — therefore means
--- "determined by the caller (via an argument, an annotation, or a method dict)" and
--- is left alone.  #518's shape is the complement: the element var of `s [1, 2]` in
+-- The impl boundary supplies only roots shared with its instance head or declared
+-- method dictionaries. The generic-default boundary still supplies every root in
+-- its declared method mono, preserving its existing policy until it gains the same
+-- concrete construction context. #518's shape is the complement: the element var
+-- of `s [1, 2]` in
 -- `t _ = s [1, 2]` is consumed entirely inside the body and surfaces nowhere in
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
---
--- (Note the membership test is the INVERSE of member defaulting, which requires
--- the var to be IN the type — `containsI id inT` — and then excludes arg-reachable
--- ones.  Neither existing primitive expresses "in the type at all", hence this one.)
-defaultBodyLocalNumWith : Option Int -> List UObligation -> Mono -> Unit
-defaultBodyLocalNumWith ownerPolicy obls memberMono =
-  let inType = monoUnboundIds memberMono
-  let candidates = dedupI (numConstrainedIds obls)
-  groundNumVarsWith
-    ownerPolicy
-    obls
-    (filterList (id => not (containsI id inType)) candidates)
+defaultBodyLocalNumWith : Option Int -> OrdMap Unit -> List UObligation -> Unit
+defaultBodyLocalNumWith ownerPolicy protectedIds obls =
+  let candidates = unprotectedNumCandidates protectedIds obls
+  groundNumVarsWith ownerPolicy obls candidates
 
 -- per-binding defaulting: run the member rule on each placeholder mono
 defaultEachMemberWith : Option Int ->
@@ -30522,7 +30536,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
     NumBoundary {
       nbDisposition = NumBoundaryMethodBodyPending,
       nbMembers = [expected2],
-      nbSurvivingIds = omEmpty,
+      nbSurvivingIds = monoRootIdSet [expected2],
       nbDefaultObls = addedObls,
       nbAmbiguityObls = addedObls,
     }
@@ -32607,6 +32621,7 @@ inferPlainImpl env ce cur iface tys methods =
     iface
     implTvMap
     headMonos
+    []
     (scopeImplMethods (captureScope ()) methods)
 
 -- one impl `impl Iface (List a) requires Iface a where …`: build ONE tyvar map
@@ -32627,7 +32642,8 @@ inferRequiresImpl env rpNames ce cur iface tys reqs methods =
   let implTvMap = freshTvMap (dedup (flatMap tyVarNames tys))
   let headMonos = map (fromAstType implTvMap) tys
   let scopedMethods = scopeImplMethods (captureScope ()) methods
-  let _ = inferImplMethods env ce cur iface implTvMap headMonos scopedMethods
+  let _ =
+    inferImplMethods env ce cur iface implTvMap headMonos reqs scopedMethods
   registerImplRequires ce cur iface implTvMap rpNames reqs scopedMethods
 
 data ScopedImplMethod = ScopedImplMethod {
@@ -32655,12 +32671,13 @@ inferImplMethods : TcEnv ->
   IfaceRef ->
   List (String, Mono) ->
   List Mono ->
+  List Require ->
   List ScopedImplMethod ->
   Unit
-inferImplMethods _ _ _ _ _ _ [] = ()
-inferImplMethods env ce cur iface implTvMap headMonos (m :: rest) =
-  let _ = inferImplMethod env ce cur iface implTvMap headMonos m
-  inferImplMethods env ce cur iface implTvMap headMonos rest
+inferImplMethods _ _ _ _ _ _ _ [] = ()
+inferImplMethods env ce cur iface implTvMap headMonos reqs (m :: rest) =
+  let _ = inferImplMethod env ce cur iface implTvMap headMonos reqs m
+  inferImplMethods env ce cur iface implTvMap headMonos reqs rest
 
 inferImplMethod : TcEnv ->
   ClassEnv ->
@@ -32668,12 +32685,21 @@ inferImplMethod : TcEnv ->
   IfaceRef ->
   List (String, Mono) ->
   List Mono ->
+  List Require ->
   ScopedImplMethod ->
   Unit
-inferImplMethod env ce cur iface implTvMap headMonos scoped =
+inferImplMethod env ce cur iface implTvMap headMonos reqs scoped =
   let _ = openScope scoped.simScope
   let _ =
-    inferImplMethodBody env ce cur iface implTvMap headMonos scoped.simMethod
+    inferImplMethodBody
+      env
+      ce
+      cur
+      iface
+      implTvMap
+      headMonos
+      reqs
+      scoped.simMethod
   closeScope ()
 
 inferImplMethodBody : TcEnv ->
@@ -32682,9 +32708,10 @@ inferImplMethodBody : TcEnv ->
   IfaceRef ->
   List (String, Mono) ->
   List Mono ->
+  List Require ->
   ImplMethod ->
   Unit
-inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats body) =
+inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname pats body) =
   match ceMethodTyAt iface mname cur ce
     None => ()
     Some (ifaceParams, mty, gscope) =>
@@ -32859,6 +32886,20 @@ inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats 
           gscope
           eagerIdx
           launderLoc
+      -- The rigidity read above can normalize/alias union-find roots. Snapshot
+      -- channels only afterward so this set and every obligation use the same
+      -- final root identities.
+      let survivingNumIds =
+        numChannelRootSet
+          addedObls
+          (headMonos ++ methodLevelConstraintMonos ifaceParams mty extraMap)
+      let _ =
+        checkImplHeadNumObligations
+          (implSubject iface.irName mname)
+          implTvMap
+          reqs
+          survivingNumIds
+          addedObls
       -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
       -- method body — this path is not a let-group, so nothing grounded its ambiguous
       -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -32871,13 +32912,14 @@ inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats 
       -- The same expression at TOP LEVEL was always correct precisely because
       -- group defaulting grounded the var to Int first.
       --
-      -- MUST run AFTER `unify expected actual` (so [expected] reflects the body's
-      -- aliasing) and defaults ONLY BODY-LOCAL vars — see defaultBodyLocalNumWith, which
-      -- explains at length why group defaulting is the WRONG policy HERE even though
-      -- it is what processLetGroup/processSCC use: its arg-position-only exclusion filter
-      -- leaves a method-level constraint var in RETURN position (`lift : Num b => a ->
-      -- Box b`) unprotected, and at an impl method body that var is dict-supplied by the
-      -- CALLER.  Using group defaulting here measurably traded #518's S0 for a new one.
+      -- MUST run AFTER `unify expected actual`, when root identities are final. The
+      -- surviving set is the intersection of this body's Num roots with head roots and
+      -- declared method-dictionary roots. A return-position method variable (`lift :
+      -- Num b => a -> Box b`) survives through the latter; `b` in `impl Mk (Acc b)`
+      -- survives through the former and the rigidity owner above requires its impl-level
+      -- prerequisite. An unrelated body-local root remains outside both and grounds.
+      -- Group defaulting is still the wrong policy here: its arg-position-only filter
+      -- measurably traded #518's S0 for a new one.
       --
       -- NumBoundaryMethodBodyPending makes the missing owner explicit: unlike the
       -- level-owned lexical/group boundaries, this function has no enterLevel/exitLevel
@@ -32887,7 +32929,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats 
         NumBoundary {
           nbDisposition = NumBoundaryMethodBodyPending,
           nbMembers = [expected],
-          nbSurvivingIds = omEmpty,
+          nbSurvivingIds = survivingNumIds,
           nbDefaultObls = addedObls,
           nbAmbiguityObls = addedObls,
         }
@@ -33294,6 +33336,64 @@ checkSurvivorObligations subject ownIface ownTyparams mty extraMap (o :: rest) l
         o.pred.args
         loc
   checkSurvivorObligations subject ownIface ownTyparams mty extraMap rest loc
+
+-- #563's narrow instance-head prerequisite check. This reads the SAME protected
+-- root set that body-local Num defaulting consumes, then asks only whether a root
+-- carried by [implTvMap] has declared evidence in this impl's `requires`. It does
+-- not judge non-Num pinning or any head variable the body's Num obligations do not
+-- reach; those remain #1136/#819.
+checkImplHeadNumObligations : String ->
+  List (String, Mono) ->
+  List Require ->
+  OrdMap Unit ->
+  List UObligation ->
+  Unit
+checkImplHeadNumObligations _ _ _ _ [] = ()
+checkImplHeadNumObligations subject implTvMap reqs survivingIds (o :: rest) =
+  let _ =
+    checkImplHeadNumIds
+      subject
+      implTvMap
+      reqs
+      survivingIds
+      o.loc
+      (dedupI (numObligIds o))
+  checkImplHeadNumObligations subject implTvMap reqs survivingIds rest
+
+checkImplHeadNumIds : String ->
+  List (String, Mono) ->
+  List Require ->
+  OrdMap Unit ->
+  Option Loc ->
+  List Int ->
+  Unit
+checkImplHeadNumIds _ _ _ _ _ [] = ()
+checkImplHeadNumIds subject implTvMap reqs survivingIds loc (id :: rest) =
+  let _ = match survivorNameOfId id implTvMap
+    Some vname =>
+      if omHasKey (intToString id) survivingIds
+        && not (implRequiresRoot "Num" id implTvMap reqs) then
+        pushTypeErrorOnceAt
+          "T-IMPL-MISSING-REQUIRES"
+          loc
+          (undeclaredImplPrerequisiteMsg subject "Num" vname)
+    None => ()
+  checkImplHeadNumIds subject implTvMap reqs survivingIds loc rest
+
+implRequiresRoot : String -> Int -> List (String, Mono) -> List Require -> Bool
+implRequiresRoot _ _ _ [] = False
+implRequiresRoot wanted id implTvMap ((Require { requireHead = iface, requireArgs = args, ... }) :: rest) =
+  contains wanted (ifaceSelfAndSupers iface)
+      && requireArgsAreRoot id implTvMap args
+    || implRequiresRoot wanted id implTvMap rest
+
+requireArgsAreRoot : Int -> List (String, Mono) -> List Ty -> Bool
+requireArgsAreRoot id implTvMap [TyVar name] = match lookupAssoc name implTvMap
+  Some m => match normalize m
+    TVar cell => tyvarId cell == id
+    _ => False
+  None => False
+requireArgsAreRoot _ _ _ = False
 
 -- the CALL-obligation half of the constraint axis: recordCallObligations pushes
 -- (iface, [constraint-var mono], loc) for each dict slot a constrained CALLEE
@@ -33710,6 +33810,10 @@ undeclaredConstraintMsg : String -> Ty -> String -> String -> String
 undeclaredConstraintMsg subject mty oiface vname =
   "\{subject} requires '\{oiface}' on the method's quantified type variable '\{vname}', but the declared type '\{ppTy mty}' does not: every caller instantiates '\{vname}' freely (including to a type with no '\{oiface}' impl), so the body may not assume it. Add the constraint to the method's signature (`\{oiface} \{vname} => …`), or make the body parametric in '\{vname}'."
 
+undeclaredImplPrerequisiteMsg : String -> String -> String -> String
+undeclaredImplPrerequisiteMsg subject oiface vname =
+  "\{subject} requires '\{oiface}' on the instance-head type variable '\{vname}', but the impl does not declare that prerequisite. Add `requires \{oiface} \{vname}` to the impl."
+
 collapsesTyvarsMsg : String -> Ty -> String
 collapsesTyvarsMsg subject mty =
   "\{subject} identifies quantified type variables that the declared type '\{ppTy mty}' keeps distinct (two method variables forced equal, or a method variable forced equal to an impl-head variable). Every caller may instantiate each independently, so the body must keep them independent."
@@ -33781,6 +33885,17 @@ methodLevelConstraintVarNames typarams (TyConstrained cs t) =
 methodLevelConstraintVarNames typarams (TyEffect _ _ t) =
   methodLevelConstraintVarNames typarams t
 methodLevelConstraintVarNames _ _ = []
+
+methodLevelConstraintMonos : List String ->
+  Ty ->
+  List (String, Mono) ->
+  List Mono
+methodLevelConstraintMonos ifaceParams mty tvMap =
+  flatMap
+    (name => match lookupAssoc name tvMap
+      Some m => [m]
+      None => [])
+    (methodLevelConstraintVarNames ifaceParams mty)
 
 constraintFirstNonParam : List String -> Constraint -> List String
 constraintFirstNonParam typarams c = match constraintNonParamVars typarams c
