@@ -38025,7 +38025,7 @@ methodRowNumericAnchorProbe _ =
   )
 
 -- > methodRowNumericAnchorProbe ()
--- (0, "Foldable", ["t"], [("attrOnly", False, False, "", ""), ("directOnly", True, True, "String -> a", "String -> a"), ("attrThenDirect", True, True, "String -> a", "String -> a"), ("directThenAttr", False, False, "", ""), ("builtinThenUser", True, True, "Int -> a", "Int -> a"), ("userThenBuiltin", True, True, "Int -> a", "Int -> a")])
+-- (0, "Foldable", ["t"], [("attrOnly", False, False, "", ""), ("directOnly", True, True, "String -> a", "String -> a"), ("attrThenDirect", False, False, "", ""), ("directThenAttr", True, True, "String -> a", "String -> a"), ("builtinThenUser", True, True, "Int -> a", "Int -> a"), ("userThenBuiltin", True, True, "Int -> a", "Int -> a")])
 
 methodReturnProbeIface : String -> String -> Ty -> Decl
 methodReturnProbeIface moduleId ifaceName methodTy =

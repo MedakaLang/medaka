@@ -57,9 +57,8 @@ When you emit **Medaka** code in examples/tests, use multi-arg lambda form
    — derive them, line numbers here rot) call *into*
    `compiler/frontend/exhaust.mdk` (`buildOracle` / `useful` / `usefulWitness`);
    exhaust is not a standalone stage. Per-node `infer`/`check` arms are shared, but
-   **whole-program orchestration lives in two entry points** — `checkProgramDiags`
-   (the FLAT arm, single-file, no module graph) and `checkModuleFullDiags` (the
-   MODULE arm, driven by the one graph driver `driveGraphK`, whose output selection
+   **whole-program orchestration has a one-program route** — `checkOneDiags` — and
+   `checkModuleFullDiags` for each module in the graph driven by `driveGraphK`, whose output selection
    serves check and run/build alike). A change to registration, coherence, or a
    post-HM pass usually must be mirrored in both arms.
 6. **Desugar** — `compiler/frontend/desugar.mdk`. If the feature is sugar, lower
