@@ -18,8 +18,9 @@
    `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
    `Option`-returning form. `slice` copies out a sub-range and panics on a
    range that runs outside the byte string, `sliceClamped` clamps the range
-   instead, and `indexOf` finds the first
-   byte equal to a given value. Two byte strings compare lexicographically,
+   instead. `elemIndex` finds the first byte equal to a given value, and
+   `indexOf` finds the first occurrence of a byte-string needle -- `contains`
+   and `lastIndexOf` are the same shape as `String`'s. Two byte strings compare lexicographically,
    as the arrays of their bytes do, and hash as the arrays of their bytes do,
    so `Bytes` is a `HashMap`/`HashSet` key.
 
@@ -223,31 +224,127 @@ sliceClamped lo hi (Bytes bb) =
   let _ = byteBlockBlit bb lo' dst 0 (hi' - lo')
   Bytes dst
 
-indexOfGo : Int -> ByteBlock -> Int -> Int -> Option Int
-indexOfGo v bb i n =
+elemIndexGo : Int -> ByteBlock -> Int -> Int -> Option Int
+elemIndexGo v bb i n =
   if i >= n then
     None
   else if byteBlockGetUnsafe i bb == v then
     Some i
   else
-    indexOfGo v bb (i + 1) n
+    elemIndexGo v bb (i + 1) n
 
 {- | The index of the first byte equal to `v`, or `None` when no byte is.
 
-   The needle is one byte, where `string.indexOf` takes a whole substring:
+   The needle is one byte, where `indexOf` takes a whole `Bytes` needle:
    `Bytes` is a sequence of byte values, and this is the search for one of
    them, as `list.elemIndex` is for a list element. A `v` outside `0` to
    `255` equals no byte, so the answer is `None`.
 
-   > indexOf 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+   > elemIndex 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
    Some 1
-   > indexOf 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
+   > elemIndex 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
    None
-   > indexOf 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
+   > elemIndex 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
    None -}
 export
-indexOf : Int -> Bytes -> Option Int
-indexOf v (Bytes bb) = indexOfGo v bb 0 (byteBlockLength bb)
+elemIndex : Int -> Bytes -> Option Int
+elemIndex v (Bytes bb) = elemIndexGo v bb 0 (byteBlockLength bb)
+
+{- | The index of the first byte equal to `v` within `[lo, hi)`, or `None`
+   when no byte in that range is. `lo`/`hi` clamp into the byte string, as
+   `sliceClamped`'s do, and the answer is an index into `bytes`, not one
+   relative to `lo`.
+
+   > elemIndexWithin 2 5 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9, 9|])
+   Some 3
+   > elemIndexWithin 0 1 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9, 9|])
+   None -}
+export
+elemIndexWithin : Int -> Int -> Int -> Bytes -> Option Int
+elemIndexWithin lo hi v (Bytes bb) =
+  let n = byteBlockLength bb
+  let lo' = if lo < 0 then 0 else min lo n
+  let hi' = if hi < lo' then lo' else min hi n
+  elemIndexGo v bb lo' hi'
+
+indexOfWithinGo : Bytes -> Int -> Bytes -> Int -> Int -> Option Int
+indexOfWithinGo needle nlen haystack pos lastPos =
+  if pos > lastPos then
+    None
+  else if slice haystack pos (pos + nlen) == needle then
+    Some pos
+  else
+    indexOfWithinGo needle nlen haystack (pos + 1) lastPos
+
+{- | The index of the first occurrence of `needle` within `bytes[lo, hi)`, or
+   `None`. `lo`/`hi` clamp into `bytes`, as `sliceClamped`'s do, and the
+   answer is an index into `bytes`, not one relative to `lo`. The empty
+   needle occurs at `lo`.
+
+   > indexOfWithin 0 6 (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+   Some 1
+   > indexOfWithin 4 6 (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+   None
+   > indexOfWithin 2 5 (fromArrayAssumeByteDomain [||]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+   Some 2 -}
+export
+indexOfWithin : Int -> Int -> Bytes -> Bytes -> Option Int
+indexOfWithin lo hi needle (Bytes bb) =
+  let n = byteBlockLength bb
+  let lo' = if lo < 0 then 0 else min lo n
+  let hi' = if hi < lo' then lo' else min hi n
+  let nlen = bytesLength needle
+  if nlen == 0 then
+    Some lo'
+  else
+    indexOfWithinGo needle nlen (Bytes bb) lo' (hi' - nlen)
+
+{- | The index of the first occurrence of `needle` in `bytes`, or `None`.
+   The needle is a whole `Bytes` value, where `elemIndex` searches for a
+   single byte. The empty needle occurs at index `0`, matching
+   `string.indexOf ""`.
+
+   > indexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+   Some 1
+   > indexOf (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+   None
+   > indexOf (fromArrayAssumeByteDomain [||]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+   Some 0 -}
+export
+indexOf : Bytes -> Bytes -> Option Int
+indexOf needle bytes = indexOfWithin 0 (bytesLength bytes) needle bytes
+
+{- | The index of the last occurrence of `needle` in `bytes`, or `None`.
+   Occurrences may overlap. An empty needle is found at the end of `bytes`.
+
+   > lastIndexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|9, 8, 7, 9, 8|])
+   Some 3
+   > lastIndexOf (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|9, 8, 7|])
+   None -}
+export
+lastIndexOf : Bytes -> Bytes -> Option Int
+lastIndexOf needle haystack
+  | bytesLength needle == 0 = Some (bytesLength haystack)
+  | otherwise = lastIndexOfGo needle haystack 0 None
+
+-- Walks forward from each hit, advancing one byte so overlapping matches
+-- still count, and keeps the latest.
+lastIndexOfGo : Bytes -> Bytes -> Int -> Option Int -> Option Int
+lastIndexOfGo needle haystack from acc =
+  match indexOf needle (slice haystack from (bytesLength haystack))
+    None => acc
+    Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
+
+{- | Whether `needle` occurs anywhere in `haystack`. The empty needle occurs
+   in every byte string.
+
+   > contains (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+   True
+   > contains (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+   False -}
+export
+contains : Bytes -> Bytes -> Bool
+contains needle haystack = isSome (indexOf needle haystack)
 
 -- # Combining
 

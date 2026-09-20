@@ -20,8 +20,9 @@ already established the range.
 `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
 `Option`-returning form. `slice` copies out a sub-range and panics on a
 range that runs outside the byte string, `sliceClamped` clamps the range
-instead, and `indexOf` finds the first
-byte equal to a given value. Two byte strings compare lexicographically,
+instead. `elemIndex` finds the first byte equal to a given value, and
+`indexOf` finds the first occurrence of a byte-string needle -- `contains`
+and `lastIndexOf` are the same shape as `String`'s. Two byte strings compare lexicographically,
 as the arrays of their bytes do, and hash as the arrays of their bytes do,
 so `Bytes` is a `HashMap`/`HashSet` key.
 
@@ -181,26 +182,116 @@ where `b.[lo..hi]` raises a slice error.
 [||]
 ```
 
-### `indexOf`
+### `elemIndex`
 
 ```
-indexOf : Int -> Bytes -> Option Int
+elemIndex : Int -> Bytes -> Option Int
 ```
 
 The index of the first byte equal to `v`, or `None` when no byte is.
 
-The needle is one byte, where `string.indexOf` takes a whole substring:
+The needle is one byte, where `indexOf` takes a whole `Bytes` needle:
 `Bytes` is a sequence of byte values, and this is the search for one of
 them, as `list.elemIndex` is for a list element. A `v` outside `0` to
 `255` equals no byte, so the answer is `None`.
 
 ```medaka
-> indexOf 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+> elemIndex 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
 Some 1
-> indexOf 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
+> elemIndex 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
 None
-> indexOf 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
+> elemIndex 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
 None
+```
+
+### `elemIndexWithin`
+
+```
+elemIndexWithin : Int -> Int -> Int -> Bytes -> Option Int
+```
+
+The index of the first byte equal to `v` within `[lo, hi)`, or `None`
+when no byte in that range is. `lo`/`hi` clamp into the byte string, as
+`sliceClamped`'s do, and the answer is an index into `bytes`, not one
+relative to `lo`.
+
+```medaka
+> elemIndexWithin 2 5 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9, 9|])
+Some 3
+> elemIndexWithin 0 1 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9, 9|])
+None
+```
+
+### `indexOfWithin`
+
+```
+indexOfWithin : Int -> Int -> Bytes -> Bytes -> Option Int
+```
+
+The index of the first occurrence of `needle` within `bytes[lo, hi)`, or
+`None`. `lo`/`hi` clamp into `bytes`, as `sliceClamped`'s do, and the
+answer is an index into `bytes`, not one relative to `lo`. The empty
+needle occurs at `lo`.
+
+```medaka
+> indexOfWithin 0 6 (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+Some 1
+> indexOfWithin 4 6 (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+None
+> indexOfWithin 2 5 (fromArrayAssumeByteDomain [||]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+Some 2
+```
+
+### `indexOf`
+
+```
+indexOf : Bytes -> Bytes -> Option Int
+```
+
+The index of the first occurrence of `needle` in `bytes`, or `None`.
+The needle is a whole `Bytes` value, where `elemIndex` searches for a
+single byte. The empty needle occurs at index `0`, matching
+`string.indexOf ""`.
+
+```medaka
+> indexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+Some 1
+> indexOf (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+None
+> indexOf (fromArrayAssumeByteDomain [||]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+Some 0
+```
+
+### `lastIndexOf`
+
+```
+lastIndexOf : Bytes -> Bytes -> Option Int
+```
+
+The index of the last occurrence of `needle` in `bytes`, or `None`.
+Occurrences may overlap. An empty needle is found at the end of `bytes`.
+
+```medaka
+> lastIndexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|9, 8, 7, 9, 8|])
+Some 3
+> lastIndexOf (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|9, 8, 7|])
+None
+```
+
+### `contains`
+
+```
+contains : Bytes -> Bytes -> Bool
+```
+
+Whether `needle` occurs anywhere in `haystack`. The empty needle occurs
+in every byte string.
+
+```medaka
+> contains (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+True
+> contains (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+False
 ```
 
 ## Combining

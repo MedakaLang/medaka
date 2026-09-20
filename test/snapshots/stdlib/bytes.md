@@ -1,5 +1,5 @@
 # META
-source_lines=747
+source_lines=844
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -22,8 +22,9 @@ stages=DESUGAR,MARK
    `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
    `Option`-returning form. `slice` copies out a sub-range and panics on a
    range that runs outside the byte string, `sliceClamped` clamps the range
-   instead, and `indexOf` finds the first
-   byte equal to a given value. Two byte strings compare lexicographically,
+   instead. `elemIndex` finds the first byte equal to a given value, and
+   `indexOf` finds the first occurrence of a byte-string needle -- `contains`
+   and `lastIndexOf` are the same shape as `String`'s. Two byte strings compare lexicographically,
    as the arrays of their bytes do, and hash as the arrays of their bytes do,
    so `Bytes` is a `HashMap`/`HashSet` key.
 
@@ -227,31 +228,127 @@ sliceClamped lo hi (Bytes bb) =
   let _ = byteBlockBlit bb lo' dst 0 (hi' - lo')
   Bytes dst
 
-indexOfGo : Int -> ByteBlock -> Int -> Int -> Option Int
-indexOfGo v bb i n =
+elemIndexGo : Int -> ByteBlock -> Int -> Int -> Option Int
+elemIndexGo v bb i n =
   if i >= n then
     None
   else if byteBlockGetUnsafe i bb == v then
     Some i
   else
-    indexOfGo v bb (i + 1) n
+    elemIndexGo v bb (i + 1) n
 
 {- | The index of the first byte equal to `v`, or `None` when no byte is.
 
-   The needle is one byte, where `string.indexOf` takes a whole substring:
+   The needle is one byte, where `indexOf` takes a whole `Bytes` needle:
    `Bytes` is a sequence of byte values, and this is the search for one of
    them, as `list.elemIndex` is for a list element. A `v` outside `0` to
    `255` equals no byte, so the answer is `None`.
 
-   > indexOf 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+   > elemIndex 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
    Some 1
-   > indexOf 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
+   > elemIndex 5 (fromArrayAssumeByteDomain [|7, 9, 8|])
    None
-   > indexOf 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
+   > elemIndex 300 (fromArrayAssumeByteDomain [|7, 9, 8|])
    None -}
 export
-indexOf : Int -> Bytes -> Option Int
-indexOf v (Bytes bb) = indexOfGo v bb 0 (byteBlockLength bb)
+elemIndex : Int -> Bytes -> Option Int
+elemIndex v (Bytes bb) = elemIndexGo v bb 0 (byteBlockLength bb)
+
+{- | The index of the first byte equal to `v` within `[lo, hi)`, or `None`
+   when no byte in that range is. `lo`/`hi` clamp into the byte string, as
+   `sliceClamped`'s do, and the answer is an index into `bytes`, not one
+   relative to `lo`.
+
+   > elemIndexWithin 2 5 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9, 9|])
+   Some 3
+   > elemIndexWithin 0 1 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9, 9|])
+   None -}
+export
+elemIndexWithin : Int -> Int -> Int -> Bytes -> Option Int
+elemIndexWithin lo hi v (Bytes bb) =
+  let n = byteBlockLength bb
+  let lo' = if lo < 0 then 0 else min lo n
+  let hi' = if hi < lo' then lo' else min hi n
+  elemIndexGo v bb lo' hi'
+
+indexOfWithinGo : Bytes -> Int -> Bytes -> Int -> Int -> Option Int
+indexOfWithinGo needle nlen haystack pos lastPos =
+  if pos > lastPos then
+    None
+  else if slice haystack pos (pos + nlen) == needle then
+    Some pos
+  else
+    indexOfWithinGo needle nlen haystack (pos + 1) lastPos
+
+{- | The index of the first occurrence of `needle` within `bytes[lo, hi)`, or
+   `None`. `lo`/`hi` clamp into `bytes`, as `sliceClamped`'s do, and the
+   answer is an index into `bytes`, not one relative to `lo`. The empty
+   needle occurs at `lo`.
+
+   > indexOfWithin 0 6 (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+   Some 1
+   > indexOfWithin 4 6 (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+   None
+   > indexOfWithin 2 5 (fromArrayAssumeByteDomain [||]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
+   Some 2 -}
+export
+indexOfWithin : Int -> Int -> Bytes -> Bytes -> Option Int
+indexOfWithin lo hi needle (Bytes bb) =
+  let n = byteBlockLength bb
+  let lo' = if lo < 0 then 0 else min lo n
+  let hi' = if hi < lo' then lo' else min hi n
+  let nlen = bytesLength needle
+  if nlen == 0 then
+    Some lo'
+  else
+    indexOfWithinGo needle nlen (Bytes bb) lo' (hi' - nlen)
+
+{- | The index of the first occurrence of `needle` in `bytes`, or `None`.
+   The needle is a whole `Bytes` value, where `elemIndex` searches for a
+   single byte. The empty needle occurs at index `0`, matching
+   `string.indexOf ""`.
+
+   > indexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+   Some 1
+   > indexOf (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
+   None
+   > indexOf (fromArrayAssumeByteDomain [||]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+   Some 0 -}
+export
+indexOf : Bytes -> Bytes -> Option Int
+indexOf needle bytes = indexOfWithin 0 (bytesLength bytes) needle bytes
+
+{- | The index of the last occurrence of `needle` in `bytes`, or `None`.
+   Occurrences may overlap. An empty needle is found at the end of `bytes`.
+
+   > lastIndexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|9, 8, 7, 9, 8|])
+   Some 3
+   > lastIndexOf (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|9, 8, 7|])
+   None -}
+export
+lastIndexOf : Bytes -> Bytes -> Option Int
+lastIndexOf needle haystack
+  | bytesLength needle == 0 = Some (bytesLength haystack)
+  | otherwise = lastIndexOfGo needle haystack 0 None
+
+-- Walks forward from each hit, advancing one byte so overlapping matches
+-- still count, and keeps the latest.
+lastIndexOfGo : Bytes -> Bytes -> Int -> Option Int -> Option Int
+lastIndexOfGo needle haystack from acc =
+  match indexOf needle (slice haystack from (bytesLength haystack))
+    None => acc
+    Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
+
+{- | Whether `needle` occurs anywhere in `haystack`. The empty needle occurs
+   in every byte string.
+
+   > contains (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+   True
+   > contains (fromArrayAssumeByteDomain [|9, 7|]) (fromArrayAssumeByteDomain [|7, 9, 8|])
+   False -}
+export
+contains : Bytes -> Bytes -> Bool
+contains needle haystack = isSome (indexOf needle haystack)
 
 -- # Combining
 
@@ -768,10 +865,24 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
 (DTypeSig true "sliceClamped" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes")))))
 (DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
-(DTypeSig false "indexOfGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "indexOfGo" ((PVar "v") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")) (EVar "v")) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EApp (EVar "indexOfGo") (EVar "v")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
-(DTypeSig true "indexOf" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "indexOf" ((PVar "v") (PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "indexOfGo") (EVar "v")) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
+(DTypeSig false "elemIndexGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "elemIndexGo" ((PVar "v") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")) (EVar "v")) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EApp (EVar "elemIndexGo") (EVar "v")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
+(DTypeSig true "elemIndex" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "elemIndex" ((PVar "v") (PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "elemIndexGo") (EVar "v")) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
+(DTypeSig true "elemIndexWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "elemIndexWithin" ((PVar "lo") (PVar "hi") (PVar "v") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "elemIndexGo") (EVar "v")) (EVar "bb")) (EVar "lo'")) (EVar "hi'")))))
+(DTypeSig false "indexOfWithinGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DFunDef false "indexOfWithinGo" ((PVar "needle") (PVar "nlen") (PVar "haystack") (PVar "pos") (PVar "lastPos")) (EIf (EBinOp ">" (EVar "pos") (EVar "lastPos")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "slice") (EVar "haystack")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "nlen"))) (EVar "needle")) (EApp (EVar "Some") (EVar "pos")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EVar "haystack")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "lastPos")))))
+(DTypeSig true "indexOfWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "indexOfWithin" ((PVar "lo") (PVar "hi") (PVar "needle") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "nlen") (EApp (EVar "bytesLength") (EVar "needle"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "lo'")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EApp (EVar "Bytes") (EVar "bb"))) (EVar "lo'")) (EBinOp "-" (EVar "hi'") (EVar "nlen")))))))
+(DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "bytesLength") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
+(DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "bytesLength") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "bytesLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EApp (EApp (EApp (EVar "slice") (EVar "haystack")) (EVar "from")) (EApp (EVar "bytesLength") (EVar "haystack")))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
+(DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
+(DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
 (DTypeSig false "eqGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EVar "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))
@@ -849,10 +960,24 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DImpl true "Slice" ((TyCon "Bytes")) () ((im "slice" ((PCon "Bytes" (PVar "bb")) (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EBlock (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst"))))))))
 (DTypeSig true "sliceClamped" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyCon "Bytes")))))
 (DFunDef false "sliceClamped" ((PVar "lo") (PVar "hi") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "bb")) (EVar "lo'")) (EVar "dst")) (ELit (LInt 0))) (EBinOp "-" (EVar "hi'") (EVar "lo'")))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))
-(DTypeSig false "indexOfGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "indexOfGo" ((PVar "v") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")) (EVar "v")) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EApp (EVar "indexOfGo") (EVar "v")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
-(DTypeSig true "indexOf" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "indexOf" ((PVar "v") (PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "indexOfGo") (EVar "v")) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
+(DTypeSig false "elemIndexGo" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "elemIndexGo" ((PVar "v") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")) (EVar "v")) (EApp (EVar "Some") (EVar "i")) (EApp (EApp (EApp (EApp (EVar "elemIndexGo") (EVar "v")) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")))))
+(DTypeSig true "elemIndex" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "elemIndex" ((PVar "v") (PCon "Bytes" (PVar "bb"))) (EApp (EApp (EApp (EApp (EVar "elemIndexGo") (EVar "v")) (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))
+(DTypeSig true "elemIndexWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "elemIndexWithin" ((PVar "lo") (PVar "hi") (PVar "v") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "elemIndexGo") (EVar "v")) (EVar "bb")) (EVar "lo'")) (EVar "hi'")))))
+(DTypeSig false "indexOfWithinGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
+(DFunDef false "indexOfWithinGo" ((PVar "needle") (PVar "nlen") (PVar "haystack") (PVar "pos") (PVar "lastPos")) (EIf (EBinOp ">" (EVar "pos") (EVar "lastPos")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EMethodRef "slice") (EVar "haystack")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "nlen"))) (EVar "needle")) (EApp (EVar "Some") (EVar "pos")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EVar "haystack")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "lastPos")))))
+(DTypeSig true "indexOfWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "indexOfWithin" ((PVar "lo") (PVar "hi") (PVar "needle") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "nlen") (EApp (EVar "bytesLength") (EVar "needle"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "lo'")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EApp (EVar "Bytes") (EVar "bb"))) (EVar "lo'")) (EBinOp "-" (EVar "hi'") (EVar "nlen")))))))
+(DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "bytesLength") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
+(DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "bytesLength") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "bytesLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
+(DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EApp (EApp (EApp (EMethodRef "slice") (EVar "haystack")) (EVar "from")) (EApp (EVar "bytesLength") (EVar "haystack")))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
+(DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
+(DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
 (DTypeSig false "eqGo" (TyFun (TyCon "ByteBlock") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
 (DFunDef false "eqGo" ((PVar "a") (PVar "b") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "True") (EIf (EBinOp "==" (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "a")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "b"))) (EApp (EApp (EApp (EApp (EDictApp "eqGo") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n")) (EVar "False"))))

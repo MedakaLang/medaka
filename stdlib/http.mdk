@@ -349,7 +349,7 @@ lowerAscii input start end =
   fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
 
 -- The `*Bytes` twin of each grammar predicate below — `lowerAsciiBytes`,
--- `allTokenBytes`, `validFieldValueBytes`, `findByteBytes`,
+-- `allTokenBytes`, `validFieldValueBytes`,
 -- `trimLeftOwsBytes`, `trimRightOwsBytes`, `skipOwsBytes`,
 -- `scanTokenEndBytes` — is its body over a `Bytes` rather than an
 -- `Array` of `Int`. The duplication is deliberate and temporary: `Index` is
@@ -489,15 +489,6 @@ findByte value pos end wanted =
   else
     findByte value (pos + 1) end wanted
 
-findByteBytes : Bytes -> Int -> Int -> Int -> Option Int
-findByteBytes input pos end wanted =
-  if pos >= end then
-    None
-  else if input[pos] == wanted then
-    Some pos
-  else
-    findByteBytes input (pos + 1) end wanted
-
 -- | `avail` is how many bytes of `input` the caller has actually received; the
 -- search runs out of input there, not at `bytesLength input`.
 findCrlfChecked : String ->
@@ -526,18 +517,6 @@ findCrlfChecked label input avail start pos limit =
   else
     findCrlfChecked label input avail start (pos + 1) limit
 
-{- | Find the CR byte of the first CRLF in the half-open range
-   `input[pos, end)`. A CR at `end - 1` is not a complete CRLF. -}
-export
-findCrlf : Bytes -> Int -> Int -> Option Int
-findCrlf input pos end =
-  if pos + 1 >= end then
-    None
-  else if input[pos] == 13 && input[pos + 1] == 10 then
-    Some pos
-  else
-    findCrlf input (pos + 1) end
-
 -- | `cursor` is where the CRLF search resumes; it is `start` for a fresh scan
 -- and a later, already-searched offset when a suspended scan continues.
 parseRequestLine : Bytes -> Int -> Int -> Int -> Result FrameError RequestLine
@@ -550,12 +529,12 @@ parseRequestLine input avail start cursor = do
     cursor
     maxHttpRequestLineBytes
   () <- resourceExcess (checkHttpRequestLineBytes (end - start))
-  firstSpace <- match findByteBytes input start end 32
+  firstSpace <- match elemIndexWithin start end 32 input
     None =>
       malformed
         "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
     Some pos => Ok pos
-  secondSpace <- match findByteBytes input (firstSpace + 1) end 32
+  secondSpace <- match elemIndexWithin (firstSpace + 1) end 32 input
     None =>
       malformed
         "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
@@ -618,7 +597,7 @@ parseHeaderLine : Bytes -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
   if input[start] == 32 || input[start] == 9 then
     malformed "http: obsolete folded header lines are forbidden"
-  else match findByteBytes input start end 58
+  else match elemIndexWithin start end 58 input
     None => malformed "http: malformed header field; missing colon"
     Some colon =>
       if colon == start || not (allTokenBytes input start colon) then
@@ -1121,7 +1100,7 @@ parseChunkExtensionsGo input pos end =
 
 parseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkSize input start end =
-  let semi = match findByteBytes input start end 59
+  let semi = match elemIndexWithin start end 59 input
     None => end
     Some pos => pos
   if semi == start then
