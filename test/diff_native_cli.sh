@@ -420,6 +420,7 @@ else
   mb_case mutbytes_blit_src_oob "MutBytes.blit: source out of bounds"
   mb_case mutbytes_blit_dst_oob "MutBytes.blit: destination out of bounds"
   mb_case emitu8_range       "Builder.emitU8: value out of range 0..255"
+  mb_case emitu8_negative    "Builder.emitU8: value out of range 0..255"
 fi
 
 # error/* — RETIRED with the OCaml oracle (native canonical; oracle-coupled leg

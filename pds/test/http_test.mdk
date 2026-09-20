@@ -302,6 +302,21 @@ test "invalid method token is rejected" =
       "method token"
       (encodeUtf8 "GE(T / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
+test "non-ASCII byte in method is rejected" =
+  expectTrue
+    (rejects
+      "method token"
+      (mustBytes [|255|]
+        ++ encodeUtf8 "ET / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+
+test "non-ASCII byte in target is rejected" =
+  expectTrue
+    (rejects
+      "origin-form ASCII target"
+      (encodeUtf8 "GET /"
+        ++ mustBytes [|128|]
+        ++ encodeUtf8 " HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+
 test "invalid header-name token is rejected" =
   expectTrue
     (rejects

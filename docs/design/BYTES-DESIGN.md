@@ -178,8 +178,6 @@ export get           : Int -> Bytes -> Option Int
 export impl Index Bytes Int Int            -- `b[i]`, panics out of range
 export impl Eq Bytes
 export impl Ord Bytes
-export toUtf8Bytes   : String -> Bytes
-export fromUtf8Bytes : Bytes -> String
 ```
 
 There is deliberately no `fromList` and no builder. `Foldable`, `Mappable` and

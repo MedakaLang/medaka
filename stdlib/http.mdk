@@ -1979,8 +1979,11 @@ responseParseChunked input avail pos out total count = do
       else do
         (chunk, _) <- responseReadSliceAt input avail dataPos size
         next <- responseChunkDataEnd input avail dataPos size
-        let () = emitArray chunk 0 out
-        responseParseChunked input avail next out (total + size) (count + 1)
+        if not (validBytes chunk 0 (arrayLength chunk)) then
+          responseMalformed "http: chunk body byte out of range 0..255"
+        else do
+          let () = emitArray chunk 0 out
+          responseParseChunked input avail next out (total + size) (count + 1)
 
 responseParseBody : BodyMode ->
   Array Int ->
