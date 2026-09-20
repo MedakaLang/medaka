@@ -16,7 +16,7 @@ and `get`, `b[i]`, `eq`, and `compare` all read a byte back.
 `fromArrayAssumeByteDomain` is the unchecked way in, for a caller that has
 already established the range.
 
-`fromArray` and `toArray` convert; `bytesLength` is the byte count and
+`fromArray` and `toArray` convert; `length` is the byte count and
 `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
 `Option`-returning form. `slice` copies out a sub-range and panics on a
 range that runs outside the byte string, `sliceClamped` clamps the range
@@ -35,10 +35,9 @@ it falls through to the runtime's untyped concatenation, which has no
 byte-buffer case, and fails at run time. Bind `append` instead, which
 dispatches from either position.
 
-`MutBytes` is the mutable, fixed-length sibling, and the way to build a
-byte string a byte at a time: `mutBytesMake` allocates `n` zero bytes,
-`mutBytesSet` writes one, and `freeze` hands back a `Bytes`. The freeze
-copies, so a write after it never reaches the byte string it produced.
+`mut_bytes` holds `MutBytes`, the mutable, fixed-length sibling, and the
+way to build a byte string a byte at a time: its `freeze` hands back a
+`Bytes` and its `thaw` goes the other way, both by copy.
 
 ### `Bytes`
 
@@ -56,7 +55,7 @@ with a `ByteBlock` in their signature are the kernel doors, gathered in
 the `# Kernel doors` section at the end of this module.
 
 ```medaka
-> map bytesLength (fromArray [|1, 2, 3|])
+> map length (fromArray [|1, 2, 3|])
 Some 3
 ```
 
@@ -122,21 +121,23 @@ The bytes of `b` as an array, in order.
 
 ## Reading
 
-### `bytesLength`
+### `length`
 
 ```
-bytesLength : Bytes -> Int
+length : Bytes -> Int
 ```
 
 The number of bytes in `b`.
 
-The name is not `length`: that one is `Foldable`'s method, which the
-prelude exports, and `Bytes` cannot implement `Foldable`. The interface
-ranges over a container of some element type, and `Bytes` has no element
-parameter.
+This is a function rather than `Foldable`'s method: that interface ranges
+over a container of some element type, and `Bytes` has no element
+parameter, so it cannot implement `Foldable`. Named in an import list it
+shadows the prelude's method for the whole importing module, so reach it
+through an alias -- `import bytes as B`, then `B.length` -- from a module
+that uses both.
 
 ```medaka
-> bytesLength (encodeUtf8 "héllo")
+> length (encodeUtf8 "héllo")
 6
 ```
 
@@ -312,7 +313,7 @@ A codepoint outside ASCII contributes several bytes, so the byte count is
 at least the codepoint count and often larger.
 
 ```medaka
-> bytesLength (encodeUtf8 "héllo")
+> length (encodeUtf8 "héllo")
 6
 ```
 
@@ -382,112 +383,6 @@ Writes `b`'s bytes to standard output byte-for-byte.
 Unlike `putStr`, the bytes are not required to be valid UTF-8: nothing
 here decodes or re-encodes them, so a byte sequence that would mangle or
 get rejected on a `String` path round-trips exactly.
-
-## Mutation
-
-### `MutBytes`
-
-```
-newtype MutBytes = MutBytes ByteBlock
-```
-
-A mutable string of bytes, fixed at its allocated length.
-
-The constructor is module-private, so `mutBytesMake` is the way in and
-`freeze` the way out, and nothing observes the buffer except through the
-functions below.
-
-Reach for it to build a byte string a byte at a time. The alternative --
-filling an `Array Int` and handing it to `fromArray` -- boxes a machine
-word per byte before packing them, which is the cost `Bytes` exists to
-avoid.
-
-```medaka
-> mutBytesLength (mutBytesMake 3)
-3
-```
-
-Instances: [`Debug`](#debug-mutbytes)
-
-### `mutBytesMake`
-
-```
-mutBytesMake : Int -> MutBytes
-```
-
-A mutable byte string of `n` zero bytes.
-
-Panics when `n` is negative.
-
-```medaka
-> mutBytesGet 2 (mutBytesMake 3)
-Some 0
-```
-
-### `mutBytesLength`
-
-```
-mutBytesLength : MutBytes -> Int
-```
-
-The number of bytes in `mb`, fixed when it was allocated.
-
-```medaka
-> mutBytesLength (mutBytesMake 4)
-4
-```
-
-### `mutBytesGet`
-
-```
-mutBytesGet : Int -> MutBytes -> Option Int
-```
-
-The byte at index `i` of `mb`, or `None` when `i` is out of range.
-
-```medaka
-> mutBytesGet 1 (mutBytesMake 2)
-Some 0
-> mutBytesGet 2 (mutBytesMake 2)
-None
-> mutBytesGet (-1) (mutBytesMake 2)
-None
-```
-
-### `mutBytesSet`
-
-```
-mutBytesSet : Int -> Int -> MutBytes -> Unit
-```
-
-Replaces the byte at index `i` of `mb` with `v`.
-
-Panics when `i` is out of range, as `array.setInPlace` does, and panics
-when `v` falls outside `0` to `255` rather than keeping its low eight
-bits. A masked write would put a byte into a `Bytes` that no caller asked
-for, and this is the door every byte written here goes through.
-
-```medaka
-> let mb = mutBytesMake 2 in let _ = mutBytesSet 0 65 mb in mutBytesGet 0 mb
-Some 65
-```
-
-### `freeze`
-
-```
-freeze : MutBytes -> Bytes
-```
-
-The bytes of `mb` as an immutable `Bytes`.
-
-The result is a copy, so a write to `mb` afterwards does not reach it.
-
-```medaka
-> let mb = mutBytesMake 2 in let _ = mutBytesSet 1 9 mb in toArray (freeze mb)
-[|0, 9|]
-> let m = mutBytesMake 1 in let b = freeze m in let _ = mutBytesSet 0 7 m in toArray b
-[|0|]
-```
 
 ## Kernel doors
 
@@ -681,21 +576,5 @@ array of the same numbers.
 True
 > debug (fromArrayAssumeByteDomain (fromList [0..=31]))
 "Bytes \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\""
-```
-
-### `Debug MutBytes`
-
-```
-impl Debug MutBytes
-```
-
-Renders as `MutBytes "<hex>"`, in the same lowercase hex shape
-`Debug Bytes` uses -- read from the live buffer, not a `freeze`d copy.
-
-```medaka
-> debug (mutBytesMake 0)
-"MutBytes \"\""
-> let mb = mutBytesMake 2 in let _ = mutBytesSet 0 255 mb in debug mb
-"MutBytes \"ff00\""
 ```
 

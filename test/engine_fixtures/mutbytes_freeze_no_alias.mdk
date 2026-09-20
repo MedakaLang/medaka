@@ -6,30 +6,31 @@
 --
 -- Every printed value is an Int: `byteAt` projects the `Option` out so that no
 -- engine has to render a `Bytes` or a `MutBytes` cell.  An index past the end
--- reads as -1, which pins the `None` arm of `mutBytesGet` at the same time.
+-- reads as -1, which pins the `None` arm of `MB.get` at the same time.
 
--- Wildcard because a `newtype`'s TYPE name cannot be named in a selective
--- import list: `import bytes.{MutBytes}` is read as a request for the
--- module-private constructor and refused.  `stdlib/hex.mdk` imports this
--- module the same way.
-import bytes.*
+-- Both modules export a `length`, and both are read here, so each is
+-- reached through its own alias.
+import bytes as B
+import bytes.{Bytes}
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
 
 byteAt : Int -> MutBytes -> Int
-byteAt i mb = match mutBytesGet i mb
+byteAt i mb = match MB.get i mb
   Some v => v
   None => -1
 
 main =
-  let mb = mutBytesMake 4
-  let _ = mutBytesSet 0 10 mb
-  let _ = mutBytesSet 1 20 mb
-  let b = freeze mb
-  let _ = mutBytesSet 0 99 mb
-  let _ = mutBytesSet 3 255 mb
+  let mb = MB.make 4
+  let _ = MB.setInPlace 0 10 mb
+  let _ = MB.setInPlace 1 20 mb
+  let b = MB.freeze mb
+  let _ = MB.setInPlace 0 99 mb
+  let _ = MB.setInPlace 3 255 mb
   (
-    (bytesLength b, b[0], b[1], b[2], b[3]),
+    (B.length b, b[0], b[1], b[2], b[3]),
     (
-      mutBytesLength mb,
+      MB.length mb,
       byteAt 0 mb,
       byteAt 1 mb,
       byteAt 3 mb,

@@ -1,3 +1,3 @@
-import bytes.*
+import mut_bytes as MB
 
-main = mutBytesLength (mutBytesMake (0 - 1))
+main = MB.length (MB.make (0 - 1))

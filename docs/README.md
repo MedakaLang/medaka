@@ -140,6 +140,7 @@ What's in the standard library, what's planned, module-by-module status.
 | [`list.md`](stdlib/list.md) | list | — |
 | [`map.md`](stdlib/map.md) | map | — |
 | [`math.md`](stdlib/math.md) | math | — |
+| [`mut_bytes.md`](stdlib/mut_bytes.md) | mut_bytes | — |
 | [`net.md`](stdlib/net.md) | net | — |
 | [`net_async.md`](stdlib/net_async.md) | net_async | — |
 | [`nonempty.md`](stdlib/nonempty.md) | nonempty | — |

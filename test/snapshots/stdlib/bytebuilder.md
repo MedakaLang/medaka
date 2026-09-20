@@ -263,7 +263,7 @@ build1 f =
 -- Ok 127
 
 -- emitU8 keeps only the low eight bits: 300 & 255 == 44.  The write is a
--- mask, never a refusal -- `bytes.mutBytesSet` is the door that panics
+-- mask, never a refusal -- `mut_bytes.setInPlace` is the door that panics
 -- instead, and this one is deliberately not it.
 -- > runByteParser (beUint 1) (build1 (emitU8 300))
 -- Ok 44

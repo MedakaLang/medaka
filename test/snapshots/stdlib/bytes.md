@@ -1,5 +1,5 @@
 # META
-source_lines=844
+source_lines=740
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -18,7 +18,7 @@ stages=DESUGAR,MARK
    `fromArrayAssumeByteDomain` is the unchecked way in, for a caller that has
    already established the range.
 
-   `fromArray` and `toArray` convert; `bytesLength` is the byte count and
+   `fromArray` and `toArray` convert; `length` is the byte count and
    `get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
    `Option`-returning form. `slice` copies out a sub-range and panics on a
    range that runs outside the byte string, `sliceClamped` clamps the range
@@ -37,10 +37,9 @@ stages=DESUGAR,MARK
    byte-buffer case, and fails at run time. Bind `append` instead, which
    dispatches from either position.
 
-   `MutBytes` is the mutable, fixed-length sibling, and the way to build a
-   byte string a byte at a time: `mutBytesMake` allocates `n` zero bytes,
-   `mutBytesSet` writes one, and `freeze` hands back a `Bytes`. The freeze
-   copies, so a write after it never reaches the byte string it produced. -}
+   `mut_bytes` holds `MutBytes`, the mutable, fixed-length sibling, and the
+   way to build a byte string a byte at a time: its `freeze` hands back a
+   `Bytes` and its `thaw` goes the other way, both by copy. -}
 
 -- The representation is a `ByteBlock`, the runtime's packed byte buffer, and
 -- every operation here reads it directly rather than through an `Array Int`
@@ -86,7 +85,7 @@ import string.{toDigit}
    with a `ByteBlock` in their signature are the kernel doors, gathered in
    the `# Kernel doors` section at the end of this module.
 
-   > map bytesLength (fromArray [|1, 2, 3|])
+   > map length (fromArray [|1, 2, 3|])
    Some 3 -}
 export newtype Bytes = Bytes ByteBlock
 
@@ -139,16 +138,18 @@ toArray (Bytes bb) = byteBlockToIntArray bb
 
 {- | The number of bytes in `b`.
 
-   The name is not `length`: that one is `Foldable`'s method, which the
-   prelude exports, and `Bytes` cannot implement `Foldable`. The interface
-   ranges over a container of some element type, and `Bytes` has no element
-   parameter.
+   This is a function rather than `Foldable`'s method: that interface ranges
+   over a container of some element type, and `Bytes` has no element
+   parameter, so it cannot implement `Foldable`. Named in an import list it
+   shadows the prelude's method for the whole importing module, so reach it
+   through an alias -- `import bytes as B`, then `B.length` -- from a module
+   that uses both.
 
-   > bytesLength (encodeUtf8 "héllo")
+   > length (encodeUtf8 "héllo")
    6 -}
 export
-bytesLength : Bytes -> Int
-bytesLength (Bytes bb) = byteBlockLength bb
+length : Bytes -> Int
+length (Bytes bb) = byteBlockLength bb
 
 {- | The byte at index `i`, or `None` when `i` is out of range.
 
@@ -297,7 +298,7 @@ indexOfWithin lo hi needle (Bytes bb) =
   let n = byteBlockLength bb
   let lo' = if lo < 0 then 0 else min lo n
   let hi' = if hi < lo' then lo' else min hi n
-  let nlen = bytesLength needle
+  let nlen = length needle
   if nlen == 0 then
     Some lo'
   else
@@ -316,7 +317,7 @@ indexOfWithin lo hi needle (Bytes bb) =
    Some 0 -}
 export
 indexOf : Bytes -> Bytes -> Option Int
-indexOf needle bytes = indexOfWithin 0 (bytesLength bytes) needle bytes
+indexOf needle bytes = indexOfWithin 0 (length bytes) needle bytes
 
 {- | The index of the last occurrence of `needle` in `bytes`, or `None`.
    Occurrences may overlap. An empty needle is found at the end of `bytes`.
@@ -328,14 +329,14 @@ indexOf needle bytes = indexOfWithin 0 (bytesLength bytes) needle bytes
 export
 lastIndexOf : Bytes -> Bytes -> Option Int
 lastIndexOf needle haystack
-  | bytesLength needle == 0 = Some (bytesLength haystack)
+  | length needle == 0 = Some (length haystack)
   | otherwise = lastIndexOfGo needle haystack 0 None
 
 -- Walks forward from each hit, advancing one byte so overlapping matches
 -- still count, and keeps the latest.
 lastIndexOfGo : Bytes -> Bytes -> Int -> Option Int -> Option Int
 lastIndexOfGo needle haystack from acc =
-  match indexOf needle (slice haystack from (bytesLength haystack))
+  match indexOf needle (slice haystack from (length haystack))
     None => acc
     Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
 
@@ -477,7 +478,7 @@ export impl Debug Bytes where
    A codepoint outside ASCII contributes several bytes, so the byte count is
    at least the codepoint count and often larger.
 
-   > bytesLength (encodeUtf8 "héllo")
+   > length (encodeUtf8 "héllo")
    6 -}
 export
 encodeUtf8 : String -> Bytes
@@ -675,111 +676,6 @@ export
 writeStdoutBytes : Bytes -> <Stdout> Unit
 writeStdoutBytes (Bytes bb) = byteBlockWriteStdout bb
 
--- # Mutation
-
--- `MutBytes` lives beside `Bytes` rather than in its own module because
--- `freeze` builds a `Bytes` out of a block, and the `Bytes` constructor is
--- module-private: a module elsewhere could only reach it if this one exported
--- a second way in.
---
--- The names carry the type because the module holds two of them and the bare
--- `get` and `length` are already `Bytes`'s.
-
-{- | A mutable string of bytes, fixed at its allocated length.
-
-   The constructor is module-private, so `mutBytesMake` is the way in and
-   `freeze` the way out, and nothing observes the buffer except through the
-   functions below.
-
-   Reach for it to build a byte string a byte at a time. The alternative --
-   filling an `Array Int` and handing it to `fromArray` -- boxes a machine
-   word per byte before packing them, which is the cost `Bytes` exists to
-   avoid.
-
-   > mutBytesLength (mutBytesMake 3)
-   3 -}
-export newtype MutBytes = MutBytes ByteBlock
-
-{- | A mutable byte string of `n` zero bytes.
-
-   Panics when `n` is negative.
-
-   > mutBytesGet 2 (mutBytesMake 3)
-   Some 0 -}
-export
-mutBytesMake : Int -> MutBytes
-mutBytesMake n =
-  if n < 0 then
-    panic "MutBytes.mutBytesMake: negative length"
-  else
-    MutBytes (byteBlockMake n)
-
-{- | The number of bytes in `mb`, fixed when it was allocated.
-
-   > mutBytesLength (mutBytesMake 4)
-   4 -}
-export
-mutBytesLength : MutBytes -> Int
-mutBytesLength (MutBytes bb) = byteBlockLength bb
-
-{- | The byte at index `i` of `mb`, or `None` when `i` is out of range.
-
-   > mutBytesGet 1 (mutBytesMake 2)
-   Some 0
-   > mutBytesGet 2 (mutBytesMake 2)
-   None
-   > mutBytesGet (-1) (mutBytesMake 2)
-   None -}
-export
-mutBytesGet : Int -> MutBytes -> Option Int
-mutBytesGet i (MutBytes bb) =
-  if i < 0 || i >= byteBlockLength bb then
-    None
-  else
-    Some (byteBlockGetUnsafe i bb)
-
-{- | Replaces the byte at index `i` of `mb` with `v`.
-
-   Panics when `i` is out of range, as `array.setInPlace` does, and panics
-   when `v` falls outside `0` to `255` rather than keeping its low eight
-   bits. A masked write would put a byte into a `Bytes` that no caller asked
-   for, and this is the door every byte written here goes through.
-
-   > let mb = mutBytesMake 2 in let _ = mutBytesSet 0 65 mb in mutBytesGet 0 mb
-   Some 65 -}
-export
-mutBytesSet : Int -> Int -> MutBytes -> Unit
-mutBytesSet i v (MutBytes bb) =
-  if v < 0 || v > 255 then
-    panic "MutBytes.mutBytesSet: value out of range 0..255"
-  else if i < 0 || i >= byteBlockLength bb then
-    panic "MutBytes.mutBytesSet: index out of bounds"
-  else
-    byteBlockSetUnsafe i v bb
-
-{- | The bytes of `mb` as an immutable `Bytes`.
-
-   The result is a copy, so a write to `mb` afterwards does not reach it.
-
-   > let mb = mutBytesMake 2 in let _ = mutBytesSet 1 9 mb in toArray (freeze mb)
-   [|0, 9|]
-   > let m = mutBytesMake 1 in let b = freeze m in let _ = mutBytesSet 0 7 m in toArray b
-   [|0|] -}
-export
-freeze : MutBytes -> Bytes
-freeze (MutBytes bb) = Bytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
-
-{- | Renders as `MutBytes "<hex>"`, in the same lowercase hex shape
-   `Debug Bytes` uses -- read from the live buffer, not a `freeze`d copy.
-
-   > debug (mutBytesMake 0)
-   "MutBytes \"\""
-   > let mb = mutBytesMake 2 in let _ = mutBytesSet 0 255 mb in debug mb
-   "MutBytes \"ff00\"" -}
-export impl Debug MutBytes where
-  debug (MutBytes bb) =
-    "MutBytes \"\{debugBytesHex bb 0 (byteBlockLength bb)}\""
-
 -- # Kernel doors
 
 -- The only three exports in this module with a `ByteBlock` in their
@@ -857,8 +753,8 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "fromArrayAssumeByteDomain" ((PVar "arr")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr"))))
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
-(DTypeSig true "bytesLength" (TyFun (TyCon "Bytes") (TyCon "Int")))
-(DFunDef false "bytesLength" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
+(DTypeSig true "length" (TyFun (TyCon "Bytes") (TyCon "Int")))
+(DFunDef false "length" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "get" ((PVar "i") (PCon "Bytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "Int")) () ((im "index" ((PCon "Bytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))))
@@ -874,13 +770,13 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig false "indexOfWithinGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DFunDef false "indexOfWithinGo" ((PVar "needle") (PVar "nlen") (PVar "haystack") (PVar "pos") (PVar "lastPos")) (EIf (EBinOp ">" (EVar "pos") (EVar "lastPos")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "slice") (EVar "haystack")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "nlen"))) (EVar "needle")) (EApp (EVar "Some") (EVar "pos")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EVar "haystack")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "lastPos")))))
 (DTypeSig true "indexOfWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "indexOfWithin" ((PVar "lo") (PVar "hi") (PVar "needle") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "nlen") (EApp (EVar "bytesLength") (EVar "needle"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "lo'")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EApp (EVar "Bytes") (EVar "bb"))) (EVar "lo'")) (EBinOp "-" (EVar "hi'") (EVar "nlen")))))))
+(DFunDef false "indexOfWithin" ((PVar "lo") (PVar "hi") (PVar "needle") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EVar "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EVar "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "nlen") (EApp (EVar "length") (EVar "needle"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "lo'")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EApp (EVar "Bytes") (EVar "bb"))) (EVar "lo'")) (EBinOp "-" (EVar "hi'") (EVar "nlen")))))))
 (DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "bytesLength") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
+(DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "length") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "bytesLength") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "bytesLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "length") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "length") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EApp (EApp (EApp (EVar "slice") (EVar "haystack")) (EVar "from")) (EApp (EVar "bytesLength") (EVar "haystack")))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
+(DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EApp (EApp (EApp (EVar "slice") (EVar "haystack")) (EVar "from")) (EApp (EVar "length") (EVar "haystack")))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
@@ -923,18 +819,6 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
 (DTypeSig true "writeStdoutBytes" (TyFun (TyCon "Bytes") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DFunDef false "writeStdoutBytes" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockWriteStdout") (EVar "bb")))
-(DNewtype true "MutBytes" () "MutBytes" (TyCon "ByteBlock") ())
-(DTypeSig true "mutBytesMake" (TyFun (TyCon "Int") (TyCon "MutBytes")))
-(DFunDef false "mutBytesMake" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesMake: negative length"))) (EApp (EVar "MutBytes") (EApp (EVar "byteBlockMake") (EVar "n")))))
-(DTypeSig true "mutBytesLength" (TyFun (TyCon "MutBytes") (TyCon "Int")))
-(DFunDef false "mutBytesLength" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
-(DTypeSig true "mutBytesGet" (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "mutBytesGet" ((PVar "i") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))
-(DTypeSig true "mutBytesSet" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyCon "Unit")))))
-(DFunDef false "mutBytesSet" ((PVar "i") (PVar "v") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "v") (ELit (LInt 0))) (EBinOp ">" (EVar "v") (ELit (LInt 255)))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: value out of range 0..255"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "v")) (EVar "bb")))))
-(DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
-(DFunDef false "freeze" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
-(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "MutBytes \"")) (EApp (EVar "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
 (DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))
 (DFunDef false "fromByteBlockPrefix" ((PVar "n") (PVar "bb")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "Bytes.fromByteBlockPrefix: length out of range"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "n")) (EVar "bb")))))
 (DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "Bytes")))
@@ -952,8 +836,8 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DFunDef false "fromArrayAssumeByteDomain" ((PVar "arr")) (EApp (EVar "Bytes") (EApp (EVar "byteBlockFromIntArray") (EVar "arr"))))
 (DTypeSig true "toArray" (TyFun (TyCon "Bytes") (TyApp (TyCon "Array") (TyCon "Int"))))
 (DFunDef false "toArray" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockToIntArray") (EVar "bb")))
-(DTypeSig true "bytesLength" (TyFun (TyCon "Bytes") (TyCon "Int")))
-(DFunDef false "bytesLength" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
+(DTypeSig true "length#shadow" (TyFun (TyCon "Bytes") (TyCon "Int")))
+(DFunDef false "length#shadow" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
 (DTypeSig true "get" (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
 (DFunDef false "get" ((PVar "i") (PCon "Bytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))
 (DImpl true "Index" ((TyCon "Bytes") (TyCon "Int") (TyCon "Int")) () ((im "index" ((PCon "Bytes" (PVar "bb")) (PVar "i")) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb"))))))
@@ -969,13 +853,13 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig false "indexOfWithinGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int"))))))))
 (DFunDef false "indexOfWithinGo" ((PVar "needle") (PVar "nlen") (PVar "haystack") (PVar "pos") (PVar "lastPos")) (EIf (EBinOp ">" (EVar "pos") (EVar "lastPos")) (EVar "None") (EIf (EBinOp "==" (EApp (EApp (EApp (EMethodRef "slice") (EVar "haystack")) (EVar "pos")) (EBinOp "+" (EVar "pos") (EVar "nlen"))) (EVar "needle")) (EApp (EVar "Some") (EVar "pos")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EVar "haystack")) (EBinOp "+" (EVar "pos") (ELit (LInt 1)))) (EVar "lastPos")))))
 (DTypeSig true "indexOfWithin" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "indexOfWithin" ((PVar "lo") (PVar "hi") (PVar "needle") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "nlen") (EApp (EVar "bytesLength") (EVar "needle"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "lo'")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EApp (EVar "Bytes") (EVar "bb"))) (EVar "lo'")) (EBinOp "-" (EVar "hi'") (EVar "nlen")))))))
+(DFunDef false "indexOfWithin" ((PVar "lo") (PVar "hi") (PVar "needle") (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "n") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoLet false false (PVar "lo'") (EIf (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (ELit (LInt 0)) (EApp (EApp (EMethodRef "min") (EVar "lo")) (EVar "n")))) (DoLet false false (PVar "hi'") (EIf (EBinOp "<" (EVar "hi") (EVar "lo'")) (EVar "lo'") (EApp (EApp (EMethodRef "min") (EVar "hi")) (EVar "n")))) (DoLet false false (PVar "nlen") (EApp (EVar "length#shadow") (EVar "needle"))) (DoExpr (EIf (EBinOp "==" (EVar "nlen") (ELit (LInt 0))) (EApp (EVar "Some") (EVar "lo'")) (EApp (EApp (EApp (EApp (EApp (EVar "indexOfWithinGo") (EVar "needle")) (EVar "nlen")) (EApp (EVar "Bytes") (EVar "bb"))) (EVar "lo'")) (EBinOp "-" (EVar "hi'") (EVar "nlen")))))))
 (DTypeSig true "indexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "bytesLength") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
+(DFunDef false "indexOf" ((PVar "needle") (PVar "bytes")) (EApp (EApp (EApp (EApp (EVar "indexOfWithin") (ELit (LInt 0))) (EApp (EVar "length#shadow") (EVar "bytes"))) (EVar "needle")) (EVar "bytes")))
 (DTypeSig true "lastIndexOf" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "bytesLength") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "bytesLength") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "lastIndexOf" ((PVar "needle") (PVar "haystack")) (EIf (EBinOp "==" (EApp (EVar "length#shadow") (EVar "needle")) (ELit (LInt 0))) (EApp (EVar "Some") (EApp (EVar "length#shadow") (EVar "haystack"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (ELit (LInt 0))) (EVar "None")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "lastIndexOfGo" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyCon "Option") (TyCon "Int")))))))
-(DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EApp (EApp (EApp (EMethodRef "slice") (EVar "haystack")) (EVar "from")) (EApp (EVar "bytesLength") (EVar "haystack")))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
+(DFunDef false "lastIndexOfGo" ((PVar "needle") (PVar "haystack") (PVar "from") (PVar "acc")) (EMatch (EApp (EApp (EVar "indexOf") (EVar "needle")) (EApp (EApp (EApp (EMethodRef "slice") (EVar "haystack")) (EVar "from")) (EApp (EVar "length#shadow") (EVar "haystack")))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EApp (EVar "lastIndexOfGo") (EVar "needle")) (EVar "haystack")) (EBinOp "+" (EBinOp "+" (EVar "from") (EVar "i")) (ELit (LInt 1)))) (EApp (EVar "Some") (EBinOp "+" (EVar "from") (EVar "i")))))))
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DImpl true "Semigroup" ((TyCon "Bytes")) () ((im "append" ((PCon "Bytes" (PVar "a")) (PCon "Bytes" (PVar "b"))) (EBlock (DoLet false false (PVar "na") (EApp (EVar "byteBlockLength") (EVar "a"))) (DoLet false false (PVar "nb") (EApp (EVar "byteBlockLength") (EVar "b"))) (DoLet false false (PVar "dst") (EApp (EVar "byteBlockMake") (EBinOp "+" (EVar "na") (EVar "nb")))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "a")) (ELit (LInt 0))) (EVar "dst")) (ELit (LInt 0))) (EVar "na"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "byteBlockBlit") (EVar "b")) (ELit (LInt 0))) (EVar "dst")) (EVar "na")) (EVar "nb"))) (DoExpr (EApp (EVar "Bytes") (EVar "dst")))))))
@@ -1018,18 +902,6 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DProp false "decodeUtf8 (encodeUtf8 s) == Some s" ((pp "s" (TyCon "String"))) (EBinOp "==" (EApp (EVar "decodeUtf8") (EApp (EVar "encodeUtf8") (EVar "s"))) (EApp (EVar "Some") (EVar "s"))))
 (DTypeSig true "writeStdoutBytes" (TyFun (TyCon "Bytes") (TyEffect ("Stdout") None (TyCon "Unit"))))
 (DFunDef false "writeStdoutBytes" ((PCon "Bytes" (PVar "bb"))) (EApp (EVar "byteBlockWriteStdout") (EVar "bb")))
-(DNewtype true "MutBytes" () "MutBytes" (TyCon "ByteBlock") ())
-(DTypeSig true "mutBytesMake" (TyFun (TyCon "Int") (TyCon "MutBytes")))
-(DFunDef false "mutBytesMake" ((PVar "n")) (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesMake: negative length"))) (EApp (EVar "MutBytes") (EApp (EVar "byteBlockMake") (EVar "n")))))
-(DTypeSig true "mutBytesLength" (TyFun (TyCon "MutBytes") (TyCon "Int")))
-(DFunDef false "mutBytesLength" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "byteBlockLength") (EVar "bb")))
-(DTypeSig true "mutBytesGet" (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyApp (TyCon "Option") (TyCon "Int")))))
-(DFunDef false "mutBytesGet" ((PVar "i") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EVar "None") (EApp (EVar "Some") (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))))
-(DTypeSig true "mutBytesSet" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "MutBytes") (TyCon "Unit")))))
-(DFunDef false "mutBytesSet" ((PVar "i") (PVar "v") (PCon "MutBytes" (PVar "bb"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "v") (ELit (LInt 0))) (EBinOp ">" (EVar "v") (ELit (LInt 255)))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: value out of range 0..255"))) (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "MutBytes.mutBytesSet: index out of bounds"))) (EApp (EApp (EApp (EVar "byteBlockSetUnsafe") (EVar "i")) (EVar "v")) (EVar "bb")))))
-(DTypeSig true "freeze" (TyFun (TyCon "MutBytes") (TyCon "Bytes")))
-(DFunDef false "freeze" ((PCon "MutBytes" (PVar "bb"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EVar "bb"))))
-(DImpl true "Debug" ((TyCon "MutBytes")) () ((im "debug" ((PCon "MutBytes" (PVar "bb"))) (EBinOp "++" (EBinOp "++" (ELit (LString "MutBytes \"")) (EApp (EMethodRef "display") (EApp (EApp (EApp (EVar "debugBytesHex") (EVar "bb")) (ELit (LInt 0))) (EApp (EVar "byteBlockLength") (EVar "bb"))))) (ELit (LString "\""))))))
 (DTypeSig true "fromByteBlockPrefix" (TyFun (TyCon "Int") (TyFun (TyCon "ByteBlock") (TyCon "Bytes"))))
 (DFunDef false "fromByteBlockPrefix" ((PVar "n") (PVar "bb")) (EIf (EBinOp "||" (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp ">" (EVar "n") (EApp (EVar "byteBlockLength") (EVar "bb")))) (EApp (EVar "panic") (ELit (LString "Bytes.fromByteBlockPrefix: length out of range"))) (EApp (EVar "Bytes") (EApp (EApp (EVar "byteBlockCopyUnsafe") (EVar "n")) (EVar "bb")))))
 (DTypeSig true "adoptByteBlockUnsafe" (TyFun (TyCon "ByteBlock") (TyCon "Bytes")))

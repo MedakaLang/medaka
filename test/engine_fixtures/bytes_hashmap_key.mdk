@@ -15,10 +15,7 @@
 -- engine has to render a `Bytes` or a `HashMap` cell, and the absent key reads
 -- as -1 rather than through an `Option`.
 
--- Wildcard because a `newtype`'s TYPE name cannot be named in a selective
--- import list: `import bytes.{Bytes}` is read as a request for the
--- module-private constructor and refused.
-import bytes.*
+import bytes.{encodeUtf8, fromArrayAssumeByteDomain}
 import hash_map.{HashMap, fromList, findWithDefault, size}
 
 main =

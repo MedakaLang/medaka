@@ -18,7 +18,8 @@
    its `readbuffer-over`/`readbuffer-under`/`readbuffer-edges` cells. -}
 
 import array.{fromList}
-import bytes.{bytesLength, toArray}
+import bytes as B
+import bytes.{toArray}
 import shell.server.{
   ReadBuffer,
   readBufferAppend,
@@ -115,7 +116,7 @@ test "the live bytes are the appended bytes, in order" =
 -- 4096 is the smallest doubling of 1 that holds 3000, so the backing store is
 -- larger than the live count and `readBufferLive` must not expose the excess.
 test "the backing store is the smallest doubling that holds the live bytes" =
-  expectEqual 4096 (bytesLength (readBufferBacking filled))
+  expectEqual 4096 (B.length (readBufferBacking filled))
 
 -- Three appends of three bytes grow the store 0 -> 4 -> 8 -> 16: the second
 -- and third both overflow, so this fails if a single grow is made to serve
@@ -127,7 +128,7 @@ thrice =
   buf
 
 test "each overflowing append grows the store exactly once" =
-  expectEqual 16 (bytesLength (readBufferBacking thrice))
+  expectEqual 16 (B.length (readBufferBacking thrice))
 
 test "a partly-filled store reports only its live bytes" =
   expectEqual 9 (readBufferLen thrice)

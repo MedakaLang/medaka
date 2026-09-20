@@ -11,10 +11,13 @@ RBRACE
 NEWLINE
 IMPORT
 IDENT "bytes"
+AS
+UPPER "B"
+NEWLINE
+IMPORT
+IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
-COMMA
-IDENT "bytesLength"
 COMMA
 IDENT "fromArrayAssumeByteDomain"
 COMMA
@@ -255,7 +258,9 @@ LPAREN
 IDENT "encodeGo"
 IDENT "bs"
 LPAREN
-IDENT "bytesLength"
+UPPER "B"
+DOT
+IDENT "length"
 IDENT "bs"
 MINUS
 INT 1

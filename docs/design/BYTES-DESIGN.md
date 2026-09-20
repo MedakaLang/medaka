@@ -65,7 +65,9 @@ The full surface is three types, not one:
 - **`Bytes`** — immutable, packed. The type in this document's title, and the
   only one B1 builds.
 - **`MutBytes`** — mutable, packed, fixed length. The crypto scratch buffer:
-  a hash or cipher state that is overwritten in place and never resized.
+  a hash or cipher state that is overwritten in place and never resized. It
+  lives in `stdlib/mut_bytes.mdk`, not `stdlib/bytes.mdk`: one module cannot
+  export two `length`s, so each type carries the bare names in its own.
 - **`ByteBuf`** — growable, written in pure Medaka over the other two, with
   zero new intrinsics.
 
@@ -154,9 +156,12 @@ The same reasoning is why `Bytes` has no element type parameter, and therefore
 cannot implement `Foldable`, `Mappable` or `Filterable` — those interfaces
 range over a container of some element type, and `Bytes` is not one. This is a
 kind-level impossibility rather than a decision to revisit, and it is why the
-byte count is exported as `bytesLength` rather than `length`: `length` is
-`Foldable`'s method and the prelude exports it, so a bare `length` here would
-be an ambiguous occurrence at every import site.
+byte count is an ordinary export rather than a method. It was first exported
+as `bytesLength`, because a bare `length` under `import bytes.*` was an
+ambiguous occurrence; the export is now `length`, and a wildcard import of
+`bytes` is no longer a supported form. Named in an import list `length`
+shadows the prelude's method for the whole importing module, so a module that
+uses both reaches this one through an alias (`import bytes as B`).
 
 ---
 
@@ -168,7 +173,7 @@ be an ambiguous occurrence at every import site.
 export newtype Bytes = Bytes (Array Int)   -- constructor is module-private
 export fromArray     : Array Int -> Bytes
 export toArray       : Bytes -> Array Int
-export bytesLength   : Bytes -> Int
+export length        : Bytes -> Int         -- was `bytesLength` until B5
 export get           : Int -> Bytes -> Option Int
 export impl Index Bytes Int Int            -- `b[i]`, panics out of range
 export impl Eq Bytes
@@ -240,7 +245,7 @@ its input, not by convenience:
   broken promise truncates (masks to the low eight bits), because a packed
   byte cannot hold `300`. This door is **transitional**: its own doc block
   names B6 as its removal, alongside `toUtf8`/`fromUtf8`.
-- **A positional write** — `MutBytes`'s `mutBytesSet` **panics** on an
+- **A positional write** — `mut_bytes`'s `setInPlace` **panics** on an
   out-of-range value, exactly as `array.setInPlace` already panics on an
   out-of-range index. Ruling 3 made this split for the index dimension; this
   extends it to the value dimension. An `Option`-returning write was

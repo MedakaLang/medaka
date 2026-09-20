@@ -196,7 +196,7 @@ An immutable string of bytes.
 - [`fromArray`](bytes.md#fromarray)
 - [`fromArrayAssumeByteDomain`](bytes.md#fromarrayassumebytedomain)
 - [`toArray`](bytes.md#toarray)
-- [`bytesLength`](bytes.md#byteslength)
+- [`length`](bytes.md#length)
 - [`get`](bytes.md#get)
 - [`sliceClamped`](bytes.md#sliceclamped)
 - [`elemIndex`](bytes.md#elemindex)
@@ -209,12 +209,6 @@ An immutable string of bytes.
 - [`decodeUtf8`](bytes.md#decodeutf8)
 - [`decodeUtf8Lossy`](bytes.md#decodeutf8lossy)
 - [`writeStdoutBytes`](bytes.md#writestdoutbytes)
-- [`MutBytes`](bytes.md#mutbytes)
-- [`mutBytesMake`](bytes.md#mutbytesmake)
-- [`mutBytesLength`](bytes.md#mutbyteslength)
-- [`mutBytesGet`](bytes.md#mutbytesget)
-- [`mutBytesSet`](bytes.md#mutbytesset)
-- [`freeze`](bytes.md#freeze)
 - [`fromByteBlockPrefix`](bytes.md#frombyteblockprefix)
 - [`adoptByteBlockUnsafe`](bytes.md#adoptbyteblockunsafe)
 - [`lendByteBlockUnsafe`](bytes.md#lendbyteblockunsafe)
@@ -639,6 +633,20 @@ Floating-point math and a few integer helpers.
 - [`gcd`](math.md#gcd)
 - [`lcm`](math.md#lcm)
 - [`powInt`](math.md#powint)
+
+## [`mut_bytes`](mut_bytes.md)
+
+A mutable string of bytes, fixed at its allocated length.
+
+- [`MutBytes`](mut_bytes.md#mutbytes)
+- [`make`](mut_bytes.md#make)
+- [`length`](mut_bytes.md#length)
+- [`get`](mut_bytes.md#get)
+- [`setInPlace`](mut_bytes.md#setinplace)
+- [`fill`](mut_bytes.md#fill)
+- [`blit`](mut_bytes.md#blit)
+- [`freeze`](mut_bytes.md#freeze)
+- [`thaw`](mut_bytes.md#thaw)
 
 ## [`net`](net.md)
 

@@ -1,6 +1,6 @@
 {- | Pure Store and end-to-end HTTP/XRPC composition tests. -}
 
-import bytes.*
+import bytes.{Bytes, encodeUtf8, fromArray}
 import http.{
   Header,
   HttpParseFailure(..),

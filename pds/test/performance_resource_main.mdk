@@ -1,7 +1,10 @@
 {- | Native scaling and resource-limit probe for the Phase 1 MST/CAR gates. -}
 
 import array.{drop}
-import bytes.*
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
+import mut_bytes as MB
+import mut_bytes.{MutBytes}
 import hex.{decode}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode, carEncode}
@@ -494,17 +497,17 @@ inboundRequest bodyBytes =
   -- `Array Int` of the same length would box a machine word per byte before
   -- `fromArray` packed it, and the probe would then be measuring its own
   -- fixture.
-  let bytes = freeze (fillA (mutBytesMake bodyBytes) 0)
+  let bytes = MB.freeze (fillA (MB.make bodyBytes) 0)
   encodeUtf8
-      "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (bytesLength bytes)}\r\n\r\n"
+      "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
     ++ bytes
 
 fillA : MutBytes -> Int -> MutBytes
 fillA mb i =
-  if i >= mutBytesLength mb then
+  if i >= MB.length mb then
     mb
   else
-    let () = mutBytesSet i 0x41 mb
+    let () = MB.setInPlace i 0x41 mb
     fillA mb (i + 1)
 
 inboundStatusEnd : Array Int -> Int -> Int

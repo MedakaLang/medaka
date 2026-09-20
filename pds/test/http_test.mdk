@@ -53,7 +53,8 @@ import http.{
   serializeResponse,
 }
 import test.{expectEqual, expectTrue}
-import bytes.*
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromArray}
 import string.{contains, toUtf8}
 
 isErr : Result e a -> Bool
@@ -106,7 +107,7 @@ requestWithBody : String -> Bytes -> Request
 requestWithBody contentType body =
   mustRequest
     (encodeUtf8
-        "POST /xrpc/example HTTP/1.1\r\nHost: pds.example\r\nContent-Type: \{contentType}\r\nContent-Length: \{intToString (bytesLength body)}\r\n\r\n"
+        "POST /xrpc/example HTTP/1.1\r\nHost: pds.example\r\nContent-Type: \{contentType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
       ++ body)
 
 bodyRejects : String -> Request -> Bool
@@ -136,7 +137,7 @@ test "origin-form HTTP/1.1 request parses without a body" =
     (requestMethod request == "GET"
       && requestTarget request
         == "/xrpc/com.atproto.server.describeServer?detail=true"
-      && bytesLength (requestBody request) == 0
+      && B.length (requestBody request) == 0
       && requestKeepAlive request)
 
 test "fixed-length framing preserves raw binary body and ordered duplicates" =
@@ -662,7 +663,7 @@ scanAgrees input = match scanRequestBoundary input 0
   HttpFrameFailed _ => isErr (parseRequest input)
   HttpFramedAt at =>
     at >= 0
-      && at <= bytesLength input
+      && at <= B.length input
       && (match (parseRequestAt input 0 at, parseRequest (prefix input at))
         (Ok viaFrame, Ok viaPrefix) => sameRequest viaFrame viaPrefix
         _ => False)
@@ -737,7 +738,7 @@ corpus = [
 
 everyProperPrefixNeedsMore : Bytes -> Int -> Bool
 everyProperPrefixNeedsMore input size =
-  if size >= bytesLength input then
+  if size >= B.length input then
     True
   else match scanRequestBoundary (prefix input size) 0
     HttpNeedMore => everyProperPrefixNeedsMore input (size + 1)
@@ -752,7 +753,7 @@ feedOneByteAtATime : Bytes -> Bool
 feedOneByteAtATime input =
   everyProperPrefixNeedsMore input 0
     && (match scanRequestBoundary input 0
-      HttpFramedAt at => at == bytesLength input && isOk (parseRequest input)
+      HttpFramedAt at => at == B.length input && isOk (parseRequest input)
       _ => False)
 
 test "scanner and one-shot parser agree across the whole HTTP corpus" =
@@ -772,7 +773,7 @@ test "a definitively malformed prefix is rejected rather than left pending" =
 test "pipelined requests are framed one at a time from a single buffer" =
   match (
     scanRequestBoundary pipelined 0,
-    scanRequestBoundary pipelined (bytesLength simpleGet),
+    scanRequestBoundary pipelined (B.length simpleGet),
   )
     (HttpFramedAt first, HttpFramedAt second) => match (
       parseRequestAt pipelined 0 first,
@@ -780,8 +781,8 @@ test "pipelined requests are framed one at a time from a single buffer" =
     )
       (Ok head, Ok tail) =>
         expectTrue
-          (first == bytesLength simpleGet
-            && second == bytesLength pipelined
+          (first == B.length simpleGet
+            && second == B.length pipelined
             && requestMethod head == "GET"
             && requestMethod tail == "POST"
             && requestBody tail == mustBytes [|0, 128, 255|])
@@ -791,14 +792,14 @@ test "pipelined requests are framed one at a time from a single buffer" =
 test "a chunked request frames at its trailer terminator, not the buffer end" =
   let stream = chunked ++ simpleGet
   match scanRequestBoundary stream 0
-    HttpFramedAt at => expectEqual at (bytesLength chunked)
+    HttpFramedAt at => expectEqual at (B.length chunked)
     _ => expectTrue False
 
 test "trailing bytes frame the first request instead of failing the buffer" =
   let stream = simpleGet ++ encodeUtf8 "x"
   match scanRequestBoundary stream 0
     HttpFramedAt at =>
-      expectTrue (at == bytesLength simpleGet && isErr (parseRequest stream))
+      expectTrue (at == B.length simpleGet && isErr (parseRequest stream))
     _ => expectTrue False
 
 -- A resumable scan and a whole-buffer scan are the same framer, so they have to
@@ -825,7 +826,7 @@ resumeAgreesGo input start step size scan =
   let buf = prefix input size
   let (resumed, next) = scanRequestBoundaryFrom buf start scan
   let agrees = sameFrame resumed (scanRequestBoundary buf start)
-  if size >= bytesLength input then
+  if size >= B.length input then
     agrees
   else
     agrees
@@ -833,12 +834,12 @@ resumeAgreesGo input start step size scan =
         input
         start
         step
-        (min (bytesLength input) (size + step))
+        (min (B.length input) (size + step))
         next
 
 resumeAgrees : Int -> Int -> Bytes -> Bool
 resumeAgrees start step input =
-  resumeAgreesGo input start step (min start (bytesLength input)) httpScanStart
+  resumeAgreesGo input start step (min start (B.length input)) httpScanStart
 
 allResumeAgree : Int -> List Bytes -> Bool
 allResumeAgree _ [] = True
@@ -872,9 +873,9 @@ test "a resumed scan matches a whole-buffer scan at other increments" =
 
 test "a resumed scan matches a whole-buffer scan from a pipelined offset" =
   expectTrue
-    (resumeAgrees (bytesLength simpleGet) 1 pipelined
-      && resumeAgrees (bytesLength simpleGet) 1 (pipelined ++ chunked)
-      && resumeAgrees (bytesLength simpleGet) 3 (pipelined ++ chunked))
+    (resumeAgrees (B.length simpleGet) 1 pipelined
+      && resumeAgrees (B.length simpleGet) 1 (pipelined ++ chunked)
+      && resumeAgrees (B.length simpleGet) 3 (pipelined ++ chunked))
 
 -- A caller that accumulates into a backing array with spare capacity hands the
 -- scanner more bytes than it has received. Only the first `avail` bytes are
@@ -895,14 +896,10 @@ test "a body short of its content length is pending, padding notwithstanding" =
   let padded = tenByteBody ++ mustBytes (arrayMakeWith 7 (_ => 0))
   match (
     fst
-      (scanRequestBoundaryWithin
-        padded
-        (bytesLength tenByteBody)
-        0
-        httpScanStart),
+      (scanRequestBoundaryWithin padded (B.length tenByteBody) 0 httpScanStart),
     scanRequestBoundary padded 0,
   )
-    (HttpNeedMore, HttpFramedAt at) => expectEqual at (bytesLength padded)
+    (HttpNeedMore, HttpFramedAt at) => expectEqual at (B.length padded)
     _ => expectTrue False
 
 -- Scanning a padded backing array one received byte at a time has to agree with
@@ -918,7 +915,7 @@ availAgreesGo padded live avail scan =
 
 availAgrees : Bytes -> Bool
 availAgrees input =
-  availAgreesGo (input ++ slackBytes) (bytesLength input) 0 httpScanStart
+  availAgreesGo (input ++ slackBytes) (B.length input) 0 httpScanStart
 
 allAvailAgree : List Bytes -> Bool
 allAvailAgree [] = True

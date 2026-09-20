@@ -7,22 +7,20 @@
 -- The three engines agree on the values; what the array-freedom claim rests on
 -- is the emitted IR for `buildBytes`/`buildGo`, checked in the slice report.
 
--- Wildcard because a `newtype`'s TYPE name cannot be named in a selective
--- import list: `import bytes.{MutBytes}` is read as a request for the
--- module-private constructor and refused.  `stdlib/hex.mdk` imports this
--- module the same way.
-import bytes.*
+import bytes as B
+import bytes.{Bytes}
+import mut_bytes.{MutBytes, freeze, make, setInPlace}
 
 buildGo : MutBytes -> Int -> Int -> Unit
 buildGo mb i n
   | i >= n = ()
   | otherwise =
-    let _ = mutBytesSet i (i * 3) mb
+    let _ = setInPlace i (i * 3) mb
     buildGo mb (i + 1) n
 
 buildBytes : Int -> Bytes
 buildBytes n =
-  let mb = mutBytesMake n
+  let mb = make n
   let _ = buildGo mb 0 n
   freeze mb
 
@@ -33,4 +31,4 @@ sumGo b i n
 
 main =
   let b = buildBytes 16
-  (bytesLength b, b[0], b[5], b[15], sumGo b 0 (bytesLength b))
+  (B.length b, b[0], b[5], b[15], sumGo b 0 (B.length b))

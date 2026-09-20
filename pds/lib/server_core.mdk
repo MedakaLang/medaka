@@ -21,7 +21,7 @@ import http.{
   Response,
   serializeResponse,
 }
-import bytes.*
+import bytes.{Bytes, toArray}
 import hex as Hex
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
