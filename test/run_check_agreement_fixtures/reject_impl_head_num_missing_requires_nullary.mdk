@@ -1,0 +1,15 @@
+-- A nullary method result carries the impl head's `b`, so its numeric literal must
+-- not default that shared root to Int. The body instead owes an explicit `Num b`
+-- prerequisite on the impl.
+data Acc b = MkAcc b deriving (Display)
+
+impl Semigroup (Acc b) where
+  append x _ = x
+
+impl Monoid (Acc b) where
+  empty = MkAcc 0
+
+value : Acc Float
+value = empty
+
+main = println value
