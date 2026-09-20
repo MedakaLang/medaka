@@ -1,6 +1,7 @@
 {- | Direct unit coverage for `ReadBuffer`'s capacity arithmetic
-   (`pds/shell/server.mdk`) and for the `vector.pushArray`/`vector.rawParts`
-   it is built from (#2859).
+   (`pds/shell/server.mdk`), for the `vector.pushArray`/`vector.rawParts` it
+   is built from (#2859), and for the process-wide budget that bounds those
+   buffers in aggregate (#2951).
 
    The accumulation buffer's only other exercise is a live 5 MiB upload in
    `pds/test/serve_e2e.sh` (case 4d), which needs a socket, a server process
@@ -19,15 +20,31 @@
 
 import array.{fromList}
 import bytes.{bytesLength, toArray}
+import lib.resource_limits.{maxInFlightRequestBytes}
 import shell.server.{
+  BufferCensus,
+  BufferWaiter,
+  bufferedBytes,
+  chargeReadBuffer,
+  claimBufferBytes,
+  enqueueBufferBytes,
+  maxQueuedBufferedReads,
+  newBufferCensus,
   ReadBuffer,
   readBufferAppend,
   readBufferBacking,
+  readBufferCharged,
+  readBufferFrom,
   readBufferLen,
   readBufferLive,
   readBufferNew,
+  releaseBufferBytes,
+  releaseReadBuffer,
+  retireReadBuffer,
+  settleBufferedRead,
+  waitingReads,
 }
-import test.{expectAll, expectEqual}
+import test.{expectAll, expectEqual, expectTrue}
 import vector.{capacity, fromArray, get, new, pushArray, rawParts}
 
 -- # `vector.pushArray`/`vector.rawParts` directly
@@ -136,3 +153,145 @@ test "a partly-filled store's live bytes carry no spare capacity" =
   expectEqual
     (fromList [0, 1, 2, 3, 4, 5, 6, 7, 8])
     (toArray (readBufferLive thrice))
+
+-- # The process-wide buffer budget (#2951)
+
+{- | `maxInFlightRequestBytes` bounds what every connection holds buffered
+   between them, which no per-connection ceiling can: `maxHttpRequestBytes`
+   grades one buffer and `maxConcurrentConnections` counts connections, and
+   256 of the first is a gibibyte and a half against `pds/pds.service`'s
+   `MemoryMax=512M`.
+
+   What is asserted below is the admission decision itself, which is pure:
+   what a claim charges, what a full budget refuses, what a full queue refuses
+   outright, what order a release hands headroom on in, and that a connection
+   gives back every byte it charged. The parking around that decision
+   (`admitBufferBytes`) needs a scheduler and a live socket, so the
+   concurrency claim itself is graded in `pds/test/serve_e2e.sh`. -}
+
+mustWaiter : Option BufferWaiter -> BufferWaiter
+mustWaiter queued =
+  optionOrPanic
+    "read_buffer_test: the queue refused a place it had room for"
+    queued
+
+queueRefused : Option BufferWaiter -> Bool
+queueRefused None = True
+queueRefused (Some _) = False
+
+-- | `n` further reads queued for headroom, each asking for the same amount.
+queueReads : BufferCensus -> Int -> Int -> Unit
+queueReads census n bytes =
+  fold (_ _ => discard (enqueueBufferBytes census bytes)) () [1..=n]
+
+discard : Option BufferWaiter -> Unit
+discard _ = ()
+
+test "a claim within the budget is charged for exactly what it took" =
+  let census = newBufferCensus ()
+  let took = claimBufferBytes census 4096
+  expectAll [expectTrue took, expectEqual 4096 (bufferedBytes census)]
+
+test "a claim past the budget is refused and charges nothing" =
+  let census = newBufferCensus ()
+  let filledBudget = claimBufferBytes census maxInFlightRequestBytes
+  let past = claimBufferBytes census 1
+  expectAll [
+    expectTrue filledBudget,
+    expectTrue (not past),
+    expectEqual maxInFlightRequestBytes (bufferedBytes census),
+  ]
+
+-- The refusal is not the end of it: the read joins the queue, and the release
+-- that frees enough headroom charges the waiter BEFORE it runs again, so
+-- nothing arriving in between can take the bytes ahead of it.
+test "a read refused by a full budget is granted once headroom is released" =
+  let census = newBufferCensus ()
+  let filledBudget = claimBufferBytes census maxInFlightRequestBytes
+  let refused = claimBufferBytes census 4096
+  let waiter = mustWaiter (enqueueBufferBytes census 4096)
+  let queuedBefore = waitingReads census
+  let () = releaseBufferBytes census 4096
+  let granted = settleBufferedRead census waiter
+  expectAll [
+    expectTrue filledBudget,
+    expectTrue (not refused),
+    expectEqual 1 queuedBefore,
+    expectTrue granted,
+    expectEqual 0 (waitingReads census),
+    expectEqual maxInFlightRequestBytes (bufferedBytes census),
+  ]
+
+-- The queue is bounded as well as the budget: a waiter costs a parked task
+-- and the chunk it has already read, so past `maxQueuedBufferedReads` of them
+-- a further read is told now rather than held.
+test "a read past a full budget and a full queue is refused outright" =
+  let census = newBufferCensus ()
+  let filledBudget = claimBufferBytes census maxInFlightRequestBytes
+  let () = queueReads census maxQueuedBufferedReads 4096
+  let queued = waitingReads census
+  let past = enqueueBufferBytes census 4096
+  expectAll [
+    expectTrue filledBudget,
+    expectEqual maxQueuedBufferedReads queued,
+    expectTrue (queueRefused past),
+  ]
+
+-- A waiter whose wait ran out leaves the queue on its own settle, so the next
+-- release hands headroom to the read behind it rather than to one that has
+-- already been refused.
+test "a waiter that gave up frees its place and takes no headroom" =
+  let census = newBufferCensus ()
+  let filledBudget = claimBufferBytes census maxInFlightRequestBytes
+  let first = mustWaiter (enqueueBufferBytes census 4096)
+  let second = mustWaiter (enqueueBufferBytes census 4096)
+  let abandoned = settleBufferedRead census first
+  let () = releaseBufferBytes census 4096
+  let secondGranted = settleBufferedRead census second
+  expectAll [
+    expectTrue filledBudget,
+    expectTrue (not abandoned),
+    expectTrue secondGranted,
+    expectEqual 0 (waitingReads census),
+  ]
+
+-- Strictly in order: a release too small for the head of the queue grants
+-- nobody rather than skipping past it to the smaller read behind it, which
+-- would leave a large read waiting out its deadline beside headroom it was
+-- never offered.
+test "a release too small for the head of the queue grants nobody" =
+  let census = newBufferCensus ()
+  let filledBudget = claimBufferBytes census maxInFlightRequestBytes
+  let head = mustWaiter (enqueueBufferBytes census 8192)
+  let behind = mustWaiter (enqueueBufferBytes census 1024)
+  let () = releaseBufferBytes census 1024
+  let headGranted = settleBufferedRead census head
+  let behindGranted = settleBufferedRead census behind
+  expectAll [
+    expectTrue filledBudget,
+    expectTrue (not headGranted),
+    expectTrue (not behindGranted),
+  ]
+
+-- The per-connection charge and the process-wide total are one number seen
+-- twice. A kept-alive connection's buffer is REPLACED by a rebased successor
+-- between requests, so the charge has to survive that replacement or the
+-- budget would shrink by one request's bytes per request served.
+test "a connection gives back every byte it charged, across a rebase" =
+  let census = newBufferCensus ()
+  let buf = readBufferNew ()
+  let took = claimBufferBytes census liveCount
+  let () = chargeReadBuffer buf liveCount
+  let () =
+    fold (_ k => readBufferAppend (chunkAt k) buf) () [0..=chunkCount - 1]
+  let rest = readBufferFrom 1200 buf
+  let () = releaseReadBuffer census buf 1200
+  let afterRebase = bufferedBytes census
+  let () = retireReadBuffer census rest
+  expectAll [
+    expectTrue took,
+    expectEqual (liveCount - 1200) afterRebase,
+    expectEqual (liveCount - 1200) (readBufferLen rest),
+    expectEqual 0 (bufferedBytes census),
+    expectEqual 0 (readBufferCharged buf),
+  ]

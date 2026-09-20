@@ -10,7 +10,9 @@
    `max*` and `check*` exports. The OUTBOUND direction — a response received
    from an off-box appview — is untrusted input by the same argument. Its
    decoded ceilings are compatibility aliases of `stdlib/http.mdk`'s shared
-   codec; only the PDS wire-accumulation ceiling below remains local policy. -}
+   codec; only the two PDS wire-accumulation ceilings below remain local
+   policy — one per outbound call, one across every inbound connection at
+   once, neither of which a codec grading one message can express. -}
 
 import http as H
 
@@ -362,3 +364,31 @@ maxHttpClientWireBytes =
     + maxHttpClientHeaderBytes
     + maxHttpClientBodyBytes
     + maxHttpClientChunks * 16
+
+{- | How many bytes of inbound request every connection on this server may hold
+   buffered at once, summed across all of them (#2951).
+
+   The inbound counterpart of `maxHttpClientWireBytes` above, and here for the
+   same reason: `stdlib/http.mdk`'s `maxHttpRequestBytes` grades ONE arriving
+   request at six mebibytes, and a ceiling on their sum is not a question any
+   codec grading one message can be asked. Neither is it one the socket layer's
+   own ceilings answer — `maxConcurrentConnections` bounds the connections at
+   256 and `maxHttpRequestBytes` bounds each one's buffer, but nothing bounded
+   their product, which is about 1.5 gibibytes of live buffer against
+   `pds/pds.service`'s `MemoryMax=512M`. What that overrun costs is not the
+   caller's own request: one cgroup covers the whole unit, so the kill takes
+   every account's connections and every open subscription with it.
+
+   Thirty-two mebibytes is twice what all 256 connections holding one
+   `readChunkBytes` read each would take (16 MiB), so ordinary request traffic
+   does not reach it, and it still admits five concurrent requests at the full
+   per-request ceiling. Its own worst case is a doubling above itself, since
+   the buffer holding the bytes grows by doubling: 64 MiB resident, an eighth
+   of `MemoryMax`.
+
+   It bounds LIVE buffered bytes, which is the only quantity the socket side
+   has: a declared `Content-Length` is a header the framer has not graded
+   yet, and a chunked body declares nothing at all. -}
+export
+maxInFlightRequestBytes : Int
+maxInFlightRequestBytes = 33554432
