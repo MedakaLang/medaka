@@ -386,9 +386,15 @@ maxHttpClientWireBytes =
    the buffer holding the bytes grows by doubling: 64 MiB resident, an eighth
    of `MemoryMax`.
 
-   It bounds LIVE buffered bytes, which is the only quantity the socket side
-   has: a declared `Content-Length` is a header the framer has not graded
-   yet, and a chunked body declares nothing at all. -}
+   It bounds what a connection HOLDS, which counts a reservation as well as a
+   live byte: the end position of a `Content-Length` body is fixed the instant
+   its header section terminates, and a connection that takes the whole of it
+   up front is one that never comes back to the budget for the rest of that
+   body — which is what keeps a saturated budget a wait rather than a set of
+   connections each holding part of a body and waiting for the other parts. A
+   chunked body declares nothing, so it reserves `maxHttpRequestBytes`, the
+   most it could reach. `pds/shell/server.mdk`'s `readBufferTarget` is where
+   that choice is made. -}
 export
 maxInFlightRequestBytes : Int
 maxInFlightRequestBytes = 33554432

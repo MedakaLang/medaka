@@ -20,6 +20,12 @@
 
 import array.{fromList}
 import bytes.{bytesLength, toArray}
+import http.{
+  HttpScan,
+  httpScanStart,
+  maxHttpBodyBytes,
+  scanRequestBoundaryWithin,
+}
 import lib.resource_limits.{maxInFlightRequestBytes}
 import shell.server.{
   BufferCensus,
@@ -38,12 +44,15 @@ import shell.server.{
   readBufferLen,
   readBufferLive,
   readBufferNew,
+  readBufferTarget,
+  readSizeFor,
   releaseBufferBytes,
   releaseReadBuffer,
   retireReadBuffer,
   settleBufferedRead,
   waitingReads,
 }
+import string.{toUtf8}
 import test.{expectAll, expectEqual, expectTrue}
 import vector.{capacity, fromArray, get, new, pushArray, rawParts}
 
@@ -294,4 +303,148 @@ test "a connection gives back every byte it charged, across a rebase" =
     expectEqual (liveCount - 1200) (readBufferLen rest),
     expectEqual 0 (bufferedBytes census),
     expectEqual 0 (readBufferCharged buf),
+  ]
+
+-- # One admission per body, not one per chunk (#2951)
+
+{- | A budget charged per arriving chunk admits a connection PART way into its
+   body and then makes it queue for the rest. Once enough connections are in
+   that state to saturate the budget, every holder is also a waiter and
+   nothing can drain: measured live against the per-chunk shape, seven
+   concurrent 5 MiB uploads cost six of them a reset with no response, and a
+   40 KB `GET` beside them 4.876 s where it had cost 0.003 s.
+
+   What replaced it is one admission per body, sized by `readBufferTarget`
+   from the end position the header section already fixed. The cells below
+   assert the two halves of that: the target does not move once a fixed-length
+   body's head has framed, so an admitted connection never comes back; and a
+   herd that saturates the budget leaves holders that are not waiters, which
+   is the state the per-chunk shape could not reach. -}
+
+-- | The declared body every upload below carries: the largest one the framer
+-- accepts, and so the largest `readBufferTarget` will ever reserve for and
+-- the fewest of which saturate the budget. A head declaring more than this is
+-- refused where it is framed and never reaches the body phase at all.
+declaredBody : Int
+declaredBody = maxHttpBodyBytes
+
+-- | The head of a `POST` declaring `declared` body bytes. `Host` is not
+-- optional: `validateHost` refuses a head without one, and a refused head
+-- never reaches the body phase this is built to reach.
+uploadHead : Int -> Array Int
+uploadHead declared =
+  toUtf8
+    "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.test\r\nContent-Length: \{intToString declared}\r\n\r\n"
+
+headBytes : Int
+headBytes = arrayLength (uploadHead declaredBody)
+
+-- | How many such uploads the budget holds at once. Derived rather than
+-- written down: the arithmetic is what the cells below are about, and a
+-- hand-typed count would stop matching either constant the moment one moved.
+herdSize : Int
+herdSize = maxInFlightRequestBytes / (headBytes + declaredBody)
+
+{- | A connection that has delivered its head and `delivered` body bytes: the
+   buffer holding them, and the scan over it that `readBufferTarget` reads.
+
+   The rest of the body is never materialized. That is the property under
+   test: the reservation comes from the DECLARED length, which is settled
+   before a single body byte beyond these has arrived. -}
+upload : Int -> Int -> (ReadBuffer, HttpScan)
+upload declared delivered =
+  let buf = readBufferNew ()
+  let () = readBufferAppend (uploadHead declared) buf
+  let () = readBufferAppend (arrayMakeWith delivered (_ => 97)) buf
+  let (_, scan) =
+    scanRequestBoundaryWithin
+      (readBufferBacking buf)
+      (readBufferLen buf)
+      0
+      httpScanStart
+  (buf, scan)
+
+{- | One connection's whole trip through the budget: its head charged the way
+   the header phase charges it, then ONE claim for everything
+   `readBufferTarget` says its declared body still needs.
+
+   `False` means that claim did not fit, and the connection is then holding
+   its head and not one body byte, which is what lets it be told 503 rather
+   than reset part way through an upload. -}
+admitUpload : BufferCensus -> ReadBuffer -> HttpScan -> Bool
+admitUpload census buf scan =
+  if not (claimBufferBytes census headBytes) then
+    False
+  else
+    let () = chargeReadBuffer buf headBytes
+    let owed = readBufferTarget scan buf - readBufferCharged buf
+    if claimBufferBytes census owed then
+      let () = chargeReadBuffer buf owed
+      True
+    else
+      False
+
+-- | How many of `count` fresh uploads the budget admitted, in order.
+admitHerd : BufferCensus -> Int -> Int
+admitHerd census count =
+  fold
+    (taken _ =>
+      let (buf, scan) = upload declaredBody 0
+      if admitUpload census buf scan then taken + 1 else taken)
+    0
+    [1..=count]
+
+test "an admitted fixed-length body never asks the budget again" =
+  let census = newBufferCensus ()
+  let (buf, scan) = upload declaredBody 0
+  let admitted = admitUpload census buf scan
+  let charged = readBufferCharged buf
+  -- The same connection four thousand body bytes further on: its target has
+  -- not moved, so what it still owes the budget is nothing.
+  let (later, laterScan) = upload declaredBody 4096
+  expectAll [
+    expectTrue admitted,
+    expectEqual (headBytes + declaredBody) charged,
+    expectEqual charged (readBufferTarget laterScan later),
+    expectEqual (headBytes + declaredBody) (bufferedBytes census),
+  ]
+
+-- A read inside a fixed-length body asks for no more than that body still
+-- needs, so nothing past the request's own last byte is buffered against its
+-- reservation and a pipelined successor waits in the socket for the read that
+-- frames it.
+test "a read inside a fixed-length body is capped at what the body still needs" =
+  let (buf, scan) = upload 24 8
+  expectEqual 16 (readSizeFor scan buf)
+
+{- | The herd (#2951). `herdSize` uploads fill the budget, one more does not
+   fit, and the one that does not fit is holding its head alone: it queues for
+   the whole of its body rather than for the remainder of a body it was
+   already part way into.
+
+   The discriminating assertion is `expectEqual 1 stuck` beside `herdSize`
+   holders. Under the per-chunk shape every one of these connections would
+   have been granted its first chunks and then queued for the rest, so the
+   waiter count would have been the whole herd and the release below would
+   never have come. -}
+test "a herd that saturates the budget leaves holders that are not waiters" =
+  let census = newBufferCensus ()
+  let taken = admitHerd census herdSize
+  let (late, lateScan) = upload declaredBody 0
+  let gotLate = admitUpload census late lateScan
+  let owed = readBufferTarget lateScan late - readBufferCharged late
+  let waiter = mustWaiter (enqueueBufferBytes census owed)
+  let stuck = waitingReads census
+  -- The first upload's reservation covered its whole body, so it reached its
+  -- own end and gave everything back. Nothing it did on the way there needed
+  -- the budget.
+  let () = releaseBufferBytes census (headBytes + declaredBody)
+  let granted = settleBufferedRead census waiter
+  expectAll [
+    expectEqual herdSize taken,
+    expectTrue (not gotLate),
+    expectEqual headBytes (readBufferCharged late),
+    expectEqual 1 stuck,
+    expectTrue granted,
+    expectEqual 0 (waitingReads census),
   ]
