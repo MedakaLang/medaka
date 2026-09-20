@@ -30,7 +30,7 @@ import fs.{mkdirAll}
 import hex.{decode, encode}
 import list.{lookup, take}
 import string.{toUtf8}
-import test.{Expectation(..), expectEqual, expectTrue}
+import test.{Expectation(..), expectEach, expectEqual, expectFalse, expectTrue}
 import test_process.{scratchDir}
 import lib.cid.{cidToString}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
@@ -175,8 +175,11 @@ test "a name that nobody wrote is reported rather than skipped" =
     Err _ => Pass "a rejection" "a rejection"
     Ok _ => Fail "an unrecognized name parsed" "a rejection" "a pair"
 
-test "the first sequence number leaves zero free as the empty cursor" =
-  expectTrue (eventLogFirstSeq == 1 && eventLogNextSeq 1 == 2)
+test "the first sequence number leaves zero free as the empty cursor" = expectEach
+  [
+    ("eventLogFirstSeq == 1", expectEqual 1 eventLogFirstSeq),
+    ("eventLogNextSeq 1 == 2", expectEqual 2 (eventLogNextSeq 1)),
+  ]
 
 -- # Cursor boundaries
 
@@ -224,8 +227,10 @@ test "the window partitions a listing without losing or reordering a row" =
 rowName : (Int, Int, String) -> String
 rowName (_, _, name) = name
 
-test "a sweep is due on every interval-th entry and on no other" =
-  expectTrue (eventLogSweepsAt 256 && not (eventLogSweepsAt 255))
+test "a sweep is due on every interval-th entry and on no other" = expectEach [
+  ("eventLogSweepsAt 256", expectTrue (eventLogSweepsAt 256)),
+  ("not (eventLogSweepsAt 255)", expectFalse (eventLogSweepsAt 255)),
+]
 
 -- # The log on disk
 
@@ -474,7 +479,11 @@ test "a sweep removes exactly the entries the window no longer admits" =
     Err message => Fail message "two entries dropped" "an error"
     Ok dropped =>
       let after = mustSeqs (eventLogRead dir 0)
-      expectTrue (before == [1, 2, 3] && dropped == 2 && after == [3])
+      expectEach [
+        ("before == [1, 2, 3]", expectEqual [1, 2, 3] before),
+        ("dropped == 2", expectEqual 2 dropped),
+        ("after == [3]", expectEqual [3] after),
+      ]
 
 -- # An append does not rewrite the log
 

@@ -22,7 +22,7 @@
    This file uses the BOUNDS-CHECKED public array API (`arr[i]`,
    `arr[i] := v`, `Array.setInPlace`) — no restricted internal externs. -}
 
-import test.{expectEqual, expectTrue, expectFalse}
+import test.{expectEach, expectEqual, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
 import array as A
 import lib.scalar.{
@@ -224,10 +224,14 @@ test "fixed-control select visits both choices without changing their values" =
       samples
       samples2)
 
-test "fixed-control negation agrees with scalar negation, including zero" =
-  expectTrue
-    (scEqual (scNegateCt scZero) scZero
-      && all (a => scEqual (scNegateCt a) (scNegate a)) samples)
+test "fixed-control negation agrees with scalar negation, including zero" = expectEach
+  [
+    ("scNegateCt 0 = 0", expectTrue (scEqual (scNegateCt scZero) scZero)),
+    (
+      "scNegateCt matches scNegate over samples",
+      expectTrue (all (a => scEqual (scNegateCt a) (scNegate a)) samples),
+    ),
+  ]
 
 -- ── Multiplicative structure ──────────────────────────────────────────
 
@@ -358,12 +362,12 @@ test "isHigh 0 is False" = expectFalse (scIsHigh scZero)
 
 test "isHigh (n-1) is True" = expectTrue (scIsHigh nMinus1)
 
-test "fixed-control high bit agrees at every low-S boundary" =
-  expectTrue
-    (scHighBit nHalf == 0
-      && scHighBit nHalfPlus1 == 1
-      && scHighBit scZero == 0
-      && scHighBit nMinus1 == 1)
+test "fixed-control high bit agrees at every low-S boundary" = expectEach [
+  ("scHighBit nHalf == 0", expectEqual 0 (scHighBit nHalf)),
+  ("scHighBit nHalfPlus1 == 1", expectEqual 1 (scHighBit nHalfPlus1)),
+  ("scHighBit scZero == 0", expectEqual 0 (scHighBit scZero)),
+  ("scHighBit nMinus1 == 1", expectEqual 1 (scHighBit nMinus1)),
+]
 
 -- 2 * n_h = n - 1, so n_h really is floor(n/2): a check on the DERIVATION
 -- above, independent of scIsHigh.

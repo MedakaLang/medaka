@@ -1,7 +1,7 @@
 {- | Fixed-ladder public-key check source and compressed SEC 1 boundary checks. The point
    constants are SEC 2 multiples of G, not values captured from this code. -}
 
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectTrue}
 import array as A
 import lib.sign.{
   secretKeyFromBytes,
@@ -85,49 +85,96 @@ derivedCompressed n = match secretKeyFromBytes (keyBytes n)
   Ok secret => publicKeyCompressed (publicKeyForSecret secret)
   Err _ => [||]
 
-test "compressed G, 2G, and 3G decode and re-encode exactly" =
-  expectTrue
-    (publicKeyCompressed (match publicKeyFromCompressed generatorCompressed
-          Ok key => key
-          Err _ => panic "G did not decode")
-        == generatorCompressed
-      && publicKeyCompressed (match publicKeyFromCompressed twoGCompressed
-          Ok key => key
-          Err _ => panic "2G did not decode")
-        == twoGCompressed
-      && publicKeyCompressed (match publicKeyFromCompressed threeGCompressed
-          Ok key => key
-          Err _ => panic "3G did not decode")
-        == threeGCompressed)
+test "compressed G, 2G, and 3G decode and re-encode exactly" = expectEach [
+  (
+    "G round-trips",
+    expectEqual
+      generatorCompressed
+      (publicKeyCompressed (match publicKeyFromCompressed generatorCompressed
+        Ok key => key
+        Err _ => panic "G did not decode")),
+  ),
+  (
+    "2G round-trips",
+    expectEqual
+      twoGCompressed
+      (publicKeyCompressed (match publicKeyFromCompressed twoGCompressed
+        Ok key => key
+        Err _ => panic "2G did not decode")),
+  ),
+  (
+    "3G round-trips",
+    expectEqual
+      threeGCompressed
+      (publicKeyCompressed (match publicKeyFromCompressed threeGCompressed
+        Ok key => key
+        Err _ => panic "3G did not decode")),
+  ),
+]
 
-test "publicKeyForSecret derives G, 2G, and 3G" =
-  expectTrue
-    (derivedCompressed 1 == generatorCompressed
-      && derivedCompressed 2 == twoGCompressed
-      && derivedCompressed 3 == threeGCompressed)
+test "publicKeyForSecret derives G, 2G, and 3G" = expectEach [
+  (
+    "derivedCompressed 1 == G",
+    expectEqual generatorCompressed (derivedCompressed 1),
+  ),
+  (
+    "derivedCompressed 2 == 2G",
+    expectEqual twoGCompressed (derivedCompressed 2),
+  ),
+  (
+    "derivedCompressed 3 == 3G",
+    expectEqual threeGCompressed (derivedCompressed 3),
+  ),
+]
 
 test "publicKeyForSecret accepts a leading-zero scalar carrier" =
   expectEqual (derivedCompressed 4) fourGCompressed
 
-test "decode and encode preserve both compressed parity prefixes" =
-  expectTrue
-    (publicKeyCompressed (match publicKeyFromCompressed generatorCompressed
+test "decode and encode preserve both compressed parity prefixes" = expectEach [
+  (
+    "even-prefix G round-trips",
+    expectEqual
+      generatorCompressed
+      (publicKeyCompressed (match publicKeyFromCompressed generatorCompressed
+        Ok key => key
+        Err _ => panic "even G did not decode")),
+  ),
+  (
+    "odd-prefix G round-trips",
+    expectEqual
+      (withPrefix 3 generatorCompressed)
+      (publicKeyCompressed
+        (match publicKeyFromCompressed (withPrefix 3 generatorCompressed)
           Ok key => key
-          Err _ => panic "even G did not decode")
-        == generatorCompressed
-      && publicKeyCompressed
-          (match publicKeyFromCompressed (withPrefix 3 generatorCompressed)
-            Ok key => key
-            Err _ => panic "odd G did not decode")
-        == withPrefix 3 generatorCompressed)
+          Err _ => panic "odd G did not decode")),
+  ),
+]
 
-test "public decoding rejects lengths, prefixes, and compressed infinity" =
-  expectTrue
-    (isErr (publicKeyFromCompressed (arrayMake 32 0))
-      && isErr (publicKeyFromCompressed (arrayMake 34 0))
-      && isErr (publicKeyFromCompressed (withPrefix 0 generatorCompressed))
-      && isErr (publicKeyFromCompressed (withPrefix 4 generatorCompressed))
-      && isErr (publicKeyFromCompressed [|0|]))
+test "public decoding rejects lengths, prefixes, and compressed infinity" = expectEach
+  [
+    (
+      "rejects a 32-byte input",
+      expectTrue (isErr (publicKeyFromCompressed (arrayMake 32 0))),
+    ),
+    (
+      "rejects a 34-byte input",
+      expectTrue (isErr (publicKeyFromCompressed (arrayMake 34 0))),
+    ),
+    (
+      "rejects prefix 0",
+      expectTrue
+        (isErr (publicKeyFromCompressed (withPrefix 0 generatorCompressed))),
+    ),
+    (
+      "rejects prefix 4",
+      expectTrue
+        (isErr (publicKeyFromCompressed (withPrefix 4 generatorCompressed))),
+    ),
+    (
+      "rejects a 1-byte input",
+      expectTrue (isErr (publicKeyFromCompressed [|0|])),
+    ),
+  ]
 
 test "public decoding rejects x at or above p" =
   expectTrue (isErr (publicKeyFromCompressed (withPrefix 2 (arrayMake 33 255))))

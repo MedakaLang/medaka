@@ -52,7 +52,7 @@ import http.{
   scanRequestBoundaryWithin,
   serializeResponse,
 }
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectOkThen, expectTrue}
 import bytes.*
 import string.{contains, toUtf8}
 
@@ -511,8 +511,10 @@ test "query percent decoding is exact and plus stays literal" =
       (toUtf8Bytes
         "GET /x?q=a+b%20c&snow=%E2%98%83 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   match parseTargetQuery request
-    Ok (_, [QueryParam "q" first, QueryParam "snow" second]) =>
-      expectTrue (first == "a+b c" && second == "☃")
+    Ok (_, [QueryParam "q" first, QueryParam "snow" second]) => expectEach [
+      ("first == \"a+b c\"", expectEqual "a+b c" first),
+      ("second == \"☃\"", expectEqual "☃" second),
+    ]
     _ => expectTrue False
 
 test "malformed query percent escape is rejected" =
@@ -534,7 +536,10 @@ test "decoded query controls and NUL are rejected" =
   let del =
     mustRequest
       (toUtf8Bytes "GET /x?q=%7f HTTP/1.1\r\nHost: pds.example\r\n\r\n")
-  expectTrue (isErr (parseTargetQuery nul) && isErr (parseTargetQuery del))
+  expectEach [
+    ("rejects a NUL control", expectTrue (isErr (parseTargetQuery nul))),
+    ("rejects a DEL control", expectTrue (isErr (parseTargetQuery del))),
+  ]
 
 test "empty query names are rejected" =
   let first =
@@ -543,16 +548,28 @@ test "empty query names are rejected" =
   let later =
     mustRequest
       (toUtf8Bytes "GET /x?a=1&&b=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
-  expectTrue (isErr (parseTargetQuery first) && isErr (parseTargetQuery later))
+  expectEach [
+    (
+      "rejects an empty leading name",
+      expectTrue (isErr (parseTargetQuery first)),
+    ),
+    ("rejects an empty later name", expectTrue (isErr (parseTargetQuery later))),
+  ]
 
 test "media type and subtype are case-insensitive with bounded parameters" =
-  match (parseMediaType
-    (toUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto"))
-    Ok mediaType =>
-      expectTrue
-        (mediaTypeType mediaType == "application"
-          && mediaTypeSubtype mediaType == "json")
-    Err _ => expectTrue False
+  expectOkThen
+    (mediaType => expectEach [
+      (
+        "mediaTypeType mediaType == \"application\"",
+        expectEqual "application" (mediaTypeType mediaType),
+      ),
+      (
+        "mediaTypeSubtype mediaType == \"json\"",
+        expectEqual "json" (mediaTypeSubtype mediaType),
+      ),
+    ])
+    (parseMediaType
+      (toUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto"))
 
 test "malformed and non-ASCII media types are rejected" =
   expectTrue
@@ -597,8 +614,13 @@ test "missing Content-Type is rejected" =
 test "text media types decode strict UTF-8" =
   match (decodeRequestBody
     (requestWithBody "Text/Plain; charset=utf-8" (toUtf8Bytes "héllo")))
-    Ok (TextBody mediaType text) =>
-      expectTrue (mediaTypeType mediaType == "text" && text == "héllo")
+    Ok (TextBody mediaType text) => expectEach [
+      (
+        "mediaTypeType mediaType == \"text\"",
+        expectEqual "text" (mediaTypeType mediaType),
+      ),
+      ("text == \"héllo\"", expectEqual "héllo" text),
+    ]
     _ => expectTrue False
 
 test "invalid text UTF-8 is rejected" =
@@ -789,8 +811,10 @@ test "a chunked request frames at its trailer terminator, not the buffer end" =
 test "trailing bytes frame the first request instead of failing the buffer" =
   let stream = simpleGet ++ toUtf8Bytes "x"
   match scanRequestBoundary stream 0
-    HttpFramedAt at =>
-      expectTrue (at == bytesLength simpleGet && isErr (parseRequest stream))
+    HttpFramedAt at => expectEach [
+      ("at == bytesLength simpleGet", expectEqual (bytesLength simpleGet) at),
+      ("isErr (parseRequest stream)", expectTrue (isErr (parseRequest stream))),
+    ]
     _ => expectTrue False
 
 -- A resumable scan and a whole-buffer scan are the same framer, so they have to

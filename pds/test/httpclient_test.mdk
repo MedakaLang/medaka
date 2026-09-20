@@ -19,7 +19,7 @@
 
 import array.{sliceClamped}
 import string.{fromUtf8, toUtf8, repeat}
-import test.{expectEqual, expectTrue}
+import test.{expectEqual, expectOkThen, expectTrue}
 import lib.httpclient.{
   HttpClientParseFailure(..),
   parseResponse,
@@ -80,9 +80,9 @@ test "transfer coding is ASCII case-insensitive" =
   let input =
     toUtf8
       "HTTP/1.1 200 OK\r\nTransfer-Encoding: Chunked\r\n\r\n5\r\nhello\r\n0\r\n\r\n"
-  match parseResponse input
-    Err _ => expectTrue False
-    Ok response => expectEqual "hello" (fromUtf8 (responseBody response))
+  expectOkThen
+    (response => expectEqual "hello" (fromUtf8 (responseBody response)))
+    (parseResponse input)
 
 test "unsupported transfer coding remains rejected" =
   expectTrue
@@ -153,9 +153,10 @@ test "decoding a chunked response at its boundary yields the whole body" =
   let bytes = toUtf8 chunkedBody
   match responseBoundary bytes
     None => expectTrue False
-    Some at => match parseResponse (sliceClamped 0 at bytes)
-      Err _ => expectTrue False
-      Ok response => expectEqual "abcde" (fromUtf8 (responseBody response))
+    Some at =>
+      expectOkThen
+        (response => expectEqual "abcde" (fromUtf8 (responseBody response)))
+        (parseResponse (sliceClamped 0 at bytes))
 
 test "a response declaring no length of its own ends only at the close" =
   -- Correct HTTP/1.0-style framing, not a shortfall: these bytes are a whole

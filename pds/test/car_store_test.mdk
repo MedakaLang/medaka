@@ -2,7 +2,7 @@
    independent expected CAR bytes remain exclusively in the vector corpus. -}
 
 import array as A
-import test.{expectEqual, expectErr, expectTrue}
+import test.{expectEach, expectEqual, expectErr, expectTrue}
 import lib.blockstore.{
   BlockStore,
   blockStoreAddMany,
@@ -105,7 +105,13 @@ test "CAR encodes and strictly round-trips explicit block order" =
 test "CAR preserves identical duplicate sections but deduplicates storage" =
   let blocks = [(rootCid, rootBytes), (rootCid, rootBytes)]
   let car = mustCar (carDecode (mustBytes (carEncode [rootCid] blocks)))
-  expectTrue (length (carBlocks car) == 2 && blockStoreSize (carStore car) == 1)
+  expectEach [
+    ("length (carBlocks car) == 2", expectEqual 2 (length (carBlocks car))),
+    (
+      "blockStoreSize (carStore car) == 1",
+      expectEqual 1 (blockStoreSize (carStore car)),
+    ),
+  ]
 
 test "CAR accepts arbitrary order and unrelated verified blocks" =
   let blocks = [(extraCid, extraBytes), (rootCid, rootBytes)]

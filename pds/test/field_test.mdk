@@ -15,7 +15,7 @@
    rather than by hand-typed hex. -}
 
 import array.{setInPlace}
-import test.{expectEqual, expectTrue, expectFalse}
+import test.{expectEach, expectEqual, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
 import lib.field.{
   Fe,
@@ -245,8 +245,10 @@ test "fromBytesReduce ACCEPTS 2^256-1" =
 
 -- ── Parity ────────────────────────────────────────────────────────────
 
-test "isOdd 1 is True, isOdd 0 is False" =
-  expectTrue (feIsOdd feOne && not (feIsOdd feZero))
+test "isOdd 1 is True, isOdd 0 is False" = expectEach [
+  ("feIsOdd feOne", expectTrue (feIsOdd feOne)),
+  ("not (feIsOdd feZero)", expectFalse (feIsOdd feZero)),
+]
 
 -- `p` has an odd low byte, but public reduction maps it to the canonical
 -- representative 0. The raw limb representation is deliberately not public.

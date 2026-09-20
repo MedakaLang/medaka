@@ -3,7 +3,7 @@
    These are acceptance/rejection boundaries, not scalar answer keys: the
    secp256k1 order constants are inputs used to exercise the contract. -}
 
-import test.{expectTrue}
+import test.{expectEach, expectEqual, expectOkThen, expectTrue}
 import array as A
 import hex.{decode}
 import lib.sign.{
@@ -104,14 +104,23 @@ test "secret key stores a scalar before caller input mutates" =
   let mutable = arrayCopy oneBytes
   let admitted = secretKeyFromBytes mutable
   let () = A.setInPlace 31 0 mutable
-  expectTrue (isOk admitted && isErr (secretKeyFromBytes mutable))
+  expectEach [
+    ("isOk admitted", expectTrue (isOk admitted)),
+    (
+      "isErr (secretKeyFromBytes mutable)",
+      expectTrue (isErr (secretKeyFromBytes mutable)),
+    ),
+  ]
 
 test "public compact signatures round trip as exactly 64 bytes" =
-  match signatureFromCompact knownCompact
-    Err _ => expectTrue False
-    Ok signature =>
+  expectOkThen
+    (signature =>
       let compact = signatureCompact signature
-      expectTrue (arrayLength compact == 64 && compact == knownCompact)
+      expectEach [
+        ("arrayLength compact == 64", expectEqual 64 (arrayLength compact)),
+        ("compact == knownCompact", expectEqual knownCompact compact),
+      ])
+    (signatureFromCompact knownCompact)
 
 test "public compact parsing rejects 63-byte and 65-byte lengths" =
   expectTrue
@@ -132,12 +141,25 @@ test "public compact parsing rejects zero range and high-S components" =
       && isErr (signatureFromCompact highSCompact))
 
 test "public signing rejects malformed digests before production" =
-  match secretKeyFromBytes oneBytes
-    Err _ => expectTrue False
-    Ok secret =>
+  expectOkThen
+    (secret =>
       let zeroDigest = arrayMake 32 0
-      expectTrue
-        (isErr (signDigest secret (arrayMake 31 0))
-          && isErr (signDigest secret (arrayMake 33 0))
-          && isErr (signDigest secret (setAt 0 (-1) zeroDigest))
-          && isErr (signDigest secret (setAt 31 256 zeroDigest)))
+      expectEach [
+        (
+          "rejects a too-short digest",
+          expectTrue (isErr (signDigest secret (arrayMake 31 0))),
+        ),
+        (
+          "rejects a too-long digest",
+          expectTrue (isErr (signDigest secret (arrayMake 33 0))),
+        ),
+        (
+          "rejects a negative-byte digest",
+          expectTrue (isErr (signDigest secret (setAt 0 (-1) zeroDigest))),
+        ),
+        (
+          "rejects an out-of-range-byte digest",
+          expectTrue (isErr (signDigest secret (setAt 31 256 zeroDigest))),
+        ),
+      ])
+    (secretKeyFromBytes oneBytes)

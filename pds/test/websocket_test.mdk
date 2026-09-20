@@ -22,7 +22,7 @@
 import array.{blit, fill, make, setInPlace}
 import hex.{encode}
 import string.{fromUtf8, toUtf8}
-import test.{expectEqual, expectErr, expectTrue}
+import test.{expectEach, expectEqual, expectErr, expectOkThen, expectTrue}
 import lib.sha1.{sha1, sha1FixedBytes}
 import lib.websocket.{
   AssembleEvent(..),
@@ -213,16 +213,22 @@ unmaskedHelloWire = [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
 test "§5.7's masked text frame decodes to an unmasked \"Hello\"" =
   match decodedAs (decodeFrame FromClient maxPayload maskedHelloWire 0)
     None => expectTrue False
-    Some (fin, opcode, payload, consumed) =>
-      expectTrue
-        (fin && opcode == Text && fromUtf8 payload == "Hello" && consumed == 11)
+    Some (fin, opcode, payload, consumed) => expectEach [
+      ("fin", expectTrue fin),
+      ("opcode == Text", expectEqual Text opcode),
+      ("fromUtf8 payload == \"Hello\"", expectEqual "Hello" (fromUtf8 payload)),
+      ("consumed == 11", expectEqual 11 consumed),
+    ]
 
 test "§5.7's unmasked text frame decodes on the server-to-client side" =
   match decodedAs (decodeFrame FromServer maxPayload unmaskedHelloWire 0)
     None => expectTrue False
-    Some (fin, opcode, payload, consumed) =>
-      expectTrue
-        (fin && opcode == Text && fromUtf8 payload == "Hello" && consumed == 7)
+    Some (fin, opcode, payload, consumed) => expectEach [
+      ("fin", expectTrue fin),
+      ("opcode == Text", expectEqual Text opcode),
+      ("fromUtf8 payload == \"Hello\"", expectEqual "Hello" (fromUtf8 payload)),
+      ("consumed == 7", expectEqual 7 consumed),
+    ]
 
 test "a second frame in the same buffer decodes at the reported offset" =
   let buffer = [|
@@ -246,21 +252,26 @@ test "a second frame in the same buffer decodes at the reported offset" =
     Some (_, first, _, consumed) =>
       match decodedAs (decodeFrame FromServer maxPayload buffer consumed)
         None => expectTrue False
-        Some (_, second, payload, _) =>
-          expectTrue
-            (first == Ping && second == Text && fromUtf8 payload == "Hello")
+        Some (_, second, payload, _) => expectEach [
+          ("first == Ping", expectEqual Ping first),
+          ("second == Text", expectEqual Text second),
+          (
+            "fromUtf8 payload == \"Hello\"",
+            expectEqual "Hello" (fromUtf8 payload),
+          ),
+        ]
 
 test "a 16-bit-length frame this module encoded decodes back to its payload" =
   let body = make 300 0x61
   let wire = encodeServerFrame (Frame True Binary body)
   match decodedAs (decodeFrame FromServer maxPayload wire 0)
     None => expectTrue False
-    Some (fin, opcode, payload, consumed) =>
-      expectTrue
-        (fin
-          && opcode == Binary
-          && payload == body
-          && consumed == arrayLength wire)
+    Some (fin, opcode, payload, consumed) => expectEach [
+      ("fin", expectTrue fin),
+      ("opcode == Binary", expectEqual Binary opcode),
+      ("payload == body", expectEqual body payload),
+      ("consumed == arrayLength wire", expectEqual (arrayLength wire) consumed),
+    ]
 
 -- # Fragmentation — RFC 6455 §5.4
 
@@ -372,15 +383,24 @@ test "a 16-bit length field with only one of its two bytes needs more" =
 
 test "a close frame carries its status code big-endian, then the reason" =
   match closeFrame 1000 "bye"
-    Frame fin opcode payload =>
-      expectTrue
-        (fin && opcode == Close && payload == [|0x03, 0xe8, 0x62, 0x79, 0x65|])
+    Frame fin opcode payload => expectEach [
+      ("fin", expectTrue fin),
+      ("opcode == Close", expectEqual Close opcode),
+      (
+        "payload == big-endian code + reason",
+        expectEqual [|0x03, 0xe8, 0x62, 0x79, 0x65|] payload,
+      ),
+    ]
 
 test "a close payload parses back to its code and reason" =
-  match parseClosePayload [|0x03, 0xe8, 0x62, 0x79, 0x65|]
-    Ok (Some (code, reason)) =>
-      expectTrue (code == 1000 && fromUtf8 reason == "bye")
-    _ => expectTrue False
+  expectOkThen
+    (opt => match opt
+      Some (code, reason) => expectEach [
+        ("code == 1000", expectEqual 1000 code),
+        ("fromUtf8 reason == \"bye\"", expectEqual "bye" (fromUtf8 reason)),
+      ]
+      None => expectTrue False)
+    (parseClosePayload [|0x03, 0xe8, 0x62, 0x79, 0x65|])
 
 test "an empty close payload is no status, not a zero status (§5.5.1)" =
   match parseClosePayload [||]
@@ -394,9 +414,11 @@ test "close code 1005 may not appear on the wire (§7.4.1)" =
   expectErr (parseClosePayload [|0x03, 0xed|])
 
 test "a private-range close code 4000 is accepted (§7.4.2)" =
-  match parseClosePayload [|0x0f, 0xa0|]
-    Ok (Some (code, _)) => expectEqual code 4000
-    _ => expectTrue False
+  expectOkThen
+    (opt => match opt
+      Some (code, _) => expectEqual 4000 code
+      None => expectTrue False)
+    (parseClosePayload [|0x0f, 0xa0|])
 
 -- A masked payload is unmasked into a FRESH array; the read buffer a caller
 -- may still be holding must not have been rewritten under it.

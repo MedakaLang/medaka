@@ -3,7 +3,7 @@
 
 import array as A
 import string.{toUtf8}
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectTrue}
 import lib.cid.{Cid, cidEqual, cidForDagCbor}
 import lib.mst.{
   Mst,
@@ -62,8 +62,10 @@ test "from-entries is independent of input order" =
   let right = mustTree (mstFromEntries [(key1, value1), (key0, value0)])
   expectTrue (cidEqual (mstRootCid left) (mstRootCid right))
 
-test "known keys occupy adjacent protocol depths" =
-  expectTrue (mstKeyDepth key0 == Ok 0 && mstKeyDepth key1 == Ok 1)
+test "known keys occupy adjacent protocol depths" = expectEach [
+  ("mstKeyDepth key0 == Ok 0", expectEqual (Ok 0) (mstKeyDepth key0)),
+  ("mstKeyDepth key1 == Ok 1", expectEqual (Ok 1) (mstKeyDepth key1)),
+]
 
 test "lookup finds exact keys and misses absent keys" =
   let tree = mustTree (mstFromEntries [(key0, value0)])
@@ -185,4 +187,10 @@ deletePhase i (walk@(Walk tree _)) =
 test "every single-key mutation matches a from-scratch build" =
   let (Walk final ok) =
     deletePhase 0 (replacePhase 0 (insertPhase 0 (Walk mstEmpty True)))
-  expectTrue (ok && cidEqual (mstRootCid final) (mstRootCid mstEmpty))
+  expectEach [
+    ("every step matched", expectTrue ok),
+    (
+      "final root == empty root",
+      expectTrue (cidEqual (mstRootCid final) (mstRootCid mstEmpty)),
+    ),
+  ]
