@@ -1,5 +1,5 @@
 # META
-source_lines=2582
+source_lines=2604
 stages=DESUGAR,MARK
 # SOURCE
 {- | Pure, bounded HTTP/1.1 request framing and response building.
@@ -1488,6 +1488,28 @@ httpScanInHeaders (HttpScan (PhaseLine _)) = True
 httpScanInHeaders (HttpScan (PhaseFields _ _ _ _ _)) = True
 httpScanInHeaders (HttpScan (PhaseBody _ _)) = False
 
+{- | How many further bytes this scan needs before the request it is framing is
+   complete, given the `avail` the scan was produced from, or `None` when that
+   is not settled yet.
+
+   Settled for exactly one shape: a body whose end position the header section
+   already fixed, which is a `Content-Length` body and a bodyless request. A
+   scan still inside the header section has not selected a body mode, and a
+   chunked body declares its length one chunk at a time, so neither can say
+   what is still owed and both report `None`.
+
+   Only this module can answer it, the scan's phase being private. A caller
+   that must reserve a resource for a whole request before accepting any of it
+   — `pds/shell/server.mdk`'s in-flight buffer budget — has no other route to
+   the number: the declared length is a header this module has already graded
+   into a body mode, and reading it again outside would be a second framer
+   able to disagree with this one. -}
+export
+httpScanBodyRemaining : HttpScan -> Int -> Option Int
+httpScanBodyRemaining (HttpScan (PhaseBody _ (BodyUntil finalPos))) avail =
+  Some (max 0 (finalPos - avail))
+httpScanBodyRemaining _ _ = None
+
 scanVerdict : Int -> Int -> HttpScan -> ScanOutcome -> (HttpFrame, HttpScan)
 scanVerdict _ start scanned (ScanFramed (FrameSpan _ finalPos)) =
   (requestBytesVerdict (finalPos - start) (HttpFramedAt finalPos), scanned)
@@ -2879,6 +2901,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseLine" PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseFields" PWild PWild PWild PWild PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseBody" PWild PWild))) (EVar "False"))
+(DTypeSig true "httpScanBodyRemaining" (TyFun (TyCon "HttpScan") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "httpScanBodyRemaining" ((PCon "HttpScan" (PCon "PhaseBody" PWild (PCon "BodyUntil" (PVar "finalPos")))) (PVar "avail")) (EApp (EVar "Some") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "finalPos") (EVar "avail")))))
+(DFunDef false "httpScanBodyRemaining" (PWild PWild) (EVar "None"))
 (DTypeSig false "scanVerdict" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HttpScan") (TyFun (TyCon "ScanOutcome") (TyTuple (TyCon "HttpFrame") (TyCon "HttpScan")))))))
 (DFunDef false "scanVerdict" (PWild (PVar "start") (PVar "scanned") (PCon "ScanFramed" (PCon "FrameSpan" PWild (PVar "finalPos")))) (ETuple (EApp (EApp (EVar "requestBytesVerdict") (EBinOp "-" (EVar "finalPos") (EVar "start"))) (EApp (EVar "HttpFramedAt") (EVar "finalPos"))) (EVar "scanned")))
 (DFunDef false "scanVerdict" (PWild PWild (PVar "scanned") (PCon "ScanFatal" (PVar "failure"))) (ETuple (EApp (EVar "HttpFrameFailed") (EVar "failure")) (EVar "scanned")))
@@ -3341,6 +3366,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseLine" PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseFields" PWild PWild PWild PWild PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseBody" PWild PWild))) (EVar "False"))
+(DTypeSig true "httpScanBodyRemaining" (TyFun (TyCon "HttpScan") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "httpScanBodyRemaining" ((PCon "HttpScan" (PCon "PhaseBody" PWild (PCon "BodyUntil" (PVar "finalPos")))) (PVar "avail")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "finalPos") (EVar "avail")))))
+(DFunDef false "httpScanBodyRemaining" (PWild PWild) (EVar "None"))
 (DTypeSig false "scanVerdict" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HttpScan") (TyFun (TyCon "ScanOutcome") (TyTuple (TyCon "HttpFrame") (TyCon "HttpScan")))))))
 (DFunDef false "scanVerdict" (PWild (PVar "start") (PVar "scanned") (PCon "ScanFramed" (PCon "FrameSpan" PWild (PVar "finalPos")))) (ETuple (EApp (EApp (EVar "requestBytesVerdict") (EBinOp "-" (EVar "finalPos") (EVar "start"))) (EApp (EVar "HttpFramedAt") (EVar "finalPos"))) (EVar "scanned")))
 (DFunDef false "scanVerdict" (PWild PWild (PVar "scanned") (PCon "ScanFatal" (PVar "failure"))) (ETuple (EApp (EVar "HttpFrameFailed") (EVar "failure")) (EVar "scanned")))

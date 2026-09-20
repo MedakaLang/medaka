@@ -499,6 +499,29 @@ private, so a caller that budgets the header phase apart from the body has
 no other way to tell the two apart. A scan that already framed a request
 reports False: its header section ended.
 
+### `httpScanBodyRemaining`
+
+```
+httpScanBodyRemaining : HttpScan -> Int -> Option Int
+```
+
+How many further bytes this scan needs before the request it is framing is
+complete, given the `avail` the scan was produced from, or `None` when that
+is not settled yet.
+
+Settled for exactly one shape: a body whose end position the header section
+already fixed, which is a `Content-Length` body and a bodyless request. A
+scan still inside the header section has not selected a body mode, and a
+chunked body declares its length one chunk at a time, so neither can say
+what is still owed and both report `None`.
+
+Only this module can answer it, the scan's phase being private. A caller
+that must reserve a resource for a whole request before accepting any of it
+— `pds/shell/server.mdk`'s in-flight buffer budget — has no other route to
+the number: the declared length is a header this module has already graded
+into a body mode, and reading it again outside would be a second framer
+able to disagree with this one.
+
 ### `scanRequestBoundaryWithin`
 
 ```

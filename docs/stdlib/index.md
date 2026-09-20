@@ -434,6 +434,7 @@ Pure, bounded HTTP/1.1 request framing and response building.
 - [`HttpScan`](http.md#httpscan)
 - [`httpScanStart`](http.md#httpscanstart)
 - [`httpScanInHeaders`](http.md#httpscaninheaders)
+- [`httpScanBodyRemaining`](http.md#httpscanbodyremaining)
 - [`scanRequestBoundaryWithin`](http.md#scanrequestboundarywithin)
 - [`scanRequestBoundaryFrom`](http.md#scanrequestboundaryfrom)
 - [`scanRequestBoundary`](http.md#scanrequestboundary)
