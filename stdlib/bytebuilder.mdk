@@ -16,12 +16,9 @@
 -- exactly `[0, len)`, in emission order, with no reverse pass.
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
--- Wildcard, not `bytes.{Bytes, fromByteBlockPrefix}`: a `newtype`'s name is
--- not selectively importable -- the import list reads a bare uppercase name
--- as a constructor request, and a `newtype`'s constructor is always
--- module-private -- so a wildcard is the only way to name `Bytes` in the
--- signature of `buildBytes`.
-import bytes.*
+import bytes.{
+  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, toUtf8Bytes
+}
 import list.{reverse}
 
 -- # The builder

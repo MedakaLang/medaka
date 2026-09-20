@@ -1,5 +1,5 @@
 # META
-source_lines=458
+source_lines=455
 stages=DESUGAR,MARK
 # SOURCE
 {- | A buffer for building byte arrays.
@@ -20,12 +20,9 @@ stages=DESUGAR,MARK
 -- exactly `[0, len)`, in emission order, with no reverse pass.
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
--- Wildcard, not `bytes.{Bytes, fromByteBlockPrefix}`: a `newtype`'s name is
--- not selectively importable -- the import list reads a bare uppercase name
--- as a constructor request, and a `newtype`'s constructor is always
--- module-private -- so a wildcard is the only way to name `Bytes` in the
--- signature of `buildBytes`.
-import bytes.*
+import bytes.{
+  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, toUtf8Bytes
+}
 import list.{reverse}
 
 -- # The builder
@@ -462,7 +459,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
         Err _ => False
 # DESUGAR
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "toUtf8Bytes" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))
@@ -512,7 +509,7 @@ prop "emitU16BE reversed bytes, leUint agrees with beUint" (v : Int) =
 (DProp false "emitU16BE reversed bytes, leUint agrees with beUint" ((pp "v" (TyCon "Int"))) (EBlock (DoLet false false (PVar "w") (EApp (EApp (EVar "bitAnd") (EVar "v")) (ELit (LInt 65535)))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "takeBytes") (ELit (LInt 2)))) (EApp (EVar "build1") (EApp (EVar "emitU16BE") (EVar "w")))) (arm (PCon "Err" PWild) () (EVar "False")) (arm (PCon "Ok" (PVar "bytes")) () (EBlock (DoLet false false (PVar "reversedArr") (EApp (EVar "arrayFromList") (EApp (EVar "reverse") (EVar "bytes")))) (DoExpr (EMatch (EApp (EApp (EVar "runByteParser") (EApp (EVar "leUint") (ELit (LInt 2)))) (EVar "reversedArr")) (arm (PCon "Ok" (PVar "got")) () (EBinOp "==" (EVar "got") (EVar "w"))) (arm (PCon "Err" PWild) () (EVar "False"))))))))))
 # MARK
 (DUse false (UseGroup ("byteparser") ((mem "runByteParser" false) (mem "beUint" false) (mem "beSint" false) (mem "leUint" false) (mem "leSint" false) (mem "takeBytes" false))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false) (mem "fromByteBlockPrefix" false) (mem "lendByteBlock" false) (mem "toUtf8Bytes" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DData Abstract "Builder" () ((variant "Builder" (ConPos (TyApp (TyCon "Ref") (TyCon "ByteBlock")) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig true "newBuilder" (TyFun (TyCon "Unit") (TyCon "Builder")))

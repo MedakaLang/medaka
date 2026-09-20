@@ -2,9 +2,23 @@ NEWLINE
 IMPORT
 IDENT "array"
 DOT_LBRACE
-IDENT "get"
-COMMA
 IDENT "fromList"
+COMMA
+IDENT "get"
+AS
+IDENT "arrGet"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "bytes"
+DOT_LBRACE
+UPPER "Bytes"
+COMMA
+IDENT "bytesLength"
+COMMA
+IDENT "fromArrayAssumeByteDomain"
+COMMA
+IDENT "toArray"
 RBRACE
 NEWLINE
 IMPORT
@@ -27,36 +41,6 @@ COMMA
 IDENT "toChars"
 RBRACE
 NEWLINE
-IDENT "byteAt"
-COLON
-UPPER "Int"
-ARROW
-UPPER "Array"
-UPPER "Int"
-ARROW
-UPPER "Int"
-NEWLINE
-IDENT "byteAt"
-IDENT "i"
-IDENT "arr"
-EQUAL
-MATCH
-IDENT "get"
-IDENT "i"
-IDENT "arr"
-INDENT
-UPPER "Some"
-IDENT "b"
-FAT_ARROW
-IDENT "b"
-NEWLINE
-UPPER "None"
-FAT_ARROW
-IDENT "panic"
-STRING "hex: index out of bounds"
-NEWLINE
-DEDENT
-NEWLINE
 IDENT "charAt"
 COLON
 UPPER "Int"
@@ -71,7 +55,7 @@ IDENT "i"
 IDENT "arr"
 EQUAL
 MATCH
-IDENT "get"
+IDENT "arrGet"
 IDENT "i"
 IDENT "arr"
 INDENT
@@ -188,8 +172,7 @@ DEDENT
 NEWLINE
 IDENT "encodeGo"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
 ARROW
 UPPER "Int"
 ARROW
@@ -202,7 +185,7 @@ UPPER "List"
 UPPER "Char"
 NEWLINE
 IDENT "encodeGo"
-IDENT "bytes"
+IDENT "bs"
 IDENT "i"
 IDENT "upper"
 IDENT "acc"
@@ -226,15 +209,14 @@ IDENT "lo"
 RPAREN
 EQUAL
 IDENT "byteToHexChars"
-LPAREN
-IDENT "byteAt"
+IDENT "bs"
+LBRACKET_TIGHT
 IDENT "i"
-IDENT "bytes"
-RPAREN
+RBRACKET
 IDENT "upper"
 NEWLINE
 IDENT "encodeGo"
-IDENT "bytes"
+IDENT "bs"
 LPAREN
 IDENT "i"
 MINUS
@@ -253,17 +235,17 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
-EXPORT
-NEWLINE
-IDENT "encode"
+IDENT "encodeAs"
 COLON
-UPPER "Array"
-UPPER "Int"
+UPPER "Bytes"
+ARROW
+UPPER "Bool"
 ARROW
 UPPER "String"
 NEWLINE
-IDENT "encode"
-IDENT "bytes"
+IDENT "encodeAs"
+IDENT "bs"
+IDENT "upper"
 EQUAL
 INDENT
 IDENT "stringFromChars"
@@ -271,14 +253,14 @@ LPAREN
 IDENT "arrayFromList"
 LPAREN
 IDENT "encodeGo"
-IDENT "bytes"
+IDENT "bs"
 LPAREN
-IDENT "arrayLength"
-IDENT "bytes"
+IDENT "bytesLength"
+IDENT "bs"
 MINUS
 INT 1
 RPAREN
-UPPER "False"
+IDENT "upper"
 LBRACKET
 RBRACKET
 RPAREN
@@ -288,6 +270,39 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
+IDENT "encodeBytes"
+COLON
+UPPER "Bytes"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "encodeBytes"
+IDENT "b"
+EQUAL
+IDENT "encodeAs"
+IDENT "b"
+UPPER "False"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "encode"
+COLON
+UPPER "Array"
+UPPER "Int"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "encode"
+IDENT "bytes"
+EQUAL
+IDENT "encodeBytes"
+LPAREN
+IDENT "fromArrayAssumeByteDomain"
+IDENT "bytes"
+RPAREN
+NEWLINE
+EXPORT
+NEWLINE
 IDENT "encodeUpper"
 COLON
 UPPER "Array"
@@ -298,26 +313,12 @@ NEWLINE
 IDENT "encodeUpper"
 IDENT "bytes"
 EQUAL
-INDENT
-IDENT "stringFromChars"
+IDENT "encodeAs"
 LPAREN
-IDENT "arrayFromList"
-LPAREN
-IDENT "encodeGo"
+IDENT "fromArrayAssumeByteDomain"
 IDENT "bytes"
-LPAREN
-IDENT "arrayLength"
-IDENT "bytes"
-MINUS
-INT 1
 RPAREN
 UPPER "True"
-LBRACKET
-RBRACKET
-RPAREN
-RPAREN
-NEWLINE
-DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -437,18 +438,15 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
-IDENT "decode"
+IDENT "decodeBytes"
 COLON
 UPPER "String"
 ARROW
 UPPER "Result"
 UPPER "String"
-LPAREN
-UPPER "Array"
-UPPER "Int"
-RPAREN
+UPPER "Bytes"
 NEWLINE
-IDENT "decode"
+IDENT "decodeBytes"
 IDENT "s"
 EQUAL
 INDENT
@@ -476,7 +474,15 @@ DEDENT
 ELSE
 INDENT
 IDENT "map"
+LPAREN
+IDENT "xs"
+FAT_ARROW
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
 IDENT "arrayFromList"
+IDENT "xs"
+RPAREN
+RPAREN
 LPAREN
 IDENT "decodeGo"
 IDENT "chars"
@@ -489,6 +495,29 @@ NEWLINE
 DEDENT
 NEWLINE
 DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "decode"
+COLON
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Array"
+UPPER "Int"
+RPAREN
+NEWLINE
+IDENT "decode"
+IDENT "s"
+EQUAL
+IDENT "map"
+IDENT "toArray"
+LPAREN
+IDENT "decodeBytes"
+IDENT "s"
+RPAREN
 NEWLINE
 EXPORT
 NEWLINE
@@ -593,6 +622,36 @@ INT 2
 STAR
 IDENT "arrayLength"
 IDENT "bs"
+NEWLINE
+DEDENT
+NEWLINE
+PROP
+STRING "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b"
+LPAREN
+IDENT "xs"
+COLON
+UPPER "List"
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+LET
+IDENT "b"
+EQUAL
+IDENT "fromArrayAssumeByteDomain"
+LPAREN
+IDENT "toByteArray"
+IDENT "xs"
+RPAREN
+NEWLINE
+IDENT "decodeBytes"
+LPAREN
+IDENT "encodeBytes"
+IDENT "b"
+RPAREN
+EQ_EQ
+UPPER "Ok"
+IDENT "b"
 NEWLINE
 DEDENT
 NEWLINE
