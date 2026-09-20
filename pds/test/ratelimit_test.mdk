@@ -10,6 +10,7 @@ import string.{join, repeat, toUtf8}
 import test.{expectAll, expectEqual, expectTrue}
 import lib.resource_limits.{
   maxCreateSessionPerWindow,
+  maxRateLimitIdentitiesPerWindow,
   maxRepoExportsPerWindow,
   maxXffHeaderBytes,
   maxXffTokens,
@@ -436,6 +437,24 @@ test "a decision's allocation cost does not scale 100x with other active identit
   let fewCost = marginalAllocForStep fewOthers
   let manyCost = marginalAllocForStep manyOthers
   expectTrue (manyCost <= fewCost * 15.0)
+
+-- #2950: the table's row count is bounded by `maxRateLimitIdentitiesPerWindow`
+-- past which a distinct new identity is refused rather than inserted. Filling
+-- the current-window table to exactly the cap, then presenting one further
+-- distinct identity, must refuse it WITHOUT writing a row: the same identity
+-- asked again against the resulting state is refused again rather than
+-- suddenly admitted, which it would be had a row been inserted for it (its
+-- own usage is zero, well under any class's allowance).
+test "a new identity past the per-window cap is refused without a row" =
+  let filled =
+    populateOthers initRateLimitState maxRateLimitIdentitiesPerWindow 0
+  let extra = otherIdentity maxRateLimitIdentitiesPerWindow
+  let (afterFirst, firstVerdict) = step filled extra RequestsClass 0
+  let (_, secondVerdict) = step afterFirst extra RequestsClass 0
+  expectAll [
+    expectTrue (isRefused firstVerdict),
+    expectTrue (isRefused secondVerdict),
+  ]
 
 -- (h) the whole-repository export ceiling is a CLASS of its own, not a lower
 -- shared number: `maxRequestsPerWindow` bounds a count of requests, while one

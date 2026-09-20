@@ -43,7 +43,7 @@
 
 import http.{Header, headerName, headerValue}
 import list.{head, reverse}
-import map.{Map(..), get, set}
+import map.{Map(..), get, has, set, size}
 import regex.{Regex, isFullMatch, mustCompile}
 import string.{fromUtf8, split, trim}
 import lib.nsid.{sameNsidIdentity}
@@ -53,6 +53,7 @@ import lib.resource_limits.{
   maxConnectionsPerWindow,
   maxCreateSessionPerWindow,
   maxProxiedCallsPerWindow,
+  maxRateLimitIdentitiesPerWindow,
   maxRepoExportsPerWindow,
   maxRequestsPerWindow,
   maxWritesPerWindow,
@@ -166,6 +167,14 @@ slidingUsed limitClass elapsed previous current =
 -- | The pure decision. Same identity, same class: refused while the sliding
 -- count over the trailing window is at or past `classAllowance class`,
 -- admitted again as the charges behind it slide out of view.
+--
+-- Two cases write no row into `current`, keeping the table's cardinality
+-- bounded without ever evicting a live row: a decision refused by
+-- `classAllowance` for an identity not already tracked this window (nothing
+-- to gain by inserting an empty row for it), and a genuinely new identity
+-- arriving once `current` already holds `maxRateLimitIdentitiesPerWindow`
+-- rows — refused outright, ahead of the allowance check, so the cap can
+-- never be exceeded.
 export
 step : RateLimitState ->
   ClientIdentity ->
@@ -177,22 +186,25 @@ step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key
   let elapsed = now % rateLimitWindowSeconds
   let (previous, current) =
     tablesInView stateWindow windowIdx previousTable currentTable
-  let previousCounters = countersFor key previous
-  let currentCounters = countersFor key current
-  let used = slidingUsed limitClass elapsed previousCounters currentCounters
-  if used >= classAllowance limitClass then
-    (
-      RateLimitState windowIdx previous (set key currentCounters current),
-      Refused,
-    )
+  let known = has key current
+  if not known && size current >= maxRateLimitIdentitiesPerWindow then
+    (RateLimitState windowIdx previous current, Refused)
   else
-    (
-      RateLimitState
-        windowIdx
-        previous
-        (set key (bumpClass limitClass currentCounters) current),
-      Admitted,
-    )
+    let previousCounters = countersFor key previous
+    let currentCounters = countersFor key current
+    let used = slidingUsed limitClass elapsed previousCounters currentCounters
+    if used >= classAllowance limitClass then
+      let nextCurrent =
+        if known then set key currentCounters current else current
+      (RateLimitState windowIdx previous nextCurrent, Refused)
+    else
+      (
+        RateLimitState
+          windowIdx
+          previous
+          (set key (bumpClass limitClass currentCounters) current),
+        Admitted,
+      )
 
 emptyCounters : ClientCounters
 emptyCounters = ClientCounters 0 0 0 0 0 0

@@ -152,6 +152,13 @@ export
 rateLimitWindowSeconds : Int
 rateLimitWindowSeconds = 60
 
+-- Row-count ceiling on each `pds/lib/ratelimit.mdk` window table: bounds how
+-- many distinct identities one window can track, not any class's per-identity
+-- allowance.
+export
+maxRateLimitIdentitiesPerWindow : Int
+maxRateLimitIdentitiesPerWindow = 5000
+
 export
 maxConnectionsPerWindow : Int
 maxConnectionsPerWindow = 120
