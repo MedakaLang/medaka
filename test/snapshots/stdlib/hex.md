@@ -1,5 +1,5 @@
 # META
-source_lines=200
+source_lines=194
 stages=DESUGAR,MARK
 # SOURCE
 {- | Hexadecimal encoding and decoding of bytes.
@@ -22,13 +22,7 @@ stages=DESUGAR,MARK
 -- lint-disable-file rule-stdlib-reimpl
 
 import array.{fromList, get as arrGet}
--- Wildcard, not selective: `import bytes.{Bytes, ...}` cannot bring the bare
--- type name into scope here — `Bytes`'s constructor shares the type's own
--- name, and the resolver's selective-member path (`resolve.mdk`'s
--- `expandMemberNames`) reads a plain `Bytes` member as a request for that
--- (module-private) constructor, not the type, and refuses it
--- (`NewtypeCtorNotExported`). `import bytes.*` sidesteps that path entirely.
-import bytes.*
+import bytes.{Bytes, bytesLength, fromArrayAssumeByteDomain, toArray}
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 
@@ -204,7 +198,7 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
   decodeBytes (encodeBytes b) == Ok b
 # DESUGAR
 (DUse false (UseGroup ("array") ((mem "fromList" false) (mem "get" false "arrGet"))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "bytesLength" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))
@@ -240,7 +234,7 @@ prop "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" (xs : List Int)
 (DProp false "hex Bytes round-trip: decodeBytes (encodeBytes b) == Ok b" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "b") (EApp (EVar "fromArrayAssumeByteDomain") (EApp (EVar "toByteArray") (EVar "xs")))) (DoExpr (EBinOp "==" (EApp (EVar "decodeBytes") (EApp (EVar "encodeBytes") (EVar "b"))) (EApp (EVar "Ok") (EVar "b"))))))
 # MARK
 (DUse false (UseGroup ("array") ((mem "fromList" false) (mem "get" false "arrGet"))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "bytesLength" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromDigit" false) (mem "toDigit" false) (mem "toUtf8" false) (mem "fromUtf8" false) (mem "toChars" false))))
 (DTypeSig false "charAt" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyCon "Char"))))

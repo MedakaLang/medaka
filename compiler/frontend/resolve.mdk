@@ -2681,10 +2681,18 @@ pubErrLoc exp (n, loc) =
 -- lets resolve's OTHER tables (`expCtors`/`expTypeCtors`) see it, so both
 -- arms below refuse it explicitly rather than let it fall through to the
 -- generic paths, which would silently admit it exactly as #1311 found.
+-- A plain member that names an exported TYPE binds that type, even when the
+-- same spelling is also a `newtype`'s constructor (`newtype Bytes = Bytes
+-- ByteBlock`): `import bytes.{Bytes}` asks for the type, exactly as `T(..)`
+-- on a newtype keeps `T` bound below, and only a name that is a newtype ctor
+-- and NOT an exported type is a ctor request to refuse (#3205).  The ctor half
+-- of a self-named type is kept out of scope by `realImport`'s `iaCtors`.
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
 expandMemberNames exp (m@(UseMember name False loc _)) =
   match newtypeTypeOfCtor name exp
-    Some _ => []  -- refused; see expandMemberErrs
+    -- the empty arm is the refusal; see expandMemberErrs
+    Some _ =>
+      if contains name exp.expTypes then [(name, useMemberLocal m, loc)] else []
     None => [(name, useMemberLocal m, loc)]
 expandMemberNames exp (m@(UseMember name True loc _))
   | isNewtypeExport name exp =
@@ -2705,7 +2713,11 @@ pubErrExpanded exp (origin, _, loc) = pubErrLoc exp (origin, loc)
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
 expandMemberErrs exp (UseMember name False loc _) =
   match newtypeTypeOfCtor name exp
-    Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
+    Some tyName =>
+      if contains name exp.expTypes then
+        []  -- a type import; see expandMemberNames
+      else
+        [NewtypeCtorNotExported tyName exp.modId (Some loc)]
     None => []
 expandMemberErrs exp (UseMember name True loc _)
   | isNewtypeExport name exp =
@@ -3058,7 +3070,13 @@ realImport exp path loc =
     -- `omHasKey` is uncounted and byte-identical to the `contains` filter.
     iaValues = filterInSet (omFromNames exp.expValues omEmpty) names,
     iaTypes = filterContains exp.expTypes names,
-    iaCtors = filterContains exp.expCtors names,
+    -- A `newtype`'s ctor is never importable (#1311), but `expCtors` lists it
+    -- and a self-named newtype's TYPE import (#3205) puts the same spelling in
+    -- `names`; that name is a type here, not a ctor.
+    iaCtors =
+      filterList
+        (c => not (contains c (map fst exp.expNewtypeCtors)))
+        (filterContains exp.expCtors names),
     iaIfaces = filterContains exp.expInterfaces names,
     iaFieldOwners = ownedFieldOwners exp exp.expFieldOwners,
     iaErrors = map (withResErrorLoc loc) errs,

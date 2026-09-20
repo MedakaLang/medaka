@@ -1,5 +1,5 @@
 # META
-source_lines=424
+source_lines=421
 stages=DESUGAR,MARK
 # SOURCE
 -- net_async.mdk — the non-blocking half of `net`, over the async scheduler.
@@ -14,10 +14,7 @@ stages=DESUGAR,MARK
 -- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
--- Wildcard because a `newtype`'s type name cannot be named in a selective
--- import list: `import bytes.{Bytes}` is rejected as a request for the
--- module-private constructor.
-import bytes.*
+import bytes.{Bytes, adoptByteBlock}
 import net.{Connection(..), Listener(..)}
 import net as N
 import string.{toUtf8}
@@ -428,7 +425,7 @@ handleThenClose handle conn =
   deferThen (handle conn) (_ => deferMap (_ => ()) (close conn))
 # DESUGAR
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "Wait" true) (mem "liftIO" false) (mem "spawn" false) (mem "awaitAny" false) (mem "deadlineAfter" false) (mem "expired" false))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false))))
 (DUse false (UseGroup ("net") ((mem "Connection" true) (mem "Listener" true))))
 (DUse false (UseAlias ("net") "N"))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false))))
@@ -549,7 +546,7 @@ handleThenClose handle conn =
 (DFunDef false "handleThenClose" ((PVar "handle") (PVar "conn")) (EApp (EApp (EVar "deferThen") (EApp (EVar "handle") (EVar "conn"))) (ELam (PWild) (EApp (EApp (EVar "deferMap") (ELam (PWild) (ELit LUnit))) (EApp (EVar "close") (EVar "conn"))))))
 # MARK
 (DUse false (UseGroup ("async") ((mem "Async" false) (mem "Wait" true) (mem "liftIO" false) (mem "spawn" false) (mem "awaitAny" false) (mem "deadlineAfter" false) (mem "expired" false))))
-(DUse false (UseWild ("bytes")))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "adoptByteBlock" false))))
 (DUse false (UseGroup ("net") ((mem "Connection" true) (mem "Listener" true))))
 (DUse false (UseAlias ("net") "N"))
 (DUse false (UseGroup ("string") ((mem "toUtf8" false))))

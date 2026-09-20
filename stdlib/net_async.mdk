@@ -10,10 +10,7 @@
 -- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
 import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
--- Wildcard because a `newtype`'s type name cannot be named in a selective
--- import list: `import bytes.{Bytes}` is rejected as a request for the
--- module-private constructor.
-import bytes.*
+import bytes.{Bytes, adoptByteBlock}
 import net.{Connection(..), Listener(..)}
 import net as N
 import string.{toUtf8}

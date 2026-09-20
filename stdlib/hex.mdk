@@ -18,13 +18,7 @@
 -- lint-disable-file rule-stdlib-reimpl
 
 import array.{fromList, get as arrGet}
--- Wildcard, not selective: `import bytes.{Bytes, ...}` cannot bring the bare
--- type name into scope here — `Bytes`'s constructor shares the type's own
--- name, and the resolver's selective-member path (`resolve.mdk`'s
--- `expandMemberNames`) reads a plain `Bytes` member as a request for that
--- (module-private) constructor, not the type, and refuses it
--- (`NewtypeCtorNotExported`). `import bytes.*` sidesteps that path entirely.
-import bytes.*
+import bytes.{Bytes, bytesLength, fromArrayAssumeByteDomain, toArray}
 import list.{reverse}
 import string.{fromDigit, toDigit, toUtf8, fromUtf8, toChars}
 

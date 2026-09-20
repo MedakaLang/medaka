@@ -1,0 +1,11 @@
+-- #3205: a `newtype` whose constructor shares the type's own name.  The type
+-- is exported; the constructor is module-private, as every newtype's is.
+export newtype NT = NT Int
+
+export
+mk : Int -> NT
+mk x = NT x
+
+export
+unwrap : NT -> Int
+unwrap (NT x) = x

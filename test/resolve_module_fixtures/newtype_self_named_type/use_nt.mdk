@@ -1,0 +1,8 @@
+-- #3205: a bare `NT` in the import list names the exported TYPE, not the
+-- same-spelled private constructor, so it resolves with no diagnostic and
+-- is usable in a signature.  Compare newtype_ctor_direct, where the ctor
+-- has its own name (`Wrap`) and naming it IS refused.
+import nt.{NT, mk, unwrap}
+
+roundTrip : NT -> Int
+roundTrip v = unwrap (mk (unwrap v))
