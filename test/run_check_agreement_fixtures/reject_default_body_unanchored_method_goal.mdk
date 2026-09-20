@@ -1,0 +1,25 @@
+-- #564: a generic default-method body owns the unanchored result of `make`.
+-- Inheriting the default supplies no determination channel for that result, so
+-- the generic body must reject before any impl can route it arbitrarily.
+data One = One
+data Two = Two
+
+interface Thing a where
+  make : Unit -> a
+  reveal : a -> Unit
+
+impl Thing One where
+  make _ = One
+  reveal _ = ()
+
+impl Thing Two where
+  make _ = Two
+  reveal _ = ()
+
+interface Host a where
+  host : a -> Unit
+  host _ = reveal (make ())
+
+impl Host Unit
+
+main = println 0
