@@ -1,0 +1,8 @@
+import mut_bytes.{make, blit}
+
+-- 4611686018427387903 is Int's maximum, so `srcOff + len` wraps negative: the
+-- bounds guard must not be written in that form.
+main =
+  let src = make 4
+  let dst = make 4
+  blit src 4611686018427387903 dst 0 2

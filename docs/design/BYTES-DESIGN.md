@@ -65,7 +65,9 @@ The full surface is three types, not one:
 - **`Bytes`** — immutable, packed. The type in this document's title, and the
   only one B1 builds.
 - **`MutBytes`** — mutable, packed, fixed length. The crypto scratch buffer:
-  a hash or cipher state that is overwritten in place and never resized.
+  a hash or cipher state that is overwritten in place and never resized. It
+  lives in `stdlib/mut_bytes.mdk`, not `stdlib/bytes.mdk`: one module cannot
+  export two `length`s, so each type carries the bare names in its own.
 - **`ByteBuf`** — growable, written in pure Medaka over the other two, with
   zero new intrinsics.
 
@@ -93,11 +95,19 @@ the `String` cell's existing UTF-8 bytes. Today, with no representation
 change, it is `O(n)` exactly like the original.
 
 **Deviation, accepted 2026-09-17:** the twins land in `stdlib/bytes.mdk`, not
-in `stdlib/string.mdk`, and are named `toUtf8Bytes` / `fromUtf8Bytes`.
-`stdlib/string.mdk` imports only `core` today, and a `Bytes`-returning
-function there would drag `stdlib/bytes.mdk` into nearly every module's import
-closure, the compiler's included — the exact bootstrap exposure B1 is
-sequenced to avoid.
+in `stdlib/string.mdk`. `stdlib/string.mdk` imports only `core` today, and a
+`Bytes`-returning function there would drag `stdlib/bytes.mdk` into nearly
+every module's import closure, the compiler's included — the exact bootstrap
+exposure B1 is sequenced to avoid.
+
+**Amended at B5 (#3221):** the twins are named `encodeUtf8` /
+`decodeUtf8` / `decodeUtf8Lossy`, not `toUtf8Bytes` / `fromUtf8Bytes`. The way
+back is two functions rather than one because there is no total
+`Bytes -> String`: `byteBlockToString` blits bytes into a `String` cell
+without reading them, so a single `Bytes -> String` door hands back a corrupt
+`String` at exit 0 on any byte sequence that is not UTF-8. `decodeUtf8`
+answers `Option String` and refuses; `decodeUtf8Lossy` substitutes U+FFFD per
+maximal subpart. `toUtf8Bytes` / `fromUtf8Bytes` are removed, not deprecated.
 
 ---
 
@@ -146,9 +156,12 @@ The same reasoning is why `Bytes` has no element type parameter, and therefore
 cannot implement `Foldable`, `Mappable` or `Filterable` — those interfaces
 range over a container of some element type, and `Bytes` is not one. This is a
 kind-level impossibility rather than a decision to revisit, and it is why the
-byte count is exported as `bytesLength` rather than `length`: `length` is
-`Foldable`'s method and the prelude exports it, so a bare `length` here would
-be an ambiguous occurrence at every import site.
+byte count is an ordinary export rather than a method. It was first exported
+as `bytesLength`, because a bare `length` under `import bytes.*` was an
+ambiguous occurrence; the export is now `length`, and a wildcard import of
+`bytes` is no longer a supported form. Named in an import list `length`
+shadows the prelude's method for the whole importing module, so a module that
+uses both reaches this one through an alias (`import bytes as B`).
 
 ---
 
@@ -160,13 +173,11 @@ be an ambiguous occurrence at every import site.
 export newtype Bytes = Bytes (Array Int)   -- constructor is module-private
 export fromArray     : Array Int -> Bytes
 export toArray       : Bytes -> Array Int
-export bytesLength   : Bytes -> Int
+export length        : Bytes -> Int         -- was `bytesLength` until B5
 export get           : Int -> Bytes -> Option Int
 export impl Index Bytes Int Int            -- `b[i]`, panics out of range
 export impl Eq Bytes
 export impl Ord Bytes
-export toUtf8Bytes   : String -> Bytes
-export fromUtf8Bytes : Bytes -> String
 ```
 
 There is deliberately no `fromList` and no builder. `Foldable`, `Mappable` and
@@ -232,7 +243,7 @@ its input, not by convenience:
   broken promise truncates (masks to the low eight bits), because a packed
   byte cannot hold `300`. This door is **transitional**: its own doc block
   names B6 as its removal, alongside `toUtf8`/`fromUtf8`.
-- **A positional write** — `MutBytes`'s `mutBytesSet` **panics** on an
+- **A positional write** — `mut_bytes`'s `setInPlace` **panics** on an
   out-of-range value, exactly as `array.setInPlace` already panics on an
   out-of-range index. Ruling 3 made this split for the index dimension; this
   extends it to the value dimension. An `Option`-returning write was
@@ -253,3 +264,7 @@ mechanism:
   seed emitter can no longer compile HEAD, which happens only if
   `compiler/**` or `stdlib/core.mdk` adopts `Bytes` — out of scope for this
   epic (see "The B1 surface" above).
+
+`adoptByteBlockUnsafe`, `lendByteBlockUnsafe`, and `fromByteBlockPrefix` are
+the only exports naming `ByteBlock` directly (`stdlib/bytes.mdk`'s
+`# Kernel doors` section); B5 adds no more without a ruling.

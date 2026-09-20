@@ -53,7 +53,8 @@ import http.{
   serializeResponse,
 }
 import test.{expectEqual, expectTrue}
-import bytes.*
+import bytes as B
+import bytes.{Bytes, encodeUtf8, fromArray}
 import string.{contains, toUtf8}
 
 isErr : Result e a -> Bool
@@ -105,8 +106,8 @@ mustResponse status reason headers body =
 requestWithBody : String -> Bytes -> Request
 requestWithBody contentType body =
   mustRequest
-    (toUtf8Bytes
-        "POST /xrpc/example HTTP/1.1\r\nHost: pds.example\r\nContent-Type: \{contentType}\r\nContent-Length: \{intToString (bytesLength body)}\r\n\r\n"
+    (encodeUtf8
+        "POST /xrpc/example HTTP/1.1\r\nHost: pds.example\r\nContent-Type: \{contentType}\r\nContent-Length: \{intToString (B.length body)}\r\n\r\n"
       ++ body)
 
 bodyRejects : String -> Request -> Bool
@@ -116,18 +117,18 @@ bodyRejects expected request = match decodeRequestBody request
 
 simpleGet : Bytes
 simpleGet =
-  toUtf8Bytes
+  encodeUtf8
     "GET /xrpc/com.atproto.server.describeServer?detail=true HTTP/1.1\r\nHost: pds.example\r\n\r\n"
 
 fixedBinary : Bytes
 fixedBinary =
-  toUtf8Bytes
+  encodeUtf8
       "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 3\r\nConnection: keep-alive, CLOSE\r\nX-Repeat: one\r\nX-Repeat: two\r\n\r\n"
     ++ mustBytes [|0, 128, 255|]
 
 chunked : Bytes
 chunked =
-  toUtf8Bytes
+  encodeUtf8
     "POST /xrpc/com.atproto.repo.applyWrites HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: Chunked\r\nX-Repeat: one\r\nX-Repeat: two\r\n\r\n4;foo=bar\r\nWiki\r\n5;quoted=\"yes\"\r\npedia\r\n0;done\r\nX-Checksum: ok\r\n\r\n"
 
 test "origin-form HTTP/1.1 request parses without a body" =
@@ -136,7 +137,7 @@ test "origin-form HTTP/1.1 request parses without a body" =
     (requestMethod request == "GET"
       && requestTarget request
         == "/xrpc/com.atproto.server.describeServer?detail=true"
-      && bytesLength (requestBody request) == 0
+      && B.length (requestBody request) == 0
       && requestKeepAlive request)
 
 test "fixed-length framing preserves raw binary body and ordered duplicates" =
@@ -150,7 +151,7 @@ test "fixed-length framing preserves raw binary body and ordered duplicates" =
 test "header accessors return trimmed field bytes" =
   let request =
     mustRequest
-      (toUtf8Bytes
+      (encodeUtf8
         "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test:\t value \t\r\n\r\n")
   match requestHeaders request
     [_host, value] => expectEqual (headerValue value) (toUtf8 "value")
@@ -159,14 +160,14 @@ test "header accessors return trimmed field bytes" =
 test "chunked framing accepts extensions and ordered trailers" =
   let request = mustRequest chunked
   expectTrue
-    (requestBody request == toUtf8Bytes "Wikipedia"
+    (requestBody request == encodeUtf8 "Wikipedia"
       && names (requestTrailers request) == ["x-checksum"]
       && requestKeepAlive request)
 
 test "Connection close token matching is case-insensitive and comma aware" =
   let request =
     mustRequest
-      (toUtf8Bytes
+      (encodeUtf8
         "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: upgrade, ClOsE\r\n\r\n")
   expectTrue (not (requestKeepAlive request))
 
@@ -174,153 +175,168 @@ test "duplicate Content-Length is rejected even when values agree" =
   expectTrue
     (rejects
       "duplicate Content-Length"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n"))
 
 test "Transfer-Encoding plus Content-Length is rejected" =
   expectTrue
     (rejects
       "ambiguous"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n"))
 
 test "unsupported transfer coding is rejected" =
   expectTrue
     (rejects
       "unsupported transfer coding"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: gzip, chunked\r\n\r\n"))
 
 test "repeated Transfer-Encoding is rejected" =
   expectTrue
     (isErr
       (parseRequest
-        (toUtf8Bytes
+        (encodeUtf8
           "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\n")))
 
 test "close-delimited request bodies are rejected as trailing bytes" =
   expectTrue
     (rejects
       "unframed or trailing"
-      (toUtf8Bytes "POST / HTTP/1.1\r\nHost: pds.example\r\n\r\npayload"))
+      (encodeUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\n\r\npayload"))
 
 test "truncated fixed-length body is rejected" =
   expectTrue
     (rejects
       "truncated body"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 4\r\n\r\nabc"))
 
 test "bytes after fixed-length framing are rejected" =
   expectTrue
     (rejects
       "bytes after framed"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\n\r\nab"))
 
 test "overflowing Content-Length is rejected before allocation" =
   expectTrue
     (rejects
       "overflows Int"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 99999999999999999999\r\n\r\n"))
 
 test "decoded-body limit is enforced before fixed allocation" =
   expectTrue
     (rejects
       "decoded body exceeds"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 5242881\r\n\r\n"))
 
 test "invalid chunk size is rejected" =
   expectTrue
     (rejects
       "invalid chunk size"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\n"))
 
 test "oversized chunk is rejected before allocation" =
   expectTrue
     (rejects
       "chunk size exceeds"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n500001\r\n"))
 
 test "truncated chunk data is rejected" =
   expectTrue
     (rejects
       "truncated body"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab"))
 
 test "missing CRLF after chunk data is rejected" =
   expectTrue
     (rejects
       "missing CRLF"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1\r\naXX"))
 
 test "malformed chunk extension is rejected" =
   expectTrue
     (rejects
       "unterminated quoted"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1;x=\"no\r\na\r\n0\r\n\r\n"))
 
 test "forbidden framing trailer is rejected" =
   expectTrue
     (rejects
       "forbidden framing"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 0\r\n\r\n"))
 
 test "bytes after chunked trailers are rejected" =
   expectTrue
     (rejects
       "bytes after framed"
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nx"))
 
 test "bare LF is rejected" =
   expectTrue
-    (rejects "bare LF" (toUtf8Bytes "GET / HTTP/1.1\nHost: pds.example\n\n"))
+    (rejects "bare LF" (encodeUtf8 "GET / HTTP/1.1\nHost: pds.example\n\n"))
 
 test "bare CR is rejected" =
-  expectTrue (rejects "bare CR" (toUtf8Bytes "GET / HTTP/1.1\rX"))
+  expectTrue (rejects "bare CR" (encodeUtf8 "GET / HTTP/1.1\rX"))
 
 test "obsolete folded header line is rejected" =
   expectTrue
     (rejects
       "folded"
-      (toUtf8Bytes
+      (encodeUtf8
         "GET / HTTP/1.1\r\nHost: pds.example\r\n continuation\r\n\r\n"))
 
 test "invalid method token is rejected" =
   expectTrue
     (rejects
       "method token"
-      (toUtf8Bytes "GE(T / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+      (encodeUtf8 "GE(T / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+
+test "non-ASCII byte in method is rejected" =
+  expectTrue
+    (rejects
+      "method token"
+      (mustBytes [|255|]
+        ++ encodeUtf8 "ET / HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+
+test "non-ASCII byte in target is rejected" =
+  expectTrue
+    (rejects
+      "origin-form ASCII target"
+      (encodeUtf8 "GET /"
+        ++ mustBytes [|128|]
+        ++ encodeUtf8 " HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "invalid header-name token is rejected" =
   expectTrue
     (rejects
       "header field name"
-      (toUtf8Bytes
+      (encodeUtf8
         "GET / HTTP/1.1\r\nHost: pds.example\r\nBad Name: value\r\n\r\n"))
 
 test "control byte in header value is rejected" =
   expectTrue
     (rejects
       "control byte"
-      (toUtf8Bytes "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test: "
+      (encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test: "
         ++ mustBytes [|1|]
-        ++ toUtf8Bytes "\r\n\r\n"))
+        ++ encodeUtf8 "\r\n\r\n"))
 
 test "CRLF injection in request target is rejected" =
   expectTrue
     (isErr
       (parseRequest
-        (toUtf8Bytes
+        (encodeUtf8
           "GET /ok\r\nInjected: yes HTTP/1.1\r\nHost: pds.example\r\n\r\n")))
 
 -- The framer reads a `Bytes`, whose every element is an octet by
@@ -340,74 +356,74 @@ test "absolute-form request target is rejected" =
   expectTrue
     (rejects
       "origin-form"
-      (toUtf8Bytes
+      (encodeUtf8
         "GET http://pds.example/x HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "fragment in request target is rejected" =
   expectTrue
     (rejects
       "origin-form"
-      (toUtf8Bytes "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+      (encodeUtf8 "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "request target rejects raw braces and preserves percent-encoded braces" =
   expectTrue
     (rejects
         "origin-form"
-        (toUtf8Bytes "GET /x?value={bad} HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+        (encodeUtf8 "GET /x?value={bad} HTTP/1.1\r\nHost: pds.example\r\n\r\n")
       && isOk
         (parseRequest
-          (toUtf8Bytes
+          (encodeUtf8
             "GET /x?value=%7Bgood%7D HTTP/1.1\r\nHost: pds.example\r\n\r\n")))
 
 test "HTTP/1.0 is rejected" =
   expectTrue
     (rejects
       "only HTTP/1.1"
-      (toUtf8Bytes "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n"))
+      (encodeUtf8 "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n"))
 
 test "HTTP protocol name is case-sensitive" =
   expectTrue
     (rejects
         "only HTTP/1.1"
-        (toUtf8Bytes "GET / http/1.1\r\nHost: pds.example\r\n\r\n")
+        (encodeUtf8 "GET / http/1.1\r\nHost: pds.example\r\n\r\n")
       && rejects
         "only HTTP/1.1"
-        (toUtf8Bytes "GET / Http/1.1\r\nHost: pds.example\r\n\r\n"))
+        (encodeUtf8 "GET / Http/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "missing Host is rejected" =
-  expectTrue (rejects "exactly one Host" (toUtf8Bytes "GET / HTTP/1.1\r\n\r\n"))
+  expectTrue (rejects "exactly one Host" (encodeUtf8 "GET / HTTP/1.1\r\n\r\n"))
 
 test "duplicate Host is rejected" =
   expectTrue
     (rejects
       "exactly one Host"
-      (toUtf8Bytes "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n"))
+      (encodeUtf8 "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n"))
 
 test "Host requires a syntactically valid authority" =
   expectTrue
     (rejects
         "valid authority"
-        (toUtf8Bytes "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n")
+        (encodeUtf8 "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n")
       && rejects
         "valid authority"
-        (toUtf8Bytes "GET / HTTP/1.1\r\nHost: pds.example:not-a-port\r\n\r\n")
+        (encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example:not-a-port\r\n\r\n")
       && isOk
         (parseRequest
-          (toUtf8Bytes "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n")))
+          (encodeUtf8 "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n")))
 
 test "Host accepts explicit empty reg-name and IP-literal ports" =
   expectTrue
     (isOk
         (parseRequest
-          (toUtf8Bytes "GET / HTTP/1.1\r\nHost: example.com:\r\n\r\n"))
+          (encodeUtf8 "GET / HTTP/1.1\r\nHost: example.com:\r\n\r\n"))
       && isOk
-        (parseRequest (toUtf8Bytes "GET / HTTP/1.1\r\nHost: [::1]:\r\n\r\n")))
+        (parseRequest (encodeUtf8 "GET / HTTP/1.1\r\nHost: [::1]:\r\n\r\n")))
 
 test "malformed Connection token list is rejected" =
   expectTrue
     (rejects
       "Connection"
-      (toUtf8Bytes
+      (encodeUtf8
         "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: close,\r\n\r\n"))
 
 test "raw request ceiling accepts at and rejects over" =
@@ -493,7 +509,7 @@ test "response body elements must be bytes" =
 test "query decoding preserves repeated names, empty values, and order" =
   let request =
     mustRequest
-      (toUtf8Bytes "GET /x?a=1&a=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+      (encodeUtf8 "GET /x?a=1&a=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   match parseTargetQuery request
     Ok (path, [QueryParam a1 v1, QueryParam a2 v2, QueryParam flag v3]) =>
       expectTrue
@@ -508,7 +524,7 @@ test "query decoding preserves repeated names, empty values, and order" =
 
 test "empty query component after question mark is accepted" =
   let request =
-    mustRequest (toUtf8Bytes "GET /x? HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+    mustRequest (encodeUtf8 "GET /x? HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   match parseTargetQuery request
     Ok (path, []) => expectEqual path "/x"
     _ => expectTrue False
@@ -516,7 +532,7 @@ test "empty query component after question mark is accepted" =
 test "query percent decoding is exact and plus stays literal" =
   let request =
     mustRequest
-      (toUtf8Bytes
+      (encodeUtf8
         "GET /x?q=a+b%20c&snow=%E2%98%83 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   match parseTargetQuery request
     Ok (_, [QueryParam "q" first, QueryParam "snow" second]) =>
@@ -527,30 +543,30 @@ test "malformed query percent escape is rejected" =
   expectTrue
     (rejects
       "origin-form"
-      (toUtf8Bytes "GET /x?q=%2G HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
+      (encodeUtf8 "GET /x?q=%2G HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
 test "overlong UTF-8 in query is rejected" =
   let request =
     mustRequest
-      (toUtf8Bytes "GET /x?q=%C0%AF HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+      (encodeUtf8 "GET /x?q=%C0%AF HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   expectTrue (isErr (parseTargetQuery request))
 
 test "decoded query controls and NUL are rejected" =
   let nul =
     mustRequest
-      (toUtf8Bytes "GET /x?q=%00 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+      (encodeUtf8 "GET /x?q=%00 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   let del =
     mustRequest
-      (toUtf8Bytes "GET /x?q=%7f HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+      (encodeUtf8 "GET /x?q=%7f HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   expectTrue (isErr (parseTargetQuery nul) && isErr (parseTargetQuery del))
 
 test "empty query names are rejected" =
   let first =
     mustRequest
-      (toUtf8Bytes "GET /x?=value HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+      (encodeUtf8 "GET /x?=value HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   let later =
     mustRequest
-      (toUtf8Bytes "GET /x?a=1&&b=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
+      (encodeUtf8 "GET /x?a=1&&b=2 HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   expectTrue (isErr (parseTargetQuery first) && isErr (parseTargetQuery later))
 
 test "media type and subtype are case-insensitive with bounded parameters" =
@@ -572,7 +588,7 @@ test "JSON request body is syntax-checked after strict UTF-8 decoding" =
   match (decodeRequestBody
     (requestWithBody
       "Application/JSON; charset=utf-8"
-      (toUtf8Bytes "{\"ok\":true}")))
+      (encodeUtf8 "{\"ok\":true}")))
     Ok (JsonBody _ _) => expectTrue True
     _ => expectTrue False
 
@@ -580,7 +596,7 @@ test "invalid JSON syntax is rejected" =
   expectTrue
     (bodyRejects
       "invalid JSON"
-      (requestWithBody "application/json" (toUtf8Bytes "{nope}")))
+      (requestWithBody "application/json" (encodeUtf8 "{nope}")))
 
 test "invalid JSON UTF-8 is rejected before syntax parsing" =
   expectTrue
@@ -591,20 +607,20 @@ test "invalid JSON UTF-8 is rejected before syntax parsing" =
 test "duplicate Content-Type is rejected" =
   let request =
     mustRequest
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Type: application/json\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
   expectTrue (bodyRejects "duplicate Content-Type" request)
 
 test "missing Content-Type is rejected" =
   let request =
     mustRequest
-      (toUtf8Bytes
+      (encodeUtf8
         "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 2\r\n\r\n{}")
   expectTrue (bodyRejects "requires Content-Type" request)
 
 test "text media types decode strict UTF-8" =
   match (decodeRequestBody
-    (requestWithBody "Text/Plain; charset=utf-8" (toUtf8Bytes "héllo")))
+    (requestWithBody "Text/Plain; charset=utf-8" (encodeUtf8 "héllo")))
     Ok (TextBody mediaType text) =>
       expectTrue (mediaTypeType mediaType == "text" && text == "héllo")
     _ => expectTrue False
@@ -662,7 +678,7 @@ scanAgrees input = match scanRequestBoundary input 0
   HttpFrameFailed _ => isErr (parseRequest input)
   HttpFramedAt at =>
     at >= 0
-      && at <= bytesLength input
+      && at <= B.length input
       && (match (parseRequestAt input 0 at, parseRequest (prefix input at))
         (Ok viaFrame, Ok viaPrefix) => sameRequest viaFrame viaPrefix
         _ => False)
@@ -681,63 +697,63 @@ corpus = [
   chunked,
   pipelined,
   chunked ++ simpleGet,
-  simpleGet ++ toUtf8Bytes "x",
-  toUtf8Bytes
+  simpleGet ++ encodeUtf8 "x",
+  encodeUtf8
     "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test:\t value \t\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: upgrade, ClOsE\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 0\r\nContent-Length: 0\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n0\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: gzip, chunked\r\n\r\n",
-  toUtf8Bytes "POST / HTTP/1.1\r\nHost: pds.example\r\n\r\npayload",
-  toUtf8Bytes
+  encodeUtf8 "POST / HTTP/1.1\r\nHost: pds.example\r\n\r\npayload",
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 4\r\n\r\nabc",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 1\r\n\r\nab",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 99999999999999999999\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 5242881\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\nZ\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n500001\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1\r\naXX",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n1;x=\"no\r\na\r\n0\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\nContent-Length: 0\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8
     "POST / HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n0\r\n\r\nx",
-  toUtf8Bytes "GET / HTTP/1.1\nHost: pds.example\n\n",
-  toUtf8Bytes "GET / HTTP/1.1\rX",
-  toUtf8Bytes "GET / HTTP/1.1\r\nHost: pds.example\r\n continuation\r\n\r\n",
-  toUtf8Bytes "GE(T / HTTP/1.1\r\nHost: pds.example\r\n\r\n",
-  toUtf8Bytes "GET / HTTP/1.1\r\nHost: pds.example\r\nBad Name: value\r\n\r\n",
-  toUtf8Bytes "GET /ok\r\nInjected: yes HTTP/1.1\r\nHost: pds.example\r\n\r\n",
-  toUtf8Bytes "GET http://pds.example/x HTTP/1.1\r\nHost: pds.example\r\n\r\n",
-  toUtf8Bytes "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n",
-  toUtf8Bytes "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n",
-  toUtf8Bytes "GET / http/1.1\r\nHost: pds.example\r\n\r\n",
-  toUtf8Bytes "GET / HTTP/1.1\r\n\r\n",
-  toUtf8Bytes "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n",
-  toUtf8Bytes "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n",
-  toUtf8Bytes "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n",
-  toUtf8Bytes
+  encodeUtf8 "GET / HTTP/1.1\nHost: pds.example\n\n",
+  encodeUtf8 "GET / HTTP/1.1\rX",
+  encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\n continuation\r\n\r\n",
+  encodeUtf8 "GE(T / HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\nBad Name: value\r\n\r\n",
+  encodeUtf8 "GET /ok\r\nInjected: yes HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  encodeUtf8 "GET http://pds.example/x HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  encodeUtf8 "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  encodeUtf8 "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n",
+  encodeUtf8 "GET / http/1.1\r\nHost: pds.example\r\n\r\n",
+  encodeUtf8 "GET / HTTP/1.1\r\n\r\n",
+  encodeUtf8 "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n",
+  encodeUtf8 "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n",
+  encodeUtf8 "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n",
+  encodeUtf8
     "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: close,\r\n\r\n",
-  toUtf8Bytes "GET /x?a=1&a=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n",
+  encodeUtf8 "GET /x?a=1&a=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n",
   emptyBytes,
 ]
 
 everyProperPrefixNeedsMore : Bytes -> Int -> Bool
 everyProperPrefixNeedsMore input size =
-  if size >= bytesLength input then
+  if size >= B.length input then
     True
   else match scanRequestBoundary (prefix input size) 0
     HttpNeedMore => everyProperPrefixNeedsMore input (size + 1)
@@ -752,7 +768,7 @@ feedOneByteAtATime : Bytes -> Bool
 feedOneByteAtATime input =
   everyProperPrefixNeedsMore input 0
     && (match scanRequestBoundary input 0
-      HttpFramedAt at => at == bytesLength input && isOk (parseRequest input)
+      HttpFramedAt at => at == B.length input && isOk (parseRequest input)
       _ => False)
 
 test "scanner and one-shot parser agree across the whole HTTP corpus" =
@@ -765,14 +781,14 @@ test "a byte-at-a-time feed asks for more until the completing byte frames it" =
       && feedOneByteAtATime chunked)
 
 test "a definitively malformed prefix is rejected rather than left pending" =
-  match scanRequestBoundary (toUtf8Bytes "GET / HTTP/1.0\r\n") 0
+  match scanRequestBoundary (encodeUtf8 "GET / HTTP/1.0\r\n") 0
     HttpFrameFailed _ => expectTrue True
     _ => expectTrue False
 
 test "pipelined requests are framed one at a time from a single buffer" =
   match (
     scanRequestBoundary pipelined 0,
-    scanRequestBoundary pipelined (bytesLength simpleGet),
+    scanRequestBoundary pipelined (B.length simpleGet),
   )
     (HttpFramedAt first, HttpFramedAt second) => match (
       parseRequestAt pipelined 0 first,
@@ -780,8 +796,8 @@ test "pipelined requests are framed one at a time from a single buffer" =
     )
       (Ok head, Ok tail) =>
         expectTrue
-          (first == bytesLength simpleGet
-            && second == bytesLength pipelined
+          (first == B.length simpleGet
+            && second == B.length pipelined
             && requestMethod head == "GET"
             && requestMethod tail == "POST"
             && requestBody tail == mustBytes [|0, 128, 255|])
@@ -791,14 +807,14 @@ test "pipelined requests are framed one at a time from a single buffer" =
 test "a chunked request frames at its trailer terminator, not the buffer end" =
   let stream = chunked ++ simpleGet
   match scanRequestBoundary stream 0
-    HttpFramedAt at => expectEqual at (bytesLength chunked)
+    HttpFramedAt at => expectEqual at (B.length chunked)
     _ => expectTrue False
 
 test "trailing bytes frame the first request instead of failing the buffer" =
-  let stream = simpleGet ++ toUtf8Bytes "x"
+  let stream = simpleGet ++ encodeUtf8 "x"
   match scanRequestBoundary stream 0
     HttpFramedAt at =>
-      expectTrue (at == bytesLength simpleGet && isErr (parseRequest stream))
+      expectTrue (at == B.length simpleGet && isErr (parseRequest stream))
     _ => expectTrue False
 
 -- A resumable scan and a whole-buffer scan are the same framer, so they have to
@@ -825,7 +841,7 @@ resumeAgreesGo input start step size scan =
   let buf = prefix input size
   let (resumed, next) = scanRequestBoundaryFrom buf start scan
   let agrees = sameFrame resumed (scanRequestBoundary buf start)
-  if size >= bytesLength input then
+  if size >= B.length input then
     agrees
   else
     agrees
@@ -833,12 +849,12 @@ resumeAgreesGo input start step size scan =
         input
         start
         step
-        (min (bytesLength input) (size + step))
+        (min (B.length input) (size + step))
         next
 
 resumeAgrees : Int -> Int -> Bytes -> Bool
 resumeAgrees start step input =
-  resumeAgreesGo input start step (min start (bytesLength input)) httpScanStart
+  resumeAgreesGo input start step (min start (B.length input)) httpScanStart
 
 allResumeAgree : Int -> List Bytes -> Bool
 allResumeAgree _ [] = True
@@ -849,15 +865,15 @@ resumeCorpus : List Bytes
 resumeCorpus =
   corpus
     ++ [
-      toUtf8Bytes
+      encodeUtf8
         "POST /x HTTP/1.1\r\nHost: pds.example\r\nTransfer-Encoding: chunked\r\n\r\n3;a=b\r\nabc\r\n2\r\nde\r\n0\r\nX-Done: 1\r\n\r\n",
-      toUtf8Bytes
+      encodeUtf8
         "POST /x HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 5\r\nX-Pad:\t sp \t\r\n\r\nab\rcd",
       pipelined ++ chunked,
-      toUtf8Bytes "GET / HTTP/1.1\r\nHost: pds.example\r\n\r",
-      toUtf8Bytes "GET / HTTP/1.1\r\nHost: pds.example\r",
-      toUtf8Bytes "GET / HTTP/1.1\r",
-      toUtf8Bytes "GET",
+      encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r\n\r",
+      encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example\r",
+      encodeUtf8 "GET / HTTP/1.1\r",
+      encodeUtf8 "GET",
     ]
 
 test "a resumed scan matches a whole-buffer scan one byte at a time" =
@@ -872,9 +888,9 @@ test "a resumed scan matches a whole-buffer scan at other increments" =
 
 test "a resumed scan matches a whole-buffer scan from a pipelined offset" =
   expectTrue
-    (resumeAgrees (bytesLength simpleGet) 1 pipelined
-      && resumeAgrees (bytesLength simpleGet) 1 (pipelined ++ chunked)
-      && resumeAgrees (bytesLength simpleGet) 3 (pipelined ++ chunked))
+    (resumeAgrees (B.length simpleGet) 1 pipelined
+      && resumeAgrees (B.length simpleGet) 1 (pipelined ++ chunked)
+      && resumeAgrees (B.length simpleGet) 3 (pipelined ++ chunked))
 
 -- A caller that accumulates into a backing array with spare capacity hands the
 -- scanner more bytes than it has received. Only the first `avail` bytes are
@@ -884,25 +900,21 @@ test "a resumed scan matches a whole-buffer scan from a pipelined offset" =
 -- Bytes that could complete a fixed-length body, a chunk-size line, or a
 -- trailer section if the scanner ever mistook capacity for input.
 slackBytes : Bytes
-slackBytes = toUtf8Bytes "\r\n0\r\n\r\nZZZZ"
+slackBytes = encodeUtf8 "\r\n0\r\n\r\nZZZZ"
 
 tenByteBody : Bytes
 tenByteBody =
-  toUtf8Bytes
+  encodeUtf8
     "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: pds.example\r\nContent-Length: 10\r\n\r\nabc"
 
 test "a body short of its content length is pending, padding notwithstanding" =
   let padded = tenByteBody ++ mustBytes (arrayMakeWith 7 (_ => 0))
   match (
     fst
-      (scanRequestBoundaryWithin
-        padded
-        (bytesLength tenByteBody)
-        0
-        httpScanStart),
+      (scanRequestBoundaryWithin padded (B.length tenByteBody) 0 httpScanStart),
     scanRequestBoundary padded 0,
   )
-    (HttpNeedMore, HttpFramedAt at) => expectEqual at (bytesLength padded)
+    (HttpNeedMore, HttpFramedAt at) => expectEqual at (B.length padded)
     _ => expectTrue False
 
 -- Scanning a padded backing array one received byte at a time has to agree with
@@ -918,7 +930,7 @@ availAgreesGo padded live avail scan =
 
 availAgrees : Bytes -> Bool
 availAgrees input =
-  availAgreesGo (input ++ slackBytes) (bytesLength input) 0 httpScanStart
+  availAgreesGo (input ++ slackBytes) (B.length input) 0 httpScanStart
 
 allAvailAgree : List Bytes -> Bool
 allAvailAgree [] = True

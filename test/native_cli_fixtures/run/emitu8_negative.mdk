@@ -1,0 +1,5 @@
+import bytebuilder.{newBuilder, emitU8}
+
+main =
+  let buf = newBuilder ()
+  emitU8 (-1) buf

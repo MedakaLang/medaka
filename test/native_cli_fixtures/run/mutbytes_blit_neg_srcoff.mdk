@@ -1,0 +1,6 @@
+import mut_bytes.{make, blit}
+
+main =
+  let src = make 4
+  let dst = make 4
+  blit src (0 - 1) dst 0 1

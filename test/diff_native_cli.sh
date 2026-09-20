@@ -382,12 +382,18 @@ else
     fail=$((fail+1)); printf 'FAIL build/main_shape_nonunit (want exit 0 + binary + W-MAIN-SHAPE on stderr, got exit %s stderr [%s])\n' "$nub_status" "$(cat "$nub_err" 2>/dev/null)"
   fi
 
-  # ── build: MutBytes panic messages (stdlib/bytes.mdk) ─────────────────────
-  # Three `panic` arms in stdlib/bytes.mdk had zero test vehicle before this:
-  # mutBytesSet's value-range check, mutBytesSet's bounds check, and
-  # mutBytesMake's negative-length check. Pin the runtime abort text and exit
-  # code for each so a change to any of the three messages, or a regression
-  # that drops the guard entirely, is caught.
+  # ── build: MutBytes/Builder panic messages (stdlib/mut_bytes.mdk,
+  # stdlib/bytebuilder.mdk) ──────────────────────────────────────────────────
+  # Ten `panic` arms across the two types that no other vehicle reaches:
+  # MutBytes.setInPlace's value-range and bounds checks, MutBytes.make's
+  # negative-length check, MutBytes.fill's value-range check, MutBytes.blit's
+  # three negative-argument checks and two bounds checks, and Builder.emitU8's
+  # value-range check. Pin the runtime abort text and exit code for each so a
+  # change to any of the ten messages, or a regression that drops the guard
+  # entirely, is caught. The two blit bounds fixtures pass an offset of Int's
+  # maximum: a guard written as `off + len > length` wraps negative, passes,
+  # and reaches an unchecked memmove, so the failure is a segfault rather than
+  # a panic.
   mb_case() {
     mb_name="$1"; mb_f="$FIX/run/$mb_name.mdk"; mb_want="$2"
     mb_bin="$TMP/nat_build_$mb_name"; mb_err="$TMP/nat_${mb_name}_run.err"
@@ -404,9 +410,17 @@ else
         "$mb_name" "$mb_want" "$mb_status" "$(cat "$mb_err" 2>/dev/null)"
     fi
   }
-  mb_case mutbytes_set_range "MutBytes.mutBytesSet: value out of range 0..255"
-  mb_case mutbytes_set_oob   "MutBytes.mutBytesSet: index out of bounds"
-  mb_case mutbytes_make_neg  "MutBytes.mutBytesMake: negative length"
+  mb_case mutbytes_set_range "MutBytes.setInPlace: value out of range 0..255"
+  mb_case mutbytes_set_oob   "MutBytes.setInPlace: index out of bounds"
+  mb_case mutbytes_make_neg  "MutBytes.make: negative length"
+  mb_case mutbytes_fill_range "MutBytes.fill: value out of range 0..255"
+  mb_case mutbytes_blit_neg_len "MutBytes.blit: negative length"
+  mb_case mutbytes_blit_neg_srcoff "MutBytes.blit: negative srcOff"
+  mb_case mutbytes_blit_neg_dstoff "MutBytes.blit: negative dstOff"
+  mb_case mutbytes_blit_src_oob "MutBytes.blit: source out of bounds"
+  mb_case mutbytes_blit_dst_oob "MutBytes.blit: destination out of bounds"
+  mb_case emitu8_range       "Builder.emitU8: value out of range 0..255"
+  mb_case emitu8_negative    "Builder.emitU8: value out of range 0..255"
 fi
 
 # error/* — RETIRED with the OCaml oracle (native canonical; oracle-coupled leg

@@ -20,13 +20,13 @@ IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
 COMMA
-IDENT "adoptByteBlock"
+IDENT "adoptByteBlockUnsafe"
 COMMA
 IDENT "fromByteBlockPrefix"
 COMMA
-IDENT "lendByteBlock"
+IDENT "lendByteBlockUnsafe"
 COMMA
-IDENT "toUtf8Bytes"
+IDENT "encodeUtf8"
 RBRACE
 NEWLINE
 IMPORT
@@ -302,7 +302,7 @@ INDENT
 LET
 IDENT "srcBlock"
 EQUAL
-IDENT "lendByteBlock"
+IDENT "lendByteBlockUnsafe"
 IDENT "src"
 NEWLINE
 LET
@@ -402,7 +402,7 @@ IDENT "len"
 RPAREN
 EQUAL
 LPAREN
-IDENT "adoptByteBlock"
+IDENT "adoptByteBlockUnsafe"
 BANG
 IDENT "backing"
 COMMA
