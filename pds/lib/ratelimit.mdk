@@ -90,7 +90,13 @@ public export data RateLimitClass =
   | RepoExportClass
   | ProxyClass
 
-public export data RateLimitVerdict = Admitted | Refused
+-- | `RefusedCapacity` is distinct from `Refused`: the identity itself has not
+-- exceeded any class allowance (it may have no row at all), and what refused
+-- it is the shared table being full of OTHER identities. A caller renders
+-- this differently from an ordinary allowance refusal — `classMessage` and
+-- `remainingInClass` describe THIS identity's own usage, which is not what
+-- refused it here.
+public export data RateLimitVerdict = Admitted | Refused | RefusedCapacity
 
 {- | Opaque, resource-bounded: the `Int` is the window index the SECOND map
    belongs to, and the first map is the window before it. Rows are only ever
@@ -173,8 +179,14 @@ slidingUsed limitClass elapsed previous current =
 -- `classAllowance` for an identity not already tracked this window (nothing
 -- to gain by inserting an empty row for it), and a genuinely new identity
 -- arriving once `current` already holds `maxRateLimitIdentitiesPerWindow`
--- rows — refused outright, ahead of the allowance check, so the cap can
--- never be exceeded.
+-- rows — refused with `RefusedCapacity`, ahead of the allowance check, so the
+-- cap can never be exceeded.
+--
+-- `directIdentity` is exempt from that second case: it is the one shared
+-- fallback bucket every untrusted-proxy or header-less caller lands in, so it
+-- is not attacker-chosen the way a spoofed `X-Forwarded-For` address is, and
+-- refusing it once the table fills would lock out every brand-new client at
+-- once. It can still be refused by its own `classAllowance`, unchanged.
 export
 step : RateLimitState ->
   ClientIdentity ->
@@ -187,8 +199,11 @@ step (RateLimitState stateWindow previousTable currentTable) (ClientIdentity key
   let (previous, current) =
     tablesInView stateWindow windowIdx previousTable currentTable
   let known = has key current
-  if not known && size current >= maxRateLimitIdentitiesPerWindow then
-    (RateLimitState windowIdx previous current, Refused)
+  let isDirect = key == identityLabel directIdentity
+  if not known
+    && not isDirect
+    && size current >= maxRateLimitIdentitiesPerWindow then
+    (RateLimitState windowIdx previous current, RefusedCapacity)
   else
     let previousCounters = countersFor key previous
     let currentCounters = countersFor key current

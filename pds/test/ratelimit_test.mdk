@@ -64,11 +64,20 @@ mustIdentity (Err message) = panic message
 
 isRefused : RateLimitVerdict -> Bool
 isRefused Refused = True
+isRefused RefusedCapacity = True
 isRefused Admitted = False
 
 isAdmitted : RateLimitVerdict -> Bool
 isAdmitted Admitted = True
 isAdmitted Refused = False
+isAdmitted RefusedCapacity = False
+
+-- | Distinguishes a cardinality-cap refusal from an ordinary allowance
+-- refusal — the two share `isRefused`'s answer but must render differently.
+isRefusedCapacity : RateLimitVerdict -> Bool
+isRefusedCapacity RefusedCapacity = True
+isRefusedCapacity Refused = False
+isRefusedCapacity Admitted = False
 
 -- | Run `step` `n` times for the same identity/class/instant and keep the
 -- resulting state; used to reach the exact edge of a class's allowance.
@@ -454,6 +463,72 @@ test "a new identity past the per-window cap is refused without a row" =
   expectAll [
     expectTrue (isRefused firstVerdict),
     expectTrue (isRefused secondVerdict),
+    expectTrue (isRefusedCapacity firstVerdict),
+    expectTrue (isRefusedCapacity secondVerdict),
+  ]
+
+-- #2950's own stated acceptance is a cell that drives a large number of
+-- distinct identities and asserts the table's size stays under the cap — the
+-- cell above checks only one extra identity, twice, never a genuine batch.
+-- This one presents a batch of further distinct identities past the cap and
+-- requires every one of them refused: if the cap check ever let the table
+-- grow past `maxRateLimitIdentitiesPerWindow` (an off-by-one, or a check
+-- bypassed for the wrong reason), some later identity in the batch would
+-- find room and be admitted.
+allRefusedPastCap : RateLimitState -> Int -> Int -> Bool
+allRefusedPastCap _ 0 _ = True
+allRefusedPastCap state n baseOffset =
+  let ident = otherIdentity (baseOffset + n - 1)
+  let (next, verdict) = step state ident RequestsClass 0
+  isRefused verdict && allRefusedPastCap next (n - 1) baseOffset
+
+test "volume past the cap stays refused, not just one extra identity" =
+  let filled =
+    populateOthers initRateLimitState maxRateLimitIdentitiesPerWindow 0
+  expectTrue (allRefusedPastCap filled 500 maxRateLimitIdentitiesPerWindow)
+
+-- The rollover peak is 2x the cap — a full `previous` table rolled over
+-- alongside a `current` table filling back up to the cap on its own. The cap
+-- check reads only `current`'s size (`tablesInView`), so a full `previous`
+-- table must not falsely refuse a fresh identity in the new window before
+-- `current` itself reaches the cap.
+test "a full previous window does not shrink the next window's own cap" =
+  let filledWindow0 =
+    populateOthers initRateLimitState maxRateLimitIdentitiesPerWindow 0
+  let filledWindow1 =
+    populateOthers
+      filledWindow0
+      maxRateLimitIdentitiesPerWindow
+      rateLimitWindowSeconds
+  let stillRoom = otherIdentity (maxRateLimitIdentitiesPerWindow - 1)
+  let extraWindow1 = otherIdentity (2 * maxRateLimitIdentitiesPerWindow)
+  let (_, roomVerdict) =
+    step filledWindow0 stillRoom RequestsClass rateLimitWindowSeconds
+  let (_, extraVerdict) =
+    step filledWindow1 extraWindow1 RequestsClass rateLimitWindowSeconds
+  expectAll
+    [
+      -- window 1's `current` starts empty even though `previous` (window 0)
+      -- already holds the full cap, so this identity — new to window 1 — is
+      -- admitted rather than refused by a combined 2x-cap count.
+      expectTrue (isAdmitted roomVerdict),
+      -- once window 1's own `current` has independently reached the cap, a
+      -- further new identity is refused exactly as it would be in any window.
+      expectTrue (isRefused extraVerdict),
+    ]
+
+-- `directIdentity` is the one shared fallback bucket every untrusted-proxy or
+-- header-less caller lands in — not attacker-chosen the way a spoofed
+-- `X-Forwarded-For` address is. It must never be refused by the cardinality
+-- cap, even with the table saturated by other identities: refusing it here
+-- would lock out every brand-new client at once.
+test "directIdentity is never refused by the cardinality cap" =
+  let filled =
+    populateOthers initRateLimitState maxRateLimitIdentitiesPerWindow 0
+  let (_, verdict) = step filled directIdentity RequestsClass 0
+  expectAll [
+    expectTrue (isAdmitted verdict),
+    expectTrue (not (isRefusedCapacity verdict)),
   ]
 
 -- (h) the whole-repository export ceiling is a CLASS of its own, not a lower

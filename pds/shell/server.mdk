@@ -104,7 +104,11 @@ import lib.sync_event.{
   syncIdentityFrame,
   syncSyncFrame,
 }
-import lib.resource_limits.{maxInFlightRequestBytes, rateLimitWindowSeconds}
+import lib.resource_limits.{
+  maxInFlightRequestBytes,
+  maxRateLimitIdentitiesPerWindow,
+  rateLimitWindowSeconds,
+}
 import lib.proxy.{
   UpstreamAnswer,
   proxyUpstreamFailureResponse,
@@ -940,6 +944,7 @@ persistRepo dir repo = do
 data RateLimitAdmission =
   | RequestAdmitted RateLimitState
   | RequestRefused RateLimitState RateLimitClass
+  | RequestRefusedCapacity RateLimitState
 
 -- | What every request that reached the framer clears, whatever it routes to
 -- and whether or not it parsed.
@@ -1020,6 +1025,7 @@ admitClasses state _ _ [] = RequestAdmitted state
 admitClasses state identity nowSeconds (cls :: rest) =
   match step state identity cls nowSeconds
     (next, Refused) => RequestRefused next cls
+    (next, RefusedCapacity) => RequestRefusedCapacity next
     (next, Admitted) => admitClasses next identity nowSeconds rest
 
 classMessage : RateLimitClass -> String
@@ -1035,6 +1041,14 @@ classMessage RepoExportClass =
   "too many repository exports for this identity in the current window"
 classMessage ProxyClass =
   "too many proxied appview reads for this identity in the current window"
+
+-- | What a `RequestRefusedCapacity` refusal is told: this identity has not
+-- exceeded anything of its own — the shared per-window table is full of
+-- OTHER identities, and `classMessage`/`remainingInClass` would describe a
+-- usage this identity never accrued.
+capacityMessage : String
+capacityMessage =
+  "too many distinct client identities tracked in the current window"
 
 intHeader : String -> Int -> Header
 intHeader name value =
@@ -1054,6 +1068,21 @@ rateLimitHeaderList state identity cls nowSeconds = [
   intHeader
     "ratelimit-remaining"
     (remainingInClass state identity cls nowSeconds),
+  intHeader
+    "ratelimit-reset"
+    (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
+]
+
+-- | Headers for a `RequestRefusedCapacity` refusal: `ratelimit-limit` names
+-- the cardinality cap itself rather than a class allowance, and
+-- `ratelimit-remaining` is `0` rather than `remainingInClass`'s answer —
+-- this identity has no row and no usage of its own, so the class allowance
+-- it would otherwise report is not what refused it, and reporting it would
+-- claim full allowance while refusing the request.
+rateLimitCapacityHeaderList : Int -> List Header
+rateLimitCapacityHeaderList nowSeconds = [
+  intHeader "ratelimit-limit" maxRateLimitIdentitiesPerWindow,
+  intHeader "ratelimit-remaining" 0,
   intHeader
     "ratelimit-reset"
     (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
@@ -1080,6 +1109,13 @@ applyRateLimit limiterRef identity classes nowSeconds =
           (rateLimitFailureWithHeaders
             (classMessage cls)
             (rateLimitHeaderList next identity cls nowSeconds)))
+    RequestRefusedCapacity next =>
+      let () = limiterRef := next
+      Some
+        (xrpcFailureResponse
+          (rateLimitFailureWithHeaders
+            capacityMessage
+            (rateLimitCapacityHeaderList nowSeconds)))
 
 -- ── connection, subscription and proxy censuses ─────────────────────────────
 
