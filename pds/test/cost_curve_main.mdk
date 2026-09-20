@@ -13,7 +13,8 @@
    the measurement. The route answers are printed alongside the timings so a
    reader can see the probe measured a real 200 and not an error path. -}
 
-import bytes.*
+import bytes as B
+import bytes.{Bytes, encodeUtf8}
 import hex.{decode}
 import json.{Json(..), jObject, stringify}
 import string.{fromUtf8, toInt, toUtf8}
@@ -124,13 +125,13 @@ benchToken =
 
 queryRequest : String -> Bytes
 queryRequest target =
-  toUtf8Bytes "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
+  encodeUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
 
 procedureRequest : String -> String -> Bytes
 procedureRequest nsid body =
-  let bytes = toUtf8Bytes body
-  toUtf8Bytes
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (bytesLength bytes)}\r\n\r\n"
+  let bytes = encodeUtf8 body
+  encodeUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (B.length bytes)}\r\n\r\n"
     ++ bytes
 
 createRequest : Bytes

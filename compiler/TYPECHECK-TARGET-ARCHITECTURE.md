@@ -2868,9 +2868,15 @@ orders merges, and the plan does not pretend otherwise.
   its behavior is pinned, not changed). Byte-identical on the Module path;
   enumerated sign-off per divergence fixture for the rest. #462's
   comment-truth item dies here with the single order table.
-- **E-3 ⊕ (#2034). Defaulting placement** per S-2(c) — **lands before E-4**, so the
-  scheduling change happens under an enforced representation rule rather than
-  silently moving Int/Float choices (#563/#564 close against the rule).
+- **E-3 ⊕ (#2034). Defaulting placement — LANDED 2026-09-20.** One
+  `NumBoundary` descriptor and `finalizeNumBoundary` operation order defaulting
+  before ambiguity rejection at all eight boundaries. Generic-default and
+  explicit-impl bodies now enter/exit their own HM level through inference and
+  rigidity; their post-exit finalization preserves declared-dictionary and
+  impl-head channels, defaults only owned body-local numeric roots, and rejects a
+  genuinely unanchored method goal at its occurrence. #563/#564 close against
+  those controls. Whole-graph defaulting remains #2646 and scheduled marking is
+  still E-4; neither was folded into E-3.
 - **E-4. Scheduled marking.** Replace the promotion fixpoint + harvest-discard
   with per-binding marking on the (existing) SCC schedule per S-2(b)'s
   commitment rule; retire the joint flatten, `dropShadowedCore`, the

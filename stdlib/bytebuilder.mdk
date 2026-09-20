@@ -17,7 +17,8 @@
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
 import bytes.{
-  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, toUtf8Bytes
+  Bytes, adoptByteBlockUnsafe, fromByteBlockPrefix, lendByteBlockUnsafe,
+  encodeUtf8
 }
 import list.{reverse}
 
@@ -45,8 +46,8 @@ buildArray (Builder backing len) =
    copy, so emitting more afterwards does not reach it.
 
    > let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
-   "[|0, 128, 255|]"
-   > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) == debug (buildArray buf)
+   "Bytes \"0080ff\""
+   > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)
    True -}
 export
 buildBytes : Builder -> Bytes
@@ -54,12 +55,13 @@ buildBytes (Builder backing len) = fromByteBlockPrefix !len !backing
 
 -- # Emitting
 
--- | Appends one byte. Only the low eight bits of the value are used.
+-- | Appends one byte. Panics when `b` falls outside `0` to `255`.
 export
 emitU8 : Int -> Builder -> Unit
 emitU8 b (Builder backing len)
+  | b < 0 || b > 255 = panic "Builder.emitU8: value out of range 0..255"
   | !len < byteBlockLength !backing =
-    byteBlockSetUnsafe !len (bitAnd b 255) !backing
+    byteBlockSetUnsafe !len b !backing
     len := !len + 1
   | otherwise =
     -- Capacity doubles, so the blit cost amortizes to O(1) per byte, exactly
@@ -69,7 +71,7 @@ emitU8 b (Builder backing len)
     let newCap = if oldLen == 0 then 1 else oldLen * 2
     let newBlock = byteBlockMake newCap
     byteBlockBlit oldBlock 0 newBlock 0 oldLen
-    byteBlockSetUnsafe oldLen (bitAnd b 255) newBlock
+    byteBlockSetUnsafe oldLen b newBlock
     backing := newBlock
     len := oldLen + 1
 
@@ -95,14 +97,14 @@ growTo cap needed =
    separate single-byte grows. `emitBytes` is the one-byte-at-a-time form,
    over a `List Int`.
 
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hi") buf in let _ = appendBytes (toUtf8Bytes "!") buf in debug (buildBytes buf)
-   "[|104, 105, 33|]"
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "") buf in debug (buildBytes buf)
-   "[||]" -}
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
+   "Bytes \"686921\""
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
+   "Bytes \"\"" -}
 export
 appendBytes : Bytes -> Builder -> Unit
 appendBytes src (Builder backing len) =
-  let srcBlock = lendByteBlock src
+  let srcBlock = lendByteBlockUnsafe src
   let n = byteBlockLength srcBlock
   let needed = !len + n
   let () =
@@ -125,11 +127,11 @@ appendBytes src (Builder backing len) =
    block: either way the returned byte string goes stale rather than wrong,
    and a caller reading only `[0, len)` of it reads what it was handed.
 
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hey") buf in let (_, n) = builderParts buf in n
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
    3 -}
 export
 builderParts : Builder -> (Bytes, Int)
-builderParts (Builder backing len) = (adoptByteBlock !backing, !len)
+builderParts (Builder backing len) = (adoptByteBlockUnsafe !backing, !len)
 
 -- | Appends each value in the list as one byte. The inverse of
 -- `byteparser.takeBytes`.
@@ -256,14 +258,6 @@ build1 f =
 -- Ok 255
 -- > runByteParser (beUint 1) (build1 (emitU8 127))
 -- Ok 127
-
--- emitU8 keeps only the low eight bits: 300 & 255 == 44.  The write is a
--- mask, never a refusal -- `bytes.mutBytesSet` is the door that panics
--- instead, and this one is deliberately not it.
--- > runByteParser (beUint 1) (build1 (emitU8 300))
--- Ok 44
--- > runByteParser (beUint 1) (build1 (emitU8 (-1)))
--- Ok 255
 
 -- emitU16BE ↔ beUint 2
 -- > runByteParser (beUint 2) (build1 (emitU16BE 0))

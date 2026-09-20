@@ -19,7 +19,16 @@ import bytebuilder.{
   emitU8,
   newBuilder,
 }
-import bytes.*
+import bytes as B
+import bytes.{
+  Bytes,
+  contains,
+  decodeUtf8,
+  elemIndexWithin,
+  encodeUtf8,
+  fromArrayAssumeByteDomain,
+  toArray,
+}
 import json.{Json, parse}
 import list.{reverse}
 import string.{fromUtf8, toUtf8}
@@ -321,7 +330,7 @@ requestBody (Request _ _ _ _ body _) = body
 -- | Length of the framed body without copying its attacker-controlled bytes.
 export
 requestBodyLength : Request -> Int
-requestBodyLength (Request _ _ _ _ body _) = bytesLength body
+requestBodyLength (Request _ _ _ _ body _) = B.length body
 
 -- | Whether the connection stays open after this request, as its Connection
 -- field settled it.
@@ -349,7 +358,7 @@ lowerAscii input start end =
   fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
 
 -- The `*Bytes` twin of each grammar predicate below — `lowerAsciiBytes`,
--- `allTokenBytes`, `validFieldValueBytes`, `findByteBytes`,
+-- `allTokenBytes`, `validFieldValueBytes`,
 -- `trimLeftOwsBytes`, `trimRightOwsBytes`, `skipOwsBytes`,
 -- `scanTokenEndBytes` — is its body over a `Bytes` rather than an
 -- `Array` of `Int`. The duplication is deliberate and temporary: `Index` is
@@ -454,10 +463,9 @@ validTarget input pos end query =
 
 exactAsciiAt : Bytes -> Int -> String -> Bool
 exactAsciiAt input start expected =
-  let wanted = toUtf8Bytes expected
-  let size = bytesLength wanted
-  start + size <= bytesLength input
-    && slice input start (start + size) == wanted
+  let wanted = encodeUtf8 expected
+  let size = B.length wanted
+  start + size <= B.length input && slice input start (start + size) == wanted
 
 validFieldValue : Array Int -> Int -> Int -> Bool
 validFieldValue input pos end =
@@ -489,17 +497,8 @@ findByte value pos end wanted =
   else
     findByte value (pos + 1) end wanted
 
-findByteBytes : Bytes -> Int -> Int -> Int -> Option Int
-findByteBytes input pos end wanted =
-  if pos >= end then
-    None
-  else if input[pos] == wanted then
-    Some pos
-  else
-    findByteBytes input (pos + 1) end wanted
-
 -- | `avail` is how many bytes of `input` the caller has actually received; the
--- search runs out of input there, not at `bytesLength input`.
+-- search runs out of input there, not at `B.length input`.
 findCrlfChecked : String ->
   Bytes ->
   Int ->
@@ -526,18 +525,6 @@ findCrlfChecked label input avail start pos limit =
   else
     findCrlfChecked label input avail start (pos + 1) limit
 
-{- | Find the CR byte of the first CRLF in the half-open range
-   `input[pos, end)`. A CR at `end - 1` is not a complete CRLF. -}
-export
-findCrlf : Bytes -> Int -> Int -> Option Int
-findCrlf input pos end =
-  if pos + 1 >= end then
-    None
-  else if input[pos] == 13 && input[pos + 1] == 10 then
-    Some pos
-  else
-    findCrlf input (pos + 1) end
-
 -- | `cursor` is where the CRLF search resumes; it is `start` for a fresh scan
 -- and a later, already-searched offset when a suspended scan continues.
 parseRequestLine : Bytes -> Int -> Int -> Int -> Result FrameError RequestLine
@@ -550,12 +537,12 @@ parseRequestLine input avail start cursor = do
     cursor
     maxHttpRequestLineBytes
   () <- resourceExcess (checkHttpRequestLineBytes (end - start))
-  firstSpace <- match findByteBytes input start end 32
+  firstSpace <- match elemIndexWithin start end 32 input
     None =>
       malformed
         "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
     Some pos => Ok pos
-  secondSpace <- match findByteBytes input (firstSpace + 1) end 32
+  secondSpace <- match elemIndexWithin (firstSpace + 1) end 32 input
     None =>
       malformed
         "http: malformed request line; expected METHOD SP TARGET SP HTTP/1.1"
@@ -574,8 +561,12 @@ parseRequestLine input avail start cursor = do
   else
     Ok
       (RequestLine
-        (fromUtf8Bytes (slice input start firstSpace))
-        (fromUtf8Bytes (slice input (firstSpace + 1) secondSpace))
+        (optionOrPanic
+          "http: request-line method is proven ASCII by allTokenBytes"
+          (decodeUtf8 (slice input start firstSpace)))
+        (optionOrPanic
+          "http: request target is proven ASCII by validTarget"
+          (decodeUtf8 (slice input (firstSpace + 1) secondSpace)))
         (end + 2))
 
 -- | Skip optional whitespace in the half-open range `value[pos, end)`.
@@ -614,7 +605,7 @@ parseHeaderLine : Bytes -> Int -> Int -> Result FrameError Header
 parseHeaderLine input start end =
   if input[start] == 32 || input[start] == 9 then
     malformed "http: obsolete folded header lines are forbidden"
-  else match findByteBytes input start end 58
+  else match elemIndexWithin start end 58 input
     None => malformed "http: malformed header field; missing colon"
     Some colon =>
       if colon == start || not (allTokenBytes input start colon) then
@@ -693,7 +684,7 @@ parseFieldsChecked : Bytes ->
 parseFieldsChecked input pos sectionStart priorBytes count trailer acc = do
   step <- fieldStep
     input
-    (bytesLength input)
+    (B.length input)
     pos
     pos
     sectionStart
@@ -998,7 +989,7 @@ validateHost headers =
 -- read can supply.
 readSliceAt : Bytes -> Int -> Int -> Result FrameError (Bytes, Int)
 readSliceAt input pos size =
-  let avail = bytesLength input
+  let avail = B.length input
   if pos + size > avail then
     incomplete "http: truncated body at byte \{intToString avail}"
   else
@@ -1117,7 +1108,7 @@ parseChunkExtensionsGo input pos end =
 
 parseChunkSize : Bytes -> Int -> Int -> Result FrameError Int
 parseChunkSize input start end =
-  let semi = match findByteBytes input start end 59
+  let semi = match elemIndexWithin start end 59 input
     None => end
     Some pos => pos
   if semi == start then
@@ -1135,7 +1126,7 @@ parseChunkedChecked : Bytes ->
   Int ->
   Result FrameError ParsedBody
 parseChunkedChecked input pos headerBytes out total count = do
-  head <- chunkHeadStep input (bytesLength input) pos pos total count
+  head <- chunkHeadStep input (B.length input) pos pos total count
   match head
     ChunkEnd dataPos => do
       (HeaderBlock trailers finalPos _) <- parseFieldsChecked
@@ -1149,7 +1140,7 @@ parseChunkedChecked input pos headerBytes out total count = do
       Ok (ParsedBody (buildBytes out) trailers finalPos)
     ChunkBody dataPos size => do
       (chunk, _) <- readSliceAt input dataPos size
-      next <- chunkDataEnd input (bytesLength input) dataPos size
+      next <- chunkDataEnd input (B.length input) dataPos size
       let () = appendBytes chunk out
       parseChunkedChecked input next headerBytes out (total + size) (count + 1)
 
@@ -1226,7 +1217,7 @@ parseBody (FixedBody size) input pos _ = do
 parseBody ChunkedBody input pos headerBytes =
   parseChunkedChecked input pos headerBytes (newBuilder ()) 0 0
 parseBody UntilCloseBody input pos _ =
-  Ok (ParsedBody (slice input pos (bytesLength input)) [] (bytesLength input))
+  Ok (ParsedBody (slice input pos (B.length input)) [] (B.length input))
 
 -- | The diagnostic each body mode reports for bytes past its own frame.
 trailingMessage : BodyMode -> String
@@ -1403,7 +1394,7 @@ scanFrom input avail _ (PhaseBody head phase) = scanBody input avail head phase
 
 frameSpanAt : Bytes -> Int -> Result FrameError FrameSpan
 frameSpanAt input start =
-  let outcome = scanFrom input (bytesLength input) start (PhaseLine start)
+  let outcome = scanFrom input (B.length input) start (PhaseLine start)
   match outcome
     ScanSuspend message _ => Err (Incomplete message)
     ScanFatal failure => Err (Fatal failure)
@@ -1428,9 +1419,9 @@ frameRequestAt input start = do
 
 parseWholeBuffer : Bytes -> Result FrameError Request
 parseWholeBuffer input = do
-  () <- resourceExcess (checkHttpRequestBytes (bytesLength input))
+  () <- resourceExcess (checkHttpRequestBytes (B.length input))
   (FramedRequest request mode finalPos) <- frameRequestAt input 0
-  if finalPos /= bytesLength input then
+  if finalPos /= B.length input then
     malformed (trailingMessage mode)
   else
     Ok request
@@ -1536,7 +1527,7 @@ scanRequestBoundaryWithin input avail start (HttpScan phase) =
   -- A refused buffer leaves the scan where it was: the bytes it rejected were
   -- never accepted, so a later read must not skip over them.
   let unchanged = HttpScan phase
-  if avail < 0 || avail > bytesLength input then
+  if avail < 0 || avail > B.length input then
     (
       HttpFrameFailed (HttpMalformed "http: scan length outside buffer"),
       unchanged,
@@ -1555,7 +1546,7 @@ scanRequestBoundaryWithin input avail start (HttpScan phase) =
 export
 scanRequestBoundaryFrom : Bytes -> Int -> HttpScan -> (HttpFrame, HttpScan)
 scanRequestBoundaryFrom input start scan =
-  scanRequestBoundaryWithin input (bytesLength input) start scan
+  scanRequestBoundaryWithin input (B.length input) start scan
 
 -- | Find the end of the first complete request at or after `start` without a
 -- prior scan. This is `scanRequestBoundaryFrom` from `httpScanStart`, so a
@@ -1570,7 +1561,7 @@ scanRequestBoundary input start =
 export
 parseRequestAt : Bytes -> Int -> Int -> Result HttpParseFailure Request
 parseRequestAt input start end =
-  if start < 0 || end < start || end > bytesLength input then
+  if start < 0 || end < start || end > B.length input then
     Err (HttpMalformed "http: request frame bounds outside buffer")
   else
     parseRequestClassified (slice input start end)
@@ -2010,8 +2001,11 @@ responseParseChunked input avail pos out total count = do
       else do
         (chunk, _) <- responseReadSliceAt input avail dataPos size
         next <- responseChunkDataEnd input avail dataPos size
-        let () = emitArray chunk 0 out
-        responseParseChunked input avail next out (total + size) (count + 1)
+        if not (validBytes chunk 0 (arrayLength chunk)) then
+          responseMalformed "http: chunk body byte out of range 0..255"
+        else do
+          let () = emitArray chunk 0 out
+          responseParseChunked input avail next out (total + size) (count + 1)
 
 responseParseBody : BodyMode ->
   Array Int ->
@@ -2582,7 +2576,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
   -- already knows in O(1). Unpacking first would allocate a machine word
   -- per byte of a body the very next line refuses — the endpoint caps are
   -- far below the framer's, so the refused case is the large one.
-  let size = bytesLength packed
+  let size = B.length packed
   match mediaType
     MediaType "application" "json" => do
       () <- checkJsonBodyBytes size

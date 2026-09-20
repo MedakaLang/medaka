@@ -373,15 +373,6 @@ findByte : Array Int -> Int -> Int -> Int -> Option Int
 Find `wanted` in the half-open range `value[pos, end)`. No element at or
 beyond `end` is inspected.
 
-### `findCrlf`
-
-```
-findCrlf : Bytes -> Int -> Int -> Option Int
-```
-
-Find the CR byte of the first CRLF in the half-open range
-`input[pos, end)`. A CR at `end - 1` is not a complete CRLF.
-
 ### `trimLeftOws`
 
 ```

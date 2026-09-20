@@ -23,10 +23,12 @@
 -- header bytes, which does not exist in this tree yet — wiring it here would
 -- couple this module to that sibling before it's written.
 --
--- MTIME/XFL/OS are logically unsigned (uint32/uint8/uint8); `emitU32LE`/
--- `emitU8` already truncate a negative or oversized `Int` to that width by
--- construction (each masks its own low byte per round), so a header built
--- from an out-of-range field WRAPS on emit exactly the way `Int` wraps
+-- MTIME/XFL/OS are logically unsigned (uint32/uint8/uint8); `emitU32LE`
+-- truncates a negative or oversized `Int` to that width by construction
+-- (masks its own low byte per round), and the XFL/OS emit sites mask
+-- explicitly with `bitAnd _ 255` before calling `emitU8` (which panics on an
+-- out-of-range byte rather than masking), so a header built from an
+-- out-of-range field still WRAPS on emit exactly the way `Int` wraps
 -- elsewhere in this codebase, rather than being rejected. `prop
 -- "emitGzipHeader/parseGzipHeader round-trips (numeric fields)"` below
 -- pins that as the intended contract, not an oversight.
@@ -260,8 +262,8 @@ emitGzipHeader h =
   emitU8 cmDeflate buf
   emitU8 (flagsOf h) buf
   emitU32LE h.mtime buf
-  emitU8 h.xfl buf
-  emitU8 h.os buf
+  emitU8 (bitAnd h.xfl 255) buf
+  emitU8 (bitAnd h.os 255) buf
   emitOptionalField h.name buf
   emitOptionalField h.comment buf
   buildArray buf

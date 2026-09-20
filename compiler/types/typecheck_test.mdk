@@ -35,6 +35,7 @@ import types.typecheck.{
   ModDiags,
   NumericPredicateTraceEntry(..),
   NumericPredicateTraceStage(..),
+  TcDiag(..),
   beginAssumptionTrace,
   beginDefaultBodyRNoneTrace,
   beginMethodReturnTrace,
@@ -198,6 +199,43 @@ numericNestedBodySource = joinNl [
 test "a nested numeric literal may use the declared impl prerequisite" =
   let (errors, _) = numericCheckObserved numericNestedBodySource
   expectEqual [] errors
+
+numericImplHeadSource : String -> String -> String
+numericImplHeadSource methodType methodBody = joinNl [
+  "data Acc b = MkAcc b",
+  "interface Make a where",
+  "  make : " ++ methodType,
+  "impl Make (Acc b) where",
+  "  " ++ methodBody,
+]
+
+test "numeric impl-head roots require an explicit prerequisite at nullary and return positions" =
+  let nullary =
+    fst (numericCheckObserved (numericImplHeadSource "a" "make = MkAcc 0"))
+  let returns =
+    fst
+      (numericCheckObserved
+        (numericImplHeadSource "Unit -> a" "make _ = MkAcc 0"))
+  let declared = joinNl [
+    "data Acc b = MkAcc b",
+    "interface Make a where",
+    "  make : a",
+    "impl Make (Acc b) requires Num b where",
+    "  make = MkAcc 0",
+  ]
+  expectAll [
+    expectEqual
+      [
+        "Impl of 'make' for interface 'Make' requires 'Num' on the instance-head type variable 'b', but the impl does not declare that prerequisite. Add `requires Num b` to the impl.",
+      ]
+      nullary,
+    expectEqual
+      [
+        "Impl of 'make' for interface 'Make' requires 'Num' on the instance-head type variable 'b', but the impl does not declare that prerequisite. Add `requires Num b` to the impl.",
+      ]
+      returns,
+    expectEqual [] (fst (numericCheckObserved declared)),
+  ]
 
 test "numeric return keeps the Num predicate through production checking and stamping" =
   let (errors, trace) = numericCheckObserved (numericValueSource True)
@@ -1617,6 +1655,141 @@ test "absent return formal never fabricates a fresh instance parameter" = expect
       (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes False)),
     expectEqual True (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes True)),
   ]
+
+methodBodyThingDecls : Bool -> List String
+methodBodyThingDecls twoImpls =
+  [
+      "data One = One",
+      "data Two = Two",
+      "interface Thing a where",
+      "  make : Unit -> a",
+      "  reveal : a -> Unit",
+      "impl Thing One where",
+      "  make _ = One",
+      "  reveal _ = ()",
+    ]
+    ++ (if twoImpls then
+      [
+        "impl Thing Two where",
+        "  make _ = Two",
+        "  reveal _ = ()",
+      ]
+    else
+      [])
+
+methodBodyAmbiguitySource : Bool -> String
+methodBodyAmbiguitySource genericDefault =
+  joinNl
+    (methodBodyThingDecls True
+      ++ [
+        "interface Host a where",
+        "  host : a -> Unit",
+      ]
+      ++ (if genericDefault then
+        [
+          "  host _ = reveal (make ())",
+          "impl Host Unit where",
+        ]
+      else
+        [
+          "impl Host Unit where",
+          "  host _ = reveal (make ())",
+        ]))
+
+methodBodyCheck : String -> String -> List (String, Bool)
+methodBodyCheck name source =
+  let (errors, _) = checkOneDiags [] [] (
+    name,
+    desugar (parseLocated source),
+  )
+  map (diag => (tcCode diag, methodBodyDiagLocated diag)) errors
+
+methodBodyDiagLocated : TcDiag -> Bool
+methodBodyDiagLocated (TcDiag _ _ loc _ _ _) = isSome loc
+
+test "explicit and generic method bodies locate unanchored goals" = expectAll [
+  expectEqual
+    [("T-AMBIGUOUS-INSTANCE", True)]
+    (methodBodyCheck
+      "explicit_method_body_ambiguity"
+      (methodBodyAmbiguitySource False)),
+  expectEqual
+    [("T-AMBIGUOUS-INSTANCE", True)]
+    (methodBodyCheck
+      "generic_default_body_ambiguity"
+      (methodBodyAmbiguitySource True)),
+]
+
+methodBodySoleImplSource : String
+methodBodySoleImplSource =
+  joinNl
+    (methodBodyThingDecls False
+      ++ [
+        "interface Host a where",
+        "  host : a -> Unit",
+        "impl Host Unit where",
+        "  host _ = reveal (make ())",
+      ])
+
+methodBodyActiveDictSource : String
+methodBodyActiveDictSource =
+  joinNl
+    (methodBodyThingDecls True
+      ++ [
+        "interface Host a where",
+        "  host : Thing b => a -> b -> Unit",
+        "impl Host Unit where",
+        "  host _ x = reveal x",
+      ])
+
+methodBodyImplHeadSource : String
+methodBodyImplHeadSource =
+  joinNl
+    (methodBodyThingDecls True
+      ++ [
+        "interface Host a where",
+        "  host : a -> Unit",
+        "impl Host One where",
+        "  host x = reveal x",
+      ])
+
+methodBodyInnerGeneralizedSource : String
+methodBodyInnerGeneralizedSource =
+  joinNl
+    (methodBodyThingDecls True
+      ++ [
+        "interface Host a where",
+        "  host : a -> Unit",
+        "impl Host Unit where",
+        "  host _ =",
+        "    let inner x = reveal x",
+        "    inner One",
+      ])
+
+test "method-body ownership preserves every surviving determination channel" = expectAll
+  [
+    expectEqual
+      []
+      (methodBodyCheck "method_body_sole_impl" methodBodySoleImplSource),
+    expectEqual
+      []
+      (methodBodyCheck "method_body_active_dict" methodBodyActiveDictSource),
+    expectEqual
+      []
+      (methodBodyCheck "method_body_impl_head" methodBodyImplHeadSource),
+    expectEqual
+      []
+      (methodBodyCheck
+        "method_body_inner_generalized"
+        methodBodyInnerGeneralizedSource),
+  ]
+
+test "method-body levels reset across failure then success" =
+  let p1 = methodBodyCheck "method_body_level_p1" methodBodySoleImplSource
+  let q =
+    methodBodyCheck "method_body_level_q" (methodBodyAmbiguitySource False)
+  let p2 = methodBodyCheck "method_body_level_p2" methodBodySoleImplSource
+  expectEqual ([], [("T-AMBIGUOUS-INSTANCE", True)], []) (p1, q, p2)
 
 test "absent return completion cannot leak from a sibling scope" =
   let source = joinNl [

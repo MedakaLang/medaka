@@ -183,7 +183,8 @@ import time.{
   seconds,
 }
 import bytebuilder.{Builder, appendBytes, builderParts, newBuilder}
-import bytes.*
+import bytes as B
+import bytes.{Bytes, fromArray, sliceClamped, toArray}
 
 -- ── timeouts, ceilings and the listener ─────────────────────────────────────
 
@@ -2078,7 +2079,7 @@ readMore server dir storeRef limiterRef census serving conn slot deadlines buf s
       match received
         Err message => deferPure (Err message)
         Ok bytes =>
-          if bytesLength bytes == 0 then
+          if B.length bytes == 0 then
             deferPure (endOfStream buf)
           else
             let () = readBufferAppendBytes bytes buf
@@ -2226,7 +2227,7 @@ drainRefused conn left =
     match received
       Err _ => deferPure ()
       Ok bytes =>
-        if bytesLength bytes == 0 then
+        if B.length bytes == 0 then
           deferPure ()
         else
           drainRefused conn (left - 1)
