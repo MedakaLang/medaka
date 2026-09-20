@@ -4,7 +4,15 @@
    seeds a database, how the demo's own output is produced, and how the
    EXPECTED output is derived by asking the real `sqlite3` CLI the equivalent
    question. This module carries the part of that with no process in it — the
-   row shape, the two step languages, and the line comparison.
+   row shape and the two step languages.
+
+   A runner compares a row with `test.expectEqualLines`, over its
+   `outLines` joined back with `"\n"`, and never with
+   `test.expectEqualText`: that one normalizes away a last line that is
+   exactly `0`, and
+   `projection_demo.mdk`'s `SELECT DISTINCT a*0` block ends in exactly that
+   line — a demo that dropped the block entirely would normalize to the same
+   text as one that printed it.
 
    The spawns stay OUT of here, in each runner's own file, deliberately:
    `medaka gate verify`'s native-grading clause reads the source text of the
@@ -16,8 +24,7 @@
    Import what you need: `import test.oracle_support.{OracleRow(..), Step(..)}`. -}
 
 import list.{dropWhileEnd, intercalate}
-import string.{join, lines, split}
-import test.{Expectation(..)}
+import string.{lines, split}
 
 -- # One row
 
@@ -121,70 +128,3 @@ typedUserLine row = match split "|" row
 export
 flatLines : List (List String) -> List String
 flatLines parts = intercalate [] parts
-
-{- | Passes when `actual` is `expected`, line for line, naming the first line
-   at which the two diverge.
-
-   Line lists rather than whole texts, and this rather than
-   `test.expectEqualText`: that one normalizes away a last line that is
-   exactly `0`, and `projection_demo.mdk`'s `SELECT DISTINCT a*0` block ends
-   in exactly that line — a demo that dropped the block entirely would
-   normalize to the same text as one that printed it.
-
-   > expectLines ["a"] ["a"]
-   Pass "1 line" "1 line"
-   > expectLines ["a", "b"] ["a", "c"]
-   Fail "line 2: expected \"b\" but got \"c\"" "a\nb" "a\nc"
-   > expectLines ["a"] ["a", "b"]
-   Fail "line 2: expected end of output but got \"b\" (1 line remaining)" "a" "a\nb" -}
-export
-expectLines : List String -> List String -> Expectation
-expectLines expected actual =
-  if expected == actual then
-    Pass (countMsg expected) (countMsg actual)
-  else
-    Fail
-      (firstDivergence 1 expected actual)
-      (join "\n" expected)
-      (join "\n" actual)
-
-{- | `e`, with `label` prefixed onto its message when it is a `Fail`.
-
-   For a comparison run under a label (which table, which database pair) the
-   label needs to travel WITH the failure message, not sit beside it — a
-   caller that only forwards the first `Fail` out of several labelled
-   comparisons (`test.expectAll`) would otherwise print a message with no way
-   to tell which comparison it came from.
-
-   > labelFail "t1" (Pass "a" "a")
-   Pass "a" "a"
-   > labelFail "t1" (Fail "line 1: expected \"a\" but got \"b\"" "a" "b")
-   Fail "t1: line 1: expected \"a\" but got \"b\"" "a" "b" -}
-export
-labelFail : String -> Expectation -> Expectation
-labelFail _ (Pass e a) = Pass e a
-labelFail label (Fail m e a) = Fail "\{label}: \{m}" e a
-
-countMsg : List String -> String
-countMsg ls = match length ls
-  1 => "1 line"
-  n => "\{intToString n} lines"
-
-firstDivergence : Int -> List String -> List String -> String
-firstDivergence _ [] [] = "no divergence"
-firstDivergence n (e :: es) (a :: rest) =
-  if e == a then
-    firstDivergence (n + 1) es rest
-  else
-    "line \{intToString n}: expected \{debug e} but got \{debug a}"
--- The remaining case is one side running out first. It is ONE clause, not one
--- per side, because running out is a fact about the PAIR: the reader needs to
--- know which side stopped and how much of the other was still to come, and
--- splitting that across two messages makes the shorter side's count the thing
--- nobody prints.
-firstDivergence n expected actual =
-  "line \{intToString n}: expected \{tailMsg expected} but got \{tailMsg actual}"
-
-tailMsg : List String -> String
-tailMsg [] = "end of output"
-tailMsg (l :: rest) = "\{debug l} (\{countMsg (l :: rest)} remaining)"

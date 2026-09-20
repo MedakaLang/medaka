@@ -29,13 +29,12 @@
 import io.{getEnvOr, runVerb}
 import list.{lookup}
 import string.{join, trim, unwords}
-import test.{Expectation(..)}
+import test.{Expectation(..), expectEqualLines}
 import test.oracle_support.{
   OracleRow(..),
   Piece(..),
   Seed(..),
   Step(..),
-  expectLines,
   flatLines,
   outLines,
   typedUserLine,
@@ -521,7 +520,7 @@ resultOf name = match lookup name results
 oracleExpectation : String -> <Exec "_", FileRead "_", IO> Expectation
 oracleExpectation name = match resultOf name
   Err e => Fail e "sqlite3's own answer" "the row did not run"
-  Ok out => expectLines out.expected out.actual
+  Ok out => expectEqualLines (join "\n" out.expected) (join "\n" out.actual)
 
 -- The golden leg, for the two rows whose scripts diffed BOTH. Read-only: a
 -- missing or unreadable golden fails here, it is never written.
@@ -530,7 +529,8 @@ goldenExpectation name path = match resultOf name
   Err e => Fail e "the committed golden" "the row did not run"
   Ok out => match readFile (underRoot path)
     Err e => Fail "could not read \{path}: \{e}" path "unreadable"
-    Ok text => expectLines (outLines text) out.actual
+    Ok text =>
+      expectEqualLines (join "\n" (outLines text)) (join "\n" out.actual)
 
 test "oracle: reader output matches sqlite3" = oracleExpectation "oracle"
 

@@ -71,7 +71,7 @@ import string.{
   unlines,
   words,
 }
-import test.{Expectation(..)}
+import test.{Expectation(..), expectFindings, expectNoFindings}
 import test_process.{scratchDir, underRoot}
 
 -- # Reading the tree
@@ -472,57 +472,30 @@ overFiles : ((String, String) -> List String) ->
   List String
 overFiles check sources = flatMap check sources
 
--- | Passes when the check reported no violation lines.
-expectClean : String -> Result String (List String) -> Expectation
-expectClean what (Err e) =
-  Fail "\{what}: \{e}" "no violations" "the check could not run"
-expectClean _ (Ok []) = Pass "no violations" "no violations"
-expectClean what (Ok hits) =
-  Fail
-    "\{what}:\n\{unlines (map indent hits)}"
-    "no violations"
-    "\{intToString (length hits)} violations"
-
-{- | Passes when the check reported at least one violation line — a mutation
-   control, where a clean report is the failure. -}
-expectCaught : String -> Result String (List String) -> Expectation
-expectCaught what (Err e) =
-  Fail "\{what}: \{e}" "a violation" "the check could not run"
-expectCaught what (Ok []) =
-  Fail
-    "\{what}: the injected violation was not caught"
-    "a violation"
-    "no violations"
-expectCaught _ (Ok hits) =
-  Pass "a violation" "\{intToString (length hits)} violations"
-
-indent : String -> String
-indent line = "  \{line}"
-
 -- # The real tree
 
 test "no pds/lib module imports pds/shell" =
-  expectClean
+  expectNoFindings
     "real tree: pds/lib imports pds/shell"
     (sweep (overFiles shellImportHits) libSources)
 
 test "no pds/lib export declares an effect row" =
-  expectClean
+  expectNoFindings
     "real tree: pds/lib exports an effect-bearing signature"
     (sweep (overFiles effectExportHits) libSources)
 
 test "every pds/lib export carries an explicit type signature" =
-  expectClean
+  expectNoFindings
     "real tree: pds/lib export carries no type signature"
     (sweep (overFiles unsignedExportHits) libSources)
 
 test "no secret is interpolated into a string in pds/lib or pds/serve.mdk" =
-  expectClean
+  expectNoFindings
     "real tree: a secret is interpolated into a string"
     (sweep (overFiles secretInterpolationHits) (plusEntry libSources))
 
 test "no secret reaches the access log from pds/lib or pds/serve.mdk" =
-  expectClean
+  expectNoFindings
     "real tree: a secret reaches the access log"
     (sweep (overFiles accessLogHits) (plusEntry libSources))
 
@@ -531,12 +504,12 @@ test "no secret reaches the access log from pds/lib or pds/serve.mdk" =
 -- request's own headers are still in scope.
 
 test "no secret is interpolated into a string in pds/shell" =
-  expectClean
+  expectNoFindings
     "real tree: a secret is interpolated into a string in pds/shell"
     (sweep (overFiles secretInterpolationHits) (plusEntry shellSources))
 
 test "no secret reaches the access log in pds/shell" =
-  expectClean
+  expectNoFindings
     "real tree: a secret reaches the access log in pds/shell"
     (sweep (overFiles accessLogHits) (plusEntry shellSources))
 
@@ -567,7 +540,7 @@ injected path extra = match readFile path
   ]
 
 test "mutation control: an injected pds/shell import is caught" =
-  expectCaught
+  expectFindings
     "injected shell import"
     (sweep
       (overFiles shellImportHits)
@@ -582,7 +555,7 @@ effectProbe = [
 ]
 
 test "mutation control: an injected effect-bearing export is caught" =
-  expectCaught
+  expectFindings
     "injected effect-bearing export"
     (sweep (overFiles effectExportHits) (injected repoPath effectProbe))
 
@@ -615,7 +588,7 @@ nestedSources = match nestedTree
   Ok root => sourcesUnder root
 
 test "mutation control: an effect-bearing export in a nested directory is caught" =
-  expectCaught
+  expectFindings
     "injected nested effect-bearing export"
     (sweep (overFiles effectExportHits) nestedSources)
 
@@ -635,19 +608,19 @@ unsignedMutant : <FileRead "_", IO> Result String (List (String, String))
 unsignedMutant = injected repoPath unsignedProbe
 
 test "mutation control: the effect check misses an unannotated export" =
-  expectClean
+  expectNoFindings
     "the effect check was expected to MISS an unannotated export"
     (sweep (overFiles effectExportHits) unsignedMutant)
 
 test "mutation control: an injected unannotated export is caught" =
-  expectCaught
+  expectFindings
     "injected unannotated effect-bearing export"
     (sweep (overFiles unsignedExportHits) unsignedMutant)
 
 -- A secret interpolated into a diagnostic string — the shape that turns an
 -- error message into a credential disclosure.
 test "mutation control: an injected secret interpolation is caught" =
-  expectCaught
+  expectFindings
     "injected secret interpolation"
     (sweep
       (overFiles secretInterpolationHits)
@@ -661,7 +634,7 @@ test "mutation control: an injected secret interpolation is caught" =
 -- exempt in jwt.mdk, where building that string is the whole job; the same
 -- expression anywhere else is still a violation.
 test "mutation control: the ledger is per-file, not a blanket exemption" =
-  expectCaught
+  expectFindings
     "the ledger exempted a site it does not name"
     (sweep
       (overFiles secretInterpolationHits)
@@ -688,12 +661,12 @@ argumentMutant : <FileRead "_", IO> Result String (List (String, String))
 argumentMutant = injected repoPath argumentProbe
 
 test "mutation control: the interpolation check misses a secret passed as an argument" =
-  expectClean
+  expectNoFindings
     "the interpolation check was expected to MISS a secret passed as an argument"
     (sweep (overFiles secretInterpolationHits) argumentMutant)
 
 test "mutation control: a secret passed to the access log is caught" =
-  expectCaught
+  expectFindings
     "a secret passed to the access log"
     (sweep (overFiles accessLogHits) argumentMutant)
 
@@ -703,7 +676,7 @@ test "mutation control: a secret passed to the access log is caught" =
    A line-at-a-time scan would report this clean, which is why the check
    tracks the block. -}
 test "mutation control: a secret in an AccessEvent record field is caught" =
-  expectCaught
+  expectFindings
     "a secret in an AccessEvent field"
     (sweep
       (overFiles accessLogHits)
@@ -735,7 +708,7 @@ serverContent = match readFile serverPath
   Err e => Err "could not read \{serverPath}: \{e}"
   Ok content => Ok content
 
-test "mutation control: the pds/shell call site this control mutates is still there" = expectClean
+test "mutation control: the pds/shell call site this control mutates is still there" = expectNoFindings
   "the pds/shell call site this control mutates has moved — repoint it"
   (match serverContent
     Err e => Err e
@@ -745,7 +718,7 @@ test "mutation control: the pds/shell call site this control mutates is still th
       else
         Ok ["\{serverPath}: no `\{realCallSite}` call site"])
 
-test "mutation control: a secret at a real pds/shell call site is caught" = expectCaught
+test "mutation control: a secret at a real pds/shell call site is caught" = expectFindings
   "a secret at a real pds/shell access-log call site"
   (match serverContent
     Err e => Err e

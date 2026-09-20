@@ -51,6 +51,78 @@ incrementally (#2896), or several processes in flight at once and joined
 (#2897). `stdlib/test_process.mdk`'s `boundedVerb*` helpers are synchronous:
 they return only once the spawned process has exited.
 
+## The assertion vocabulary — pick the verb, don't hand-roll it
+
+The vehicle table above says WHERE a check lives. This one says WHAT to write
+once you are there. Both modules' verbs return `stdlib/test.mdk`'s
+`Expectation` — `Pass expected actual` or `Fail message expected actual`, both
+carrying the rendered operands — so a failure shows the values, never just a
+verdict. Never declare a per-file outcome type of your own, and never
+hand-roll a verb this table already names: the hand-rolled form is what keeps
+losing the operand, the label or the reason. Signatures are in
+`docs/stdlib/index.md`, name by name, generated from the source.
+
+### `stdlib/test.mdk`
+
+| You have | Verb | Instead of |
+|---|---|---|
+| a branch that is fine, with nothing to show | `pass` | `expectTrue True` |
+| a branch that is not fine, and the reason | `fail "<why>"` | `expectTrue False`, which throws the reason away |
+| a `Bool` that must be true / false | `expectTrue` / `expectFalse` | `expectTrue (not b)` for the false case |
+| a value and a one-off predicate | `expectSatisfies "<property>" p x` | `expectTrue (p x)` — the failure names neither the property nor the value |
+| two values that must be equal / differ | `expectEqual` / `expectNotEqual` | `expectTrue (a == b)`, `expectTrue (a /= b)` |
+| a strict bound | `expectLessThan` / `expectGreaterThan` | `expectTrue (a < b)` |
+| an inclusive floor or ceiling — a census that must find SOMETHING | `expectAtLeast` / `expectAtMost` | `expectTrue (n >= 1)`, or pinning today's exact count and failing on every legitimate growth |
+| a `Result` that must be `Ok` / `Err` | `expectOk` / `expectErr` | `expectTrue (isOk r)`, `expectTrue (isErr r)` |
+| a `Result` that must be `Err` SAYING something | `expectErrContains "<needle>"` | `expectErr` alone, which stays green once the diagnostic it was written for is replaced |
+| a `Result` whose `Ok` payload you then assert on | `expectOkThen (v => …)` | `match r` with `Err _ => expectTrue False`, which drops the error that says why |
+| an `Option` that must be `Some` / `None` | `expectSome` / `expectNone` | `expectTrue (isSome o)` |
+| two `Float`s within a tolerance | `expectWithin` | `expectTrue (abs (a - b) < eps)` |
+| text that must contain several substrings | `expectTextContainsAll` | a chain of `expectTrue (contains … )` where only the first failure reports |
+| …all of them on the SAME line — a location bound to its diagnostic | `expectLineContainsAll` | `expectTextContainsAll`, which accepts each landing in a different error |
+| text with a required prefix AND substrings | `expectTextStartsWithAndContains` | two assertions, only the first of which reports |
+| two texts where a trailing `()` or a whole-line `0` is a driver artefact | `expectEqualText` | `expectEqual` over the whole text, which dumps both and names no line |
+| two texts where that trailing `0` is DATA | `expectEqualLines` | `expectEqualText`, which normalizes the `0` away and equates two different answers |
+| several expectations that must all pass | `expectAll` | `&&`-chaining `Bool`s down to one `expectTrue` |
+| …one of which has to say WHICH row it was | `labelFail "<row>"` | a label kept beside the expectation — `expectAll` forwards the first `Fail` and drops everything else |
+| a whole corpus of labelled rows | `expectEach [("<row>", e), …]` | `expectAll (map snd rows)` |
+| a check returning `Result String (List String)` that must be clean | `expectNoFindings "<check>"` | `expectOk`, which passes on a check that ran and found violations |
+| …and its mutation control | `expectFindings "<check>"` | no control at all, so a check that can never fire reads as clean |
+| an `Expectation` to inspect rather than return | `expectationTag` / `expectationMessage` / `expectationExpected` / `expectationActual` | matching on `Pass`/`Fail`, which a module declaring its own cannot do |
+| named tests run from an ordinary program | `runTests` | a hand-rolled loop printing its own summary |
+| output compared against a committed golden file | `expectGolden` | `readFile` plus `expectEqualText`, with a separate branch for "no golden yet" |
+
+### `stdlib/test_process.mdk`
+
+Its verbs reach a subprocess extern the interpreter does not bind, so a file
+using them runs under `medaka test --native`.
+
+| You have | Verb | Instead of |
+|---|---|---|
+| the tree under test, a path in it, the binary to spawn | `medakaRoot` / `underRoot` / `medakaBin` | an inline `getEnvOr "MEDAKA_ROOT" "."`; a bare `"medaka"` that can resolve to another build or to nothing (exit 127) |
+| the per-spawn wall-clock ceiling | `spawnTimeoutSeconds` | a timeout constant re-chosen per gate |
+| a spawn that must not hang the whole job | `boundedVerb` | `runVerb`, where the first hanging row consumes the job's own timeout and the sweep names nothing |
+| …whose own pipeline is legitimately slower | `boundedVerbSeconds n` | stretching `spawnTimeoutSeconds` for every caller |
+| a directory to write into | `scratchDir` | a constant `/tmp/…` path two concurrent gate runs write over |
+| a spawn that must exit 0 | `expectSpawnOk` | `runVerb` plus `expectEqual 0 code`, which drops stdout and stderr from the message |
+| a rejection: nonzero exit AND a diagnostic | `expectSpawnFails` | the exit code alone, which stays green once the diagnostic is deleted; or the text alone, which accepts a program that never ran |
+| …whose diagnostic must say several things at once | `expectSpawnFailsAll` | one needle, which passes on a message that kept its headline and lost its location |
+| a spawn that must exit 0 and print an exact line | `expectSpawnOkLine` | a substring check, which accepts a longer or differently prefixed line |
+| the `*_test.mdk` stem of a file name | `testFileStem` | an inline `stripSuffix` |
+| a suite's executed-assertion count | `testAssertionCount` | parsing the human transcript, which a formatting change silently zeroes |
+| a roster closed over a directory | `unrosteredUnits` / `unrosteredTestFiles` | assuming the roster is complete, so a new file joins nothing |
+| …its other half: roster rows naming nothing | `missingUnits` / `missingTestFiles` | a renamed or deleted file still reading as coverage |
+
+**One asymmetry worth knowing before you convert anything.** `expectOk`,
+`expectErr` and `expectErrContains` constrain the `Result`'s payload types with
+`Debug`, because the failure message renders the value; `isOk`/`isErr` are
+plain `Bool` predicates with no such constraint. So
+`expectTrue (isErr (f x)) → expectErr (f x)` does not typecheck wherever the
+`Ok` payload is a program type that derives nothing, and adding `deriving
+Debug` to that type is usually a larger change than the conversion was worth.
+`expectOkThen` is the way through when you need the payload anyway: it asks for
+`Debug`/`Display` on the ERROR only.
+
 ## Negative space — NOT a doctest
 
 A candidate doctest is unit-test-shaped, not documentary, if any of:

@@ -45,8 +45,15 @@
 import io.{getEnvOr, runVerb}
 import list.{replicate}
 import string.{contains, join, startsWith, trim, unwords}
-import test.{Expectation(..), expectAll, expectEqual, expectTextContainsAll}
-import test.oracle_support.{expectLines, flatLines, labelFail, outLines}
+import test.{
+  Expectation(..),
+  expectAll,
+  expectEqual,
+  expectEqualLines,
+  expectTextContainsAll,
+  labelFail,
+}
+import test.oracle_support.{flatLines, outLines}
 import test_process.{
   boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
 }
@@ -259,7 +266,10 @@ runDelete db deleter reader = do
 test "delete: literal gates match the hand-derived expected values" =
   match deleteResult
     Err e => Fail e (join "\n" deleteExpectedLines) "the row did not run"
-    Ok r => expectLines deleteExpectedLines (deleteReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" deleteExpectedLines)
+        (join "\n" (deleteReport r))
 
 test "delete: report matches sqlite/test/delete.golden" = match deleteResult
   Err e => Fail e "the committed golden" "the row did not run"
@@ -269,7 +279,8 @@ test "delete: report matches sqlite/test/delete.golden" = match deleteResult
         "could not read sqlite/test/delete.golden: \{e}"
         "sqlite/test/delete.golden"
         "unreadable"
-    Ok text => expectLines (outLines text) (deleteReport r)
+    Ok text =>
+      expectEqualLines (join "\n" (outLines text)) (join "\n" (deleteReport r))
 
 -- # delete_negative
 --
@@ -349,7 +360,10 @@ test "delete_negative: report matches sqlite/test/delete_negative.golden" =
           "could not read sqlite/test/delete_negative.golden: \{e}"
           "sqlite/test/delete_negative.golden"
           "unreadable"
-      Ok text => expectLines (outLines text) (negativeReport r)
+      Ok text =>
+        expectEqualLines
+          (join "\n" (outLines text))
+          (join "\n" (negativeReport r))
 
 -- # update
 --
@@ -459,7 +473,10 @@ runUpdate db dbIpk updater = do
 test "update: literal gates match the hand-derived expected values" =
   match updateResult
     Err e => Fail e (join "\n" updateExpectedLines) "the row did not run"
-    Ok r => expectLines updateExpectedLines (updateReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" updateExpectedLines)
+        (join "\n" (updateReport r))
 
 test "update: report matches sqlite/test/update.golden" = match updateResult
   Err e => Fail e "the committed golden" "the row did not run"
@@ -469,7 +486,8 @@ test "update: report matches sqlite/test/update.golden" = match updateResult
         "could not read sqlite/test/update.golden: \{e}"
         "sqlite/test/update.golden"
         "unreadable"
-    Ok text => expectLines (outLines text) (updateReport r)
+    Ok text =>
+      expectEqualLines (join "\n" (outLines text)) (join "\n" (updateReport r))
 
 -- # update_expr
 --
@@ -545,7 +563,10 @@ tableDiff dbm dbs t = do
     [".mode list", ".nullvalue NULL", "SELECT * FROM \{t} ORDER BY id;"]
   mm <- sqlite3Args dbm args
   ss <- sqlite3Args dbs args
-  Ok (labelFail t (expectLines (outLines ss) (outLines mm)))
+  Ok
+    (labelFail
+      t
+      (expectEqualLines (join "\n" (outLines ss)) (join "\n" (outLines mm))))
 
 test "update_expr: arithmetic UPDATE matches the sqlite3 CLI on every table" =
   match updateExprResult
@@ -639,7 +660,7 @@ compareDbs label mdb sdb = do
   else do
     md <- dumpDb mdb
     sd <- dumpDb sdb
-    Ok (labelFail label (expectLines sd md))
+    Ok (labelFail label (expectEqualLines (join "\n" sd) (join "\n" md)))
 
 runCorpusSection : String ->
   String ->
@@ -709,7 +730,10 @@ dmlAuthored = [
 overflowLengths : String -> <Exec "_", IO> Result String Expectation
 overflowLengths db = do
   raw <- sqlite3Query db "SELECT length(body) FROM docs ORDER BY rowid;"
-  Ok (labelFail "overflow" (expectLines ["9000", "5000"] (outLines raw)))
+  Ok
+    (labelFail
+      "overflow"
+      (expectEqualLines "9000\n5000" (join "\n" (outLines raw))))
 
 -- ── section 4: CLI SELECT (byte-identical to the sqlite3 CLI) ────────────
 dmlSelects : List String
@@ -742,7 +766,9 @@ cliSelectOne cli mdb sdb q = do
   Ok
     (labelFail
       q
-      (expectLines (outLines (sout ++ serr)) (outLines (mout ++ merr))))
+      (expectEqualLines
+        (join "\n" (outLines (sout ++ serr)))
+        (join "\n" (outLines (mout ++ merr)))))
 
 cliSelectExpectation : String ->
   String ->

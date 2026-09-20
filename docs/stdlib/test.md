@@ -88,6 +88,27 @@ Pass "False" "False"
 Fail "expected False but got True" "False" "True"
 ```
 
+### `expectSatisfies`
+
+```
+expectSatisfies : Debug a => String -> (a -> Bool) -> a -> Expectation
+```
+
+Passes when `x` satisfies `p`, naming the property as `what`.
+
+The escape hatch for a one-off predicate that no other assertion here
+says. `what` completes the sentence "expected …", so it names the
+property rather than restating the call: `"a positive number"`, not
+`"p x"`. The value is rendered either way, so a failure shows what was
+actually tested.
+
+```medaka
+> expectSatisfies "a positive number" (n => n > 0) 3
+Pass "a positive number" "3"
+> expectSatisfies "a positive number" (n => n > 0) 0
+Fail "expected a positive number but got 0" "a positive number" "0"
+```
+
 ### `expectEqual`
 
 ```
@@ -150,6 +171,40 @@ Pass "0" "5"
 Fail "expected 3 > 10" "10" "3"
 ```
 
+### `expectAtLeast`
+
+```
+expectAtLeast : (Ord a, Debug a) => a -> a -> Expectation
+```
+
+Passes when `actual` is at least `floor`.
+
+The inclusive peer of `expectGreaterThan`, for a count whose exact value
+is not the point: a census that must find SOMETHING pins a floor, and
+pinning the current count instead would fail on every legitimate growth.
+
+```medaka
+> expectAtLeast 3 5
+Pass "3" "5"
+> expectAtLeast 3 2
+Fail "expected 2 >= 3" "3" "2"
+```
+
+### `expectAtMost`
+
+```
+expectAtMost : (Ord a, Debug a) => a -> a -> Expectation
+```
+
+Passes when `actual` is at most `ceiling`.
+
+```medaka
+> expectAtMost 3 2
+Pass "3" "2"
+> expectAtMost 3 5
+Fail "expected 5 <= 3" "3" "5"
+```
+
 ### `expectOk`
 
 ```
@@ -159,9 +214,9 @@ expectOk : (Debug e, Debug a) => Result e a -> Expectation
 Passes when the result is `Ok`.
 
 ```medaka
-> expectOk (Ok 1)
+> expectOk (Ok 1 : Result String Int)
 Pass "Ok _" "Ok 1"
-> expectOk (Err "boom")
+> expectOk (Err "boom" : Result String Int)
 Fail "expected Ok but got Err \"boom\"" "Ok _" "Err \"boom\""
 ```
 
@@ -174,10 +229,57 @@ expectErr : (Debug e, Debug a) => Result e a -> Expectation
 Passes when the result is `Err`.
 
 ```medaka
-> expectErr (Err "boom")
+> expectErr (Err "boom" : Result String Int)
 Pass "Err _" "Err \"boom\""
-> expectErr (Ok 1)
+> expectErr (Ok 1 : Result String Int)
 Fail "expected Err but got Ok 1" "Err _" "Ok 1"
+```
+
+### `expectErrContains`
+
+```
+expectErrContains : (Debug e, Debug a, Display e) => String -> Result e a -> Expectation
+```
+
+Passes when the result is `Err` whose message contains `needle`.
+
+Both halves are required, and for the same reason `expectSpawnFails`
+needs both: a rejection graded on the `Err` constructor alone still
+passes once the error it was written for has been replaced by a
+different one. The needle is matched against `display e`, the sentence a
+caller would print, not against `debug e`'s constructor spelling.
+
+```medaka
+> expectErrContains "no such column" (Err "no such column: age" : Result String Int)
+Pass "Err containing \"no such column\"" "Err \"no such column: age\""
+> expectErrContains "no such column" (Err "syntax error" : Result String Int)
+Fail "expected the error to contain \"no such column\" but got \"syntax error\"" "Err containing \"no such column\"" "Err \"syntax error\""
+> expectErrContains "no such column" (Ok 1 : Result String Int)
+Fail "expected Err but got Ok 1" "Err containing \"no such column\"" "Ok 1"
+```
+
+### `expectOkThen`
+
+```
+expectOkThen : (Debug e, Display e) => (a -> Expectation) -> Result e a -> Expectation
+```
+
+Runs `k` on the `Ok` payload, and fails naming the error otherwise.
+
+The unwrap-or-fail guard, as a verb. A hand-written `match` whose `Err`
+arm is `expectTrue False` (or any bare `fail`) throws the error away and
+reports only that the step did not reach its assertion; this keeps the
+error in the message, which is the only thing that says WHY.
+
+The payload needs no `Debug`, so this reaches a `Result` whose success
+type is a program type that derives nothing — the case the plain
+`expectOk` cannot take.
+
+```medaka
+> expectOkThen (n => expectEqual 1 n) (Ok 1 : Result String Int)
+Pass "1" "1"
+> expectOkThen (n => expectEqual 1 n) (Err "boom" : Result String Int)
+Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\""
 ```
 
 ### `expectSome`
@@ -191,7 +293,7 @@ Passes when the option is `Some`.
 ```medaka
 > expectSome (Some 1)
 Pass "Some _" "Some 1"
-> expectSome None
+> expectSome (None : Option Int)
 Fail "expected Some but got None" "Some _" "None"
 ```
 
@@ -204,7 +306,7 @@ expectNone : Debug a => Option a -> Expectation
 Passes when the option is `None`.
 
 ```medaka
-> expectNone None
+> expectNone (None : Option Int)
 Pass "None" "None"
 > expectNone (Some 1)
 Fail "expected None but got Some 1" "None" "Some 1"
@@ -290,7 +392,9 @@ exactly `0`. Ordinary text ending in the digit `0` is NOT touched — only
 a `0` occupying the whole last line normalizes.
 
 A mismatch names the first differing line, 1-indexed, rather than
-dumping both texts whole.
+dumping both texts whole. `expectEqualLines` is the sibling that
+normalizes nothing, for text where a trailing `()` or a whole-line `0`
+is data rather than a driver's artefact.
 
 ```medaka
 > expectEqualText "same" "same"
@@ -299,6 +403,32 @@ Pass "same" "same"
 Pass "result" "result"
 > expectEqualText "value: 10" "value: 1"
 Fail "line 1: expected \"value: 10\" but got \"value: 1\"" "value: 10" "value: 1"
+```
+
+### `expectEqualLines`
+
+```
+expectEqualLines : String -> String -> Expectation
+```
+
+Passes when two texts are equal, naming the first line at which they
+diverge.
+
+`expectEqualText` without the normalizer: nothing is stripped, so a text
+whose last line is exactly `0` compares as itself. A query result set
+ending in a `0` row and one that printed no row at all are different
+answers, and only this separates them.
+
+Whole texts rather than line lists, so a caller holding captured output
+compares it directly; a caller holding lines joins them with `"\n"`.
+
+```medaka
+> expectEqualLines "a\nb" "a\nb"
+Pass "a\nb" "a\nb"
+> expectEqualLines "a\nb" "a\nc"
+Fail "line 2: expected \"b\" but got \"c\"" "a\nb" "a\nc"
+> expectEqualLines "a" "a\nb"
+Fail "line 2: expected nothing but got \"b\"" "a" "a\nb"
 ```
 
 ### `expectAll`
@@ -316,6 +446,95 @@ The result is the first `Fail`, when there is one.
 Pass "" ""
 > expectAll [pass, fail "oops", pass]
 Fail "oops" "" ""
+```
+
+### `labelFail`
+
+```
+labelFail : String -> Expectation -> Expectation
+```
+
+`e`, with `label` prefixed onto its message when it is a `Fail`.
+
+For a comparison run under a label (which row, which table, which file)
+the label has to travel WITH the message: `expectAll` forwards the first
+`Fail` out of many and drops everything beside it, so a label kept
+anywhere else is the thing nobody prints.
+
+```medaka
+> labelFail "t1" pass
+Pass "" ""
+> labelFail "t1" (fail "mismatch")
+Fail "t1: mismatch" "" ""
+```
+
+### `expectEach`
+
+```
+expectEach : List (String, Expectation) -> Expectation
+```
+
+Passes when every labelled expectation passes, naming the first that
+does not.
+
+`expectAll` over rows that each need saying which one they were: one
+`test` block sweeping a corpus reports `"users.sql: line 3: …"` instead
+of a bare line number that fits every row equally.
+
+```medaka
+> expectEach [("a", pass), ("b", pass)]
+Pass "" ""
+> expectEach [("a", pass), ("b", fail "oops")]
+Fail "b: oops" "" ""
+```
+
+## Grading a check's findings
+
+### `expectNoFindings`
+
+```
+expectNoFindings : String -> Result String (List String) -> Expectation
+```
+
+Passes when `check` ran and reported nothing.
+
+The shape a scan-shaped test wants: a check returns either the reason it
+could not run or the lines it found, and those are three outcomes, not
+two. A plain `expectOk` would pass on a check that ran and found
+violations, and a plain `expectEqual []` would report "could not run" as
+though it were a finding.
+
+`what` names the check, and heads the failure so a suite of scans says
+which one fired.
+
+```medaka
+> expectNoFindings "hardening" (Ok [])
+Pass "no findings" "no findings"
+> expectNoFindings "hardening" (Ok ["pds.service: no MemoryDenyWriteExecute"])
+Fail "hardening:\n  pds.service: no MemoryDenyWriteExecute\n" "no findings" "1 findings"
+> expectNoFindings "hardening" (Err "could not read pds.service")
+Fail "hardening: could not read pds.service" "no findings" "the check could not run"
+```
+
+### `expectFindings`
+
+```
+expectFindings : String -> Result String (List String) -> Expectation
+```
+
+Passes when `check` ran and reported at least one finding.
+
+`expectNoFindings`'s mutation control, where a clean report is the
+failure. The count, not the text: a control proves the check can fire at
+all, and pinning which line fired would restate the check beside it.
+
+```medaka
+> expectFindings "injected secret" (Ok ["shell.mdk:12: literal token"])
+Pass "a finding" "1 findings"
+> expectFindings "injected secret" (Ok [])
+Fail "injected secret: nothing was reported" "a finding" "no findings"
+> expectFindings "injected secret" (Err "could not read shell.mdk")
+Fail "injected secret: could not read shell.mdk" "a finding" "the check could not run"
 ```
 
 ## Reading an expectation

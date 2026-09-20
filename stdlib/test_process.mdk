@@ -196,6 +196,49 @@ expectSpawnFails cmd args needle =
           want
           got
 
+{- | Passes when running `cmd` with `args` exits nonzero and its output
+   contains EVERY string in `needles`.
+
+   `expectSpawnFails` for a rejection whose diagnostic has to say more than
+   one thing: which rule fired, which file, and what to do instead. A single
+   needle grades only the part it names, so a diagnostic that keeps its
+   headline and drops its location still passes. The needles are matched in
+   any order, against stdout and stderr concatenated, and need not share a
+   line — `test.expectLineContainsAll` is the one that binds them
+   together.
+
+   An empty `needles` list grades the exit code alone, which is
+   `expectSpawnFails` with an empty needle.
+
+   > expectSpawnFailsAll "sh" ["-c", "printf alpha-beta; exit 3"] ["alpha", "beta"]
+   Pass "nonzero exit, output containing [\"alpha\", \"beta\"]" "exit 3, output \"alpha-beta\""
+   > expectSpawnFailsAll "sh" ["-c", "printf alpha; exit 3"] ["alpha", "beta"]
+   Fail "`sh -c printf alpha; exit 3` exited 3 but its output does not contain \"beta\": \"alpha\"" "nonzero exit, output containing [\"alpha\", \"beta\"]" "exit 3, output \"alpha\""
+   > expectSpawnFailsAll "true" [] ["alpha"]
+   Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing [\"alpha\"]" "exit 0, output \"\"" -}
+export
+expectSpawnFailsAll : String ->
+  List String ->
+  List String ->
+  <Exec "_"> Expectation
+expectSpawnFailsAll cmd args needles =
+  let line = unwords (cmd :: args)
+  let want = "nonzero exit, output containing \{debug needles}"
+  match runVerb cmd args
+    Err e => Fail "could not run `\{line}`: \{e}" want "no spawn"
+    Ok (code, out, err) =>
+      let text = out ++ err
+      let got = "exit \{intToString code}, output \{debug text}"
+      if code == 0 then
+        Fail "`\{line}` exited 0, expected it to fail" want got
+      else match filter (n => not (contains n text)) needles
+        [] => Pass want got
+        missing :: _ =>
+          Fail
+            "`\{line}` exited \{intToString code} but its output does not contain \{debug missing}: \{debug text}"
+            want
+            got
+
 {- | Passes when running `cmd` with `args` exits 0 and one whole line of its
    output equals `wantLine`.
 

@@ -21,6 +21,8 @@ COMMA
 IDENT "startsWith"
 COMMA
 IDENT "stripSuffix"
+COMMA
+IDENT "unlines"
 RBRACE
 NEWLINE
 PUBLIC
@@ -122,6 +124,56 @@ UPPER "Fail"
 STRING "expected False but got True"
 STRING "False"
 STRING "True"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectSatisfies"
+COLON
+UPPER "Debug"
+IDENT "a"
+FAT_ARROW
+UPPER "String"
+ARROW
+LPAREN
+IDENT "a"
+ARROW
+UPPER "Bool"
+RPAREN
+ARROW
+IDENT "a"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectSatisfies"
+IDENT "what"
+IDENT "p"
+IDENT "x"
+EQUAL
+INDENT
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "x"
+NEWLINE
+IF
+IDENT "p"
+IDENT "x"
+THEN
+UPPER "Pass"
+IDENT "what"
+IDENT "a"
+ELSE
+UPPER "Fail"
+INTERP_OPEN "expected "
+IDENT "what"
+INTERP_MID " but got "
+IDENT "a"
+INTERP_END ""
+IDENT "what"
+IDENT "a"
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -351,6 +403,116 @@ DEDENT
 NEWLINE
 EXPORT
 NEWLINE
+IDENT "expectAtLeast"
+COLON
+LPAREN
+UPPER "Ord"
+IDENT "a"
+COMMA
+UPPER "Debug"
+IDENT "a"
+RPAREN
+FAT_ARROW
+IDENT "a"
+ARROW
+IDENT "a"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectAtLeast"
+IDENT "floor"
+IDENT "actual"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "debug"
+IDENT "floor"
+NEWLINE
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "actual"
+NEWLINE
+IF
+IDENT "gte"
+IDENT "actual"
+IDENT "floor"
+THEN
+UPPER "Pass"
+IDENT "e"
+IDENT "a"
+ELSE
+UPPER "Fail"
+INTERP_OPEN "expected "
+IDENT "a"
+INTERP_MID " >= "
+IDENT "e"
+INTERP_END ""
+IDENT "e"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectAtMost"
+COLON
+LPAREN
+UPPER "Ord"
+IDENT "a"
+COMMA
+UPPER "Debug"
+IDENT "a"
+RPAREN
+FAT_ARROW
+IDENT "a"
+ARROW
+IDENT "a"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectAtMost"
+IDENT "ceiling"
+IDENT "actual"
+EQUAL
+INDENT
+LET
+IDENT "e"
+EQUAL
+IDENT "debug"
+IDENT "ceiling"
+NEWLINE
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "actual"
+NEWLINE
+IF
+IDENT "lte"
+IDENT "actual"
+IDENT "ceiling"
+THEN
+UPPER "Pass"
+IDENT "e"
+IDENT "a"
+ELSE
+UPPER "Fail"
+INTERP_OPEN "expected "
+IDENT "a"
+INTERP_MID " <= "
+IDENT "e"
+INTERP_END ""
+IDENT "e"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
 IDENT "expectOk"
 COLON
 LPAREN
@@ -450,6 +612,168 @@ STRING "Err _"
 IDENT "a"
 NEWLINE
 DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectErrContains"
+COLON
+LPAREN
+UPPER "Debug"
+IDENT "e"
+COMMA
+UPPER "Debug"
+IDENT "a"
+COMMA
+UPPER "Display"
+IDENT "e"
+RPAREN
+FAT_ARROW
+INDENT
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "Result"
+IDENT "e"
+IDENT "a"
+ARROW
+NEWLINE
+UPPER "Expectation"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "expectErrContains"
+IDENT "needle"
+IDENT "r"
+EQUAL
+INDENT
+LET
+IDENT "want"
+EQUAL
+INTERP_OPEN "Err containing "
+IDENT "debug"
+IDENT "needle"
+INTERP_END ""
+NEWLINE
+LET
+IDENT "a"
+EQUAL
+IDENT "debug"
+IDENT "r"
+NEWLINE
+MATCH
+IDENT "r"
+INDENT
+UPPER "Ok"
+UNDERSCORE
+FAT_ARROW
+UPPER "Fail"
+INTERP_OPEN "expected Err but got "
+IDENT "a"
+INTERP_END ""
+IDENT "want"
+IDENT "a"
+NEWLINE
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+INDENT
+IF
+IDENT "contains"
+IDENT "needle"
+LPAREN
+IDENT "display"
+IDENT "e"
+RPAREN
+THEN
+INDENT
+UPPER "Pass"
+IDENT "want"
+IDENT "a"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+INTERP_OPEN "expected the error to contain "
+IDENT "debug"
+IDENT "needle"
+INTERP_MID " but got "
+IDENT "debug"
+LPAREN
+IDENT "display"
+IDENT "e"
+RPAREN
+INTERP_END ""
+IDENT "want"
+IDENT "a"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectOkThen"
+COLON
+LPAREN
+UPPER "Debug"
+IDENT "e"
+COMMA
+UPPER "Display"
+IDENT "e"
+RPAREN
+FAT_ARROW
+INDENT
+LPAREN
+IDENT "a"
+ARROW
+UPPER "Expectation"
+RPAREN
+ARROW
+NEWLINE
+UPPER "Result"
+IDENT "e"
+IDENT "a"
+ARROW
+NEWLINE
+UPPER "Expectation"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "expectOkThen"
+IDENT "k"
+LPAREN
+UPPER "Ok"
+IDENT "v"
+RPAREN
+EQUAL
+IDENT "k"
+IDENT "v"
+NEWLINE
+IDENT "expectOkThen"
+UNDERSCORE
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+INDENT
+UPPER "Fail"
+INTERP_OPEN "expected Ok but got Err "
+IDENT "display"
+IDENT "e"
+INTERP_END ""
+STRING "Ok _"
+INTERP_OPEN "Err "
+IDENT "debug"
+IDENT "e"
+INTERP_END ""
 NEWLINE
 DEDENT
 NEWLINE
@@ -1056,6 +1380,54 @@ IDENT "a"
 NEWLINE
 DEDENT
 NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectEqualLines"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectEqualLines"
+IDENT "expected"
+IDENT "actual"
+EQUAL
+INDENT
+IF
+IDENT "expected"
+EQ_EQ
+IDENT "actual"
+THEN
+INDENT
+UPPER "Pass"
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+LPAREN
+IDENT "diffLineMsg"
+INT 1
+LPAREN
+IDENT "lines"
+IDENT "expected"
+RPAREN
+LPAREN
+IDENT "lines"
+IDENT "actual"
+RPAREN
+RPAREN
+IDENT "expected"
+IDENT "actual"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "expectAllStep"
 COLON
 UPPER "Expectation"
@@ -1126,6 +1498,240 @@ IDENT "fold"
 IDENT "expectAllStep"
 IDENT "pass"
 IDENT "es"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "labelFail"
+COLON
+UPPER "String"
+ARROW
+UPPER "Expectation"
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "labelFail"
+UNDERSCORE
+LPAREN
+UPPER "Pass"
+IDENT "e"
+IDENT "a"
+RPAREN
+EQUAL
+UPPER "Pass"
+IDENT "e"
+IDENT "a"
+NEWLINE
+IDENT "labelFail"
+IDENT "label"
+LPAREN
+UPPER "Fail"
+IDENT "m"
+IDENT "e"
+IDENT "a"
+RPAREN
+EQUAL
+UPPER "Fail"
+INTERP_OPEN ""
+IDENT "label"
+INTERP_MID ": "
+IDENT "m"
+INTERP_END ""
+IDENT "e"
+IDENT "a"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectEach"
+COLON
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Expectation"
+RPAREN
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectEach"
+IDENT "rows"
+EQUAL
+IDENT "expectAll"
+LPAREN
+IDENT "map"
+LPAREN
+LPAREN
+IDENT "label"
+COMMA
+IDENT "e"
+RPAREN
+FAT_ARROW
+IDENT "labelFail"
+IDENT "label"
+IDENT "e"
+RPAREN
+IDENT "rows"
+RPAREN
+NEWLINE
+IDENT "indentFinding"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "indentFinding"
+IDENT "hit"
+EQUAL
+INTERP_OPEN "  "
+IDENT "hit"
+INTERP_END ""
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectNoFindings"
+COLON
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectNoFindings"
+IDENT "what"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+INDENT
+UPPER "Fail"
+INTERP_OPEN ""
+IDENT "what"
+INTERP_MID ": "
+IDENT "e"
+INTERP_END ""
+STRING "no findings"
+STRING "the check could not run"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "expectNoFindings"
+UNDERSCORE
+LPAREN
+UPPER "Ok"
+LBRACKET
+RBRACKET
+RPAREN
+EQUAL
+UPPER "Pass"
+STRING "no findings"
+STRING "no findings"
+NEWLINE
+IDENT "expectNoFindings"
+IDENT "what"
+LPAREN
+UPPER "Ok"
+IDENT "hits"
+RPAREN
+EQUAL
+INDENT
+UPPER "Fail"
+INTERP_OPEN ""
+IDENT "what"
+INTERP_MID ":\n"
+IDENT "unlines"
+LPAREN
+IDENT "map"
+IDENT "indentFinding"
+IDENT "hits"
+RPAREN
+INTERP_END ""
+STRING "no findings"
+INTERP_OPEN ""
+IDENT "intToString"
+LPAREN
+IDENT "length"
+IDENT "hits"
+RPAREN
+INTERP_END " findings"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectFindings"
+COLON
+UPPER "String"
+ARROW
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+ARROW
+UPPER "Expectation"
+NEWLINE
+IDENT "expectFindings"
+IDENT "what"
+LPAREN
+UPPER "Err"
+IDENT "e"
+RPAREN
+EQUAL
+INDENT
+UPPER "Fail"
+INTERP_OPEN ""
+IDENT "what"
+INTERP_MID ": "
+IDENT "e"
+INTERP_END ""
+STRING "a finding"
+STRING "the check could not run"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "expectFindings"
+IDENT "what"
+LPAREN
+UPPER "Ok"
+LBRACKET
+RBRACKET
+RPAREN
+EQUAL
+INDENT
+UPPER "Fail"
+INTERP_OPEN ""
+IDENT "what"
+INTERP_END ": nothing was reported"
+STRING "a finding"
+STRING "no findings"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "expectFindings"
+UNDERSCORE
+LPAREN
+UPPER "Ok"
+IDENT "hits"
+RPAREN
+EQUAL
+INDENT
+UPPER "Pass"
+STRING "a finding"
+INTERP_OPEN ""
+IDENT "intToString"
+LPAREN
+IDENT "length"
+IDENT "hits"
+RPAREN
+INTERP_END " findings"
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -1509,6 +2115,62 @@ IDENT "debug"
 IDENT "pass"
 EQ_EQ
 UPPER "False"
+NEWLINE
+DEDENT
+NEWLINE
+PROP
+STRING "labelFail is identity on Pass and prefixes the message on Fail"
+LPAREN
+IDENT "l"
+COLON
+UPPER "String"
+RPAREN
+LPAREN
+IDENT "m"
+COLON
+UPPER "String"
+RPAREN
+EQUAL
+INDENT
+IDENT "labelFail"
+IDENT "l"
+IDENT "pass"
+EQ_EQ
+IDENT "pass"
+AND
+IDENT "labelFail"
+IDENT "l"
+LPAREN
+IDENT "fail"
+IDENT "m"
+RPAREN
+EQ_EQ
+IDENT "fail"
+INTERP_OPEN ""
+IDENT "l"
+INTERP_MID ": "
+IDENT "m"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+PROP
+STRING "expectAtLeast passes when actual equals the floor"
+LPAREN
+IDENT "n"
+COLON
+UPPER "Int"
+RPAREN
+EQUAL
+INDENT
+IDENT "expectationTag"
+LPAREN
+IDENT "expectAtLeast"
+IDENT "n"
+IDENT "n"
+RPAREN
+EQ_EQ
+STRING "Pass"
 NEWLINE
 DEDENT
 NEWLINE
