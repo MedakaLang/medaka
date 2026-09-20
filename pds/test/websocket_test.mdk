@@ -22,7 +22,7 @@
 import array.{blit, fill, make, setInPlace}
 import hex.{encode}
 import string.{fromUtf8, toUtf8}
-import test.{expectEqual, expectTrue}
+import test.{expectEqual, expectErr, expectTrue}
 import lib.sha1.{sha1, sha1FixedBytes}
 import lib.websocket.{
   AssembleEvent(..),
@@ -134,14 +134,10 @@ test "RFC 6455 §1.3 worked example: the key's accept value, byte for byte" =
       == Ok "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
 
 test "a Sec-WebSocket-Key that does not decode to 16 bytes is refused (§4.1)" =
-  match handshakeAccept "c2hvcnQ="
-    Ok _ => expectTrue False
-    Err _ => expectTrue True
+  expectErr (handshakeAccept "c2hvcnQ=")
 
 test "a Sec-WebSocket-Key that is not base64 at all is refused" =
-  match handshakeAccept "not base64!!"
-    Ok _ => expectTrue False
-    Err _ => expectTrue True
+  expectErr (handshakeAccept "not base64!!")
 
 -- # Frame encoding — RFC 6455 §5.7
 
@@ -392,14 +388,10 @@ test "an empty close payload is no status, not a zero status (§5.5.1)" =
     _ => expectTrue False
 
 test "a one-byte close payload is a violation, not half a code (§5.5.1)" =
-  match parseClosePayload [|0x03|]
-    Err _ => expectTrue True
-    _ => expectTrue False
+  expectErr (parseClosePayload [|0x03|])
 
 test "close code 1005 may not appear on the wire (§7.4.1)" =
-  match parseClosePayload [|0x03, 0xed|]
-    Err _ => expectTrue True
-    _ => expectTrue False
+  expectErr (parseClosePayload [|0x03, 0xed|])
 
 test "a private-range close code 4000 is accepted (§7.4.2)" =
   match parseClosePayload [|0x0f, 0xa0|]

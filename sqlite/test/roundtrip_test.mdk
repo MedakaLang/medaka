@@ -10,7 +10,7 @@
 --
 -- Run with: `medaka test sqlite/test/roundtrip_test.mdk` from the sqlite project root.
 
-import test.{Expectation, expectTrue, expectEqual, expectAll, pass, fail}
+import test.{Expectation, expectTrue, expectEqual, expectAll, fail}
 import test.dbfix.{q, qd}
 import byteparser.{runByteParser}
 import lib.varint.{sqVarint, sqVarintBytes}
@@ -68,8 +68,7 @@ stableQueries = [
 ]
 
 test "parse-render-parse is stable across the representative query set" =
-  expectAll
-    (map (sql => if parseStable sql then pass else fail sql) stableQueries)
+  expectAll (map (sql => expectTrue (parseStable sql)) stableQueries)
 
 -- ── SELECT DISTINCT idempotence: the result carries no duplicate rows ───────
 hasNoDups : List (List Cell) -> Bool
@@ -102,10 +101,6 @@ nonDecreasing [_] = True
 nonDecreasing (a :: b :: rest) =
   if a <= b then nonDecreasing (b :: rest) else False
 
-len : List a -> Int
-len [] = 0
-len (_ :: rest) = 1 + len rest
-
 -- Ordered ascending ⇒ the projected ints are non-decreasing, and ORDER BY is a
 -- permutation (it neither drops nor invents rows), so the count is preserved.
 test "ORDER BY ASC is a sorted, count-preserving permutation" =
@@ -115,5 +110,5 @@ test "ORDER BY ASC is a sorted, count-preserving permutation" =
       Err e => fail e
       Ok unordered => expectAll [
         expectTrue (nonDecreasing (map firstInt ordered)),
-        expectEqual (len ordered) (len unordered),
+        expectEqual (length ordered) (length unordered),
       ]

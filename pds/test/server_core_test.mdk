@@ -220,9 +220,7 @@ test "classified parser exposes resource excess without diagnostic matching" =
     _ => expectTrue False
 
 test "original parseRequest API retains its Result String contract" =
-  match parseRequest fixedQuery
-    Ok _ => expectTrue True
-    Err _ => expectTrue False
+  expectTrue (isOk (parseRequest fixedQuery))
 
 test "direct configured handle preserves Store for a fixed query" =
   match parseRequest fixedQuery

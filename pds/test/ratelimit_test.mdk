@@ -38,9 +38,8 @@ import lib.xrpc.{
 }
 
 mustHeader : String -> String -> Header
-mustHeader name value = match makeHeader name (toUtf8 value)
-  Ok header => header
-  Err message => panic message
+mustHeader name value =
+  resultOrPanic "ratelimit_test: mustHeader" (makeHeader name (toUtf8 value))
 
 xffHeader : String -> Header
 xffHeader = mustHeader "x-forwarded-for"
@@ -58,8 +57,7 @@ labelOf (Err _) = "refused"
 -- | The identity a derivation that must succeed produced, for the cases that
 -- go on to make a rate-limit decision with it.
 mustIdentity : Result String ClientIdentity -> ClientIdentity
-mustIdentity (Ok identity) = identity
-mustIdentity (Err message) = panic message
+mustIdentity = resultOrPanic "ratelimit_test: mustIdentity"
 
 isRefused : RateLimitVerdict -> Bool
 isRefused Refused = True
