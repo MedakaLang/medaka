@@ -1,0 +1,18 @@
+data Acc b = MkAcc b deriving (Display)
+
+interface Fancy a requires Num a where
+  fromInt : Int -> a
+
+impl Fancy Float where
+  fromInt _ = 42.0
+
+interface Mk a where
+  mk : Unit -> a
+
+impl Mk (Acc b) requires Fancy b where
+  mk _ = MkAcc 0
+
+value : Acc Float
+value = mk ()
+
+main = println value

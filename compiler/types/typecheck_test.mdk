@@ -200,6 +200,30 @@ test "a nested numeric literal may use the declared impl prerequisite" =
   let (errors, _) = numericCheckObserved numericNestedBodySource
   expectEqual [] errors
 
+numericSuperclassImplSource : String -> String
+numericSuperclassImplSource reqs = joinNl [
+  "data Acc b = MkAcc b",
+  "interface Fancy a requires Num a where",
+  "  fromInt : Int -> a",
+  "impl Fancy Float where",
+  "  fromInt _ = 42.0",
+  "interface Mk a where",
+  "  mk : Unit -> a",
+  "impl Mk (Acc b) requires " ++ reqs ++ " where",
+  "  mk _ = MkAcc 0",
+]
+
+test "an impl prerequisite supplies numeric evidence through its superclass" = expectAll
+  [
+    expectEqual
+      []
+      (fst (numericCheckObserved (numericSuperclassImplSource "Fancy b"))),
+    expectEqual
+      []
+      (fst
+        (numericCheckObserved (numericSuperclassImplSource "Fancy b, Num b"))),
+  ]
+
 numericImplHeadSource : String -> String -> String
 numericImplHeadSource methodType methodBody = joinNl [
   "data Acc b = MkAcc b",
