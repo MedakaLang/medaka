@@ -876,9 +876,14 @@ data PredicateRequest = PredicateRequest {
 data PredicateSlot = PredicateSlot {
 data MethodPredicateSlot = MethodPredicateSlot {
 data PendingMethodDict = PendingMethodDict {
-registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
-      psArgs = PSArgsKnown argMonos,
-      psBoundIds = ids,
+registerReqSlots : ScopeId ->
+  List (String, Mono) ->
+  Int ->
+  Int ->
+  List Require ->
+  Unit
+    psArgs = PSArgsKnown argMonos,
+    psBoundIds = ids,
 setFunConstraintEntry : String -> List PredicateSlot -> Unit
 registerActiveDictVars : ScopeId -> Int -> List PredicateSlot -> Unit
 recordCallObligations : List CSlot -> List Mono -> List (List Mono) -> Unit
