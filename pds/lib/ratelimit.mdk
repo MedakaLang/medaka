@@ -1,5 +1,6 @@
 {- | Client-identity derivation and the pure rate-limit decision (#2612, PURE
-   half only — nothing here is enforced; the shell wires this in next).
+   half only — `pds/shell/server.mdk`'s `applyRateLimit`/`admitClasses`/
+   `limiterRef` enforce it).
 
    The step function is `(state, identity, class, now) -> (state, verdict)`.
    `now` is a plain `Int` argument, never a `Clock` effect: `pds/lib/` may

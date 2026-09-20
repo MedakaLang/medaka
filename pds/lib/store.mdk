@@ -6,7 +6,11 @@
    shipped (`storeGet`/`storePut`/`storeSize` unchanged), plus each blob's
    declared MIME type recorded alongside it by `storePutBlob`/
    `storeBlobMimeType` — content addressing verifies bytes, not MIME, so the
-   declared type is state the routes must carry, not something a CID implies.
+   declared type is state the routes must carry, not something a CID implies —
+   plus a running byte total (`storeBlobBytes`) so an upload can be graded
+   against a per-account cap without walking every blob, and a base32-CID-text
+   index (`storeBlobCidTexts`) kept in the same order a sync cursor compares,
+   so paging needs no sort of its own.
 
    The **repository half** is the configured account's real signed repository
    state (`lib.repo`'s `Repo`), which Phase 4 record writes transition. It is
@@ -434,7 +438,9 @@ storeBlobMimeType : Cid -> Store -> Option String
 storeBlobMimeType cid (Store half _ _ _) = declaredTypeOf cid half
 
 -- | Every distinct verified block in the blob half, CID-sorted and
--- defensively copied — the primitive `sync.listBlobs` wraps.
+-- defensively copied, byte payload included. No route calls this — every
+-- caller that only needs names or a byte total reaches for
+-- `storeBlobCids`/`storeBlobCidTexts`/`storeBlobBytes` instead.
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
 storeBlobEntries (Store (BlobHalf blocks _ _) _ _ _) = blockStoreEntries blocks

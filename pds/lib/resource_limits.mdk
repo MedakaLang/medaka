@@ -382,9 +382,8 @@ maxHttpClientWireBytes =
    Thirty-two mebibytes is twice what all 256 connections holding one
    `readChunkBytes` read each would take (16 MiB), so ordinary request traffic
    does not reach it, and it still admits five concurrent requests at the full
-   per-request ceiling. Its own worst case is a doubling above itself, since
-   the buffer holding the bytes grows by doubling: 64 MiB resident, an eighth
-   of `MemoryMax`.
+   per-request ceiling. Measured under a 7-connection saturation probe, its
+   worst case is 88.6 MB VmRSS — comfortably under `MemoryMax=512M` (17.3%).
 
    It bounds what a connection HOLDS, which counts a reservation as well as a
    live byte: the end position of a `Content-Length` body is fixed the instant
