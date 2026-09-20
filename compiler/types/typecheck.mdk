@@ -13623,13 +13623,14 @@ blockRecLet env x xloc e =
   let _ = unify placeholder t1
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ =
-    defaultAmbiguousNumOwnedBy
-      (perRun.value.currentLevel.value + 1)
-      omEmpty
-      addedObls
-      t1  -- PLAN.md #11
-  let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
+  let _ = finalizeNumBoundary NumBoundary {
+    nbDisposition =
+      NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
+    nbMembers = [t1],
+    nbSurvivingIds = omEmpty,
+    nbDefaultObls = addedObls,
+    nbAmbiguityObls = addedObls,
+  }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (block rec-let bypasses inferPat)
   let sch =
     genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
@@ -13645,13 +13646,14 @@ blockLet env (PVar x xloc) e =
   let t = infer env e
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ =
-    defaultAmbiguousNumOwnedBy
-      (perRun.value.currentLevel.value + 1)
-      omEmpty
-      addedObls
-      t  -- PLAN.md #11
-  let _ = registerAmbiguousConstraints addedObls [t]  -- RETPOS soundness
+  let _ = finalizeNumBoundary NumBoundary {
+    nbDisposition =
+      NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
+    nbMembers = [t],
+    nbSurvivingIds = omEmpty,
+    nbDefaultObls = addedObls,
+    nbAmbiguityObls = addedObls,
+  }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x (Some xloc) t  -- LSP hover (block let bypasses inferPat)
   let sch =
     genRestricted
@@ -18709,13 +18711,14 @@ inferRecLet env x xloc e1 e2 =
   let _ = unify placeholder t1
   let _ = exitLevel ()
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ =
-    defaultAmbiguousNumOwnedBy
-      (perRun.value.currentLevel.value + 1)
-      omEmpty
-      addedObls
-      t1  -- PLAN.md #11
-  let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
+  let _ = finalizeNumBoundary NumBoundary {
+    nbDisposition =
+      NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
+    nbMembers = [t1],
+    nbSurvivingIds = omEmpty,
+    nbDefaultObls = addedObls,
+    nbAmbiguityObls = addedObls,
+  }  -- PLAN.md #11 / RETPOS soundness
   let _ = recordLocalBind x xloc t1  -- LSP hover (recursive PVar let bypasses inferPat)
   let sch =
     genRestricted (not (pinLocalIfDictForwarded callN0 dictN0 x xloc t1)) t1  -- #866
@@ -18773,13 +18776,14 @@ inferLetSimple env pat e1 e2 =
   -- before it generalizes, so `let z = 2 in y + z` (y:Float) is a clean type
   -- error and never leaks an unbound Num var.  Scoped to this binding's new obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ =
-    defaultAmbiguousNumOwnedBy
-      (perRun.value.currentLevel.value + 1)
-      omEmpty
-      addedObls
-      t1
-  let _ = registerAmbiguousConstraints addedObls [t1]  -- RETPOS soundness
+  let _ = finalizeNumBoundary NumBoundary {
+    nbDisposition =
+      NumBoundaryOwnedMember (perRun.value.currentLevel.value + 1),
+    nbMembers = [t1],
+    nbSurvivingIds = omEmpty,
+    nbDefaultObls = addedObls,
+    nbAmbiguityObls = addedObls,
+  }
   inferLetBody env pat t1 e1 e2 oblN0 callN0 dictN0
 
 inferLetBody : TcEnv -> Pat -> Mono -> Expr -> Expr -> Int -> Int -> Int -> Mono
@@ -20155,16 +20159,16 @@ processLetGroup env binds =
   -- where-group boundary (and not arg-reachable from any member type) before the
   -- group generalizes.  Scoped to this group's newly added obligations.
   let addedObls = wWindow perRun.value.implObls oblN0
-  let _ =
-    defaultGroupNumOwnedBy
-      (perRun.value.currentLevel.value + 1)
-      omEmpty
-      addedObls
-      (map (p => schemeMono (snd p)) placeholders)
-  let _ =
-    registerAmbiguousConstraints
-      addedObls
-      (map (p => schemeMono (snd p)) placeholders)  -- RETPOS soundness
+  let memberMonos = map (p => schemeMono (snd p)) placeholders
+  let _ = finalizeNumBoundary
+    NumBoundary {
+      nbDisposition =
+        NumBoundaryOwnedGroup (perRun.value.currentLevel.value + 1),
+      nbMembers = memberMonos,
+      nbSurvivingIds = omEmpty,
+      nbDefaultObls = addedObls,
+      nbAmbiguityObls = addedObls,
+    }  -- RETPOS soundness
   -- #866: hoisted out of generalizeGroup's per-binding recursion (all three sources are
   -- fixed for the whole group), so an N-member group scans the pin sets ONCE.  Every
   -- half is kept in (id, iface) form so each member can record its own pin note (the
@@ -20732,7 +20736,7 @@ anyIn xs ys = anyList (x => containsI x ys) xs
 -- determined, so leaving it unbound hands an UNGROUNDED RECEIVER to the route
 -- resolver, which then silently mis-selects an impl.  It is not a let-group, which is
 -- why it needed its own call rather than inheriting one.  It defaults strictly LESS
--- than a let-group does — body-local vars only (defaultBodyLocalNum) — because an
+-- than a let-group does — body-local vars only — because an
 -- impl method's vars can ALSO be caller-determined via a method DICT, a channel with
 -- no let-group analogue.  This paragraph is the written scope extension; before #518
 -- the widening would have existed only as a judgment call in code.
@@ -20766,17 +20770,78 @@ numObligIds o = match o.oblProj
   OpProjected => []
   OpNumLit occ => monoUnboundIds occ
 
-defaultAmbiguousNum : OrdMap Unit -> List UObligation -> Mono -> Unit
-defaultAmbiguousNum protectedIds obls t =
-  defaultAmbiguousNumWith None protectedIds obls t
+-- One explicit description of a numeric-defaulting boundary.  An owned boundary
+-- carries the just-exited HM level used by BOTH defaulting and ambiguity rejection;
+-- a method body with no level window is represented as pending rather than borrowing
+-- the ambient level.
+-- These four policies preserve the existing candidate sets while making the
+-- outliving channels named data instead of positional arguments:
+--   * member: roots in one member, excluding its arguments;
+--   * group: all roots, excluding arguments of any member;
+--   * SCC: the group rule plus the existing per-member fallback;
+--   * body-local: roots absent from the declared method mono.
+data NumBoundaryDisposition =
+  | NumBoundaryOwnedMember Int
+  | NumBoundaryOwnedGroup Int
+  | NumBoundaryOwnedScc Int
+  | NumBoundaryMethodBodyPending
 
-defaultAmbiguousNumOwnedBy : Int ->
-  OrdMap Unit ->
-  List UObligation ->
-  Mono ->
-  Unit
-defaultAmbiguousNumOwnedBy owner protectedIds obls t =
-  defaultAmbiguousNumWith (Some owner) protectedIds obls t
+data NumBoundary = NumBoundary {
+  nbDisposition : NumBoundaryDisposition,
+  nbMembers : List Mono,
+  nbSurvivingIds : OrdMap Unit,
+  nbDefaultObls : List UObligation,
+  nbAmbiguityObls : List UObligation,
+}
+
+-- D1: one operation performs defaulting first, then ambiguity registration.
+-- The pending method-body disposition still defaults with the legacy unrestricted
+-- owner policy and deliberately has no ambiguity owner yet.
+finalizeNumBoundary : NumBoundary -> Unit
+finalizeNumBoundary boundary =
+  let ownerPolicy = match boundary.nbDisposition
+    NumBoundaryOwnedMember owner => Some owner
+    NumBoundaryOwnedGroup owner => Some owner
+    NumBoundaryOwnedScc owner => Some owner
+    NumBoundaryMethodBodyPending => None
+  let _ = match boundary.nbDisposition
+    NumBoundaryOwnedMember _ => match boundary.nbMembers
+      [member] =>
+        defaultAmbiguousNumWith
+          ownerPolicy
+          boundary.nbSurvivingIds
+          boundary.nbDefaultObls
+          member
+      _ => panic "NumBoundaryOwnedMember must carry exactly one member"
+    NumBoundaryOwnedGroup _ =>
+      defaultGroupNumWith
+        ownerPolicy
+        boundary.nbSurvivingIds
+        boundary.nbDefaultObls
+        boundary.nbMembers
+    NumBoundaryOwnedScc _ =>
+      let _ =
+        defaultGroupNumWith
+          ownerPolicy
+          boundary.nbSurvivingIds
+          boundary.nbDefaultObls
+          boundary.nbMembers
+      defaultEachMemberWith
+        ownerPolicy
+        boundary.nbSurvivingIds
+        boundary.nbDefaultObls
+        boundary.nbMembers
+    NumBoundaryMethodBodyPending => match boundary.nbMembers
+      [member] =>
+        defaultBodyLocalNumWith ownerPolicy boundary.nbDefaultObls member
+      _ => panic "NumBoundaryMethodBodyPending must carry exactly one member"
+  match ownerPolicy
+    Some owner =>
+      registerAmbiguousConstraintsOwnedBy
+        owner
+        boundary.nbAmbiguityObls
+        boundary.nbMembers
+    None => ()
 
 defaultAmbiguousNumWith : Option Int ->
   OrdMap Unit ->
@@ -20797,22 +20862,10 @@ defaultAmbiguousNumWith ownerPolicy protectedIds obls t =
 -- group-level defaulting: ground every unprotected Num-constrained var NOT reachable
 -- from an ARGUMENT position of ANY member's type.  [monos] = the group's member
 -- placeholder monos; [obls] = ONLY this group's newly-added obligations (an earlier
--- group's already-generalized var must not be touched).  Unlike defaultAmbiguousNum
+-- group's already-generalized var must not be touched).  Unlike the member policy,
 -- this does NOT require the var to appear in a member's type (a var consumed inside a
 -- body surfaces in no type but must still ground — `let n = tag [1,2,3]`).  Mirrors
 -- process_letrec_group's group_arg_ids over added_obligs/added_methods.
-defaultGroupNum : OrdMap Unit -> List UObligation -> List Mono -> Unit
-defaultGroupNum protectedIds obls monos =
-  defaultGroupNumWith None protectedIds obls monos
-
-defaultGroupNumOwnedBy : Int ->
-  OrdMap Unit ->
-  List UObligation ->
-  List Mono ->
-  Unit
-defaultGroupNumOwnedBy owner protectedIds obls monos =
-  defaultGroupNumWith (Some owner) protectedIds obls monos
-
 defaultGroupNumWith : Option Int ->
   OrdMap Unit ->
   List UObligation ->
@@ -20833,11 +20886,11 @@ unprotectedNumCandidates protectedIds obls =
     (dedupI (numConstrainedIds obls))
 
 -- #518: BODY-LOCAL defaulting — ground only the Num-constrained vars that appear
--- NOWHERE in [memberMono].  Strictly narrower than defaultGroupNum, and the
+-- NOWHERE in [memberMono].  Strictly narrower than group defaulting, and the
 -- distinction is SOUNDNESS-CRITICAL at an impl-method body, which is why this is a
 -- separate primitive rather than a reuse.
 --
--- defaultGroupNum's exclusion filter is monoArgUnboundIds, which walks ONLY the
+-- Group defaulting's exclusion filter is monoArgUnboundIds, which walks ONLY the
 -- domains of the outermost arrow chain.  A var living in RETURN position — including
 -- nested inside a return application — is invisible to it and gets ZERO protection.
 -- At a let-group that is (mostly) benign: the binding generalizes, so a return-only
@@ -20858,24 +20911,28 @@ unprotectedNumCandidates protectedIds obls =
 -- `t : Option2 Int -> Int`, so nothing outside the body can ever determine it.  That
 -- var, and only that var, is what this grounds.
 --
--- (Note the membership test is the INVERSE of defaultAmbiguousNum's, which requires
+-- (Note the membership test is the INVERSE of member defaulting, which requires
 -- the var to be IN the type — `containsI id inT` — and then excludes arg-reachable
 -- ones.  Neither existing primitive expresses "in the type at all", hence this one.)
-defaultBodyLocalNum : List UObligation -> Mono -> Unit
-defaultBodyLocalNum obls memberMono =
+defaultBodyLocalNumWith : Option Int -> List UObligation -> Mono -> Unit
+defaultBodyLocalNumWith ownerPolicy obls memberMono =
   let inType = monoUnboundIds memberMono
   let candidates = dedupI (numConstrainedIds obls)
-  groundNumVars obls (filterList (id => not (containsI id inType)) candidates)
+  groundNumVarsWith
+    ownerPolicy
+    obls
+    (filterList (id => not (containsI id inType)) candidates)
 
--- per-binding defaulting: run defaultAmbiguousNum on each member's placeholder mono
-defaultEachMember : OrdMap Unit ->
+-- per-binding defaulting: run the member rule on each placeholder mono
+defaultEachMemberWith : Option Int ->
+  OrdMap Unit ->
   List UObligation ->
-  List (String, Mono) ->
+  List Mono ->
   Unit
-defaultEachMember _ _ [] = ()
-defaultEachMember protectedIds obls ((_, m) :: rest) =
-  let _ = defaultAmbiguousNum protectedIds obls m
-  defaultEachMember protectedIds obls rest
+defaultEachMemberWith _ _ _ [] = ()
+defaultEachMemberWith ownerPolicy protectedIds obls (m :: rest) =
+  let _ = defaultAmbiguousNumWith ownerPolicy protectedIds obls m
+  defaultEachMemberWith ownerPolicy protectedIds obls rest
 
 -- RETPOS soundness — ambiguous interface constraint (run≠build hole).
 -- A method obligation recorded inside a binding whose discriminating tyvar is
@@ -20890,7 +20947,7 @@ defaultEachMember protectedIds obls ((_, m) :: rest) =
 -- guards an undetermined call site already uses (so a sole-impl interface is never
 -- over-rejected and `Num` stays on its literal-defaulting path).  Three filters
 -- keep this from firing on legitimately-deferred constraints:
---   • member-type membership (defaultGroupNum's `monoUnboundIds`) — a var IN the
+--   • member-type membership (`monoUnboundIds`) — a var IN the
 --     binding's type is determined by a caller/annotation;
 --   • group LEVEL — a DEEPER var belongs to an inner let/where binding that already
 --     generalized + checked it (its obligation merely leaks into our addedObls
@@ -20899,17 +20956,15 @@ defaultEachMember protectedIds obls ((_, m) :: rest) =
 --     of this binding (`Set _a` from a `Set {…}` literal's FromEntries/Display) is
 --     ground at emit by head-pinning, so it is sound-but-deferred, NOT ambiguous.
 -- The obligation's record-site loc rides along (currentLoc is stale post-HM).
-registerAmbiguousConstraints : List UObligation -> List Mono -> Unit
-registerAmbiguousConstraints obls monos =
-  -- groupLevel = the level THIS group generalizes at (we run post-exitLevel, so the
-  -- outer currentLevel + 1).  anchoredIds = every unbound var that appears inside a
-  -- concrete-headed dispatch mono across this group's obligations (head-pinnable).
+registerAmbiguousConstraintsOwnedBy : Int ->
+  List UObligation ->
+  List Mono ->
+  Unit
+registerAmbiguousConstraintsOwnedBy owner obls monos =
+  -- anchoredIds = every unbound var that appears inside a concrete-headed dispatch
+  -- mono across this group's obligations (head-pinnable).
   let anchoredIds = flatMap concreteHeadVarIds (flatMap oblDispatchMonos obls)
-  registerAmbiguousGo
-    obls
-    (perRun.value.currentLevel.value + 1)
-    (flatMap monoUnboundIds monos)
-    anchoredIds
+  registerAmbiguousGo obls owner (flatMap monoUnboundIds monos) anchoredIds
 
 -- the dispatch monos this obligation discriminates on (empty for Num, whose
 -- ambiguity is handled by literal defaulting).
@@ -21071,15 +21126,12 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- > numDefaultOwnerAllows (Some 7) (TVar (Ref (Link (TVar (Ref (Unbound 91004 7))))))
 -- True
 --
--- Unrestricted policy preserves legacy SCC/body-local behavior.
+-- Pending method bodies preserve their legacy unrestricted behavior.
 -- > numDefaultOwnerAllows None (TVar (Ref (Unbound 91005 6)))
 -- True
 
 -- Ground each id to Int by unifying the live var carrying it (found among [obls]'
 -- Num operand monos — refs alias post-unify, grounding any grounds all).
-groundNumVars : List UObligation -> List Int -> Unit
-groundNumVars obls ids = groundNumVarsWith None obls ids
-
 groundNumVarsWith : Option Int -> List UObligation -> List Int -> Unit
 groundNumVarsWith _ _ [] = ()
 groundNumVarsWith ownerPolicy obls (id :: rest) =
@@ -30349,7 +30401,7 @@ inferDefaultMethods env iface dscope typarams (m :: rest) =
 -- would need a compiler built with S1 removed, and nobody has built one).
 --
 -- ⚠️ THE GATED BLOCK IS NOT DIAGNOSTICS-ONLY.  `unify expected2 actualTy` mutates
--- union-find state that `defaultBodyLocalNum` reads below — its job (#873) is grounding
+-- union-find state that the body-local boundary reads below — its job (#873) is grounding
 -- body-local `Num` vars so the right impl is selected — so skipping it moves GROUNDING,
 -- hence dispatch, not just what prints.  On the ordinary path that is harmless because
 -- a detection here means the program is rejected anyway; across the check drivers'
@@ -30455,12 +30507,19 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- `check` green either way.  [addedObls] = this default body's obligation window (the
   -- SAME [implObls] channel inferImplMethod grounds over after #841/#876) and [expected2]
   -- = the declared method type as a Mono, aliased by the body's unify above — the exact
-  -- pair inferImplMethod passes.  defaultBodyLocalNum grounds ONLY vars absent from
+  -- pair inferImplMethod passes.  The body-local boundary grounds ONLY vars absent from
   -- [expected2], so a legitimately polymorphic default (a Num var reflected in the
   -- signature, dict-supplied by the caller) stays polymorphic — no over-grounding.  Runs
   -- AFTER checkDefaultMethodRigidity so a body-local Num default can never mask a pin,
   -- matching the impl path's ordering.
-  let _ = defaultBodyLocalNum addedObls expected2
+  let _ = finalizeNumBoundary
+    NumBoundary {
+      nbDisposition = NumBoundaryMethodBodyPending,
+      nbMembers = [expected2],
+      nbSurvivingIds = omEmpty,
+      nbDefaultObls = addedObls,
+      nbAmbiguityObls = addedObls,
+    }
   -- #837: schemeObligationsRef restore RETIRED (see snapshot site above).
   perRun.value.inRigidityBodyRef := False
   -- register AFTER body inference, so each constraint var's id in [snd inst] is
@@ -31159,7 +31218,7 @@ univHeadless (ImplUniverse _ hl _) iface =
 -- channel's semantics: a non-ground impl obligation DEFERS unconditionally (old
 -- checkOneImplObligation step 7).  This is NOT a mode fork on elaboration — it is the
 -- same fact the two checkers always encoded: the impl channel's genuinely-ambiguous
--- subset is caught out-of-band by registerAmbiguousConstraints (which re-records the
+-- subset is caught out-of-band by registerAmbiguousConstraintsOwnedBy (which re-records the
 -- escaped-unanchored var as a PCallSlot CALL obligation → RULE 3), so applying RULE 3
 -- to the impl channel directly would ALSO reject the benign non-ground impl obligations
 -- (prelude interface-method occurrences: a bare receiver var recorded outside any
@@ -32762,8 +32821,8 @@ inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats 
       -- arrow, alone or nested in a tuple/data arg (caller pins b to the pure
       -- arrow: a certified-pure value performs IO — the #814 laundering vein the
       -- per-arrow #803 walk above is structurally blind to).  Runs BEFORE
-      -- defaultBodyLocalNum so a body-local Num default can never mask a pin.
-      -- [addedObls] (this body's obligation window, also fed to defaultBodyLocalNum
+      -- body-local defaulting so a Num default can never mask a pin.
+      -- [addedObls] (this body's obligation window, also fed to the numeric boundary
       -- below) carries the CONSTRAINT axis: a body whose pin is a *constrained
       -- var* rather than a constructed type (`mk d = 42` pins b to a Num-obligated
       -- var, still a TVar) escapes the distinctness check, but its obligation on a
@@ -32807,19 +32866,25 @@ inferImplMethodBody env ce cur iface implTvMap headMonos (ImplMethod mname pats 
       -- group defaulting grounded the var to Int first.
       --
       -- MUST run AFTER `unify expected actual` (so [expected] reflects the body's
-      -- aliasing) and defaults ONLY BODY-LOCAL vars — see defaultBodyLocalNum, which
-      -- explains at length why defaultGroupNum is the WRONG primitive HERE even though
+      -- aliasing) and defaults ONLY BODY-LOCAL vars — see defaultBodyLocalNumWith, which
+      -- explains at length why group defaulting is the WRONG policy HERE even though
       -- it is what processLetGroup/processSCC use: its arg-position-only exclusion filter
       -- leaves a method-level constraint var in RETURN position (`lift : Num b => a ->
       -- Box b`) unprotected, and at an impl method body that var is dict-supplied by the
-      -- CALLER.  Using defaultGroupNum here measurably traded #518's S0 for a new one.
+      -- CALLER.  Using group defaulting here measurably traded #518's S0 for a new one.
       --
-      -- NOT paired with registerAmbiguousConstraints, unlike processLetGroup/processSCC:
-      -- that helper reads `currentLevel + 1` and documents itself as running POST-
-      -- exitLevel, but this function has no enterLevel/exitLevel at all, so the level it
-      -- would compute here is meaningless.  It is also orthogonal to #518 (oblDispatchMonos
-      -- returns [] for Num).  Tracked as #564.
-      let _ = defaultBodyLocalNum addedObls expected
+      -- NumBoundaryMethodBodyPending makes the missing owner explicit: unlike the
+      -- level-owned lexical/group boundaries, this function has no enterLevel/exitLevel
+      -- window, so finalization defaults but cannot register ambiguity.  The pending
+      -- disposition prevents it from silently borrowing an ambient owner.  Tracked as #564.
+      let _ = finalizeNumBoundary
+        NumBoundary {
+          nbDisposition = NumBoundaryMethodBodyPending,
+          nbMembers = [expected],
+          nbSurvivingIds = omEmpty,
+          nbDefaultObls = addedObls,
+          nbAmbiguityObls = addedObls,
+        }
       -- Eval-path method-dict threading (parity with inferDefaultMethod's
       -- registerMethodDictSlots): an impl method with its OWN method-level constraint
       -- (`wrap : Thenable m => … -> m (List b)`) whose body returns a constraint-var
@@ -35582,8 +35647,8 @@ processSCCs env sigs grouped (scc :: rest) =
 -- pendingCallObligations / pendingDictApps deltas.  The Num constraint of an
 -- ambiguous var reaching a group ONLY through a constrained-callee instantiation
 -- (`main = println (app2 (==))`) is recorded on those refs, never on
--- pendingImplObligations, so the group-level Num defaulting (defaultGroupNum /
--- groundNumVars, which both reads candidate ids AND finds the live var to ground
+-- pendingImplObligations, so group-level Num defaulting (defaultGroupNumWith /
+-- groundNumVarsWith, which both reads candidate ids AND finds the live var to ground
 -- from impl-shaped entries) never saw it — leaving an ungrounded var whose Num dict
 -- route resolves RNone → a NULL dict word → build-time SIGTRAP (run is correct).
 -- Only field 0 (iface) and field 3 (the live operand mono) are read downstream;
@@ -35610,8 +35675,8 @@ numDictObls : List PendingDictApp -> List UObligation
 -- `currentLoc`.  This runs at a generalized group close, well after inference left
 -- the call site, so `currentLoc` named whichever ELoc happened to be entered last.
 -- Behaviour-neutral by inspection rather than by hope: these synthetic entries feed
--- ONLY the Num-defaulting search (`defaultGroupNum`/`defaultEachMember` →
--- `numConstrainedIds`/`groundNumVars` → `numObligIds`/`liveNumVarGo`), and every one
+-- ONLY the Num-defaulting search (`NumBoundaryOwnedScc` →
+-- `numConstrainedIds`/`groundNumVarsWith` → `numObligIds`/`liveNumVarGo`), and every one
 -- of those readers destructures the 5th element as `_`.  Nothing renders it today;
 -- the point is that the tuple stops carrying a span it knows to be wrong.
 numDictObls [] = []
@@ -35772,9 +35837,13 @@ processSCC env sigs grouped0 members =
   let extraNumObls =
     numCallObls (callUOblsWindow callN0) ++ numDictObls (dictAppsSince dictN0)
   let defaultObls = addedObls ++ extraNumObls
-  let _ = defaultGroupNum protectedSigIds defaultObls (map snd placeholders)
-  let _ = defaultEachMember protectedSigIds defaultObls placeholders
-  let _ = registerAmbiguousConstraints addedObls (map snd placeholders)  -- RETPOS soundness
+  let _ = finalizeNumBoundary NumBoundary {
+    nbDisposition = NumBoundaryOwnedScc (perRun.value.currentLevel.value + 1),
+    nbMembers = map snd placeholders,
+    nbSurvivingIds = protectedSigIds,
+    nbDefaultObls = defaultObls,
+    nbAmbiguityObls = addedObls,
+  }  -- RETPOS soundness
   let schemes =
     sccSchemes env2 sigs groupedStamped (isLetrecGroup members) placeholders
   let scopedSchemes = alignScopedSchemes scopedMembers schemes
