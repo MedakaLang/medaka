@@ -20770,10 +20770,11 @@ numObligIds o = match o.oblProj
   OpProjected => []
   OpNumLit occ => monoUnboundIds occ
 
--- One explicit description of a numeric-defaulting boundary.  An owned boundary
--- carries the just-exited HM level used by BOTH defaulting and ambiguity rejection;
--- a method body with no level window is represented as pending rather than borrowing
--- the ambient level.
+-- One explicit description of a numeric-defaulting boundary.  Member and local-group
+-- boundaries carry the just-exited HM level used by BOTH defaulting and ambiguity
+-- rejection.  An SCC carries that level for ambiguity rejection while retaining its
+-- legacy unrestricted defaulting policy; a method body with no level window is
+-- represented as pending rather than borrowing the ambient level.
 -- These four policies preserve the existing candidate sets while making the
 -- outliving channels named data instead of positional arguments:
 --   * member: roots in one member, excluding its arguments;
@@ -20799,7 +20800,12 @@ data NumBoundary = NumBoundary {
 -- owner policy and deliberately has no ambiguity owner yet.
 finalizeNumBoundary : NumBoundary -> Unit
 finalizeNumBoundary boundary =
-  let ownerPolicy = match boundary.nbDisposition
+  let defaultOwnerPolicy = match boundary.nbDisposition
+    NumBoundaryOwnedMember owner => Some owner
+    NumBoundaryOwnedGroup owner => Some owner
+    NumBoundaryOwnedScc _ => None
+    NumBoundaryMethodBodyPending => None
+  let ambiguityOwner = match boundary.nbDisposition
     NumBoundaryOwnedMember owner => Some owner
     NumBoundaryOwnedGroup owner => Some owner
     NumBoundaryOwnedScc owner => Some owner
@@ -20808,34 +20814,34 @@ finalizeNumBoundary boundary =
     NumBoundaryOwnedMember _ => match boundary.nbMembers
       [member] =>
         defaultAmbiguousNumWith
-          ownerPolicy
+          defaultOwnerPolicy
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
           member
       _ => panic "NumBoundaryOwnedMember must carry exactly one member"
     NumBoundaryOwnedGroup _ =>
       defaultGroupNumWith
-        ownerPolicy
+        defaultOwnerPolicy
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
         boundary.nbMembers
     NumBoundaryOwnedScc _ =>
       let _ =
         defaultGroupNumWith
-          ownerPolicy
+          defaultOwnerPolicy
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
           boundary.nbMembers
       defaultEachMemberWith
-        ownerPolicy
+        defaultOwnerPolicy
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
         boundary.nbMembers
     NumBoundaryMethodBodyPending => match boundary.nbMembers
       [member] =>
-        defaultBodyLocalNumWith ownerPolicy boundary.nbDefaultObls member
+        defaultBodyLocalNumWith defaultOwnerPolicy boundary.nbDefaultObls member
       _ => panic "NumBoundaryMethodBodyPending must carry exactly one member"
-  match ownerPolicy
+  match ambiguityOwner
     Some owner =>
       registerAmbiguousConstraintsOwnedBy
         owner

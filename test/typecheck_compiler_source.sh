@@ -1230,8 +1230,10 @@ if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
   exit 1
 fi
 
-# Every numeric boundary now supplies one explicit descriptor. The six level-owned
-# boundaries name their just-exited owner; method bodies expose the pending state.
+# Every numeric boundary now supplies one explicit descriptor. The six boundaries with
+# ambiguity ownership name their just-exited owner; method bodies expose the pending
+# state. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
+# the just-exited level.
 numeric_boundaries='blockRecLet blockLet NumBoundaryOwnedMember
 blockLet inferRecordCreate NumBoundaryOwnedMember
 inferRecLet registerLocalScheme NumBoundaryOwnedMember
@@ -1262,8 +1264,10 @@ fi
 
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedMember owner => Some owner'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedGroup owner => Some owner'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedScc _ => None'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedScc owner => Some owner'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryMethodBodyPending => None'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'let ambiguityOwner = match boundary.nbDisposition'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'registerAmbiguousConstraintsOwnedBy'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'None => ()'
 require_typecheck_arm numDefaultOwnerAllows groundNumVarsWith 'numDefaultOwnerAllows (Some level) m = match normalize m'
