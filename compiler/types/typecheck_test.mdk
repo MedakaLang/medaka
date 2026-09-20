@@ -2,7 +2,7 @@
 -- Every scope id is projected while its request graph is still live.  Tests
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
-import test.{expectAll, expectEqual}
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{
   Decl(..), EvId(..), EvVal(..), Expr(..), Loc(..), Route(..), TyConOrigin(..)
 }
@@ -243,9 +243,8 @@ test "a Forge instance cannot discharge the numeric Num obligation" =
   ]
   let (errors, trace) = numericCheckObserved source
   expectAll [
-    expectEqual True (listLen errors > 0),
-    expectEqual
-      True
+    expectTrue (listLen errors > 0),
+    expectTrue
       (any
         (view =>
           view.ntvStage == NPTChecked && view.ntvInterface == "core::Num")
@@ -436,7 +435,7 @@ test "finalized scheme queries drain numeric predicates on cold and keyed calls"
     numericCheckObserved "value : Int\nvalue = \"wrong\"\n"
   let afterFailure = numericSchemeObserved (Some (977, 983)) source
   expectAll [
-    expectEqual True (listLen failedErrors > 0),
+    expectTrue (listLen failedErrors > 0),
     expectEqual (["N"], ["N"], ["N"]) (fst cold, fst keyed, fst repeated),
     expectEqual
       [
@@ -586,7 +585,7 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
     expectEqual cold keyed,
     expectEqual keyed repeated,
     expectEqual repeated afterFailure,
-    expectEqual True (listLen failed > 0),
+    expectTrue (listLen failed > 0),
     expectEqual
       [
         ("binding:signedRem", "binding:signedRem", 0),
@@ -918,7 +917,7 @@ test "declared numeric result retains its quantifier and given at finalized quer
     expectEqual cold keyed,
     expectEqual keyed repeated,
     expectEqual repeated afterFailure,
-    expectEqual True (listLen failed > 0),
+    expectTrue (listLen failed > 0),
   ]
 
 test "declared numeric channels include nested results and independent quantifiers" =
@@ -1227,10 +1226,8 @@ test "wrapped return checking rejects an instance for only the result wrapper" =
   let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
   let (flatErrors, _) = checkOneDiags [] core ("__user__", program)
   expectAll [
-    expectEqual
-      True
-      (contains "No impl of Seed for Int" (map tcMsg moduleErrors)),
-    expectEqual True (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
+    expectTrue (contains "No impl of Seed for Int" (map tcMsg moduleErrors)),
+    expectTrue (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
   ]
 
 test "wrapped return routes use the specific instance's empty context" =
@@ -1252,7 +1249,7 @@ test "wrapped return routes survive an intervening failed request" =
   )
   let after = wrappedReturnRoutes (wrappedReturnSource True True)
   expectAll [
-    expectEqual True (listLen errors > 0),
+    expectTrue (listLen errors > 0),
     expectEqual (Some ["Int[]"]) before,
     expectEqual before after,
   ]
@@ -1383,15 +1380,15 @@ test "ordinary return shares declaration identity vector and goal destination" =
     expectEqual
       [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
       (map methodTraceArgs trace),
-    expectEqual True (match goals
+    expectTrue (match goals
       first :: second :: third :: [] => first == second && second == third
       _ => False),
-    expectEqual True (match (goals, aggregate)
+    expectTrue (match (goals, aggregate)
       (goal :: _, Some methodGoal) => goal /= methodGoal
       _ => False),
     expectEqual [True, True, True] (map methodTracePublishedOne trace),
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
       [None, Some (MOVInstance _ ["Int", "Bool"] []), Some _] => True
       _ => False),
     expectEqual
@@ -1441,12 +1438,12 @@ test "ordinary return given evidence feeds checking and route publication" =
         "use _ = choose ()",
       ])
   expectAll [
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
       [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
         checked == stamped
       _ => False),
-    expectEqual True (match trace
+    expectTrue (match trace
       [_, _, stamped] => match stamped.mrtRoute
         Some (RDictFwd _) => listLen stamped.mrtPrerequisites == 0
         _ => False
@@ -1487,12 +1484,12 @@ test "ordinary return instance evidence retains selected prerequisites" =
         "value = make ()",
       ])
   expectAll [
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
       [None, Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])]), Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])])] =>
         True
       _ => False),
-    expectEqual True (match trace
+    expectTrue (match trace
       [_, _, stamped] => match stamped.mrtRoute
         Some (RKey _ _) => listLen stamped.mrtPrerequisites == 1
         _ => False
@@ -1501,15 +1498,15 @@ test "ordinary return instance evidence retains selected prerequisites" =
 
 test "ordinary return validation rejects wrong selected instance" =
   let (_, rejected, _, _) = methodReturnResolutionMutationProbe ()
-  expectEqual True rejected
+  expectTrue rejected
 
 test "ordinary return validation rejects wrong prerequisites" =
   let (_, _, rejected, _) = methodReturnResolutionMutationProbe ()
-  expectEqual True rejected
+  expectTrue rejected
 
 test "ordinary return validation rejects checker evidence disagreement" =
   let (_, _, _, rejected) = methodReturnResolutionMutationProbe ()
-  expectEqual True rejected
+  expectTrue rejected
 
 test "ordinary return template records present and absent interface formals" =
   expectEqual
@@ -1590,12 +1587,12 @@ test "absent return formal completes from the exact enclosing given" =
     expectEqual
       [None, Some ["a", "a"], Some ["a", "a"]]
       (map methodTraceArgs trace),
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
       [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
         checked == stamped
       _ => False),
-    expectEqual True (match trace
+    expectTrue (match trace
       [_, _, stamped] => match stamped.mrtRoute
         Some (RDictFwd _) => True
         _ => False
@@ -1612,10 +1609,8 @@ absentReturnCodes reverseImpls =
 
 test "absent return formal never fabricates a fresh instance parameter" = expectAll
   [
-    expectEqual
-      True
-      (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes False)),
-    expectEqual True (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes True)),
+    expectTrue (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes False)),
+    expectTrue (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes True)),
   ]
 
 test "absent return completion cannot leak from a sibling scope" =
@@ -1635,8 +1630,7 @@ test "absent return completion cannot leak from a sibling scope" =
         (methodCarrierStages "hidden" source))
   expectAll [
     expectEqual 2 (listLen checkedArgs),
-    expectEqual
-      True
+    expectTrue
       (checkedArgs == ["Bool", "Char"] || checkedArgs == ["Char", "Bool"]),
   ]
 
@@ -1815,10 +1809,10 @@ test "ordinary return traces are fresh while cache hits replay no events" =
   expectAll [
     expectEqual [MRTProduced, MRTChecked, MRTStamped] first,
     expectEqual first afterFailure,
-    expectEqual True (listLen failedErrors > 0),
+    expectTrue (listLen failedErrors > 0),
     expectEqual (0, [MRTProduced, MRTChecked, MRTStamped]) cold,
     expectEqual (0, []) hit,
-    expectEqual True (fst failedHit > 0 && snd failedHit == []),
+    expectTrue (fst failedHit > 0 && snd failedHit == []),
     expectEqual (0, []) afterFailedHit,
   ]
 
@@ -1936,11 +1930,11 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
     expectEqual cold afterFailed,
     expectEqual cold afterConflict,
     expectEqual cold backToP,
-    expectEqual True (returnMemoErrorCount failed > 0),
-    expectEqual True (returnMemoErrorCount conflict > 0),
-    expectEqual True (changed /= cold && returnMemoErrorCount changed == 0),
-    expectEqual True (forcedStale /= changed),
-    expectEqual True (match (coldInstance, changedInstance)
+    expectTrue (returnMemoErrorCount failed > 0),
+    expectTrue (returnMemoErrorCount conflict > 0),
+    expectTrue (changed /= cold && returnMemoErrorCount changed == 0),
+    expectTrue (forcedStale /= changed),
+    expectTrue (match (coldInstance, changedInstance)
       (Some before, Some after) =>
         before.mrmvOutcome == "instance"
           && after.mrmvOutcome == "instance"
@@ -1950,7 +1944,7 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
           && after.mrmvEvidence /= "unpublished"
           && before.mrmvEvidence /= after.mrmvEvidence
       _ => False),
-    expectEqual True (match coldGiven
+    expectTrue (match coldGiven
       Some given =>
         given.mrmvArguments == Some ["a", "a"]
           && given.mrmvOutcome == "given"
@@ -2076,7 +2070,7 @@ test "Core IR round-trip preserves method occurrence arity" =
   match parseCProgram (cprogramToSexp original)
     CProgram [CBind "main" [CClause [] (CMethod "probe" arity RNone [] [])]] _ _ _ =>
       expectEqual 7 arity
-    _ => expectEqual True False
+    _ => expectTrue False
 
 emptyLocalCoreFacts : LocalCoreFacts
 emptyLocalCoreFacts = LocalCoreFacts False [] [] 0
@@ -2135,10 +2129,10 @@ test "block recursive Core keeps dictionary methods inside the captured closure"
   let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) =
     blockRecCoreFacts
   expectAll [
-    expectEqual True shape,
+    expectTrue shape,
     expectEqual 1 (listLen addRoutes),
     expectEqual addRoutes fromIntRoutes,
-    expectEqual False (contains "" addRoutes),
+    expectFalse (contains "" addRoutes),
     expectEqual 0 primCount,
   ]
 
@@ -2170,9 +2164,9 @@ test "nested lambda-group Core keeps dictionary dispatch in the group member" =
   let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) =
     lamThenGroupCoreFacts
   expectAll [
-    expectEqual True shape,
+    expectTrue shape,
     expectEqual 1 (listLen addRoutes),
-    expectEqual False (contains "" addRoutes),
+    expectFalse (contains "" addRoutes),
     expectEqual [] fromIntRoutes,
     expectEqual 0 primCount,
   ]

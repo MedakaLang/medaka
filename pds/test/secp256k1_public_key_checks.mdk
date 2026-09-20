@@ -10,10 +10,6 @@ import lib.sign.{
   publicKeyForSecret,
 }
 
-isErr : Result String a -> Bool
-isErr (Ok _) = False
-isErr (Err _) = True
-
 keyBytes : Int -> Array Int
 keyBytes n = [|
   0,

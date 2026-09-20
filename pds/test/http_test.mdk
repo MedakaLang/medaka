@@ -56,14 +56,6 @@ import test.{expectEqual, expectTrue}
 import bytes.*
 import string.{contains, toUtf8}
 
-isErr : Result e a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
-
-isOk : Result e a -> Bool
-isOk (Ok _) = True
-isOk (Err _) = False
-
 rejects : String -> Bytes -> Bool
 rejects expected input = match parseRequest input
   Err message => contains expected message

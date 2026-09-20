@@ -23,6 +23,7 @@
    `arr[i] := v`, `Array.setInPlace`) — no restricted internal externs. -}
 
 import test.{expectEqual, expectTrue, expectFalse}
+import test.algebra_support.{allPairs, allTriples}
 import array as A
 import lib.scalar.{
   Sc,
@@ -162,21 +163,8 @@ samples2 : List Sc
 samples2 =
   map scFromBytesReduce (map (bs => decBytes (decBytes bs)) sampleBytes)
 
-allPairs : (Sc -> Sc -> Bool) -> Bool
-allPairs f = pairsGo f samples samples2
-
-pairsGo : (Sc -> Sc -> Bool) -> List Sc -> List Sc -> Bool
-pairsGo f (a :: ax) (b :: bx) = f a b && pairsGo f ax bx
-pairsGo _ _ _ = True
-
--- The third operand is derived from the first, so every triple is distinct
--- without needing a third input list.
-allTriples : (Sc -> Sc -> Sc -> Bool) -> Bool
-allTriples f = triplesGo f samples samples2
-
-triplesGo : (Sc -> Sc -> Sc -> Bool) -> List Sc -> List Sc -> Bool
-triplesGo f (a :: ax) (b :: bx) = f a b (scAdd a scOne) && triplesGo f ax bx
-triplesGo _ _ _ = True
+scNext : Sc -> Sc
+scNext a = scAdd a scOne
 
 -- ── The sample list is NON-EMPTY ──────────────────────────────────────
 -- Every identity below is an `all`/`allPairs` over `samples`, and `all` over
@@ -198,16 +186,25 @@ test "a + (-a) = 0, over every limb boundary" =
 test "a + 0 = a" = expectTrue (all (a => scEqual (scAdd a scZero) a) samples)
 
 test "a - b = a + (-b)" =
-  expectTrue (allPairs (a b => scEqual (scSub a b) (scAdd a (scNegate b))))
+  expectTrue
+    (allPairs
+      (a b => scEqual (scSub a b) (scAdd a (scNegate b)))
+      samples
+      samples2)
 
 test "a - a = 0" = expectTrue (all (a => scIsZero (scSub a a)) samples)
 
 test "(a + b) + c = a + (b + c)" =
   expectTrue
-    (allTriples (a b c => scEqual (scAdd (scAdd a b) c) (scAdd a (scAdd b c))))
+    (allTriples
+      (a b c => scEqual (scAdd (scAdd a b) c) (scAdd a (scAdd b c)))
+      scNext
+      samples
+      samples2)
 
 test "a + b = b + a" =
-  expectTrue (allPairs (a b => scEqual (scAdd a b) (scAdd b a)))
+  expectTrue
+    (allPairs (a b => scEqual (scAdd a b) (scAdd b a)) samples samples2)
 
 test "-0 = 0" = expectTrue (scIsZero (scNegate scZero))
 
@@ -222,7 +219,10 @@ test "fixed-control zero/equality bits agree with the public predicates" =
 
 test "fixed-control select visits both choices without changing their values" =
   expectTrue
-    (allPairs (a b => scEqual (scSelect 0 a b) a && scEqual (scSelect 1 a b) b))
+    (allPairs
+      (a b => scEqual (scSelect 0 a b) a && scEqual (scSelect 1 a b) b)
+      samples
+      samples2)
 
 test "fixed-control negation agrees with scalar negation, including zero" =
   expectTrue
@@ -237,15 +237,23 @@ test "a * 0 = 0" = expectTrue (all (a => scIsZero (scMul a scZero)) samples)
 
 test "(a * b) * c = a * (b * c)" =
   expectTrue
-    (allTriples (a b c => scEqual (scMul (scMul a b) c) (scMul a (scMul b c))))
+    (allTriples
+      (a b c => scEqual (scMul (scMul a b) c) (scMul a (scMul b c)))
+      scNext
+      samples
+      samples2)
 
 test "a * b = b * a" =
-  expectTrue (allPairs (a b => scEqual (scMul a b) (scMul b a)))
+  expectTrue
+    (allPairs (a b => scEqual (scMul a b) (scMul b a)) samples samples2)
 
 test "a * (b + c) = a*b + a*c" =
   expectTrue
-    (allTriples (a b c =>
-      scEqual (scMul a (scAdd b c)) (scAdd (scMul a b) (scMul a c))))
+    (allTriples
+      (a b c => scEqual (scMul a (scAdd b c)) (scAdd (scMul a b) (scMul a c)))
+      scNext
+      samples
+      samples2)
 
 -- ⚠️ SUBSET, DELIBERATELY, AND MEASURED. `scInverse` is Fermat over `n-2`:
 -- ~451 scalar multiplies, ~11 s per call under the tree-walking interpreter

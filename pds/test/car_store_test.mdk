@@ -2,7 +2,7 @@
    independent expected CAR bytes remain exclusively in the vector corpus. -}
 
 import array as A
-import test.{expectEqual, expectTrue}
+import test.{expectEqual, expectErr, expectTrue}
 import lib.blockstore.{
   BlockStore,
   blockStoreAddMany,
@@ -17,10 +17,6 @@ import lib.blockstore.{
 }
 import lib.car.{Car, carBlocks, carDecode, carEncode, carRoots, carStore}
 import lib.cid.{Cid, cidEqual, cidForDagCbor, cidForRaw, cidToString}
-
-isErr : Result e a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
 
 mustStore : Result String BlockStore -> BlockStore
 mustStore (Ok store) = store
@@ -120,10 +116,9 @@ test "CAR accepts arbitrary order and unrelated verified blocks" =
       && blockStoreHas rootCid (carStore car))
 
 test "CAR rejects a missing atproto root block" =
-  expectTrue (isErr (carEncode [rootCid] [(extraCid, extraBytes)]))
+  expectErr (carEncode [rootCid] [(extraCid, extraBytes)])
 
-test "CAR rejects empty roots" =
-  expectTrue (isErr (carEncode [] [(rootCid, rootBytes)]))
+test "CAR rejects empty roots" = expectErr (carEncode [] [(rootCid, rootBytes)])
 
 test "decoded root identity is preserved" =
   let car =

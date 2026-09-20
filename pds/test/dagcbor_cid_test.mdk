@@ -4,7 +4,7 @@
 
 import array as A
 import string.{contains, toLower}
-import test.{expectEqual, expectTrue}
+import test.{expectEqual, expectErr, expectTrue}
 import base32.{base32Decode, base32Encode}
 import lib.cid.{
   cidDigest,
@@ -18,10 +18,6 @@ import lib.cid.{
 }
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.resource_limits.{maxDagCborDepth}
-
-isErr : Result e a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
 
 -- | `n` nested single-element arrays around one leaf, putting that leaf at
 -- DAG-CBOR nesting depth `n` and every array above it at depths 0..n-1.
@@ -85,16 +81,16 @@ test "DAG-CBOR map encoding is insertion-order independent" =
   expectEqual (dagCborEncode a) (dagCborEncode b)
 
 test "DAG-CBOR encoder rejects duplicate map keys" =
-  expectTrue (isErr (dagCborEncode (DcMap [("x", DcInt 1), ("x", DcInt 2)])))
+  expectErr (dagCborEncode (DcMap [("x", DcInt 1), ("x", DcInt 2)]))
 
 test "DAG-CBOR encoder rejects non-byte array elements" =
-  expectTrue (isErr (dagCborEncode (DcBytes [|0, 256|])))
+  expectErr (dagCborEncode (DcBytes [|0, 256|]))
 
 test "DAG-CBOR encoder admits the deepest nesting its decoder reads back" =
   expectTrue (roundTrip (nest maxDagCborDepth))
 
 test "DAG-CBOR encoder refuses nesting one level past the decoder's ceiling" =
-  expectTrue (isErr (dagCborEncode (nest (maxDagCborDepth + 1))))
+  expectErr (dagCborEncode (nest (maxDagCborDepth + 1)))
 
 {- | The two ceilings are the SAME ceiling: one more array header in front of
    the deepest admitted encoding is the encoding the encoder now refuses, and

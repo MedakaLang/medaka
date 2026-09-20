@@ -21,10 +21,6 @@ import lib.mst.{
   mstValidateBlocks,
 }
 
-isErr : Result e a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
-
 -- `Cid` derives no `Eq` — `lib.cid` designates `cidEqual` as its equality
 -- (`Cid`'s constructor is module-private), so an `Option Cid` result cannot be
 -- compared with `==`.

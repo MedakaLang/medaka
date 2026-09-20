@@ -13,14 +13,6 @@ import lib.sign.{
   signDigest,
 }
 
-isOk : Result String a -> Bool
-isOk (Ok _) = True
-isOk (Err _) = False
-
-isErr : Result String a -> Bool
-isErr (Ok _) = False
-isErr (Err _) = True
-
 bytes : String -> Array Int
 bytes value = resultOrPanic "sign_key_test: malformed hex" (decode value)
 

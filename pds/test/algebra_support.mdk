@@ -1,0 +1,18 @@
+{- | Shared zip-and-fold combinators for algebraic identity tests: check a
+   boolean property across two aligned sample lists, pairwise or (with a
+   derived third element) triple-wise. Used by the scalar and field-element
+   identity suites, which otherwise duplicated the same two functions under
+   the same names against different element types. -}
+
+export
+allPairs : (a -> a -> Bool) -> List a -> List a -> Bool
+allPairs f (a :: ax) (b :: bx) = f a b && allPairs f ax bx
+allPairs _ _ _ = True
+
+{- | `next` derives the third operand from the first, so every triple is
+   distinct without needing a third input list. -}
+export
+allTriples : (a -> a -> a -> Bool) -> (a -> a) -> List a -> List a -> Bool
+allTriples f next (a :: ax) (b :: bx) =
+  f a b (next a) && allTriples f next ax bx
+allTriples _ _ _ _ = True

@@ -12,7 +12,7 @@
    they need no provenance row of their own; only the expected output
    bytes are the graded values. -}
 
-import test.{expectTrue}
+import test.{expectEqual, expectTrue}
 import array.{take}
 import pbkdf2.{pbkdf2HmacSha256}
 
@@ -169,10 +169,10 @@ expected2 = [|
 |]
 
 test "RFC 7914 §11 vector 1: P=passwd S=salt c=1 dkLen=64" =
-  expectTrue (pbkdf2HmacSha256 passwd salt1 1 64 == expected1)
+  expectEqual (pbkdf2HmacSha256 passwd salt1 1 64) expected1
 
 test "RFC 7914 §11 vector 2: P=Password S=NaCl c=80000 dkLen=64" =
-  expectTrue (pbkdf2HmacSha256 passwordCap nacl 80000 64 == expected2)
+  expectEqual (pbkdf2HmacSha256 passwordCap nacl 80000 64) expected2
 
 test "shorter dkLen truncates the same block stream rather than re-deriving" =
   let full = pbkdf2HmacSha256 passwd salt1 1 64

@@ -337,7 +337,7 @@ test "getBlob needs no credential" =
       (contextAt testInstant 7)
       uploadedStore
       (getQuery "" getBlobNsid "?did=\{accountDidText}&cid=\{uploadedCidText}")
-  expectTrue (statusLineOf (fromUtf8 response) == "200 OK")
+  expectEqual (statusLineOf (fromUtf8 response)) "200 OK"
 
 -- # listBlobs
 
@@ -347,7 +347,7 @@ test "listBlobs lists the just-uploaded CID" =
       (contextAt testInstant 8)
       uploadedStore
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
-  expectTrue (listedCids response == [uploadedCidText])
+  expectEqual (listedCids response) [uploadedCidText]
 
 test "listBlobs on an empty store lists nothing" =
   let (_, response) =
@@ -355,7 +355,7 @@ test "listBlobs on an empty store lists nothing" =
       (contextAt testInstant 9)
       sessionStore
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
-  expectTrue (listedCids response == [])
+  expectEqual (listedCids response) []
 
 test "listBlobs needs no credential" =
   let (_, response) =
@@ -363,7 +363,7 @@ test "listBlobs needs no credential" =
       (contextAt testInstant 10)
       uploadedStore
       (getQuery "" listBlobsNsid "?did=\{accountDidText}")
-  expectTrue (statusLineOf (fromUtf8 response) == "200 OK")
+  expectEqual (statusLineOf (fromUtf8 response)) "200 OK"
 
 -- # listBlobs cursor pagination
 
