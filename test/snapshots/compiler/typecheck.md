@@ -1,5 +1,5 @@
 # META
-source_lines=46505
+source_lines=46618
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -28594,10 +28594,99 @@ argImplReqRoutes : String ->
   Int ->
   Int ->
   List Route
-argImplReqRoutes _ _ _ [] _ _ = []
-argImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
+argImplReqRoutes encl useScope subst reqs prevSize spent =
+  argExpandedImplReqRoutes
+    encl
+    useScope
+    subst
+    (expandImplRequires reqs)
+    prevSize
+    spent
+
+argExpandedImplReqRoutes : String ->
+  ScopeId ->
+  List (String, Mono) ->
+  List Require ->
+  Int ->
+  Int ->
+  List Route
+argExpandedImplReqRoutes _ _ _ [] _ _ = []
+argExpandedImplReqRoutes encl useScope subst ((Require { requireHead = rIface, requireArgs = rargs }) :: rest) prevSize spent =
   argReqRoute rIface encl useScope subst rargs prevSize spent
-    :: argImplReqRoutes encl useScope subst rest prevSize spent
+    :: argExpandedImplReqRoutes encl useScope subst rest prevSize spent
+
+-- Impl prerequisites use the same flattened superclass representation as `=>`
+-- constraints: declared predicates stay first, then each transitive superclass gets
+-- its own dictionary slot.  Keeping this expansion in `Require` form gives routing,
+-- definition arity, and body registration one shared slot sequence.
+expandImplRequires : List Require -> List Require
+expandImplRequires reqs =
+  expandImplRequiresIn driverState.value.superDeclsRef.value reqs
+
+expandImplRequiresIn : List Decl -> List Require -> List Require
+expandImplRequiresIn allDecls reqs =
+  let rigidMap = implRequireRigidMap reqs
+  let seen = implRequireIndex rigidMap reqs omEmpty
+  reqs
+    ++ uniqueImplRequires
+      rigidMap
+      seen
+      (flatMap (implRequireSupers allDecls) reqs)
+
+implRequireSupers : List Decl -> Require -> List Require
+implRequireSupers allDecls req = match ifaceSupersOf allDecls req.requireHead
+  None => []
+  Some (typarams, supers) =>
+    let direct =
+      flatMap (implRequireSuper (zipL typarams req.requireArgs)) supers
+    direct ++ flatMap (implRequireSupers allDecls) direct
+
+implRequireSuper : List (String, Ty) -> Super -> List Require
+implRequireSuper subst (Super { superHead = name, superParams = params, superOrigin = origin }) =
+  let args = substParams params subst
+  if listLen args == listLen params then
+    [Require { requireHead = name, requireArgs = args, requireOrigin = origin }]
+  else
+    []
+
+implRequireRigidMap : List Require -> List (String, Mono)
+implRequireRigidMap reqs =
+  map (name => (name, TRigid name)) (dedup (flatMap implRequireTyvars reqs))
+
+implRequireTyvars : Require -> List String
+implRequireTyvars (Require { requireArgs = args, ... }) =
+  flatMap tyVarNames args
+
+implRequireIndex : List (String, Mono) ->
+  List Require ->
+  OrdMap Unit ->
+  OrdMap Unit
+implRequireIndex _ [] acc = acc
+implRequireIndex rigidMap (req :: rest) acc =
+  implRequireIndex rigidMap rest (omInsert (implRequireKey rigidMap req) () acc)
+
+uniqueImplRequires : List (String, Mono) ->
+  OrdMap Unit ->
+  List Require ->
+  List Require
+uniqueImplRequires _ _ [] = []
+uniqueImplRequires rigidMap seen (req :: rest) =
+  let key = implRequireKey rigidMap req
+  if omHasKey key seen then
+    uniqueImplRequires rigidMap seen rest
+  else
+    req :: uniqueImplRequires rigidMap (omInsert key () seen) rest
+
+implRequireKey : List (String, Mono) -> Require -> String
+implRequireKey rigidMap (Require { requireHead = iface, requireArgs = args, requireOrigin = origin }) =
+  let monos = map (fromAstType rigidMap) args
+  cslotVecKey (
+    CSlot {
+      csIface = IfaceRef { irName = iface, irOrigin = origin },
+      csId = firstOrZero (flatMap monoTyvarIds monos),
+    },
+    monos,
+  )
 
 argReqRoute : String ->
   String ->
@@ -28753,9 +28842,15 @@ firstTvar a b id = match findTvarInMono a id
 -- O(decls x names).  Index it ONCE here; `dictPassDecl`/`dictPassLetBind` probe
 -- with `omHasKey`.  Membership semantics unchanged.
 dictPass : List String -> List Decl -> List Decl
-dictPass names prog =
+dictPass names prog = dictPassIn prog names prog
+
+dictPassIn : List Decl -> List String -> List Decl -> List Decl
+dictPassIn allDecls names prog =
   map
-    (dictPassDecl (omFromNames names omEmpty) (returnPosMethodNames prog))
+    (dictPassDecl
+      (omFromNames names omEmpty)
+      (returnPosMethodNames prog)
+      allDecls)
     (mapProg rewriteBinopExpr prog)
 
 -- Routed operators become method applications, including generic arithmetic.
@@ -28854,8 +28949,8 @@ unopMethodApp op e routeRef =
   let split = binopRouteSplit !routeRef
   EApp (EMethodAt method "" (mintMethodCellWith 1 (fst split) (snd split))) e
 
-dictPassDecl : OrdMap Unit -> List String -> Decl -> Decl
-dictPassDecl names _ (DFunDef pub n pats body)
+dictPassDecl : OrdMap Unit -> List String -> List Decl -> Decl -> Decl
+dictPassDecl names _ _ (DFunDef pub n pats body)
   | omHasKey n names = DFunDef pub n (dictParams n (dictArityOf n) ++ pats) body
   | otherwise = DFunDef pub n pats body
 -- Top-level `let rec … with …` (DLetGroup): each binding is dict-passed exactly
@@ -28864,7 +28959,7 @@ dictPassDecl names _ (DFunDef pub n pats body)
 -- rewritten) line up with the definition.  (Without this, a `Num a => a -> a` group member's call site
 -- supplies a leading dict the body never binds → the dict lands in the first user
 -- param → arithmetic over a dict value panics `unknown op`.)
-dictPassDecl names _ (DLetGroup pub binds) =
+dictPassDecl names _ _ (DLetGroup pub binds) =
   DLetGroup pub (map (dictPassLetBind names) binds)
 -- Phase 83/84 single-level + D3b-1: a parametric impl with `requires` gets one
 -- leading `$dict_<method>_<slot>` param on each method (return- OR argument-
@@ -28873,18 +28968,22 @@ dictPassDecl names _ (DLetGroup pub binds) =
 -- added UNIFORMLY across all clauses of a method when ANY clause uses the dict, so
 -- a multi-clause method keeps one arity).  The routes resolveSite/resolveArgStamp
 -- filled on the call-site EMethodAt's impl-dicts ref line up with these params.
-dictPassDecl _ _ (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
-  methods = implDictPassMethods implOrigin (listLen reqs) methods,
+dictPassDecl _ _ allDecls (d@(DImpl { implOrigin, reqs, methods, ... })) = DImpl { d |
+  methods =
+    implDictPassMethods
+      implOrigin
+      (listLen (expandImplRequiresIn allDecls reqs))
+      methods,
 }
 -- Phase 69.x-e: a method with method-level constraints (foldMap's `Monoid m`) gets
 -- one leading `$dict_<method>_<slot>` param per constraint on its DEFAULT body, so a
 -- caller can supply the dictionary the body's `empty`/… reads (routed RDict by
 -- inferDefaultMethod).
-dictPassDecl _ _ (d@(DInterface { typarams, methods, ... })) =
+dictPassDecl _ _ _ (d@(DInterface { typarams, methods, ... })) =
   DInterface { d | methods = map (ifaceDictPassMethod typarams) methods }
-dictPassDecl names ret (DAttrib attrs d) =
-  DAttrib attrs (dictPassDecl names ret d)
-dictPassDecl _ _ d = d
+dictPassDecl names ret allDecls (DAttrib attrs d) =
+  DAttrib attrs (dictPassDecl names ret allDecls d)
+dictPassDecl _ _ _ d = d
 
 -- DLetGroup binding dict-pass: prepend the member's dict params to every clause.
 -- `dictArityOf n` is 0 for an unconstrained member (no change), matching the
@@ -31452,7 +31551,9 @@ exactReturnBlockers args =
 methodReturnPrerequisites : List Mono -> ImplRow -> List PrerequisiteEvidence
 methodReturnPrerequisites args row = match selectedRowReqMatch args row
   Some (subst, reqs) =>
-    map prerequisiteEvidence (map (reqToObligation subst) reqs)
+    map
+      prerequisiteEvidence
+      (map (reqToObligation subst) (expandImplRequires reqs))
   None => []
 
 prerequisiteEvidence : (IfaceRef, List Mono) -> PrerequisiteEvidence
@@ -34006,7 +34107,13 @@ registerImplRequires _ _ _ _ _ _ [] = ()
 registerImplRequires ce cur iface implTvMap rpNames reqs (scoped :: rest)
   | registersElementDict mname rpNames =
     let methodArity = methodDictArityInClassEnv ce cur iface mname
-    let _ = registerReqSlots scoped.simScope implTvMap methodArity reqs
+    let _ =
+      registerReqSlots
+        scoped.simScope
+        implTvMap
+        methodArity
+        (listLen reqs)
+        (expandImplRequires reqs)
     registerImplRequires ce cur iface implTvMap rpNames reqs rest
   | otherwise = registerImplRequires ce cur iface implTvMap rpNames reqs rest
   where
@@ -34025,32 +34132,38 @@ registersElementDict : String -> List String -> Bool
 registersElementDict mname rpNames =
   contains mname rpNames || isSome (argDispatchOf mname)
 
-registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
-registerReqSlots _ _ _ [] = ()
-registerReqSlots scope implTvMap slot ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
+registerReqSlots : ScopeId ->
+  List (String, Mono) ->
+  Int ->
+  Int ->
+  List Require ->
+  Unit
+registerReqSlots _ _ _ _ [] = ()
+registerReqSlots scope implTvMap slot directLeft ((Require { requireHead = iface, requireArgs = rargs, requireOrigin = ro }) :: rest) =
   let argMonos = map (a => fromAstType implTvMap a) rargs
   let ids = flatMap monoTyvarIds argMonos
   let binder = Scopes.binderAt scope slot
-  let _ = registerEachActive ids binder
   let reqIface = IfaceRef { irName = iface, irOrigin = ro }
-  let _ = registerPredGiven reqIface argMonos binder
-  -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
-  -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
-  -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
-  -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
-  -- SLICE-1 SUPPLY (#1182): `requireOrigin` is a field of the `Require` this arm
-  -- ALREADY destructures — `reqToObligation` reads the same pair to build a real
-  -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
-  pushGiven
-    GMIdWitnessed
-    DirectGiven
-    PredicateSlot {
-      psIface = reqIface,
-      psArgs = PSArgsKnown argMonos,
-      psBoundIds = ids,
-    }
-    binder
-  registerReqSlots scope implTvMap (slot + 1) rest
+  let slotPred = PredicateSlot {
+    psIface = reqIface,
+    psArgs = PSArgsKnown argMonos,
+    psBoundIds = ids,
+  }
+  let _ =
+    if directLeft > 0 then
+      let _ = registerEachActive ids binder
+      let _ = registerPredGiven reqIface argMonos binder
+      -- #1154 RESIDUAL: record the WHOLE predicate beside the ids, in the SAME op that
+      -- registers them, so the two can never be written apart (`setFunConstraintEntry`'s
+      -- rule, one channel over).  `registerPredGiven` above cannot serve this: it is
+      -- single-subject and STRUCTURED-only, so `requires Ix a Char` registers nothing there.
+      -- SLICE-1 SUPPLY (#1182): `requireOrigin` is a field of the `Require` this arm
+      -- ALREADY destructures — `reqToObligation` reads the same pair to build a real
+      -- `IfaceRef` — so this was a projection thrown away in place, not a missing channel.
+      pushGiven GMIdWitnessed DirectGiven slotPred binder
+    else
+      pushGiven GMPredicate LegacySuperclassAlias slotPred binder
+  registerReqSlots scope implTvMap (slot + 1) (directLeft - 1) rest
 
 -- #412: the PREDICATE-keyed half of the given registry.  `activeDictVars` above is keyed
 -- by TYVAR ID, which cannot express a STRUCTURED given: `requires S (List a)` registers
@@ -44991,7 +45104,7 @@ dictPassModulesScoped dictNames promotedQ importerReach core2 allModules ((mid, 
     scopeMethodPredicateSlots
       crossRun.value.crossModuleMethodPredicateSlotsQualRef.value
       scopeMods
-  (mid, dictPass dictNames prog)
+  (mid, dictPassIn scope dictNames prog)
     :: dictPassModulesScoped
       dictNames
       promotedQ
@@ -51102,8 +51215,30 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "argImplDictRoutesForEncl" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route")))))))))
 (DFunDef false "argImplDictRoutesForEncl" ((PVar "encl") (PVar "useScope") (PVar "name") (PVar "_tag") (PVar "mono") (PVar "goals")) (EMatch (EApp (EVar "ieRowHeadTriple") (EApp (EApp (EApp (EVar "ieSelectRowByMethod") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "name")) (EVar "goals"))) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "implTys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "implTys")) (EVar "mono")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "reqs")) (ELit (LInt 0))) (ELit (LInt 0)))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "argImplReqRoutes" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))
-(DFunDef false "argImplReqRoutes" (PWild PWild PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "argImplReqRoutes" ((PVar "encl") (PVar "useScope") (PVar "subst") (PCons (PRec "Require" ((rf "requireHead" (PVar "rIface")) (rf "requireArgs" (PVar "rargs"))) false) (PVar "rest")) (PVar "prevSize") (PVar "spent")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argReqRoute") (EVar "rIface")) (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rargs")) (EVar "prevSize")) (EVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rest")) (EVar "prevSize")) (EVar "spent"))))
+(DFunDef false "argImplReqRoutes" ((PVar "encl") (PVar "useScope") (PVar "subst") (PVar "reqs") (PVar "prevSize") (PVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argExpandedImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EApp (EVar "expandImplRequires") (EVar "reqs"))) (EVar "prevSize")) (EVar "spent")))
+(DTypeSig false "argExpandedImplReqRoutes" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))
+(DFunDef false "argExpandedImplReqRoutes" (PWild PWild PWild (PList) PWild PWild) (EListLit))
+(DFunDef false "argExpandedImplReqRoutes" ((PVar "encl") (PVar "useScope") (PVar "subst") (PCons (PRec "Require" ((rf "requireHead" (PVar "rIface")) (rf "requireArgs" (PVar "rargs"))) false) (PVar "rest")) (PVar "prevSize") (PVar "spent")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argReqRoute") (EVar "rIface")) (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rargs")) (EVar "prevSize")) (EVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argExpandedImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rest")) (EVar "prevSize")) (EVar "spent"))))
+(DTypeSig false "expandImplRequires" (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Require"))))
+(DFunDef false "expandImplRequires" ((PVar "reqs")) (EApp (EApp (EVar "expandImplRequiresIn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "reqs")))
+(DTypeSig false "expandImplRequiresIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Require")))))
+(DFunDef false "expandImplRequiresIn" ((PVar "allDecls") (PVar "reqs")) (EBlock (DoLet false false (PVar "rigidMap") (EApp (EVar "implRequireRigidMap") (EVar "reqs"))) (DoLet false false (PVar "seen") (EApp (EApp (EApp (EVar "implRequireIndex") (EVar "rigidMap")) (EVar "reqs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EVar "reqs") (EApp (EApp (EApp (EVar "uniqueImplRequires") (EVar "rigidMap")) (EVar "seen")) (EApp (EApp (EVar "flatMap") (EApp (EVar "implRequireSupers") (EVar "allDecls"))) (EVar "reqs")))))))
+(DTypeSig false "implRequireSupers" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "Require")))))
+(DFunDef false "implRequireSupers" ((PVar "allDecls") (PVar "req")) (EMatch (EApp (EApp (EVar "ifaceSupersOf") (EVar "allDecls")) (EFieldAccess (EVar "req") "requireHead")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "typarams") (PVar "supers"))) () (EBlock (DoLet false false (PVar "direct") (EApp (EApp (EVar "flatMap") (EApp (EVar "implRequireSuper") (EApp (EApp (EVar "zipL") (EVar "typarams")) (EFieldAccess (EVar "req") "requireArgs")))) (EVar "supers"))) (DoExpr (EBinOp "++" (EVar "direct") (EApp (EApp (EVar "flatMap") (EApp (EVar "implRequireSupers") (EVar "allDecls"))) (EVar "direct"))))))))
+(DTypeSig false "implRequireSuper" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "Require")))))
+(DFunDef false "implRequireSuper" ((PVar "subst") (PRec "Super" ((rf "superHead" (PVar "name")) (rf "superParams" (PVar "params")) (rf "superOrigin" (PVar "origin"))) false)) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "substParams") (EVar "params")) (EVar "subst"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EVar "params"))) (EListLit (ERecordCreate "Require" ((fa "requireHead" (EVar "name")) (fa "requireArgs" (EVar "args")) (fa "requireOrigin" (EVar "origin"))))) (EListLit)))))
+(DTypeSig false "implRequireRigidMap" (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))
+(DFunDef false "implRequireRigidMap" ((PVar "reqs")) (EApp (EApp (EVar "map") (ELam ((PVar "name")) (ETuple (EVar "name") (EApp (EVar "TRigid") (EVar "name"))))) (EApp (EVar "dedup") (EApp (EApp (EVar "flatMap") (EVar "implRequireTyvars")) (EVar "reqs")))))
+(DTypeSig false "implRequireTyvars" (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "implRequireTyvars" ((PRec "Require" ((rf "requireArgs" (PVar "args"))) true)) (EApp (EApp (EVar "flatMap") (EVar "tyVarNames")) (EVar "args")))
+(DTypeSig false "implRequireIndex" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "implRequireIndex" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "implRequireIndex" ((PVar "rigidMap") (PCons (PVar "req") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "implRequireIndex") (EVar "rigidMap")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implRequireKey") (EVar "rigidMap")) (EVar "req"))) (ELit LUnit)) (EVar "acc"))))
+(DTypeSig false "uniqueImplRequires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Require"))))))
+(DFunDef false "uniqueImplRequires" (PWild PWild (PList)) (EListLit))
+(DFunDef false "uniqueImplRequires" ((PVar "rigidMap") (PVar "seen") (PCons (PVar "req") (PVar "rest"))) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "implRequireKey") (EVar "rigidMap")) (EVar "req"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "key")) (EVar "seen")) (EApp (EApp (EApp (EVar "uniqueImplRequires") (EVar "rigidMap")) (EVar "seen")) (EVar "rest")) (EBinOp "::" (EVar "req") (EApp (EApp (EApp (EVar "uniqueImplRequires") (EVar "rigidMap")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ELit LUnit)) (EVar "seen"))) (EVar "rest")))))))
+(DTypeSig false "implRequireKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Require") (TyCon "String"))))
+(DFunDef false "implRequireKey" ((PVar "rigidMap") (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "args")) (rf "requireOrigin" (PVar "origin"))) false)) (EBlock (DoLet false false (PVar "monos") (EApp (EApp (EVar "map") (EApp (EVar "fromAstType") (EVar "rigidMap"))) (EVar "args"))) (DoExpr (EApp (EVar "cslotVecKey") (ETuple (ERecordCreate "CSlot" ((fa "csIface" (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "origin"))))) (fa "csId" (EApp (EVar "firstOrZero") (EApp (EApp (EVar "flatMap") (EVar "monoTyvarIds")) (EVar "monos")))))) (EVar "monos"))))))
 (DTypeSig false "argReqRoute" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Route")))))))))
 (DFunDef false "argReqRoute" (PWild PWild PWild PWild (PList) PWild PWild) (EVar "RNone"))
 (DFunDef false "argReqRoute" ((PVar "iface") (PVar "encl") (PVar "useScope") (PVar "subst") (PCons (PVar "arg") (PVar "more")) (PVar "prevSize") (PVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EApp (EVar "ifaceRefBare") (EVar "iface"))) (EVar "encl")) (EVar "useScope")) (EVar "KeepNone")) (EApp (EApp (EVar "fromAstType") (EVar "subst")) (EVar "arg"))) (EApp (EApp (EVar "map") (EApp (EVar "fromAstType") (EVar "subst"))) (EVar "more"))) (EVar "prevSize")) (EVar "spent")))
@@ -51149,7 +51284,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "firstTvar" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "firstTvar" ((PVar "a") (PVar "b") (PVar "id")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "a")) (EVar "id")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMono") (EVar "b")) (EVar "id")))))
 (DTypeSig false "dictPass" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "dictPassDecl") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
+(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EApp (EVar "dictPassIn") (EVar "prog")) (EVar "names")) (EVar "prog")))
+(DTypeSig false "dictPassIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "dictPassIn" ((PVar "allDecls") (PVar "names") (PVar "prog")) (EApp (EApp (EVar "map") (EApp (EApp (EApp (EVar "dictPassDecl") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog"))) (EVar "allDecls"))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
 (DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteBinopExpr" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef")))))
 (DFunDef false "rewriteBinopExpr" ((PCon "ENumLit" (PVar "n") (PVar "fref") (PVar "dref") PWild)) (EMatch (EUnOp "!" (EVar "fref")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "dref")) (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EVar "mintMethodCellWith") (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
@@ -51164,13 +51301,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
 (DTypeSig false "unopMethodApp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr")))))
 (DFunDef false "unopMethodApp" ((PVar "op") (PVar "e") (PVar "routeRef")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EUnOp "!" (EVar "routeRef")))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "mintMethodCellWith") (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
-(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "dictPassLetBind") (EVar "names"))) (EVar "binds"))))
-(DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DImpl" ((rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "implOrigin")) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
-(DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
-(DFunDef false "dictPassDecl" ((PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EVar "ret")) (EVar "d"))))
-(DFunDef false "dictPassDecl" (PWild PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "Decl"))))))
+(DFunDef false "dictPassDecl" ((PVar "names") PWild PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dictPassDecl" ((PVar "names") PWild PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EVar "map") (EApp (EVar "dictPassLetBind") (EVar "names"))) (EVar "binds"))))
+(DFunDef false "dictPassDecl" (PWild PWild (PVar "allDecls") (PAs "d" (PRec "DImpl" ((rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "implOrigin")) (EApp (EVar "listLen") (EApp (EApp (EVar "expandImplRequiresIn") (EVar "allDecls")) (EVar "reqs")))) (EVar "methods"))))))
+(DFunDef false "dictPassDecl" (PWild PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EVar "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
+(DFunDef false "dictPassDecl" ((PVar "names") (PVar "ret") (PVar "allDecls") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EVar "ret")) (EVar "allDecls")) (EVar "d"))))
+(DFunDef false "dictPassDecl" (PWild PWild PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "dictPassLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
 (DFunDef false "dictPassLetBind" ((PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n")))) (EVar "clauses"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependDictClause" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -51466,7 +51603,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exactReturnBlockers" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "SolverBlocker"))))
 (DFunDef false "exactReturnBlockers" ((PVar "args")) (EApp (EApp (EVar "map") (EVar "BlockingTypeVariable")) (EApp (EApp (EVar "flatMap") (EVar "monoUnboundIds")) (EVar "args"))))
 (DTypeSig false "methodReturnPrerequisites" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))))
-(DFunDef false "methodReturnPrerequisites" ((PVar "args") (PVar "row")) (EMatch (EApp (EApp (EVar "selectedRowReqMatch") (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EVar "map") (EVar "prerequisiteEvidence")) (EApp (EApp (EVar "map") (EApp (EVar "reqToObligation") (EVar "subst"))) (EVar "reqs")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "methodReturnPrerequisites" ((PVar "args") (PVar "row")) (EMatch (EApp (EApp (EVar "selectedRowReqMatch") (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EVar "map") (EVar "prerequisiteEvidence")) (EApp (EApp (EVar "map") (EApp (EVar "reqToObligation") (EVar "subst"))) (EApp (EVar "expandImplRequires") (EVar "reqs"))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "prerequisiteEvidence" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PrerequisiteEvidence")))
 (DFunDef false "prerequisiteEvidence" ((PTuple (PVar "iface") (PVar "args"))) (ERecordCreate "PrerequisiteEvidence" ((fa "prerequisiteInterface" (EVar "iface")) (fa "prerequisiteArguments" (EVar "args")))))
 (DTypeSig false "consumeExactReturnOutcome" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyCon "MethodReturnResolution") (TyCon "Unit")))))
@@ -51851,14 +51988,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "sameIfaceDecl" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "tabKeyEq") (EApp (EVar "oblIfaceKey") (EVar "a"))) (EApp (EVar "oblIfaceKey") (EVar "b"))))
 (DTypeSig false "registerImplRequires" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ScopedImplMethod")) (TyCon "Unit")))))))))
 (DFunDef false "registerImplRequires" (PWild PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerImplRequires" ((PVar "ce") (PVar "cur") (PVar "iface") (PVar "implTvMap") (PVar "rpNames") (PVar "reqs") (PCons (PVar "scoped") (PVar "rest"))) (ELetGroup ((lgb "mname" (clause () (EApp (EVar "implMethodName") (EFieldAccess (EVar "scoped") "simMethod"))))) (EIf (EApp (EApp (EVar "registersElementDict") (EVar "mname")) (EVar "rpNames")) (EBlock (DoLet false false (PVar "methodArity") (EApp (EApp (EApp (EApp (EVar "methodDictArityInClassEnv") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EFieldAccess (EVar "scoped") "simScope")) (EVar "implTvMap")) (EVar "methodArity")) (EVar "reqs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "registerImplRequires" ((PVar "ce") (PVar "cur") (PVar "iface") (PVar "implTvMap") (PVar "rpNames") (PVar "reqs") (PCons (PVar "scoped") (PVar "rest"))) (ELetGroup ((lgb "mname" (clause () (EApp (EVar "implMethodName") (EFieldAccess (EVar "scoped") "simMethod"))))) (EIf (EApp (EApp (EVar "registersElementDict") (EVar "mname")) (EVar "rpNames")) (EBlock (DoLet false false (PVar "methodArity") (EApp (EApp (EApp (EApp (EVar "methodDictArityInClassEnv") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EFieldAccess (EVar "scoped") "simScope")) (EVar "implTvMap")) (EVar "methodArity")) (EApp (EVar "listLen") (EVar "reqs"))) (EApp (EVar "expandImplRequires") (EVar "reqs")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "methodDictArityInClassEnv" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "methodDictArityInClassEnv" ((PVar "ce") (PVar "cur") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EApp (EApp (EVar "ceMethodTyAt") (EVar "iface")) (EVar "method")) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PTuple (PVar "typarams") (PVar "ty") PWild)) () (EApp (EVar "listLen") (EApp (EApp (EVar "methodLevelConstraintVarNames") (EVar "typarams")) (EVar "ty")))) (arm (PCon "None") () (EApp (EVar "methodDictArityOf") (EVar "method")))))
 (DTypeSig false "registersElementDict" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "registersElementDict" ((PVar "mname") (PVar "rpNames")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "rpNames")) (EApp (EVar "isSome") (EApp (EVar "argDispatchOf") (EVar "mname")))))
-(DTypeSig false "registerReqSlots" (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Unit"))))))
-(DFunDef false "registerReqSlots" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerReqSlots" ((PVar "scope") (PVar "implTvMap") (PVar "slot") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs")) (rf "requireOrigin" (PVar "ro"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EVar "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false (PVar "binder") (EApp (EApp (EVar "Scopes.binderAt") (EVar "scope")) (EVar "slot"))) (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EVar "binder"))) (DoLet false false (PVar "reqIface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "ro"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "reqIface")) (EVar "argMonos")) (EVar "binder"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "reqIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "argMonos"))) (fa "psBoundIds" (EVar "ids"))))) (EVar "binder"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "scope")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")))))
+(DTypeSig false "registerReqSlots" (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Unit")))))))
+(DFunDef false "registerReqSlots" (PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "registerReqSlots" ((PVar "scope") (PVar "implTvMap") (PVar "slot") (PVar "directLeft") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs")) (rf "requireOrigin" (PVar "ro"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EVar "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EVar "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false (PVar "binder") (EApp (EApp (EVar "Scopes.binderAt") (EVar "scope")) (EVar "slot"))) (DoLet false false (PVar "reqIface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "ro"))))) (DoLet false false (PVar "slotPred") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "reqIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "argMonos"))) (fa "psBoundIds" (EVar "ids"))))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "directLeft") (ELit (LInt 0))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EVar "binder"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "reqIface")) (EVar "argMonos")) (EVar "binder"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "slotPred")) (EVar "binder")))) (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "LegacySuperclassAlias")) (EVar "slotPred")) (EVar "binder")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "scope")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EBinOp "-" (EVar "directLeft") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "registerPredGiven" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "EvidenceBinderId") (TyCon "Unit")))))
 (DFunDef false "registerPredGiven" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "registerPredGiven" ((PVar "iface") (PVar "args") (PVar "dname")) (EIf (EApp (EApp (EVar "allList") (EVar "monoIsBareTyvar")) (EVar "args")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EApp (EVar "dedupI") (EApp (EApp (EVar "flatMap") (EVar "monoTyvarIds")) (EVar "args"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EVar "dname")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -53405,7 +53542,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "dictPassModulesIfEnabled" ((PVar "dictNames") (PVar "core2") (PVar "modules2")) (EBlock (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoLet false false (PVar "allModDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "modules2"))) (DoLet false false (PVar "promotedQ") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (DoLet false false (PVar "allMods") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "modules2"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EVar "scopePredicateSlots") (EVar "promotedQ")) (EVar "allMods")) (EBinOp "++" (EVar "core2") (EVar "allModDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EApp (EApp (EVar "scopeMethodPredicateSlots") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")) (EVar "allMods")))) (DoLet false false (PVar "core2'") (EApp (EApp (EVar "dictPass") (EVar "dictNames")) (EVar "core2"))) (DoLet false false (PVar "importerReach") (EApp (EVar "importerReachIndex") (EVar "modules2"))) (DoLet false false (PVar "modules2'") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dictPassModulesScoped") (EVar "dictNames")) (EVar "promotedQ")) (EVar "importerReach")) (EVar "core2")) (EVar "modules2")) (EVar "modules2"))) (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoExpr (ETuple (EVar "core2'") (EVar "modules2'")))))
 (DTypeSig false "dictPassModulesScoped" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "dictPassModulesScoped" (PWild PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "dictPassModulesScoped" ((PVar "dictNames") (PVar "promotedQ") (PVar "importerReach") (PVar "core2") (PVar "allModules") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PVar "importers") (EApp (EApp (EApp (EVar "transitiveImporters") (EVar "importerReach")) (EVar "mid")) (EVar "allModules"))) (DoLet false false (PVar "importerDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "importers"))) (DoLet false false (PVar "scope") (EBinOp "++" (EBinOp "++" (EVar "core2") (EVar "prog")) (EVar "importerDecls"))) (DoLet false false (PVar "scopeMods") (EApp (EApp (EVar "namesToSet") (EBinOp "::" (EVar "mid") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "importers")))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EVar "promotedQ")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EVar "promotedQ")) (EApp (EApp (EApp (EVar "scopePredicateSlots") (EVar "promotedQ")) (EVar "scopeMods")) (EVar "scope")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EApp (EApp (EVar "scopeMethodPredicateSlots") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")) (EVar "scopeMods")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "dictPass") (EVar "dictNames")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dictPassModulesScoped") (EVar "dictNames")) (EVar "promotedQ")) (EVar "importerReach")) (EVar "core2")) (EVar "allModules")) (EVar "rest"))))))
+(DFunDef false "dictPassModulesScoped" ((PVar "dictNames") (PVar "promotedQ") (PVar "importerReach") (PVar "core2") (PVar "allModules") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PVar "importers") (EApp (EApp (EApp (EVar "transitiveImporters") (EVar "importerReach")) (EVar "mid")) (EVar "allModules"))) (DoLet false false (PVar "importerDecls") (EApp (EApp (EVar "flatMap") (EVar "snd")) (EVar "importers"))) (DoLet false false (PVar "scope") (EBinOp "++" (EBinOp "++" (EVar "core2") (EVar "prog")) (EVar "importerDecls"))) (DoLet false false (PVar "scopeMods") (EApp (EApp (EVar "namesToSet") (EBinOp "::" (EVar "mid") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "importers")))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EVar "promotedQ")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EVar "promotedQ")) (EApp (EApp (EApp (EVar "scopePredicateSlots") (EVar "promotedQ")) (EVar "scopeMods")) (EVar "scope")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EApp (EApp (EVar "scopeMethodPredicateSlots") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")) (EVar "scopeMods")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "dictPassIn") (EVar "scope")) (EVar "dictNames")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dictPassModulesScoped") (EVar "dictNames")) (EVar "promotedQ")) (EVar "importerReach")) (EVar "core2")) (EVar "allModules")) (EVar "rest"))))))
 (DTypeSig false "scopePredicateSlots" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot"))))))))
 (DFunDef false "scopePredicateSlots" ((PVar "promotedQ") (PVar "scopeMods") (PVar "scope")) (EBlock (DoLet false false (PVar "scopeNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "scope"))) (EVar "omEmpty"))) (DoLet false false (PVar "nameInScope") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeNames")))) (EVar "promotedQ"))) (DoLet false false (PVar "resolvedNames") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (ELam ((PVar "e")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")))) (EVar "nameInScope")))) (EVar "omEmpty"))) (DoLet false false (PVar "inferredQ") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "||" (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e")))) (EVar "resolvedNames")))))) (EVar "nameInScope"))) (DoLet false false (PVar "inferred") (EApp (EApp (EVar "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EVar "inferredQ"))) (DoLet false false (PVar "inferredNames") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EVar "map") (EVar "fst")) (EVar "inferred"))) (EVar "omEmpty"))) (DoLet false false (PVar "sigEntries") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "inferredNames"))))) (EApp (EApp (EVar "flatMap") (EVar "constrainedSigPredicateSlots")) (EVar "scope")))) (DoExpr (EBinOp "++" (EVar "inferred") (EVar "sigEntries")))))
 (DTypeSig false "selfDeclArities" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))))
@@ -58204,8 +58341,30 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "argImplDictRoutesForEncl" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Mono") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "Route")))))))))
 (DFunDef false "argImplDictRoutesForEncl" ((PVar "encl") (PVar "useScope") (PVar "name") (PVar "_tag") (PVar "mono") (PVar "goals")) (EMatch (EApp (EVar "ieRowHeadTriple") (EApp (EApp (EApp (EVar "ieSelectRowByMethod") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "bodyImplEnvRef") "value")) (EVar "name")) (EVar "goals"))) (arm (PCon "Some" (PTuple (PVar "headTy") (PVar "implTys") (PVar "reqs"))) () (EMatch (EApp (EApp (EApp (EApp (EVar "headSubstWithParams") (EVar "headTy")) (EVar "implTys")) (EVar "mono")) (EVar "goals")) (arm (PCon "Some" (PVar "subst")) () (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "reqs")) (ELit (LInt 0))) (ELit (LInt 0)))) (arm (PCon "None") () (EListLit)))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "argImplReqRoutes" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))
-(DFunDef false "argImplReqRoutes" (PWild PWild PWild (PList) PWild PWild) (EListLit))
-(DFunDef false "argImplReqRoutes" ((PVar "encl") (PVar "useScope") (PVar "subst") (PCons (PRec "Require" ((rf "requireHead" (PVar "rIface")) (rf "requireArgs" (PVar "rargs"))) false) (PVar "rest")) (PVar "prevSize") (PVar "spent")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argReqRoute") (EVar "rIface")) (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rargs")) (EVar "prevSize")) (EVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rest")) (EVar "prevSize")) (EVar "spent"))))
+(DFunDef false "argImplReqRoutes" ((PVar "encl") (PVar "useScope") (PVar "subst") (PVar "reqs") (PVar "prevSize") (PVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argExpandedImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EApp (EVar "expandImplRequires") (EVar "reqs"))) (EVar "prevSize")) (EVar "spent")))
+(DTypeSig false "argExpandedImplReqRoutes" (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Route")))))))))
+(DFunDef false "argExpandedImplReqRoutes" (PWild PWild PWild (PList) PWild PWild) (EListLit))
+(DFunDef false "argExpandedImplReqRoutes" ((PVar "encl") (PVar "useScope") (PVar "subst") (PCons (PRec "Require" ((rf "requireHead" (PVar "rIface")) (rf "requireArgs" (PVar "rargs"))) false) (PVar "rest")) (PVar "prevSize") (PVar "spent")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argReqRoute") (EVar "rIface")) (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rargs")) (EVar "prevSize")) (EVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "argExpandedImplReqRoutes") (EVar "encl")) (EVar "useScope")) (EVar "subst")) (EVar "rest")) (EVar "prevSize")) (EVar "spent"))))
+(DTypeSig false "expandImplRequires" (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Require"))))
+(DFunDef false "expandImplRequires" ((PVar "reqs")) (EApp (EApp (EVar "expandImplRequiresIn") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "superDeclsRef") "value")) (EVar "reqs")))
+(DTypeSig false "expandImplRequiresIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Require")))))
+(DFunDef false "expandImplRequiresIn" ((PVar "allDecls") (PVar "reqs")) (EBlock (DoLet false false (PVar "rigidMap") (EApp (EVar "implRequireRigidMap") (EVar "reqs"))) (DoLet false false (PVar "seen") (EApp (EApp (EApp (EVar "implRequireIndex") (EVar "rigidMap")) (EVar "reqs")) (EVar "omEmpty"))) (DoExpr (EBinOp "++" (EVar "reqs") (EApp (EApp (EApp (EVar "uniqueImplRequires") (EVar "rigidMap")) (EVar "seen")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implRequireSupers") (EVar "allDecls"))) (EVar "reqs")))))))
+(DTypeSig false "implRequireSupers" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "Require")))))
+(DFunDef false "implRequireSupers" ((PVar "allDecls") (PVar "req")) (EMatch (EApp (EApp (EVar "ifaceSupersOf") (EVar "allDecls")) (EFieldAccess (EVar "req") "requireHead")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "typarams") (PVar "supers"))) () (EBlock (DoLet false false (PVar "direct") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implRequireSuper") (EApp (EApp (EVar "zipL") (EVar "typarams")) (EFieldAccess (EVar "req") "requireArgs")))) (EVar "supers"))) (DoExpr (EBinOp "++" (EVar "direct") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "implRequireSupers") (EVar "allDecls"))) (EVar "direct"))))))))
+(DTypeSig false "implRequireSuper" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Ty"))) (TyFun (TyCon "Super") (TyApp (TyCon "List") (TyCon "Require")))))
+(DFunDef false "implRequireSuper" ((PVar "subst") (PRec "Super" ((rf "superHead" (PVar "name")) (rf "superParams" (PVar "params")) (rf "superOrigin" (PVar "origin"))) false)) (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "substParams") (EVar "params")) (EVar "subst"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EApp (EVar "listLen") (EVar "params"))) (EListLit (ERecordCreate "Require" ((fa "requireHead" (EVar "name")) (fa "requireArgs" (EVar "args")) (fa "requireOrigin" (EVar "origin"))))) (EListLit)))))
+(DTypeSig false "implRequireRigidMap" (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono")))))
+(DFunDef false "implRequireRigidMap" ((PVar "reqs")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "name")) (ETuple (EVar "name") (EApp (EVar "TRigid") (EVar "name"))))) (EApp (EVar "dedup") (EApp (EApp (EDictApp "flatMap") (EVar "implRequireTyvars")) (EVar "reqs")))))
+(DTypeSig false "implRequireTyvars" (TyFun (TyCon "Require") (TyApp (TyCon "List") (TyCon "String"))))
+(DFunDef false "implRequireTyvars" ((PRec "Require" ((rf "requireArgs" (PVar "args"))) true)) (EApp (EApp (EDictApp "flatMap") (EVar "tyVarNames")) (EVar "args")))
+(DTypeSig false "implRequireIndex" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyApp (TyCon "OrdMap") (TyCon "Unit"))))))
+(DFunDef false "implRequireIndex" (PWild (PList) (PVar "acc")) (EVar "acc"))
+(DFunDef false "implRequireIndex" ((PVar "rigidMap") (PCons (PVar "req") (PVar "rest")) (PVar "acc")) (EApp (EApp (EApp (EVar "implRequireIndex") (EVar "rigidMap")) (EVar "rest")) (EApp (EApp (EApp (EVar "omInsert") (EApp (EApp (EVar "implRequireKey") (EVar "rigidMap")) (EVar "req"))) (ELit LUnit)) (EVar "acc"))))
+(DTypeSig false "uniqueImplRequires" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyApp (TyCon "List") (TyCon "Require"))))))
+(DFunDef false "uniqueImplRequires" (PWild PWild (PList)) (EListLit))
+(DFunDef false "uniqueImplRequires" ((PVar "rigidMap") (PVar "seen") (PCons (PVar "req") (PVar "rest"))) (EBlock (DoLet false false (PVar "key") (EApp (EApp (EVar "implRequireKey") (EVar "rigidMap")) (EVar "req"))) (DoExpr (EIf (EApp (EApp (EVar "omHasKey") (EVar "key")) (EVar "seen")) (EApp (EApp (EApp (EVar "uniqueImplRequires") (EVar "rigidMap")) (EVar "seen")) (EVar "rest")) (EBinOp "::" (EVar "req") (EApp (EApp (EApp (EVar "uniqueImplRequires") (EVar "rigidMap")) (EApp (EApp (EApp (EVar "omInsert") (EVar "key")) (ELit LUnit)) (EVar "seen"))) (EVar "rest")))))))
+(DTypeSig false "implRequireKey" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Require") (TyCon "String"))))
+(DFunDef false "implRequireKey" ((PVar "rigidMap") (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "args")) (rf "requireOrigin" (PVar "origin"))) false)) (EBlock (DoLet false false (PVar "monos") (EApp (EApp (EMethodRef "map") (EApp (EVar "fromAstType") (EVar "rigidMap"))) (EVar "args"))) (DoExpr (EApp (EVar "cslotVecKey") (ETuple (ERecordCreate "CSlot" ((fa "csIface" (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "origin"))))) (fa "csId" (EApp (EVar "firstOrZero") (EApp (EApp (EDictApp "flatMap") (EVar "monoTyvarIds")) (EVar "monos")))))) (EVar "monos"))))))
 (DTypeSig false "argReqRoute" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Route")))))))))
 (DFunDef false "argReqRoute" (PWild PWild PWild PWild (PList) PWild PWild) (EVar "RNone"))
 (DFunDef false "argReqRoute" ((PVar "iface") (PVar "encl") (PVar "useScope") (PVar "subst") (PCons (PVar "arg") (PVar "more")) (PVar "prevSize") (PVar "spent")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "routeOfD") (EApp (EVar "ifaceRefBare") (EVar "iface"))) (EVar "encl")) (EVar "useScope")) (EVar "KeepNone")) (EApp (EApp (EVar "fromAstType") (EVar "subst")) (EVar "arg"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "fromAstType") (EVar "subst"))) (EVar "more"))) (EVar "prevSize")) (EVar "spent")))
@@ -58251,7 +58410,9 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "firstTvar" (TyFun (TyCon "Mono") (TyFun (TyCon "Mono") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Mono"))))))
 (DFunDef false "firstTvar" ((PVar "a") (PVar "b") (PVar "id")) (EMatch (EApp (EApp (EVar "findTvarInMono") (EVar "a")) (EVar "id")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EApp (EApp (EVar "findTvarInMono") (EVar "b")) (EVar "id")))))
 (DTypeSig false "dictPass" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
-(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "dictPassDecl") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog")))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
+(DFunDef false "dictPass" ((PVar "names") (PVar "prog")) (EApp (EApp (EApp (EVar "dictPassIn") (EVar "prog")) (EVar "names")) (EVar "prog")))
+(DTypeSig false "dictPassIn" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "dictPassIn" ((PVar "allDecls") (PVar "names") (PVar "prog")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EVar "dictPassDecl") (EApp (EApp (EVar "omFromNames") (EVar "names")) (EVar "omEmpty"))) (EApp (EVar "returnPosMethodNames") (EVar "prog"))) (EVar "allDecls"))) (EApp (EApp (EVar "mapProg") (EVar "rewriteBinopExpr")) (EVar "prog"))))
 (DTypeSig false "rewriteBinopExpr" (TyFun (TyCon "Expr") (TyCon "Expr")))
 (DFunDef false "rewriteBinopExpr" ((PCon "EBinOp" (PVar "op") (PVar "l") (PVar "r") (PVar "routeRef"))) (EMatch (EUnOp "!" (EVar "routeRef")) (arm (PCon "RNone") () (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (arm (PCon "RScalar" (PVar "tag")) () (EApp (EApp (EVar "EAnnot") (EApp (EApp (EApp (EApp (EVar "EBinOp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef"))) (EApp (EApp (EVar "tyConBuiltin") (EVar "tag")) (EVar "None")))) (arm PWild () (EApp (EApp (EApp (EApp (EVar "binopMethodApp") (EVar "op")) (EVar "l")) (EVar "r")) (EVar "routeRef")))))
 (DFunDef false "rewriteBinopExpr" ((PCon "ENumLit" (PVar "n") (PVar "fref") (PVar "dref") PWild)) (EMatch (EUnOp "!" (EVar "fref")) (arm (PCon "Some" (PVar "f")) () (EApp (EVar "ELit") (EApp (EVar "LFloat") (EVar "f")))) (arm (PCon "None") () (EMatch (EUnOp "!" (EVar "dref")) (arm (PCon "RNone") () (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))) (arm (PVar "route") () (EBlock (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EVar "route"))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (ELit (LString "fromInt"))) (ELit (LString ""))) (EApp (EApp (EApp (EVar "mintMethodCellWith") (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EApp (EVar "ELit") (EApp (EVar "LInt") (EVar "n")))))))))))
@@ -58266,13 +58427,13 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "binopDispatchMethod" ((PVar "op")) (EMatch (EApp (EVar "arithDispatchMethod") (EVar "op")) (arm (PCon "Some" (PVar "method")) () (EApp (EVar "Some") (EVar "method"))) (arm (PCon "None") () (EApp (EVar "binopMethod") (EVar "op")))))
 (DTypeSig false "unopMethodApp" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyApp (TyCon "Ref") (TyCon "Route")) (TyCon "Expr")))))
 (DFunDef false "unopMethodApp" ((PVar "op") (PVar "e") (PVar "routeRef")) (EBlock (DoLet false false (PVar "method") (EApp (EApp (EVar "optionOr") (ELit (LString "negate"))) (EApp (EVar "unopMethod") (EVar "op")))) (DoLet false false (PVar "split") (EApp (EVar "binopRouteSplit") (EUnOp "!" (EVar "routeRef")))) (DoExpr (EApp (EApp (EVar "EApp") (EApp (EApp (EApp (EVar "EMethodAt") (EVar "method")) (ELit (LString ""))) (EApp (EApp (EApp (EVar "mintMethodCellWith") (ELit (LInt 1))) (EApp (EVar "fst") (EVar "split"))) (EApp (EVar "snd") (EVar "split"))))) (EVar "e")))))
-(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Decl") (TyCon "Decl")))))
-(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
-(DFunDef false "dictPassDecl" ((PVar "names") PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "dictPassLetBind") (EVar "names"))) (EVar "binds"))))
-(DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DImpl" ((rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "implOrigin")) (EApp (EVar "listLen") (EVar "reqs"))) (EVar "methods"))))))
-(DFunDef false "dictPassDecl" (PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
-(DFunDef false "dictPassDecl" ((PVar "names") (PVar "ret") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EVar "ret")) (EVar "d"))))
-(DFunDef false "dictPassDecl" (PWild PWild (PVar "d")) (EVar "d"))
+(DTypeSig false "dictPassDecl" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyCon "Decl") (TyCon "Decl"))))))
+(DFunDef false "dictPassDecl" ((PVar "names") PWild PWild (PCon "DFunDef" (PVar "pub") (PVar "n") (PVar "pats") (PVar "body"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EBinOp "++" (EApp (EApp (EVar "dictParams") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n"))) (EVar "pats"))) (EVar "body")) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "DFunDef") (EVar "pub")) (EVar "n")) (EVar "pats")) (EVar "body")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "dictPassDecl" ((PVar "names") PWild PWild (PCon "DLetGroup" (PVar "pub") (PVar "binds"))) (EApp (EApp (EVar "DLetGroup") (EVar "pub")) (EApp (EApp (EMethodRef "map") (EApp (EVar "dictPassLetBind") (EVar "names"))) (EVar "binds"))))
+(DFunDef false "dictPassDecl" (PWild PWild (PVar "allDecls") (PAs "d" (PRec "DImpl" ((rf "implOrigin" None) (rf "reqs" None) (rf "methods" None)) true))) (EVariantUpdate "DImpl" (EVar "d") ((fa "methods" (EApp (EApp (EApp (EVar "implDictPassMethods") (EVar "implOrigin")) (EApp (EVar "listLen") (EApp (EApp (EVar "expandImplRequiresIn") (EVar "allDecls")) (EVar "reqs")))) (EVar "methods"))))))
+(DFunDef false "dictPassDecl" (PWild PWild PWild (PAs "d" (PRec "DInterface" ((rf "typarams" None) (rf "methods" None)) true))) (EVariantUpdate "DInterface" (EVar "d") ((fa "methods" (EApp (EApp (EMethodRef "map") (EApp (EVar "ifaceDictPassMethod") (EVar "typarams"))) (EVar "methods"))))))
+(DFunDef false "dictPassDecl" ((PVar "names") (PVar "ret") (PVar "allDecls") (PCon "DAttrib" (PVar "attrs") (PVar "d"))) (EApp (EApp (EVar "DAttrib") (EVar "attrs")) (EApp (EApp (EApp (EApp (EVar "dictPassDecl") (EVar "names")) (EVar "ret")) (EVar "allDecls")) (EVar "d"))))
+(DFunDef false "dictPassDecl" (PWild PWild PWild (PVar "d")) (EVar "d"))
 (DTypeSig false "dictPassLetBind" (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyCon "LetBind") (TyCon "LetBind"))))
 (DFunDef false "dictPassLetBind" ((PVar "names") (PCon "LetBind" (PVar "n") (PVar "clauses"))) (EIf (EApp (EApp (EVar "omHasKey") (EVar "n")) (EVar "names")) (EApp (EApp (EVar "LetBind") (EVar "n")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "prependDictClause") (EVar "n")) (EApp (EVar "dictArityOf") (EVar "n")))) (EVar "clauses"))) (EIf (EVar "otherwise") (EApp (EApp (EVar "LetBind") (EVar "n")) (EVar "clauses")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "prependDictClause" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "FunClause") (TyCon "FunClause")))))
@@ -58568,7 +58729,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "exactReturnBlockers" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyApp (TyCon "List") (TyCon "SolverBlocker"))))
 (DFunDef false "exactReturnBlockers" ((PVar "args")) (EApp (EApp (EMethodRef "map") (EVar "BlockingTypeVariable")) (EApp (EApp (EDictApp "flatMap") (EVar "monoUnboundIds")) (EVar "args"))))
 (DTypeSig false "methodReturnPrerequisites" (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "ImplRow") (TyApp (TyCon "List") (TyCon "PrerequisiteEvidence")))))
-(DFunDef false "methodReturnPrerequisites" ((PVar "args") (PVar "row")) (EMatch (EApp (EApp (EVar "selectedRowReqMatch") (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EMethodRef "map") (EVar "prerequisiteEvidence")) (EApp (EApp (EMethodRef "map") (EApp (EVar "reqToObligation") (EVar "subst"))) (EVar "reqs")))) (arm (PCon "None") () (EListLit))))
+(DFunDef false "methodReturnPrerequisites" ((PVar "args") (PVar "row")) (EMatch (EApp (EApp (EVar "selectedRowReqMatch") (EVar "args")) (EVar "row")) (arm (PCon "Some" (PTuple (PVar "subst") (PVar "reqs"))) () (EApp (EApp (EMethodRef "map") (EVar "prerequisiteEvidence")) (EApp (EApp (EMethodRef "map") (EApp (EVar "reqToObligation") (EVar "subst"))) (EApp (EVar "expandImplRequires") (EVar "reqs"))))) (arm (PCon "None") () (EListLit))))
 (DTypeSig false "prerequisiteEvidence" (TyFun (TyTuple (TyCon "IfaceRef") (TyApp (TyCon "List") (TyCon "Mono"))) (TyCon "PrerequisiteEvidence")))
 (DFunDef false "prerequisiteEvidence" ((PTuple (PVar "iface") (PVar "args"))) (ERecordCreate "PrerequisiteEvidence" ((fa "prerequisiteInterface" (EVar "iface")) (fa "prerequisiteArguments" (EVar "args")))))
 (DTypeSig false "consumeExactReturnOutcome" (TyFun (TyCon "ImplUniverse") (TyFun (TyCon "MethodReturnRequest") (TyFun (TyCon "MethodReturnResolution") (TyCon "Unit")))))
@@ -58953,14 +59114,14 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "sameIfaceDecl" ((PVar "a") (PVar "b")) (EApp (EApp (EVar "tabKeyEq") (EApp (EVar "oblIfaceKey") (EVar "a"))) (EApp (EVar "oblIfaceKey") (EVar "b"))))
 (DTypeSig false "registerImplRequires" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyFun (TyApp (TyCon "List") (TyCon "ScopedImplMethod")) (TyCon "Unit")))))))))
 (DFunDef false "registerImplRequires" (PWild PWild PWild PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerImplRequires" ((PVar "ce") (PVar "cur") (PVar "iface") (PVar "implTvMap") (PVar "rpNames") (PVar "reqs") (PCons (PVar "scoped") (PVar "rest"))) (ELetGroup ((lgb "mname" (clause () (EApp (EVar "implMethodName") (EFieldAccess (EVar "scoped") "simMethod"))))) (EIf (EApp (EApp (EVar "registersElementDict") (EVar "mname")) (EVar "rpNames")) (EBlock (DoLet false false (PVar "methodArity") (EApp (EApp (EApp (EApp (EVar "methodDictArityInClassEnv") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EFieldAccess (EVar "scoped") "simScope")) (EVar "implTvMap")) (EVar "methodArity")) (EVar "reqs"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "registerImplRequires" ((PVar "ce") (PVar "cur") (PVar "iface") (PVar "implTvMap") (PVar "rpNames") (PVar "reqs") (PCons (PVar "scoped") (PVar "rest"))) (ELetGroup ((lgb "mname" (clause () (EApp (EVar "implMethodName") (EFieldAccess (EVar "scoped") "simMethod"))))) (EIf (EApp (EApp (EVar "registersElementDict") (EVar "mname")) (EVar "rpNames")) (EBlock (DoLet false false (PVar "methodArity") (EApp (EApp (EApp (EApp (EVar "methodDictArityInClassEnv") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "mname"))) (DoLet false false PWild (EApp (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EFieldAccess (EVar "scoped") "simScope")) (EVar "implTvMap")) (EVar "methodArity")) (EApp (EVar "listLen") (EVar "reqs"))) (EApp (EVar "expandImplRequires") (EVar "reqs")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "registerImplRequires") (EVar "ce")) (EVar "cur")) (EVar "iface")) (EVar "implTvMap")) (EVar "rpNames")) (EVar "reqs")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "methodDictArityInClassEnv" (TyFun (TyCon "ClassEnv") (TyFun (TyCon "Int") (TyFun (TyCon "IfaceRef") (TyFun (TyCon "String") (TyCon "Int"))))))
 (DFunDef false "methodDictArityInClassEnv" ((PVar "ce") (PVar "cur") (PVar "iface") (PVar "method")) (EMatch (EApp (EApp (EApp (EApp (EVar "ceMethodTyAt") (EVar "iface")) (EVar "method")) (EVar "cur")) (EVar "ce")) (arm (PCon "Some" (PTuple (PVar "typarams") (PVar "ty") PWild)) () (EApp (EVar "listLen") (EApp (EApp (EVar "methodLevelConstraintVarNames") (EVar "typarams")) (EVar "ty")))) (arm (PCon "None") () (EApp (EVar "methodDictArityOf") (EVar "method")))))
 (DTypeSig false "registersElementDict" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "Bool"))))
 (DFunDef false "registersElementDict" ((PVar "mname") (PVar "rpNames")) (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "mname")) (EVar "rpNames")) (EApp (EVar "isSome") (EApp (EVar "argDispatchOf") (EVar "mname")))))
-(DTypeSig false "registerReqSlots" (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Unit"))))))
-(DFunDef false "registerReqSlots" (PWild PWild PWild (PList)) (ELit LUnit))
-(DFunDef false "registerReqSlots" ((PVar "scope") (PVar "implTvMap") (PVar "slot") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs")) (rf "requireOrigin" (PVar "ro"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EDictApp "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false (PVar "binder") (EApp (EApp (EVar "Scopes.binderAt") (EVar "scope")) (EVar "slot"))) (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EVar "binder"))) (DoLet false false (PVar "reqIface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "ro"))))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "reqIface")) (EVar "argMonos")) (EVar "binder"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "reqIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "argMonos"))) (fa "psBoundIds" (EVar "ids"))))) (EVar "binder"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "scope")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EVar "rest")))))
+(DTypeSig false "registerReqSlots" (TyFun (TyCon "ScopeId") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Mono"))) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Require")) (TyCon "Unit")))))))
+(DFunDef false "registerReqSlots" (PWild PWild PWild PWild (PList)) (ELit LUnit))
+(DFunDef false "registerReqSlots" ((PVar "scope") (PVar "implTvMap") (PVar "slot") (PVar "directLeft") (PCons (PRec "Require" ((rf "requireHead" (PVar "iface")) (rf "requireArgs" (PVar "rargs")) (rf "requireOrigin" (PVar "ro"))) false) (PVar "rest"))) (EBlock (DoLet false false (PVar "argMonos") (EApp (EApp (EMethodRef "map") (ELam ((PVar "a")) (EApp (EApp (EVar "fromAstType") (EVar "implTvMap")) (EVar "a")))) (EVar "rargs"))) (DoLet false false (PVar "ids") (EApp (EApp (EDictApp "flatMap") (EVar "monoTyvarIds")) (EVar "argMonos"))) (DoLet false false (PVar "binder") (EApp (EApp (EVar "Scopes.binderAt") (EVar "scope")) (EVar "slot"))) (DoLet false false (PVar "reqIface") (ERecordCreate "IfaceRef" ((fa "irName" (EVar "iface")) (fa "irOrigin" (EVar "ro"))))) (DoLet false false (PVar "slotPred") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "reqIface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "argMonos"))) (fa "psBoundIds" (EVar "ids"))))) (DoLet false false PWild (EIf (EBinOp ">" (EVar "directLeft") (ELit (LInt 0))) (EBlock (DoLet false false PWild (EApp (EApp (EVar "registerEachActive") (EVar "ids")) (EVar "binder"))) (DoLet false false PWild (EApp (EApp (EApp (EVar "registerPredGiven") (EVar "reqIface")) (EVar "argMonos")) (EVar "binder"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMIdWitnessed")) (EVar "DirectGiven")) (EVar "slotPred")) (EVar "binder")))) (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "LegacySuperclassAlias")) (EVar "slotPred")) (EVar "binder")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "registerReqSlots") (EVar "scope")) (EVar "implTvMap")) (EBinOp "+" (EVar "slot") (ELit (LInt 1)))) (EBinOp "-" (EVar "directLeft") (ELit (LInt 1)))) (EVar "rest")))))
 (DTypeSig false "registerPredGiven" (TyFun (TyCon "IfaceRef") (TyFun (TyApp (TyCon "List") (TyCon "Mono")) (TyFun (TyCon "EvidenceBinderId") (TyCon "Unit")))))
 (DFunDef false "registerPredGiven" (PWild (PList) PWild) (ELit LUnit))
 (DFunDef false "registerPredGiven" ((PVar "iface") (PVar "args") (PVar "dname")) (EIf (EApp (EApp (EVar "allList") (EVar "monoIsBareTyvar")) (EVar "args")) (ELit LUnit) (EIf (EVar "otherwise") (EBlock (DoLet false false (PVar "slot") (ERecordCreate "PredicateSlot" ((fa "psIface" (EVar "iface")) (fa "psArgs" (EApp (EVar "PSArgsKnown") (EVar "args"))) (fa "psBoundIds" (EApp (EVar "dedupI") (EApp (EApp (EDictApp "flatMap") (EVar "monoTyvarIds")) (EVar "args"))))))) (DoExpr (EApp (EApp (EApp (EApp (EVar "pushGiven") (EVar "GMPredicate")) (EVar "DirectGiven")) (EVar "slot")) (EVar "dname")))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -60507,7 +60668,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "dictPassModulesIfEnabled" ((PVar "dictNames") (PVar "core2") (PVar "modules2")) (EBlock (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoLet false false (PVar "allModDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "modules2"))) (DoLet false false (PVar "promotedQ") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleFunPredicateSlotsQualRef") "value")) (DoLet false false (PVar "allMods") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "modules2"))) (EVar "omEmpty"))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EVar "scopePredicateSlots") (EVar "promotedQ")) (EVar "allMods")) (EBinOp "++" (EVar "core2") (EVar "allModDecls"))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EApp (EApp (EVar "scopeMethodPredicateSlots") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")) (EVar "allMods")))) (DoLet false false (PVar "core2'") (EApp (EApp (EVar "dictPass") (EVar "dictNames")) (EVar "core2"))) (DoLet false false (PVar "importerReach") (EApp (EVar "importerReachIndex") (EVar "modules2"))) (DoLet false false (PVar "modules2'") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dictPassModulesScoped") (EVar "dictNames")) (EVar "promotedQ")) (EVar "importerReach")) (EVar "core2")) (EVar "modules2")) (EVar "modules2"))) (DoLet false false PWild (EApp (EVar "publishEvidence") (ELit LUnit))) (DoExpr (ETuple (EVar "core2'") (EVar "modules2'")))))
 (DTypeSig false "dictPassModulesScoped" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))) (TyFun (TyApp (TyCon "OrdMap") (TyApp (TyCon "OrdMap") (TyCon "Unit"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "dictPassModulesScoped" (PWild PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "dictPassModulesScoped" ((PVar "dictNames") (PVar "promotedQ") (PVar "importerReach") (PVar "core2") (PVar "allModules") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PVar "importers") (EApp (EApp (EApp (EVar "transitiveImporters") (EVar "importerReach")) (EVar "mid")) (EVar "allModules"))) (DoLet false false (PVar "importerDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "importers"))) (DoLet false false (PVar "scope") (EBinOp "++" (EBinOp "++" (EVar "core2") (EVar "prog")) (EVar "importerDecls"))) (DoLet false false (PVar "scopeMods") (EApp (EApp (EVar "namesToSet") (EBinOp "::" (EVar "mid") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "importers")))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EVar "promotedQ")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EVar "promotedQ")) (EApp (EApp (EApp (EVar "scopePredicateSlots") (EVar "promotedQ")) (EVar "scopeMods")) (EVar "scope")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EApp (EApp (EVar "scopeMethodPredicateSlots") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")) (EVar "scopeMods")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EVar "dictPass") (EVar "dictNames")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dictPassModulesScoped") (EVar "dictNames")) (EVar "promotedQ")) (EVar "importerReach")) (EVar "core2")) (EVar "allModules")) (EVar "rest"))))))
+(DFunDef false "dictPassModulesScoped" ((PVar "dictNames") (PVar "promotedQ") (PVar "importerReach") (PVar "core2") (PVar "allModules") (PCons (PTuple (PVar "mid") (PVar "prog")) (PVar "rest"))) (EBlock (DoLet false false (PVar "importers") (EApp (EApp (EApp (EVar "transitiveImporters") (EVar "importerReach")) (EVar "mid")) (EVar "allModules"))) (DoLet false false (PVar "importerDecls") (EApp (EApp (EDictApp "flatMap") (EVar "snd")) (EVar "importers"))) (DoLet false false (PVar "scope") (EBinOp "++" (EBinOp "++" (EVar "core2") (EVar "prog")) (EVar "importerDecls"))) (DoLet false false (PVar "scopeMods") (EApp (EApp (EVar "namesToSet") (EBinOp "::" (EVar "mid") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "importers")))) (EVar "omEmpty"))) (DoLet false false PWild (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funPredicateSlotsRef")) (EApp (EApp (EApp (EApp (EVar "selfDeclArities") (EVar "mid")) (EVar "prog")) (EVar "promotedQ")) (EBinOp "++" (EApp (EApp (EVar "aliasConstraintEntries") (EVar "prog")) (EVar "promotedQ")) (EApp (EApp (EApp (EVar "scopePredicateSlots") (EVar "promotedQ")) (EVar "scopeMods")) (EVar "scope")))))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "funConstraintDeclaredRef")) (EListLit))) (DoExpr (EApp (EApp (EVar "setRef") (EFieldAccess (EFieldAccess (EVar "perRun") "value") "methodPredicateSlotsRef")) (EApp (EApp (EVar "scopeMethodPredicateSlots") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "crossRun") "value") "crossModuleMethodPredicateSlotsQualRef") "value")) (EVar "scopeMods")))) (DoExpr (EBinOp "::" (ETuple (EVar "mid") (EApp (EApp (EApp (EVar "dictPassIn") (EVar "scope")) (EVar "dictNames")) (EVar "prog"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "dictPassModulesScoped") (EVar "dictNames")) (EVar "promotedQ")) (EVar "importerReach")) (EVar "core2")) (EVar "allModules")) (EVar "rest"))))))
 (DTypeSig false "scopePredicateSlots" (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyApp (TyCon "List") (TyCon "PredicateSlot")))) (TyFun (TyApp (TyCon "OrdMap") (TyCon "Unit")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "PredicateSlot"))))))))
 (DFunDef false "scopePredicateSlots" ((PVar "promotedQ") (PVar "scopeMods") (PVar "scope")) (EBlock (DoLet false false (PVar "scopeNames") (EApp (EApp (EVar "namesToSet") (EApp (EVar "declTopFnNames") (EVar "scope"))) (EVar "omEmpty"))) (DoLet false false (PVar "nameInScope") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeNames")))) (EVar "promotedQ"))) (DoLet false false (PVar "resolvedNames") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))))) (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")))) (EVar "nameInScope")))) (EVar "omEmpty"))) (DoLet false false (PVar "inferredQ") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EBinOp "||" (EApp (EApp (EVar "modInScope") (EApp (EVar "fst") (EApp (EVar "fst") (EVar "e")))) (EVar "scopeMods")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e")))) (EVar "resolvedNames")))))) (EVar "nameInScope"))) (DoLet false false (PVar "inferred") (EApp (EApp (EMethodRef "map") (ELam ((PVar "e")) (ETuple (EApp (EVar "snd") (EApp (EVar "fst") (EVar "e"))) (EApp (EVar "snd") (EVar "e"))))) (EVar "inferredQ"))) (DoLet false false (PVar "inferredNames") (EApp (EApp (EVar "namesToSet") (EApp (EApp (EMethodRef "map") (EVar "fst")) (EVar "inferred"))) (EVar "omEmpty"))) (DoLet false false (PVar "sigEntries") (EApp (EApp (EVar "filterList") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "omHasKey") (EApp (EVar "fst") (EVar "e"))) (EVar "inferredNames"))))) (EApp (EApp (EDictApp "flatMap") (EVar "constrainedSigPredicateSlots")) (EVar "scope")))) (DoExpr (EBinOp "++" (EVar "inferred") (EVar "sigEntries")))))
 (DTypeSig false "selfDeclArities" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyTuple (TyCon "String") (TyCon "String")) (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyVar "a"))))))))

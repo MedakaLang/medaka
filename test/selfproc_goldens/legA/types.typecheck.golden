@@ -143,6 +143,7 @@ argDispatchOfDecl : Decl -> List (String, Int)
 argDispatchOfDeclById : Decl -> List ((IfaceRef, String), Int)
 argDispatchOfMethod : List String -> IfaceMethod -> List (String, Int)
 argDispatchOfMethodById : IfaceRef -> List String -> IfaceMethod -> List ((IfaceRef, String), Int)
+argExpandedImplReqRoutes : String -> ScopeId -> List (String, Mono) -> List Require -> Int -> Int -> List Route
 argImplDictRoutesForEncl : String -> ScopeId -> String -> String -> Mono -> List Mono -> List Route
 argImplReqRoutes : String -> ScopeId -> List (String, Mono) -> List Require -> Int -> Int -> List Route
 argImplRequiresRoutes : IfaceRef -> String -> ScopeId -> Mono -> List Mono -> Int -> Int -> List Route
@@ -713,7 +714,8 @@ dictParams : String -> Int -> List Pat
 dictParamsFrom : String -> Int -> Int -> List Pat
 dictParamsGo : String -> Int -> Int -> List Pat
 dictPass : List String -> List Decl -> List Decl
-dictPassDecl : Map String Unit -> List String -> Decl -> Decl
+dictPassDecl : Map String Unit -> List String -> List Decl -> Decl -> Decl
+dictPassIn : List Decl -> List String -> List Decl -> List Decl
 dictPassLetBind : Map String Unit -> LetBind -> LetBind
 dictPassModulesIfEnabled : List String -> List Decl -> List (String, List Decl) -> (List Decl, List (String, List Decl))
 dictPassModulesScoped : List String -> List ((String, String), List PredicateSlot) -> Map String (Map String Unit) -> List Decl -> List (String, List Decl) -> List (String, List Decl) -> List (String, List Decl)
@@ -838,6 +840,8 @@ exitLevel : Unit -> Unit
 expandAliasHeadTy : Ty -> Ty
 expandAliasHeadTyWith : List (TabKey, (List String, Ty)) -> Ty -> Ty
 expandFunPredicateSlots : List Decl -> List (String, List PredicateSlot) -> List (String, List PredicateSlot)
+expandImplRequires : List Require -> List Require
+expandImplRequiresIn : List Decl -> List Require -> List Require
 expandIoInBound : List Atom -> List Atom
 expandPredicateSlotEntry : List Decl -> (String, List PredicateSlot) -> (String, List PredicateSlot)
 expandPredicateSlots : List Decl -> List PredicateSlot -> List PredicateSlot
@@ -1200,6 +1204,12 @@ implMethodEVars : ImplMethod -> List String
 implMethodName : ImplMethod -> String
 implMethodNameTc : ImplMethod -> String
 implReqDictVarOf : Option PredicateRequest -> Mono -> String -> ScopeId -> Option AssumAnswer
+implRequireIndex : List (String, Mono) -> List Require -> Map String Unit -> Map String Unit
+implRequireKey : List (String, Mono) -> Require -> String
+implRequireRigidMap : List Require -> List (String, Mono)
+implRequireSuper : List (String, Ty) -> Super -> List Require
+implRequireSupers : List Decl -> Require -> List Require
+implRequireTyvars : Require -> List String
 implRequiresRoot : String -> Int -> List (String, Mono) -> List Require -> Bool
 implRowHasReqs : List Require -> Bool
 implRowMatchesSuper : TabKey -> String -> List Ty -> ImplRow -> Bool
@@ -2106,7 +2116,7 @@ registerOneAmbiguous : IfaceRef -> List String -> Ty -> Mono -> Option Loc -> Sc
 registerOneMethodDict : ScopeId -> Int -> Int -> List (Int, Mono) -> Unit
 registerPredGiven : IfaceRef -> List Mono -> EvidenceBinderId -> Unit
 registerRecordInfoKeyed : TyConOrigin -> String -> String -> List String -> List Field -> Unit
-registerReqSlots : ScopeId -> List (String, Mono) -> Int -> List Require -> Unit
+registerReqSlots : ScopeId -> List (String, Mono) -> Int -> Int -> List Require -> Unit
 registerSchemeObligations : Map String Int -> List (String, Ty, List (String, Mono)) -> List (IfaceRef, List Mono, Option Loc) -> List UObligation -> List (String, Scheme) -> Unit
 registerSlotPredGivens : ScopeId -> Int -> List PredicateSlot -> Unit
 registerVariants : TyConOrigin -> TcEnv -> String -> List String -> List (Option KindAnn) -> List Variant -> TcEnv
@@ -2497,6 +2507,7 @@ unifySpineProbe : Mono -> List Mono -> Unit
 unifySpineResult : Mono -> List Mono -> Mono
 unifyStandaloneDomain : Mono -> Mono -> Option Loc -> Unit
 unifyVars : Ref Tyvar -> Ref Tyvar -> Unit
+uniqueImplRequires : List (String, Mono) -> Map String Unit -> List Require -> List Require
 uniqueImplTysFor : List Decl -> String -> String -> Option (List Ty)
 uniqueMethodTemplateGiven : MethodPredicateTemplate -> ScopeId -> List GivenEntry -> Option GivenEntry
 unitCarriesMangledFunDefs : String -> List (String, (List Pat, Expr)) -> Bool
