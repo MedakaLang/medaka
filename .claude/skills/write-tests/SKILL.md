@@ -34,8 +34,14 @@ register it `migration = "native-wrap"` so the epic can find it again.
 project-local imports one level, so a helper binding the gate imports is a
 spawn site like any other, reported at the helper's own file and line (#3234).
 The stdlib and declared dependencies are never followed. Two consequences for
-an author: a helper that spawns and grades nothing reds every gate that
-imports it, and a spawn two imports deep is still invisible.
+an author: a helper that spawns and grades nothing reds each gate that reaches
+it, and reach is bounded at one relay hop — a gate reaches a helper binding it
+names itself, or one named by another helper binding the gate names, and no
+further. So a gate that imports a wrapper reaches the spawn one call below it,
+but a spawn two calls below the imported name is still invisible, as is any
+helper binding the gate writes no route to. An import line never counts as a
+relay or as grading evidence: names co-occurring in one import block are not a
+code relationship.
 
 **Resolved, no longer an open question:** orchestration *by* `medaka gate` (the
 CLI subcommand) does NOT count as harness dependence for #2298's

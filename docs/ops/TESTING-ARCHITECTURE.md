@@ -464,7 +464,12 @@ derived; `[G-MUST-FAIL]` inverted polarity gets a field, not a rubber stamp.
   interpolated into a message but never compared still reads as graded. It follows a gate
   module's project-local imports one level, so a spawn in a helper module the gate imports
   IS a site, reported at the helper's own file:line (#3234); the stdlib and declared
-  dependencies are never followed, and a spawn two imports deep still is not seen.
+  dependencies are never followed. Within a followed module, reach is one relay hop: the
+  gate reaches a binding it names itself, or one named by another binding the gate names —
+  so importing a wrapper reaches the spawn one call below it, and a spawn two calls below
+  the imported name, or in a binding the gate writes no route to, is not seen. An import
+  line is neither a relay nor grading evidence, so two names in one import block never
+  vouch for each other.
 
 ---
 

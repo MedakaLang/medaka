@@ -160,3 +160,98 @@ test "a helper importing the gate back is a named cycle error" =
 
 test "the cycle is reported instead of a silently clean gate" =
   expectTrue (listLen (violations cycleTable gateOverHelperSrc) > 0)
+
+-- ── the spawn one call deeper than the imported name ─────────────────────────
+
+-- A helper module exports a thin wrapper and keeps the spawn in a binding
+-- below it. The gate imports and names `spawnOut` only; `spawnRaw` is a name
+-- the gate never writes. Charging only bindings the gate names directly would
+-- leave `spawnRaw` never even considered — not checked and cleared, never
+-- looked at — which is the whole shared spawn layer going unwalled.
+helperWrapperUngradedSrc : String
+helperWrapperUngradedSrc =
+  "import io.{runVerb}\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = runVerb \"medaka\" args\n\nspawnOut : List String -> Result String String\nspawnOut args = match spawnRaw args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+wrapperUngradedTable : List (String, ImportTarget)
+wrapperUngradedTable = [
+  (
+    "test.oracle_support",
+    Followed "test/oracle_support.mdk" helperWrapperUngradedSrc,
+  ),
+  ("test", Elsewhere),
+]
+
+test "a spawn below the imported wrapper is still the gate's violation" =
+  expectEqual 1 (listLen (violations wrapperUngradedTable gateOverHelperSrc))
+
+test "it names the binding that spawns, not the wrapper the gate imported" =
+  expectTextContainsAll
+    ["fixture_gate: test/oracle_support.mdk:3: `spawnRaw` spawns a process"]
+    (firstOr "" (violations wrapperUngradedTable gateOverHelperSrc))
+
+-- The same two-binding shape with the lower binding reading its own exit code:
+-- reaching a site is not reporting it.
+helperWrapperGradedSrc : String
+helperWrapperGradedSrc =
+  "import io.{runVerb}\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = match runVerb \"medaka\" args\n  Ok (code, out, err) => if code == 0 then Ok (code, out, err) else Err err\n  Err e => Err e\n\nspawnOut : List String -> Result String String\nspawnOut args = match spawnRaw args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+test "the same shape with the lower binding grading leaves the gate clean" =
+  expectEqual
+    []
+    (violations
+      [
+        (
+          "test.oracle_support",
+          Followed "test/oracle_support.mdk" helperWrapperGradedSrc,
+        ),
+        ("test", Elsewhere),
+      ]
+      gateOverHelperSrc)
+
+-- The relay hop is bounded by what the GATE wrote: a gate importing some other
+-- name from the same helper module reaches neither the wrapper nor the spawn
+-- below it. Without this bound one shared runner module's spawn becomes a
+-- violation for every gate that imports anything at all from it.
+helperUnnamedSrc : String
+helperUnnamedSrc =
+  "import io.{runVerb}\n\noutLines : String -> List String\noutLines out = [out]\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = runVerb \"medaka\" args\n\nspawnOut : List String -> Result String String\nspawnOut args = match spawnRaw args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+gateNamesNeitherSrc : String
+gateNamesNeitherSrc =
+  "import test.oracle_support.{outLines}\nimport test.{fail, pass}\n\ntest \"one row\" = if outLines \"\" == [] then pass else fail \"no\"\n"
+
+test "a helper spawn the gate names no route to is not that gate's site" =
+  expectEqual
+    []
+    (violations
+      [
+        (
+          "test.oracle_support",
+          Followed "test/oracle_support.mdk" helperUnnamedSrc,
+        ),
+        ("test", Elsewhere),
+      ]
+      gateNamesNeitherSrc)
+
+-- ── an import block is not grading evidence ──────────────────────────────────
+
+-- Adjacent import lines fold into one chunk whose text unions every name on
+-- the run. An import that brings in a grading verb therefore sits in the same
+-- chunk text as an ungraded spawn helper imported two lines down, and reading
+-- that chunk as an answer would let the one vouch for the other — two names a
+-- module happens to need, not a code relationship.
+gateFoldedImportSrc : String
+gateFoldedImportSrc =
+  "import test_process.{expectSpawnFails}\nimport test.oracle_support.{spawnOut}\nimport test.{fail, pass}\n\ntest \"one row\" = match spawnOut [\"check\", \"row.mdk\"]\n  Ok out => if out == \"\" then fail \"empty\" else pass\n  Err e => fail e\n"
+
+foldedImportTable : List (String, ImportTarget)
+foldedImportTable = [
+  ("test.oracle_support", Followed "test/oracle_support.mdk" helperUngradedSrc),
+  ("test_process", Elsewhere),
+  ("test", Elsewhere),
+]
+
+test "a grading name imported beside the spawn helper does not answer for it" =
+  expectTextContainsAll
+    ["fixture_gate: test/oracle_support.mdk:3: `spawnOut` spawns a process"]
+    (firstOr "" (violations foldedImportTable gateFoldedImportSrc))
