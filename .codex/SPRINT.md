@@ -42,7 +42,7 @@ Sol/high explicitly at dispatch.
 
 ### Choosing an implementation tier
 
-For Codex planning, start each implementation slice at **Terra/high**. Choose
+For Codex planning and every fix packet, start at **Terra/high**. Choose
 from the reasoning still left to the implementer, not the issue's severity or
 subsystem. A settled remedy with named sites, an existing pattern, and bounded
 acceptance checks stays Terra even for an S0, compiler internals, several
@@ -50,12 +50,17 @@ coupled files, or a large test matrix.
 
 Use **Sol/high** when the implementer must resolve a specific open semantic or
 algorithmic decision where competing plausible answers require substantial
-reasoning. Name that decision in the contract's one-line model justification;
+reasoning. Name that decision in the contract or fix packet's model justification;
 "cross-cutting", "high risk", and "compiler work" alone are not justifications.
 For example, propagating an already-chosen representation through its consumers
 is Terra; deciding an unresolved coherence rule and its consequences can warrant
 Sol. If planning settles the decision, reconsider whether implementation still
 needs Sol.
+
+A review finding does not inherit the reviewer's tier. If the reproducer,
+invariant, and remedy are settled, the repair remains Terra; "confirmed S0" or
+"compiler state loss" alone does not justify Sol. Keep directly related cleanup
+in the same bounded packet; do not create extra dispatches to separate cheap work.
 
 When uncertain, start Terra and use the existing refusal/upgrade path for a
 concrete reasoning blocker. Missing prerequisites, permissions, or a broken
@@ -63,12 +68,28 @@ build need repair, not an automatic model upgrade. Do not add a design agent,
 review round, or model-share quota. This default concerns implementation only:
 retain the selected planner model and the Sol end reviewer above.
 
-Use native subagent tools and fresh context for each slice. With a tool that
-offers `fork_turns`, use `none`: the packet and cited files are the handoff.
+Use native subagent tools and fresh context for every new dispatch, including
+fixes and retro. With a tool that offers `fork_turns`, use `none`: the packet
+and cited files are the handoff.
 Pass the packet's absolute path and the assigned worktree path. Save the
 returned agent ID beside that slice in STATUS.md so the user can find it with
 `/agent`; no separate agent registry. Reuse a worker for a bounded continuation
 of the same packet, not as a permanent seat across unrelated slices.
+
+### Resume checkpoint
+
+After compaction or session resume, read this section before the next wait or
+dispatch. Preserve it by reference in the compaction handoff, alongside any
+active agent IDs, process sessions, and outer cell handles; do not create a ledger.
+
+- Re-establish both wait durations from the effective host instructions, not
+  just the inner poll: 180,000 outer / 170,000 inner when three-minute idle
+  waits are allowed, or 60,000 / 55,000 under a one-minute cap. Put the pragma
+  on every long execution call, including the initial command.
+- Resume an outstanding outer cell before polling its process; do not restart
+  a command because its handle was omitted from a summary. Require process exit.
+- New dispatches still use `fork_turns: none`; a fix still needs its own model
+  decision under the rubric above. Compaction does not change either default.
 
 ## Worktrees and packet setup
 
@@ -124,6 +145,11 @@ the active-work cadence and all interruption/permission rules. Verify the
 effective instructions in a fresh session; this adapter cannot override a
 higher-priority host rule.
 
+Custom roles replace the inherited `developer_instructions` field. The three
+sprint role TOMLs therefore carry the idle-wait policy themselves; keep their
+policy paragraphs identical. Validate a fresh `sprint_implementer` and
+`sprint_reviewer`, not just a generic child, after changing this configuration.
+
 Prepare the next packet during useful overlap, then hold one
 `collaboration.wait_agent` call while there is no independent work. Use the
 longest timeout permitted by the host instructions: for example, 180,000 ms
@@ -160,18 +186,19 @@ limits, leaving room for the result to return:
 | Three minutes | 180,000 ms | 170,000 ms |
 | One minute | 60,000 ms | 55,000 ms |
 
-For the one-minute case, put the pragma on the first line and substitute the
+For the three-minute case, put the pragma on the first line and substitute the
 actual process handle for `processSessionId`:
 
 ```javascript
-// @exec: {"yield_time_ms": 60000, "max_output_tokens": 2500}
+// @exec: {"yield_time_ms": 180000, "max_output_tokens": 2500}
 const result = await tools.write_stdin({
-  session_id: processSessionId, chars: "", yield_time_ms: 55000,
+  session_id: processSessionId, chars: "", yield_time_ms: 170000,
   max_output_tokens: 2000
 });
 text(result);
 ```
 
+Under a one-minute cap, change BOTH numbers to the table's shorter pair.
 Use that outer pragma for the initial long `exec_command` call too. If the
 host requires shorter waits, reduce both durations while retaining headroom.
 If an outer call still yields a `cell_id`, resume it with `functions.wait`

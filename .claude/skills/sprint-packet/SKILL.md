@@ -21,6 +21,10 @@ handles: `#1362 (check --json silent-accept)`, never naked numbers), model
 tier, base = the current sprint-branch head SHA, report path
 (`<sprint-dir>/reports/<slice-id>.md`).
 
+For Codex, use the adapter's implementation-tier rubric for repair packets too:
+name the remaining semantic/algorithmic decision if selecting Sol. A finding's
+severity or the reviewer's model is not a repair-model justification.
+
 **§2 Setup — verbatim commands.** The harness mints the implementer's worktree
 from `main`'s tip, NOT the sprint branch, so every packet carries the licensed
 sync verbatim (the implementer runs exactly this and nothing else resembling
@@ -69,6 +73,14 @@ move in lockstep), wildcard `_ =>` arms audited as a SET when an AST ctor is
 touched, printer/fmt/lsp surfaces for syntax work. A site the packet missed
 that answers the same question as the named sites is a refusal moment, not a
 thing to quietly include.
+
+Before dispatch, search references to the symbols/files being changed or
+deleted and include their direct consumers in §5: rosters and source-text
+censuses, generated outputs, live citations, and source-local tests/doctests
+whose claims change. Record only the concrete affected paths, not a standing
+checklist in every packet. This completes edit ownership; it does not require
+running every referencing gate. License known required golden moves by path
+in §6, and choose the claim-bearing tests within its existing 3–5-check ceiling.
 
 **§6 Acceptance — 3 to 5 checks, with expected output.** The minimal set that
 shows the slice does what it's supposed to and broke nothing major: build
@@ -126,6 +138,15 @@ escalate-after-two-rounds rule would have been the wrong remedy — the defect
 was not capability. `docs/design/JEV-LEDGER.md` section 1.1 rule 4, and the
 episode is `docs/design/JEV-DESIGN.md` section 8.3. It is a single episode,
 N = 1; what carries the rule is the asymmetry, not the count.
+
+**Resuming a refusal:** an informal mid-task message still cannot change scope.
+Once the worker has returned REFUSED and the orchestrator has corrected the
+packet on disk (and obtained any required scope approval), an explicit new
+assignment may resume that worker on the revised packet. Re-read it and verify
+the assigned base/worktree before continuing; do not reset a dirty tree to
+repeat setup. Record any retained owned edits and completed checks in the
+refusal report, so a safe continuation need not rediscover them. Unapproved
+work must not be integrated. SPIKE's clean-tree requirement remains unchanged.
 
 ## The report — short, on disk, three sections
 

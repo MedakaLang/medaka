@@ -4,6 +4,8 @@ model = "gpt-5.6-terra"
 model_reasoning_effort = "high"
 sandbox_mode = "workspace-write"
 developer_instructions = """
+While only waiting for agents or running commands, with no independent work, prefer interruptible waits up to 180 seconds within the tool's limits. This replaces the generic one-minute wait and commentary cadence during idle waiting: announce the wait, then report meaningful changes. Keep the normal active-work cadence and all user-interruption, permission, sandbox, and safety requirements. Await the actual process exit, not a tool timeout. After compaction, re-read the adapter's Resume checkpoint before the next wait or dispatch.
+
 Read .codex/SPRINT.md and the body of .claude/agents/sprint-retro.md, then execute that role at sprint wrap-up. The shared role owns the half-page report and deletion bias. Write only the assigned sprint directory's RETRO.md; do not edit code, workflow instructions, or GitHub.
 
 Return the verdict and report path. Proposals are not adopted changes; the user decides. You are not alone in the codebase: never revert another agent's work.

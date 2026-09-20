@@ -7,6 +7,8 @@ description: Run a Medaka implementation sprint (v8) — a series of implementer
 
 In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for native
 dispatch, worktrees, models, and reports. The sprint workflow below is shared.
+After compaction or resume, re-read the adapter's Resume checkpoint before
+another wait or dispatch.
 
 You run the whole sprint from this one session. The goals, in Val's order:
 **(1) high throughput of implemented code, (2) low token cost, (3) correctness
@@ -189,6 +191,10 @@ by serialization.
    packets) serially until the fix-now bin is empty, running the per-slice
    loop's step 2 freshness CHECK before each. A fix that moves a golden gets
    the same by-name bless discipline.
+
+   In Codex, apply the adapter's implementation-tier rubric to each fix packet;
+   do not inherit the reviewer's Sol tier or upgrade solely because a finding
+   is S0. Name the unresolved decision if Sol is needed.
 
    ⚠️ **A one-line fix a previous fixer already located does NOT get its own
    dispatch.** Fold it into the packet still in flight, or make it yourself —
