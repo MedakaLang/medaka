@@ -495,7 +495,7 @@ inboundRequest bodyBytes =
   -- `fromArray` packed it, and the probe would then be measuring its own
   -- fixture.
   let bytes = freeze (fillA (mutBytesMake bodyBytes) 0)
-  toUtf8Bytes
+  encodeUtf8
       "POST /xrpc/com.atproto.repo.uploadBlob HTTP/1.1\r\nHost: \{inboundHost}\r\nAuthorization: Bearer \{inboundToken}\r\nContent-Type: application/octet-stream\r\nContent-Length: \{intToString (bytesLength bytes)}\r\n\r\n"
     ++ bytes
 

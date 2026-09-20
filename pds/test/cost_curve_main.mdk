@@ -124,12 +124,12 @@ benchToken =
 
 queryRequest : String -> Bytes
 queryRequest target =
-  toUtf8Bytes "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
+  encodeUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
 
 procedureRequest : String -> String -> Bytes
 procedureRequest nsid body =
-  let bytes = toUtf8Bytes body
-  toUtf8Bytes
+  let bytes = encodeUtf8 body
+  encodeUtf8
       "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (bytesLength bytes)}\r\n\r\n"
     ++ bytes
 

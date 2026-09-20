@@ -23,19 +23,19 @@ import hash_map.{HashMap, fromList, findWithDefault, size}
 
 main =
   let m = fromList [
-    (toUtf8Bytes "one", 1),
-    (toUtf8Bytes "two", 2),
-    (toUtf8Bytes "three", 3),
+    (encodeUtf8 "one", 1),
+    (encodeUtf8 "two", 2),
+    (encodeUtf8 "three", 3),
   ]
   (
     (
       size m,
-      findWithDefault (-1) (toUtf8Bytes "one") m,
-      findWithDefault (-1) (toUtf8Bytes "two") m,
+      findWithDefault (-1) (encodeUtf8 "one") m,
+      findWithDefault (-1) (encodeUtf8 "two") m,
     ),
     (
-      findWithDefault (-1) (toUtf8Bytes "three") m,
-      findWithDefault (-1) (toUtf8Bytes "four") m,
+      findWithDefault (-1) (encodeUtf8 "three") m,
+      findWithDefault (-1) (encodeUtf8 "four") m,
       findWithDefault (-1) (fromArrayAssumeByteDomain [|116, 119, 111|]) m,
     ),
   )

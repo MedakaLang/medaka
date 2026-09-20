@@ -17,7 +17,7 @@
 
 import byteparser.{runByteParser, beUint, beSint, leUint, leSint, takeBytes}
 import bytes.{
-  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, toUtf8Bytes
+  Bytes, adoptByteBlock, fromByteBlockPrefix, lendByteBlock, encodeUtf8
 }
 import list.{reverse}
 
@@ -95,9 +95,9 @@ growTo cap needed =
    separate single-byte grows. `emitBytes` is the one-byte-at-a-time form,
    over a `List Int`.
 
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hi") buf in let _ = appendBytes (toUtf8Bytes "!") buf in debug (buildBytes buf)
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
    "[|104, 105, 33|]"
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "") buf in debug (buildBytes buf)
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
    "[||]" -}
 export
 appendBytes : Bytes -> Builder -> Unit
@@ -125,7 +125,7 @@ appendBytes src (Builder backing len) =
    block: either way the returned byte string goes stale rather than wrong,
    and a caller reading only `[0, len)` of it reads what it was handed.
 
-   > let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hey") buf in let (_, n) = builderParts buf in n
+   > let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
    3 -}
 export
 builderParts : Builder -> (Bytes, Int)

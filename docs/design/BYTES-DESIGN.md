@@ -93,11 +93,19 @@ the `String` cell's existing UTF-8 bytes. Today, with no representation
 change, it is `O(n)` exactly like the original.
 
 **Deviation, accepted 2026-09-17:** the twins land in `stdlib/bytes.mdk`, not
-in `stdlib/string.mdk`, and are named `toUtf8Bytes` / `fromUtf8Bytes`.
-`stdlib/string.mdk` imports only `core` today, and a `Bytes`-returning
-function there would drag `stdlib/bytes.mdk` into nearly every module's import
-closure, the compiler's included — the exact bootstrap exposure B1 is
-sequenced to avoid.
+in `stdlib/string.mdk`. `stdlib/string.mdk` imports only `core` today, and a
+`Bytes`-returning function there would drag `stdlib/bytes.mdk` into nearly
+every module's import closure, the compiler's included — the exact bootstrap
+exposure B1 is sequenced to avoid.
+
+**Amended at B5 (#3221):** the twins are named `encodeUtf8` /
+`decodeUtf8` / `decodeUtf8Lossy`, not `toUtf8Bytes` / `fromUtf8Bytes`. The way
+back is two functions rather than one because there is no total
+`Bytes -> String`: `byteBlockToString` blits bytes into a `String` cell
+without reading them, so a single `Bytes -> String` door hands back a corrupt
+`String` at exit 0 on any byte sequence that is not UTF-8. `decodeUtf8`
+answers `Option String` and refuses; `decodeUtf8Lossy` substitutes U+FFFD per
+maximal subpart. `toUtf8Bytes` / `fromUtf8Bytes` are removed, not deprecated.
 
 ---
 

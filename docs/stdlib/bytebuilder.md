@@ -79,9 +79,9 @@ separate single-byte grows. `emitBytes` is the one-byte-at-a-time form,
 over a `List Int`.
 
 ```medaka
-> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hi") buf in let _ = appendBytes (toUtf8Bytes "!") buf in debug (buildBytes buf)
+> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
 "[|104, 105, 33|]"
-> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "") buf in debug (buildBytes buf)
+> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
 "[||]"
 ```
 
@@ -104,7 +104,7 @@ block: either way the returned byte string goes stale rather than wrong,
 and a caller reading only `[0, len)` of it reads what it was handed.
 
 ```medaka
-> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hey") buf in let (_, n) = builderParts buf in n
+> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
 3
 ```
 

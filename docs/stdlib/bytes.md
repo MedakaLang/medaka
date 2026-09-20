@@ -49,8 +49,8 @@ The byte-string type.
 
 The constructor is module-private, so `fromArray`,
 `fromArrayAssumeByteDomain`, `fromByteBlockPrefix`, `adoptByteBlock` and
-`toUtf8Bytes` are the ways in and `toArray`, `lendByteBlock` and
-`fromUtf8Bytes` are the ways out.
+`encodeUtf8` are the ways in and `toArray`, `lendByteBlock`,
+`decodeUtf8` and `decodeUtf8Lossy` are the ways out.
 
 ```medaka
 > map bytesLength (fromArray [|1, 2, 3|])
@@ -167,7 +167,7 @@ per byte. The block is the byte string's own, so a write to it changes a
 value that hands out no other way to change it. Read it; do not write it.
 
 ```medaka
-> byteBlockLength (lendByteBlock (toUtf8Bytes "héllo"))
+> byteBlockLength (lendByteBlock (encodeUtf8 "héllo"))
 6
 ```
 
@@ -180,7 +180,7 @@ toArray : Bytes -> Array Int
 The bytes of `b` as an array, in order.
 
 ```medaka
-> toArray (toUtf8Bytes "hi")
+> toArray (encodeUtf8 "hi")
 [|104, 105|]
 ```
 
@@ -200,7 +200,7 @@ ranges over a container of some element type, and `Bytes` has no element
 parameter.
 
 ```medaka
-> bytesLength (toUtf8Bytes "héllo")
+> bytesLength (encodeUtf8 "héllo")
 6
 ```
 
@@ -274,10 +274,10 @@ None
 
 ## Text
 
-### `toUtf8Bytes`
+### `encodeUtf8`
 
 ```
-toUtf8Bytes : String -> Bytes
+encodeUtf8 : String -> Bytes
 ```
 
 The UTF-8 encoding of `s`.
@@ -286,23 +286,61 @@ A codepoint outside ASCII contributes several bytes, so the byte count is
 at least the codepoint count and often larger.
 
 ```medaka
-> bytesLength (toUtf8Bytes "héllo")
+> bytesLength (encodeUtf8 "héllo")
 6
 ```
 
-### `fromUtf8Bytes`
+### `decodeUtf8`
 
 ```
-fromUtf8Bytes : Bytes -> String
+decodeUtf8 : Bytes -> Option String
 ```
 
-The string encoded by `b`, read as UTF-8.
+The string `b` encodes, read as UTF-8, or `None` when `b` is not valid
+UTF-8.
 
-On valid UTF-8, `fromUtf8Bytes (toUtf8Bytes s)` is `s`.
+The door out of `Bytes` and into `String`. It refuses every byte sequence
+that is not a canonical UTF-8 encoding of Unicode scalar values: an
+unexpected continuation byte, a truncated sequence, an overlong form, a
+surrogate, and anything above U+10FFFF. `decodeUtf8Lossy` is the form that
+substitutes U+FFFD for each of those instead of refusing.
+
+`decodeUtf8 (encodeUtf8 s)` is `Some s` for every `s`.
 
 ```medaka
-> fromUtf8Bytes (toUtf8Bytes "héllo→")
+> decodeUtf8 (encodeUtf8 "héllo→")
+Some "héllo→"
+> decodeUtf8 (fromArrayAssumeByteDomain [|0xff, 0xfe, 104, 105|])
+None
+> decodeUtf8 (fromArrayAssumeByteDomain [|0xe2, 0x82|])
+None
+```
+
+### `decodeUtf8Lossy`
+
+```
+decodeUtf8Lossy : Bytes -> String
+```
+
+The string `b` encodes, read as UTF-8, with one U+FFFD replacement
+character substituted for each ill-formed sequence in it.
+
+`decodeUtf8`'s never-failing form, for a caller that would rather render
+what it was handed than refuse it. The substitution is WHATWG's: one
+replacement character per maximal subpart, so a truncated three-byte
+sequence costs one and three stray continuation bytes cost three. Nothing
+is ever copied through verbatim, so the result is valid UTF-8 whatever `b`
+holds.
+
+```medaka
+> decodeUtf8Lossy (encodeUtf8 "héllo→")
 "héllo→"
+> decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xff, 0xfe, 104, 105|])
+"��hi"
+> decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])
+"�"
+> toArray (encodeUtf8 (decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])))
+[|239, 191, 189|]
 ```
 
 ## Output
@@ -475,8 +513,8 @@ Backs `++`.
 ```medaka
 > toArray (append (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|3|]))
 [|1, 2, 3|]
-> fromUtf8Bytes (toUtf8Bytes "hé" ++ toUtf8Bytes "llo")
-"héllo"
+> decodeUtf8 (encodeUtf8 "hé" ++ encodeUtf8 "llo")
+Some "héllo"
 ```
 
 ### `Eq Bytes`

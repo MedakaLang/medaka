@@ -454,7 +454,7 @@ validTarget input pos end query =
 
 exactAsciiAt : Bytes -> Int -> String -> Bool
 exactAsciiAt input start expected =
-  let wanted = toUtf8Bytes expected
+  let wanted = encodeUtf8 expected
   let size = bytesLength wanted
   start + size <= bytesLength input
     && slice input start (start + size) == wanted
@@ -574,8 +574,12 @@ parseRequestLine input avail start cursor = do
   else
     Ok
       (RequestLine
-        (fromUtf8Bytes (slice input start firstSpace))
-        (fromUtf8Bytes (slice input (firstSpace + 1) secondSpace))
+        (optionOrPanic
+          "http: request-line method is proven ASCII by allTokenBytes"
+          (decodeUtf8 (slice input start firstSpace)))
+        (optionOrPanic
+          "http: request target is proven ASCII by validTarget"
+          (decodeUtf8 (slice input (firstSpace + 1) secondSpace)))
         (end + 2))
 
 -- | Skip optional whitespace in the half-open range `value[pos, end)`.
