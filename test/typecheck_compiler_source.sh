@@ -1230,9 +1230,9 @@ if grep -Fq 'recordArithSite :' "$predicate_slot_src"; then
   exit 1
 fi
 
-# Every numeric boundary now supplies one explicit descriptor. The six boundaries with
-# ambiguity ownership name their just-exited owner; method bodies expose the pending
-# state. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
+# Every numeric boundary supplies one explicit descriptor. All eight boundaries name
+# their ambiguity owner; method bodies capture it inside their own balanced inference
+# window. SCC defaulting remains explicitly unrestricted while its ambiguity channel owns
 # the just-exited level.
 numeric_boundaries='blockRecLet blockLet NumBoundaryOwnedMember
 blockLet inferRecordCreate NumBoundaryOwnedMember
@@ -1240,8 +1240,8 @@ inferRecLet registerLocalScheme NumBoundaryOwnedMember
 inferLetSimple inferLetBody NumBoundaryOwnedMember
 processLetGroup inferLetBinds NumBoundaryOwnedGroup
 processSCC sccSchemes NumBoundaryOwnedScc
-inferDefaultMethod instantiateNamedMonos NumBoundaryMethodBodyPending
-inferImplMethodBody implBodyLoc NumBoundaryMethodBodyPending'
+inferDefaultMethod instantiateNamedMonos NumBoundaryOwnedMethodBody
+inferImplMethodBody implBodyLoc NumBoundaryOwnedMethodBody'
 printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" 'finalizeNumBoundary'
   require_typecheck_arm "$reader" "$next" 'NumBoundary {'
@@ -1249,8 +1249,11 @@ printf '%s\n' "$numeric_boundaries" | while read -r reader next disposition; do
   require_typecheck_arm "$reader" "$next" "$disposition"
   require_typecheck_arm "$reader" "$next" 'nbMembers ='
   require_typecheck_arm "$reader" "$next" 'nbSurvivingIds ='
-  if [ "$disposition" != NumBoundaryMethodBodyPending ]; then
-    require_typecheck_arm "$reader" "$next" 'let _ = exitLevel ()'
+  require_typecheck_arm "$reader" "$next" 'let _ = exitLevel ()'
+  if [ "$disposition" = NumBoundaryOwnedMethodBody ]; then
+    require_typecheck_arm "$reader" "$next" 'let bodyLevel = perRun.value.currentLevel.value'
+    require_typecheck_arm "$reader" "$next" 'NumBoundaryOwnedMethodBody bodyLevel'
+  else
     require_typecheck_arm "$reader" "$next" '(perRun.value.currentLevel.value + 1)'
   fi
 done || exit 1
@@ -1266,7 +1269,7 @@ require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOw
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedGroup owner => Some owner'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedScc _ => None'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedScc owner => Some owner'
-require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryMethodBodyPending => None'
+require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'NumBoundaryOwnedMethodBody owner => Some owner'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'let ambiguityOwner = match boundary.nbDisposition'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'registerAmbiguousConstraintsOwnedBy'
 require_typecheck_arm finalizeNumBoundary defaultAmbiguousNumWith 'None => ()'

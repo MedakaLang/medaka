@@ -20773,8 +20773,8 @@ numObligIds o = match o.oblProj
 -- One explicit description of a numeric-defaulting boundary.  Member and local-group
 -- boundaries carry the just-exited HM level used by BOTH defaulting and ambiguity
 -- rejection.  An SCC carries that level for ambiguity rejection while retaining its
--- legacy unrestricted defaulting policy; a method body with no level window is
--- represented as pending rather than borrowing the ambient level.
+-- legacy unrestricted SCC defaulting policy; method bodies carry their owned
+-- inference level while retaining the body-local surviving-channel rule.
 -- These four policies preserve the existing candidate sets while making the
 -- outliving channels named data instead of positional arguments:
 --   * member: roots in one member, excluding its arguments;
@@ -20785,7 +20785,7 @@ data NumBoundaryDisposition =
   | NumBoundaryOwnedMember Int
   | NumBoundaryOwnedGroup Int
   | NumBoundaryOwnedScc Int
-  | NumBoundaryMethodBodyPending
+  | NumBoundaryOwnedMethodBody Int
 
 data NumBoundary = NumBoundary {
   nbDisposition : NumBoundaryDisposition,
@@ -20796,20 +20796,18 @@ data NumBoundary = NumBoundary {
 }
 
 -- D1: one operation performs defaulting first, then ambiguity registration.
--- The pending method-body disposition still defaults with the legacy unrestricted
--- owner policy and deliberately has no ambiguity owner yet.
 finalizeNumBoundary : NumBoundary -> Unit
 finalizeNumBoundary boundary =
   let defaultOwnerPolicy = match boundary.nbDisposition
     NumBoundaryOwnedMember owner => Some owner
     NumBoundaryOwnedGroup owner => Some owner
     NumBoundaryOwnedScc _ => None
-    NumBoundaryMethodBodyPending => None
+    NumBoundaryOwnedMethodBody owner => Some owner
   let ambiguityOwner = match boundary.nbDisposition
     NumBoundaryOwnedMember owner => Some owner
     NumBoundaryOwnedGroup owner => Some owner
     NumBoundaryOwnedScc owner => Some owner
-    NumBoundaryMethodBodyPending => None
+    NumBoundaryOwnedMethodBody owner => Some owner
   let _ = match boundary.nbDisposition
     NumBoundaryOwnedMember _ => match boundary.nbMembers
       [member] =>
@@ -20837,13 +20835,13 @@ finalizeNumBoundary boundary =
         boundary.nbSurvivingIds
         boundary.nbDefaultObls
         boundary.nbMembers
-    NumBoundaryMethodBodyPending => match boundary.nbMembers
+    NumBoundaryOwnedMethodBody _ => match boundary.nbMembers
       [_] =>
         defaultBodyLocalNumWith
           defaultOwnerPolicy
           boundary.nbSurvivingIds
           boundary.nbDefaultObls
-      _ => panic "NumBoundaryMethodBodyPending must carry exactly one member"
+      _ => panic "NumBoundaryOwnedMethodBody must carry exactly one member"
   match ambiguityOwner
     Some owner =>
       registerAmbiguousConstraintsOwnedBy
@@ -21146,8 +21144,8 @@ numDefaultOwnerAllows (Some level) m = match normalize m
 -- > numDefaultOwnerAllows (Some 7) (TVar (Ref (Link (TVar (Ref (Unbound 91004 7))))))
 -- True
 --
--- Pending method bodies preserve their legacy unrestricted behavior.
--- > numDefaultOwnerAllows None (TVar (Ref (Unbound 91005 6)))
+-- An owned method body defaults only a root minted in its own inference window.
+-- > numDefaultOwnerAllows (Some 6) (TVar (Ref (Unbound 91005 6)))
 -- True
 
 -- Ground each id to Int by unifying the live var carrying it (found among [obls]'
@@ -30436,6 +30434,8 @@ inferDefaultMethod : TcEnv ->
   IfaceMethod ->
   Unit
 inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (MethodDefault pats body)) _) =
+  let _ = enterLevel ()
+  let bodyLevel = perRun.value.currentLevel.value
   let parentScope = captureScope ()
   let owner = DefaultBodyIdentity { dbiIface = iface, dbiMethod = mname }
   let bodyScope =
@@ -30515,6 +30515,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
       addedObls
       addedCallObls
       defLoc
+  let _ = exitLevel ()
   -- #873 (S0, silent wrongness): mirror inferImplMethod's #518 body-local Num
   -- grounding onto the GENERIC-DEFAULT path.  A cross-module impl inherits the
   -- untagged generic default (fillImplDefaults specializes SAME-MODULE only), so
@@ -30534,7 +30535,7 @@ inferDefaultMethod env iface dscope typarams (IfaceMethod mname mty (Some (Metho
   -- matching the impl path's ordering.
   let _ = finalizeNumBoundary
     NumBoundary {
-      nbDisposition = NumBoundaryMethodBodyPending,
+      nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
       nbMembers = [expected2],
       nbSurvivingIds = monoRootIdSet [expected2],
       nbDefaultObls = addedObls,
@@ -32715,6 +32716,8 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
   match ceMethodTyAt iface mname cur ce
     None => ()
     Some (ifaceParams, mty, gscope) =>
+      let _ = enterLevel ()
+      let bodyLevel = perRun.value.currentLevel.value
       -- currentFn = the method name (NOT "") so arg-/return-position sites in THIS
       -- body record `encl = mname`.  registerImplRequires keys every method of an impl
       -- under the SAME impl tyvar id (`impl Ord (List a)` registers `a` once per
@@ -32900,6 +32903,7 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
           reqs
           survivingNumIds
           addedObls
+      let _ = exitLevel ()
       -- #518 (S0, silent wrongness): PLAN.md #11 Num defaulting NEVER RAN over an impl
       -- method body — this path is not a let-group, so nothing grounded its ambiguous
       -- Num vars.  A literal consumed entirely inside the body (`t _ = s [1, 2]`) left
@@ -32921,13 +32925,13 @@ inferImplMethodBody env ce cur iface implTvMap headMonos reqs (ImplMethod mname 
       -- Group defaulting is still the wrong policy here: its arg-position-only filter
       -- measurably traded #518's S0 for a new one.
       --
-      -- NumBoundaryMethodBodyPending makes the missing owner explicit: unlike the
-      -- level-owned lexical/group boundaries, this function has no enterLevel/exitLevel
-      -- window, so finalization defaults but cannot register ambiguity.  The pending
-      -- disposition prevents it from silently borrowing an ambient owner.  Tracked as #564.
+      -- The just-exited method-body level owns both body-local defaulting and the
+      -- ambiguity registration that follows it. Roots carried by the impl head or
+      -- declared method dictionaries survive through [survivingNumIds]/[expected];
+      -- deeper generalized locals remain outside this boundary by level.
       let _ = finalizeNumBoundary
         NumBoundary {
-          nbDisposition = NumBoundaryMethodBodyPending,
+          nbDisposition = NumBoundaryOwnedMethodBody bodyLevel,
           nbMembers = [expected],
           nbSurvivingIds = survivingNumIds,
           nbDefaultObls = addedObls,
