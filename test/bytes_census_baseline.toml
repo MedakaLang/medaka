@@ -19,3 +19,23 @@
 [[entry]]
 file = "stdlib/hex.mdk"
 count = 6
+
+[[entry]]
+file = "stdlib/http.mdk"
+count = 82
+
+[[entry]]
+file = "stdlib/net.mdk"
+count = 13
+
+[[entry]]
+file = "stdlib/net_async.mdk"
+count = 20
+
+[[entry]]
+file = "pds/shell/server.mdk"
+count = 12
+
+[[entry]]
+file = "pds/lib/server_core.mdk"
+count = 9

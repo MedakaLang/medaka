@@ -202,4 +202,31 @@ grep -F -q "REHYDRATE 2000 OK root=bafyreicw3pzj4d4qkmxvx5vhtvfpyn5byiqbd4arsyuf
   "$WORK/rehydrate-2000.out" || fail 'rehydrate root CID drifted at 2000 rows'
 echo "rehydrate scaling: 1000=$REHYDRATE_SMALL s 2000=$REHYDRATE_LARGE s"
 
+# #3210 (a-byte-costs-a-byte, S1): allocation footprint of the inbound HTTP
+# request path (`lib.server_core.handleBytes`), pinned against a stable
+# small workload so a future ReadBuffer/parsing change that blows up
+# per-request allocation reds here rather than only in a hand-run probe.
+# Measured 2,390,496-2,390,928 bytes across four repeated runs at
+# N=4/bodyBytes=256 on this box; the threshold below gives >3x headroom.
+INBOUND_ALLOC_THRESHOLD=8000000
+
+measure_inbound_alloc() {
+  n=$1
+  body_bytes=$2
+  "$WORK/perf-native" inbound-alloc "$n" "$body_bytes" > "$WORK/inbound-alloc.out" 2> "$WORK/inbound-alloc.err"
+  require_empty "$WORK/inbound-alloc.err" inbound-alloc
+  grep -F -q 'status=HTTP/1.1 200 OK' "$WORK/inbound-alloc.out" ||
+    fail 'inbound-alloc route did not answer 200'
+  alloc_line=$(grep '^INBOUNDALLOC allocBytes=' "$WORK/inbound-alloc.out") ||
+    fail 'inbound-alloc probe printed no allocBytes line'
+  rest="${alloc_line#INBOUNDALLOC allocBytes=}"
+  echo "${rest%% *}"
+}
+
+INBOUND_ALLOC=$(measure_inbound_alloc 4 256)
+if [ "$INBOUND_ALLOC" -ge "$INBOUND_ALLOC_THRESHOLD" ]; then
+  fail "inbound-alloc footprint regressed: allocBytes=$INBOUND_ALLOC (>= $INBOUND_ALLOC_THRESHOLD)"
+fi
+echo "inbound-alloc: N=4 bodyBytes=256 allocBytes=$INBOUND_ALLOC (< $INBOUND_ALLOC_THRESHOLD)"
+
 echo "PASS: MST — 11 official-reference cases; 17 covering-proof rows (13 narrower than the whole tree); 14 hostile routes; 3 lexical controls; $ENGINE_GRADE"

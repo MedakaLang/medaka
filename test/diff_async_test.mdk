@@ -2,8 +2,8 @@
    registered as `diff_async` in test/gates.toml.
 
    Async I/O is native-first: the readiness externs (`ioPoll`, `netTryAccept`,
-   `netTryRecv`, `netTrySend`, `netTrySendFrom`, `netSetNonblock`,
-   `netConnectStart`, `netConnectCheck`) are bound by the LLVM backend
+   `netTryRecv`, `netTryRecvBytes`, `netTrySend`, `netTrySendFrom`,
+   `netSetNonblock`, `netConnectStart`, `netConnectCheck`) are bound by the LLVM backend
    (`compiler/backend/llvm_emit.mdk`) and implemented in `runtime/medaka_rt.c`
    only — `compiler/eval/eval.mdk` never binds any of them. There is
    therefore no interpreter arm to run, let alone compare against a native
@@ -125,9 +125,11 @@ test "diff_async: build+exec matches the committed stdout for every fixture" =
           fail
             "\{intToString (length failures)} of \{intToString declaredFixtureCount} fixtures under \{corpus} missed their expected stdout:\n\{unlines failures}"
 
--- The readiness externs `echo_overlap`, `no_starvation` and
--- `overlap_sleeps` exercise. Kept as data rather than a hardcoded count so
--- that a future extern joining this list carries the same proof.
+-- The readiness externs the async runtime is built on — those
+-- `echo_overlap`, `no_starvation` and `overlap_sleeps` exercise, and the
+-- rest of the family, which share their native-only binding. Kept as data
+-- rather than a hardcoded count so that a future extern joining this list
+-- carries the same proof.
 readinessExterns : List String
 readinessExterns = [
   "ioPoll",
@@ -136,6 +138,7 @@ readinessExterns = [
   "netConnectStart",
   "netConnectCheck",
   "netTryRecv",
+  "netTryRecvBytes",
   "netTrySend",
   "netTrySendFrom",
 ]

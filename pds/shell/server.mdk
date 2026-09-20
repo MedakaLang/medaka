@@ -38,7 +38,6 @@ import http.{
   scanRequestBoundaryWithin,
   serializeResponse,
 }
-import array.{sliceClamped}
 import async.{
   Async,
   Wait(..),
@@ -167,8 +166,8 @@ import shell.subscribe.{runSubscription}
 import lib.websocket.{handshakeResponseBytes}
 import string.{toUtf8}
 import time.{Duration, formatIso, fromEpochSeconds, monotonic, now, seconds}
-import vector.{Vector(..)}
-import vector as V
+import bytebuilder.{Builder, appendBytes, builderParts, newBuilder}
+import bytes.*
 
 -- ── timeouts, ceilings and the listener ─────────────────────────────────────
 
@@ -436,7 +435,7 @@ persistFailureBytes =
 applyRequest : Server ->
   String ->
   Ref Store ->
-  Array Int ->
+  Bytes ->
   <Clock, FileRead "_", FileWrite "_", Rand, Stderr> Array Int
 applyRequest server dir storeRef bytes =
   let store = !storeRef
@@ -1193,74 +1192,104 @@ retireConnection active slot =
 
 -- ── the read buffer ─────────────────────────────────────────────────────────
 
-{- | A connection's accumulated read bytes: `Vector Int`'s own backing array
-   with spare capacity, and how many of its bytes are live. Appending a
+{- | A connection's accumulated read bytes: `bytebuilder.Builder`'s own
+   backing byte block with spare capacity, and how many of its bytes are
+   live. A byte costs a byte here, not a tagged 64-bit word. Appending a
    chunk (`readBufferAppend`) copies only the chunk, doubling the backing
    store when it doesn't fit — a request delivered in K reads costs
    O(bytes), not O(bytes × K), which `buf ++ bytes` on a plain `Array Int`
    would cost because `++` copies its whole left operand on every call. The
-   doubling itself is `vector.pushArray`'s: this module no longer does its
-   own capacity arithmetic.
+   doubling itself is `bytebuilder.appendBytes`'s: this module does no
+   capacity arithmetic of its own.
 
    The live count is exactly what `scanRequestBoundaryWithin` calls `avail`:
-   the backing array's own length is spare capacity, never received bytes,
+   the backing store's own length is spare capacity, never received bytes,
    so nothing may read past it.
+
+   `readBufferBacking` hands out that block itself, and `scanRequestBoundaryWithin`
+   and `parseRequestAt` read it in place: no copy stands between a received
+   byte and the framer that reads it.
 
    Exported abstractly, with the operations below, for
    `pds/test/read_buffer_test.mdk`: the growth behavior is pure — a function
    of the bytes appended — and so can be asserted without a socket. The
    representation stays private — a caller outside this module cannot reach
-   the `Vector`. -}
-export data ReadBuffer = ReadBuffer (Vector Int)
+   the `Builder`. -}
+export data ReadBuffer = ReadBuffer Builder
 
 -- | An empty buffer; the backing store is allocated on the first append.
 export
 readBufferNew : Unit -> ReadBuffer
-readBufferNew _ = ReadBuffer (V.new ())
+readBufferNew _ = ReadBuffer (newBuilder ())
 
 -- | How many bytes are live, in O(1): a `Ref Int` deref, never a traversal of
 -- the backing store.
 export
 readBufferLen : ReadBuffer -> Int
-readBufferLen (ReadBuffer v) = let (_, len) = V.rawParts v in len
+readBufferLen (ReadBuffer b) = let (_, len) = builderParts b in len
 
 readBufferIsEmpty : ReadBuffer -> Bool
 readBufferIsEmpty buf = readBufferLen buf == 0
 
--- | The backing array, for a caller (`scanRequestBoundaryWithin`,
+-- | The backing store, for a caller (`scanRequestBoundaryWithin`,
 -- `parseRequestAt`) that is handed the live count separately and must never
--- read past it on its own. Zero-copy: `V.rawParts` hands back the vector's
--- own backing store.
+-- read past it on its own. `builderParts` reaches the builder's own block
+-- without copying, so this costs nothing proportional to what is buffered.
 export
-readBufferBacking : ReadBuffer -> Array Int
-readBufferBacking (ReadBuffer v) = let (backing, _) = V.rawParts v in backing
+readBufferBacking : ReadBuffer -> Bytes
+readBufferBacking (ReadBuffer b) =
+  let (backing, _) = builderParts b
+  backing
 
 {- | Appends `bytes` in place. When the backing store doesn't fit them, it is
    replaced by a doubled one first, copying the live prefix once (`blit`);
    the append itself is one more `blit`, of exactly `arrayLength bytes`
-   elements. Neither copy is proportional to bytes already buffered from
-   earlier reads — `V.pushArray` grows at most once per call, to the
+   bytes. Neither copy is proportional to bytes already buffered from
+   earlier reads — `appendBytes` grows at most once per call, to the
    smallest doubling that holds the result, however many capacity classes a
-   single delivered chunk spans. -}
+   single delivered chunk spans.
+
+   Packing `bytes` into a `Bytes` first is the one copy this shape adds, and
+   it goes through the CHECKED door: an element outside `0..255` aborts
+   rather than being masked to its low eight bits, so no caller can put a
+   byte on the wire that it did not supply. The socket read loop pays
+   neither the copy nor the scan: its chunk arrives packed and appends
+   through `readBufferAppendBytes`. The abort is graded out of process by
+   `pds/test/trust_boundary_guards_test.mdk`'s `readbuffer-*` cells. -}
 export
 readBufferAppend : Array Int -> ReadBuffer -> Unit
-readBufferAppend bytes (ReadBuffer v) = V.pushArray bytes v
+readBufferAppend bytes (ReadBuffer b) =
+  appendBytes
+    (optionOrPanic
+      "readBufferAppend: every element must be a byte in 0..255"
+      (fromArray bytes))
+    b
+
+-- | Appends an already-packed chunk, skipping the packing copy
+-- `readBufferAppend` performs. This is `readMore`'s door: a chunk off the
+-- socket arrives packed.
+readBufferAppendBytes : Bytes -> ReadBuffer -> Unit
+readBufferAppendBytes bytes (ReadBuffer b) = appendBytes bytes b
 
 {- | A fresh buffer holding the live bytes from `from` to the end — the
    leftover a finished request carries into the next one
    (`respondAt`'s `rest`). Copies the leftover once, the same single copy
    `sliceClamped` performed on the old `Array Int` representation. -}
 readBufferFrom : Int -> ReadBuffer -> ReadBuffer
-readBufferFrom from buf =
-  let sliced = sliceClamped from (readBufferLen buf) (readBufferBacking buf)
-  ReadBuffer (Vector (Ref sliced) (Ref (arrayLength sliced)))
+readBufferFrom from (ReadBuffer b) =
+  let (backing, len) = builderParts b
+  let fresh = newBuilder ()
+  let () = appendBytes (sliceClamped from len backing) fresh
+  ReadBuffer fresh
 
--- | The live bytes as an ordinary array, for the one caller
--- (`rejectBufferAt`) that hands the whole buffer to `applyRequest` rather
--- than a scanned `[0, boundary)` prefix.
+-- | The live bytes alone, for the one caller (`rejectBufferAt`) that hands
+-- the whole buffer to `applyRequest` rather than a scanned `[0, boundary)`
+-- prefix.
 export
-readBufferLive : ReadBuffer -> Array Int
-readBufferLive buf = sliceClamped 0 (readBufferLen buf) (readBufferBacking buf)
+readBufferLive : ReadBuffer -> Bytes
+readBufferLive (ReadBuffer b) =
+  let (backing, len) = builderParts b
+  sliceClamped 0 len backing
 
 -- ── the serving context ─────────────────────────────────────────────────────
 
@@ -1648,14 +1677,14 @@ readMore : Server ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
-    received <- A.recvWithin (silenceBudget scan) conn readChunkBytes
+    received <- A.recvBytesWithin (silenceBudget scan) conn readChunkBytes
     match received
       Err message => deferPure (Err message)
       Ok bytes =>
-        if arrayLength bytes == 0 then
+        if bytesLength bytes == 0 then
           deferPure (endOfStream buf)
         else
-          let () = readBufferAppend bytes buf
+          let () = readBufferAppendBytes bytes buf
           frameLoop
             server
             dir
@@ -2336,7 +2365,7 @@ admitSubscription server dir storeRef limiterRef census serving conn slot rest t
       conn
       admission.accept
       admission.cursor
-      (readBufferLive rest)
+      (toArray (readBufferLive rest))
     _ <- liftIO (u => releaseSubscription census)
     deferPure outcome
 

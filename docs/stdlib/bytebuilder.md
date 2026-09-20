@@ -64,6 +64,50 @@ emitU8 : Int -> Builder -> Unit
 
 Appends one byte. Only the low eight bits of the value are used.
 
+### `appendBytes`
+
+```
+appendBytes : Bytes -> Builder -> Unit
+```
+
+Appends every byte of `src`, in order, in one bulk copy.
+
+Amortized `O(1)` per byte: the backing block grows at most once, to the
+smallest doubling that holds the result, so appending `n` bytes costs one
+blit of the live prefix (on grow) plus one blit of `src` -- never `n`
+separate single-byte grows. `emitBytes` is the one-byte-at-a-time form,
+over a `List Int`.
+
+```medaka
+> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hi") buf in let _ = appendBytes (toUtf8Bytes "!") buf in debug (buildBytes buf)
+"[|104, 105, 33|]"
+> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "") buf in debug (buildBytes buf)
+"[||]"
+```
+
+### `builderParts`
+
+```
+builderParts : Builder -> (Bytes, Int)
+```
+
+The live backing block as a `Bytes`, and how many of its bytes have been
+emitted, with no copy.
+
+For a caller that scans the buffered bytes in place and would rather not
+pay `buildBytes`'s allocation. The returned byte string is the builder's
+own backing block, spare capacity and all, so it is longer than the
+returned length whenever the block is not full, and bytes at or past that
+length are scratch rather than emitted ones. A later `emit` either writes
+past the returned length or, on a grow, moves the builder to a fresh
+block: either way the returned byte string goes stale rather than wrong,
+and a caller reading only `[0, len)` of it reads what it was handed.
+
+```medaka
+> let buf = newBuilder () in let _ = appendBytes (toUtf8Bytes "hey") buf in let (_, n) = builderParts buf in n
+3
+```
+
 ### `emitBytes`
 
 ```

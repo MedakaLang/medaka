@@ -23,6 +23,7 @@
    rkey-less `createRecord` does not propose one again; and a batch deleting a
    record that is not there is the same idempotent no-op `deleteRecord` is. -}
 
+import bytes.{fromArray}
 import json.{Json(..), jArray, jObject, get, parse, stringify}
 import hex.{decode, encode}
 import io.{readLines}
@@ -57,6 +58,19 @@ import lib.store.{
   storeWithServerSecret,
 }
 import lib.tid.{Tid, tidParse, tidToString}
+
+-- | `handleBytes` over a request fixture this driver still holds as an
+-- `Array Int`. The seam takes a packed `Bytes`, and `fromArray` is the only
+-- door into one: a fixture element outside the byte domain stops here rather
+-- than reaching the framer.
+handleFixture : Server ->
+  RequestContext ->
+  Store ->
+  Array Int ->
+  (Store, Array Int)
+handleFixture httpServer context store request = match fromArray request
+  Some packed => handleBytes httpServer context store packed
+  None => panic "batch_handlers: request fixture holds a non-byte element"
 
 accountHandleText : String
 accountHandleText = "medaka.example"
@@ -293,7 +307,7 @@ rejectCell : String -> String -> String -> Server -> Store -> String -> <IO> Int
 rejectCell label expectedCode did server store body =
   let before = storeFingerprint store
   let (next, responseBytes) =
-    handleBytes server testContext store (procedureRequest did body)
+    handleFixture server testContext store (procedureRequest did body)
   let value = responseJson responseBytes
   let after = storeFingerprint next
   let code = fieldText "error" value
@@ -347,7 +361,7 @@ runBatch lines =
     authorizedStore did (storeFromRepo (mustRepo did (field 1 meta) initialRev))
   let before = storeFingerprint store
   let (applied, responseBytes) =
-    handleBytes
+    handleFixture
       server
       testContext
       store
@@ -410,7 +424,7 @@ runBatch lines =
 emptyBatchCell : String -> Server -> Store -> String -> <IO> Int
 emptyBatchCell did server store before =
   let (after, responseBytes) =
-    handleBytes
+    handleFixture
       server
       testContext
       store
@@ -460,7 +474,7 @@ createRecordBody did record =
 autoRkeyCell : String -> Server -> Store -> Json -> <IO> Int
 autoRkeyCell did server store record =
   let (afterBatch, batchBytes) =
-    handleBytes
+    handleFixture
       server
       testContext
       store
@@ -469,7 +483,7 @@ autoRkeyCell did server store record =
         (batchBody did [autoCreateElement record, autoCreateElement record]))
   let batchValue = responseJson batchBytes
   let (_, createBytes) =
-    handleBytes
+    handleFixture
       server
       testContext
       afterBatch
@@ -491,7 +505,7 @@ autoRkeyCell did server store record =
 absentDeleteCell : String -> Server -> Store -> String -> <IO> Int
 absentDeleteCell did server store before =
   let (after, responseBytes) =
-    handleBytes
+    handleFixture
       server
       testContext
       store

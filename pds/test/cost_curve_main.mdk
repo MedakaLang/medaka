@@ -13,6 +13,7 @@
    the measurement. The route answers are printed alongside the timings so a
    reader can see the probe measured a real 200 and not an error path. -}
 
+import bytes.*
 import hex.{decode}
 import json.{Json(..), jObject, stringify}
 import string.{fromUtf8, toInt, toUtf8}
@@ -121,18 +122,18 @@ benchToken =
 
 -- ── request framing ─────────────────────────────────────────────────────────
 
-queryRequest : String -> Array Int
+queryRequest : String -> Bytes
 queryRequest target =
-  toUtf8 "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
+  toUtf8Bytes "GET /xrpc/\{target} HTTP/1.1\r\nHost: \{hostText}\r\n\r\n"
 
-procedureRequest : String -> String -> Array Int
+procedureRequest : String -> String -> Bytes
 procedureRequest nsid body =
-  let bytes = toUtf8 body
-  toUtf8
-      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (arrayLength bytes)}\r\n\r\n"
+  let bytes = toUtf8Bytes body
+  toUtf8Bytes
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: \{hostText}\r\nAuthorization: Bearer \{benchToken}\r\nContent-Type: application/json\r\nContent-Length: \{intToString (bytesLength bytes)}\r\n\r\n"
     ++ bytes
 
-createRequest : Array Int
+createRequest : Bytes
 createRequest =
   procedureRequest
     "com.atproto.repo.createRecord"
@@ -170,7 +171,7 @@ statusLine bytes = fromUtf8 (arrayMakeWith (statusEnd bytes 0) (i => bytes[i]))
 {- | Answer the same request `n` times against the same store, summing each
    answer's length so no repetition can be discarded unevaluated. The store a
    write returns is dropped on purpose — see the module header. -}
-repeatRequest : Server -> Store -> Array Int -> Int -> Int -> Int
+repeatRequest : Server -> Store -> Bytes -> Int -> Int -> Int
 repeatRequest server store request n acc =
   if n <= 0 then
     acc
@@ -181,7 +182,7 @@ repeatRequest server store request n acc =
 micros : Float -> Int -> Int
 micros elapsed reps = floatToInt (elapsed * 1000000.0 / intToFloat reps)
 
-measure : String -> Server -> Store -> Array Int -> Int -> <IO, Clock> Unit
+measure : String -> Server -> Store -> Bytes -> Int -> <IO, Clock> Unit
 measure label server store request reps =
   let (_, first) = handleBytes server benchContext store request
   let start = monotonicSec ()

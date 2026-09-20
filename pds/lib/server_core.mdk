@@ -21,6 +21,7 @@ import http.{
   Response,
   serializeResponse,
 }
+import bytes.*
 import hex as Hex
 import lib.cors.{isPreflight, preflightResponse, withAllowOrigin}
 import lib.websocket.{handshakeAccept}
@@ -665,7 +666,7 @@ admitForward account context request nsid audience signedAudience =
   if not (forwardableProxyVerb (requestMethod request)) then
     ProxyRefused proxyMethodRefusalResponse
   else
-    let body = requestBody request
+    let body = toArray (requestBody request)
     ProxyAdmitted ProxyAdmission {
       nsid = nsid,
       verb = requestMethod request,
@@ -1093,11 +1094,7 @@ resourceExcessResponse =
 -- | Handle one complete buffered request. Both HTTP failure classes preserve
 -- the exact input Store; successful calls expose the handler's successor.
 export
-handleBytes : Server ->
-  RequestContext ->
-  Store ->
-  Array Int ->
-  (Store, Array Int)
+handleBytes : Server -> RequestContext -> Store -> Bytes -> (Store, Array Int)
 handleBytes server context store bytes = match parseRequestClassified bytes
   Err (HttpMalformed _) =>
     (store, serializeResponse (withAllowOrigin malformedHttpResponse))

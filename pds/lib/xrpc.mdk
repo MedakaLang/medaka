@@ -34,6 +34,7 @@ import http.{
   requestMethod,
   Response,
 }
+import bytes.{toArray}
 import json.{Json, Json(..), jObject, stringify}
 import string.{fromUtf8, toUtf8}
 import lib.nsid.{sameNsidIdentity, validateNsid}
@@ -528,7 +529,7 @@ decodeProcedure nsid RawInput auth params request =
       SelectedMedia media =>
         RouteCall
           auth
-          (ProcedureRawCall nsid params media (requestBody request))
+          (ProcedureRawCall nsid params media (toArray (requestBody request)))
 decodeProcedure nsid policy auth params request =
   let size = requestBodyLength request
   match inputSizeFailure policy size

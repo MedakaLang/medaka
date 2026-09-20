@@ -56,8 +56,9 @@
    on stdout names it — the same contract `pds/serve.mdk` has with this gate,
    so neither side has to guess a free port. -}
 
-import array.{concat, sliceClamped}
+import array.{concat}
 import base64.{decodeUrlSafe}
+import bytes.{fromArray, toArray}
 import http.{
   Header,
   HttpFrame(..),
@@ -217,18 +218,22 @@ logLine path line = match appendFile path "\{line}\n"
    terminator would answer before the body it is supposed to observe had
    arrived. -}
 recvRequest : Connection -> Array Int -> <Net "_"> Result String Request
-recvRequest conn buffer = match scanRequestBoundary buffer 0
-  HttpFramedAt at => parseRequest (sliceClamped 0 at buffer)
-  -- The framer refused what it has; parse the same bytes for the diagnostic
-  -- rather than keeping a second wording of it here.
-  HttpFrameFailed _ => parseRequest buffer
-  HttpNeedMore => match recv conn 65536
-    Err message => Err "appview_stub: read failed: \{message}"
-    Ok chunk =>
-      if arrayLength chunk == 0 then
-        Err "appview_stub: call closed before its request was complete"
-      else
-        recvRequest conn (concat [|buffer, chunk|])
+recvRequest conn buffer = match fromArray buffer
+  -- `recv` hands back an `Array Int`; the framer reads a packed `Bytes`, and
+  -- `fromArray` is the only door between them.
+  None => Err "appview_stub: a byte read off the socket fell outside 0..255"
+  Some packed => match scanRequestBoundary packed 0
+    HttpFramedAt at => parseRequest (slice packed 0 at)
+    -- The framer refused what it has; parse the same bytes for the diagnostic
+    -- rather than keeping a second wording of it here.
+    HttpFrameFailed _ => parseRequest packed
+    HttpNeedMore => match recv conn 65536
+      Err message => Err "appview_stub: read failed: \{message}"
+      Ok chunk =>
+        if arrayLength chunk == 0 then
+          Err "appview_stub: call closed before its request was complete"
+        else
+          recvRequest conn (concat [|buffer, chunk|])
 
 observedField : String -> Request -> String
 observedField name request = match findHeaderValue name (requestHeaders request)
@@ -240,7 +245,7 @@ observedField name request = match findHeaderValue name (requestHeaders request)
 -- show up as a short line rather than a wrong one.
 observedCall : Request -> String
 observedCall request =
-  "verb=\{requestMethod request} content-type=\{observedField "content-type" request} accept-language=\{observedField "accept-language" request} body=\{fromUtf8 (requestBody request)}"
+  "verb=\{requestMethod request} content-type=\{observedField "content-type" request} accept-language=\{observedField "accept-language" request} body=\{fromUtf8 (toArray (requestBody request))}"
 
 -- | Reads one call, logs what it carried, and returns the bytes that answer
 -- it — WITHOUT sending them. Split from `answerCall` so `batch` can hold a

@@ -2748,6 +2748,36 @@ long long mdk_net_try_recv(long long fd_tagged, long long max_tagged) {
   return mdk_ok(mdk_some((long long)cell));
 }
 
+/* netTryRecvBytes : fd -> maxBytes -> Result String (Option ByteBlock)
+ * mdk_net_try_recv delivering a packed block instead of a boxed array: recv(2)
+ * writes straight into a block's own payload, so no per-byte boxing loop runs.
+ * The block recv writes into is the CEILING one, maxBytes long, because the
+ * received size is not known until recv returns.  A short read is then copied
+ * down into a block of exactly that size and the ceiling block dropped: the
+ * returned value is reachable for as long as the caller holds it, so retaining
+ * the ceiling would cost maxBytes of live memory per retained chunk however
+ * few bytes arrived.  The copy is O(bytes received), the same order as the
+ * recv that produced them.
+ * None = would-block; Some (a zero-length block) = EOF (matches netTryRecv). */
+long long mdk_net_try_recv_bytes(long long fd_tagged, long long max_tagged) {
+  long long max = max_tagged >> 1;
+  if (max < 0) max = 0;
+  long long *cell = mdk_byteblock_alloc(max);
+  ssize_t r = recv(MDK_NET_UNTAG(fd_tagged),
+                   mdk_byteblock_bytes((long long)cell), (size_t)max, 0);
+  if (r < 0) {
+    if (mdk_net_would_block(errno)) return mdk_ok(mdk_none());
+    return mdk_err(mdk_str_cstr(strerror(errno)));
+  }
+  if (r < max) {
+    long long *fit = mdk_byteblock_alloc((long long)r);
+    if (r > 0) memcpy(mdk_byteblock_bytes((long long)fit),
+                      mdk_byteblock_bytes((long long)cell), (size_t)r);
+    cell = fit;
+  }
+  return mdk_ok(mdk_some((long long)cell));
+}
+
 /* netTrySend : fd -> Array Int -> Result String (Option Int)
  * None = would-block; Some n = bytes written (may be short). */
 long long mdk_net_try_send(long long fd_tagged, long long arr) {

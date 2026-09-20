@@ -60,6 +60,14 @@
 # ratchet. Sanctioned way to move a baselined count or enroll a new file;
 # never hand-edit the generated file.
 #
+# Floor check (#3177): before overwriting, --write reads <path>'s
+# CURRENTLY-COMMITTED row (if any) for each named file. A file with no old
+# row is a first enrollment and is always allowed. A file WITH an old row
+# whose freshly-counted `Array Int` total exceeds that row's committed count
+# is refused (nonzero exit) — writing a higher count would silently loosen
+# an already-pinned ratchet. Pass --allow-increase (anywhere in the
+# arguments) to deliberately re-pin a file upward.
+#
 # --check <baseline> [<file> ...]: the ratchet — for every (file, count) row
 # already present in <baseline> (optionally intersected with the given
 # <file> args, if any are passed), fail if the file's CURRENT count exceeds
@@ -97,6 +105,91 @@ if [ "${1:-}" = "--write" ]; then
   [ -n "$outpath" ] || { echo "bytes_census: --write needs a <path>" >&2; exit 2; }
   shift 2
   [ "$#" -gt 0 ] || { echo "bytes_census: --write needs at least one <file>" >&2; exit 2; }
+
+  allow_increase=0
+  allow_drop=0
+  files_to_write=""
+  for a in "$@"; do
+    if [ "$a" = "--allow-increase" ]; then
+      allow_increase=1
+    elif [ "$a" = "--allow-drop" ]; then
+      allow_drop=1
+    else
+      if [ -z "$files_to_write" ]; then
+        files_to_write="$a"
+      else
+        files_to_write="$files_to_write
+$a"
+      fi
+    fi
+  done
+  [ -n "$files_to_write" ] || { echo "bytes_census: --write needs at least one <file>" >&2; exit 2; }
+
+  # Read the OLD committed baseline (if any) into file\tcount rows, same
+  # parse shape as --check's, so a re-run of --write can never silently
+  # raise an already-pinned count (#3177).
+  old_parsed=""
+  if [ -f "$outpath" ]; then
+    old_parsed="$(mktemp)"
+    awk '
+      /^\[\[entry\]\]/ { if (f != "") print f "\t" n; f = ""; n = ""; next }
+      /^file[ \t]*=/ { s = $0; sub(/^file[ \t]*=[ \t]*"/, "", s); sub(/"[ \t]*$/, "", s); f = s; next }
+      /^count[ \t]*=/ { s = $0; sub(/^count[ \t]*=[ \t]*/, "", s); n = s; next }
+      END { if (f != "") print f "\t" n }
+    ' "$outpath" >"$old_parsed"
+  fi
+
+  if [ "$allow_increase" -eq 0 ] && [ -n "$old_parsed" ]; then
+    floor_fail=0
+    for f in $files_to_write; do
+      old_count="$(awk -F'\t' -v f="$f" '$1 == f { print $2 }' "$old_parsed")"
+      [ -n "$old_count" ] || continue
+      new_count="$(count_positions "$f")"
+      if [ "$new_count" -gt "$old_count" ]; then
+        floor_fail=1
+        echo "FAIL: $f: --write would raise the pinned Array Int count from $old_count to $new_count" >&2
+      fi
+    done
+    if [ "$floor_fail" -ne 0 ]; then
+      rm -f "$old_parsed"
+      echo "" >&2
+      echo "  A baselined file's Array Int position count may only FALL at write time." >&2
+      echo "  Pass --allow-increase to deliberately re-pin a file upward." >&2
+      exit 1
+    fi
+  fi
+
+  # Ratchet, second half (#3210/F5): a --write that names only SOME of the
+  # currently-enrolled files must not silently drop the rest — the first
+  # half (#3177, above) stops a count from silently RISING; this stops a
+  # row from silently VANISHING. Any file with an old row that is not named
+  # in this invocation is carried into the new output unchanged, unless
+  # --allow-drop says to actually drop it.
+  tab="$(printf '\t')"
+  preserved_rows=""
+  if [ "$allow_drop" -eq 0 ] && [ -n "$old_parsed" ]; then
+    while IFS="$tab" read -r pf pc; do
+      [ -n "$pf" ] || continue
+      named=0
+      for wf in $files_to_write; do
+        [ "$wf" = "$pf" ] && { named=1; break; }
+      done
+      if [ "$named" -eq 0 ]; then
+        row="$pf$tab$pc"
+        if [ -z "$preserved_rows" ]; then
+          preserved_rows="$row"
+        else
+          preserved_rows="$preserved_rows
+$row"
+        fi
+      fi
+    done <"$old_parsed"
+  fi
+  rm -f "$old_parsed"
+
+  set -f
+  set -- $files_to_write
+  set +f
   {
     echo "# test/bytes_census_baseline.toml — Array Int position count baseline,"
     echo "# GENERATED, never hand-edited (epic #3134)."
@@ -123,6 +216,19 @@ if [ "${1:-}" = "--write" ]; then
       echo "file = \"$f\""
       echo "count = $n"
     done
+    if [ -n "$preserved_rows" ]; then
+      set -f
+      while IFS="$tab" read -r pf pc; do
+        [ -n "$pf" ] || continue
+        echo ""
+        echo "[[entry]]"
+        echo "file = \"$pf\""
+        echo "count = $pc"
+      done <<EOF_PRESERVED
+$preserved_rows
+EOF_PRESERVED
+      set +f
+    fi
   } >"$outpath"
   exit 0
 fi

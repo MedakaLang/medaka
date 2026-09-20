@@ -249,7 +249,7 @@ raw bytes with surrounding optional whitespace removed.
 
 ```
 data Request
-  = Request String String (List Header) (List Header) (Array Int) Bool
+  = Request String String (List Header) (List Header) Bytes Bool
 ```
 
 A fully framed HTTP/1.1 request. Constructors stay private so callers
@@ -330,11 +330,14 @@ chunked.
 ### `requestBody`
 
 ```
-requestBody : Request -> Array Int
+requestBody : Request -> Bytes
 ```
 
 The decoded body bytes, with any chunked transfer coding removed. The
-result is a copy; `requestBodyLength` reports the length without one.
+stored body is already a private copy that framing cut out of the input
+(`bytes.slice` copies), and nothing else holds it, so this hands it out
+rather than copying again; a caller wanting an `Array Int` writes
+`toArray` and pays for the unpacking where it asked for it.
 
 ### `requestBodyLength`
 
@@ -367,13 +370,13 @@ Whether `byte` is one of HTTP's ASCII token bytes.
 findByte : Array Int -> Int -> Int -> Int -> Option Int
 ```
 
-Find `wanted` in the half-open byte range `input[pos, end)`. No byte at
-or beyond `end` is inspected.
+Find `wanted` in the half-open range `value[pos, end)`. No element at or
+beyond `end` is inspected.
 
 ### `findCrlf`
 
 ```
-findCrlf : Array Int -> Int -> Int -> Option Int
+findCrlf : Bytes -> Int -> Int -> Option Int
 ```
 
 Find the CR byte of the first CRLF in the half-open range
@@ -385,7 +388,7 @@ Find the CR byte of the first CRLF in the half-open range
 trimLeftOws : Array Int -> Int -> Int -> Int
 ```
 
-Skip optional whitespace in the half-open range `input[pos, end)`.
+Skip optional whitespace in the half-open range `value[pos, end)`.
 
 ### `trimRightOws`
 
@@ -393,12 +396,12 @@ Skip optional whitespace in the half-open range `input[pos, end)`.
 trimRightOws : Array Int -> Int -> Int -> Int
 ```
 
-Trim optional whitespace from the right edge of `input[start, end)`.
+Trim optional whitespace from the right edge of `value[start, end)`.
 
 ### `parseFields`
 
 ```
-parseFields : Array Int -> Int -> Bool -> Result HttpParseFailure (List Header, Int)
+parseFields : Bytes -> Int -> Bool -> Result HttpParseFailure (List Header, Int)
 ```
 
 Parse a complete header or trailer section beginning at `pos`. Fields
@@ -421,12 +424,12 @@ Decode one ASCII hexadecimal digit.
 skipOws : Array Int -> Int -> Int -> Int
 ```
 
-Skip optional whitespace in the half-open range `input[pos, end)`.
+Skip optional whitespace in the half-open range `value[pos, end)`.
 
 ### `parseChunked`
 
 ```
-parseChunked : Array Int -> Int -> Result HttpParseFailure (Array Int, List Header, Int)
+parseChunked : Bytes -> Int -> Result HttpParseFailure (Bytes, List Header, Int)
 ```
 
 Decode one complete chunked body beginning at `pos`. The result contains
@@ -437,7 +440,7 @@ and framing ceilings are enforced before the result is returned.
 ### `parseRequestClassified`
 
 ```
-parseRequestClassified : Array Int -> Result HttpParseFailure Request
+parseRequestClassified : Bytes -> Result HttpParseFailure Request
 ```
 
 Parse one complete request while preserving structural failure class.
@@ -461,7 +464,7 @@ byte of the framed request, which is where the next one begins.
 
 ```
 data HttpScan
-  = HttpScan Int ScanPhase
+  = HttpScan ScanPhase
 ```
 
 How far a scan of a growing buffer has already got. The type is opaque:
@@ -499,7 +502,7 @@ reports False: its header section ended.
 ### `scanRequestBoundaryWithin`
 
 ```
-scanRequestBoundaryWithin : Array Int -> Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
+scanRequestBoundaryWithin : Bytes -> Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
 ```
 
 Find the end of the first complete request at or after `start` in the first
@@ -517,7 +520,7 @@ suspension point is one only later bytes can move past.
 ### `scanRequestBoundaryFrom`
 
 ```
-scanRequestBoundaryFrom : Array Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
+scanRequestBoundaryFrom : Bytes -> Int -> HttpScan -> (HttpFrame, HttpScan)
 ```
 
 Scan a buffer whose every byte is received input. This is
@@ -527,7 +530,7 @@ keeps no spare capacity needs to know nothing about the distinction.
 ### `scanRequestBoundary`
 
 ```
-scanRequestBoundary : Array Int -> Int -> HttpFrame
+scanRequestBoundary : Bytes -> Int -> HttpFrame
 ```
 
 Find the end of the first complete request at or after `start` without a
@@ -537,7 +540,7 @@ whole-buffer scan and a resumed one cannot be two different framers.
 ### `parseRequestAt`
 
 ```
-parseRequestAt : Array Int -> Int -> Int -> Result HttpParseFailure Request
+parseRequestAt : Bytes -> Int -> Int -> Result HttpParseFailure Request
 ```
 
 Parse the frame `[start, end)` exactly as `parseRequestClassified` parses
@@ -546,7 +549,7 @@ that region on its own, so a scanned boundary and a parse cannot disagree.
 ### `parseRequest`
 
 ```
-parseRequest : Array Int -> Result String Request
+parseRequest : Bytes -> Result String Request
 ```
 
 Parse one complete request, reporting a failure as its diagnostic alone.

@@ -8,6 +8,7 @@
    session secret and credential but no repository, the same shape
    `pds/test/session_routes_test.mdk` already uses. -}
 
+import bytes.{fromArray}
 import json.{Json(..), get, jObject, parse, stringify}
 import list.{sort}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
@@ -201,7 +202,9 @@ stringEntries (_ :: rest) = stringEntries rest
 -- ── driving ──────────────────────────────────────────────────────────────────
 
 send : RequestContext -> Store -> Array Int -> (Store, Array Int)
-send context store bytes = handleBytes server context store bytes
+send context store bytes = match fromArray bytes
+  Some packed => handleBytes server context store packed
+  None => panic "blob_routes: request fixture holds a non-byte element"
 
 createSessionNsid : String
 createSessionNsid = "com.atproto.server.createSession"
