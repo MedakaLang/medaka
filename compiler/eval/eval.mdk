@@ -4090,6 +4090,24 @@ globalFramesWith : List (String, Ref (Value e)) ->
 globalFramesWith [] globalCells = [globalCells]
 globalFramesWith privateCells globalCells = [privateCells, globalCells]
 
+-- The prelude's surface as an IMPORT resolves it — what `import core as C` and
+-- `import core.{n as p}` bind, which is NOT the shared global frame.  A prelude
+-- standalone the user shadowed with an interface method has been moved out of
+-- `globalCells` into `privateCells` (see `preludeShadowNames`), so reading core's
+-- surface off `globalCells` alone hands an aliased spelling the user's method
+-- DISPATCHER under core's name — the alias then answers with the local impl at
+-- exit 0.  The private cells go FIRST: for a shadowed name they are the only cell
+-- that denotes core's own binding, and for every other name they are absent.
+-- The frame keeps the opposite precedence on purpose: a BARE occurrence of a
+-- shadowed name denotes the method (S1-PRELUDE (a)), an ALIASED one denotes core.
+export
+coreImportExports : List (String, Ref (Value e)) ->
+  List (String, Ref (Value e)) ->
+  List Decl ->
+  ModExports (Value e)
+coreImportExports privateCells globalCells preludeDecls =
+  ModExports (privateCells ++ globalCells) (ctorsByTypeOf preludeDecls)
+
 -- B2 (RUN-EFFECTS): evalModules with EXTRA extern bindings installed alongside
 -- externBindings — the seam `medaka run` uses to install real-I/O prims
 -- (ioExternBindings) without them ever reaching the differential-oracle
@@ -4133,7 +4151,8 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
   let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
   let mods =
     buildModInfos
-      (ModExports globalCells (ctorsByTypeOf preludeDecls))
+      globalCells
+      (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
   let implEntries =
@@ -4150,13 +4169,21 @@ evalModulesWith extraExterns preludeDecls0 modules0 =
 
 -- pass 1: allocate each module's local cells + build its env (imports resolved
 -- against already-processed modules, since loader order is dependency-first)
-buildModInfos : ModExports (Value e) ->
+--
+-- `globalCells` (the shared global FRAME) and `coreExports` (the prelude's IMPORT
+-- surface) are separate parameters because they disagree on exactly the names
+-- `preludeShadowNames` moved into the private prelude frame: in the frame, such a
+-- name must denote the user's method dispatcher (S1-PRELUDE (a)), while `import
+-- core as C` / `import core.{n as p}` must reach the prelude's own standalone.
+-- One list cannot answer both — a single frame is first-match, so whichever cell
+-- it holds is the only one either consumer can see.
+buildModInfos : List (String, Ref (Value e)) ->
+  ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (ModInfo (Value e))
-buildModInfos _ _ [] = []
-buildModInfos coreExports exportsMap ((mid, decls) :: rest) =
-  let globalCells = modExportCells coreExports
+buildModInfos _ _ _ [] = []
+buildModInfos globalCells coreExports exportsMap ((mid, decls) :: rest) =
   let grps = groupsOf decls
   -- P0-9: each module's OWN constructors ALSO live in its LOCAL frame (they stay
   -- in the shared global too — see evalModules — for by-name / `Type(..)`
@@ -4181,7 +4208,7 @@ buildModInfos coreExports exportsMap ((mid, decls) :: rest) =
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
   ModInfo mid decls grps localCells menv
-    :: buildModInfos coreExports ((mid, exports) :: exportsMap) rest
+    :: buildModInfos globalCells coreExports ((mid, exports) :: exportsMap) rest
 
 -- IMPORT ALIASING: a module must ALSO export the interface/impl METHODS it declares.
 --
@@ -4298,7 +4325,8 @@ evalModulesRootEnvWith extraExterns preludeDecls0 modules0 =
   let globalEnv = EvalEnv (globalFramesWith privateCells globalCells)
   let mods =
     buildModInfos
-      (ModExports globalCells (ctorsByTypeOf preludeDecls))
+      globalCells
+      (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
   let implEntries =

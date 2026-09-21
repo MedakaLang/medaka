@@ -822,20 +822,34 @@ Given an occurrence of bare name `N` in module `M`:
   > |---|---|
   > | Rename the interface method (or the local use) | **WORKS** — all three verbs, and is the only repair that needs nothing new. The one row the `run` defect below does not touch, because it leaves no collision behind |
   > | A shim module: a module that does **not** declare the colliding interface calls bare prelude `N` and exports it under a fresh name; `M` imports that | **BINDS; `check` 0 and the built binary is correct; `run` FAILS** — located `E-NOT-A-FUNCTION: applied non-function: 99` inside the shim. Measured at `8d9d267f1` and unchanged by `#95`, so this is the standing state of the repair this table has prescribed since 2026-08-10, not a regression. The 2026-08-10 row claimed *`run` correct* and that half is now refuted |
-  > | `import core as C` → `C.N` | **BINDS as of `#95`; `check` 0 and the built binary is correct; `run` FAILS** the same way as the shim row. Previously `Unbound variable: C.N`, failing **with no collision present at all** — aliasing the implicit prelude was unimplemented, which is what `#95` implemented. With no collision present it is now correct on all three verbs (`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk`, `test/shadow_fixtures/x22_prelude_alias_constrained_standalone.mdk` and `test/shadow_fixtures/x23_prelude_alias_denotes_bare_name.mdk`) |
-  > | `import core.{N as pN}` → `pN` | **BINDS as of `#95`, and DOES NOT RECOVER** — a member rename resolves to the ORIGIN bare name before resolution runs (`renameAliasedMethods`), so `pN` lands on whatever holds `N` in this module, which is the interface method. General to every module, not a prelude quirk; stated in `docs/spec/SYNTAX.md`'s alias table and pinned at `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`. Previously `Unbound variable: pN. Did you mean 'N'` |
+  > | `import core as C` → `C.N` | **WORKS as of 2026-09-21, on all three verbs and the executed binary.** Re-measured on both arms, `MEDAKA_STRICT=1`, with the collision standing — `import core as C` plus `interface Parity a where isEven : a -> Bool` and `impl Parity Int`, printing `(isEven 4, C.isEven 4)`: `run` `(False, True)`, built binary `(False, True)`, `check` exit 0; and constrained, with `clamp` in place of `isEven`: `run` `(0, 10)`, binary `(0, 10)`. Pinned at `test/shadow_fixtures/x24_prelude_alias_standalone_escapes_shadow.mdk`. **Until 2026-09-21 the `run` arm and the typed Core-IR interpreter instead printed `(False, False)`** — silently, at exit 0, while the binary already printed `(False, True)` — because the alias resolved to the very dispatch cell the bare name resolves to. Repaired by giving the prelude an import surface distinct from the shared global frame (`coreImportExports`, `compiler/eval/eval.mdk`, and its `compiler/ir/core_ir_eval.mdk` twin). Before `#95` this spelling did not bind at all (`Unbound variable: C.N`), which is what `#95` implemented; with no collision present it is correct on all three verbs (`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk`, `test/shadow_fixtures/x22_prelude_alias_constrained_standalone.mdk` and `test/shadow_fixtures/x23_prelude_alias_denotes_bare_name.mdk`) |
+  > | `import core.{N as pN}` → `pN` | **SPLIT, and the split is on what `N` IS.** For a prelude **standalone** it **RECOVERS as of 2026-09-21**: `import core.{isEven as pIsEven}` against the same collision prints `(False, True)` on `run` and on the built binary alike (measured 2026-09-21 on both arms; base printed `(False, True)` on the binary and `(False, False)` on `run`, the same silent split as the row above, and the same repair closed it). For a prelude **method** it **DOES NOT RECOVER**, and cannot: a member rename of a method is rewritten to the ORIGIN bare name before resolution runs (`renameAliasedMethods`), so `pN` lands on whatever holds `N` in this module, which is the interface method — `import core.{eq as eqM}` prints `(False, False)` on `run` and the binary alike, agreeing, by design. The method half is general to every module, not a prelude quirk; stated in `docs/spec/SYNTAX.md`'s alias table and pinned at `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`. Before `#95` neither half bound (`Unbound variable: pN. Did you mean 'N'`) |
   > | `import core.{N}` (plain, no rename) | **DOES NOT RECOVER** — the interface method still wins; writing the import explicitly changes nothing. Unchanged by `#95` |
   > | `import <shim> as S` → `S.N`, where the shim is `export import core.{N}` | **DOES NOT WORK, AND IS AN S0** — `check` exit 0 typing `S.N` as the *interface method*'s scheme, then a failing binary. **The 2026-08-10 SIGSEGV is GONE; re-measured 2026-09-20 at `8d9d267f1` and unchanged by `#95`, the binary now exits 1 with `E-DISPATCH-NO-IMPL`, and `run` exits 1 with `E-NOT-A-FUNCTION`.** Still S0-shaped, because `check` still accepts a program that cannot execute. **Not drained.** Without the collision the same spelling builds a binary that prints the right answer, so the collision is the trigger. Filed separately; **do not name this spelling in any message** |
   >
-  > 🚨 **The `run` column is ONE defect, and it is not the prelude's.** Every row
-  > above that leaves the collision standing fails under `run` and succeeds in the
-  > built binary, because the tree-walking evaluator keys a method by its bare name
-  > in one program-global cell (`globalCells`/`coalesceImpls`), so the module's
-  > `impl` has already taken `N` before any recovery spelling is consulted. The
-  > emitter does not, which is why the binary is right. This is the same
-  > run-versus-binary split recorded at matrix row 49 and filed as `#1497`; it
-  > predates `#95` on the shim row, which is the arm that isolates it, and `#95`
-  > neither widened nor narrowed it.
+  > 🚨 **The `run` column is ONE defect, and it is not the prelude's** — but as of
+  > 2026-09-21 it no longer reaches every row. The tree-walking evaluator keys a
+  > method by its bare name in one program-global cell
+  > (`globalCells`/`coalesceImpls`), so the module's `impl` has already taken `N`
+  > before a recovery spelling is consulted; the emitter mangles the prelude to
+  > `core__<name>` before elaboration and cannot collide, which is why the binary is
+  > right. That is the same run-versus-binary split recorded at matrix row 49 and
+  > filed as `#1497`, and it predates `#95`.
+  >
+  > **What changed:** the two ALIAS rows are out of it. An `import` of `core` now
+  > resolves against a prelude import surface that keeps the displaced standalone's
+  > own cell (`coreImportExports`), rather than reading core's surface off the shared
+  > global frame the collision owns — so `C.N` and `N as pN` reach the prelude
+  > binding on `run` and in the binary alike. The SHIM rows still exhibit the split,
+  > and for the reason above: a shim calls bare `N` from inside its own module, where
+  > the global dispatch cell is the only thing that spelling can reach, and no import
+  > surface is involved. Measured 2026-09-21 on both arms with the collision
+  > standing, unconstrained `isEven`: shim `run` `(False, False)` against binary
+  > `(False, True)`, unchanged by the repair. The two rows' failure SIGNATURES are
+  > shape-dependent — an unconstrained `N` is silently wrong at exit 0, a
+  > `=>`-constrained one is applied one argument short and dies loudly — so read the
+  > signature in each row as the shape that row measured, not as the shape of the
+  > defect.
   >
   > **There is no `hiding`/exclusion syntax** — derived, not assumed: a
   > case-insensitive word-bounded grep for `hiding` over `compiler/`, `stdlib/` and
@@ -1596,7 +1610,7 @@ new rule takes away that the old one gave. What still works:
 | **A written `=>` constraint** (S5 carve-out) | **YES** | `sizeOf : Sizeable a => a -> Int ; sizeOf x = size x` dispatches — including N-way. For a non-operator interface this is the **only** in-module route. Gated by `definer_shadow_nway`. |
 | **Any other module** | **YES** | Shadow-hood is per-module (S1). A module that does not define a colliding standalone is completely unaffected — including the prelude's own bodies (P0-21). |
 | **Module alias** — `import core as C` → `C.eq` | **YES**, since `#95` | Re-measured 2026-09-20 on both arms. `(eq 1 1, C.eq 1 1)` in a module whose own `eq` returns `False` prints `(False, True)` on `check`, `run` and the built binary alike. The dotted spelling is what makes it work: it survives inference and is restored to the origin method only afterwards. Pinned at `test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk`. |
-| **Member alias** — `import core.{eq as eqM}` → `eqM` | **NO** — it binds now, and lands on the shadow | Re-measured 2026-09-20: the same program prints `(False, False)`. A member rename is rewritten to the ORIGIN bare name before resolution (`renameAliasedMethods`), and the origin bare name is the one this module has shadowed. **General to every module**, not a prelude quirk — `docs/spec/SYNTAX.md`'s alias table states it. Pinned at `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`. |
+| **Member alias** — `import core.{eq as eqM}` → `eqM` | **NO** — it binds now, and lands on the shadow | Re-measured 2026-09-20: the same program prints `(False, False)`. A member rename is rewritten to the ORIGIN bare name before resolution (`renameAliasedMethods`), and the origin bare name is the one this module has shadowed. **General to every module**, not a prelude quirk — `docs/spec/SYNTAX.md`'s alias table states it. Pinned at `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`. ⚠️ **The rewrite is keyed on METHOD-hood, so this row does not carry over to a renamed prelude STANDALONE**, which is the mirror topology (a local interface method shadowing a prelude standalone, S1-PRELUDE (b) rather than this section). There the rename is not rewritten and does reach past the shadow: `import core.{isEven as pIsEven}` prints `(False, True)` on `run` and the built binary alike, measured 2026-09-21 — see S1-PRELUDE (b)'s recovery table, whose `N as pN` row states the split. |
 | **Interface-qualified** — `Eq.eq x y` | **NO** | No such syntax. |
 
 **The 2026-07-14 follow-up is discharged, and it named the wrong spelling.** It

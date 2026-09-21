@@ -31,7 +31,7 @@ buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorToType : List Decl -> List (String, String)
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
-buildModInfos : ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> List (Value a)
 bytesBEToU64 : Array Int -> U64
 candIface : Value a -> String
@@ -61,6 +61,7 @@ concatList : List (List a) -> List a
 consVal : Value a -> Value a -> Value a
 containsInt : Int -> List Int -> Bool
 coreAliasCells : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
+coreImportExports : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 countTyvars : Ty -> Int
 ctorEntry : Variant -> (String, Value a)
 ctorFieldOrderEntries : Decl -> List (String, List String)

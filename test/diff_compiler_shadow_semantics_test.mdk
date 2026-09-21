@@ -1023,6 +1023,16 @@ table = [
     pinned = "True\n",
   },
   Row {
+    entry = "x24_prelude_alias_standalone_escapes_shadow.mdk",
+    label =
+      "X24 (S1-PRELUDE (b)) x19`s STANDALONE twin, and the cell x19 alone cannot decide. x19 aliases a prelude METHOD past the shadow; a method keeps ONE global dispatch cell, so the alias is a second spelling of a cell that is still there. A prelude STANDALONE the module shadows is moved OUT of that shared global frame into the private prelude frame (`preludeShadowNames`, S1-PRELUDE (a)), so the alias must reach a cell the global frame no longer holds -- different machinery, and x19 green says nothing about it. Pinned `(False, True)`: the bare name is this module`s own method (`impl Parity Int`, False for every Int) and `C.isEven 4` is the prelude standalone reached past it. `(False, False)` is the failure, and it is not hypothetical -- it is what `run` and the typed Core-IR interpreter both printed at exit 0, silently, while the compiled binary printed `(False, True)`, because the binary mangles the prelude to `core__<name>` before elaboration and cannot collide. That split is why `mode = AllExact` and not an exit-code reading: every way of getting this wrong still exits 0. `(True, True)` would mean S1-PRELUDE (a) itself regressed, which x1/x2 grade directly. The `impl` is load-bearing: with no impl in scope the dispatch cell has nothing to answer with and the wrong binding is unreachable",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(False, True)\n",
+  },
+  Row {
     entry = "i29_importer_selective_import_displaced/main.mdk",
     label =
       "I29 (#2738) an interface method nameable by its TYPE name displaces a SELECTIVELY IMPORTED standalone of a DIFFERENT scheme. The i3 topology with the standalone`s domain widened to cover the receiver, so both candidates typecheck and the displacement is observable only as a value plus a diagnostic. RESOLUTION IS UNCHANGED AND CONFORMANT -- S1 makes `peek` an importer shadow (S1-NS (a)(i), the TYPE arm: `import peekable.{Peekable}` names the interface), S2`s importer arm finds `impl Peekable Box` at the receiver`s head, so it dispatches: `peek=7`, not `peek=(\"box\", 7)`. What was S0 is the SILENCE: the user wrote the strongest statement the language offers about which `peek` is meant and got the other one at exit 0 on check, run and build alike. VALUES AND VERDICTS DERIVED FROM S1/S2 AND FROM THE RULING BEFORE THE BINARY WAS BUILT, per [W-QUIETER] in reverse. Also asserts `W-IMPORT-METHOD-SHADOW` fires on check/run/build stderr alike",

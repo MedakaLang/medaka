@@ -1,0 +1,31 @@
+-- X24 (SHADOW-SEMANTICS S1-PRELUDE (b), the recovery table) -- x19's STANDALONE twin.
+--
+-- x19 aliases a prelude METHOD (`eq`) past the shadow; this cell aliases a prelude
+-- STANDALONE (`isEven`) past one.  The two travel different machinery and neither
+-- value is decidable from the other: a method keeps one global dispatch cell that the
+-- alias is a second spelling of, while a standalone the module shadows is moved OUT of
+-- the shared global frame into the private prelude frame (`preludeShadowNames`), so the
+-- alias has to reach a cell the global frame no longer holds.
+--
+--   PINNED: `(False, True)`.  The first component is the bare name, which S1-PRELUDE (a)
+--     hands to this module's own interface method (`impl Parity Int` answers False for
+--     every Int).  The second is `C.isEven 4`, the prelude standalone reached past it.
+--   `(False, False)` is the failure this cell exists to catch: the alias resolving to the
+--     very dispatch cell the bare name resolves to, which is a silent wrong value at exit 0
+--     on `run` and on the typed Core-IR interpreter while the compiled binary answers True.
+--     The compiled binary mangles the prelude to `core__<name>` before elaboration, so the
+--     build arm cannot collide and is the oracle for this cell.
+--   `(True, True)` would mean the bare name stopped denoting the method, i.e. S1-PRELUDE (a)
+--     regressed; x1/x2 grade that displacement directly and must move together with it.
+--
+-- The interface needs a matching-arity `impl` in scope for the wrong answer to be
+-- reachable at all: with no impl the dispatch cell holds nothing to answer with.
+import core as C
+
+interface Parity a where
+  isEven : a -> Bool
+
+impl Parity Int where
+  isEven _ = False
+
+main = println (isEven 4, C.isEven 4)
