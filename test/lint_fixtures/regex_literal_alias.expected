@@ -1,0 +1,11 @@
+warning: [rule-dead-code] private top-level 'badAlias' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'badBare' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'badDotted' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'badRenamed' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-missing-signature] top-level 'badAlias' has no type signature. Add a `badAlias : …` declaration
+warning: [rule-missing-signature] top-level 'badBare' has no type signature. Add a `badBare : …` declaration
+warning: [rule-missing-signature] top-level 'badDotted' has no type signature. Add a `badDotted : …` declaration
+warning: [rule-missing-signature] top-level 'badRenamed' has no type signature. Add a `badRenamed : …` declaration
+warning: [rule-regex-literal] regex pattern "(unclosed" fails to compile: pattern is missing a closing ) (position 9)
+warning: [rule-regex-literal] regex pattern "(unclosed" fails to compile: pattern is missing a closing ) (position 9)
+warning: [rule-regex-literal] regex pattern "(unclosed" fails to compile: pattern is missing a closing ) (position 9)

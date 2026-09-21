@@ -38,6 +38,7 @@ import frontend.ast.{
   Pat(..),
   UsePath(..),
   UseMember(..),
+  qualifiedLocal,
   RecPatField(..),
   Guard(..),
   Arm(..),
@@ -6613,12 +6614,48 @@ directiveReasonFinding c = Finding {
 
 -- ── rule: regex-literal ────────────────────────────────────────────────────────
 -- A string literal passed directly to `compile`/`mustCompile` (bare, or
--- module-qualified `regex.compile`/`regex.mustCompile`) is run through
+-- reached through any of THIS FILE's own `import regex` forms -- a module
+-- alias's dotted spelling, or a group import's renamed member) is run through
 -- `regex.compile` AT LINT TIME; a bad pattern becomes one located finding
 -- instead of a `mustCompile` panic the FIRST time the line runs.
 regexLiteralCallNames : List String
-regexLiteralCallNames =
-  ["compile", "mustCompile", "regex.compile", "regex.mustCompile"]
+regexLiteralCallNames = ["compile", "mustCompile"]
+
+-- The extra call spellings THIS FILE's own `import regex` decls bind for
+-- `compile`/`mustCompile`: a module alias (`import regex as Re` ->
+-- `Re.compile`), a group-import rename (`import regex.{mustCompile as mc}`
+-- -> `mc`), or a group import's own unrenamed member.  Read straight off the
+-- raw `DUse` decls (lint has no resolver, [P-DESUGAR-FIRST]) and across
+-- EVERY such decl in the file, not just the first -- a file may import the
+-- same module more than once under different forms.  An unaliased dotted
+-- `regex.mustCompile` is never produced here -- a bare `import regex` binds
+-- no names at all ([P-IMPORT-BINDS]), so that spelling is not a call real
+-- code can make.
+regexImportedCallNames : List Decl -> List String
+regexImportedCallNames prog =
+  flatMap (regexImportedCallNamesFor prog) ["compile", "mustCompile"]
+
+regexImportedCallNamesFor : List Decl -> String -> List String
+regexImportedCallNamesFor prog stdName =
+  flatMap (regexLocalNamesInDecl stdName) prog
+
+regexLocalNamesInDecl : String -> Decl -> List String
+regexLocalNamesInDecl stdName (DUse _ path _) =
+  regexLocalNamesInPath stdName path
+regexLocalNamesInDecl stdName (DAttrib _ d) = regexLocalNamesInDecl stdName d
+regexLocalNamesInDecl _ _ = []
+
+regexLocalNamesInPath : String -> UsePath -> List String
+regexLocalNamesInPath stdName (UseGroup path members)
+  | lastSegOf path == "regex" = filterMap (memberLocalIfOrigin stdName) members
+  | otherwise = []
+regexLocalNamesInPath stdName (UseWild path)
+  | lastSegOf path == "regex" = [stdName]
+  | otherwise = []
+regexLocalNamesInPath stdName (UseAlias path alias)
+  | lastSegOf path == "regex" = [qualifiedLocal alias stdName]
+  | otherwise = []
+regexLocalNamesInPath _ _ = []
 
 ruleRegexLiteral : StdlibIndex ->
   String ->
@@ -6627,24 +6664,28 @@ ruleRegexLiteral : StdlibIndex ->
   List Decl ->
   List Finding
 ruleRegexLiteral _ _ _ pos prog =
-  exprRuleFindings noExcl regexLiteralOf regexLiteralFinding pos prog
+  exprRuleFindings
+    noExcl
+    (regexLiteralOf (regexLiteralCallNames ++ regexImportedCallNames prog))
+    regexLiteralFinding
+    pos
+    prog
 
 -- The parser ELoc-wraps every expr, callee and argument included, so both
 -- must be peeled (`stripELoc`) before the shape match.
-regexLiteralOf : Expr -> Option Expr
-regexLiteralOf e = regexLiteralOfSpine e (stripELoc e)
+regexLiteralOf : List String -> Expr -> Option Expr
+regexLiteralOf names e = regexLiteralOfSpine names e (stripELoc e)
 
-regexLiteralOfSpine : Expr -> Expr -> Option Expr
-regexLiteralOfSpine e (EApp callee arg) =
-  regexLiteralOfArg e (stripELoc callee) (stripELoc arg)
-regexLiteralOfSpine _ _ = None
+regexLiteralOfSpine : List String -> Expr -> Expr -> Option Expr
+regexLiteralOfSpine names e (EApp callee arg) =
+  regexLiteralOfArg names e (stripELoc callee) (stripELoc arg)
+regexLiteralOfSpine _ _ _ = None
 
-regexLiteralOfArg : Expr -> Expr -> Expr -> Option Expr
-regexLiteralOfArg e callee (ELit (LString pat))
-  | contains (exprToString callee) regexLiteralCallNames && isRegexErr pat =
-    Some e
+regexLiteralOfArg : List String -> Expr -> Expr -> Expr -> Option Expr
+regexLiteralOfArg names e callee (ELit (LString pat))
+  | contains (exprToString callee) names && isRegexErr pat = Some e
   | otherwise = None
-regexLiteralOfArg _ _ _ = None
+regexLiteralOfArg _ _ _ _ = None
 
 isRegexErr : String -> Bool
 isRegexErr pat = match compile pat
