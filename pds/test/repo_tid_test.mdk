@@ -39,8 +39,8 @@ test "TID encode and parse preserve timestamp clock and spelling" =
 
 test "TID lexical order follows microsecond order" =
   expectEqual
-    (tidCompare (mustTid 1700000000000000 0) (mustTid 1700000000000001 0))
     Lt
+    (tidCompare (mustTid 1700000000000000 0) (mustTid 1700000000000001 0))
 
 test "TID monotonic next advances a backwards proposal" =
   let prior = mustTid 1700000000000000 7

@@ -1,5 +1,5 @@
 # META
-source_lines=3540
+source_lines=3588
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -1681,12 +1681,18 @@ anyMarker : List String -> String -> Bool
 anyMarker [] _ = False
 anyMarker (m :: ms) src = strContains m src || anyMarker ms src
 
-{- | Structural grading evidence: a chunk whose text contains an
-   `Ok (<int literal>, ...)`-shaped pattern-match arm — a spawn result
-   tuple destructured directly on its exit code, with no marker string
-   anywhere in sight (`sqlite/test/oracle_support.mdk`'s `spawnRaw`, #3261
-   item 2). Textual markers alone miss this: the code is read, but never
-   through a name or comparison `gradeEvidenceMarkers` recognizes. -}
+{- | Structural grading evidence: a chunk whose text contains a match arm
+   of the shape `Ok (<int literal>, ...) =>` — a spawn result tuple
+   destructured directly on its exit code, with no marker string anywhere
+   in sight (`sqlite/test/oracle_support.mdk`'s `spawnRaw`, #3261 item 2).
+   Textual markers alone miss this: the code is read, but never through a
+   name or comparison `gradeEvidenceMarkers` recognizes.
+
+   The trailing `=>` is part of the shape, not decoration: without it the
+   same text is a plain `Result` construction (`Ok (0, "", "")`), which
+   grades nothing. And a tuple that fails the shape only rules itself out,
+   so the scan runs to the end of the chunk: a wildcard arm `Ok (_, out, _)
+   => Ok out` textually ahead of the grading one must not answer for it. -}
 hasOkIntTuple : String -> Bool
 hasOkIntTuple text =
   let cs = stringToChars text
@@ -1695,7 +1701,7 @@ hasOkIntTuple text =
 okIntTupleAt : Array Char -> Int -> Int -> Bool
 okIntTupleAt cs n i
   | i + 4 > n = False
-  | okOpenAt cs i = intLiteralThenComma cs n (skipBlanks cs n (i + 4))
+  | okOpenAt cs i && okIntArmAt cs n i = True
   | otherwise = okIntTupleAt cs n (i + 1)
 
 okOpenAt : Array Char -> Int -> Bool
@@ -1704,6 +1710,48 @@ okOpenAt cs i =
     && arrayGetUnsafe (i + 1) cs == 'k'
     && arrayGetUnsafe (i + 2) cs == ' '
     && arrayGetUnsafe (i + 3) cs == '('
+
+-- `i` sits at the `O` of a matched `Ok (`: the tuple must open with an
+-- integer literal followed by a comma, and the paren closing it must be
+-- followed by the `=>` that makes the whole thing a match arm.
+okIntArmAt : Array Char -> Int -> Int -> Bool
+okIntArmAt cs n i =
+  intLiteralThenComma cs n (skipLayout cs n (i + 4))
+    && arrowAt cs n (skipLayout cs n (closeParen cs n (i + 4) 0))
+
+-- Blanks and newlines alike: a match arm may be written across two lines,
+-- and a chunk's text carries its newlines. Separate from the shared
+-- `skipBlanks`, whose line-scoped callers must keep stopping at a newline.
+skipLayout : Array Char -> Int -> Int -> Int
+skipLayout cs n i
+  | i < n && (arrayGetUnsafe i cs == ' ' || arrayGetUnsafe i cs == '\n') =
+    skipLayout cs n (i + 1)
+  | otherwise = i
+
+arrowAt : Array Char -> Int -> Int -> Bool
+arrowAt cs n i = charAtOr cs n i == '=' && charAtOr cs n (i + 1) == '>'
+
+-- The index just past the paren that closes the tuple whose own open paren
+-- ends at `i`. Nested parens and string literals inside the tuple are
+-- stepped over, so `Ok (127, _, Some (e)) =>` and `Ok (0, ")", "")` both
+-- close where the eye says they do. `n` when the text runs out first.
+closeParen : Array Char -> Int -> Int -> Int -> Int
+closeParen cs n i depth
+  | i >= n = n
+  | arrayGetUnsafe i cs == '"' = closeParen cs n (skipStrLit cs n (i + 1)) depth
+  | arrayGetUnsafe i cs == '(' = closeParen cs n (i + 1) (depth + 1)
+  | arrayGetUnsafe i cs /= ')' = closeParen cs n (i + 1) depth
+  | depth == 0 = i + 1
+  | otherwise = closeParen cs n (i + 1) (depth - 1)
+
+-- Index just past the closing `"` of a string literal whose opening quote
+-- has already been consumed; a backslashed character never closes it.
+skipStrLit : Array Char -> Int -> Int -> Int
+skipStrLit cs n i
+  | i >= n = n
+  | arrayGetUnsafe i cs == '\\' = skipStrLit cs n (i + 2)
+  | arrayGetUnsafe i cs == '"' = i + 1
+  | otherwise = skipStrLit cs n (i + 1)
 
 -- `i` sits just past `Ok (`, past any blanks: one or more digits followed
 -- by a comma is the exit-code-then-rest-of-tuple shape.
@@ -3872,9 +3920,19 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "hasOkIntTuple" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasOkIntTuple" ((PVar "text")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "text"))) (DoExpr (EApp (EApp (EApp (EVar "okIntTupleAt") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "okIntTupleAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "okIntTupleAt" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "okOpenAt") (EVar "cs")) (EVar "i")) (EApp (EApp (EApp (EVar "intLiteralThenComma") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 4))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "okIntTupleAt") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "okIntTupleAt" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "okOpenAt") (EVar "cs")) (EVar "i")) (EApp (EApp (EApp (EVar "okIntArmAt") (EVar "cs")) (EVar "n")) (EVar "i"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "okIntTupleAt") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "okOpenAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "okOpenAt" ((PVar "cs") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "O"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "k")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "cs")) (ELit (LChar " ")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "cs")) (ELit (LChar "(")))))
+(DTypeSig false "okIntArmAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "okIntArmAt" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EApp (EApp (EApp (EVar "intLiteralThenComma") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipLayout") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 4))))) (EApp (EApp (EApp (EVar "arrowAt") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipLayout") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (ELit (LInt 0)))))))
+(DTypeSig false "skipLayout" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "skipLayout" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " "))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))))) (EApp (EApp (EApp (EVar "skipLayout") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "arrowAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "arrowAt" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "i")) (ELit (LChar "="))) (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LChar ">")))))
+(DTypeSig false "closeParen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "closeParen" ((PVar "cs") (PVar "n") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "depth")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ")"))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DTypeSig false "skipStrLit" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "skipStrLit" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "intLiteralThenComma" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "intLiteralThenComma" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EApp (EApp (EVar "afterIntLiteral") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig false "afterIntLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
@@ -4605,9 +4663,19 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "hasOkIntTuple" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "hasOkIntTuple" ((PVar "text")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "text"))) (DoExpr (EApp (EApp (EApp (EVar "okIntTupleAt") (EVar "cs")) (EApp (EVar "arrayLength") (EVar "cs"))) (ELit (LInt 0))))))
 (DTypeSig false "okIntTupleAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
-(DFunDef false "okIntTupleAt" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EVar "n")) (EVar "False") (EIf (EApp (EApp (EVar "okOpenAt") (EVar "cs")) (EVar "i")) (EApp (EApp (EApp (EVar "intLiteralThenComma") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipBlanks") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 4))))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "okIntTupleAt") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
+(DFunDef false "okIntTupleAt" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">" (EBinOp "+" (EVar "i") (ELit (LInt 4))) (EVar "n")) (EVar "False") (EIf (EBinOp "&&" (EApp (EApp (EVar "okOpenAt") (EVar "cs")) (EVar "i")) (EApp (EApp (EApp (EVar "okIntArmAt") (EVar "cs")) (EVar "n")) (EVar "i"))) (EVar "True") (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "okIntTupleAt") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
 (DTypeSig false "okOpenAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyCon "Bool"))))
 (DFunDef false "okOpenAt" ((PVar "cs") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "O"))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "cs")) (ELit (LChar "k")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EVar "cs")) (ELit (LChar " ")))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "i") (ELit (LInt 3)))) (EVar "cs")) (ELit (LChar "(")))))
+(DTypeSig false "okIntArmAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "okIntArmAt" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EApp (EApp (EApp (EVar "intLiteralThenComma") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipLayout") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 4))))) (EApp (EApp (EApp (EVar "arrowAt") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipLayout") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 4)))) (ELit (LInt 0)))))))
+(DTypeSig false "skipLayout" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "skipLayout" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EBinOp "||" (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar " "))) (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\n"))))) (EApp (EApp (EApp (EVar "skipLayout") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EIf (EVar "otherwise") (EVar "i") (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "arrowAt" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
+(DFunDef false "arrowAt" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EVar "i")) (ELit (LChar "="))) (EBinOp "==" (EApp (EApp (EApp (EVar "charAtOr") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (ELit (LChar ">")))))
+(DTypeSig false "closeParen" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int"))))))
+(DFunDef false "closeParen" ((PVar "cs") (PVar "n") (PVar "i") (PVar "depth")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))) (EVar "depth")) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "("))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "+" (EVar "depth") (ELit (LInt 1)))) (EIf (EBinOp "/=" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar ")"))) (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "depth")) (EIf (EBinOp "==" (EVar "depth") (ELit (LInt 0))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "closeParen") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EBinOp "-" (EVar "depth") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DTypeSig false "skipStrLit" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Int")))))
+(DFunDef false "skipStrLit" ((PVar "cs") (PVar "n") (PVar "i")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "n") (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\\"))) (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 2)))) (EIf (EBinOp "==" (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")) (ELit (LChar "\""))) (EBinOp "+" (EVar "i") (ELit (LInt 1))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EVar "skipStrLit") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))))
 (DTypeSig false "intLiteralThenComma" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))
 (DFunDef false "intLiteralThenComma" ((PVar "cs") (PVar "n") (PVar "i")) (EBinOp "&&" (EBinOp "&&" (EBinOp "<" (EVar "i") (EVar "n")) (EApp (EVar "isDigit") (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs")))) (EApp (EApp (EApp (EVar "afterIntLiteral") (EVar "cs")) (EVar "n")) (EBinOp "+" (EVar "i") (ELit (LInt 1))))))
 (DTypeSig false "afterIntLiteral" (TyFun (TyApp (TyCon "Array") (TyCon "Char")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool")))))

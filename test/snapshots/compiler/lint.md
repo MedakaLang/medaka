@@ -6858,9 +6858,9 @@ testBoolLiteralEqualFix _ d =
 -- both operands.
 --
 -- ONLY `==`/`/=`, for the same reason `rule-not-eq` excludes the orderings: a
--- rewrite of `expectTrue (a < b)` would need `expectLessThan`, a different verb
--- per operator, and the `expectFalse` polarity flip of an ordering is unsound
--- for `Float` (NaN makes `not (a < b)` ≠ `a >= b`).
+-- rewrite of `expectTrue (a < b)` would need an ordering-aware verb, a
+-- different one per operator, and the `expectFalse` polarity flip of an
+-- ordering is unsound for `Float` (NaN makes `not (a < b)` ≠ `a >= b`).
 --
 -- `expectEqual`/`expectNotEqual` carry a `Debug a` obligation that `expectTrue`
 -- does not, and a lint rule has no type environment to discharge it, so `--fix`

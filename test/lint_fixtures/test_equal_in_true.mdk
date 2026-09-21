@@ -14,8 +14,8 @@ falseNe a = expectFalse (a /= 1)
 -- POSITIVE: nested anywhere in a body.
 nestedTrue a b = if a then expectTrue (b == 2) else expectFalse (b == 3)
 
--- NEGATIVE: orderings are excluded, for `rule-not-eq`'s reason — `expectLessThan`
--- is a different verb per operator, and the `expectFalse` complement of an
+-- NEGATIVE: orderings are excluded, for `rule-not-eq`'s reason — an ordering
+-- needs a different verb per operator, and the `expectFalse` complement of an
 -- ordering is unsound for Float (NaN).
 trueLt a = expectTrue (a < 1)
 falseGe a = expectFalse (a >= 1)

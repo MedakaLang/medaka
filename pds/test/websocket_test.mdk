@@ -101,15 +101,15 @@ maxPayload = 65536
 
 test "RFC 3174 §7.3 TEST1: \"abc\"" =
   expectEqual
-    (encode (sha1 (toUtf8 "abc")))
     "a9993e364706816aba3e25717850c26c9cd0d89d"
+    (encode (sha1 (toUtf8 "abc")))
 
 test "RFC 3174 §7.3 TEST2: the 56-byte alphabet string" =
   expectEqual
+    "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
     (encode
       (sha1
         (toUtf8 "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")))
-    "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
 
 -- RFC 3174 TEST3's message: the one byte of "a", a million times. Built by
 -- `make` rather than by `repeated`, whose per-repeat recursion would be a
@@ -121,18 +121,18 @@ millionA =
 
 test "RFC 3174 §7.3 TEST3: one million 'a'" =
   expectEqual
-    (encode (sha1FixedBytes millionA))
     "34aa973cd4c4daa4f61eeb2bdbad27316534016f"
+    (encode (sha1FixedBytes millionA))
 
 test "RFC 3174 §7.3 TEST4: a 64-byte pattern ten times (exact block multiple)" =
   expectEqual
+    "dea356a2cddd90c7a7ecedc5ebb563934f460452"
     (encode
       (sha1
         (repeated
           (toUtf8
             "0123456701234567012345670123456701234567012345670123456701234567")
           10)))
-    "dea356a2cddd90c7a7ecedc5ebb563934f460452"
 
 test "the digest is 20 bytes" = expectEqual 20 (arrayLength (sha1 (toUtf8 "")))
 
@@ -140,8 +140,8 @@ test "the digest is 20 bytes" = expectEqual 20 (arrayLength (sha1 (toUtf8 "")))
 
 test "RFC 6455 §1.3 worked example: the key's accept value, byte for byte" =
   expectEqual
-    (handshakeAccept "dGhlIHNhbXBsZSBub25jZQ==")
     (Ok "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=")
+    (handshakeAccept "dGhlIHNhbXBsZSBub25jZQ==")
 
 test "a Sec-WebSocket-Key that does not decode to 16 bytes is refused (§4.1)" =
   expectErr (handshakeAccept "c2hvcnQ=")
@@ -158,15 +158,15 @@ hello = toUtf8 "Hello"
 sampleMaskKey : Array Int
 sampleMaskKey = [|0x37, 0xfa, 0x21, 0x3d|]
 
-test "§5.7: a single-frame unmasked text message" = expectEqual
-  (encodeServerFrame (Frame True Text hello))
-  [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
+test "§5.7: a single-frame unmasked text message" =
+  expectEqual
+    [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
+    (encodeServerFrame (Frame True Text hello))
 
-test "§5.7: a single-frame masked text message" = expectEqual (encodeClientFrame
-  sampleMaskKey
-  (Frame True Text hello)) [|
-  0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58
-|]
+test "§5.7: a single-frame masked text message" =
+  expectEqual
+    [|0x81, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
+    (encodeClientFrame sampleMaskKey (Frame True Text hello))
 
 test "§5.7: a fragmented unmasked text message, both frames" =
   let first = encodeServerFrame (Frame False Text (toUtf8 "Hel"))
