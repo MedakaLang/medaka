@@ -1,0 +1,25 @@
+-- X22 (SHADOW-SEMANTICS S1-PRELUDE (b)) -- x19's CONSTRAINED twin, and the arity axis.
+--
+-- x19 and x20 both name an UNCONSTRAINED callee, so they grade the scope layer and nothing
+-- below it.  `clamp` is `stdlib/core.mdk`'s `export clamp : Ord a => a -> a -> a -> a`, and
+-- elaboration PREPENDS a `$dict` parameter to a `=>`-constrained prelude function -- so an
+-- alias spelling that binds in scope but carries no dict-arity row produces a callee applied
+-- one argument short.  That failure is invisible to `check`, which is what makes this cell
+-- worth its own fixture rather than a variant of x19:
+--
+--   PINNED: `10`, byte-identical to what bare `clamp 0 10 42` prints.
+--   The under-applied reading exits 0 on `check` and then panics -- `intToString: not an Int`
+--     under `run`, `CDict head 'C.clamp' is not a known top-level function` at build.  Both
+--     are exit-1 outcomes the verdict columns would catch, but only against a cell that
+--     reaches the dict path at all.
+--
+-- Same shape as x5's relationship to x4: one rule, two callee shapes differing by one
+-- argument, because that is the axis on which this collision has produced silent wrongness
+-- before (#1492).
+--
+-- VALUE HAND-DERIVED FROM bare `clamp 0 10 42`, whose denotation the alias spelling is
+-- required to share; not captured from the alias arm, which did not run when this was
+-- written.
+import core as C
+
+main = println (C.clamp 0 10 42)

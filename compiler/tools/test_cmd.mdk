@@ -67,11 +67,11 @@ import driver.loader.{
 import driver.build_cmd.{readPreludeFile, envOr, defaultMedakaRoot}
 import types.typecheck.{elaborateOne, elaborateModules, TcDiag}
 import backend.private_mangle.{mangleCtorCollisionsPair}
+import frontend.marker.{declRefs}
 import frontend.lexer.{collectComments}
 import eval.eval.{
   Value,
-  evalOneWith,
-  evalModulesWith,
+  evalOneRootEnvWith,
   evalModulesRootEnvWith,
   testCapableExterns,
   funNamesOf,
@@ -559,7 +559,7 @@ data TestPair =
 
 -- What the DOCTEST phase's interpreter arm evaluates.  The two shapes are NOT
 -- interchangeable, which is why this is a separate type rather than a third
--- `TestPair` constructor: the single-file arm hands `evalOneWith` an EMPTY
+-- `TestPair` constructor: the single-file arm hands `evalOneRootEnvWith` an EMPTY
 -- prelude with core folded into one `__main__` unit, so prelude-shadow splitting
 -- and cross-unit constructor mangling both see a different program than the pair
 -- form's core-beside-modules shape does.
@@ -773,7 +773,7 @@ driveMulti : List Engine ->
 driveMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt userDecls exempt =
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
-  let synthResults = buildSynthResults examples
+  let synthResults = buildSynthResults userDecls examples
   let synthDecls = buildSynthDecls synthResults
   let gated =
     prepareMulti
@@ -837,7 +837,7 @@ driveSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt use
         tsrc
         userDecls
         examples
-        (buildSynthResults examples)
+        (buildSynthResults userDecls examples)
     if hasProps userDecls || hasTests userDecls then
       let pair = prepareSingle runtimeDecls coreDecls target roots userDecls
       let propsOk = runProps pair target tsrc userDecls cases filterOpt
@@ -951,8 +951,8 @@ runChosenOn EngNative _trees target tsrc userDecls examples synthResults =
 -- so prepending it would duplicate every top-level decl (two `Bounded Char`
 -- impls, etc.) and corrupt return-position dispatch — hence `programIsCore`.
 -- `elaborateOne` is the 1-module wrapper over `elaborateModules` returning the
--- FLAT shape `evalOneWith` consumes, and its rootLocals carry the synthesized
--- `__dt_i__` bindings the same way the pair arm's do.
+-- FLAT shape `evalOneRootEnvWith` consumes, and its root frame carries the
+-- synthesized `__dt_i__` bindings the same way the pair arm's does.
 runChosen : DoctestTrees ->
   List Example ->
   List (Result String (List Decl)) ->
@@ -960,8 +960,17 @@ runChosen : DoctestTrees ->
 runChosen (DtPair (TestPairErr e)) examples synthResults =
   buildDetailsFrom (Err e) synthResults examples
 runChosen (DtPair (TestPair coreM modsM)) examples synthResults =
-  let env = evalModulesWith (testCapableExterns ()) coreM modsM
-  buildDetailsFrom (Ok (renderExamples env examples)) synthResults examples
+  -- Root-FULL env (locals ∪ imports ∪ globals), not `evalModulesWith`'s
+  -- locals-only `rootLocals`: `firstUnresolvedDottedRef` below needs the
+  -- import frame visible to find (or fail to find) an alias-qualified name
+  -- like `H.foo`, which `rootLocals` never carries (#3206). A `__dt_i__`
+  -- synth binding is always in `localCells`, first in this flattened list
+  -- either way, so this changes nothing about what `force` below returns.
+  let env = evalModulesRootEnvWith (testCapableExterns ()) coreM modsM
+  buildDetailsFrom
+    (Ok (renderExamples env synthResults examples))
+    synthResults
+    examples
 runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synthResults =
   let allUser = userDecls ++ buildSynthDecls synthResults
   let livePrelude =
@@ -971,8 +980,12 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
       dropShadowedExp (funNamesOf allUser) coreDecls
   let rootId = singleRootId roots target
   let elaborated = elaborateOne runtimeDecls livePrelude (rootId, allUser)
-  let env = evalOneWith (testCapableExterns ()) [] ("__main__", elaborated)
-  buildDetailsFrom (Ok (renderExamples env examples)) synthResults examples
+  let env =
+    evalOneRootEnvWith (testCapableExterns ()) [] ("__main__", elaborated)
+  buildDetailsFrom
+    (Ok (renderExamples env synthResults examples))
+    synthResults
+    examples
 
 -- ── The interpreter's adapter onto doctest.mdk's buildDetailsFrom seam ──────
 -- buildDetailsFrom (Stage 1) wants "one rendered actual per example, or one
@@ -980,28 +993,66 @@ runChosen (DtSingle runtimeDecls coreDecls target roots userDecls) examples synt
 -- for each example i, look up its synthesized `__dt_i__` binding in the post-
 -- run env and render it, exactly as the pre-Stage-1 `oneResult` did inline.
 renderExamples : List (String, Value e) ->
+  List (Result String (List Decl)) ->
   List Example ->
   <e> List (Result String String)
-renderExamples env examples = renderExamplesGo env 0 examples
+renderExamples env synthResults examples =
+  renderExamplesGo env synthResults 0 examples
 
 renderExamplesGo : List (String, Value e) ->
+  List (Result String (List Decl)) ->
   Int ->
   List Example ->
   <e> List (Result String String)
-renderExamplesGo _ _ [] = []
-renderExamplesGo env i (ex :: rest) =
-  renderOneExample env i ex :: renderExamplesGo env (i + 1) rest
+renderExamplesGo _ _ _ [] = []
+renderExamplesGo env (sr :: srRest) i (ex :: rest) =
+  renderOneExample env sr i ex :: renderExamplesGo env srRest (i + 1) rest
+renderExamplesGo env [] i (ex :: rest) =
+  renderOneExample env (Err "") i ex :: renderExamplesGo env [] (i + 1) rest
 
 -- No binding for __dt_i__ means that example's synth never ran (its own
 -- decl was dropped, or the file errored before reaching it) — reported the
 -- same way the interpreter always has: "could not evaluate: <expr>".
+--
+-- #3206: an alias-qualified example (`H.foo 1`) whose target doesn't resolve
+-- (a typo'd member, a stale alias) would otherwise reach `force`, which
+-- PANICS on an unbound identifier — and a panic here is not catchable
+-- (AGENTS.md), so it takes down every OTHER doctest in the file, not just
+-- this one. A dotted name is unambiguously a qualified reference (a surface
+-- identifier can never contain '.'), so checking each one `declRefs` finds in
+-- this example against `env` — BEFORE forcing — catches exactly that failure
+-- as a normal per-example `Errored`, the same shape #55 already uses for a
+-- synth decl that failed to parse.
 renderOneExample : List (String, Value e) ->
+  Result String (List Decl) ->
   Int ->
   Example ->
   <e> Result String String
-renderOneExample env i ex = match lookupBinding (synthName i) env
+renderOneExample env sr i ex = match lookupBinding (synthName i) env
   None => Err ("could not evaluate: " ++ exampleInput ex)
-  Some v => Ok (ppValue (force v))
+  Some v => match firstUnresolvedDottedRef env sr
+    Some name =>
+      Err "could not evaluate: \{exampleInput ex} (unresolved: \{name})"
+    None => Ok (ppValue (force v))
+
+firstUnresolvedDottedRef : List (String, Value e) ->
+  Result String (List Decl) ->
+  Option String
+firstUnresolvedDottedRef _ (Err _) = None
+firstUnresolvedDottedRef env (Ok ds) =
+  firstUnresolvedName env (flatMap declRefs ds)
+
+firstUnresolvedName : List (String, Value e) -> List String -> Option String
+firstUnresolvedName _ [] = None
+firstUnresolvedName env (n :: rest)
+  | isDottedRef n && isNone (lookupBinding n env) = Some n
+  | otherwise = firstUnresolvedName env rest
+
+-- A dot cannot occur in a surface identifier (desugar.mdk's alias rewrite
+-- relies on the same fact) — a dotted name here is always a cross-module or
+-- alias-qualified reference, never a locally bound one.
+isDottedRef : String -> Bool
+isDottedRef n = isSome (stringIndexOf "." n)
 
 -- ARCH E-5 (#1521/#1223): the loader-derived id for a single-file test target —
 -- shared by the prelude-only doctest arm and `prepareSingle`.  `deps` mirrors
@@ -1574,7 +1625,7 @@ reportMulti : List Engine ->
 reportMulti engines runtimeDecls rsrc csrc target tsrc roots cases filterOpt includeTestDecls userDecls exempt =
   let allExamples = extractExamples (collectComments tsrc)
   let examples = filterExamplesByName filterOpt allExamples
-  let synthResults = buildSynthResults examples
+  let synthResults = buildSynthResults userDecls examples
   let prepared =
     prepareMulti
       rsrc
@@ -1637,7 +1688,7 @@ reportSingle engines runtimeDecls coreDecls target tsrc roots cases filterOpt in
       tsrc
       userDecls
       examples
-      (buildSynthResults examples)
+      (buildSynthResults userDecls examples)
   if hasProps userDecls || includeTestDecls && hasTests userDecls then
     let pair = prepareSingle runtimeDecls coreDecls target roots userDecls
     (

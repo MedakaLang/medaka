@@ -1,0 +1,16 @@
+-- Fixture for rule-regex-literal (#2929): the roster resolves a call head
+-- through the file's own `import` decls, so an aliased or renamed
+-- `regex.mustCompile` call is flagged exactly like the bare form is.
+
+import regex.{mustCompile}
+import regex as Re
+import regex.{mustCompile as mc}
+
+-- POSITIVE: all three call forms carry the same unclosed group.
+badBare = mustCompile "(unclosed"
+badAlias = Re.mustCompile "(unclosed"
+badRenamed = mc "(unclosed"
+
+-- NEGATIVE: dotted access on a plain, non-aliased `import regex` is not a
+-- legal call form at all ([P-IMPORT-BINDS]) -- never a fourth roster entry.
+badDotted = regex.mustCompile "(unclosed"

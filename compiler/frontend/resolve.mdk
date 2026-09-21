@@ -38,6 +38,8 @@ import frontend.ast.{
   UseMember(..),
   UsePath(..),
   useMemberLocal,
+  useMemberOrigin,
+  useMemberAlias,
   qualifiedLocal,
   PropParam(..),
   MethodDefault(..),
@@ -82,6 +84,8 @@ import support.util.{
   anyList,
   dedup,
   dedupBy,
+  splitOnChar,
+  startsWith,
 }
 import test.{expectTrue}
 
@@ -109,6 +113,13 @@ public export data ResError =
   -- the message is a static how-to (ERROR-QUALITY: point at the fix, not a
   -- guess).
   | UnboundVariableIsModule String (Option Loc)
+  -- an alias-qualified reference (`Alias.name`) that fails to resolve, while the
+  -- BARE suffix `name` resolves elsewhere in scope (the prelude, or another
+  -- module) — the aliased module supplies an `impl` for that method but does
+  -- not itself define or re-export it, and `Alias.name` only binds names the
+  -- aliased module defines/re-exports itself (#1287). Fields: full qualified
+  -- name, alias, bare member name.
+  | UnboundQualifiedElsewhere String String String (Option Loc)
   -- trailing `Option String` = suggested constructor name: today ONLY a
   -- curated Haskell-alias exact match (`Just`→`Some`, …; see
   -- `haskellCtorAliases`), None otherwise — there is no general edit-distance
@@ -231,6 +242,7 @@ resErrorLoc : ResError -> Option Loc
 resErrorLoc (UnboundVariable _ l _) = l
 resErrorLoc (UnboundVariableExported _ _ l) = l
 resErrorLoc (UnboundVariableIsModule _ l) = l
+resErrorLoc (UnboundQualifiedElsewhere _ _ _ l) = l
 resErrorLoc (UnknownConstructor _ l _) = l
 resErrorLoc (UnknownType _ l _) = l
 resErrorLoc (UnknownEffect _ l) = l
@@ -286,6 +298,8 @@ public export data Env = Env {
   internalGuard : OrdMap Unit,
   sugValuesMemo : Ref (Option (List SugCand)),  -- the did-you-mean candidate POOLS, built at most
   sugTypesMemo : Ref (Option (List SugCand)),  -- ONCE per `Env` — see `sugValuePool` (#1016, #2800).
+  localValues : OrdMap Unit,  -- this file's own top-level value names only — never
+-- prelude/imported; lets `localBinding` tell "own binding" apart from "elsewhere".
 }  -- imported module (needs a selective import, not a typo fix; audit #5).
 -- (modId, expValues) pairs for every non-`core` module this file `import`s
 -- (multi-module path only; single-file `buildEnv` leaves this `[]`) — lets
@@ -781,14 +795,29 @@ checkVar cur env scope n
 -- already-imported module (audit #5 — the user needs a selective import, not
 -- a typo fix), report that specifically; otherwise fall back to the generic
 -- edit-distance/Haskell-alias UnboundVariable suggestion.
+-- An alias-qualified reference (`Alias.name`) has no unqualified spelling of
+-- its own — it only ever reaches `checkVar` as a joined "\{alias}.\{name}"
+-- string via `qualifiedLocal` (importedNamesMM's UseAlias arm) — so a SINGLE
+-- dot reliably marks one.  When the bare suffix resolves via the prelude or
+-- another module but the qualified form doesn't, the aliased module simply
+-- doesn't define/re-export that name itself (#1287); that is a more specific
+-- diagnosis than the generic UnboundVariable fallback below. But when the bare
+-- suffix instead resolves to a binding of THIS file — its own top-level
+-- definition, or a local scope binder of the same name — there is no
+-- "elsewhere" to point at: the diagnosis and its "call it unqualified" advice
+-- would both be false, so that case falls through to the generic path.
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
-unboundVarErrors cur env scope n = match modulesExportingName env n
-  m :: _ => [UnboundVariableExported n m cur]
-  [] =>
-    if isImportedModuleName env n then
-      [UnboundVariableIsModule n cur]
-    else
-      [UnboundVariable n cur (suggestName env scope n)]
+unboundVarErrors cur env scope n = match splitOnChar '.' n
+  [alias, bare] if lookupValue env scope bare
+    && not (localBinding env scope bare) =>
+    [UnboundQualifiedElsewhere n alias bare cur]
+  _ => match modulesExportingName env n
+    m :: _ => [UnboundVariableExported n m cur]
+    [] =>
+      if isImportedModuleName env n then
+        [UnboundVariableIsModule n cur]
+      else
+        [UnboundVariable n cur (suggestName env scope n)]
 
 -- module ids (of modules this file already imports) that export `n` as a
 -- value — deliberately NOT scope/local-shadow aware, since `unboundVarErrors`
@@ -885,6 +914,15 @@ lookupValue env scope n =
     || omHasKey n env.values
     || omHasKey n env.ctors
     || omHasKey n env.imported
+
+-- True when `n` resolves to a binding that belongs to the file doing the
+-- lookup itself — a local scope binder (lambda/let/pattern), or this file's
+-- own top-level definition (`env.localValues`) — rather than the prelude or
+-- another module. Used to keep `UnboundQualifiedElsewhere`'s "resolves
+-- elsewhere" claim honest: a bare name that only resolves THIS way is not
+-- "elsewhere" at all.
+localBinding : Env -> Scope -> String -> Bool
+localBinding env scope n = scopeMem n scope || omHasKey n env.localValues
 
 -- "did you mean" for an unbound name: the nearest in-scope value name by
 -- Levenshtein distance (ERROR-QUALITY §4.1).  Suggest only when the distance is
@@ -1729,6 +1767,50 @@ useStubNames (UseWild _) = []
 -- `singleFileImportErrors`, so contributing nothing is right.
 useStubNames (UseAlias _ _) = []
 
+-- ── the prelude's alias / member-rename bindings ───────────────────────────
+-- A `core` use-path binds nothing for scope (`useImportNames`, `oneImport`): the
+-- prelude is prepended to every module, so every core name is already in scope under
+-- its OWN spelling and re-binding it would be a no-op.  An alias is the exception,
+-- because it introduces a spelling the prelude did NOT supply — `import core as C`
+-- asks for `C.isEven`, `import core.{isEven as even2}` asks for `even2`, and neither
+-- name is anywhere in scope.  These two functions are the whole of what a core
+-- use-path contributes; the unaliased forms still contribute nothing.
+--
+-- The name set is `coreAliasableValues`, not `coreExports`.  `coreExports` reports
+-- every core binding, private helpers included, because the prelude's names are in
+-- scope regardless of visibility and the export surface only ever VALIDATES a core
+-- use-path (`coreUseErrors`) — it never binds one.  Binding from it would make
+-- `C.indexGo` reach a module-private helper that has no other spelling, i.e. mint a
+-- fresh public surface for it.  Pinned by
+-- `test/shadow_fixtures/x21_prelude_alias_private_helper_reject.mdk`.
+coreAliasNames : List String -> UsePath -> List String
+coreAliasNames vals (UseAlias _ a) = map (qualifiedLocal a) vals
+coreAliasNames vals (UseGroup _ ms) = flatMap (coreRenamedMember vals) ms
+coreAliasNames _ _ = []
+
+-- a member rename binds its LOCAL name when the ORIGIN is a core value the prelude
+-- really exports; a plain member (no `as`) binds nothing, as it did before.
+coreRenamedMember : List String -> UseMember -> List String
+coreRenamedMember vals m = match useMemberAlias m
+  None => []
+  Some local => if contains (useMemberOrigin m) vals then [local] else []
+
+-- core's value surface as VISIBILITY sees it: the `export`ed standalones plus the
+-- methods of its `export interface`s.  Same two extractors `buildExports` runs over an
+-- ordinary module (`expValuesDirect` / `pubIfaceMethodSets`), so "what an alias of core
+-- can bind" is by construction "what an alias of an ordinary module could bind".
+coreAliasableValues : List Decl -> List String
+coreAliasableValues preludeDecls =
+  expValuesDirect preludeDecls
+    ++ flatMap identity (pubIfaceMethodSets preludeDecls)
+
+-- every alias/rename binding the program's `core` use-paths contribute.
+coreAliasImports : List String -> List Decl -> List String
+coreAliasImports vals prog = flatMap (coreAliasNames vals) (coreUsePaths prog)
+
+coreUsePaths : List Decl -> List UsePath
+coreUsePaths prog = filterList (p => useModId p == "core") (usePathsOf prog)
+
 useModId : UsePath -> String
 useModId (UseName ns) =
   if listLen ns > 1 then joinDot (initList ns) else firstOr "" ns
@@ -1769,7 +1851,9 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
   let pValues = whenL seed (preludeValueNames preludeDecls)
   let pFieldOwners = whenL seed (fieldOwnersOf preludeDecls)
   let uIfaces = interfaceList prog
-  let imported = importedNames prog
+  let imported =
+    importedNames prog
+      ++ whenL seed (coreAliasImports (coreAliasableValues preludeDecls) prog)
   let valuesM =
     omFromNames
       (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ imported)
@@ -1800,6 +1884,7 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     internalGuard = omFromNames internalGuard omEmpty,
     sugValuesMemo = Ref None,
     sugTypesMemo = Ref None,
+    localValues = omFromNames (userValueNames prog) omEmpty,
   }
 
 whenL : Bool -> List a -> List a
@@ -2257,6 +2342,8 @@ resErrorSexp (UnboundVariableExported n m _) =
   "(UnboundVariableExported \{escStr n} \{escStr m})"
 resErrorSexp (UnboundVariableIsModule n _) =
   "(UnboundVariableIsModule \{escStr n})"
+resErrorSexp (UnboundQualifiedElsewhere n a b _) =
+  "(UnboundQualifiedElsewhere \{escStr n} \{escStr a} \{escStr b})"
 resErrorSexp (UnknownConstructor n _ _) =
   "(UnknownConstructor " ++ escStr n ++ ")"
 -- NOTE: the suggestion field is deliberately NOT serialized here either (mirrors
@@ -2374,6 +2461,8 @@ ppResError (UnboundVariableIsModule n _) =
   "Unbound variable: \{n}. '\{n}' is an imported module, not a value — a bare "
     ++ "'import \{n}' binds no names. Bind what you need: 'import \{n}.{name, "
     ++ "...}', or 'import \{n} as M' then 'M.name'"
+ppResError (UnboundQualifiedElsewhere n a b _) =
+  "Unbound variable: \{n}. '\{b}' is not defined (or re-exported) by the module aliased as '\{a}' — it resolves unqualified, from elsewhere (the prelude, or another module). An alias only qualifies names the aliased module itself defines or re-exports, not a name it merely has an `impl` for. Call it unqualified as '\{b}', or alias the module that actually defines it"
 ppResError (UnknownConstructor n _ s) = match s
   Some sug =>
     "Unknown constructor: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
@@ -2419,22 +2508,25 @@ ppResError (DuplicateSignature n _ None) =
 ppResError (DuplicateBinder k n _) =
   "Duplicate binder: '\{n}' is bound more than once in this \{k}. Each binder must be distinct — rename one occurrence"
 ppResError (AmbiguousOccurrence n mods _) =
-  "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase mods}. Qualify, or select with `import <mod>.{\{n}}`"
+  "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase mods}. Qualify, or import it under a new name from one module: `import <mod>.{\{n} as <alias>}` — a plain `import <mod>.{\{n}}` still collides with the other module's wildcard import"
 -- No `Type.\{n}` spelling exists (a qualified constructor is a parse error), so the
 -- fix is a selective import of ONE owning type: `import <mod>.{T(..)}` — bringing in
 -- only that module's constructors — with the other left as a bare `import <mod>` (or
 -- without `(..)`), which binds its impls but not its constructors.  Never "qualify".
 ppResError (AmbiguousConstructor n mods _) =
   "Ambiguous constructor: '\{n}' is brought into scope by \{ambigModPhrase mods}. Import the constructors of only one — e.g. `import <mod>.{T(..)}` — and drop the other's `(..)`"
--- Neither remedy the VALUE peer offers exists for a type or an interface, so the
--- copy must not borrow its wording.  "Qualify" is impossible: `import m as A` binds
--- m's VALUES as `A.name`, and an alias-qualified name in TYPE position is a parse
--- error (`docs/spec/SYNTAX.md`, "Import aliasing").  A member alias is impossible
--- too: only a value member may be renamed, so `import m.{Foo as Bar}` is rejected.
--- That leaves exactly one fix — name it, rather than gesture at the two that do not
--- work: import the name from one module and drop it from the other's list.
+-- `import m as A` binds m's TYPES as `A.name`, same as it does values (#2412,
+-- `docs/spec/SYNTAX.md` "Import aliasing"), so qualifying with a module alias
+-- resolves the collision the same way it does for an ordinary value — offer it.
 ppResError (AmbiguousType n mods _) =
-  "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. A type name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
+  "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>.\{n}` — or drop '\{n}' from the other's import list"
+-- The remedy above does not exist for an interface. "Qualify" is impossible: an
+-- alias-qualified name in interface position is a parse error — module aliasing
+-- binds only values and types (#2412), never interfaces. A member alias is
+-- impossible too: only a value member may be renamed, so `import m.{Foo as Bar}`
+-- is rejected. That leaves exactly one fix — name it, rather than gesture at the
+-- two that do not work: import the interface from one module and drop it from
+-- the other's list.
 ppResError (AmbiguousInterface n mods _) =
   "Ambiguous interface: '\{n}' is brought into scope by \{ambigModPhrase mods}. An interface name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
 ppResError (InternalExternAccess n _) =
@@ -2462,6 +2554,7 @@ resErrorCode : ResError -> String
 resErrorCode (UnboundVariable _ _ _) = "R-UNBOUND"
 resErrorCode (UnboundVariableExported _ _ _) = "R-UNBOUND"
 resErrorCode (UnboundVariableIsModule _ _) = "R-UNBOUND"
+resErrorCode (UnboundQualifiedElsewhere _ _ _ _) = "R-UNBOUND"
 resErrorCode (UnknownConstructor _ _ _) = "R-UNKNOWN-CTOR"
 resErrorCode (UnknownType _ _ _) = "R-UNKNOWN-TYPE"
 resErrorCode (UnknownEffect _ _) = "R-UNKNOWN-EFFECT"
@@ -2648,11 +2741,21 @@ importedNamesMM (UseWild _) exp = (
       exp.expCtors,
   [],
 )
--- `import m as A` binds m's exported VALUES as `A.name`, and nothing unqualified.
--- Values only: a qualified reference parses as a field access, whose field must be
--- lowercase, so `A.SomeType` / `A.SomeCtor` cannot be spelled at all (it is a parse
--- error, not a silent miss).  Types and ctors are imported with `import m.{T(..)}`.
-importedNamesMM (UseAlias _ a) exp = (map (qualifiedLocal a) exp.expValues, [])
+-- `import m as A` binds m's exported VALUES and TYPES as `A.name`, and nothing
+-- unqualified (#2412).  The two namespaces are told apart downstream by the
+-- SPELLING of the right-hand side, which the grammar already separates: a
+-- qualified value reference is a field access, whose field is lowercase; a
+-- qualified type is `Upper.Upper`.  CONSTRUCTORS are still not reachable through
+-- an alias — `A.SomeCtor` is a field access with an uppercase field, which does
+-- not parse — so ctors are imported with `import m.{T(..)}`.
+--
+-- Only `iaImported` receives the dotted names: every namespace-narrowing consumer
+-- filters `names` against a BARE export list (`realImport`'s `iaTypes`,
+-- `importNamesIn`), which a dotted name misses by construction.  That is the
+-- intended reading — an alias-qualified name has no unqualified spelling, so it
+-- can never participate in the use-time ambiguity machinery.
+importedNamesMM (UseAlias _ a) exp =
+  (map (qualifiedLocal a) (exp.expValues ++ exp.expTypes), [])
 
 pubErr : ModuleExports -> String -> List ResError
 pubErr exp n =
@@ -3215,6 +3318,9 @@ data PreludeScope = PreludeScope {
   psCtorsM : OrdMap Unit,
   psExternsM : OrdMap Unit,
   psCoreExports : ModuleExports,
+  -- what a `core` ALIAS may bind — the visibility-filtered surface, deliberately
+  -- narrower than `psCoreExports` (see `coreAliasNames`).
+  psCoreAliasValues : List String,
 }
 
 preludeScopeMemoRef : Ref (Option ((Int, Int), PreludeScope))
@@ -3236,6 +3342,7 @@ preludeScopeOf runtimeDecls preludeDecls =
     psCtorsM = omFromNames (primitiveConstructors ++ cts) omEmpty,
     psExternsM = omFromNames (externNames runtimeDecls) omEmpty,
     psCoreExports = coreExports preludeDecls,
+    psCoreAliasValues = coreAliasableValues preludeDecls,
   }
 
 -- The key is the `desugaredPreludeKey` generation pair the typechecker's own
@@ -3295,11 +3402,13 @@ buildEnvMM ps known prog internalGuard =
     ps.psTypesM
   else
     omFromNames primitiveTypes omEmpty)
-  let ctorsM = omFromNames (ctorNames prog ++ adds.iaCtors) (if seed then
-    ps.psCtorsM
-  else
-    omFromNames primitiveConstructors omEmpty)
-  let importedM = omFromNames adds.iaImported omEmpty
+  let ctorsM = omFromNames
+    (ctorNames prog ++ adds.iaCtors)
+    (if seed then ps.psCtorsM else omFromNames primitiveConstructors omEmpty)
+  -- `oneImport` gives `core` no adds at all; its alias/rename bindings come from the
+  -- prelude scope instead, which is the only place this path holds core's surface.
+  let coreAliased = whenL seed (coreAliasImports ps.psCoreAliasValues prog)
+  let importedM = omFromNames (adds.iaImported ++ coreAliased) omEmpty
   let env = Env {
     values = valuesM,
     types = typesM,
@@ -3324,6 +3433,7 @@ buildEnvMM ps known prog internalGuard =
     internalGuard = omFromNames internalGuard omEmpty,
     sugValuesMemo = Ref None,
     sugTypesMemo = Ref None,
+    localValues = omFromNames (userValueNames prog) omEmpty,
   }
   (env, adds.iaErrors)
 
@@ -4389,10 +4499,24 @@ importedTypeOriginsFrom (UseName ns) src =
 importedTypeOriginsFrom (UseGroup _ members) src =
   keepTypeOrigins src (map useMemberBinding members)
 importedTypeOriginsFrom (UseWild _) src = src
--- `import m as A` binds m's exported VALUES as `A.name` and nothing else — an
--- alias-qualified name in TYPE position is a parse error — so it contributes no
--- type identity at all.
-importedTypeOriginsFrom (UseAlias _ _) _ = []
+-- `import m as A` binds m's exported types as `A.Name` (#2412), so the identity
+-- it contributes is m's, entered under the dotted local name.  `keepTypeOrigins`
+-- decides the definer exactly as it does for `import m.{Name}` — an alias is a
+-- spelling, never a re-attribution.  The `iface:`-tagged keys of `src` are
+-- dropped from the BINDINGS: `bindTypeOrigin` derives the interface key from each
+-- binding's own name, so passing a tagged key through would key an interface
+-- under `A.iface:Name`, which no surface spelling can reach.
+importedTypeOriginsFrom (UseAlias _ a) src =
+  keepTypeOrigins src (map (aliasTypeBinding a) (untaggedOriginKeys src))
+
+aliasTypeBinding : String -> String -> (String, String)
+aliasTypeBinding a n = (n, qualifiedLocal a n)
+
+-- The `iface:` tag, derived from `ifaceKey` rather than written out again, so the
+-- two cannot drift.
+untaggedOriginKeys : List (String, String) -> List String
+untaggedOriginKeys src =
+  filterList (n => not (startsWith (ifaceKey "") n)) (map fst src)
 
 -- (ORIGIN, LOCAL), exactly as `expandMemberNames` splits them.  Only a VALUE member
 -- can carry an alias (parser-enforced), so for a type the two coincide; going
@@ -4451,7 +4575,21 @@ bindOneOrigin definers key local = match omLookup key definers
 -- annotations inside bodies.
 export
 stampTyOrigins : OrdMap TyConOrigin -> List Decl -> List Decl
-stampTyOrigins scope decls = map (stampDeclTyOrigins scope) decls
+stampTyOrigins scope decls =
+  map (stampDeclTyOrigins (moduleAliasNames decls) scope) decls
+
+-- The module aliases `decls` declares (`import m as A` → `"A"`), which is what
+-- tells an alias-qualified type head (#2412) from an ordinary one.  Derived from
+-- `decls` rather than taken as a parameter so this function's exported signature
+-- — and typecheck's two extern-scheme call sites with it — stay as they were.
+-- A decl list with no `import … as` yields `[]`, and `unqualAliasTyName` is then
+-- the identity, so an alias-free module pays one walk of its own import list.
+moduleAliasNames : List Decl -> List String
+moduleAliasNames decls = flatMap aliasOfUsePath (usePathsOf decls)
+
+aliasOfUsePath : UsePath -> List String
+aliasOfUsePath (UseAlias _ a) = [a]
+aliasOfUsePath _ = []
 
 -- ⚠️ ONE WALK, BOTH OCCURRENCE LAYERS (#1110 PR C).  `mapOriginsInDecl` takes the
 -- Ty-position callback AND the interface-occurrence callback, so the type heads and
@@ -4459,9 +4597,9 @@ stampTyOrigins scope decls = map (stampDeclTyOrigins scope) decls
 -- decl.  A second `mapTyInDecl` pass would have cost a full extra AST rebuild per
 -- decl per module in a stage `compiler/AGENTS.md` calls GC-bound, and would have
 -- let the agreement probe drive a different traversal from this one.
-stampDeclTyOrigins : OrdMap TyConOrigin -> Decl -> Decl
-stampDeclTyOrigins scope d =
-  mapOriginsInDecl (stampTyHead scope) (fillIfaceOccOrigin scope) d
+stampDeclTyOrigins : List String -> OrdMap TyConOrigin -> Decl -> Decl
+stampDeclTyOrigins aliases scope d =
+  mapOriginsInDecl (stampTyHead aliases scope) (fillIfaceOccOrigin scope) d
 
 -- ⚠️ The three arms are enumerated rather than wildcarded ON PURPOSE: a fourth
 -- `TyConOrigin` inhabitant should be MADE TO SHOW UP here rather than falling
@@ -4472,12 +4610,37 @@ stampDeclTyOrigins scope d =
 -- assumed (`non-exhaustive match of 'T'. Missing case: 'C'` printed above `ok (2
 -- declaration(s) checked, 0 errors)`).  So this is a REVIEW aid, not a build gate:
 -- it puts the new inhabitant on the diff and in `check` output, and nothing more.
-stampTyHead : OrdMap TyConOrigin -> Ty -> (Ty, Bool)
-stampTyHead scope (t@(TyCon { tyConName = n, tyConOrigin = o })) = match o
-  OriginUnresolved => stampHeadWith t (originOfTyName scope n)
-  OriginBuiltin => (t, False)
-  OriginModule _ => (t, False)
-stampTyHead _ t = (t, False)
+stampTyHead : List String -> OrdMap TyConOrigin -> Ty -> (Ty, Bool)
+stampTyHead aliases scope (t@(TyCon { tyConName = n, tyConOrigin = o })) =
+  match o
+    OriginUnresolved => aliasStampHead aliases t n (originOfTyName scope n)
+    OriginBuiltin => (t, False)
+    OriginModule _ => (t, False)
+stampTyHead _ _ t = (t, False)
+
+-- `M.Map` → `Map` (#2412).  The name and the identity move together, or neither
+-- moves.  Together, because typecheck reads a type's identity straight off the
+-- pair it is handed — `fromAstTypeE` mints `tconFrom o n` with no scope lookup of
+-- its own — so a head left spelled `M.Map` would be a DIFFERENT type from the
+-- `Map` an `import map.{Map}` denotes even carrying the same origin.  That is also
+-- why the strip lives here and not in desugar, where the value-side rewrite
+-- (`rewriteAliasQual`) sits: before this walk there is no module identity to pair
+-- the shortened name with.  Neither, because an unattributed prefix is a name this
+-- pass could not verify: the flat (module-graph-less) drivers attribute no import
+-- at all (`stampFlatTyOrigins`), and rewriting there would silently answer a
+-- question they cannot ask.  `checkType` reports the unknown name, spelled as the
+-- author wrote it, from its own walk over the pre-stamp decls.
+aliasStampHead : List String -> Ty -> String -> TyConOrigin -> (Ty, Bool)
+aliasStampHead _ t _ OriginUnresolved = (t, False)
+aliasStampHead aliases t n o =
+  stampHeadWith TyCon { t | tyConName = unqualAliasTyName aliases n } o
+
+-- A head whose prefix is not an alias of THIS module, and a head with no prefix,
+-- are both returned unchanged.
+unqualAliasTyName : List String -> String -> String
+unqualAliasTyName aliases n = match splitOnChar '.' n
+  [a, base] if contains a aliases => base
+  _ => n
 
 -- An UNKNOWN type name keeps `OriginUnresolved` — there is no module to attribute
 -- it to, and `checkType` has already reported it as `UnknownType`.

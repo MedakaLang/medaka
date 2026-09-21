@@ -67,9 +67,10 @@ An alias replaces the unqualified import: `import red as R` does not also bind a
 `paint`. A module alias has to be capitalized, since it is used as a qualifier. A
 member alias renames one imported value.
 
-There are two limits. An alias qualifies values only, so `C.Color` in a type does not parse;
-import a type by its own name, `import colors.{Color(..)}`. And an alias cannot be
-combined with a group or wildcard import, since those already bind their names
+An alias qualifies types as well as values, so `C.Color` works in a type signature. It
+does not reach a CONSTRUCTOR: `C.Red` is not a spelling the grammar has, so a pattern or
+an expression that names one still needs `import colors.{Color(..)}`. An alias also
+cannot be combined with a group or wildcard import, since those already bind their names
 unqualified.
 
 ### A bare import binds nothing, but it is not a no-op

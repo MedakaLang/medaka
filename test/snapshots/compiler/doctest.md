@@ -1,5 +1,5 @@
 # META
-source_lines=489
+source_lines=504
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted doctest extraction + running.
@@ -25,7 +25,7 @@ stages=DESUGAR,MARK
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.ast.{Decl, DUse}
 import frontend.parser.{parseResult, parseErrorMessage}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 import json.{Json, JString}
 import regex.{Regex, mustCompile, isMatch, find}
@@ -326,18 +326,33 @@ synthSrc i ex =
 -- `frontend/parser.mdk`) individually, so one bad example becomes a single
 -- located `Errored` result (see `oneResult` below) instead of zeroing the
 -- whole file's coverage.
+--
+-- `targetDecls` is the tested file's own decls (`userDecls` at the call
+-- site) — each example is parsed and desugared as its own tiny standalone
+-- program (`__dt_i__ = <expr>`, no `import … as A` decl of its own), so a
+-- reference like `H.foo` would otherwise never see the target file's alias
+-- table (#3206) and reach eval as a bare, unbound `H`.  `moduleAliases`
+-- reads that table from `targetDecls`; `qualifyAliasRefsWith` applies it to
+-- the synth decl the same way `desugar` applies a module's own aliases to
+-- itself.
 export
-buildSynthResults : List Example -> List (Result String (List Decl))
-buildSynthResults examples = buildSynthResultsGo 0 examples
+buildSynthResults : List Decl ->
+  List Example ->
+  List (Result String (List Decl))
+buildSynthResults targetDecls examples =
+  buildSynthResultsGo (moduleAliases targetDecls) 0 examples
 
-buildSynthResultsGo : Int -> List Example -> List (Result String (List Decl))
-buildSynthResultsGo _ [] = []
-buildSynthResultsGo i (ex :: rest) =
-  synthOne i ex :: buildSynthResultsGo (i + 1) rest
+buildSynthResultsGo : List String ->
+  Int ->
+  List Example ->
+  List (Result String (List Decl))
+buildSynthResultsGo _ _ [] = []
+buildSynthResultsGo aliases i (ex :: rest) =
+  synthOne aliases i ex :: buildSynthResultsGo aliases (i + 1) rest
 
-synthOne : Int -> Example -> Result String (List Decl)
-synthOne i ex = match parseResult (synthSrc i ex)
-  Ok ds => Ok (desugar ds)
+synthOne : List String -> Int -> Example -> Result String (List Decl)
+synthOne aliases i ex = match parseResult (synthSrc i ex)
+  Ok ds => Ok (desugar (qualifyAliasRefsWith aliases ds))
   Err e => Err (parseErrorMessage e)
 
 -- The decls to actually elaborate/run: every example that parsed, concatenated
@@ -495,7 +510,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
@@ -583,13 +598,13 @@ isUse _ = False
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EVar "display") (EVar "rhs"))) (ELit (LString ""))))))
-(DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "buildSynthResults" ((PVar "examples")) (EApp (EApp (EVar "buildSynthResultsGo") (ELit (LInt 0))) (EVar "examples")))
-(DTypeSig false "buildSynthResultsGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "buildSynthResultsGo" (PWild (PList)) (EListLit))
-(DFunDef false "buildSynthResultsGo" ((PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "synthOne") (EVar "i")) (EVar "ex")) (EApp (EApp (EVar "buildSynthResultsGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig false "synthOne" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "synthOne" ((PVar "i") (PVar "ex")) (EMatch (EApp (EVar "parseResult") (EApp (EApp (EVar "synthSrc") (EVar "i")) (EVar "ex"))) (arm (PCon "Ok" (PVar "ds")) () (EApp (EVar "Ok") (EApp (EVar "desugar") (EVar "ds")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "parseErrorMessage") (EVar "e"))))))
+(DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "buildSynthResults" ((PVar "targetDecls") (PVar "examples")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EApp (EVar "moduleAliases") (EVar "targetDecls"))) (ELit (LInt 0))) (EVar "examples")))
+(DTypeSig false "buildSynthResultsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "buildSynthResultsGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "buildSynthResultsGo" ((PVar "aliases") (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "synthOne") (EVar "aliases")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EVar "aliases")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "synthOne" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "synthOne" ((PVar "aliases") (PVar "i") (PVar "ex")) (EMatch (EApp (EVar "parseResult") (EApp (EApp (EVar "synthSrc") (EVar "i")) (EVar "ex"))) (arm (PCon "Ok" (PVar "ds")) () (EApp (EVar "Ok") (EApp (EVar "desugar") (EApp (EApp (EVar "qualifyAliasRefsWith") (EVar "aliases")) (EVar "ds"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "parseErrorMessage") (EVar "e"))))))
 (DTypeSig true "buildSynthDecls" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "buildSynthDecls" ((PVar "synthResults")) (EApp (EVar "concatOkDecls") (EVar "synthResults")))
 (DTypeSig false "concatOkDecls" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))
@@ -647,7 +662,7 @@ isUse _ = False
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
-(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
+(DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
@@ -735,13 +750,13 @@ isUse _ = False
 (DFunDef false "synthName" ((PVar "i")) (EBinOp "++" (EBinOp "++" (ELit (LString "__dt_")) (EApp (EVar "intToString") (EVar "i"))) (ELit (LString "__"))))
 (DTypeSig true "synthSrc" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyCon "String"))))
 (DFunDef false "synthSrc" ((PVar "i") (PVar "ex")) (EBlock (DoLet false false (PVar "rhs") (EMatch (EApp (EVar "exampleExpected") (EVar "ex")) (arm (PCon "Some" PWild) () (EBinOp "++" (EBinOp "++" (ELit (LString "debug (")) (EApp (EVar "exampleInput") (EVar "ex"))) (ELit (LString ")")))) (arm (PCon "None") () (EApp (EVar "exampleInput") (EVar "ex"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "synthName") (EVar "i")))) (ELit (LString " = "))) (EApp (EMethodRef "display") (EVar "rhs"))) (ELit (LString ""))))))
-(DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "buildSynthResults" ((PVar "examples")) (EApp (EApp (EVar "buildSynthResultsGo") (ELit (LInt 0))) (EVar "examples")))
-(DTypeSig false "buildSynthResultsGo" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
-(DFunDef false "buildSynthResultsGo" (PWild (PList)) (EListLit))
-(DFunDef false "buildSynthResultsGo" ((PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EVar "synthOne") (EVar "i")) (EVar "ex")) (EApp (EApp (EVar "buildSynthResultsGo") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
-(DTypeSig false "synthOne" (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))
-(DFunDef false "synthOne" ((PVar "i") (PVar "ex")) (EMatch (EApp (EVar "parseResult") (EApp (EApp (EVar "synthSrc") (EVar "i")) (EVar "ex"))) (arm (PCon "Ok" (PVar "ds")) () (EApp (EVar "Ok") (EApp (EVar "desugar") (EVar "ds")))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "parseErrorMessage") (EVar "e"))))))
+(DTypeSig true "buildSynthResults" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "buildSynthResults" ((PVar "targetDecls") (PVar "examples")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EApp (EVar "moduleAliases") (EVar "targetDecls"))) (ELit (LInt 0))) (EVar "examples")))
+(DTypeSig false "buildSynthResultsGo" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Example")) (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl"))))))))
+(DFunDef false "buildSynthResultsGo" (PWild PWild (PList)) (EListLit))
+(DFunDef false "buildSynthResultsGo" ((PVar "aliases") (PVar "i") (PCons (PVar "ex") (PVar "rest"))) (EBinOp "::" (EApp (EApp (EApp (EVar "synthOne") (EVar "aliases")) (EVar "i")) (EVar "ex")) (EApp (EApp (EApp (EVar "buildSynthResultsGo") (EVar "aliases")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))
+(DTypeSig false "synthOne" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "Example") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "synthOne" ((PVar "aliases") (PVar "i") (PVar "ex")) (EMatch (EApp (EVar "parseResult") (EApp (EApp (EVar "synthSrc") (EVar "i")) (EVar "ex"))) (arm (PCon "Ok" (PVar "ds")) () (EApp (EVar "Ok") (EApp (EVar "desugar") (EApp (EApp (EVar "qualifyAliasRefsWith") (EVar "aliases")) (EVar "ds"))))) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "Err") (EApp (EVar "parseErrorMessage") (EVar "e"))))))
 (DTypeSig true "buildSynthDecls" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))
 (DFunDef false "buildSynthDecls" ((PVar "synthResults")) (EApp (EVar "concatOkDecls") (EVar "synthResults")))
 (DTypeSig false "concatOkDecls" (TyFun (TyApp (TyCon "List") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "List") (TyCon "Decl")))) (TyApp (TyCon "List") (TyCon "Decl"))))

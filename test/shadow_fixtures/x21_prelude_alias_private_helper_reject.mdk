@@ -1,0 +1,20 @@
+-- X21 (SHADOW-SEMANTICS S1-PRELUDE (b), the boundary on the recovery spelling) -- #2640.
+--
+-- x19 makes every prelude binding a module can NAME reachable as `C.<name>`.  The set that
+-- licenses is core's EXPORT surface, computed the same way an ordinary module's is, and not
+-- core's whole top-level namespace.  Without this cell the alias spelling would be free to
+-- widen silently to every private core helper, and nothing in x19 could tell.
+--
+--   PINNED: located REJECT on check, run and build.  `indexGo` is a top-level binding of
+--     `stdlib/core.mdk` that carries no `export`, so it is not in the alias surface.
+--   The positive control rides in the diagnostic: the message suggests `C.index`, the
+--     EXPORTED sibling, which is reachable.  A regression that widened the surface would
+--     turn this cell green while leaving every other x-cell untouched.
+--
+-- #2640 asks a DIFFERENT question -- whether `check` should bind a private core helper under
+-- its BARE name, which it does today -- and this cell neither answers nor depends on it.
+-- The alias surface is narrower than the bare one on purpose, and stays narrower whichever
+-- way #2640 is ruled.
+import core as C
+
+main = println (C.indexGo 0 [1, 2] 0)

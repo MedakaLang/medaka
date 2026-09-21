@@ -1084,6 +1084,86 @@ else
   fail=$((fail+1)); printf 'FAIL A-2.10/accept-runs-and-dispatches (exit %d, got [%s], want 7)\n' "$a210_run_code" "$a210_run_out"
 fi
 
+# ── #2412: A MODULE ALIAS QUALIFIES A TYPE, AND THE TYPE IS THE SAME ONE ──────
+#
+# Here for the reason the A-2.10 block above states: `test/must_fail_fixtures/
+# 1287-alias-type-position-bare-parse-error/` pinned `M.Map` in type position as a
+# bare P-PARSE, and draining a must-fail leaves no regression test behind.  What
+# has to hold now is ACCEPTANCE plus IDENTITY, and acceptance is observable only
+# here — `check_module_fixtures` diffs the entry module's scheme dump, where the
+# alias prefix is already gone by the time anything prints.
+#
+# ⚠️ THE IDENTITY LEG IS THE ONE THAT MATTERS, not the parse.  `A.Tag` reaching the
+# typechecker still spelled `A.Tag` would parse, resolve and print perfectly well
+# while being a DIFFERENT type from the `Tag` an `import a2412_defs.{Tag}` denotes
+# — `fromAstTypeE` mints a head from (name, origin) with no scope lookup of its
+# own — so `viaAlias` and `byName` below are deliberately crossed over: each is
+# handed the other's value.  A slice that only stripped the prefix, or only stamped
+# the identity, fails this row and passes a parse-only one.
+cat > "$TMP/a2412_defs.mdk" <<'EOF'
+public export data Tag = Tag Int
+export untag : Tag -> Int
+untag (Tag n) = n
+export mkTag : Int -> Tag
+mkTag n = Tag n
+EOF
+cat > "$TMP/a2412_accept.mdk" <<'EOF'
+import a2412_defs as A
+import a2412_defs.{Tag, mkTag}
+viaAlias : A.Tag -> Int
+viaAlias t = A.untag t
+byName : Tag -> Int
+byName t = A.untag t
+type Aliased = A.Tag
+viaTypeAlias : Aliased -> Int
+viaTypeAlias t = A.untag t
+data Holder = Holder (A.Tag)
+unhold : Holder -> Int
+unhold (Holder t) = A.untag t
+main = println (viaAlias (mkTag 1) + byName (A.mkTag 2) + viaTypeAlias (mkTag 3) + unhold (Holder (mkTag 4)))
+EOF
+a2412_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a2412_accept.mdk" 2>&1)"
+a2412_code=$?
+if [ "$a2412_code" -eq 0 ]; then
+  pass=$((pass+1)); printf 'ok   2412/accept-alias-qualified-type\n'
+else
+  fail=$((fail+1)); printf 'FAIL 2412/accept-alias-qualified-type (valid program rejected, exit %d: [%s])\n' "$a2412_code" "$a2412_out"
+fi
+a2412_run="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$TMP/a2412_accept.mdk" 2>&1)"
+a2412_run_code=$?
+if [ "$a2412_run_code" -eq 0 ] && [ "$a2412_run" = "10" ]; then
+  pass=$((pass+1)); printf 'ok   2412/accept-runs-same-type-both-ways (10)\n'
+else
+  fail=$((fail+1)); printf 'FAIL 2412/accept-runs-same-type-both-ways (exit %d, got [%s], want 10)\n' "$a2412_run_code" "$a2412_run"
+fi
+
+# The two rejections the acceptance must NOT have bought.  An alias is a SPELLING:
+# it binds nothing unqualified, and it cannot conjure a name the module does not
+# export.  Both pin the CODE, because a fixture typo would grade green on any
+# unrelated rejection.
+cat > "$TMP/a2412_rej_bare.mdk" <<'EOF'
+import a2412_defs as A
+bare : Tag -> Int
+bare t = A.untag t
+main = println 0
+EOF
+cat > "$TMP/a2412_rej_nosuch.mdk" <<'EOF'
+import a2412_defs as A
+nosuch : A.Nope -> Int
+nosuch t = 0
+main = println 0
+EOF
+for a2412_case in bare nosuch; do
+  a2412_rej_out="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check "$TMP/a2412_rej_$a2412_case.mdk" 2>&1)"
+  a2412_rej_code=$?
+  a2412_rej_json="$(MEDAKA_ROOT="$ROOT" bound "$MEDAKA" check --json "$TMP/a2412_rej_$a2412_case.mdk" 2>/dev/null)"
+  if [ "$a2412_rej_code" -ne 0 ] && printf '%s' "$a2412_rej_json" | grep -q 'R-UNKNOWN-TYPE'; then
+    pass=$((pass+1)); printf 'ok   2412/reject-%s (alias binds no unqualified name, and invents none)\n' "$a2412_case"
+  else
+    fail=$((fail+1)); printf 'FAIL 2412/reject-%s (exit %d, no R-UNKNOWN-TYPE: [%s])\n' "$a2412_case" "$a2412_rej_code" "$a2412_rej_out"
+  fi
+done
+
 # ── #1111 A-2.10: ONE PHYSICAL FILE MUST HAVE ONE IDENTITY ────────────────────
 #
 # THE ONLY NON-FLAT PROJECT IN ANY OF THESE CORPORA, AND THAT IS THE POINT.  Every

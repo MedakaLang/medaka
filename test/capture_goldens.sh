@@ -360,7 +360,8 @@ if [ -n "$FROZEN_TAG" ]; then
         "$ROOT"/test/compiler_test_fixtures/mappable_not_foldable.mdk \
         "$ROOT"/test/compiler_test_fixtures/shadow_impl_tolist.mdk \
         "$ROOT"/test/compiler_test_fixtures/blockquote_and_valid.mdk \
-        "$ROOT"/test/compiler_test_fixtures/doctest_typecheck_gate.mdk; do
+        "$ROOT"/test/compiler_test_fixtures/doctest_typecheck_gate.mdk \
+        "$ROOT"/test/compiler_test_fixtures/doctest_import_qualified.mdk; do
         [ -f "$f" ] || continue
         only_match "$(basename "$f" .mdk)" || continue
         tr_tmp="$(mktemp)"

@@ -1,0 +1,6 @@
+import list as L
+
+sum : List Int -> Int
+sum _ = 42
+
+main = println (L.sum [1, 2, 3])

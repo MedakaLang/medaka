@@ -57,7 +57,7 @@ runProbe target = match readFile target
             tsrc
             userDecls
             examples
-            (buildSynthResults examples))
+            (buildSynthResults userDecls examples))
 
 -- Same rendering as `medaka test`'s own doctest phase — deliberately, through
 -- the SAME printer (`tools/doctest.mdk`): the point of Stage 3's differential is

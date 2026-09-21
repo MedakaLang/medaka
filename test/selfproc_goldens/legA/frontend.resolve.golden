@@ -1,6 +1,9 @@
 addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
+aliasOfUsePath : UsePath -> List String
+aliasStampHead : List String -> Ty -> String -> TyConOrigin -> (Ty, Bool)
+aliasTypeBinding : String -> String -> (String, String)
 ambigModPhrase : List String -> String
 ambigMods : Env -> String -> List String
 ambiguousCtorErrors : Env -> String -> Option Loc -> List ResError
@@ -65,9 +68,14 @@ closeMissing : List String -> List String -> Map String Unit -> Map String Unit
 collectImports : Map String ModuleExports -> List Decl -> ImportAdds
 contigGo : Map String Unit -> List String -> List Decl -> List ResError
 contiguityErrors : List Decl -> List ResError
+coreAliasImports : List String -> List Decl -> List String
+coreAliasNames : List String -> UsePath -> List String
+coreAliasableValues : List Decl -> List String
 coreExports : List Decl -> ModuleExports
+coreRenamedMember : List String -> UseMember -> List String
 coreUseErrors : List Decl -> List Decl -> List ResError
 coreUseErrorsOf : ModuleExports -> Decl -> List ResError
+coreUsePaths : List Decl -> List UsePath
 ctorAmbigMods : Env -> String -> List String
 ctorAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ctorNames : List Decl -> List String
@@ -195,6 +203,7 @@ lastOf : List String -> String
 letBindDupErrors : Option Loc -> String -> List FunClause -> List ResError
 letBindName : LetBind -> String
 locKey : Option Loc -> String
+localBinding : Env -> Scope -> String -> Bool
 localOfExpanded : (String, String, Loc) -> String
 localsExportedFrom : List String -> List (String, String) -> List String
 lookupBindId : Map String Int -> String -> Int
@@ -208,6 +217,7 @@ mapSuperOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Super -> Super
 matchesExport : String -> (String, List String) -> List String
 mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
 mkScope : List String -> Scope
+moduleAliasNames : List Decl -> List String
 modulesExportingName : Env -> String -> List String
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
@@ -307,7 +317,7 @@ stampClauseWith : Map String Int -> (List Pat, Expr) -> (List Pat, Expr)
 stampDecl : Map String Int -> Decl -> Decl
 stampDeclOrigin : String -> Decl -> Decl
 stampDeclOrigins : String -> List Decl -> List Decl
-stampDeclTyOrigins : Map String TyConOrigin -> Decl -> Decl
+stampDeclTyOrigins : List String -> Map String TyConOrigin -> Decl -> Decl
 stampDeclWith : Map String Int -> Decl -> Decl
 stampExpr : Map String Int -> Expr -> Expr
 stampFieldAssign : Map String Int -> FieldAssign -> FieldAssign
@@ -328,7 +338,7 @@ stampOneModule : List (String, String) -> Map String (List (String, String)) -> 
 stampSection : Map String Int -> Section -> Section
 stampStmts : Map String Int -> List DoStmt -> List DoStmt
 stampTopScope : List Decl -> (Map String Int, List (String, Int))
-stampTyHead : Map String TyConOrigin -> Ty -> (Ty, Bool)
+stampTyHead : List String -> Map String TyConOrigin -> Ty -> (Ty, Bool)
 stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
@@ -359,6 +369,8 @@ typeDeclaredIn : String -> String -> (String, String)
 typeOriginExports : Map String (List (String, String)) -> String -> List Decl -> List (String, String)
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String
+unqualAliasTyName : List String -> String -> String
+untaggedOriginKeys : List (String, String) -> List String
 useImportNames : UsePath -> List String
 useMemberBinding : UseMember -> (String, String)
 useModId : UsePath -> String

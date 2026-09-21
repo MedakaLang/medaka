@@ -1,0 +1,3 @@
+import vector as V
+
+main = println (V.toList (V.fromList [1, 2, 3]))

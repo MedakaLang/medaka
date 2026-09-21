@@ -111,6 +111,7 @@ pinTypeGo : Ty -> List Ty -> Ty
 punField : Expr -> FieldAssign
 pureMethodName : Bool -> String
 qualifyAliasRefs : List Decl -> List Decl
+qualifyAliasRefsWith : List String -> List Decl -> List Decl
 recPatFields : List Field -> List String -> List RecPatField
 rewriteAliasQual : List String -> Expr -> Expr
 rewriteAssignIndex : Expr -> Expr

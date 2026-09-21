@@ -779,9 +779,10 @@ main = println (EA.emit ++ emitB)
 
 | form | meaning |
 |---|---|
-| `import m as A` | binds every non-method VALUE `m` exports as `A.name`. Does **not** bind bare `name`. |
+| `import m as A` | binds every non-method VALUE `m` exports as `A.name`, and every TYPE it exports as `A.Name` (#2412). Does **not** bind bare `name`/`Name`, and does **not** reach a constructor — `A.Ctor` is not a spelling the grammar has. |
 | `import m.sub as A` | same, for a nested module path |
 | `import m.{a as b, c}` | binds `m`'s `a` as `b`, plus `c`. Does **not** bind bare `a`. |
+| `import core as C` / `import core.{a as b}` | the implicit prelude takes both forms like any other module (#95). The bare prelude names stay in scope either way — an explicit `core` import adds spellings, it never replaces them. The alias surface is core's EXPORTS, so a private core helper is not reachable as `C.name`. |
 
 **An alias REPLACES the unqualified import** (like Python's `import x as y`, or
 Haskell's `qualified`). That is what makes a collision resolvable: `import emit_a as A`
@@ -800,6 +801,18 @@ their bare origin name too, alongside `A.name`; only `m`'s non-method values are
 alias-qualified-only. Fixed 2026-09-16 (#1812): `check`, `run`, `build`, the LSP, and the
 MCP tools all now agree on this.
 
+**The consequence, for every module: a member RENAME of a method does not out-scope a
+local binding of the origin name; a module ALIAS does.** `import m.{size as sz}` is
+rewritten to the origin name before resolution — it is a second spelling of one cell, not
+a second binding — so a module that also declares its own `size` gets *that* one when it
+writes `sz`. `import m as M` keeps the dotted spelling all the way through inference, so
+`M.size` reaches the method past the local declaration. This is not a prelude rule: the
+implicit prelude, aliasable as of #95, is just the case where it is easiest to hit,
+because its names are in scope everywhere without an import. Pinned at
+`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias, reaches
+the method) and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`
+(member rename, lands on the local binding).
+
 Rules, each a real error rather than a silent no-op:
 
 | rejected form | why |
@@ -810,13 +823,28 @@ Rules, each a real error rather than a silent no-op:
 | `import m.{Foo as Bar}` | only a **value** member can be renamed. Impl coherence and constructor identity resolve on the REAL name globally, so aliasing a type/ctor/interface would be a soundness hole, not a rename |
 | `export import m as A` | an alias is FILE-LOCAL. Re-exporting `A.name` would export a name no importer could write |
 
-A qualified reference `A.name` is lowered by `frontend/desugar.mdk` to the flat name
+A qualified VALUE reference `A.name` is lowered by `frontend/desugar.mdk` to the flat name
 `A.name` (a dot cannot occur in an identifier, so it cannot collide), and
 `backend/private_mangle.mdk` maps it back to the origin module's real symbol — no dotted
 name reaches the emitted code.
 
-Only values can be qualified: `A.SomeType` does not parse (a field name is lowercase).
-Import a type with `import m.{T(..)}`.
+A qualified TYPE `A.Name` takes the other route, and the difference is forced by what a
+type's identity is. `frontend/parser.mdk` folds the two tokens into one dotted type-head
+name, and `frontend/resolve.mdk` attributes it to `m` and SHORTENS it to `Name` in the
+same step — a type's identity is the pair (name, declaring module), so `A.Name` left
+spelled that way would be a different type from the `Name` an `import m.{Name}` denotes.
+Downstream of resolve the two spellings are indistinguishable, which is the point:
+
+```medaka-nocheck: names a sibling module that only exists in this example
+import m as A
+import m.{Name}
+
+viaAlias : A.Name -> Int   -- the same type as `Name` below, not a copy of it
+byName : Name -> Int
+```
+
+Only constructors cannot be qualified: `A.SomeCtor` does not parse (a field name is
+lowercase). Import a type's constructors with `import m.{T(..)}`.
 
 ## Externs (primitive declarations — see stdlib/runtime.mdk)
 

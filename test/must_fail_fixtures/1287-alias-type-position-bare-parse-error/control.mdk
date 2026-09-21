@@ -1,6 +1,0 @@
-import vector.{Vector, fromList}
-
-sizeOf : Vector Int -> Int
-sizeOf m = 0
-
-main = println (sizeOf (fromList [1, 2, 3]))

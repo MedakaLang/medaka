@@ -31,7 +31,7 @@ buildCtorFieldOrders : List Decl -> List (String, List String)
 buildCtorToType : List Decl -> List (String, String)
 buildIfaceDispatch : List Decl -> List ((String, String, String), List Int)
 buildMethodReqCounts : List Decl -> List ((String, String), Int)
-buildModInfos : ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
+buildModInfos : List (String, Ref (Value a)) -> ModExports (Value a) -> List (String, ModExports (Value a)) -> List (String, List Decl) -> List (ModInfo (Value a))
 buildWith : Value a -> Int -> Int -> List (Value a)
 bytesBEToU64 : Array Int -> U64
 candIface : Value a -> String
@@ -60,6 +60,8 @@ composeFwd : Value a -> Value a -> Value a
 concatList : List (List a) -> List a
 consVal : Value a -> Value a -> Value a
 containsInt : Int -> List Int -> Bool
+coreAliasCells : UsePath -> ModExports (Value a) -> List (String, Ref (Value a))
+coreImportExports : List (String, Ref (Value a)) -> List (String, Ref (Value a)) -> List Decl -> ModExports (Value a)
 countTyvars : Ty -> Int
 ctorEntry : Variant -> (String, Value a)
 ctorFieldOrderEntries : Decl -> List (String, List String)
@@ -181,7 +183,7 @@ implMethodNames : List Decl -> List String
 implMethodReqCountEntries : String -> String -> ImplMethod -> List ((String, String), Int)
 implMethodReqCounts : Decl -> List ((String, String), Int)
 implMethodValue : EvalEnv (Value a) -> List Int -> List Pat -> Expr -> Value a
-importFrameOf : List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
+importFrameOf : ModExports (Value a) -> List (String, ModExports (Value a)) -> List Decl -> List (String, Ref (Value a))
 inCharRange : String -> String -> String -> Bool -> Bool
 inIntRange : Int -> Int -> Int -> Bool -> Bool
 insertScore : (Int, Value a) -> List (Int, Value a) -> List (Int, Value a)
@@ -231,6 +233,7 @@ matchRecFields : List RecPatField -> List (String, Value a) -> Option (List (Str
 matchesTag : String -> Value a -> Bool
 memberBind : UseMember -> (String, String)
 memberCells : ModExports (Value a) -> UseMember -> List (String, Ref (Value a))
+memberIsRenamed : UseMember -> Bool
 memoThunk : EvalEnv (Value a) -> Expr -> Value a
 memoThunkOf : Ref (Option (Value a)) -> EvalEnv (Value a) -> Expr -> Value a
 mergeField : List (String, Value a) -> (String, Value a) -> (String, Value a)
@@ -489,7 +492,7 @@ undecidableCand : String -> Value a -> Bool
 unitResultToValue : Result String Unit -> Value a
 updateEvalLoc : Loc -> Unit
 upperInitialName : String -> Bool
-useImports : List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
+useImports : ModExports (Value a) -> List (String, ModExports (Value a)) -> Decl -> List (String, Ref (Value a))
 useModuleId : UsePath -> String
 vIntArray : Array Int -> Value a
 vOptionString : Option String -> Value a

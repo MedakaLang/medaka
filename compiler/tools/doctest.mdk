@@ -21,7 +21,7 @@
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
 import frontend.ast.{Decl, DUse}
 import frontend.parser.{parseResult, parseErrorMessage}
-import frontend.desugar.{desugar}
+import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
 import json.{Json, JString}
 import regex.{Regex, mustCompile, isMatch, find}
@@ -322,18 +322,33 @@ synthSrc i ex =
 -- `frontend/parser.mdk`) individually, so one bad example becomes a single
 -- located `Errored` result (see `oneResult` below) instead of zeroing the
 -- whole file's coverage.
+--
+-- `targetDecls` is the tested file's own decls (`userDecls` at the call
+-- site) — each example is parsed and desugared as its own tiny standalone
+-- program (`__dt_i__ = <expr>`, no `import … as A` decl of its own), so a
+-- reference like `H.foo` would otherwise never see the target file's alias
+-- table (#3206) and reach eval as a bare, unbound `H`.  `moduleAliases`
+-- reads that table from `targetDecls`; `qualifyAliasRefsWith` applies it to
+-- the synth decl the same way `desugar` applies a module's own aliases to
+-- itself.
 export
-buildSynthResults : List Example -> List (Result String (List Decl))
-buildSynthResults examples = buildSynthResultsGo 0 examples
+buildSynthResults : List Decl ->
+  List Example ->
+  List (Result String (List Decl))
+buildSynthResults targetDecls examples =
+  buildSynthResultsGo (moduleAliases targetDecls) 0 examples
 
-buildSynthResultsGo : Int -> List Example -> List (Result String (List Decl))
-buildSynthResultsGo _ [] = []
-buildSynthResultsGo i (ex :: rest) =
-  synthOne i ex :: buildSynthResultsGo (i + 1) rest
+buildSynthResultsGo : List String ->
+  Int ->
+  List Example ->
+  List (Result String (List Decl))
+buildSynthResultsGo _ _ [] = []
+buildSynthResultsGo aliases i (ex :: rest) =
+  synthOne aliases i ex :: buildSynthResultsGo aliases (i + 1) rest
 
-synthOne : Int -> Example -> Result String (List Decl)
-synthOne i ex = match parseResult (synthSrc i ex)
-  Ok ds => Ok (desugar ds)
+synthOne : List String -> Int -> Example -> Result String (List Decl)
+synthOne aliases i ex = match parseResult (synthSrc i ex)
+  Ok ds => Ok (desugar (qualifyAliasRefsWith aliases ds))
   Err e => Err (parseErrorMessage e)
 
 -- The decls to actually elaborate/run: every example that parsed, concatenated

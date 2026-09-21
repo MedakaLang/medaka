@@ -117,6 +117,7 @@ import frontend.ast.{
   UseMember(..),
   useMemberOrigin,
   useMemberLocal,
+  useMemberAlias,
   qualifiedLocal,
   Variant(..),
   DataVis(..),
@@ -1018,7 +1019,7 @@ usePathEntries : List (String, List (String, String)) ->
 usePathEntries exportsPerUnit path =
   let mid = useModIdU path
   if mid == "core" then
-    []
+    corePathEntries exportsPerUnit path
   else match lookupExports mid exportsPerUnit
     None => []
     Some exports => match path
@@ -1026,6 +1027,29 @@ usePathEntries exportsPerUnit path =
       UseWild _ => flatMap originEntryPair exports
       UseName ns => originEntry exports (lastOfPM ns)
       UseAlias _ a => flatMap (aliasEntryPair a) exports
+
+-- The implicit prelude's BARE spellings are already entered for every unit by
+-- `coreImportEntries`, so the only prelude rows an explicit `import core …` owes are the
+-- ones that introduce a name the bare pass cannot know: the alias-qualified `C.<name>`
+-- and a member RENAME's new local.  Everything else stays `[]`, which is what this arm
+-- returned for all four spellings before.  The name set is the same `exportsPerUnit`
+-- row `coreImportEntries` reads, deliberately: resolve decides what a prelude alias may
+-- name, and an entry here for a name resolve refuses is never reachable from emitted
+-- code.  Widening THIS row is therefore not the #2640 question; `withPreludeDefs` is.
+corePathEntries : List (String, List (String, String)) ->
+  UsePath ->
+  List (String, String)
+corePathEntries exportsPerUnit path = match lookupExports "core" exportsPerUnit
+  None => []
+  Some exports => match path
+    UseAlias _ a => flatMap (aliasEntryPair a) exports
+    UseGroup _ members => flatMap (coreRenamedEntry exports) members
+    _ => []
+
+coreRenamedEntry : List (String, String) -> UseMember -> List (String, String)
+coreRenamedEntry exports m = match useMemberAlias m
+  None => []
+  Some local => originEntryAs exports (useMemberOrigin m) local
 
 -- a UseGroup member → entry if its ORIGIN names an exported fn of the origin module;
 -- the entry is keyed by the member's LOCAL name (its alias, if it has one).

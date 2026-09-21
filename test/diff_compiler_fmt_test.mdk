@@ -25,7 +25,7 @@
    `diff_compiler_lint`'s probe reads an environment variable the other five
    do not: `lint_main` builds its stdlib index from `$MEDAKA_ROOT/stdlib`, and
    indexes NOTHING when that is unset, which silences every
-   `rule-stdlib-reimpl` finding. Eight of its 41 fixtures answer differently
+   `rule-stdlib-reimpl` finding. Eight of its 46 fixtures answer differently
    without it and the goldens are the with-index answer, so an unset
    `MEDAKA_ROOT` reds those eight rather than passing on an empty index.
    `medaka gate run` sets it for every gate (`gate_cmd.gateArgs`); a bare
@@ -185,7 +185,7 @@ rows = [
     goldenSuffix = ".expected",
     sorted = True,
     stripUnit = True,
-    fixtures = 45,
+    fixtures = 46,
   },
   Row {
     gate = "diff_compiler_lint_fix",
@@ -1170,6 +1170,7 @@ testReportCorpus = [
   "test/compiler_test_fixtures/shadow_impl_tolist.mdk",
   "test/compiler_test_fixtures/blockquote_and_valid.mdk",
   "test/compiler_test_fixtures/doctest_typecheck_gate.mdk",
+  "test/compiler_test_fixtures/doctest_import_qualified.mdk",
 ]
 
 testFixturesDir : String
@@ -1505,7 +1506,7 @@ test "project-wide diagnostics bucket per file the way the oracle does" = report
 test "`medaka test`'s corpus reproduces its committed reports" =
   report
     "test-report"
-    (countFloor "test-report corpus" 24 testReportCorpus
+    (countFloor "test-report corpus" 25 testReportCorpus
       ++ somes (map testGoldenFailure testReportCorpus))
 
 test "`medaka test`'s exit code and its pinned reports still discriminate" =

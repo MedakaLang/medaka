@@ -46,9 +46,14 @@ exists *only* via `as`). It is not a no-op: **any** import of a module brings th
 `stdlib/json.mdk`'s bare `import array` — without it, `map (+ 1) [|1,2,3|]` is *"No impl of
 Mappable for Array"*.
 
-Also for the record on import forms: an alias-qualified name (`import map as M` → `M.get`)
-works for **values only** — an alias-qualified name in *type* position is a parse error, so
-types must be imported by name (`import map.{Map}`), never through the alias.
+Also for the record on import forms: an alias-qualified name (`import map as M`) reaches
+`M.get` AND `M.Map` in type position (#2412). The two take different routes for a reason
+worth knowing: the value form is lowered to a flat `EVar "M.get"` by desugar and stays
+dotted through inference, while the type form is SHORTENED back to `Map` by resolve in the
+same step that attributes it to `map`, because a type's identity is the pair (name,
+declaring module) and a head left spelled `M.Map` would be a different type from the one
+`import map.{Map}` denotes. Constructors are reachable through neither: `M.Tip` is not a
+spelling the grammar has, so `import map.{Map(..)}` is still the only way to a ctor.
 
 ## Retired origin-agreement entry — F1/F2, two S0s through 12/12 green CI (#1110)
 

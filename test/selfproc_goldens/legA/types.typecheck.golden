@@ -525,8 +525,11 @@ copyCrossRun : CrossRun -> CrossRun
 copyDriverState : DriverState -> DriverState
 copyGraphRun : GraphRun -> GraphRun
 copyGraphRunForMemo : GraphRun -> GraphRun
+coreAliasSchemes : UsePath -> List (String, Scheme) -> List (String, Scheme)
 coreCheckMemoHit : Option (Int, Int) -> Option CoreCheckMemo
 coreCheckMemoRef : Ref (Option CoreCheckMemo)
+coreQualScheme : String -> (String, Scheme) -> (String, Scheme)
+coreRenameScheme : List (String, Scheme) -> UseMember -> List (String, Scheme)
 coreShadowMapFor : List Decl -> List (String, String) -> List (String, String)
 crossRun : Ref CrossRun
 cslotKey : CSlot -> String
@@ -1222,8 +1225,9 @@ importFormRows : UsePath -> List (String, a) -> List (String, a)
 importFormSchemes : List (String, List (String, Scheme)) -> UsePath -> List (String, Scheme) -> List (String, Scheme)
 importMemberShadow : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> List Decl -> UseMember -> List (String, String, Option Ty, Ty, Loc)
 importOverlayDecls : Bool -> Int -> List DeclEnvModule -> Decl -> List Decl
-importSeed : List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
+importSeed : List (String, Scheme) -> List Decl -> List (String, List (String, Scheme)) -> List (String, Scheme)
 importShadowsOfDecl : List (String, List Decl) -> List (String, List String) -> Map String Unit -> List Decl -> Decl -> List (String, String, Option Ty, Ty, Loc)
+importTableMid : UsePath -> String
 importedBindings : UsePath -> Option (List (String, String))
 importedCandIfaces : List Decl -> String -> List (Ident, (IfaceRef, List String, Ty, List (String, List Kind))) -> List IfaceRef
 importedCtorEntry : List Decl -> String -> List (Ident, String, Scheme) -> Option Scheme

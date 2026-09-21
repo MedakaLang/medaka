@@ -89,7 +89,6 @@ import eval.eval.{
   importFrameOf,
   pubReexports,
   ModExports(..),
-  modExportCells,
   ctorsByTypeOf,
   evalVariantUpdate,
   buildCtorFieldOrders,
@@ -99,6 +98,7 @@ import eval.eval.{
   defaultCellName,
   preludeShadowNames,
   globalFramesWith,
+  coreImportExports,
   ffiExternNamesRef,
   externDeclNamesOfDecls,
 }
@@ -638,7 +638,8 @@ cevalModules preludeDecls0 modules0 =
   let mods =
     cBuildModInfos
       disp
-      (ModExports globalCells (ctorsByTypeOf preludeDecls))
+      globalCells
+      (coreImportExports privateCells globalCells preludeDecls)
       []
       modules
   let implEntries =
@@ -656,14 +657,16 @@ cevalModules preludeDecls0 modules0 =
 -- pass 1: lower + allocate each module's local cells and build its env (imports
 -- resolved against already-processed modules, since loader order is
 -- dependency-first).  Mirror of eval.mdk's buildModInfos, lowering groups/impls.
+-- The `globalCells`/`coreExports` split is eval.mdk's, for eval.mdk's reason — see
+-- `coreImportExports` there.
 cBuildModInfos : List ((String, String, String), List Int) ->
+  List (String, Ref (Value e)) ->
   ModExports (Value e) ->
   List (String, ModExports (Value e)) ->
   List (String, List Decl) ->
   List (CModInfo (Value e))
-cBuildModInfos _ _ _ [] = []
-cBuildModInfos disp coreExports exportsMap ((mid, decls) :: rest) =
-  let globalCells = modExportCells coreExports
+cBuildModInfos _ _ _ _ [] = []
+cBuildModInfos disp globalCells coreExports exportsMap ((mid, decls) :: rest) =
   let cbinds = lowerGroups decls
   let cimpls = lowerImplsWith disp decls
   -- P0-9 (Core-IR port of the eval.mdk fix): each module's OWN constructors ALSO
@@ -677,7 +680,7 @@ cBuildModInfos disp coreExports exportsMap ((mid, decls) :: rest) =
   let modCtors = collectCtors decls
   let localCells =
     map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
-  let imports = importFrameOf exportsMap decls
+  let imports = importFrameOf coreExports exportsMap decls
   let menv = EvalEnv [localCells, imports, globalCells]
   -- IMPORT ALIASING (Core-IR port of the eval.mdk fix — these two module drivers are
   -- parallel and their frame semantics MUST move in lockstep): a module also exports the
@@ -696,7 +699,12 @@ cBuildModInfos disp coreExports exportsMap ((mid, decls) :: rest) =
         ++ pubReexports coreExports exportsMap decls)
       (ctorsByTypeOf decls)
   CModInfo mid decls cbinds cimpls localCells menv
-    :: cBuildModInfos disp coreExports ((mid, exports) :: exportsMap) rest
+    :: cBuildModInfos
+      disp
+      globalCells
+      coreExports
+      ((mid, exports) :: exportsMap)
+      rest
 
 -- a module's impl methods / interface defaults close over ITS env but coalesce
 -- into the shared global VMulti (mirror of eval.mdk's modImplEntries)

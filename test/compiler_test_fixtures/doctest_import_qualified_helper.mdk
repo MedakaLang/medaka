@@ -1,0 +1,7 @@
+-- Sibling helper for doctest_import_qualified.mdk (#3206): a plain module to
+-- import under an alias, so the alias-qualified reference resolves against a
+-- REAL cross-file export rather than a fixture-local name.
+
+export
+bump : Int -> Int
+bump x = x + 1

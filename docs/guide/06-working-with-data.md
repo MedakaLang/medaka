@@ -71,16 +71,12 @@ Qualify, or select with `import <mod>.{get}`
 
 `import array as A` gives you a prefix and avoids the question.
 
-> ⚠️ **A module alias qualifies values, not types.** `import map as M` lets you
-> write `M.get`, but `M.Map String Int` in a type is a parse error. Import the type
-> by name on its own line, `import map.{Map}`, alongside the alias.
->
-> ```
-> error: probe.mdk:3:9: unexpected `.`
->   |
-> 3 | sizes : M.Map String Int
->   |          ^
-> ```
+> **The alias qualifies the type too.** `import map as M` lets you write both
+> `M.get` and `M.Map String Int`, and `M.Map String Int` is the same type as the
+> `Map String Int` you would get from `import map.{Map}` — a value built one way
+> fits a signature written the other. What an alias does *not* reach is a
+> CONSTRUCTOR: `M.Tip` is not a spelling the grammar has, so pattern-matching a
+> map's constructors still needs `import map.{Map(..)}`.
 
 ## `map`, `filter`, and `fold`
 

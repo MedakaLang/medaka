@@ -41179,9 +41179,20 @@ importedSchemeOblEntries [] _ = []
 importedSchemeOblEntries ((DAttrib _ d) :: rest) qual =
   importedSchemeOblEntries [d] qual ++ importedSchemeOblEntries rest qual
 importedSchemeOblEntries ((DUse _ path _) :: rest) qual =
-  schemeOblEntriesFor (usePathModuleId path) path qual
+  schemeOblEntriesFor (importTableMid path) path qual
     ++ importedSchemeOblEntries rest qual
 importedSchemeOblEntries (_ :: rest) qual = importedSchemeOblEntries rest qual
+
+-- The definer key every fn-side qual table uses for the implicit prelude is `""`, not
+-- `"core"` (`modInScope`, `selfDeclArities`, `cmCheckWorker`), because the prelude is
+-- checked with the empty module id.  An import path spells it `core`, so a prelude
+-- import read under its SPELLED id matches no row at all and yields no context and no
+-- dict arity.  Every other module ids identically in both, so this is the whole of the
+-- translation.
+importTableMid : UsePath -> String
+importTableMid path =
+  let mid = usePathModuleId path
+  if mid == "core" then "" else mid
 
 schemeOblEntriesFor : String ->
   UsePath ->
@@ -41226,7 +41237,7 @@ aliasConstraintEntries [] _ = []
 aliasConstraintEntries ((DAttrib _ d) :: rest) qual =
   aliasConstraintEntries [d] qual ++ aliasConstraintEntries rest qual
 aliasConstraintEntries ((DUse _ path _) :: rest) qual =
-  aliasEntriesFor (usePathModuleId path) path qual
+  aliasEntriesFor (importTableMid path) path qual
     ++ aliasConstraintEntries rest qual
 aliasConstraintEntries (_ :: rest) qual = aliasConstraintEntries rest qual
 
@@ -41245,8 +41256,13 @@ aliasEntriesFor : String ->
 -- No direct-match fallback: like the wildcard tier of `useDefinerRows`, this arm
 -- can't enumerate without the graph — safe here because `aliasConstraintEntries`
 -- runs only in `Module` mode, where the envelope always exists.
-aliasEntriesFor mid (UseAlias _ a) qual =
-  flatMap (graphAliasEntry a qual) (graphPubDefiners mid)
+-- The prelude (`importTableMid` → `""`) has no import-graph node, so `graphPubDefiners`
+-- cannot enumerate it; it also re-exports nothing, so the definer key on its own rows is
+-- already final and the direct `defMid == mid` match `schemeOblEntriesFor` uses is exact
+-- here for the same reason it is inexact for a re-exporting module.
+aliasEntriesFor mid (UseAlias _ a) qual
+  | mid == "" = flatMap (moduleAliasEntry mid a) qual
+  | otherwise = flatMap (graphAliasEntry a qual) (graphPubDefiners mid)
 -- `import m.{x as y}` → `y` carries `x`'s dict arity.
 aliasEntriesFor mid (UseGroup _ ms) qual =
   flatMap (memberAliasEntry mid qual) ms
@@ -42185,19 +42201,47 @@ andList [x] = x
 andList [x, y] = "\{x} and \{y}"
 andList (x :: rest) = "\{x}, \{andList rest}"
 
-importSeed : List Decl ->
+-- `core` is never in `depEnv` (it is the implicit prelude — `reexportSeed`'s comment
+-- carries the full reason), so it is passed separately as `coreV`, and it contributes
+-- ONE thing: the keys an ALIAS introduces.  A plain `import core.{f}` still seeds
+-- nothing, because `f` is already in `baseSeed` under that very spelling and seeding it
+-- twice only adds a duplicate assoc entry — but `import core as C` and
+-- `import core.{f as g}` ask for `C.f` / `g`, which `baseSeed` does not hold under any
+-- spelling.  `resolve.mdk`'s `coreAliasNames` binds exactly the same two forms, and the
+-- two must agree: a key bound in scope with no scheme here is a `T-UNBOUND` at the use
+-- site, which is what #95 measured for six years.
+importSeed : List (String, Scheme) ->
+  List Decl ->
   List (String, List (String, Scheme)) ->
   List (String, Scheme)
-importSeed [] _ = []
-importSeed ((DAttrib _ d) :: rest) depEnv =
-  importSeed [d] depEnv ++ importSeed rest depEnv
-importSeed ((DUse _ path _) :: rest) depEnv =
+importSeed _ [] _ = []
+importSeed coreV ((DAttrib _ d) :: rest) depEnv =
+  importSeed coreV [d] depEnv ++ importSeed coreV rest depEnv
+importSeed coreV ((DUse _ path _) :: rest) depEnv =
   let depId = usePathModuleId path
-  match lookupAssoc depId depEnv
-    None => importSeed rest depEnv
+  if depId == "core" then
+    coreAliasSchemes path coreV ++ importSeed coreV rest depEnv
+  else match lookupAssoc depId depEnv
+    None => importSeed coreV rest depEnv
     Some depSchemes =>
-      importFormSchemes depEnv path depSchemes ++ importSeed rest depEnv
-importSeed (_ :: rest) depEnv = importSeed rest depEnv
+      importFormSchemes depEnv path depSchemes ++ importSeed coreV rest depEnv
+importSeed coreV (_ :: rest) depEnv = importSeed coreV rest depEnv
+
+-- the schemes a `core` use-path binds under a spelling the prelude did not supply.
+coreAliasSchemes : UsePath -> List (String, Scheme) -> List (String, Scheme)
+coreAliasSchemes (UseAlias _ a) coreV = map (coreQualScheme a) coreV
+coreAliasSchemes (UseGroup _ ms) coreV = flatMap (coreRenameScheme coreV) ms
+coreAliasSchemes _ _ = []
+
+coreQualScheme : String -> (String, Scheme) -> (String, Scheme)
+coreQualScheme a (k, s) = (qualifiedLocal a k, s)
+
+coreRenameScheme : List (String, Scheme) -> UseMember -> List (String, Scheme)
+coreRenameScheme coreV m = match useMemberAlias m
+  None => []
+  Some local => match lookupAssoc (useMemberOrigin m) coreV
+    None => []
+    Some s => [(local, s)]
 
 -- WS-2/D2: THIS module's imported value name → import-source module id, from its DUse
 -- decls.  Mirrors importSeed's walk but records (localName, depId) for EXPLICIT imports
@@ -43062,12 +43106,12 @@ foldModules : Bool ->
   List (String, List Decl) ->
   acc
 foldModules _ _ _ _ base _ _ _ _ _ [] = base
-foldModules _wantData _wantAll worker collect base baseSeed _coreV depEnv accData accAll [(mid, prog)] =
-  let seed = baseSeed ++ importSeed prog depEnv
+foldModules _wantData _wantAll worker collect base baseSeed coreV depEnv accData accAll [(mid, prog)] =
+  let seed = baseSeed ++ importSeed coreV prog depEnv
   let (_, extra) = worker mid seed accData accAll prog
   collect True mid extra base
 foldModules wantData wantAll worker collect base baseSeed coreV depEnv accData accAll ((mid, prog) :: rest) =
-  let seed = baseSeed ++ importSeed prog depEnv
+  let seed = baseSeed ++ importSeed coreV prog depEnv
   let (schemes, extra) = worker mid seed accData accAll prog
   let pubV =
     pickSchemes (publicValNames prog) schemes ++ reexportSeed coreV prog depEnv
@@ -44265,14 +44309,14 @@ chainGo : List (String, Scheme) ->
   List (String, List Decl) ->
   (List ModDiags, List ChainStep)
 chainGo _ _ _ _ _ results _ [] = (results, [])
-chainGo baseSeed _ depEnv accData accAll results _ [(mid, prog)] =
-  let seed = baseSeed ++ importSeed prog depEnv
+chainGo baseSeed coreV depEnv accData accAll results _ [(mid, prog)] =
+  let seed = baseSeed ++ importSeed coreV prog depEnv
   let (schemes, (_, _, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
   let _ = setMainSchemeIfEntry True schemes
   ((mid, (schemes, errs, warns)) :: results, [])
 chainGo baseSeed coreV depEnv accData accAll results keys ((mid, prog) :: rest) =
-  let seed = baseSeed ++ importSeed prog depEnv
+  let seed = baseSeed ++ importSeed coreV prog depEnv
   let (schemes, (_, _, errs, warns)) =
     graphModuleWorker GOutDiags mid seed accData accAll prog
   let pubV =

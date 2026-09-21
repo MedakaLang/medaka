@@ -1,0 +1,22 @@
+-- X23 (SHADOW-SEMANTICS S1-PRELUDE (b)) -- the denotation assertion, no shadow present.
+--
+-- x19 through x22 all put a collision or a boundary in the program.  This cell removes both
+-- and asserts the property the recovery spellings exist to have in the FIRST place: an
+-- aliased or renamed prelude name denotes THE SAME FUNCTION as the bare one.
+--
+--   PINNED: `True` -- the conjunction, so a cell that bound a different `isEven` (or bound
+--     nothing and defaulted) cannot pass by getting one comparison right.
+--   Both recovery spellings appear, because they take different paths: the module alias
+--     stays dotted through inference, the member rename is rewritten to the origin name
+--     before it.  A cell naming only one grades only one path.
+--   The `7` comparison is present so the assertion is not satisfied by an `isEven` that
+--     returns a constant.
+--
+-- An exit-code-only reading of this cell is worth nothing: every way of getting the
+-- denotation wrong here still exits 0 and prints `False`.
+import core as C
+import core.{isEven as even2}
+
+main =
+  println
+    (C.isEven 4 == isEven 4 && even2 4 == isEven 4 && C.isEven 7 == isEven 7)
