@@ -1,0 +1,5 @@
+-- The other declarer.  `speak` is spelled the same in both interfaces on purpose,
+-- so an `impl` or a predicate is method-valid whichever one is bound — the fixture
+-- then asserts the AMBIGUITY and not a downstream method-membership error.
+export interface Speak a where
+  speak : a -> Int

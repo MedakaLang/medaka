@@ -986,8 +986,9 @@ parseAtomRaw = defer
 parseUpperAtom : String -> Parser Expr
 parseUpperAtom x = defer
   advance
+  n <- upperQualTail x
   t <- peekP
-  upperTail x t
+  upperTail n t
 
 upperTail : String -> Token -> Parser Expr
 upperTail x TLBrace = upperBrace x
@@ -1690,8 +1691,9 @@ parsePatApp = defer
 patAppFor : Token -> Parser Pat
 patAppFor (TUpper c) = defer
   advance
+  n <- upperQualTail c
   t <- peekP
-  upperPatRest c t
+  upperPatRest n t
 patAppFor _ = parsePatAtom
 
 -- after an uppercase ctor in pattern position: a record pattern `C { … }`,
@@ -1867,8 +1869,9 @@ parsePatAtomRaw = defer
     TChar s => charPatRest (LChar s)
     TUpper c => defer
       advance
+      n <- upperQualTail c
       t2 <- peekP
-      upperAtomRest c t2
+      upperAtomRest n t2
     TLParen => parsePatParen
     TLBracket => parsePatList
     _ => reservedOrPatFail t
@@ -2242,6 +2245,36 @@ upperNameP = defer
 upperNameFor : Token -> Parser String
 upperNameFor (TUpper c) = emit c
 upperNameFor _ = failP "expected effect label"
+
+-- `D.Leaf` in constructor, `impl`-head and `requires` position: a module alias
+-- qualifies a CONSTRUCTOR and an INTERFACE name too, not only a type (#1287).
+-- The value-level peer of `tyConQualTail`, and deliberately the same two-token
+-- rule: `TDot` followed by `TUpper` folds into ONE dotted name, the flat
+-- spelling `qualifiedLocal` gives an alias-qualified value and the one the
+-- import machinery enters an aliased module's ctors and interfaces under.
+-- Resolve strips the prefix once it has a module identity to check it against
+-- (`unqualAliasCtorName`, frontend/resolve.mdk), so nothing downstream of
+-- resolve sees a dotted ctor or interface name.
+--
+-- Only `Upper . Upper` folds.  A record FIELD is always lowercase (`TIdent`),
+-- and `Upper . Upper` has no other reading in expression, pattern, `impl`-head
+-- or `requires` position, so no existing spelling is taken away.
+--
+-- The caller re-reads the next token AFTER calling this, because `D.Node { … }`
+-- is a record literal / record pattern on the folded name — not a plain
+-- `EVar`/`PCon` followed by a brace.
+upperQualTail : String -> Parser String
+upperQualTail head = defer
+  t <- peekP
+  t2 <- peek2P
+  upperQualFor head t t2
+
+upperQualFor : String -> Token -> Token -> Parser String
+upperQualFor head TDot (TUpper n) = defer
+  advance
+  advance
+  deferPure (qualifiedLocal head n)
+upperQualFor head _ _ = deferPure head
 
 tyArrowTail : Ty -> Parser Ty
 tyArrowTail left = defer
@@ -2978,7 +3011,8 @@ ifaceSuperFor _ = deferPure []
 
 ifaceSuperEntry : Parser Super
 ifaceSuperEntry = defer
-  name <- upperNameP
+  head <- upperNameP
+  name <- upperQualTail head
   params <- many lowerNameP
   deferPure (superUnresolved name params)
 
@@ -3117,7 +3151,8 @@ parseImpl pub = defer
 implHead : Bool -> Int -> Token -> Parser Decl
 implHead pub kw (TUpper u) = defer
   advance
-  implRest pub kw u
+  n <- upperQualTail u
+  implRest pub kw n
 implHead _ _ (TIdent _) = failP namedImplRemovedMsg
 implHead _ _ _ = failP "expected impl head"
 
@@ -3150,7 +3185,8 @@ implRequiresFor _ = deferPure []
 
 implRequireEntry : Parser Require
 implRequireEntry = defer
-  iface <- upperNameP
+  head <- upperNameP
+  iface <- upperQualTail head
   tys <- many parseTyAtom
   deferPure (requireUnresolved iface tys)
 

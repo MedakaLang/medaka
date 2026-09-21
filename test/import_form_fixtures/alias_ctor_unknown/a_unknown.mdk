@@ -1,0 +1,8 @@
+-- A name the aliased module does not export, written through the alias.  The
+-- diagnostic must carry the QUALIFIED spelling: an alias-qualified constructor
+-- is stripped to its bare name on the way to typecheck, and a strip that fired
+-- here would hand `Nope` to another module's table and resolve it at exit 0.
+import decl as D
+
+v : D.Col
+v = D.Nope

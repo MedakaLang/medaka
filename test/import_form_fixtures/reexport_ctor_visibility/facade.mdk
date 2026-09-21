@@ -1,0 +1,5 @@
+-- The facade that NAMES the constructors: `T(..)` expands to the type plus its
+-- ctors at this hop, so the hop re-exports both and a consumer's own `T(..)` finds
+-- them (#2309).  No extra spelling is involved -- `public` is a parse error on an
+-- import, and `(..)` is what carries constructors at every other import site.
+export import i.{T(..), unT}

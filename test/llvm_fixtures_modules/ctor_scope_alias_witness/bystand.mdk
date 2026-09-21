@@ -1,0 +1,20 @@
+-- THE "FEATURE PRESENT, UNRELATED CODE STILL BEHAVES" CELL.  An alias is in scope
+-- and a name from it is used, while this module's OWN `Dup` decides every bare
+-- occurrence — so widening the alias witness into "any aliased module's
+-- constructor wins" would clobber a local declaration, and refusing every module
+-- that declares a name some alias also reaches would reject this file outright.
+-- The refusal the alias strip now raises is scoped to an occurrence WRITTEN
+-- `A.Dup`, and this file writes none.
+import dupa as A
+
+public export data Plain =
+  | Dup Int
+  | Skip
+
+unPlain : Plain -> Int
+unPlain (Dup n) = n
+unPlain Skip = 0
+
+export
+bys : Int
+bys = unPlain (Dup 5) + A.unDA A.ANull

@@ -1,0 +1,5 @@
+-- One of two unrelated modules exporting an interface spelled `Speak`.  Neither
+-- imports the other, and both declarations stay legal: ambiguity is diagnosed at
+-- the USE site, never at the declaration.
+export interface Speak a where
+  speak : a -> Int

@@ -1,0 +1,11 @@
+-- The declaring module, from the drained #1373 pin.  `RA` is a multi-variant type
+-- whose FIRST variant carries named fields, so the field's owner is the
+-- constructor `Dup` and not the type `RA` -- the asymmetry that made a re-export
+-- hop drop it.
+public export data RA =
+  | Dup { dx : Int }
+  | ACount Int
+
+export unRA : RA -> Int
+unRA (Dup { dx }) = dx
+unRA (ACount n) = n

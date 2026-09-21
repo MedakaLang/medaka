@@ -1,0 +1,16 @@
+-- THE LOCAL COLLISION, which the import-provenance set cannot see.  Only ONE
+-- module brings a `Node` into scope here; the other is declared in this file, and
+-- an import map counts imports.  A BARE `Node` is settled by that declaration and
+-- is not contested, which is why `x` is not a row.  `A.Node` names ca's
+-- constructor explicitly and then strips onto the very key the local `data` owns,
+-- where the local declaration wins the bare-keyed table — so the qualified
+-- occurrence is refused rather than silently meaning `TLocal`'s.
+import ca as A
+
+data TLocal = Node Int
+
+x : TLocal
+x = Node 1
+
+y : A.TA
+y = A.Node 2

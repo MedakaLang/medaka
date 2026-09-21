@@ -1,0 +1,13 @@
+-- THE ALIAS CONSUMER of the same hop.  `import facade as F` binds every name the
+-- facade exports as `F.name`, constructors included, but the alias strip asks the
+-- facade's own export rows whether `MkT` is a constructor before it shortens
+-- `F.MkT`.  A hop that carried the type and dropped the constructor-OWNERSHIP edge
+-- answered no, the prefix survived, and this module failed with an unbound
+-- `F.MkT` while the byte-identical program through `import i as F` worked (#1359).
+import facade as F
+
+mkAlias : Int -> F.T
+mkAlias n = F.MkT n
+
+readAlias : F.T -> Int
+readAlias (F.MkT n) = n + F.unT (F.MkT n)

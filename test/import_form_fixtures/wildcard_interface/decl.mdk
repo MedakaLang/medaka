@@ -1,0 +1,12 @@
+-- The declarer for the import-form matrix: one module exporting a name in four
+-- namespaces at once — a type with a named-field variant (`Col`, `Node`/`Leaf`,
+-- field `lbl`), an interface (`Speak`), and a plain value (`plain`).  Every
+-- consumer beside it names all four, so a form that carries three of them and
+-- drops the fourth is a row here rather than a silent narrowing.
+public export data Col = Node { lbl : Int } | Leaf
+
+export interface Speak a where
+  speak : a -> Int
+
+export plain : Int -> Int
+plain x = x + 1

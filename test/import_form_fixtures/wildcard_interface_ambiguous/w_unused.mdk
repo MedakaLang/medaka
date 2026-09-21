@@ -1,0 +1,9 @@
+-- CONTROL — USE SITE, NOT IMPORT SITE.  Both declarers wildcard-imported, the
+-- colliding name never written.  Importing an ambiguity you never name stays
+-- legal, so this module contributes ZERO rows; moving the check to the import
+-- statement would light it up.
+import ia.*
+import ib.*
+
+untouched : Int -> Int
+untouched n = n

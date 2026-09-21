@@ -1,0 +1,12 @@
+-- IMPORT ORDER, ARM ONE: the alias clause written BEFORE the bare import of the
+-- other declarer.  A bare `import dupb` binds no names at all, so it cannot decide
+-- what `A.Dup` means — yet before the alias counted as a constructor witness, the
+-- scope overlay declined, the floor fell back to load order, and this arm rejected
+-- with `Type mismatch: DA vs DB` while its twin below compiled.
+import k.{Tag, tag}
+import dupa as A
+import dupb
+
+export
+ofirst : Int
+ofirst = tag (A.Dup 1)

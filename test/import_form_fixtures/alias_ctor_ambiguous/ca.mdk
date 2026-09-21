@@ -1,0 +1,4 @@
+-- One of two unrelated modules exporting a constructor spelled `Node`.  Neither
+-- imports the other, and both declarations stay legal: the collision is
+-- diagnosed at the USE site, never at the declaration.
+public export data TA = Node Int

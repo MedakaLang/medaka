@@ -187,6 +187,14 @@ test: medaka
 	## import closure, but nothing else runs `medaka test` on it, so
 	## without this line the memo assertions would never execute.
 	./medaka test compiler/frontend/resolve.mdk
+	## S-a-missing-companion-is-a-red-gate (#1685): compiler/frontend/
+	## resolve_test.mdk is a `*_test.mdk` sibling, outside every entry's
+	## import closure ([W-MODULE-BLIND]), so without this line its
+	## structural `ModuleExports`/`reExp*From` companion census would never
+	## run. `--native`: parsing resolve.mdk's own live source needs
+	## `readFile`, an extern `medaka test`'s default interpreter engine does
+	## not bind.
+	./medaka test --native compiler/frontend/resolve_test.mdk
 	## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
 	## in-language suite (lib + main) has no floor gate of any kind, and a
 	## directory target already grades every assertion in it with one exit

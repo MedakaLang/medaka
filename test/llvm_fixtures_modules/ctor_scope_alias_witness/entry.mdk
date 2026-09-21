@@ -1,0 +1,32 @@
+-- #1359: a WHOLE-MODULE ALIAS witnesses the constructors it qualifies.  Before the
+-- fix, `import m as A` counted for nothing when the per-module constructor scope
+-- was decided, so `A.Dup` fell back to whatever the graph's load order had left on
+-- the bare key — and a second, unrelated module declaring `Dup` took it.
+--
+-- Four consumers, one per way the unrelated declarer can be reachable, because a
+-- fix that only handled the directly-imported case would be green on the other
+-- three: bare-imported with the alias clause first, the same swapped (the pair is
+-- the ACCEPTANCE assertion — one arm used to reject), selectively imported without
+-- `(..)`, and reached only transitively.  `bystand` is the fifth and asserts about
+-- code that takes no part in the collision.
+--
+-- Expected output, derived by hand before any capture:
+--   ofirst = tag (A.Dup 1)                    = 1      (dupa's impl: n)
+--   olast  = tag (A.Dup 2)                    = 2
+--   vsel   = tag (A.Dup 3)                    = 3
+--   vtr    = tag (A.Dup 4) + mb - 9           = 4 + 9 - 9 = 4
+--   bys    = unPlain (Dup 5) + unDA ANull     = 5 + 7 = 12
+-- A resolution to dupb's `Dup` instead adds 100 to any of the first four.
+import ordfirst.{ofirst}
+import ordlast.{olast}
+import viasel.{vsel}
+import viatrans.{vtr}
+import bystand.{bys}
+
+main : <IO> Unit
+main =
+  let _ = putStrLn (intToString ofirst)
+  let _ = putStrLn (intToString olast)
+  let _ = putStrLn (intToString vsel)
+  let _ = putStrLn (intToString vtr)
+  putStrLn (intToString bys)

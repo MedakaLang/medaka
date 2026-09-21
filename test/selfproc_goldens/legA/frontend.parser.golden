@@ -588,6 +588,8 @@ upperBrace : String -> ParserE <> Expr
 upperNameFor : Token -> ParserE <> String
 upperNameP : ParserE <> String
 upperPatRest : String -> Token -> ParserE <> Pat
+upperQualFor : String -> Token -> Token -> ParserE <> String
+upperQualTail : String -> ParserE <> String
 upperTail : String -> Token -> ParserE <> Expr
 variantBoundaryAt : Array Token -> Int -> Int -> Int -> Bool -> Token -> List Int
 variantBoundaryGo : Array Token -> Int -> Int -> Int -> Bool -> List Int

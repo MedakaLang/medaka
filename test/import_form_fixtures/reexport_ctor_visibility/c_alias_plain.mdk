@@ -1,0 +1,13 @@
+-- THE NEGATIVE CONTROL for the alias spelling.  `facade_plain` re-exported `T`
+-- abstractly, so it carries no constructor and no ownership edge for it, and the
+-- strip's guard must still refuse to shorten `P.MkT` — an unguarded strip would
+-- turn it into a bare `MkT` that the graph's other `T` supplies at exit 0.  The
+-- type itself still resolves through the same alias, so the refusal is about the
+-- constructor and not about the hop being empty.
+import facade_plain as P
+
+readPlain : P.T -> Int
+readPlain x = P.unT x
+
+mkPlain : Int -> P.T
+mkPlain n = P.MkT n

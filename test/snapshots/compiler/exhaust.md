@@ -1,5 +1,5 @@
 # META
-source_lines=1106
+source_lines=1136
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted exhaust stage — standalone
@@ -71,6 +71,7 @@ import support.util.{
   joinWith,
   orElseOpt,
   reverseL,
+  splitOnChar,
 }
 
 -- ── small helpers ─────────────────────────────────────────────────────────
@@ -327,14 +328,20 @@ desugarPat _ (PLit LUnit) = PCon "Unit" []
 desugarPat _ (PLit l) = PLit l
 desugarPat oracle (PTuple ps) =
   PCon (tupleCtorName (listLen ps)) (map (desugarPat oracle) ps)
-desugarPat oracle (PCon c args) = PCon c (map (desugarPat oracle) args)
+desugarPat oracle (PCon c args) =
+  PCon (oracleCtorName oracle c) (map (desugarPat oracle) args)
 desugarPat oracle (PCons h t) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle t]
 desugarPat _ (PList []) = PCon "Nil" []
 desugarPat oracle (PList (h :: rest)) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ p) = desugarPat oracle p
-desugarPat oracle (PRec name fields _) = match oGetCtorFields oracle name
+desugarPat oracle (PRec name fields _) =
+  desugarRecPat oracle (oracleCtorName oracle name) fields
+desugarPat _ (PRng _ _ _) = PWild
+
+desugarRecPat : Oracle -> String -> List RecPatField -> Pat
+desugarRecPat oracle name fields = match oGetCtorFields oracle name
   -- Lower a record pattern to a constructor-tagged row.  This arm handles the
   -- `...` (open) form too: `...` means "and I don't care about the other
   -- FIELDS", never "...the CONSTRUCTOR", and `lookupRecField` already yields
@@ -348,7 +355,30 @@ desugarPat oracle (PRec name fields _) = match oGetCtorFields oracle name
 
   None => PWild
   Some fieldOrder => PCon name (map (lookupRecField oracle fields) fieldOrder)
-desugarPat _ (PRng _ _ _) = PWild
+
+-- `A.Leaf` written through a module alias (#1287).  The clause-coverage pass runs
+-- on the RAW pre-resolve tree, where the prefix is still attached, while every
+-- oracle table is keyed by the BARE constructor name — so a dotted head matches no
+-- row and the column degrades to "unknown constructor" in BOTH directions: a
+-- `PCon` head that covers nothing (a spurious W-NONEXHAUSTIVE-CLAUSES on a total
+-- group) and a `PRec` head whose field layout is unknown, which `desugarPat`
+-- collapses to `PWild` — the wildcard that hides a REAL gap.
+--
+-- The guard is the oracle itself, not an alias list: shorten only when the dotted
+-- spelling names no constructor and the bare suffix does.  A name with no dot, a
+-- dotted name the oracle already knows, and a suffix that is not a constructor are
+-- all returned untouched, so nothing outside the alias spelling moves.
+oracleCtorName : Oracle -> String -> String
+oracleCtorName oracle c = match splitOnChar '.' c
+  [_, base] => oracleKnownName oracle c base
+  _ => c
+
+oracleKnownName : Oracle -> String -> String -> String
+oracleKnownName oracle c base = match oGetCtorType oracle c
+  Some _ => c
+  None => match oGetCtorType oracle base
+    Some _ => base
+    None => c
 
 lookupRecField : Oracle -> List RecPatField -> String -> Pat
 lookupRecField oracle fields fn = match findRecField fn fields
@@ -1112,7 +1142,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "orElseOpt" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DTypeSig true "tupleCtorName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorName" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tuple")) (EApp (EVar "display") (EVar "n"))) (ELit (LString "__"))))
 (DTypeSig false "tupleArityOfName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
@@ -1191,13 +1221,19 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LUnit"))) (EApp (EApp (EVar "PCon") (ELit (LString "Unit"))) (EListLit)))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PVar "l"))) (EApp (EVar "PLit") (EVar "l")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "PCon") (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EApp (EApp (EVar "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "ps"))))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EVar "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "args"))))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EVar "PCon") (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "c"))) (EApp (EApp (EVar "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "args"))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "t")))))
 (DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (ELit (LString "Nil"))) (EListLit)))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
+(DTypeSig false "desugarRecPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Pat")))))
+(DFunDef false "desugarRecPat" ((PVar "oracle") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EVar "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
+(DTypeSig false "oracleCtorName" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "oracleCtorName" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "c")) (arm (PList PWild (PVar "base")) () (EApp (EApp (EApp (EVar "oracleKnownName") (EVar "oracle")) (EVar "c")) (EVar "base"))) (arm PWild () (EVar "c"))))
+(DTypeSig false "oracleKnownName" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "oracleKnownName" ((PVar "oracle") (PVar "c") (PVar "base")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "oracle")) (EVar "c")) (arm (PCon "Some" PWild) () (EVar "c")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "oracle")) (EVar "base")) (arm (PCon "Some" PWild) () (EVar "base")) (arm (PCon "None") () (EVar "c"))))))
 (DTypeSig false "lookupRecField" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "String") (TyCon "Pat")))))
 (DFunDef false "lookupRecField" ((PVar "oracle") (PVar "fields") (PVar "fn")) (EMatch (EApp (EApp (EVar "findRecField") (EVar "fn")) (EVar "fields")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PCon "None")) () (EVar "PWild")) (arm (PCon "Some" (PCon "Some" (PVar "p"))) () (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))))
 (DTypeSig false "findRecField" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "Option") (TyApp (TyCon "Option") (TyCon "Pat"))))))
@@ -1501,7 +1537,7 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Loc" false) (mem "Ty" true) (mem "Constraint" true) (mem "Pat" true) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "DoStmt" true) (mem "InterpPart" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "Section" true) (mem "FunClause" true) (mem "LetBind" true) (mem "Expr" true) (mem "UseMember" true) (mem "UsePath" true) (mem "PropParam" true) (mem "MethodDefault" true) (mem "IfaceMethod" true) (mem "Super" true) (mem "Require" true) (mem "ImplMethod" true) (mem "DataVis" true) (mem "Field" true) (mem "ConPayload" true) (mem "Variant" true) (mem "Decl" true) (mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "tabKeyName" false) (mem "lookupTab" false))))
 (DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omEmpty" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromPairs" false))))
-(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "orElseOpt" false) (mem "reverseL" false))))
+(DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "allList" false) (mem "anyList" false) (mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "joinWith" false) (mem "orElseOpt" false) (mem "reverseL" false) (mem "splitOnChar" false))))
 (DTypeSig true "tupleCtorName" (TyFun (TyCon "Int") (TyCon "String")))
 (DFunDef false "tupleCtorName" ((PVar "n")) (EBinOp "++" (EBinOp "++" (ELit (LString "__tuple")) (EApp (EMethodRef "display") (EVar "n"))) (ELit (LString "__"))))
 (DTypeSig false "tupleArityOfName" (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Int"))))
@@ -1580,13 +1616,19 @@ exhaustToLines prog = exhaustToLinesWith prog prog
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PCon "LUnit"))) (EApp (EApp (EVar "PCon") (ELit (LString "Unit"))) (EListLit)))
 (DFunDef false "desugarPat" (PWild (PCon "PLit" (PVar "l"))) (EApp (EVar "PLit") (EVar "l")))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PTuple" (PVar "ps"))) (EApp (EApp (EVar "PCon") (EApp (EVar "tupleCtorName") (EApp (EVar "listLen") (EVar "ps")))) (EApp (EApp (EMethodRef "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "ps"))))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EVar "PCon") (EVar "c")) (EApp (EApp (EMethodRef "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "args"))))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCon" (PVar "c") (PVar "args"))) (EApp (EApp (EVar "PCon") (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "c"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "desugarPat") (EVar "oracle"))) (EVar "args"))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PCons" (PVar "h") (PVar "t"))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "t")))))
 (DFunDef false "desugarPat" (PWild (PCon "PList" (PList))) (EApp (EApp (EVar "PCon") (ELit (LString "Nil"))) (EListLit)))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PList" (PCons (PVar "h") (PVar "rest")))) (EApp (EApp (EVar "PCon") (ELit (LString "Cons"))) (EListLit (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "h")) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EApp (EVar "PList") (EVar "rest"))))))
 (DFunDef false "desugarPat" ((PVar "oracle") (PCon "PAs" PWild PWild (PVar "p"))) (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))
-(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
+(DFunDef false "desugarPat" ((PVar "oracle") (PCon "PRec" (PVar "name") (PVar "fields") PWild)) (EApp (EApp (EApp (EVar "desugarRecPat") (EVar "oracle")) (EApp (EApp (EVar "oracleCtorName") (EVar "oracle")) (EVar "name"))) (EVar "fields")))
 (DFunDef false "desugarPat" (PWild (PCon "PRng" PWild PWild PWild)) (EVar "PWild"))
+(DTypeSig false "desugarRecPat" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyCon "Pat")))))
+(DFunDef false "desugarRecPat" ((PVar "oracle") (PVar "name") (PVar "fields")) (EMatch (EApp (EApp (EVar "oGetCtorFields") (EVar "oracle")) (EVar "name")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PVar "fieldOrder")) () (EApp (EApp (EVar "PCon") (EVar "name")) (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "lookupRecField") (EVar "oracle")) (EVar "fields"))) (EVar "fieldOrder"))))))
+(DTypeSig false "oracleCtorName" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyCon "String"))))
+(DFunDef false "oracleCtorName" ((PVar "oracle") (PVar "c")) (EMatch (EApp (EApp (EVar "splitOnChar") (ELit (LChar "."))) (EVar "c")) (arm (PList PWild (PVar "base")) () (EApp (EApp (EApp (EVar "oracleKnownName") (EVar "oracle")) (EVar "c")) (EVar "base"))) (arm PWild () (EVar "c"))))
+(DTypeSig false "oracleKnownName" (TyFun (TyCon "Oracle") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
+(DFunDef false "oracleKnownName" ((PVar "oracle") (PVar "c") (PVar "base")) (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "oracle")) (EVar "c")) (arm (PCon "Some" PWild) () (EVar "c")) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "oGetCtorType") (EVar "oracle")) (EVar "base")) (arm (PCon "Some" PWild) () (EVar "base")) (arm (PCon "None") () (EVar "c"))))))
 (DTypeSig false "lookupRecField" (TyFun (TyCon "Oracle") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyFun (TyCon "String") (TyCon "Pat")))))
 (DFunDef false "lookupRecField" ((PVar "oracle") (PVar "fields") (PVar "fn")) (EMatch (EApp (EApp (EVar "findRecField") (EVar "fn")) (EVar "fields")) (arm (PCon "None") () (EVar "PWild")) (arm (PCon "Some" (PCon "None")) () (EVar "PWild")) (arm (PCon "Some" (PCon "Some" (PVar "p"))) () (EApp (EApp (EVar "desugarPat") (EVar "oracle")) (EVar "p")))))
 (DTypeSig false "findRecField" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "RecPatField")) (TyApp (TyCon "Option") (TyApp (TyCon "Option") (TyCon "Pat"))))))

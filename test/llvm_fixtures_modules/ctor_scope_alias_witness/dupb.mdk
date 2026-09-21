@@ -1,0 +1,14 @@
+-- The module no consumer means.  Its `Dup` wraps the same payload as dupa's ON
+-- PURPOSE, so a use site that resolved to it still typechecks and this fixture
+-- asserts WHICH constructor won rather than a downstream type mismatch standing in
+-- for the answer.  The `+ 100` is what makes the two distinguishable at runtime.
+import k.{Tag, tag}
+
+public export data DB = Dup Int
+
+impl Tag DB where
+  tag (Dup n) = n + 100
+
+export
+unDB : DB -> Int
+unDB (Dup n) = n

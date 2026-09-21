@@ -32,6 +32,7 @@ declBodyWarnings : Oracle -> Decl -> List (String, Option Loc)
 defRow : List Pat -> Option (List Pat)
 defaultMatrix : List (List Pat) -> List (List Pat)
 desugarPat : Oracle -> Pat -> Pat
+desugarRecPat : Oracle -> String -> List RecPatField -> Pat
 digitVal : Char -> Int
 doStmtBinds : DoStmt -> List LetBind
 exhaustToLines : List Decl -> String
@@ -79,6 +80,8 @@ oGetArity : Oracle -> String -> Int
 oGetCtorFields : Oracle -> String -> Option (List String)
 oGetCtorType : Oracle -> String -> Option TabKey
 oGetCtors : Oracle -> TabKey -> Option (List String)
+oracleCtorName : Oracle -> String -> String
+oracleKnownName : Oracle -> String -> String -> String
 oracleMap : List (String, a) -> Map String a
 parenWrapWit : Bool -> String -> String
 parseDigits : Array Char -> Int -> Int -> Option Int

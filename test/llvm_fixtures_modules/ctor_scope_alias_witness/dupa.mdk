@@ -1,0 +1,18 @@
+-- The module every consumer MEANS, reached only through a whole-module alias.
+-- `ANull` is the non-colliding sibling: `bystand` needs one name from here that no
+-- local declaration contests, or "the local constructor still wins" could be bought
+-- by dropping the import rather than by scoping it.
+import k.{Tag, tag}
+
+public export data DA =
+  | Dup Int
+  | ANull
+
+impl Tag DA where
+  tag (Dup n) = n
+  tag ANull = 0
+
+export
+unDA : DA -> Int
+unDA (Dup n) = n
+unDA ANull = 7

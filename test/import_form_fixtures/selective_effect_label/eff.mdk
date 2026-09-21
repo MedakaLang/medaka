@@ -1,0 +1,6 @@
+-- The declarer for the effect-label half of the matrix (#3293): one exported
+-- effect label and one exported value that carries it.
+export effect Logging
+
+export doLog : Int -> <Logging> Int
+doLog x = x + 1

@@ -1,0 +1,6 @@
+-- CONTROL 1 — the label check is not vacuous: a label `eff` does not declare is
+-- still rejected under the wildcard that reaches every label it does.
+import eff.*
+
+bad : Int -> <Wibble> Int
+bad x = x + 1

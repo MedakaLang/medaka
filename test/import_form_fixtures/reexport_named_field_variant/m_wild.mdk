@@ -1,0 +1,5 @@
+-- The same program through the wildcard hop.
+import bre_wild.{RA, Dup, unRA}
+
+sevenWild : Int
+sevenWild = unRA (Dup { dx = 7 })

@@ -1,0 +1,26 @@
+-- THE PARITY TWIN: the selective spelling of the same import, carrying all four
+-- interface occurrence positions and all four namespaces in one module.  The two
+-- forms have to agree by BOTH accepting: narrowing the selective form down to a
+-- lossy wildcard would also make them agree, and this module is what reds when
+-- that is how the agreement is reached.
+import decl.{Col, Node, Leaf, Speak, speak, plain}
+
+shoutSel : Speak a => a -> Int
+shoutSel x = speak x
+
+labelOfSel : Col -> Int
+labelOfSel (Node { lbl = n }) = plain n
+labelOfSel Leaf = 0
+
+data LocalSel = LocalSel
+
+impl Speak LocalSel where
+  speak _ = 1
+
+data BoxSel a = BoxSel a
+
+impl Speak (BoxSel a) requires Speak a where
+  speak _ = 1
+
+interface YellSel a requires Speak a where
+  yellSel : a -> Int

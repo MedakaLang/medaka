@@ -1,0 +1,8 @@
+-- THE CONTROL, the pin's `control.mdk`: the one variable removed.  `Dup` comes
+-- straight from its declaring module, no hop.  This was always green, so a row
+-- here means record construction or named-field variants broke in general rather
+-- than that the hop was fixed.
+import bmod.{RA, Dup, unRA}
+
+sevenDirect : Int
+sevenDirect = unRA (Dup { dx = 7 })

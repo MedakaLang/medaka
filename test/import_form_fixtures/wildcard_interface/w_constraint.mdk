@@ -1,0 +1,11 @@
+-- WILDCARD, interface occurrence 1/4: a `=>` predicate (#1251).  The other three
+-- namespaces `decl` exports are named in the same module, so this row stays zero
+-- only if `.*` carries all four.
+import decl.*
+
+shout : Speak a => a -> Int
+shout x = speak x
+
+labelOf : Col -> Int
+labelOf (Node { lbl = n }) = plain n
+labelOf Leaf = 0

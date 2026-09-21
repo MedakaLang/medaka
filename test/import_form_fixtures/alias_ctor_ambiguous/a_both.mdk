@@ -1,0 +1,14 @@
+-- THE COST OF QUALIFYING, ASSERTED.  Two aliases, each naming its own module's
+-- `Node`, so the two use sites are spelled apart and resolve sees no collision
+-- among its import-local names.  The collision is downstream: the alias prefix
+-- is stripped before typecheck, whose constructor table is keyed by the bare
+-- name and would keep whichever import folded last.  Both spellings are rows,
+-- because nothing in the program says which of the two the author meant to win.
+import ca as A
+import cb as B
+
+x : A.TA
+x = A.Node 1
+
+y : B.TB
+y = B.Node 2

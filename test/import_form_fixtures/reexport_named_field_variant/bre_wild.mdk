@@ -1,0 +1,3 @@
+-- The hop, spelled as a wildcard.  Both spellings re-export `Dup`, so both owe the
+-- consumer `Dup`'s fields.
+export import bmod.*

@@ -1,7 +1,0 @@
-public export data RA =
-  | Dup { dx : Int }
-  | ACount Int
-
-export unRA : RA -> Int
-unRA (Dup { dx }) = dx
-unRA (ACount n) = n
