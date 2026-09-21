@@ -1,0 +1,53 @@
+{- | Floor gate for four modules that no roster, gate or production entry
+   reaches today (#3081): `test/probe_runner.mdk`, plus three compiler
+   modules ([W-MODULE-BLIND] — outside every entry's import closure, so
+   `make medaka`, `make check-self` and `test/typecheck_compiler_source.sh`
+   walk none of them) that this gate picks up alongside it:
+   `compiler/tools/gate_cost.mdk`, `compiler/support/util.mdk` and
+   `compiler/support/manifest.mdk`.
+
+   THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
+   indistinguishable from "this passed"): a `medaka test` file with zero
+   assertions exits 0, vacuously green. So exit 0 alone is not enough. Each
+   module's executed-assertion count (`summary.passed` from `medaka test
+   --json`) must meet the floor committed below.
+
+   A fixed, small, non-growing set of four modules from two unrelated
+   directories plus `test/` itself, so this is four explicit `test "…"`
+   declarations rather than a directory-walk closure check (the shape
+   `test/stdlib_suite_test.mdk` uses, over the whole of `stdlib/`).
+
+   `Makefile`'s `test:` target invokes this file directly, and
+   `test/CI-COVERAGE-TOOLS.txt` records why it is reached there rather than
+   through a `test/gates.toml` row. -}
+
+import test.{Expectation(..)}
+import test_process.{testAssertionCount, underRoot}
+
+{- | Grades one module's floor: its executed-assertion count must be at
+   least the committed floor. A raw spawn/run error is reported by name
+   rather than folded into a generic failure, so a broken module and a
+   count that merely fell short read differently. -}
+floorExpectation : String -> Int -> <Exec "_", IO> Expectation
+floorExpectation path floor = match testAssertionCount (underRoot path) []
+  Err e => Fail e "\{intToString floor} assertions" "spawn/run error"
+  Ok ran =>
+    if ran >= floor then
+      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
+    else
+      Fail
+        "\{path} — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
+        "\{intToString floor} assertions"
+        "\{intToString ran} assertions"
+
+test "compiler/tools/gate_cost.mdk executed >= 20 assertions" =
+  floorExpectation "compiler/tools/gate_cost.mdk" 20
+
+test "compiler/support/util.mdk executed >= 7 assertions" =
+  floorExpectation "compiler/support/util.mdk" 7
+
+test "compiler/support/manifest.mdk executed >= 8 assertions" =
+  floorExpectation "compiler/support/manifest.mdk" 8
+
+test "test/probe_runner.mdk executed >= 4 assertions" =
+  floorExpectation "test/probe_runner.mdk" 4
