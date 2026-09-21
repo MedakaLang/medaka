@@ -12,7 +12,7 @@
 -- (`seedPropRng`/`randBoolL`), independent of any `prop`'s randomized-length
 -- `List Bool` generation.
 
-import test.{expectTrue}
+import test.{expectEach, expectTrue}
 import tools.prop_runner.{seedPropRng, randBoolL}
 import list.{nub}
 
@@ -37,7 +37,14 @@ strictlyAlternates (a :: b :: rest) = a /= b && strictlyAlternates (b :: rest)
 test "a run of Bool draws hits both values and is not a fixed alternation" =
   let _ = seedPropRng 123456789
   let draws = drawBools 100
-  expectTrue (hasTrue draws && hasFalse draws && not (strictlyAlternates draws))
+  expectEach [
+    ("some draw is True", expectTrue (hasTrue draws)),
+    ("some draw is False", expectTrue (hasFalse draws)),
+    (
+      "the draws are not a strict alternation",
+      expectTrue (not (strictlyAlternates draws)),
+    ),
+  ]
 
 -- Bit-window periodicity regression (#2344 slice 1 residual): a shift/
 -- truncate fix (`s / 256`) still leaves every contiguous bit-window of the

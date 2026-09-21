@@ -415,9 +415,10 @@ Passes when two texts are equal, naming the first line at which they
 diverge.
 
 `expectEqualText` without the normalizer: nothing is stripped, so a text
-whose last line is exactly `0` compares as itself. A query result set
-ending in a `0` row and one that printed no row at all are different
-answers, and only this separates them.
+whose last line is exactly `0` compares as itself. Use this whenever a
+trailing `()` or whole-line `0` is part of the real answer rather than a
+driver artifact. `expectEqualText`'s normalizer exists only to absorb that
+artifact, not to disambiguate two genuinely different answers.
 
 Whole texts rather than line lists, so a caller holding captured output
 compares it directly; a caller holding lines joins them with `"\n"`.
@@ -428,7 +429,7 @@ Pass "a\nb" "a\nb"
 > expectEqualLines "a\nb" "a\nc"
 Fail "line 2: expected \"b\" but got \"c\"" "a\nb" "a\nc"
 > expectEqualLines "a" "a\nb"
-Fail "line 2: expected nothing but got \"b\"" "a" "a\nb"
+Fail "line 2: expected nothing but got \"b\" (1 line remaining)" "a" "a\nb"
 ```
 
 ### `expectAll`

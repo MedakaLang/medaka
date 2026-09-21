@@ -69,8 +69,16 @@ test "known keys occupy adjacent protocol depths" = expectEach [
 
 test "lookup finds exact keys and misses absent keys" =
   let tree = mustTree (mstFromEntries [(key0, value0)])
-  expectTrue
-    (lookupIs (mstLookup key0 tree) value0 && isNone (mstLookup key1 tree))
+  expectEach [
+    (
+      "an inserted key is found",
+      expectTrue (lookupIs (mstLookup key0 tree) value0),
+    ),
+    (
+      "a key never inserted is absent",
+      expectTrue (isNone (mstLookup key1 tree)),
+    ),
+  ]
 
 test "insert rejects an existing key" =
   let tree = mustTree (mstInsert key0 value0 mstEmpty)
@@ -79,9 +87,16 @@ test "insert rejects an existing key" =
 test "replace changes only the selected value" =
   let tree = mustTree (mstFromEntries [(key0, value0), (key1, value1)])
   let updated = mustTree (mstReplace key0 value1 tree)
-  expectTrue
-    (lookupIs (mstLookup key0 updated) value1
-      && lookupIs (mstLookup key1 updated) value1)
+  expectEach [
+    (
+      "the replaced key now carries the new value",
+      expectTrue (lookupIs (mstLookup key0 updated) value1),
+    ),
+    (
+      "the untouched key still carries its own value",
+      expectTrue (lookupIs (mstLookup key1 updated) value1),
+    ),
+  ]
 
 test "replace rejects a missing key" =
   expectTrue (isErr (mstReplace key0 value1 mstEmpty))
@@ -89,19 +104,29 @@ test "replace rejects a missing key" =
 test "delete removes exactly one key" =
   let tree = mustTree (mstFromEntries [(key0, value0), (key1, value1)])
   let updated = mustTree (mstDelete key0 tree)
-  expectTrue
-    (isNone (mstLookup key0 updated)
-      && lookupIs (mstLookup key1 updated) value1)
+  expectEach [
+    ("the deleted key is gone", expectTrue (isNone (mstLookup key0 updated))),
+    (
+      "the other key survives the delete",
+      expectTrue (lookupIs (mstLookup key1 updated) value1),
+    ),
+  ]
 
 test "delete-to-empty restores the canonical empty root" =
   let tree = mustTree (mstInsert key0 value0 mstEmpty)
   let empty = mustTree (mstDelete key0 tree)
   expectTrue (cidEqual (mstRootCid empty) (mstRootCid mstEmpty))
 
-test "from-entries rejects empty and duplicate keys" =
-  expectTrue
-    (isErr (mstFromEntries [([||], value0)])
-      && isErr (mstFromEntries [(key0, value0), (key0, value1)]))
+test "from-entries rejects empty and duplicate keys" = expectEach [
+  (
+    "an empty key is rejected",
+    expectTrue (isErr (mstFromEntries [([||], value0)])),
+  ),
+  (
+    "a duplicate key is rejected",
+    expectTrue (isErr (mstFromEntries [(key0, value0), (key0, value1)])),
+  ),
+]
 
 test "entry and root byte views are defensive copies" =
   let tree = mustTree (mstInsert key0 value0 mstEmpty)
@@ -190,7 +215,7 @@ test "every single-key mutation matches a from-scratch build" =
   expectEach [
     ("every step matched", expectTrue ok),
     (
-      "final root == empty root",
+      "deleting every key returns to the empty root",
       expectTrue (cidEqual (mstRootCid final) (mstRootCid mstEmpty)),
     ),
   ]

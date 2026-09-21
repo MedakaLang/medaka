@@ -185,7 +185,7 @@ rows = [
     goldenSuffix = ".expected",
     sorted = True,
     stripUnit = True,
-    fixtures = 41,
+    fixtures = 45,
   },
   Row {
     gate = "diff_compiler_lint_fix",
@@ -195,7 +195,7 @@ rows = [
     goldenSuffix = ".fixed",
     sorted = False,
     stripUnit = False,
-    fixtures = 21,
+    fixtures = 23,
   },
 ]
 

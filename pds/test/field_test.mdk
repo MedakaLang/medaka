@@ -15,7 +15,7 @@
    rather than by hand-typed hex. -}
 
 import array.{setInPlace}
-import test.{expectEach, expectEqual, expectTrue, expectFalse}
+import test.{expectEach, expectEqual, expectSatisfies, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
 import lib.field.{
   Fe,
@@ -154,10 +154,17 @@ test "fixed-control select visits both choices without changing their values" =
       samples
       samples2)
 
-test "fixed-control negation agrees with field negation, including zero" =
-  expectTrue
-    (feEqual (feNegateCt feZero) feZero
-      && all (a => feEqual (feNegateCt a) (feNegate a)) samples)
+test "fixed-control negation agrees with field negation, including zero" = expectEach
+  [
+    (
+      "fixed-control negation leaves zero at zero",
+      expectTrue (feEqual (feNegateCt feZero) feZero),
+    ),
+    (
+      "fixed-control negation agrees with plain negation on every sample",
+      expectTrue (all (a => feEqual (feNegateCt a) (feNegate a)) samples),
+    ),
+  ]
 
 -- ── Multiplicative structure ──────────────────────────────────────────
 
@@ -210,7 +217,10 @@ test "fromBytes >> toBytes round-trips at every limb boundary (incl. the 26/22 s
   expectTrue (all roundTrips sampleBytes)
 
 test "toBytes is 32 bytes" =
-  expectTrue (all (a => arrayLength (feToBytes a) == 32) samples)
+  expectSatisfies
+    "every sample to encode to 32 bytes"
+    (all (n => n == 32))
+    (map (a => arrayLength (feToBytes a)) samples)
 
 test "fromBytes REJECTS p" = expectTrue (match feFromBytes pBytes
   Err _ => True
@@ -246,8 +256,8 @@ test "fromBytesReduce ACCEPTS 2^256-1" =
 -- ── Parity ────────────────────────────────────────────────────────────
 
 test "isOdd 1 is True, isOdd 0 is False" = expectEach [
-  ("feIsOdd feOne", expectTrue (feIsOdd feOne)),
-  ("not (feIsOdd feZero)", expectFalse (feIsOdd feZero)),
+  ("one is odd", expectTrue (feIsOdd feOne)),
+  ("zero is even", expectFalse (feIsOdd feZero)),
 ]
 
 -- `p` has an odd low byte, but public reduction maps it to the canonical

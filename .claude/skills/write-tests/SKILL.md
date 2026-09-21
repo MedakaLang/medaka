@@ -68,6 +68,16 @@ hand-roll a verb this table already names: the hand-rolled form is what keeps
 losing the operand, the label or the reason. Signatures are in
 `docs/stdlib/index.md`, name by name, generated from the source.
 
+Three of the rows below are also enforced, syntactically, by
+`compiler/tools/lint.mdk` (#3235): `rule-test-bool-literal-equal`
+(`expectEqual True e`), `rule-test-equal-in-true` (`expectTrue (a == b)`) and
+`rule-test-prelude-shadow` (a `*_test.mdk` redeclaring the prelude's
+`isOk`/`isErr`/`isSome`/`isNone`). The first two carry `--fix`. They are gated,
+not baselined, so a new one of those three shapes fails the commit rather than
+accumulating. Everything else in this table is yours to get right. A sprint
+packet whose §5 names a test file should name the verb from here too — see the
+`sprint-packet` skill's §5 Sites.
+
 ### `stdlib/test.mdk`
 
 | You have | Verb | Instead of |

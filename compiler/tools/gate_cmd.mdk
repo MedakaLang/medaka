@@ -103,6 +103,7 @@ import string.{
   fromChars,
   isAlpha,
   isAlphaNum,
+  isDigit,
   split as strSplit,
 }
 
@@ -1662,7 +1663,6 @@ gradeEvidenceMarkers = [
   "expectCheckReject",
   "expectVerbExitStartsWith",
   "expectSpawnFails",
-  "expectSpawnFailsAll",
   "expectSpawnOk",
   "processFailure",
   "Code /=",
@@ -1676,6 +1676,96 @@ gradeEvidenceMarkers = [
 anyMarker : List String -> String -> Bool
 anyMarker [] _ = False
 anyMarker (m :: ms) src = strContains m src || anyMarker ms src
+
+{- | Structural grading evidence: a chunk whose text contains a match arm
+   of the shape `Ok (<int literal>, ...) =>` — a spawn result tuple
+   destructured directly on its exit code, with no marker string anywhere
+   in sight (`sqlite/test/oracle_support.mdk`'s `spawnRaw`, #3261 item 2).
+   Textual markers alone miss this: the code is read, but never through a
+   name or comparison `gradeEvidenceMarkers` recognizes.
+
+   The trailing `=>` is part of the shape, not decoration: without it the
+   same text is a plain `Result` construction (`Ok (0, "", "")`), which
+   grades nothing. And a tuple that fails the shape only rules itself out,
+   so the scan runs to the end of the chunk: a wildcard arm `Ok (_, out, _)
+   => Ok out` textually ahead of the grading one must not answer for it. -}
+hasOkIntTuple : String -> Bool
+hasOkIntTuple text =
+  let cs = stringToChars text
+  okIntTupleAt cs (arrayLength cs) 0
+
+okIntTupleAt : Array Char -> Int -> Int -> Bool
+okIntTupleAt cs n i
+  | i + 4 > n = False
+  | okOpenAt cs i && okIntArmAt cs n i = True
+  | otherwise = okIntTupleAt cs n (i + 1)
+
+okOpenAt : Array Char -> Int -> Bool
+okOpenAt cs i =
+  arrayGetUnsafe i cs == 'O'
+    && arrayGetUnsafe (i + 1) cs == 'k'
+    && arrayGetUnsafe (i + 2) cs == ' '
+    && arrayGetUnsafe (i + 3) cs == '('
+
+-- `i` sits at the `O` of a matched `Ok (`: the tuple must open with an
+-- integer literal followed by a comma, and the paren closing it must be
+-- followed by the `=>` that makes the whole thing a match arm.
+okIntArmAt : Array Char -> Int -> Int -> Bool
+okIntArmAt cs n i =
+  intLiteralThenComma cs n (skipLayout cs n (i + 4))
+    && arrowAt cs n (skipLayout cs n (closeParen cs n (i + 4) 0))
+
+-- Blanks and newlines alike: a match arm may be written across two lines,
+-- and a chunk's text carries its newlines. Separate from the shared
+-- `skipBlanks`, whose line-scoped callers must keep stopping at a newline.
+skipLayout : Array Char -> Int -> Int -> Int
+skipLayout cs n i
+  | i < n && (arrayGetUnsafe i cs == ' ' || arrayGetUnsafe i cs == '\n') =
+    skipLayout cs n (i + 1)
+  | otherwise = i
+
+arrowAt : Array Char -> Int -> Int -> Bool
+arrowAt cs n i = charAtOr cs n i == '=' && charAtOr cs n (i + 1) == '>'
+
+-- The index just past the paren that closes the tuple whose own open paren
+-- ends at `i`. Nested parens and string literals inside the tuple are
+-- stepped over, so `Ok (127, _, Some (e)) =>` and `Ok (0, ")", "")` both
+-- close where the eye says they do. `n` when the text runs out first.
+closeParen : Array Char -> Int -> Int -> Int -> Int
+closeParen cs n i depth
+  | i >= n = n
+  | arrayGetUnsafe i cs == '"' = closeParen cs n (skipStrLit cs n (i + 1)) depth
+  | arrayGetUnsafe i cs == '(' = closeParen cs n (i + 1) (depth + 1)
+  | arrayGetUnsafe i cs /= ')' = closeParen cs n (i + 1) depth
+  | depth == 0 = i + 1
+  | otherwise = closeParen cs n (i + 1) (depth - 1)
+
+-- Index just past the closing `"` of a string literal whose opening quote
+-- has already been consumed; a backslashed character never closes it.
+skipStrLit : Array Char -> Int -> Int -> Int
+skipStrLit cs n i
+  | i >= n = n
+  | arrayGetUnsafe i cs == '\\' = skipStrLit cs n (i + 2)
+  | arrayGetUnsafe i cs == '"' = i + 1
+  | otherwise = skipStrLit cs n (i + 1)
+
+-- `i` sits just past `Ok (`, past any blanks: one or more digits followed
+-- by a comma is the exit-code-then-rest-of-tuple shape.
+intLiteralThenComma : Array Char -> Int -> Int -> Bool
+intLiteralThenComma cs n i =
+  i < n && isDigit (arrayGetUnsafe i cs) && afterIntLiteral cs n (i + 1)
+
+afterIntLiteral : Array Char -> Int -> Int -> Bool
+afterIntLiteral cs n i
+  | i < n && isDigit (arrayGetUnsafe i cs) = afterIntLiteral cs n (i + 1)
+  | otherwise = i < n && arrayGetUnsafe i cs == ','
+
+-- Grading evidence, either register: a textual marker, or the structural
+-- `Ok (<int>, ...)` shape. The three call sites below all reduce to this
+-- one predicate so the two registers can never drift apart between them.
+hasGradingEvidence : String -> Bool
+hasGradingEvidence text =
+  anyMarker gradeEvidenceMarkers text || hasOkIntTuple text
 
 {- | One top-level binding of a gate module: the comment-stripped lines from
    a column-0 identifier down to the next one, with a binding's signature and
@@ -2004,7 +2094,7 @@ relayReaches gateText c d
 
 spawnAnswered : String -> List GateChunk -> GateChunk -> Bool
 spawnAnswered gateFile cs c =
-  anyMarker gradeEvidenceMarkers c.text
+  hasGradingEvidence c.text
     || anyList (d => gradesFor c d) cs
     || c.file /= gateFile && anyList (d => relaysFor cs c d) cs
 
@@ -2023,7 +2113,7 @@ relaysFor cs c d
   | d.name == "import" = False
   | d.file == c.file && d.line == c.line = False
   | not (namesOther d c) = False
-  | anyMarker gradeEvidenceMarkers d.text = True
+  | hasGradingEvidence d.text = True
   | otherwise = anyList (e => gradesFor d e) cs
 
 {- | `d` is grading evidence that answers for `c`'s spawn: `d` carries a
@@ -2041,7 +2131,7 @@ gradesFor : GateChunk -> GateChunk -> Bool
 gradesFor c d
   | d.name == "import" = False
   | d.file == c.file && d.line == c.line = False
-  | not (anyMarker gradeEvidenceMarkers d.text) = False
+  | not (hasGradingEvidence d.text) = False
   | otherwise = namesOther c d || namesOther d c
 
 namesOther : GateChunk -> GateChunk -> Bool

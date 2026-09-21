@@ -46,9 +46,25 @@ test "compact parsing rejects zero, range, and high-S components" =
   let highS =
     bytes
       "a0b37f8fba683cc68f6574cd43b39f0343a50008bf6ccea9d13231d9e7e2e1e4ee12372cf8dabd69d9b51403c23893260446a5aca818c9f55a1d5e8be63972ef"
-  expectTrue
-    (isErr (ecdsaSignatureFromCompact zeroR)
-      && isErr (ecdsaSignatureFromCompact zeroS)
-      && isErr (ecdsaSignatureFromCompact rangeR)
-      && isErr (ecdsaSignatureFromCompact rangeS)
-      && isErr (ecdsaSignatureFromCompact highS))
+  expectEach [
+    (
+      "a zero r component is rejected",
+      expectTrue (isErr (ecdsaSignatureFromCompact zeroR)),
+    ),
+    (
+      "a zero s component is rejected",
+      expectTrue (isErr (ecdsaSignatureFromCompact zeroS)),
+    ),
+    (
+      "an r component at the group order is rejected",
+      expectTrue (isErr (ecdsaSignatureFromCompact rangeR)),
+    ),
+    (
+      "an s component at the group order is rejected",
+      expectTrue (isErr (ecdsaSignatureFromCompact rangeS)),
+    ),
+    (
+      "a high-S signature is rejected",
+      expectTrue (isErr (ecdsaSignatureFromCompact highS)),
+    ),
+  ]

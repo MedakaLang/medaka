@@ -1,0 +1,13 @@
+-- Fixture for rule-test-prelude-shadow (#3235), NEGATIVE half: the SAME four
+-- declarations as test/lint_fixtures/test_prelude_shadow_test.mdk, in a file
+-- whose name does not end `_test.mdk`.
+--
+-- Nothing here may produce a rule-test-prelude-shadow finding.  A non-test module
+-- that redeclares one of these names is making a considered choice about its own
+-- namespace; without this pair, a rule that silently dropped its filename scoping
+-- would still reproduce the positive fixture's golden.
+
+isOk r = r == 0
+isErr r = r /= 0
+isSome o = o == 1
+isNone o = o /= 1

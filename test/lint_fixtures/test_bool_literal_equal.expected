@@ -1,0 +1,26 @@
+warning: [rule-dead-code] private top-level 'bothLits' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'eqFalseLeft' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'eqFalseRight' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'eqTrueLeft' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'eqTrueRight' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'nestedEq' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'notEqualVerb' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'partialEq' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'plainEq' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-missing-signature] top-level 'bothLits' has no type signature. Add a `bothLits : …` declaration
+warning: [rule-missing-signature] top-level 'eqFalseLeft' has no type signature. Add a `eqFalseLeft : …` declaration
+warning: [rule-missing-signature] top-level 'eqFalseRight' has no type signature. Add a `eqFalseRight : …` declaration
+warning: [rule-missing-signature] top-level 'eqTrueLeft' has no type signature. Add a `eqTrueLeft : …` declaration
+warning: [rule-missing-signature] top-level 'eqTrueRight' has no type signature. Add a `eqTrueRight : …` declaration
+warning: [rule-missing-signature] top-level 'nestedEq' has no type signature. Add a `nestedEq : …` declaration
+warning: [rule-missing-signature] top-level 'notEqualVerb' has no type signature. Add a `notEqualVerb : …` declaration
+warning: [rule-missing-signature] top-level 'partialEq' has no type signature. Add a `partialEq : …` declaration
+warning: [rule-missing-signature] top-level 'plainEq' has no type signature. Add a `plainEq : …` declaration
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectFalse (a == 1)'
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectFalse (a == 1)'
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectFalse (isReady n)'
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectFalse flag'
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectTrue (a == 1)'
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectTrue (a == 1)'
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectTrue (isReady 1)'
+warning: [rule-test-bool-literal-equal] `expectEqual` against a boolean literal. Rewrite as 'expectTrue flag'

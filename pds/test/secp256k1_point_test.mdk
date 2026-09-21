@@ -1,7 +1,7 @@
 {- | Structural complete-Jacobian checks.  `2G` and `3G` are SEC 2 multiples
    of the published generator, used as inputs to these group-law assertions. -}
 
-import test.{expectTrue}
+import test.{expectEach, expectTrue}
 import lib.field.{Fe, feFromBytesReduce}
 import lib.secp256k1.{
   pointInfinity,
@@ -44,8 +44,16 @@ threeGY = feFromBytesReduce [|
 
 test "infinity plus infinity is canonical infinity" =
   let result = pointAddComplete pointInfinity pointInfinity
-  expectTrue
-    (pointEqual result pointInfinity && pointIsCanonicalInfinity result)
+  expectEach [
+    (
+      "the result is the point at infinity",
+      expectTrue (pointEqual result pointInfinity),
+    ),
+    (
+      "the result uses the canonical infinity representation",
+      expectTrue (pointIsCanonicalInfinity result),
+    ),
+  ]
 
 test "infinity plus G is G" =
   expectTrue
@@ -69,8 +77,16 @@ test "G plus 2G is the SEC 2 3G point" =
 
 test "G plus negative G is canonical infinity" =
   let result = pointAddComplete pointGenerator (pointNegate pointGenerator)
-  expectTrue
-    (pointEqual result pointInfinity && pointIsCanonicalInfinity result)
+  expectEach [
+    (
+      "the result is the point at infinity",
+      expectTrue (pointEqual result pointInfinity),
+    ),
+    (
+      "the result uses the canonical infinity representation",
+      expectTrue (pointIsCanonicalInfinity result),
+    ),
+  ]
 
 test "doubling G is the SEC 2 2G point" =
   expectTrue
@@ -78,5 +94,13 @@ test "doubling G is the SEC 2 2G point" =
 
 test "doubling infinity is canonical infinity" =
   let result = pointDoubleComplete pointInfinity
-  expectTrue
-    (pointEqual result pointInfinity && pointIsCanonicalInfinity result)
+  expectEach [
+    (
+      "the result is the point at infinity",
+      expectTrue (pointEqual result pointInfinity),
+    ),
+    (
+      "the result uses the canonical infinity representation",
+      expectTrue (pointIsCanonicalInfinity result),
+    ),
+  ]

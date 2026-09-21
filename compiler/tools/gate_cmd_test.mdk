@@ -255,3 +255,77 @@ test "a grading name imported beside the spawn helper does not answer for it" =
   expectTextContainsAll
     ["fixture_gate: test/oracle_support.mdk:3: `spawnOut` spawns a process"]
     (firstOr "" (violations foldedImportTable gateFoldedImportSrc))
+
+-- ── an `Ok (<int literal>, ...)` match is grading evidence too ───────────────
+
+-- `sqlite/test/oracle_support.mdk`'s real `spawnRaw` reads its exit code by
+-- destructuring the literal 127 straight out of the spawn's result tuple,
+-- carrying none of `gradeEvidenceMarkers`'s textual markers (#3261 item 2).
+-- Mirrors that shape exactly: no `code`/`Code` binding, no marker call.
+helperOkIntSrc : String
+helperOkIntSrc =
+  "import io.{runVerb}\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = match runVerb \"medaka\" args\n  Ok (127, _, err) => Err err\n  Ok triple => Ok triple\n  Err e => Err e\n"
+
+gateOverOkIntSrc : String
+gateOverOkIntSrc =
+  "import test.oracle_support.{spawnRaw}\nimport test.{fail, pass}\n\ntest \"one row\" = match spawnRaw [\"check\", \"row.mdk\"]\n  Ok _ => pass\n  Err e => fail e\n"
+
+okIntTable : List (String, ImportTarget)
+okIntTable = [
+  ("test.oracle_support", Followed "test/oracle_support.mdk" helperOkIntSrc),
+  ("test", Elsewhere),
+]
+
+test "a followed helper graded solely by an Ok (<int literal>, ...) match leaves the gate clean" =
+  expectEqual [] (violations okIntTable gateOverOkIntSrc)
+
+-- The structural recognizer keys on a literal digit, not any name bound in
+-- that tuple slot — a helper matching `Ok (n, ...)` on a plain variable
+-- carries neither a literal nor a marker, so it is still a violation.
+helperOkVarSrc : String
+helperOkVarSrc =
+  "import io.{runVerb}\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = match runVerb \"medaka\" args\n  Ok (n, out, err) => Ok (n, out, err)\n  Err e => Err e\n"
+
+okVarTable : List (String, ImportTarget)
+okVarTable = [
+  ("test.oracle_support", Followed "test/oracle_support.mdk" helperOkVarSrc),
+  ("test", Elsewhere),
+]
+
+test "an Ok (<var>, ...) match with no literal and no marker is still a violation" =
+  expectEqual 1 (listLen (violations okVarTable gateOverOkIntSrc))
+
+-- The same text without a `=>` after it is a `Result` being CONSTRUCTED, not
+-- an exit code being read: `emptyOutcome`'s `Ok (0, "", "")` is the empty
+-- answer the helper falls back to, and it grades nothing.
+helperOkCtorSrc : String
+helperOkCtorSrc =
+  "import io.{runVerb}\n\nemptyOutcome : Result String (Int, String, String)\nemptyOutcome = Ok (0, \"\", \"\")\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw [] = emptyOutcome\nspawnRaw args = runVerb \"medaka\" args\n"
+
+okCtorTable : List (String, ImportTarget)
+okCtorTable = [
+  ("test.oracle_support", Followed "test/oracle_support.mdk" helperOkCtorSrc),
+  ("test", Elsewhere),
+]
+
+test "an Ok (<int>, ...) that CONSTRUCTS rather than matches grades nothing" =
+  expectEqual 1 (listLen (violations okCtorTable gateOverOkIntSrc))
+
+-- One chunk holds several `Ok (` arms and only a later one carries the
+-- literal: the recognizer must read the whole chunk, not stop at whatever
+-- `Ok (` comes first.
+helperOkLaterArmSrc : String
+helperOkLaterArmSrc =
+  "import io.{runVerb}\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = match runVerb \"medaka\" args\n  Ok (_, \"\", _) => Err \"no output\"\n  Ok (127, _, err) => Err err\n  Ok triple => Ok triple\n  Err e => Err e\n"
+
+okLaterArmTable : List (String, ImportTarget)
+okLaterArmTable = [
+  (
+    "test.oracle_support",
+    Followed "test/oracle_support.mdk" helperOkLaterArmSrc,
+  ),
+  ("test", Elsewhere),
+]
+
+test "a grading arm behind a non-grading one is still found" =
+  expectEqual [] (violations okLaterArmTable gateOverOkIntSrc)

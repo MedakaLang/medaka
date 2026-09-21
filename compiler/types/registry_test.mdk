@@ -32,7 +32,7 @@
 -- exists to avoid.
 -- lint-disable-file rule-duplicate-body
 
-import test.{expectEqual, expectFalse, expectTrue}
+import test.{expectEqual, expectNotEqual, expectTrue}
 import types.registry.{
   HeadKey(..),
   MultiRegistry,
@@ -293,8 +293,9 @@ test "every module-origin fixture mint is Some, not the fallback" =
 -- ── F2: the field-vs-method case `Ns`'s own doc-comment names, asserted on
 -- the renderer rather than through a registry.
 test "identKey separates the field and method namespaces" =
-  expectFalse
-    (identKey (identSizeIn NsField) == identKey (identSizeIn NsMethod))
+  expectNotEqual
+    (identKey (identSizeIn NsField))
+    (identKey (identSizeIn NsMethod))
 
 -- The origin TAG is redundant by construction and this is the only thing that
 -- tests it: every module id is non-empty, so the module string alone already
@@ -320,7 +321,7 @@ test "regKeyRender leads with the identity COUNT" =
 -- Adversarial boundary shift: `identKey` itself must differ, which is the
 -- property that keeps a shifted pair on two registry rows.
 test "identKey does not collide a module/name boundary shift" =
-  expectFalse (identKey identShiftA == identKey identShiftB)
+  expectNotEqual (identKey identShiftA) (identKey identShiftB)
 
 -- ── F3: #607 — two vectors differing only in WHICH position is absent ──────
 -- Both keys carry the SAME identities and differ only in which argument
@@ -380,9 +381,9 @@ test "a rigid's POSITION and NAME both discriminate" =
 -- compare equal. That is not an oversight: it is what the bare-name key did,
 -- and the widening is answer-preserving by construction.
 test "the same rigid name at the same position compares equal" =
-  expectTrue
-    (dispKeyRender keyIxNoDecl [(0, "a")]
-      == dispKeyRender keyIxNoDecl [(0, "a")])
+  expectEqual
+    (dispKeyRender keyIxNoDecl [(0, "a")])
+    (dispKeyRender keyIxNoDecl [(0, "a")])
 
 -- ── F3d: `headBucketKey`'s three-way classification ────────────────────────
 -- A rigid head yields NO key at all — the §8 I6.1 refusal. An ABSENT head
@@ -405,9 +406,9 @@ test "headBucketKey refuses a rigid and separates absent from declared" =
 -- A one-ident key and the same ident at slot 0 are DIFFERENT keys — the
 -- ordinal block is not silently equivalent to its absence.
 test "an ordinal block is not equivalent to its absence" =
-  expectFalse
-    (regKeyRender (regKeyOf identIfaceFooM)
-      == regKeyRender (regKeyAt identIfaceFooM 0))
+  expectNotEqual
+    (regKeyRender (regKeyOf identIfaceFooM))
+    (regKeyRender (regKeyAt identIfaceFooM 0))
 
 -- The grouping is what keeps identity tuples apart, not a separator: `[A, B]`
 -- and `[B, A]` are different keys, and no concatenation of two 1-tuples
@@ -455,9 +456,9 @@ test "regEntries returns the original identities in render order" =
 -- values, compared as a multiset since the internal list order is not itself
 -- the guarantee.
 test "mregAdd keeps both values under either call order" =
-  expectTrue
-    (sort (mregLookup identTypeFooM mregOrderA)
-      == sort (mregLookup identTypeFooM mregOrderB))
+  expectEqual
+    (sort (mregLookup identTypeFooM mregOrderA))
+    (sort (mregLookup identTypeFooM mregOrderB))
 
 test "MultiRegistry enumeration and union keep every registration" =
   expectEqual
@@ -519,7 +520,7 @@ test "tabHasName sees both TabKey halves and selects no row" =
 -- not consulted down here, so a `tabKeyRender` whose bare arm collided with
 -- an identity arm is caught only by this.
 test "a bare slot key never renders as an identity-bearing one" =
-  expectFalse (regKeyRender slotUA == regKeyRender slotPA)
+  expectNotEqual (regKeyRender slotUA) (regKeyRender slotPA)
 
 -- `regKeyOfTab` and `regKeyOf` agree on an identity-bearing key — the
 -- `List Ident` to `List TabKey` widening is answer-preserving for every

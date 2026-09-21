@@ -17,7 +17,14 @@
 import bytes.{fromArray}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
-import test.{expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue}
+import test.{
+  expectEach,
+  expectEqual,
+  expectFalse,
+  expectNotEqual,
+  expectSatisfies,
+  expectTrue,
+}
 import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.server_core.{
@@ -245,9 +252,14 @@ test "a login is answered with an active session" =
   let (_, response) = login testInstant 1 configuredStore
   expectEqual (fieldBool "active" response) (Some True)
 
-test "a login issues two different tokens" =
-  expectTrue
-    (accessToken /= "" && refreshToken /= "" && accessToken /= refreshToken)
+test "a login issues two different tokens" = expectEach [
+  ("the access token is not empty", expectNotEqual "" accessToken),
+  ("the refresh token is not empty", expectNotEqual "" refreshToken),
+  (
+    "the two tokens differ from one another",
+    expectNotEqual accessToken refreshToken,
+  ),
+]
 
 test "a login by DID is accepted as well as by handle" =
   let (_, response) =
@@ -314,14 +326,26 @@ test "a refusal repeats neither the password nor the identifier" =
       (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
   let text = fromUtf8 response
   expectEach [
-    ("does not repeat the password", expectFalse (contains "not it" text)),
-    ("does not repeat the identifier", expectFalse (contains "alice.test" text)),
+    (
+      "the refusal does not repeat the password",
+      expectSatisfies
+        "a response free of the password"
+        (t => not (contains "not it" t))
+        text,
+    ),
+    (
+      "the refusal does not repeat the identifier",
+      expectSatisfies
+        "a response free of the identifier"
+        (t => not (contains "alice.test" t))
+        text,
+    ),
   ]
 
 test "two logins in the same second issue different tokens" =
   let (_, first) = login testInstant 1 configuredStore
   let (_, second) = login testInstant 2 configuredStore
-  expectTrue (field "accessJwt" first /= field "accessJwt" second)
+  expectNotEqual (field "accessJwt" first) (field "accessJwt" second)
 
 -- # The access token
 

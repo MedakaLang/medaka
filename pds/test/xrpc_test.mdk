@@ -14,7 +14,7 @@ import http.{
 }
 import json.{stringify}
 import string.{toUtf8}
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectFalse, expectTrue, fail, pass}
 import lib.nsid.{validateNsid}
 import lib.xrpc.{
   AuthPolicy(..),
@@ -138,21 +138,50 @@ sizeBoundaryMatches policy limit message =
         failureValueMatches 413 "PayloadTooLarge" message failed
       _ => False)
 
-test "shared NSID authority accepts ASCII case and rejects structural boundaries" =
-  expectTrue
-    (not (isErr (validateNsid "com.atproto.repo.applyWrites"))
-      && not (isErr (validateNsid "Com.AtProto.repo.applyWrites"))
-      && isErr (validateNsid "com.applyWrites")
-      && isErr (validateNsid "1com.atproto.applyWrites")
-      && isErr (validateNsid "com.-atproto.applyWrites")
-      && isErr (validateNsid "com.atproto.apply-Writes"))
+test "shared NSID authority accepts ASCII case and rejects structural boundaries" = expectEach
+  [
+    (
+      "a well-formed NSID is accepted",
+      expectFalse (isErr (validateNsid "com.atproto.repo.applyWrites")),
+    ),
+    (
+      "the same NSID with a mixed-case authority is accepted",
+      expectFalse (isErr (validateNsid "Com.AtProto.repo.applyWrites")),
+    ),
+    (
+      "a two-segment NSID is rejected",
+      expectTrue (isErr (validateNsid "com.applyWrites")),
+    ),
+    (
+      "an authority segment starting with a digit is rejected",
+      expectTrue (isErr (validateNsid "1com.atproto.applyWrites")),
+    ),
+    (
+      "an authority segment starting with a hyphen is rejected",
+      expectTrue (isErr (validateNsid "com.-atproto.applyWrites")),
+    ),
+    (
+      "a hyphen in the method name is rejected",
+      expectTrue (isErr (validateNsid "com.atproto.apply-Writes")),
+    ),
+  ]
 
-test "endpoint smart constructors reject invalid NSIDs" =
-  expectTrue
-    (isErr (queryEndpoint "com.atproto.bad-name" PublicRoute)
-      && isErr (procedureEndpoint "not-an-nsid" JsonInput PublicRoute)
-      && isErr
-        (subscriptionEndpoint "com.atproto.sync.subscribe-Repos" PublicRoute))
+test "endpoint smart constructors reject invalid NSIDs" = expectEach [
+  (
+    "a query endpoint rejects a malformed NSID",
+    expectTrue (isErr (queryEndpoint "com.atproto.bad-name" PublicRoute)),
+  ),
+  (
+    "a procedure endpoint rejects a malformed NSID",
+    expectTrue (isErr (procedureEndpoint "not-an-nsid" JsonInput PublicRoute)),
+  ),
+  (
+    "a subscription endpoint rejects a malformed NSID",
+    expectTrue
+      (isErr
+        (subscriptionEndpoint "com.atproto.sync.subscribe-Repos" PublicRoute)),
+  ),
+]
 
 test "registry admission rejects duplicate endpoint NSIDs" =
   let endpoint =
@@ -165,9 +194,16 @@ test "registry identity folds authority case but preserves method-name case" =
     mustEndpoint (queryEndpoint "Com.Example.test.echo" PublicRoute)
   let upperMethod =
     mustEndpoint (queryEndpoint "com.example.test.Echo" PublicRoute)
-  expectTrue
-    (isErr (makeRegistry [lower, upperAuthority])
-      && not (isErr (makeRegistry [lower, upperMethod])))
+  expectEach [
+    (
+      "two endpoints differing only in authority case collide",
+      expectTrue (isErr (makeRegistry [lower, upperAuthority])),
+    ),
+    (
+      "two endpoints differing in method-name case do not collide",
+      expectFalse (isErr (makeRegistry [lower, upperMethod])),
+    ),
+  ]
 
 test "GET query routing preserves repeated decoded values and order" =
   let request =
@@ -175,37 +211,61 @@ test "GET query routing preserves repeated decoded values and order" =
       "GET"
       "/xrpc/com.atproto.server.describeServer?detail=one&detail=&flag"
   match routeRequest registry request
-    RouteCall _ (QueryCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) =>
-      expectTrue
-        (nsid == "com.atproto.server.describeServer"
-          && firstName == "detail"
-          && firstValue == "one"
-          && secondName == "detail"
-          && secondValue == ""
-          && flag == "flag"
-          && flagValue == "")
-    _ => expectTrue False
+    RouteCall _ (QueryCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue]) => expectEach
+      [
+        (
+          "the call names the queried method",
+          expectEqual "com.atproto.server.describeServer" nsid,
+        ),
+        ("the first parameter keeps its name", expectEqual "detail" firstName),
+        (
+          "the first parameter keeps its decoded value",
+          expectEqual "one" firstValue,
+        ),
+        (
+          "the repeated name is preserved, not merged",
+          expectEqual "detail" secondName,
+        ),
+        (
+          "the second parameter's empty value is preserved",
+          expectEqual "" secondValue,
+        ),
+        ("the valueless parameter keeps its name", expectEqual "flag" flag),
+        (
+          "the valueless parameter decodes to the empty string",
+          expectEqual "" flagValue,
+        ),
+      ]
+    _ => fail "expected a RouteCall to a QueryCall with the four query params"
 
-test "encoded and otherwise invalid XRPC method identities are rejected" =
-  expectTrue
-    (failureMatches
-        400
-        "InvalidRequest"
-        "Invalid XRPC method NSID"
-        (noBodyRequest "GET" "/xrpc/com%2eatproto.server.describeServer")
-      && failureMatches
-        400
-        "InvalidRequest"
-        "Invalid XRPC method NSID"
-        (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer/"))
+test "encoded and otherwise invalid XRPC method identities are rejected" = expectEach
+  [
+    (
+      "a percent-encoded dot in the method identity is rejected",
+      expectTrue
+        (failureMatches
+          400
+          "InvalidRequest"
+          "Invalid XRPC method NSID"
+          (noBodyRequest "GET" "/xrpc/com%2eatproto.server.describeServer")),
+    ),
+    (
+      "a trailing slash after the method identity is rejected",
+      expectTrue
+        (failureMatches
+          400
+          "InvalidRequest"
+          "Invalid XRPC method NSID"
+          (noBodyRequest "GET" "/xrpc/com.atproto.server.describeServer/")),
+    ),
+  ]
 
 test "routing matches authority case-insensitively and returns registered spelling" =
   match (routeRequest
     registry
     (noBodyRequest "GET" "/xrpc/Com.AtProto.server.describeServer"))
-    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) => pass
+    _ => fail "expected a RouteCall to a QueryCall with no query params"
 
 test "empty XRPC method path is rejected without producing a call" =
   expectTrue
@@ -275,17 +335,15 @@ test "query admits zero-length framing and Content-Type" =
       "/xrpc/com.atproto.server.describeServer"
       "Content-Type: application/json\r\n"
       [||]))
-    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) => pass
+    _ => fail "expected a RouteCall to a QueryCall with no query params"
 
 test "no-input procedure produces a typed call" =
   match (routeRequest
     registry
     (noBodyRequest "POST" "/xrpc/com.example.nobody.ping"))
-    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
+    _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
 -- The shape nearly every HTTP client gives a bodiless POST, and so the one
 -- `com.atproto.server.refreshSession` is reached by in the field.
@@ -293,9 +351,8 @@ test "no-input procedure admits a zero-length Content-Length" =
   match (routeRequest
     registry
     (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" [||]))
-    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
+    _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
 test "no-input procedure admits a Content-Type over a zero-length body" =
   match (routeRequest
@@ -305,9 +362,8 @@ test "no-input procedure admits a Content-Type over a zero-length body" =
       "/xrpc/com.example.nobody.ping"
       "Content-Type: application/json\r\n"
       [||]))
-    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
+    _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
 test "no-input procedure rejects a body that carries bytes" =
   expectTrue
@@ -335,11 +391,17 @@ test "JSON procedure produces a typed parsed call" =
       "Content-Type: application/json; charset=utf-8\r\n"
       (toUtf8 "{\"ok\":true}")
   match routeRequest registry request
-    RouteCall _ (ProcedureJsonCall nsid [] value) =>
-      expectTrue
-        (nsid == "com.atproto.repo.applyWrites"
-          && stringify value == "{\"ok\":true}")
-    _ => expectTrue False
+    RouteCall _ (ProcedureJsonCall nsid [] value) => expectEach [
+      (
+        "the call names the posted method",
+        expectEqual "com.atproto.repo.applyWrites" nsid,
+      ),
+      (
+        "the JSON body parses back to what was sent",
+        expectEqual "{\"ok\":true}" (stringify value),
+      ),
+    ]
+    _ => fail "expected a RouteCall to a ProcedureJsonCall"
 
 test "text procedure produces a typed UTF-8 call" =
   let request =
@@ -349,13 +411,19 @@ test "text procedure produces a typed UTF-8 call" =
       "Content-Type: text/plain; charset=utf-8\r\n"
       (toUtf8 "héllo")
   match routeRequest registry request
-    RouteCall _ (ProcedureTextCall nsid [] media text) =>
-      expectTrue
-        (nsid == "com.example.text.echo"
-          && mediaTypeType media == "text"
-          && mediaTypeSubtype media == "plain"
-          && text == "héllo")
-    _ => expectTrue False
+    RouteCall _ (ProcedureTextCall nsid [] media text) => expectEach [
+      (
+        "the call names the posted method",
+        expectEqual "com.example.text.echo" nsid,
+      ),
+      ("the media type is text", expectEqual "text" (mediaTypeType media)),
+      (
+        "the media subtype is plain",
+        expectEqual "plain" (mediaTypeSubtype media),
+      ),
+      ("the body decodes as UTF-8, accents intact", expectEqual "héllo" text),
+    ]
+    _ => fail "expected a RouteCall to a ProcedureTextCall"
 
 test "wildcard raw procedure preserves text JSON and opaque media with exact bytes" =
   let textRequest =
@@ -380,21 +448,58 @@ test "wildcard raw procedure preserves text JSON and opaque media with exact byt
     routeRequest registry jsonRequest,
     routeRequest registry opaqueRequest,
   )
-    (RouteCall _ (ProcedureRawCall textNsid [] textMedia textBytes), RouteCall _ (ProcedureRawCall jsonNsid [] jsonMedia jsonBytes), RouteCall _ (ProcedureRawCall opaqueNsid [] opaqueMedia opaqueBytes)) =>
-      expectTrue
-        (textNsid == "com.atproto.repo.uploadBlob"
-          && mediaTypeType textMedia == "text"
-          && mediaTypeSubtype textMedia == "plain"
-          && textBytes == toUtf8 "hello"
-          && jsonNsid == "com.atproto.repo.uploadBlob"
-          && mediaTypeType jsonMedia == "application"
-          && mediaTypeSubtype jsonMedia == "json"
-          && jsonBytes == toUtf8 "{nope}"
-          && opaqueNsid == "com.atproto.repo.uploadBlob"
-          && mediaTypeType opaqueMedia == "image"
-          && mediaTypeSubtype opaqueMedia == "png"
-          && opaqueBytes == [|0, 128, 255|])
-    _ => expectTrue False
+    (RouteCall _ (ProcedureRawCall textNsid [] textMedia textBytes), RouteCall _ (ProcedureRawCall jsonNsid [] jsonMedia jsonBytes), RouteCall _ (ProcedureRawCall opaqueNsid [] opaqueMedia opaqueBytes)) => expectEach
+      [
+        (
+          "the text request names the blob method",
+          expectEqual "com.atproto.repo.uploadBlob" textNsid,
+        ),
+        (
+          "the text request keeps its media type",
+          expectEqual "text" (mediaTypeType textMedia),
+        ),
+        (
+          "the text request keeps its media subtype",
+          expectEqual "plain" (mediaTypeSubtype textMedia),
+        ),
+        (
+          "the text request's bytes are passed through",
+          expectEqual (toUtf8 "hello") textBytes,
+        ),
+        (
+          "the JSON request names the blob method",
+          expectEqual "com.atproto.repo.uploadBlob" jsonNsid,
+        ),
+        (
+          "the JSON request keeps its media type",
+          expectEqual "application" (mediaTypeType jsonMedia),
+        ),
+        (
+          "the JSON request keeps its media subtype",
+          expectEqual "json" (mediaTypeSubtype jsonMedia),
+        ),
+        (
+          "the JSON request's bytes are passed through unparsed",
+          expectEqual (toUtf8 "{nope}") jsonBytes,
+        ),
+        (
+          "the opaque request names the blob method",
+          expectEqual "com.atproto.repo.uploadBlob" opaqueNsid,
+        ),
+        (
+          "the opaque request keeps its media type",
+          expectEqual "image" (mediaTypeType opaqueMedia),
+        ),
+        (
+          "the opaque request keeps its media subtype",
+          expectEqual "png" (mediaTypeSubtype opaqueMedia),
+        ),
+        (
+          "the opaque request's bytes are passed through",
+          expectEqual [|0, 128, 255|] opaqueBytes,
+        ),
+      ]
+    _ => fail "expected the JSON and opaque procedure calls to route"
 
 test "procedure query parameters preserve repeated names empty values and order" =
   let request =
@@ -404,20 +509,37 @@ test "procedure query parameters preserve repeated names empty values and order"
       "Content-Type: application/json\r\n"
       (toUtf8 "{}")
   match routeRequest registry request
-    RouteCall _ (ProcedureJsonCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue] _) =>
-      expectTrue
-        (nsid == "com.atproto.repo.applyWrites"
-          && firstName == "dryRun"
-          && firstValue == "true"
-          && secondName == "dryRun"
-          && secondValue == ""
-          && flag == "flag"
-          && flagValue == "")
-    _ => expectTrue False
+    RouteCall _ (ProcedureJsonCall nsid [QueryParam firstName firstValue, QueryParam secondName secondValue, QueryParam flag flagValue] _) => expectEach
+      [
+        (
+          "the call names the posted method",
+          expectEqual "com.atproto.repo.applyWrites" nsid,
+        ),
+        ("the first parameter keeps its name", expectEqual "dryRun" firstName),
+        ("the first parameter keeps its value", expectEqual "true" firstValue),
+        (
+          "the repeated name is preserved, not merged",
+          expectEqual "dryRun" secondName,
+        ),
+        (
+          "the second parameter's empty value is preserved",
+          expectEqual "" secondValue,
+        ),
+        ("the valueless parameter keeps its name", expectEqual "flag" flag),
+        (
+          "the valueless parameter decodes to the empty string",
+          expectEqual "" flagValue,
+        ),
+      ]
+    _ =>
+      fail
+        "expected a RouteCall to a ProcedureJsonCall with the three query params"
 
-test "missing duplicate and malformed body media classify as 415" =
-  expectTrue
-    (failureMatches
+test "missing duplicate and malformed body media classify as 415" = expectEach [
+  (
+    "a body with no Content-Type is refused",
+    expectTrue
+      (failureMatches
         415
         "UnsupportedMediaType"
         "Request body requires one Content-Type header"
@@ -425,8 +547,12 @@ test "missing duplicate and malformed body media classify as 415" =
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           ""
-          (toUtf8 "{}"))
-      && failureMatches
+          (toUtf8 "{}"))),
+  ),
+  (
+    "a body with two Content-Type headers is refused",
+    expectTrue
+      (failureMatches
         415
         "UnsupportedMediaType"
         "Request body requires one Content-Type header"
@@ -434,8 +560,12 @@ test "missing duplicate and malformed body media classify as 415" =
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application/json\r\nContent-Type: application/json\r\n"
-          (toUtf8 "{}"))
-      && failureMatches
+          (toUtf8 "{}"))),
+  ),
+  (
+    "a body with a malformed Content-Type is refused",
+    expectTrue
+      (failureMatches
         415
         "UnsupportedMediaType"
         "Request body has an invalid Content-Type header"
@@ -443,11 +573,15 @@ test "missing duplicate and malformed body media classify as 415" =
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application\r\n"
-          (toUtf8 "{}")))
+          (toUtf8 "{}"))),
+  ),
+]
 
-test "wrong JSON and text media classify as 415" =
-  expectTrue
-    (failureMatches
+test "wrong JSON and text media classify as 415" = expectEach [
+  (
+    "text sent to a JSON endpoint is refused",
+    expectTrue
+      (failureMatches
         415
         "UnsupportedMediaType"
         "Request body media type does not match endpoint input"
@@ -455,8 +589,12 @@ test "wrong JSON and text media classify as 415" =
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: text/plain\r\n"
-          (toUtf8 "{}"))
-      && failureMatches
+          (toUtf8 "{}"))),
+  ),
+  (
+    "JSON sent to a text endpoint is refused",
+    expectTrue
+      (failureMatches
         415
         "UnsupportedMediaType"
         "Request body media type does not match endpoint input"
@@ -464,11 +602,15 @@ test "wrong JSON and text media classify as 415" =
           "POST"
           "/xrpc/com.example.text.echo"
           "Content-Type: application/json\r\n"
-          (toUtf8 "{}")))
+          (toUtf8 "{}"))),
+  ),
+]
 
-test "invalid JSON syntax and UTF-8 classify as 400" =
-  expectTrue
-    (failureMatches
+test "invalid JSON syntax and UTF-8 classify as 400" = expectEach [
+  (
+    "a body that is not JSON is refused",
+    expectTrue
+      (failureMatches
         400
         "InvalidRequest"
         "Request body is invalid for endpoint input"
@@ -476,8 +618,12 @@ test "invalid JSON syntax and UTF-8 classify as 400" =
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application/json\r\n"
-          (toUtf8 "{nope}"))
-      && failureMatches
+          (toUtf8 "{nope}"))),
+  ),
+  (
+    "a body that is not valid UTF-8 is refused",
+    expectTrue
+      (failureMatches
         400
         "InvalidRequest"
         "Request body is invalid for endpoint input"
@@ -485,7 +631,9 @@ test "invalid JSON syntax and UTF-8 classify as 400" =
           "POST"
           "/xrpc/com.atproto.repo.applyWrites"
           "Content-Type: application/json\r\n"
-          [|0xc0, 0xaf|]))
+          [|0xc0, 0xaf|])),
+  ),
+]
 
 test "invalid text UTF-8 classifies as 400" =
   expectTrue
@@ -520,15 +668,23 @@ test "raw input ceiling accepts at and returns exact 413 over" =
       maxRawBodyBytes
       "Raw request body exceeds 5242880 bytes")
 
-test "known subscription is 426 while its wrong method is 405" =
-  expectTrue
-    (failureMatches
+test "known subscription is 426 while its wrong method is 405" = expectEach [
+  (
+    "a plain GET to a subscription asks for a WebSocket upgrade",
+    expectTrue
+      (failureMatches
         426
         "UpgradeRequired"
         "XRPC subscription requires a WebSocket upgrade: com.atproto.sync.subscribeRepos"
-        (noBodyRequest "GET" "/xrpc/com.atproto.sync.subscribeRepos")
-      && failureMatches
+        (noBodyRequest "GET" "/xrpc/com.atproto.sync.subscribeRepos")),
+  ),
+  (
+    "a POST to a subscription is refused as the wrong method",
+    expectTrue
+      (failureMatches
         405
         "MethodNotAllowed"
         "XRPC subscription endpoints require GET"
-        (noBodyRequest "POST" "/xrpc/com.atproto.sync.subscribeRepos"))
+        (noBodyRequest "POST" "/xrpc/com.atproto.sync.subscribeRepos")),
+  ),
+]

@@ -22,7 +22,7 @@
    algorithm pin, the expiry window, and the subject/audience checks each
    individually load-bearing. -}
 
-import test.{expectEach, expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectNotEqual, expectTrue}
 import base64.{decodeUrlSafe, encodeUrlSafe}
 import hex.{decode}
 import string.{fromUtf8, split, stripSuffix, toUtf8}
@@ -256,14 +256,14 @@ test "a claims object missing jti is rejected" =
     (Err (JwtBadClaims "jti"))
 
 test "two tokens minted a second apart differ only if their jti does" =
-  expectTrue
-    (mintToken rfcKey subject audience "one" issuedAt expiresAt
-      /= mintToken rfcKey subject audience "two" issuedAt expiresAt)
+  expectNotEqual
+    (mintToken rfcKey subject audience "one" issuedAt expiresAt)
+    (mintToken rfcKey subject audience "two" issuedAt expiresAt)
 
 test "verification reads no clock: the same token verifies at any instant in its window" =
-  expectTrue
-    (verifyToken rfcKey subject audience 1001 goodToken
-      == verifyToken rfcKey subject audience 1999 goodToken)
+  expectEqual
+    (verifyToken rfcKey subject audience 1001 goodToken)
+    (verifyToken rfcKey subject audience 1999 goodToken)
 
 -- ── service auth (S-service-jwt, #2608) ─────────────────────────────────────
 --

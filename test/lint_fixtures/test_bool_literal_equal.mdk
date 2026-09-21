@@ -1,0 +1,37 @@
+-- Fixture for rule-test-bool-literal-equal (#3235): `expectEqual` against a
+-- `True`/`False` literal, on either side, names a claim `expectTrue`/`expectFalse`
+-- already names.
+
+-- POSITIVE: the literal on the LEFT.
+eqTrueLeft a = expectEqual True (a == 1)
+eqFalseLeft a = expectEqual False (a == 1)
+
+-- POSITIVE: the literal on the RIGHT.
+eqTrueRight a = expectEqual (a == 1) True
+eqFalseRight a = expectEqual (a == 1) False
+
+-- POSITIVE: over a plain Bool subject, nested anywhere in a body.
+nestedEq flag = if flag then expectEqual True flag else expectEqual flag False
+
+-- NEGATIVE: a literal on BOTH sides names no subject under test, so there is no
+-- operand left to hand `expectTrue`/`expectFalse`.
+bothLits = expectEqual True False
+
+-- NEGATIVE: neither operand is a boolean literal — this is the verb's real job.
+plainEq a b = expectEqual a b
+
+-- NEGATIVE: a PARTIAL application is not `expectEqual a b`; there is no second
+-- operand to keep.
+partialEq = expectEqual True
+
+-- NEGATIVE: a different verb. `expectNotEqual True e` means `expectFalse e`,
+-- which is not the substitution this rule performs, so it is left alone rather
+-- than rewritten under the wrong polarity.
+notEqualVerb a = expectNotEqual True (a == 1)
+
+-- POSITIVE, inside a `test` decl body — the descent this rule opts into.
+test "a bool literal inside a test body" = expectEqual True (isReady 1)
+
+-- POSITIVE, inside a `prop` decl body.
+prop "a bool literal inside a prop body" (n : Int) =
+  expectEqual (isReady n) False

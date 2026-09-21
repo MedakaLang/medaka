@@ -1,0 +1,49 @@
+-- Fixture for rule-test-equal-in-true (#3235): an `==`/`/=` comparison wrapped in
+-- `expectTrue`/`expectFalse` reports neither operand on failure; the equality
+-- verbs render both.  The `expectFalse` forms carry the polarity flip.
+
+-- POSITIVE: expectTrue.
+trueEq a = expectTrue (a == 1)
+trueNe a = expectTrue (a /= 1)
+
+-- POSITIVE: expectFalse — the verb the operator names is replaced by its
+-- complement.
+falseEq a = expectFalse (a == 1)
+falseNe a = expectFalse (a /= 1)
+
+-- POSITIVE: nested anywhere in a body.
+nestedTrue a b = if a then expectTrue (b == 2) else expectFalse (b == 3)
+
+-- NEGATIVE: orderings are excluded, for `rule-not-eq`'s reason — an ordering
+-- needs a different verb per operator, and the `expectFalse` complement of an
+-- ordering is unsound for Float (NaN).
+trueLt a = expectTrue (a < 1)
+falseGe a = expectFalse (a >= 1)
+
+-- NEGATIVE: a CONJUNCTION is not one comparison. `expectEqual` renders one pair
+-- of operands, so a rewrite would drop a fact.
+trueConj a b = expectTrue (a == 1 && b == 2)
+
+-- NEGATIVE: the argument is not a comparison at all.
+truePlain flag = expectTrue flag
+
+-- NEGATIVE: already the named verb.
+alreadyEqual a = expectEqual a 1
+
+-- POSITIVE, inside a `test` decl body. These three rules descend into `test`
+-- and `prop` bodies; the shared expression-rule driver does not, so the rows
+-- below are the only place that descent is observed.
+test "an equality inside a test body" = expectTrue (1 == 1)
+
+-- POSITIVE, inside a `prop` decl body.
+prop "an equality inside a prop body" (n : Int) = expectFalse (n == 0)
+
+-- NEGATIVE, and the pin on the descent's SCOPE: `rule-not-eq` would rewrite
+-- `not (a == b)` in a `def` body, and reports nothing here. If this golden ever
+-- grows a `rule-not-eq` line, the descent stopped being opt-in.
+test "a non-test rule does not reach a test body" = not (1 == 2)
+
+-- The CONTROL for the row above: the same expression in a `def` body, where
+-- `rule-not-eq` does reach it. The golden must carry exactly one
+-- `rule-not-eq` line, for this decl and not for the `test` one.
+notEqDef a = not (a == 1)
