@@ -1,5 +1,5 @@
 # META
-source_lines=46662
+source_lines=46670
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -25240,13 +25240,21 @@ usePathWitnessesCtor path n owner ident =
 --
 -- `UseWild` (`import m.*`) binds every constructor `m` exports, and that is safe for the
 -- same reason it is safe for methods: the export test still admits only the declarations
--- `m` really provides.  `UseName` (bare `import m`) binds NO names — it exists to bring
--- impls into scope for dispatch (`AGENTS.md`) — and `UseAlias` binds VALUES only (an
--- alias-qualified name in type or constructor position is a parse error), so both
--- witness nothing.
+-- `m` really provides.  `UseAlias` (`import m as A`) binds every constructor `m` exports
+-- too, spelled `A.C`; resolve strips the prefix before typecheck, so the occurrence that
+-- reaches the bare-keyed table is indistinguishable from a wildcard import's and
+-- witnesses on the same terms.  `UseName` (bare `import m`) binds NO names — it exists
+-- to bring impls into scope for dispatch (`AGENTS.md`) — so it alone witnesses nothing.
+--
+-- Nothing here reads the ALIAS: the caller's second conjunct
+-- (`depExportsCtorIdent`) already restricts the witness to a declaration the aliased
+-- module really carries, and an alias-qualified spelling whose base the module does not
+-- export is never stripped in the first place (`unqualCtor`'s guard,
+-- `frontend/resolve.mdk`).
 usePathBindsCtor : UsePath -> String -> String -> Bool
 usePathBindsCtor (UseGroup _ ms) n owner = anyMemberBindsCtor n owner ms
 usePathBindsCtor (UseWild _) _ _ = True
+usePathBindsCtor (UseAlias _ _) _ _ = True
 usePathBindsCtor _ _ _ = False
 
 anyMemberBindsCtor : String -> String -> List UseMember -> Bool
@@ -25265,8 +25273,8 @@ anyMemberBindsCtor n owner (m :: rest) =
 -- point is moot either way — `import m.{C as D}` is REJECTED upstream ("is a type or
 -- constructor and cannot be aliased"), so no aliased constructor member reaches here —
 -- but a wrong consequence beside a right premise is exactly the sentence a later reader
--- builds on, so it is corrected rather than deleted.  The `UseAlias` claim on
--- `usePathBindsCtor` above is a different statement and is accurate.
+-- builds on, so it is corrected rather than deleted.  A WHOLE-MODULE alias is a
+-- different statement, decided by `usePathBindsCtor` above and not by this predicate.
 memberBindsCtorName : String -> String -> UseMember -> Bool
 memberBindsCtorName n owner (UseMember mn ctors _ _) =
   mn == n || ctors && mn == owner
@@ -50826,6 +50834,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "usePathBindsCtor" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "usePathBindsCtor" ((PCon "UseGroup" PWild (PVar "ms")) (PVar "n") (PVar "owner")) (EApp (EApp (EApp (EVar "anyMemberBindsCtor") (EVar "n")) (EVar "owner")) (EVar "ms")))
 (DFunDef false "usePathBindsCtor" ((PCon "UseWild" PWild) PWild PWild) (EVar "True"))
+(DFunDef false "usePathBindsCtor" ((PCon "UseAlias" PWild PWild) PWild PWild) (EVar "True"))
 (DFunDef false "usePathBindsCtor" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "anyMemberBindsCtor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "UseMember")) (TyCon "Bool")))))
 (DFunDef false "anyMemberBindsCtor" (PWild PWild (PList)) (EVar "False"))
@@ -57962,6 +57971,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DTypeSig false "usePathBindsCtor" (TyFun (TyCon "UsePath") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool")))))
 (DFunDef false "usePathBindsCtor" ((PCon "UseGroup" PWild (PVar "ms")) (PVar "n") (PVar "owner")) (EApp (EApp (EApp (EVar "anyMemberBindsCtor") (EVar "n")) (EVar "owner")) (EVar "ms")))
 (DFunDef false "usePathBindsCtor" ((PCon "UseWild" PWild) PWild PWild) (EVar "True"))
+(DFunDef false "usePathBindsCtor" ((PCon "UseAlias" PWild PWild) PWild PWild) (EVar "True"))
 (DFunDef false "usePathBindsCtor" (PWild PWild PWild) (EVar "False"))
 (DTypeSig false "anyMemberBindsCtor" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "UseMember")) (TyCon "Bool")))))
 (DFunDef false "anyMemberBindsCtor" (PWild PWild (PList)) (EVar "False"))

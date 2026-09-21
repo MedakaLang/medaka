@@ -7,6 +7,9 @@ aliasIfaceMethods : UsePath -> List (String, List String) -> List (String, List 
 aliasOfUsePath : UsePath -> List String
 aliasOriginBaseNames : List (String, String) -> List String
 aliasOwnerPairs : UsePath -> List (String, String) -> List (String, String)
+aliasShadowedCtorMod : Env -> String -> Option String
+aliasShadowedCtors : Map String ModuleExports -> List Decl -> List (String, String)
+aliasShadowedFrom : Map String Unit -> Map String ModuleExports -> UsePath -> List (String, String)
 aliasStampHead : List String -> Ty -> String -> TyConOrigin -> (Ty, Bool)
 aliasTypeBinding : String -> String -> (String, String)
 ambigModPhrase : List String -> String
@@ -31,6 +34,7 @@ buildFieldOwnerIndex : List (String, String) -> Map String (List String)
 builtInEffects : List String
 builtinTyOrigin : String -> (String, TyConOrigin)
 builtinTyOrigins : List (String, TyConOrigin)
+carriedCtorOwners : List (String, String) -> List UseMember -> List (String, String)
 carriedTypeCtors : List String -> List String -> List (String, List String) -> List (String, List String)
 charMask : Int -> String -> Int
 charMaskGo : Int -> Array Char -> Int -> Int -> Int
@@ -87,6 +91,9 @@ ctorAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List S
 ctorDeclaredIn : String -> String -> (String, String)
 ctorKey : String -> String
 ctorNames : List Decl -> List String
+ctorOccurrenceContested : Env -> String -> Bool
+ctorOwnedBy : (String, List String) -> List (String, String)
+ctorOwnerKey : String -> String
 ctorProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
 dataRecordNames : List Decl -> List String
 dbName : ResError -> String
@@ -94,6 +101,7 @@ declBindNames : Decl -> List String
 declLoc : Decl -> Option Loc
 dedupResErrors : List ResError -> List ResError
 deleteAllStr : List String -> Map String Unit -> Map String Unit
+dotDotMemberNames : List UseMember -> List String
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dupClauseTail : Option Loc -> String -> Bool -> List FunClause -> List ResError
 dupErr : String -> String -> ResError
@@ -194,6 +202,7 @@ internalExterns : List String
 internalGuardFor : Bool -> List String
 isAmbiguous : Env -> String -> Bool
 isCtorAmbiguous : Env -> String -> Bool
+isCtorOwnerKey : String -> Bool
 isEmptyL : List a -> Bool
 isHaskellAliasPair : String -> String -> Bool
 isHint : String -> Bool

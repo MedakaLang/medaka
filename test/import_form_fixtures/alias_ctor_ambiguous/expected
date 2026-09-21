@@ -1,3 +1,4 @@
 (AmbiguousConstructor "A.Node" "ca" "cb")
 (AmbiguousConstructor "B.Node" "ca" "cb")
 (AmbiguousConstructor "B.Node" "ca" "cb")
+(AmbiguousAliasCtor "A.Node" "ca")

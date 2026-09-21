@@ -1,0 +1,7 @@
+-- The hop that puts the other declarer in the GRAPH without putting it in any
+-- consumer's import list, so `viatrans` reaches it only transitively.
+import dupb.{DB(..), unDB}
+
+export
+mb : Int
+mb = unDB (Dup 9)

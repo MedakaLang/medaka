@@ -1,0 +1,10 @@
+-- IMPORT ORDER, ARM TWO: the same two clauses, swapped, and nothing else changed.
+-- The pair is the assertion — two spellings of one program that differed in
+-- ACCEPTANCE, not merely in which answer they produced.  Both must now be `A`'s.
+import k.{Tag, tag}
+import dupb
+import dupa as A
+
+export
+olast : Int
+olast = tag (A.Dup 2)

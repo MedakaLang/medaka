@@ -189,6 +189,15 @@ public export data ResError =
   -- accepted, run was right, the native build CRASHED.  Fired at the USE site, so
   -- importing both but never using the ctor stays legal.
   | AmbiguousConstructor String (List String) (Option Loc)
+  -- ALIAS-QUALIFIED constructor (`B.Node`) whose bare base is ALSO declared by
+  -- this module.  The sibling above cannot state this collision: its provenance
+  -- map is built from imports alone, and `keepAmbiguous` treats a same-module
+  -- declaration as the thing that SETTLES a contest rather than one of its
+  -- parties — right for a bare occurrence, where the local constructor is what
+  -- the author wrote, and wrong here, where the author named another module's.
+  -- Carries the aliased module id, not a list: the other party is always this
+  -- module, and naming it adds nothing a reader of the file does not have.
+  | AmbiguousAliasCtor String String (Option Loc)
   -- TYPE name (in a signature, an annotation, a record pattern head, or a record
   -- literal head) that ≥2 non-`core` imports bring into scope under one spelling
   -- (#1110 Stage A-1).  The TYPE peer of AmbiguousOccurrence, with the identical
@@ -265,6 +274,7 @@ resErrorLoc (DuplicateBinder _ _ l) = l
 resErrorLoc (AsPatternMisplaced l) = l
 resErrorLoc (AmbiguousOccurrence _ _ l) = l
 resErrorLoc (AmbiguousConstructor _ _ l) = l
+resErrorLoc (AmbiguousAliasCtor _ _ l) = l
 resErrorLoc (AmbiguousType _ _ l) = l
 resErrorLoc (AmbiguousInterface _ _ l) = l
 resErrorLoc (InternalExternAccess _ l) = l
@@ -293,6 +303,7 @@ public export data Env = Env {
   importedModuleValues : List (String, List String),
   ambiguous : List (String, List String),
   ctorAmbiguous : List (String, List String),
+  ctorAliasShadow : List (String, String),
   typeAmbiguous : List (String, List String),
   ifaceAmbiguous : List (String, List String),
   internalGuard : OrdMap Unit,
@@ -497,10 +508,16 @@ ambiguousTypeErrors env n loc =
 -- variable arm.  A record head is a type-or-constructor spelling in a syntactic position
 -- where a local binder cannot appear, so there is nothing for a scope test to exclude and
 -- neither of these two callers even receives the `Scope`.
+-- The two sets are DISJOINT by construction and the `match` relies on it: a bare
+-- base this module declares is dropped from `ctorAmbiguous` by `keepAmbiguous`,
+-- and `aliasShadowedCtors` enters only names it declares — so no occurrence is in
+-- both and neither arm can hide a collision the other would have reported.
 ambiguousCtorErrors : Env -> String -> Option Loc -> List ResError
-ambiguousCtorErrors env n loc = whenL (isCtorAmbiguous env n) [
-  AmbiguousConstructor n (ctorAmbigMods env n) loc,
-]
+ambiguousCtorErrors env n loc = match aliasShadowedCtorMod env n
+  Some mid => [AmbiguousAliasCtor n mid loc]
+  None => whenL (isCtorAmbiguous env n) [
+    AmbiguousConstructor n (ctorAmbigMods env n) loc,
+  ]
 
 -- ── the RECORD-HEAD verdict: exactly ONE of the two peers ──────────────────
 -- A record head (`recPatHead` / `recCreateHead`) may be spelled either way — a TYPE
@@ -786,8 +803,9 @@ checkVar cur env scope n
   | not (scopeMem n scope) && isAmbiguous env n =
     [AmbiguousOccurrence n (ambigMods env n) cur]
   -- a CONSTRUCTOR used as an expression, brought in by ≥2 explicitly-importing
-  -- modules under one name (#674) — the expression peer of checkPat's PCon arm.
-  | not (scopeMem n scope) && isCtorAmbiguous env n =
+  -- modules under one name (#674), or alias-qualified onto a name this module
+  -- declares — the expression peer of checkPat's PCon arm.
+  | not (scopeMem n scope) && ctorOccurrenceContested env n =
     ambiguousCtorErrors env n cur
   | otherwise = []
 
@@ -860,6 +878,24 @@ ctorAmbigMods : Env -> String -> List String
 ctorAmbigMods env n = match lookupAssoc n env.ctorAmbiguous
   Some mods => mods
   None => []
+
+-- The alias-qualified spelling's own peer: the aliased module whose constructor
+-- `n` names, when this module declares that bare name too.  Keyed by the DOTTED
+-- spelling, so it can only answer at an occurrence the author actually wrote.
+aliasShadowedCtorMod : Env -> String -> Option String
+aliasShadowedCtorMod env n = lookupAssoc n env.ctorAliasShadow
+
+-- Every way an occurrence of constructor `n` can be contested.  `checkVar` needs
+-- this as a GUARD — its clause ladder decides whether to consult the sets at all,
+-- and a guard naming only one of them silently drops the other's diagnostic —
+-- while `checkPat`'s `PCon` arm and the record heads call `ambiguousCtorErrors`
+-- outright.  Both must agree on the disjunction, so it is written once.
+ctorOccurrenceContested : Env -> String -> Bool
+ctorOccurrenceContested env n =
+  isCtorAmbiguous env n
+    || (match aliasShadowedCtorMod env n
+      Some _ => True
+      None => False)
 
 -- TYPE peer of isAmbiguous/ambigMods (#1110): is this TYPE name brought into scope
 -- by ≥2 explicitly-importing modules?  Read at every type-occurrence site — a
@@ -1879,6 +1915,7 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     importedModuleValues = [],
     ambiguous = [],
     ctorAmbiguous = [],
+    ctorAliasShadow = [],
     typeAmbiguous = [],
     ifaceAmbiguous = [],
     internalGuard = omFromNames internalGuard omEmpty,
@@ -2384,6 +2421,8 @@ resErrorSexp (AmbiguousOccurrence n mods _) =
   "(AmbiguousOccurrence " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (AmbiguousConstructor n mods _) =
   "(AmbiguousConstructor " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
+resErrorSexp (AmbiguousAliasCtor n mid _) =
+  "(AmbiguousAliasCtor \{escStr n} \{escStr mid})"
 resErrorSexp (AmbiguousType n mods _) =
   "(AmbiguousType " ++ joinWith " " (escStr n :: map escStr mods) ++ ")"
 resErrorSexp (AmbiguousInterface n mods _) =
@@ -2520,6 +2559,12 @@ ppResError (AmbiguousOccurrence n mods _) =
 -- which binds its impls but not its constructors.
 ppResError (AmbiguousConstructor n mods _) =
   "Ambiguous constructor: '\{n}' is brought into scope by \{ambigModPhrase mods}. A module alias cannot tell two constructors apart. Bring in the constructors of only one — e.g. `import <mod>.{T(..)}` — and import the other without `(..)` and without an alias"
+-- The remedy is a RENAME and nothing else, unlike every other member of this
+-- family.  The alias already names the module the author meant, so there is no
+-- narrower import to offer and no second alias to reach for: both constructors
+-- land on one bare key whatever the import clauses say.
+ppResError (AmbiguousAliasCtor n mid _) =
+  "Ambiguous constructor: '\{n}' names `\{mid}`'s constructor, but this module declares a constructor of that name itself. The alias prefix is dropped before the constructor table is consulted, and that table is keyed by the bare name, so the two cannot be told apart. Rename one of them"
 -- `import m as A` binds m's TYPES as `A.name`, same as it does values (#2412,
 -- `docs/spec/SYNTAX.md` "Import aliasing"), so qualifying with a module alias
 -- resolves the collision the same way it does for an ordinary value — offer it.
@@ -2582,6 +2627,7 @@ resErrorCode (DuplicateBinder _ _ _) = "R-DUP-BINDER"
 resErrorCode (AsPatternMisplaced _) = "R-AS-PATTERN-MISPLACED"
 resErrorCode (AmbiguousOccurrence _ _ _) = "R-AMBIGUOUS-OCCURRENCE"
 resErrorCode (AmbiguousConstructor _ _ _) = "R-AMBIGUOUS-CTOR"
+resErrorCode (AmbiguousAliasCtor _ _ _) = "R-AMBIGUOUS-CTOR"
 resErrorCode (AmbiguousType _ _ _) = "R-AMBIGUOUS-TYPE"
 resErrorCode (AmbiguousInterface _ _ _) = "R-AMBIGUOUS-INTERFACE"
 resErrorCode (InternalExternAccess _ _) = "R-INTERNAL-EXTERN"
@@ -3135,6 +3181,36 @@ strippedCtorKey p collisions n =
     Some mods => [(n, mods)]
     None => []
 
+-- The STRIP-ONTO-A-LOCAL-CONSTRUCTOR collision, the half `strippedCtorAmbiguity`
+-- above structurally cannot see.  Its provenance map counts IMPORTS, and
+-- `keepAmbiguous` then drops any name this module declares, because for a BARE
+-- occurrence the local constructor is simply what the author wrote and nothing is
+-- contested.  An alias-qualified occurrence inverts that: the author named ANOTHER
+-- module's constructor, the prefix is stripped before typecheck's bare-keyed table
+-- is consulted, and the local declaration wins that table — so one aliased import
+-- plus one local declaration is already a collision, with no second importer
+-- needed.  A corrected VALUE is not reachable from here (`PCon`/`EVar` carry no
+-- module identity; #1288 tracks giving them one), so the occurrence is refused.
+--
+-- Only spellings that actually strip are entered (`useBaseName p n /= n`), which
+-- is true of no import form but the alias, so this adds nothing to any program
+-- that writes none.
+aliasShadowedCtors : OrdMap ModuleExports -> List Decl -> List (String, String)
+aliasShadowedCtors known prog =
+  let localCtors = omFromNames (ctorNames prog) omEmpty
+  flatMap (p => aliasShadowedFrom localCtors known p) (usePathsOf prog)
+
+aliasShadowedFrom : OrdMap Unit ->
+  OrdMap ModuleExports ->
+  UsePath ->
+  List (String, String)
+aliasShadowedFrom localCtors known p =
+  map
+    (n => (n, useModId p))
+    (filterList
+      (n => useBaseName p n /= n && omHasKey (useBaseName p n) localCtors)
+      (importCtorNames known p))
+
 -- ── type-name / interface-name provenance / ambiguity (#1110) ───────────────
 -- The TYPE and INTERFACE peers of the two blocks above, deliberately built from
 -- the same three parts (`importedNamesMM` → a namespace filter → `keepAmbiguous`)
@@ -3578,6 +3654,7 @@ buildEnvMM ps known prog internalGuard =
     importedModuleValues = impModValues,
     ambiguous = ambiguousSet known prog,
     ctorAmbiguous = ctorAmbiguousSet known prog,
+    ctorAliasShadow = aliasShadowedCtors known prog,
     typeAmbiguous = typeAmbiguousSet known prog,
     ifaceAmbiguous = ifaceAmbiguousSet known prog,
     internalGuard = omFromNames internalGuard omEmpty,
@@ -4676,6 +4753,7 @@ typeOriginExports known mid prog =
     ++ map (typeDeclaredIn mid) (expTypesDirect prog)
     ++ map (ifaceDeclaredIn mid) (expInterfacesDirect prog)
     ++ map (ctorDeclaredIn mid) (expCtorsDirect prog)
+    ++ flatMap ctorOwnedBy (expTypeCtorsDirect prog)
 
 typeDeclaredIn : String -> String -> (String, String)
 typeDeclaredIn mid n = (n, mid)
@@ -4698,8 +4776,20 @@ importedTypeOriginsFrom : UsePath ->
   List (String, String)
 importedTypeOriginsFrom (UseName ns) src =
   if listLen ns > 1 then keepTypeOrigins src [(lastOf ns, lastOf ns)] else []
+-- A `T(..)` member binds constructors it never spells, so the literal member
+-- list is not the whole binding set (#1359).  Reading it as if it were carries a
+-- re-export hop's type and drops its constructors: the importer's `F.MkT` then
+-- fails the alias strip's guard and reaches typecheck as an unbound `F.MkT`.  A
+-- wildcard hop passes `src` through whole and has no such gap.  The
+-- constructors are recovered from the `ctorof:` rows rather than re-derived, and
+-- those rows are re-emitted so the next hop can do the same.
 importedTypeOriginsFrom (UseGroup _ members) src =
-  keepTypeOrigins src (map useMemberBinding members)
+  let owners = carriedCtorOwners src members
+  keepTypeOrigins
+      src
+      (map useMemberBinding members
+        ++ map (r => selfBinding (untagOriginKey (fst r))) owners)
+    ++ owners
 importedTypeOriginsFrom (UseWild _) src = src
 -- `import m as A` binds m's exported types, interfaces and constructors as
 -- `A.Name` (#2412, #1287), so the identity it contributes is m's, entered under
@@ -4719,10 +4809,33 @@ importedTypeOriginsFrom (UseAlias _ a) src =
 aliasTypeBinding : String -> String -> (String, String)
 aliasTypeBinding a n = (n, qualifiedLocal a n)
 
--- The namespace tags, derived from `ifaceKey`/`ctorKey` rather than written out
--- again, so the predicate cannot drift from the keys it is asked about.
+-- `src`'s constructor-ownership rows for the types these members name with `(..)`,
+-- and for no others.  A member naming a type WITHOUT `(..)` carries the type and
+-- deliberately not its constructors — the same rule `reExpTypeCtors` states for
+-- `ModuleExports`, so a consumer's later `import <hop>.{T(..)}` is still refused as
+-- abstract where it should be.
+carriedCtorOwners : List (String, String) ->
+  List UseMember ->
+  List (String, String)
+carriedCtorOwners src members = match dotDotMemberNames members
+  [] => []
+  tys =>
+    let wanted = omFromNames tys omEmpty
+    filterList (r => isCtorOwnerKey (fst r) && omHasKey (snd r) wanted) src
+
+dotDotMemberNames : List UseMember -> List String
+dotDotMemberNames [] = []
+dotDotMemberNames ((UseMember n True _ _) :: rest) = n :: dotDotMemberNames rest
+dotDotMemberNames (_ :: rest) = dotDotMemberNames rest
+
+-- The namespace tags, derived from `ifaceKey`/`ctorKey`/`ctorOwnerKey` rather than
+-- written out again, so the predicate cannot drift from the keys it is asked about.
 isTaggedOriginKey : String -> Bool
-isTaggedOriginKey n = startsWith (ifaceKey "") n || startsWith (ctorKey "") n
+isTaggedOriginKey n =
+  startsWith (ifaceKey "") n || startsWith (ctorKey "") n || isCtorOwnerKey n
+
+isCtorOwnerKey : String -> Bool
+isCtorOwnerKey n = startsWith (ctorOwnerKey "") n
 
 untaggedOriginKeys : List (String, String) -> List String
 untaggedOriginKeys src =
@@ -5489,6 +5602,22 @@ ownIfaceOrigin mid n = (ifaceKey n, OriginModule mid)
 
 ctorDeclaredIn : String -> String -> (String, String)
 ctorDeclaredIn mid n = (ctorKey n, mid)
+
+-- The FOURTH tag, and the only one whose VALUE is not a module id (#1359): it maps
+-- a constructor to the TYPE that declares it, so a `T(..)` member can find the
+-- constructors it binds without spelling any of them.  Nothing else on the map can
+-- answer that — `ctor:` rows say who defined a constructor, never what it belongs
+-- to, and a key maps to one string where a type has many constructors, so the edge
+-- is stored once per constructor and read by filtering on the VALUE.
+--
+-- A type name travels unchanged through any number of `export import` hops, which
+-- is why the value here is the type and not, say, a re-encoded owner pair: the row
+-- a definer emits is the row every re-exporter passes along.
+ctorOwnerKey : String -> String
+ctorOwnerKey n = "ctorof:\{n}"
+
+ctorOwnedBy : (String, List String) -> List (String, String)
+ctorOwnedBy (ty, ctors) = map (c => (ctorOwnerKey c, ty)) ctors
 
 -- ALL interfaces a decl list declares, public or not — a module's own private
 -- interface is in its own scope.  The `DAttrib` arm is why this is not

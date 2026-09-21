@@ -1,0 +1,5 @@
+-- The shared interface, so every consumer below reaches its answer by DISPATCH on
+-- the type its constructor built.  A wrong constructor is then a wrong number
+-- rather than a type error, which is what lets this fixture fail with a value.
+export interface Tag a where
+  tag : a -> Int

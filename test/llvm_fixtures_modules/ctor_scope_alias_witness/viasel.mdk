@@ -1,0 +1,11 @@
+-- The other declarer imported SELECTIVELY and without `(..)`, so its constructors
+-- are never nominally in scope here by any spelling.  It still contested `A.Dup`
+-- before the fix: the strip produced a bare key, and the key is what the collision
+-- was computed over.
+import k.{Tag, tag}
+import dupa as A
+import dupb.{DB, unDB}
+
+export
+vsel : Int
+vsel = tag (A.Dup 3)

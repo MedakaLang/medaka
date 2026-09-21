@@ -1,0 +1,11 @@
+-- The other declarer reached ONLY TRANSITIVELY: this file never names `dupb`.  A
+-- collision computed over the loaded graph rather than over what THIS module
+-- imports still found one, which is the sharpest form of the defect — no edit to
+-- this file could have avoided it.
+import k.{Tag, tag}
+import dupa as A
+import midb.{mb}
+
+export
+vtr : Int
+vtr = tag (A.Dup 4) + mb - 9

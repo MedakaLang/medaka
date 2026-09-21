@@ -1,0 +1,15 @@
+-- CONTROL — THE REFUSAL IS AT THE USE SITE.  The same declaring module aliased
+-- beside the same local `Node`, with the qualified constructor never written: the
+-- alias carries the TYPE, the local declaration carries the constructor, and
+-- nothing is contested, so this contributes ZERO rows.  A check keyed on the
+-- import statement — "this module declares a name the alias also reaches" — would
+-- light this up and reject a program that was always well defined.
+import ca as A
+
+data TLocal = Node Int
+
+unLocal : TLocal -> Int
+unLocal (Node n) = n
+
+useA : A.TA -> Int
+useA _ = unLocal (Node 3)

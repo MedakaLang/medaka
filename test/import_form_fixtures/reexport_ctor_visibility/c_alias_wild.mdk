@@ -1,0 +1,11 @@
+-- The alias over the WILDCARD hop.  It already worked, because `.*` re-exports the
+-- source module's rows whole and the ownership edge rode along with them — which is
+-- what made the selective hop's failure look like an alias bug rather than a hop
+-- bug.  Kept as the discriminator between the two readings.
+import facade_wild as W
+
+mkWild : Int -> W.T
+mkWild n = W.MkT n
+
+readWild : W.T -> Int
+readWild x = W.unT x
