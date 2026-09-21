@@ -250,7 +250,7 @@ The leftmost match that starts at or after `from`.
 whole subject, not of the searched tail.
 
 ```medaka
-> map (m => m.start) (findFrom 3 (mustCompile "a") "aaaaa")
+> map (m => (m : Match).start) (findFrom 3 (mustCompile "a") "aaaaa")
 Some 3
 > findFrom 3 (mustCompile "^a") "aaaaa"
 None
@@ -265,7 +265,7 @@ fullMatch : Regex -> String -> Option Match
 The match covering the whole subject, or `None`.
 
 ```medaka
-> map (m => m.text) (fullMatch (mustCompile "a|ab") "ab")
+> map (m => (m : Match).text) (fullMatch (mustCompile "a|ab") "ab")
 Some "ab"
 > fullMatch (mustCompile "a") "ab"
 None
@@ -317,9 +317,9 @@ cuts a codepoint decodes the way `fromUtf8` decodes any malformed input.
 Keeping byte patterns ASCII is what keeps that from arising.
 
 ```medaka
-> map (m => m.text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+> map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
 Some "12"
-> map (m => m.start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+> map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
 Some 1
 > findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
 None
@@ -338,9 +338,9 @@ An empty match is kept, except directly at the end of the previous match:
 empty match at the end.
 
 ```medaka
-> map (m => m.text) (findAll (mustCompile "\\d+") "a1b22c")
+> map (m => (m : Match).text) (findAll (mustCompile "\\d+") "a1b22c")
 ["1", "22"]
-> map (m => m.text) (findAll (mustCompile "\\d*") "a1b")
+> map (m => (m : Match).text) (findAll (mustCompile "\\d*") "a1b")
 ["", "1", ""]
 ```
 
@@ -396,7 +396,7 @@ Nothing in the result is rescanned, so a replacement that looks like the
 pattern is left alone.
 
 ```medaka
-> replaceAllWith (mustCompile "\\d") (m => "[" ++ m.text ++ "]") "a1b2"
+> replaceAllWith (mustCompile "\\d") (m => "[" ++ (m : Match).text ++ "]") "a1b2"
 "a[1]b[2]"
 ```
 

@@ -12,7 +12,8 @@
    explicitly for the same reason. Add assertions here if the project ever
    grows behavior worth asserting on. -}
 
-import test_process.{expectSpawnOk, medakaBin, underRoot}
+import test.{Expectation(..)}
+import test_process.{expectSpawnOk, medakaBin, testAssertionCount, underRoot}
 
 test "parsec/main.mdk passes `medaka check`" =
   expectSpawnOk medakaBin ["check", underRoot "parsec/main.mdk"]
@@ -22,3 +23,19 @@ test "parsec/lib/toml.mdk passes `medaka check`" =
 
 test "parsec/toml_demo.mdk passes `medaka check`" =
   expectSpawnOk medakaBin ["check", underRoot "parsec/toml_demo.mdk"]
+
+-- #2984-adjacent: `parsec/lib/parser.mdk` is the only `parsec/lib/` module
+-- with assertions of its own (`parsec/lib/toml.mdk` has none, out of scope);
+-- inlined rather than routed through a `floorExpectation` helper since this
+-- file is short and has no such helper yet.
+test "parsec/lib/parser.mdk executed >= 6 assertions" =
+  match testAssertionCount (underRoot "parsec/lib/parser.mdk") []
+    Err e => Fail e ">= 6 assertions" "spawn/parse error"
+    Ok n =>
+      if n >= 6 then
+        Pass ">= 6 assertions" "\{intToString n} assertions"
+      else
+        Fail
+          "parsec/lib/parser.mdk — only \{intToString n} assertions ran, expected >= 6 (vacuous-green guard: discovery may have silently stopped finding tests)"
+          ">= 6 assertions"
+          "\{intToString n} assertions"

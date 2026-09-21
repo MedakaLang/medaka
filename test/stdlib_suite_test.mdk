@@ -1,0 +1,600 @@
+{- | Floor gate for the in-language (`medaka test`) `stdlib/` suite (#3214).
+
+   It asserts that the doctests, `prop "…"` and `test "…"` declarations
+   written inside `stdlib/*.mdk` are discovered and pass. Each module is
+   spawned as its own `medaka test` run — twice, once per engine, wherever
+   it can take both; no external oracle is needed.
+
+   Why a roster is the only thing that runs them. A `stdlib/` module's types
+   are walked whenever something imports it, but no importer runs its
+   assertions, and `make medaka`, `make check-self` and
+   `test/typecheck_compiler_source.sh` run none of them either: that is
+   [W-MODULE-BLIND] in `AGENTS.md`, and it applies to every module below.
+   Importing is not running — `pds/` imports `stdlib/hex.mdk` and exercises
+   it as ordinary code while `hex.mdk`'s own out-of-domain masking pin went
+   unrun, and `stdlib/bytes.mdk` stays outside the COMPILER's import closure
+   by design, since that is what keeps it free of a seed re-mint, even
+   though plenty of other code imports it.
+
+   Two other vehicles reach part of `stdlib/`, and neither is a substitute
+   for a roster closed over the directory: `test/diff_compiler_test_native.sh`
+   spawns the three modules in its `MODULES` list, and
+   `test/diff_compiler_fmt_test.mdk`'s `testReportCorpus` golden-pins the
+   `medaka test` report of fifteen more. A golden pin fails when a count
+   moves in either direction, so it grades a module that is already listed;
+   it cannot say that a NEW module's assertions are run by nothing, which is
+   what the closure check below is for.
+
+   The anti-rot guard (`docs/ops/TESTING-DESIGN.md` §0: "this didn't run" is
+   indistinguishable from "this passed"): a `medaka test` file with zero
+   assertions exits 0, vacuously green. So exit 0 alone is not enough. Every
+   module's executed-assertion count (`summary.passed` from `medaka test
+   --json`) must meet the per-module floor committed below, the corpus total
+   must be nonzero, and every `stdlib/*.mdk` must have either a `suites` row
+   or a reasoned `exempt` row — a module with neither fails this gate
+   rather than going uncounted.
+
+   This module lists a directory and spawns subprocesses, so it runs under
+   `medaka test --native`. `Makefile`'s `test:` target invokes it that way,
+   and `test/CI-COVERAGE-TOOLS.txt` records why it is reached there rather
+   than through a `test/gates.toml` row. -}
+
+import io.{readLines}
+import list.{lookup}
+import string.{stripSuffix}
+import test.{Expectation(..)}
+import test_process.{
+  disagreeingFloorBlocks,
+  missingUnits,
+  testAssertionCount,
+  underRoot,
+  ungradedRosterRows,
+  unrosteredUnits,
+}
+
+{- | Which engine a module is spawned under, and why.
+
+   The two native reasons stay distinguishable because they drain on
+   different events: a `NativeCapability` row drains when the module stops
+   statically reaching an extern the interpreter does not bind, a
+   `NativeSpeed` row when the interpreter gets fast enough to carry it. A
+   single undifferentiated "native" list cannot say which of those to
+   re-check.
+
+   `EvalAndNative` is not a third reason to prefer one engine but a pair of
+   spawns: the module runs under the interpreter and again under the native
+   backend, and the two counts must be EQUAL TO EACH OTHER before either is
+   graded against the floor at all. The arm-vs-arm rule is equality rather
+   than "both at least the floor" because the arms running different numbers
+   of assertions is itself the regression to catch; a rule that only bounds
+   them below lets one arm drop while it stays over the floor, and nothing
+   says so. The agreed count is then graded `>= floor`, the same way every
+   other row is, so adding assertions to a module never fails its row.
+
+   It is what a module takes whenever it can take both, because the eval
+   arm alone never typechecks the module the way a native build does — a
+   doctest that is not valid Medaka still passes under the interpreter,
+   which is how #3291's 91 unbuildable regex examples stayed green. A row
+   drains out of `EvalAndNative` the moment the two arms stop agreeing, and
+   then by moving to `Eval` with the reason written down, never by dropping
+   the second spawn. `async` is the row waiting to drain the other way: it
+   is `Eval` today only because its native doctest build fails whole-file
+   on two `sleep`-bearing examples (#3300), and it joins `EvalAndNative`
+   when that is fixed. -}
+data Engine = Eval | NativeCapability | NativeSpeed | EvalAndNative
+
+-- The extra `medaka test` arguments a module is spawned with.
+--
+-- `EvalAndNative` is two spawns and so has no single argument list;
+-- `runModule` matches it before it can reach here, and the arm below
+-- exists only because this function must be total.
+engineArgs : Engine -> List String
+engineArgs Eval = []
+engineArgs NativeCapability = ["--native"]
+engineArgs NativeSpeed = ["--native"]
+engineArgs EvalAndNative = []
+
+-- How a module's engine is named in this gate's own failure message, so a
+-- spawn error says which arm produced it.
+engineLabel : Engine -> String
+engineLabel Eval = "eval"
+engineLabel NativeCapability = "native (capability)"
+engineLabel NativeSpeed = "native (speed)"
+engineLabel EvalAndNative = "eval+native"
+
+{- | The roster: module name, the assertion-count floor it commits, and the
+   engine it runs under.
+
+   A floor is the count committed when the row was written, never a
+   recomputation: adding tests only raises the real count (`>= floor` still
+   passes), while removing them, or a discovery regression, drops below the
+   floor and fails. Raise one floor when you add tests to that module; never
+   regenerate every floor from a fresh run, which would turn the guard into
+   a tautology.
+
+   The floors are `summary.passed` counts, not source-text sums of
+   `prop`/`test`/doctest declarations. The two differ: `core` runs 123
+   assertions from 29 `prop` declarations and 94 doctest lines, and reading
+   the declarations alone commits a floor five times too low.
+
+   `EvalAndNative` is the column every row carries unless something stops
+   it, and the two arms must agree before the floor is graded at all. The
+   eval arm on its own runs a module's examples without ever building it,
+   so a doctest that is not valid Medaka passes there; the native arm is
+   what typechecks the generated file, and it is the only arm that can say
+   so.
+
+   `NativeCapability` (four rows): the eval arm refuses the module outright
+   with `E-PANIC: unbound identifier` on `listDir`, `readFile` or
+   `runCommand` — host primitives `medaka test`'s interpreter capability
+   policy does not bind — so this is a capability question, not a timing
+   one.
+
+   `core` is `Eval` and must stay `Eval`: `medaka test --native
+   stdlib/core.mdk` skips its DOCTESTS with a loud named skip citing #1334,
+   which `test/diff_compiler_test_native.sh` asserts on. Its 29 `prop`
+   declarations do run under the native arm, and only its 94 doctest lines
+   are interpreter-only; the row is `Eval` because a native arm that ran 29
+   of the module's 123 assertions could not be compared with the eval arm's
+   count at all.
+
+   `async` is `Eval` for a reason that is a bug rather than a policy: its
+   native doctest build fails whole-file, so the native arm runs 0 of its
+   11 assertions rather than some of them. Two examples drive an `Async`
+   program with `sleep`, which performs `<Clock>`, and the doctest runner's
+   generated top-level binding admits only `<>` (#3300). No annotation
+   inside the example fixes an effect-row rejection, so this is not #3291's
+   defect wearing a different hat. The row moves to `EvalAndNative` when
+   #3300 closes.
+
+   Two rows are worth knowing about when their floor moves. `regex`'s count
+   includes two linear-time step-count sentinels that fail loudly if the
+   Pike VM's sparse-set dedup or its priority cut is ever lost, so a drop
+   there is a complexity regression rather than a bookkeeping one. `hmac`'s
+   covers the RFC 4231 vectors and the boundary key lengths, which is what
+   makes a reverted variable-key schedule visible at all. -}
+suites : List (String, (Int, Engine))
+suites = [
+  ("args", (44, EvalAndNative)),
+  ("array", (53, EvalAndNative)),
+  ("async", (11, Eval)),
+  -- The RFC 4648 vectors and the canonical-rejection checks. Neither of the
+  -- two vehicles named in the header reaches this module, so without this
+  -- row nothing would run them.
+  ("base32", (28, EvalAndNative)),
+  ("base64", (21, EvalAndNative)),
+  ("bits64", (31, EvalAndNative)),
+  ("bytebuilder", (69, EvalAndNative)),
+  ("byteparser", (33, EvalAndNative)),
+  -- The `Bytes` surface, including the out-of-range pairing (`get` answers
+  -- `None` where `b[i]` panics). Staying out of the COMPILER's import
+  -- closure is what keeps this module free of a seed re-mint, and neither
+  -- of the two vehicles named in the header reaches it either.
+  ("bytes", (87, EvalAndNative)),
+  ("core", (123, Eval)),
+  ("fs", (8, NativeCapability)),
+  ("hash_map", (24, EvalAndNative)),
+  ("hash_set", (13, EvalAndNative)),
+  ("hex", (23, EvalAndNative)),
+  ("hmac", (12, EvalAndNative)),
+  -- The resource-limit examples. Neither of the two vehicles named in the
+  -- header reaches this module, so without this row nothing would run them.
+  ("http", (6, EvalAndNative)),
+  ("io", (8, NativeCapability)),
+  ("json", (55, EvalAndNative)),
+  ("list", (158, EvalAndNative)),
+  ("math", (61, EvalAndNative)),
+  ("mut_bytes", (16, EvalAndNative)),
+  ("net", (3, EvalAndNative)),
+  ("nonempty", (15, EvalAndNative)),
+  ("path", (34, EvalAndNative)),
+  ("regex", (94, EvalAndNative)),
+  ("set", (64, EvalAndNative)),
+  -- The assertion library every `*_test.mdk` in the tree imports, whose own
+  -- doctests and props importing it never runs. Neither of the two vehicles
+  -- named in the header reaches this module either.
+  ("test", (72, NativeCapability)),
+  ("test_process", (21, NativeCapability)),
+  ("time", (36, EvalAndNative)),
+  ("toml", (56, EvalAndNative)),
+  ("validation", (20, EvalAndNative)),
+  ("vector", (32, EvalAndNative)),
+]
+
+rosterNames : List String
+rosterNames = map fst suites
+
+{- | The `stdlib/` modules that carry no assertion at all today, and the
+   engine each is spawned under to prove it.
+
+   A module with nothing to floor cannot take a `suites` row: `>= 0` passes
+   for any count, so the row would read as coverage while asserting nothing.
+   It takes an `exempt` row instead, derived below from this same list so
+   the two cannot drift, plus an exact `== 0` pin. The pin is what keeps the
+   exemption from being permanent: the day one of these grows a doctest, its
+   pin fails and says to move the row into `suites` with a real floor, which
+   is the outcome an unpinned `exempt` row would have let pass silently. -}
+zeroAssertionModules : List (String, Engine)
+zeroAssertionModules = [
+  ("net_async", Eval),
+  ("pbkdf2", Eval),
+  ("runtime", Eval),
+  ("sha256", Eval),
+]
+
+zeroAssertionNames : List String
+zeroAssertionNames = map fst zeroAssertionModules
+
+zeroAssertionExempt : List (String, String)
+zeroAssertionExempt =
+  map
+    ((name, _) => (
+      name,
+      "carries no assertion today; the `stdlib/\{name}.mdk runs 0 assertions` pin below fails the day it grows one",
+    ))
+    zeroAssertionModules
+
+{- | The `stdlib/*.mdk` modules this gate does not floor, each paired with
+   the reason.
+
+   A row is licensed for a module some other enrolled vehicle already runs,
+   or for one with nothing to floor. Anything else under `stdlib/` is a
+   suite and belongs in `suites` — that is what keeps a new module from
+   being added silently, since a module in neither list fails the closure
+   check below. The guard after it fails if a row here names a module that
+   is not on disk, so a rename cannot leave the roster quietly open. -}
+exempt : List (String, String)
+exempt =
+  [
+      (
+        "map",
+        "already run by `test/diff_compiler_test_native.sh`, whose `MODULES` list spawns it under `--engines eval,native` and grades the same count this roster would",
+      ),
+      (
+        "string",
+        "already run by `test/diff_compiler_test_native.sh`, whose `MODULES` list spawns it under `--engines eval,native` and grades the same count this roster would",
+      ),
+    ]
+    ++ zeroAssertionExempt
+
+exemptNames : List String
+exemptNames = map fst exempt
+
+{- | Runs one module under its engine and returns its executed-assertion
+   count, or an error naming the engine and what went wrong.
+
+   Every constructor is named explicitly and none of the clauses is a bare
+   variable. `EvalAndNative` is the one engine that is two spawns, so it
+   must reach `runBothEngines` rather than `runOneSpawn`, and a catch-all
+   clause makes that dependent on clause ORDER: with the two clauses
+   swapped, the variable pattern matches `EvalAndNative` too, every row
+   silently runs its eval arm alone, and the file still exits 0 reporting
+   every floor met. Exhaustive arms make the same mistake a missing-arm
+   compile error instead. -}
+runModule : String -> Engine -> <Exec "_", IO> Result String Int
+runModule name EvalAndNative = runBothEngines (underRoot "stdlib/\{name}.mdk")
+runModule name Eval = runOneSpawn name Eval
+runModule name NativeCapability = runOneSpawn name NativeCapability
+runModule name NativeSpeed = runOneSpawn name NativeSpeed
+
+{- | One `medaka test` spawn of `name` under `engine`.
+
+   The engine is named in the error because the arms fail differently: a
+   capability refusal from the eval arm and a genuine assertion failure both
+   surface as a nonzero exit, and only the label says which arm was asked. -}
+runOneSpawn : String -> Engine -> <Exec "_", IO> Result String Int
+runOneSpawn name engine =
+  let path = underRoot "stdlib/\{name}.mdk"
+  match testAssertionCount path (engineArgs engine)
+    Err e => Err "\{path} (\{engineLabel engine}): \{e}"
+    Ok n => Ok n
+
+{- | Runs one module twice, once under each engine, and returns the count
+   the two arms agree on.
+
+   Two spawns rather than one `--engines eval,native` spawn because that
+   form emits only the first engine's object under `--json`, which is the
+   only output `testAssertionCount` can grade.
+
+   The two counts must be equal, not merely both at or above the floor.
+   Reducing them to the lower one would pass a module whose native arm has
+   quietly stopped running some of its assertions, for as long as the
+   remainder stays over the floor; equality makes the divergence itself the
+   failure, and the message carries both numbers so the next reader knows
+   which arm moved. An arm that refuses to run at all is an `Err` naming
+   which one, since the two fail for unrelated reasons (the interpreter
+   over an unbound extern, the native backend over a doctest that does not
+   typecheck). -}
+runBothEngines : String -> <Exec "_", IO> Result String Int
+runBothEngines path = match testAssertionCount path []
+  Err e => Err "\{path} (eval arm of \{engineLabel EvalAndNative}): \{e}"
+  Ok evalRan => match testAssertionCount path ["--native"]
+    Err e => Err "\{path} (native arm of \{engineLabel EvalAndNative}): \{e}"
+    Ok nativeRan =>
+      if evalRan == nativeRan then
+        Ok evalRan
+      else
+        Err
+          "\{path} (\{engineLabel EvalAndNative}): the eval arm ran \{intToString evalRan} assertions and the native arm ran \{intToString nativeRan} — the arms must run the same assertions, so one of them has stopped discovering some"
+
+{- | Every rostered module run exactly once, shared by every assertion below
+   — top-level nullary bindings are memoized, so a spawn placed here and
+   read from two `test` decls executes once, not twice. -}
+results : <Exec "_", IO> List (String, (Int, Result String Int))
+results =
+  map ((name, (floor, engine)) => (name, (floor, runModule name engine))) suites
+
+{- | Grades one module's floor. The message names the module and both
+   numbers on a miss; a run that failed outright reports the spawn's own
+   text instead, so a broken assertion inside a module is never mistaken for
+   a count that merely fell short. -}
+floorExpectation : String -> <Exec "_", IO> Expectation
+floorExpectation name = match lookup name results
+  None => Fail "stdlib/\{name}.mdk has no `results` entry" "" ""
+  Some (floor, Err e) =>
+    Fail e "\{intToString floor} assertions" "spawn/run error"
+  Some (floor, Ok ran) =>
+    if ran >= floor then
+      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
+    else
+      Fail
+        "stdlib/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
+        "\{intToString floor} assertions"
+        "\{intToString ran} assertions"
+
+test "stdlib/args.mdk executed >= 44 assertions" = floorExpectation "args"
+
+test "stdlib/array.mdk executed >= 53 assertions" = floorExpectation "array"
+
+test "stdlib/async.mdk executed >= 11 assertions" = floorExpectation "async"
+
+test "stdlib/base32.mdk executed >= 28 assertions" = floorExpectation "base32"
+
+test "stdlib/base64.mdk executed >= 21 assertions" = floorExpectation "base64"
+
+test "stdlib/bits64.mdk executed >= 31 assertions" = floorExpectation "bits64"
+
+test "stdlib/bytebuilder.mdk executed >= 69 assertions" =
+  floorExpectation "bytebuilder"
+
+test "stdlib/byteparser.mdk executed >= 33 assertions" =
+  floorExpectation "byteparser"
+
+test "stdlib/bytes.mdk executed >= 87 assertions" = floorExpectation "bytes"
+
+test "stdlib/core.mdk executed >= 123 assertions" = floorExpectation "core"
+
+test "stdlib/fs.mdk executed >= 8 assertions" = floorExpectation "fs"
+
+test "stdlib/hash_map.mdk executed >= 24 assertions" =
+  floorExpectation "hash_map"
+
+test "stdlib/hash_set.mdk executed >= 13 assertions" =
+  floorExpectation "hash_set"
+
+test "stdlib/hex.mdk executed >= 23 assertions" = floorExpectation "hex"
+
+test "stdlib/hmac.mdk executed >= 12 assertions" = floorExpectation "hmac"
+
+test "stdlib/http.mdk executed >= 6 assertions" = floorExpectation "http"
+
+test "stdlib/io.mdk executed >= 8 assertions" = floorExpectation "io"
+
+test "stdlib/json.mdk executed >= 55 assertions" = floorExpectation "json"
+
+test "stdlib/list.mdk executed >= 158 assertions" = floorExpectation "list"
+
+test "stdlib/math.mdk executed >= 61 assertions" = floorExpectation "math"
+
+test "stdlib/mut_bytes.mdk executed >= 16 assertions" =
+  floorExpectation "mut_bytes"
+
+test "stdlib/net.mdk executed >= 3 assertions" = floorExpectation "net"
+
+test "stdlib/nonempty.mdk executed >= 15 assertions" =
+  floorExpectation "nonempty"
+
+test "stdlib/path.mdk executed >= 34 assertions" = floorExpectation "path"
+
+test "stdlib/regex.mdk executed >= 94 assertions" = floorExpectation "regex"
+
+test "stdlib/set.mdk executed >= 64 assertions" = floorExpectation "set"
+
+test "stdlib/test.mdk executed >= 72 assertions" = floorExpectation "test"
+
+test "stdlib/test_process.mdk executed >= 21 assertions" =
+  floorExpectation "test_process"
+
+test "stdlib/time.mdk executed >= 36 assertions" = floorExpectation "time"
+
+test "stdlib/toml.mdk executed >= 56 assertions" = floorExpectation "toml"
+
+test "stdlib/validation.mdk executed >= 20 assertions" =
+  floorExpectation "validation"
+
+test "stdlib/vector.mdk executed >= 32 assertions" = floorExpectation "vector"
+
+-- # The zero-assertion pins
+
+zeroResults : <Exec "_", IO> List (String, Result String Int)
+zeroResults =
+  map ((name, engine) => (name, runModule name engine)) zeroAssertionModules
+
+{- | Grades one exempt-because-empty module: its count must be exactly 0,
+   never merely at least 0. A module that has grown an assertion fails here
+   with the count to commit as its new floor. -}
+zeroExpectation : String -> <Exec "_", IO> Expectation
+zeroExpectation name = match lookup name zeroResults
+  None => Fail "stdlib/\{name}.mdk has no `zeroResults` entry" "" ""
+  Some (Err e) => Fail e "0 assertions" "spawn/run error"
+  Some (Ok ran) =>
+    if ran == 0 then
+      Pass "0 assertions" "0 assertions"
+    else
+      Fail
+        "stdlib/\{name}.mdk now runs \{intToString ran} assertions, but it is an `exempt` row, so no floor protects them — move it into `suites` with \{intToString ran} as its floor"
+        "0 assertions"
+        "\{intToString ran} assertions"
+
+test "stdlib/net_async.mdk runs 0 assertions" = zeroExpectation "net_async"
+
+test "stdlib/pbkdf2.mdk runs 0 assertions" = zeroExpectation "pbkdf2"
+
+test "stdlib/runtime.mdk runs 0 assertions" = zeroExpectation "runtime"
+
+test "stdlib/sha256.mdk runs 0 assertions" = zeroExpectation "sha256"
+
+-- # Non-vacuity
+
+ranCountOf : (String, (Int, Result String Int)) -> Int
+ranCountOf (_, (_, Ok n)) = n
+ranCountOf (_, (_, Err _)) = 0
+
+totalRan : <Exec "_", IO> Int
+totalRan = sum (map ranCountOf results)
+
+test "stdlib in-language suite ran at least one assertion" =
+  if totalRan > 0 then
+    Pass "> 0 assertions" "\{intToString totalRan} assertions"
+  else
+    Fail
+      "no assertions ran at all across the stdlib in-language suite"
+      "> 0 assertions"
+      "0 assertions"
+
+{- # Roster closure
+
+   Every `stdlib/*.mdk` must be accounted for: a row in `suites` above, or a
+   reasoned row in `exempt`. Without this a new stdlib module is added with
+   its assertions run by nothing, which is the state #3214 records and this
+   gate exists to close, and nothing anywhere would say so.
+
+   The roster is over the modules themselves, not over `*_test.mdk`
+   siblings, so the unit namer is `stripSuffix ".mdk"` rather than
+   `test_process.testFileStem`, and the two general helpers
+   (`unrosteredUnits`/`missingUnits`) are called directly rather than
+   through their `*TestFiles` wrappers. A directory entry that is not a
+   Medaka module (`README.md`, the `.lextok.golden` and `.test.golden`
+   files) names no unit and is skipped. -}
+
+-- | The module name a `stdlib/` directory entry names, or `None` when the
+-- entry is not a Medaka module.
+--
+-- > moduleStem "set.mdk"
+-- Some "set"
+-- > moduleStem "set.lextok.golden"
+-- None
+moduleStem : String -> Option String
+moduleStem name = stripSuffix ".mdk" name
+
+stdlibEntries : <FileRead "_", IO> Result String (List String)
+stdlibEntries = match listDir (underRoot "stdlib")
+  Err e => Err "could not list stdlib: \{e}"
+  Ok names => Ok names
+
+unrosteredModules : <FileRead "_", IO> Result String (List String)
+unrosteredModules =
+  map (unrosteredUnits moduleStem (rosterNames ++ exemptNames)) stdlibEntries
+
+test "every stdlib/*.mdk module has a `suites` or `exempt` row" =
+  match unrosteredModules
+    Err e => Fail e "no unrostered modules" "listDir failed"
+    Ok [] => Pass "no unrostered modules" "no unrostered modules"
+    Ok extras =>
+      Fail
+        "unaccounted stdlib/*.mdk module(s): \{debug extras} — add a row to `suites` in this file with the floor it commits today, or an `exempt` row saying why it is not floored here"
+        "no unrostered modules"
+        "\{debug extras}"
+
+phantomExemptions : <FileRead "_", IO> Result String (List String)
+phantomExemptions = map (missingUnits moduleStem exemptNames) stdlibEntries
+
+test "every `exempt` row names a module that exists" = match phantomExemptions
+  Err e => Fail e "no phantom exemptions" "listDir failed"
+  Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
+  Ok extras =>
+    Fail
+      "`exempt` names stdlib module(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a module of that name"
+      "no phantom exemptions"
+      "\{debug extras}"
+
+{- | A module carrying both a `suites` row and an `exempt` row.
+
+   The closure check above reads the two lists concatenated, so it cannot
+   see a module in both — it floors the module and simultaneously records a
+   reason not to, and whichever of the two is wrong is the one nothing
+   reports. Every other check in this file stays green on an overlap. -}
+doublyRosteredModules : List String
+doublyRosteredModules = filter (n => elem n exemptNames) rosterNames
+
+test "no stdlib module has both a `suites` and an `exempt` row" =
+  match doublyRosteredModules
+    [] => Pass "no doubly-rostered modules" "no doubly-rostered modules"
+    extras =>
+      Fail
+        "stdlib module(s) with both a `suites` row and an `exempt` row: \{debug extras} — delete whichever is wrong; the closure check reads the two lists joined and cannot see the overlap"
+        "no doubly-rostered modules"
+        "\{debug extras}"
+
+-- A zero-assertion module is pinned above and exempted below from the same
+-- list, so the two cannot disagree; this fails if that derivation is ever
+-- replaced by a second hand-written list.
+unexemptedZeroRows : List String
+unexemptedZeroRows = filter (n => not (elem n exemptNames)) zeroAssertionNames
+
+test "every `zeroAssertionModules` row is also an `exempt` row" =
+  match unexemptedZeroRows
+    [] => Pass "no unexempted zero rows" "no unexempted zero rows"
+    extras =>
+      Fail
+        "zero-assertion module(s) with no `exempt` row: \{debug extras} — the roster closure check would report them unaccounted"
+        "no unexempted zero rows"
+        "\{debug extras}"
+
+{- # Roster/assertion lockstep
+
+   `results` is a shared memoized binding computed for every `suites` row
+   whether or not anything asserts on it: a row with no `test` block of its
+   own is still spawned, and its verdict is silently discarded. The closure
+   checks above prove only that a MODULE is named somewhere; they say
+   nothing about whether an assertion grades it. `test_process`'s
+   `ungradedRosterRows` closes that gap by reading this file's own source
+   text rather than hand-maintaining a second list beside the `test` blocks,
+   which would relocate the bug from "no check" to "two lists that can
+   drift" (#2997). -}
+
+floorCallOpen : String
+floorCallOpen = "floorExpectation \""
+
+ownSourceLines : <IO> Result String (List String)
+ownSourceLines = readLines (underRoot "test/stdlib_suite_test.mdk")
+
+uncheckedRows : <IO> Result String (List String)
+uncheckedRows =
+  map
+    (ls => ungradedRosterRows "stdlib/" floorCallOpen rosterNames ls)
+    ownSourceLines
+
+test "every `suites` row has a matching `test` block" = match uncheckedRows
+  Err e => Fail e "no unchecked rows" "read failed"
+  Ok [] => Pass "no unchecked rows" "no unchecked rows"
+  Ok extras =>
+    Fail
+      "suites row(s) with no `test \"stdlib/<name>.mdk executed >= …\"` block grading that same name: \{debug extras} — `results` is computed for them but never turned into an assertion (#2997)"
+      "no unchecked rows"
+      "\{debug extras}"
+
+disagreeingBlocks : <IO> Result String (List String)
+disagreeingBlocks =
+  map (ls => disagreeingFloorBlocks "stdlib/" floorCallOpen ls) ownSourceLines
+
+test "every floor assertion grades the module its own title names" =
+  match disagreeingBlocks
+    Err e => Fail e "no title/argument disagreements" "read failed"
+    Ok [] =>
+      Pass "no title/argument disagreements" "no title/argument disagreements"
+    Ok bad =>
+      Fail
+        "floor assertion block(s) whose title and `floorExpectation` argument name different modules: \{debug bad} — the titled row's floor is never applied and the graded row's is applied twice, while the row reads as covered"
+        "no title/argument disagreements"
+        "\{debug bad}"
