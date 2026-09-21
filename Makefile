@@ -192,6 +192,15 @@ test: medaka
 	## directory target already grades every assertion in it with one exit
 	## code, so this is that, rather than a per-module roster row.
 	./medaka test gzip
+	## S-the-makefile-is-not-a-roster (#3081): a small fixed roster over four
+	## modules nothing else reaches — `compiler/tools/gate_cost.mdk`,
+	## `compiler/support/util.mdk` and `compiler/support/manifest.mdk` are
+	## outside every entry's import closure ([W-MODULE-BLIND]), and
+	## `test/probe_runner.mdk` carries its own doctests that no other gate
+	## runs. `--native` is for THIS module, not the ones it grades: it spawns
+	## a `medaka test` subprocess per row via `runCommand`, an extern the
+	## interpreter does not bind.
+	./medaka test --native test/compiler_module_roster_test.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:

@@ -523,3 +523,13 @@ test/stdlib_suite_test.mdk     the floor gate for the whole stdlib/ suite (#3214
                                yet), which reds the required ci-gen-drift context. Its behavior IS
                                asserted: the Makefile `test:` target names it explicitly, so
                                `make test` runs it, and CI's `inlang` job runs `make test`.
+test/compiler_module_roster_test.mdk  a small fixed roster over four modules nothing else
+                               reaches (#3081): compiler/tools/gate_cost.mdk,
+                               compiler/support/util.mdk and compiler/support/manifest.mdk are
+                               outside every entry's import closure ([W-MODULE-BLIND]), plus
+                               test/probe_runner.mdk itself. Deliberately not a test/gates.toml
+                               `run` target, for the same reason as test/stdlib_suite_test.mdk
+                               above: a brand-new gate hits [W-SHARD-DERIVED]'s hard refusal.
+                               Its behavior IS asserted: the Makefile `test:` target names it
+                               explicitly, so `make test` runs it, and CI's `inlang` job runs
+                               `make test`.
