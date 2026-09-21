@@ -1,6 +1,9 @@
 addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
+aliasOfUsePath : UsePath -> List String
+aliasStampHead : List String -> Ty -> String -> TyConOrigin -> (Ty, Bool)
+aliasTypeBinding : String -> String -> (String, String)
 ambigModPhrase : List String -> String
 ambigMods : Env -> String -> List String
 ambiguousCtorErrors : Env -> String -> Option Loc -> List ResError
@@ -213,6 +216,7 @@ mapSuperOcc : (String -> String -> TyConOrigin -> TyConOrigin) -> Super -> Super
 matchesExport : String -> (String, List String) -> List String
 mergeAdds : ImportAdds -> ImportAdds -> ImportAdds
 mkScope : List String -> Scope
+moduleAliasNames : List Decl -> List String
 modulesExportingName : Env -> String -> List String
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
@@ -312,7 +316,7 @@ stampClauseWith : Map String Int -> (List Pat, Expr) -> (List Pat, Expr)
 stampDecl : Map String Int -> Decl -> Decl
 stampDeclOrigin : String -> Decl -> Decl
 stampDeclOrigins : String -> List Decl -> List Decl
-stampDeclTyOrigins : Map String TyConOrigin -> Decl -> Decl
+stampDeclTyOrigins : List String -> Map String TyConOrigin -> Decl -> Decl
 stampDeclWith : Map String Int -> Decl -> Decl
 stampExpr : Map String Int -> Expr -> Expr
 stampFieldAssign : Map String Int -> FieldAssign -> FieldAssign
@@ -333,7 +337,7 @@ stampOneModule : List (String, String) -> Map String (List (String, String)) -> 
 stampSection : Map String Int -> Section -> Section
 stampStmts : Map String Int -> List DoStmt -> List DoStmt
 stampTopScope : List Decl -> (Map String Int, List (String, Int))
-stampTyHead : Map String TyConOrigin -> Ty -> (Ty, Bool)
+stampTyHead : List String -> Map String TyConOrigin -> Ty -> (Ty, Bool)
 stampTyOrigins : Map String TyConOrigin -> List Decl -> List Decl
 startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
@@ -364,6 +368,8 @@ typeDeclaredIn : String -> String -> (String, String)
 typeOriginExports : Map String (List (String, String)) -> String -> List Decl -> List (String, String)
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String
+unqualAliasTyName : List String -> String -> String
+untaggedOriginKeys : List (String, String) -> List String
 useImportNames : UsePath -> List String
 useMemberBinding : UseMember -> (String, String)
 useModId : UsePath -> String

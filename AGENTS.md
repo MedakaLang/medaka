@@ -122,8 +122,9 @@ documentation"** — what renders (marked blocks only), what a doc comment
 contains, and what stays out (history, issue numbers, implementation notes).
 
 Import forms: `import map.{Map, get}` (selective), `import map.*` (all exported), `import
-map as M` → `M.get` (**values only** — an alias-qualified name in *type* position is a parse
-error, so import types by name). `import
+map as M` → `M.get`, and `M.Map` in *type* position too (#2412 — the alias-qualified type is
+the SAME type the by-name import gives; constructors are still not reachable through an
+alias, so `import map.{Map(..)}` for those). `import
 m.{f} as A` / `import m.* as A` rejected, diagnostic names the fix.
 
 ⚠️ **[P-IMPORT-BINDS]** Bare `import map` binds NO names but is **not** a no-op — any import

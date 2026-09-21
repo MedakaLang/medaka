@@ -571,6 +571,8 @@ tyAppSpineAcc : Ty -> List Ty -> Option (String, List Ty)
 tyApplyAll : Ty -> List Ty -> Ty
 tyArrowSkipLayout : Token -> ParserE <> Bool
 tyArrowTail : Ty -> ParserE <> Ty
+tyConQualFor : String -> Token -> Token -> ParserE <> String
+tyConQualTail : String -> ParserE <> String
 tyFor : Token -> ParserE <> Ty
 tyParamFor : Token -> ParserE <> (String, Option KindAnn)
 tyParamP : ParserE <> (String, Option KindAnn)

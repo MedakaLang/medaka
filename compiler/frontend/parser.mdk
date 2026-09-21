@@ -40,6 +40,7 @@ import frontend.ast.{
   UsePath(..),
   useMemberOrigin,
   useMemberAlias,
+  qualifiedLocal,
   tyConUnresolved,
   tyConBuiltin,
   dDataUnresolved,
@@ -2306,12 +2307,37 @@ parseTyAtomRaw = defer
     TUpper c => defer
       s <- getPos
       advance
+      n <- tyConQualTail c
       q <- getPos
-      deferPure (tyConUnresolved c (Some (locOfSpan s q)))
+      deferPure (tyConUnresolved n (Some (locOfSpan s q)))
     TIdent v => emit (TyVar v)
     TLParen => parseTyParen
     TLt => parseBareEffectAtom
     _ => failP "expected type atom"
+
+-- `M.Map` in type position: a module alias qualifies a TYPE name, not only a
+-- value (#2412).  The grammar has no notion of a qualified name, so the two
+-- tokens are folded into ONE dotted `TyCon` name here — the same flat spelling
+-- `qualifiedLocal` gives an alias-qualified value, and the same one the import
+-- machinery enters an aliased module's types under.  Resolve strips the prefix
+-- once it has the module identity to stamp (`stampTyHead`, frontend/resolve.mdk),
+-- so nothing downstream of resolve ever sees a dotted type name.
+--
+-- Only `Upper . Upper` folds.  A `.` after a type atom is a parse error in every
+-- other shape, so no existing reading is taken away, and a lowercase right-hand
+-- side stays the error it was (a type name cannot be lowercase).
+tyConQualTail : String -> Parser String
+tyConQualTail head = defer
+  t <- peekP
+  t2 <- peek2P
+  tyConQualFor head t t2
+
+tyConQualFor : String -> Token -> Token -> Parser String
+tyConQualFor head TDot (TUpper n) = defer
+  advance
+  advance
+  deferPure (qualifiedLocal head n)
+tyConQualFor head _ _ = deferPure head
 
 -- A row/grade written directly in a type-ARGUMENT slot (#997), e.g.
 -- `Async <Stdout> Unit` — unlike the prefix `tyFor TLt` form
