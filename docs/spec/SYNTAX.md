@@ -716,6 +716,14 @@ export import list.{reverse, take}  -- re-export
 main = println (reverse (take 2 [1, 2, 3]))
 ```
 
+The wildcard form (`import m.*`) brings in every namespace `m` exports, on equal
+footing with a selective import naming everything by hand: values, types and
+constructors, INTERFACES (so a `=>` predicate, an `impl` head or a `requires`
+naming one is accepted), and effect labels. A selective import can likewise
+name an exported effect label directly (`import eff.{Logging, doLog}`) —
+`(..)` on a label is rejected, since a label has no members for `(..)` to bring
+in (`import eff.{Logging(..), doLog}` fails with a diagnostic saying so).
+
 Export forms:
 
 ```medaka-project
@@ -779,7 +787,7 @@ main = println (EA.emit ++ emitB)
 
 | form | meaning |
 |---|---|
-| `import m as A` | binds every non-method VALUE `m` exports as `A.name`, and every TYPE it exports as `A.Name` (#2412). Does **not** bind bare `name`/`Name`, and does **not** reach a constructor — `A.Ctor` is not a spelling the grammar has. |
+| `import m as A` | binds every non-method VALUE `m` exports as `A.name`, every TYPE it exports as `A.Name` (#2412), every CONSTRUCTOR as `A.Ctor` (expression and pattern position), and every INTERFACE as `A.Iface` (predicate, `impl` head, `requires`) — an alias qualifies the module's whole namespace, matching Haskell's `import qualified` and Rust's paths, not a per-entity-kind list. Does **not** bind any of these bare. `A.Ctor` also reaches a constructor `m` only carries through an `export import` re-export hop. If `A.Ctor`'s bare name ALSO names a constructor declared locally in the importing module, the reference is rejected (`Ambiguous constructor`) rather than silently resolving to either one — the alias prefix is dropped before the constructor table is consulted, and that table has no way to tell the two apart. |
 | `import m.sub as A` | same, for a nested module path |
 | `import m.{a as b, c}` | binds `m`'s `a` as `b`, plus `c`. Does **not** bind bare `a`. |
 | `import core as C` / `import core.{a as b}` | the implicit prelude takes both forms like any other module (#95). The bare prelude names stay in scope either way — an explicit `core` import adds spellings, it never replaces them. The alias surface is core's EXPORTS, so a private core helper is not reachable as `C.name`. |
@@ -843,8 +851,17 @@ viaAlias : A.Name -> Int   -- the same type as `Name` below, not a copy of it
 byName : Name -> Int
 ```
 
-Only constructors cannot be qualified: `A.SomeCtor` does not parse (a field name is
-lowercase). Import a type's constructors with `import m.{T(..)}`.
+A qualified CONSTRUCTOR `A.Ctor` (expression and pattern position) and a qualified
+INTERFACE `A.Iface` (predicate, `impl` head, `requires`) both parse and resolve to
+`m`'s declaration, the same as a type. Unlike a type, a constructor's real identity
+in the compiler's own tables is keyed by its bare name alone — there is no
+declaring-module field on the AST node the way `frontend/repr.mdk`'s type
+representation carries one — so `A.Ctor` is stripped to the bare `Ctor` before
+resolution and, unlike a qualified type, cannot always be told apart from a
+same-spelled constructor the importing module declares itself; that specific
+collision is rejected (`Ambiguous constructor`) rather than silently picking one.
+A qualified interface has no such gap — interface identity already includes its
+declaring module.
 
 ## Externs (primitive declarations — see stdlib/runtime.mdk)
 
