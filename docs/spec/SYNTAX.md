@@ -843,8 +843,8 @@ viaAlias : A.Name -> Int   -- the same type as `Name` below, not a copy of it
 byName : Name -> Int
 ```
 
-Only values can be qualified: `A.SomeType` does not parse (a field name is lowercase).
-Import a type with `import m.{T(..)}`.
+Only constructors cannot be qualified: `A.SomeCtor` does not parse (a field name is
+lowercase). Import a type's constructors with `import m.{T(..)}`.
 
 ## Externs (primitive declarations — see stdlib/runtime.mdk)
 
