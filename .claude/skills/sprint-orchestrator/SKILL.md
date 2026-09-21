@@ -7,8 +7,10 @@ description: Run a Medaka implementation sprint (v8) — a series of implementer
 
 In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for native
 dispatch, worktrees, models, and reports. The sprint workflow below is shared.
-After compaction or resume, re-read the adapter's Resume checkpoint before
-another wait or dispatch.
+In Pi, read `.pi/SPRINT.md` from the repository root instead: it maps the shared
+roles to project-local agents and replaces spawn/wait and worktree mechanics.
+After compaction or resume, re-read the active harness adapter's recovery
+instructions before another wait or dispatch.
 
 You run the whole sprint from this one session. The goals, in Val's order:
 **(1) high throughput of implemented code, (2) low token cost, (3) correctness

@@ -6,7 +6,8 @@ description: Cut a sprint — choose a coherent set of 3–5 implementation slic
 # Sprint planning — cutting the slice set
 
 In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for model
-and harness mappings. The planning workflow below is shared by both clients.
+and harness mappings. In Pi, read `.pi/SPRINT.md` from the repository root
+instead. The planning workflow below is shared by all three clients.
 
 A sprint (v8) is a simple machine: **a series of implementers that run one after
 another, each doing minimal verification, followed by one thorough review round
@@ -74,7 +75,8 @@ deeper than this measured ~75% rework.
    right call for genuinely tricky slices: cross-cutting semantics, coupled
    sites, anything where a wrong-but-plausible transform is easy. When
    unsure, start sonnet; the orchestrator upgrades on a refusal.
-   **Codex:** apply `.codex/SPRINT.md` § "Choosing an implementation tier":
+   **Codex / Pi:** apply the implementation-tier rubric in `.codex/SPRINT.md`
+   or `.pi/SPRINT.md`, respectively:
    Terra/high is the default, including coupled-site work with a settled remedy.
    A Sol/high choice must name the unresolved semantic or algorithmic decision,
    not merely the severity, subsystem, file count, or test volume.

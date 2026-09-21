@@ -6,7 +6,9 @@ description: The one-page packet contract for Medaka sprint slices — the hando
 # The packet contract (v8)
 
 In Codex, first read [.codex/SPRINT.md](../../../.codex/SPRINT.md) for the
-prepared-worktree form of §2 and model mappings. Keep the six-section contract.
+prepared-worktree form of §2 and model mappings. In Pi, read `.pi/SPRINT.md`
+from the repository root for its injected-worktree form and project roles.
+Keep the six-section contract.
 
 A packet is ONE PAGE — target ≤80 lines, hard ceiling 120. It exists so an
 implementer can start coding within minutes of reading it. Everything the
@@ -21,7 +23,7 @@ handles: `#1362 (check --json silent-accept)`, never naked numbers), model
 tier, base = the current sprint-branch head SHA, report path
 (`<sprint-dir>/reports/<slice-id>.md`).
 
-For Codex, use the adapter's implementation-tier rubric for repair packets too:
+For Codex and Pi, use the active adapter's implementation-tier rubric for repair packets too:
 name the remaining semantic/algorithmic decision if selecting Sol. A finding's
 severity or the reviewer's model is not a repair-model justification.
 
