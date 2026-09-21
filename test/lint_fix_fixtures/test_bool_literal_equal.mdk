@@ -16,4 +16,5 @@ notEqualVerb a = expectNotEqual True (a == 1)
 
 -- POSITIVE: `--fix` reaches a `test` and a `prop` body.
 test "a bool literal inside a test body" = expectEqual True (isReady 1)
-prop "a bool literal inside a prop body" (n : Int) = expectEqual (isReady n) False
+prop "a bool literal inside a prop body" (n : Int) =
+  expectEqual (isReady n) False
