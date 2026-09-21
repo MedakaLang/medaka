@@ -1,0 +1,5 @@
+public export data Tbl = Tbl Int
+
+export
+mkA : Int -> Tbl
+mkA n = Tbl n

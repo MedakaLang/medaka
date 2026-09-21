@@ -203,6 +203,7 @@ lastOf : List String -> String
 letBindDupErrors : Option Loc -> String -> List FunClause -> List ResError
 letBindName : LetBind -> String
 locKey : Option Loc -> String
+localBinding : Env -> Scope -> String -> Bool
 localOfExpanded : (String, String, Loc) -> String
 localsExportedFrom : List String -> List (String, String) -> List String
 lookupBindId : Map String Int -> String -> Int

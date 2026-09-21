@@ -1,0 +1,7 @@
+import ma.*
+import mb.*
+
+f : Tbl -> Int
+f _ = 1
+
+main = println (f (mkA 1))

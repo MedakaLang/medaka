@@ -298,6 +298,8 @@ public export data Env = Env {
   internalGuard : OrdMap Unit,
   sugValuesMemo : Ref (Option (List SugCand)),  -- the did-you-mean candidate POOLS, built at most
   sugTypesMemo : Ref (Option (List SugCand)),  -- ONCE per `Env` — see `sugValuePool` (#1016, #2800).
+  localValues : OrdMap Unit,  -- this file's own top-level value names only — never
+-- prelude/imported; lets `localBinding` tell "own binding" apart from "elsewhere".
 }  -- imported module (needs a selective import, not a typo fix; audit #5).
 -- (modId, expValues) pairs for every non-`core` module this file `import`s
 -- (multi-module path only; single-file `buildEnv` leaves this `[]`) — lets
@@ -796,13 +798,18 @@ checkVar cur env scope n
 -- An alias-qualified reference (`Alias.name`) has no unqualified spelling of
 -- its own — it only ever reaches `checkVar` as a joined "\{alias}.\{name}"
 -- string via `qualifiedLocal` (importedNamesMM's UseAlias arm) — so a SINGLE
--- dot reliably marks one.  When the bare suffix resolves (the prelude, or
--- another module) but the qualified form doesn't, the aliased module simply
+-- dot reliably marks one.  When the bare suffix resolves via the prelude or
+-- another module but the qualified form doesn't, the aliased module simply
 -- doesn't define/re-export that name itself (#1287); that is a more specific
--- diagnosis than the generic UnboundVariable fallback below.
+-- diagnosis than the generic UnboundVariable fallback below. But when the bare
+-- suffix instead resolves to a binding of THIS file — its own top-level
+-- definition, or a local scope binder of the same name — there is no
+-- "elsewhere" to point at: the diagnosis and its "call it unqualified" advice
+-- would both be false, so that case falls through to the generic path.
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unboundVarErrors cur env scope n = match splitOnChar '.' n
-  [alias, bare] if lookupValue env scope bare =>
+  [alias, bare] if lookupValue env scope bare
+    && not (localBinding env scope bare) =>
     [UnboundQualifiedElsewhere n alias bare cur]
   _ => match modulesExportingName env n
     m :: _ => [UnboundVariableExported n m cur]
@@ -907,6 +914,15 @@ lookupValue env scope n =
     || omHasKey n env.values
     || omHasKey n env.ctors
     || omHasKey n env.imported
+
+-- True when `n` resolves to a binding that belongs to the file doing the
+-- lookup itself — a local scope binder (lambda/let/pattern), or this file's
+-- own top-level definition (`env.localValues`) — rather than the prelude or
+-- another module. Used to keep `UnboundQualifiedElsewhere`'s "resolves
+-- elsewhere" claim honest: a bare name that only resolves THIS way is not
+-- "elsewhere" at all.
+localBinding : Env -> Scope -> String -> Bool
+localBinding env scope n = scopeMem n scope || omHasKey n env.localValues
 
 -- "did you mean" for an unbound name: the nearest in-scope value name by
 -- Levenshtein distance (ERROR-QUALITY §4.1).  Suggest only when the distance is
@@ -1868,6 +1884,7 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     internalGuard = omFromNames internalGuard omEmpty,
     sugValuesMemo = Ref None,
     sugTypesMemo = Ref None,
+    localValues = omFromNames (userValueNames prog) omEmpty,
   }
 
 whenL : Bool -> List a -> List a
@@ -2498,15 +2515,18 @@ ppResError (AmbiguousOccurrence n mods _) =
 -- without `(..)`), which binds its impls but not its constructors.  Never "qualify".
 ppResError (AmbiguousConstructor n mods _) =
   "Ambiguous constructor: '\{n}' is brought into scope by \{ambigModPhrase mods}. Import the constructors of only one — e.g. `import <mod>.{T(..)}` — and drop the other's `(..)`"
--- Neither remedy the VALUE peer offers exists for a type or an interface, so the
--- copy must not borrow its wording.  "Qualify" is impossible: `import m as A` binds
--- m's VALUES as `A.name`, and an alias-qualified name in TYPE position is a parse
--- error (`docs/spec/SYNTAX.md`, "Import aliasing").  A member alias is impossible
--- too: only a value member may be renamed, so `import m.{Foo as Bar}` is rejected.
--- That leaves exactly one fix — name it, rather than gesture at the two that do not
--- work: import the name from one module and drop it from the other's list.
+-- `import m as A` binds m's TYPES as `A.name`, same as it does values (#2412,
+-- `docs/spec/SYNTAX.md` "Import aliasing"), so qualifying with a module alias
+-- resolves the collision the same way it does for an ordinary value — offer it.
 ppResError (AmbiguousType n mods _) =
-  "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. A type name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
+  "Ambiguous type: '\{n}' is brought into scope by \{ambigModPhrase mods}. Qualify with the owning module's alias — `import <mod> as <alias>` then write `<alias>.\{n}` — or drop '\{n}' from the other's import list"
+-- The remedy above does not exist for an interface. "Qualify" is impossible: an
+-- alias-qualified name in interface position is a parse error — module aliasing
+-- binds only values and types (#2412), never interfaces. A member alias is
+-- impossible too: only a value member may be renamed, so `import m.{Foo as Bar}`
+-- is rejected. That leaves exactly one fix — name it, rather than gesture at the
+-- two that do not work: import the interface from one module and drop it from
+-- the other's list.
 ppResError (AmbiguousInterface n mods _) =
   "Ambiguous interface: '\{n}' is brought into scope by \{ambigModPhrase mods}. An interface name can be neither qualified nor aliased, so import it from only one — drop '\{n}' from the other's import list"
 ppResError (InternalExternAccess n _) =
@@ -3413,6 +3433,7 @@ buildEnvMM ps known prog internalGuard =
     internalGuard = omFromNames internalGuard omEmpty,
     sugValuesMemo = Ref None,
     sugTypesMemo = Ref None,
+    localValues = omFromNames (userValueNames prog) omEmpty,
   }
   (env, adds.iaErrors)
 
