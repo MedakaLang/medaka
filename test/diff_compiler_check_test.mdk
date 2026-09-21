@@ -229,6 +229,24 @@ resolveModulesLeg = Leg {
   fixtures = 19,
 }
 
+{- | The import-form matrix: one declaring module, and a consumer module per
+   import SPELLING that names the same exports.
+
+   Same layout and grading as `resolveModulesLeg` — a separate corpus because
+   the question is different. Those fixtures ask what one import form carries;
+   these hold two or more spellings of the SAME import side by side and grade
+   them against one `expected`, so a form that drops a namespace is a row even
+   when every form is individually plausible. -}
+importFormsLeg : Leg
+importFormsLeg = Leg {
+  corpus = "test/import_form_fixtures",
+  shape = OrderedModules,
+  pairedWith = None,
+  golden = InFixtureDir "expected",
+  grade = SortedEqual,
+  fixtures = 3,
+}
+
 rows : List Row
 rows = [
   Row {
@@ -306,7 +324,7 @@ rows = [
     label = "resolve_modules_main",
     oracle = "test/bin/resolve_modules_main",
     prelude = [runtimeMod, coreMod],
-    legs = [resolveModulesLeg],
+    legs = [resolveModulesLeg, importFormsLeg],
     batched = False,
   },
 ]

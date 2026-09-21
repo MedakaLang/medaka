@@ -1,0 +1,7 @@
+-- PARITY CONTROL: a bare `import eff` binds no NAMES, yet an effect label reaches
+-- scope through any import of the module that declares it.  That asymmetry is what
+-- made the selective form's refusal a contradiction rather than a policy.
+import eff
+
+actBare : Int -> <Logging> Int
+actBare x = x + 1

@@ -1,5 +1,5 @@
 # META
-source_lines=5269
+source_lines=5283
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted resolve stage (single-file
@@ -2679,13 +2679,18 @@ filterInSet domain (n :: rest)
 findExports : String -> OrdMap ModuleExports -> Option ModuleExports
 findExports mid known = omLookup mid known
 
--- exported under any value/type/ctor/interface category (lib's imported_names is_pub)
+-- exported under any value/type/ctor/interface/effect category (lib's
+-- imported_names is_pub).  `expEffects` belongs in this disjunction because
+-- `importedEffects` installs every label `m` exports on ANY import of `m`: drop
+-- it and a selective member list naming a label refuses a name the very same
+-- import statement puts in scope, with a message that denies the export (#3293).
 isPubExp : ModuleExports -> String -> Bool
 isPubExp exp n =
   contains n exp.expValues
     || contains n exp.expTypes
     || contains n exp.expCtors
     || contains n exp.expInterfaces
+    || contains n exp.expEffects
 
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeCtorsOf name exp = lookupAssoc name exp.expTypeCtors
@@ -2732,6 +2737,15 @@ importedNamesMM (UseGroup _ members) exp =
   let names = map localOfExpanded expanded
   let expandErrs = flatMap (expandMemberErrs exp) members
   (names, expandErrs ++ flatMap (pubErrExpanded exp) expanded)
+-- `.*` binds every namespace the selective member list can name, so the import
+-- FORM never decides what a name means (#1251).  `expInterfaces` is load-bearing
+-- in all four interface occurrence positions — a `=>` predicate, an `impl` head,
+-- an impl `requires` and a superinterface — and also carries the interface's
+-- METHOD list, since `importedIfaceMethods` scopes each path's methods by the
+-- interface names THAT PATH binds.  Effect labels are absent because they are not
+-- gated on this list at all: `importedEffects` installs every label a module
+-- exports on ANY import of it.
+--
 -- #1311: `.*` silently excludes a private newtype's ctor from `expCtors` —
 -- same silent treatment a VisAbstract data type's ctors already get here (they
 -- are simply never IN `expCtors` to begin with).  No diagnostic on a wildcard
@@ -2740,6 +2754,7 @@ importedNamesMM (UseGroup _ members) exp =
 importedNamesMM (UseWild _) exp = (
   exp.expValues
     ++ exp.expTypes
+    ++ exp.expInterfaces
     ++ filterList
       (c => not (contains c (map fst exp.expNewtypeCtors)))
       exp.expCtors,
@@ -3046,12 +3061,11 @@ ctorAmbiguousSet known prog =
 importTypeNames : OrdMap ModuleExports -> UsePath -> List String
 importTypeNames known path = importNamesIn expTypesOf known path
 
--- The INTERFACE names one non-core import contributes.  ⚠️ `import m.*` contributes
--- NONE, because `importedNamesMM`'s `UseWild` arm lists values/types/ctors and not
--- interfaces — so a wildcard-imported interface is not in `env.interfaces` either
--- (`realImport`'s `iaIfaces` filters the same list).  Reading the same source keeps
--- the ambiguity set a subset of what is actually in scope, which is the property
--- that matters: this must never flag a name resolve did not bind.
+-- The INTERFACE names one non-core import contributes.  Every form that binds
+-- an interface contributes here, wildcard included, because this reads the same
+-- `importedNamesMM` names `realImport`'s `iaIfaces` filters.  Reading the same
+-- source keeps the ambiguity set a subset of what is actually in scope, which is
+-- the property that matters: this must never flag a name resolve did not bind.
 importIfaceNames : OrdMap ModuleExports -> UsePath -> List String
 importIfaceNames known path = importNamesIn expInterfacesOf known path
 
@@ -6055,7 +6069,7 @@ takeOriginTrace _ =
 (DTypeSig false "findExports" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyApp (TyCon "Option") (TyCon "ModuleExports")))))
 (DFunDef false "findExports" ((PVar "mid") (PVar "known")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "known")))
 (DTypeSig false "isPubExp" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isPubExp" ((PVar "exp") (PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expValues")) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expTypes"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expCtors"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expInterfaces"))))
+(DFunDef false "isPubExp" ((PVar "exp") (PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expValues")) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expTypes"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expCtors"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expInterfaces"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expEffects"))))
 (DTypeSig false "typeCtorsOf" (TyFun (TyCon "String") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "typeCtorsOf" ((PVar "name") (PVar "exp")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "exp") "expTypeCtors")))
 (DTypeSig false "newtypeTypeOfCtor" (TyFun (TyCon "String") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -6077,7 +6091,7 @@ takeOriginTrace _ =
 (DTypeSig false "importedNamesMM" (TyFun (TyCon "UsePath") (TyFun (TyCon "ModuleExports") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "importedNamesMM" ((PCon "UseName" (PVar "ns")) (PVar "exp")) (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EBlock (DoLet false false (PVar "nm") (EApp (EVar "lastOf") (EVar "ns"))) (DoExpr (ETuple (EListLit (EVar "nm")) (EApp (EApp (EVar "pubErr") (EVar "exp")) (EVar "nm"))))) (ETuple (EListLit) (EListLit))))
 (DFunDef false "importedNamesMM" ((PCon "UseGroup" PWild (PVar "members")) (PVar "exp")) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EVar "flatMap") (EApp (EVar "expandMemberNames") (EVar "exp"))) (EVar "members"))) (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "localOfExpanded")) (EVar "expanded"))) (DoLet false false (PVar "expandErrs") (EApp (EApp (EVar "flatMap") (EApp (EVar "expandMemberErrs") (EVar "exp"))) (EVar "members"))) (DoExpr (ETuple (EVar "names") (EBinOp "++" (EVar "expandErrs") (EApp (EApp (EVar "flatMap") (EApp (EVar "pubErrExpanded") (EVar "exp"))) (EVar "expanded")))))))
-(DFunDef false "importedNamesMM" ((PCon "UseWild" PWild) (PVar "exp")) (ETuple (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "exp") "expValues") (EFieldAccess (EVar "exp") "expTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "c")) (EApp (EApp (EVar "map") (EVar "fst")) (EFieldAccess (EVar "exp") "expNewtypeCtors")))))) (EFieldAccess (EVar "exp") "expCtors"))) (EListLit)))
+(DFunDef false "importedNamesMM" ((PCon "UseWild" PWild) (PVar "exp")) (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "exp") "expValues") (EFieldAccess (EVar "exp") "expTypes")) (EFieldAccess (EVar "exp") "expInterfaces")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "c")) (EApp (EApp (EVar "map") (EVar "fst")) (EFieldAccess (EVar "exp") "expNewtypeCtors")))))) (EFieldAccess (EVar "exp") "expCtors"))) (EListLit)))
 (DFunDef false "importedNamesMM" ((PCon "UseAlias" PWild (PVar "a")) (PVar "exp")) (ETuple (EApp (EApp (EVar "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EBinOp "++" (EFieldAccess (EVar "exp") "expValues") (EFieldAccess (EVar "exp") "expTypes"))) (EListLit)))
 (DTypeSig false "pubErr" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "pubErr" ((PVar "exp") (PVar "n")) (EIf (EApp (EApp (EVar "isPubExp") (EVar "exp")) (EVar "n")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "PrivateNameAccess") (EVar "n")) (EFieldAccess (EVar "exp") "modId")) (EVar "None")))))
@@ -7354,7 +7368,7 @@ takeOriginTrace _ =
 (DTypeSig false "findExports" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "OrdMap") (TyCon "ModuleExports")) (TyApp (TyCon "Option") (TyCon "ModuleExports")))))
 (DFunDef false "findExports" ((PVar "mid") (PVar "known")) (EApp (EApp (EVar "omLookup") (EVar "mid")) (EVar "known")))
 (DTypeSig false "isPubExp" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "String") (TyCon "Bool"))))
-(DFunDef false "isPubExp" ((PVar "exp") (PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expValues")) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expTypes"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expCtors"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expInterfaces"))))
+(DFunDef false "isPubExp" ((PVar "exp") (PVar "n")) (EBinOp "||" (EBinOp "||" (EBinOp "||" (EBinOp "||" (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expValues")) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expTypes"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expCtors"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expInterfaces"))) (EApp (EApp (EVar "contains") (EVar "n")) (EFieldAccess (EVar "exp") "expEffects"))))
 (DTypeSig false "typeCtorsOf" (TyFun (TyCon "String") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
 (DFunDef false "typeCtorsOf" ((PVar "name") (PVar "exp")) (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EFieldAccess (EVar "exp") "expTypeCtors")))
 (DTypeSig false "newtypeTypeOfCtor" (TyFun (TyCon "String") (TyFun (TyCon "ModuleExports") (TyApp (TyCon "Option") (TyCon "String")))))
@@ -7376,7 +7390,7 @@ takeOriginTrace _ =
 (DTypeSig false "importedNamesMM" (TyFun (TyCon "UsePath") (TyFun (TyCon "ModuleExports") (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "ResError"))))))
 (DFunDef false "importedNamesMM" ((PCon "UseName" (PVar "ns")) (PVar "exp")) (EIf (EBinOp ">" (EApp (EVar "listLen") (EVar "ns")) (ELit (LInt 1))) (EBlock (DoLet false false (PVar "nm") (EApp (EVar "lastOf") (EVar "ns"))) (DoExpr (ETuple (EListLit (EVar "nm")) (EApp (EApp (EVar "pubErr") (EVar "exp")) (EVar "nm"))))) (ETuple (EListLit) (EListLit))))
 (DFunDef false "importedNamesMM" ((PCon "UseGroup" PWild (PVar "members")) (PVar "exp")) (EBlock (DoLet false false (PVar "expanded") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "expandMemberNames") (EVar "exp"))) (EVar "members"))) (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "localOfExpanded")) (EVar "expanded"))) (DoLet false false (PVar "expandErrs") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "expandMemberErrs") (EVar "exp"))) (EVar "members"))) (DoExpr (ETuple (EVar "names") (EBinOp "++" (EVar "expandErrs") (EApp (EApp (EDictApp "flatMap") (EApp (EVar "pubErrExpanded") (EVar "exp"))) (EVar "expanded")))))))
-(DFunDef false "importedNamesMM" ((PCon "UseWild" PWild) (PVar "exp")) (ETuple (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "exp") "expValues") (EFieldAccess (EVar "exp") "expTypes")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "c")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EFieldAccess (EVar "exp") "expNewtypeCtors")))))) (EFieldAccess (EVar "exp") "expCtors"))) (EListLit)))
+(DFunDef false "importedNamesMM" ((PCon "UseWild" PWild) (PVar "exp")) (ETuple (EBinOp "++" (EBinOp "++" (EBinOp "++" (EFieldAccess (EVar "exp") "expValues") (EFieldAccess (EVar "exp") "expTypes")) (EFieldAccess (EVar "exp") "expInterfaces")) (EApp (EApp (EVar "filterList") (ELam ((PVar "c")) (EApp (EVar "not") (EApp (EApp (EVar "contains") (EVar "c")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EFieldAccess (EVar "exp") "expNewtypeCtors")))))) (EFieldAccess (EVar "exp") "expCtors"))) (EListLit)))
 (DFunDef false "importedNamesMM" ((PCon "UseAlias" PWild (PVar "a")) (PVar "exp")) (ETuple (EApp (EApp (EMethodRef "map") (EApp (EVar "qualifiedLocal") (EVar "a"))) (EBinOp "++" (EFieldAccess (EVar "exp") "expValues") (EFieldAccess (EVar "exp") "expTypes"))) (EListLit)))
 (DTypeSig false "pubErr" (TyFun (TyCon "ModuleExports") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "ResError")))))
 (DFunDef false "pubErr" ((PVar "exp") (PVar "n")) (EIf (EApp (EApp (EVar "isPubExp") (EVar "exp")) (EVar "n")) (EListLit) (EListLit (EApp (EApp (EApp (EVar "PrivateNameAccess") (EVar "n")) (EFieldAccess (EVar "exp") "modId")) (EVar "None")))))

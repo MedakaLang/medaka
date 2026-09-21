@@ -1,0 +1,8 @@
+-- WILDCARD, interface occurrence 3/4: an impl `requires`.  It cannot be written
+-- without an impl head, so this module re-covers occurrence 2/4 as well.
+import decl.*
+
+data Box a = Box a
+
+impl Speak (Box a) requires Speak a where
+  speak _ = 1

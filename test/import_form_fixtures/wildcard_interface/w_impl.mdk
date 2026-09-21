@@ -1,0 +1,10 @@
+-- WILDCARD, interface occurrence 2/4: the interface an `impl` is OF.  The method
+-- name is checked against the interface's own method list, which reaches scope by
+-- the same per-path interface set — so an `impl` that is accepted here also proves
+-- the wildcard path contributed `Speak`'s methods and not just its name.
+import decl.*
+
+data Local = Local
+
+impl Speak Local where
+  speak _ = 1

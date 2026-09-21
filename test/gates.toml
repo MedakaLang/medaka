@@ -1434,7 +1434,7 @@ migration = "done"
 run = "test/diff_compiler_check_test.mdk"
 oracles = ["check_batch", "check_main", "check_match_main", "check_modules_main", "parse_main", "parse_result_main", "resolve_batch", "resolve_main", "resolve_modules_main"]
 sources = ["compiler/driver/*", "compiler/frontend/ast.mdk", "compiler/frontend/exhaust.mdk", "compiler/frontend/lexer.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/tools/*", "compiler/types/*", "test/compiler_cli_test_support.mdk", "test/diff_compiler_check_test.mdk"]
-corpus = ["test/check_match_fixtures", "test/check_module_fixtures", "test/diff_fixtures", "test/import_error_fixtures", "test/parse_error_fixtures", "test/resolve_fixtures", "test/resolve_module_fixtures"]
+corpus = ["test/check_match_fixtures", "test/check_module_fixtures", "test/diff_fixtures", "test/import_error_fixtures", "test/import_form_fixtures", "test/parse_error_fixtures", "test/resolve_fixtures", "test/resolve_module_fixtures"]
 toolchain = []
 
 [[gate]]

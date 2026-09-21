@@ -1,0 +1,6 @@
+-- PARITY CONTROL: the wildcard spelling already reached the label, and must keep
+-- reaching it.
+import eff.*
+
+actWild : Int -> <Logging> Int
+actWild x = doLog x

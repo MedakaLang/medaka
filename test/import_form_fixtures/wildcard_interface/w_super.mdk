@@ -1,0 +1,5 @@
+-- WILDCARD, interface occurrence 4/4: a SUPERINTERFACE.
+import decl.*
+
+interface Yell a requires Speak a where
+  yell : a -> Int

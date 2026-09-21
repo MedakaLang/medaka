@@ -1,0 +1,8 @@
+-- #3293: a selective member list may name an exported effect label.  It used to be
+-- the one import form that refused one, with the false statement "Module 'eff' has
+-- no exported name 'Logging'" — false because the label was already installed in
+-- this module's effect scope by the same import statement.
+import eff.{Logging, doLog}
+
+act : Int -> <Logging> Int
+act x = doLog x

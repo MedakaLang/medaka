@@ -1,0 +1,10 @@
+-- THE COST OF WIDENING `.*`, ASSERTED.  Two wildcard imports both bind `Speak`,
+-- so naming it is ambiguous — exactly as it is for the selective spelling of the
+-- same two imports.  A wildcard that does not carry interfaces answers a
+-- different question here (`Unknown interface: Speak`), so this row is what
+-- distinguishes "the name is missing" from "the name is here twice".
+import ia.*
+import ib.*
+
+shout : Speak a => a -> Int
+shout _ = 1
