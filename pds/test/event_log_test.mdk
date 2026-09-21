@@ -99,12 +99,18 @@ test "an entry survives encode and decode unchanged" =
   let entry = entryAt 7 1700000000
   match eventLogDecodeEntry (eventLogEncodeEntry entry)
     Err message => Fail message "the same entry" message
-    Ok back =>
-      expectTrue
-        (back.seq == entry.seq
-          && back.timeSeconds == entry.timeSeconds
-          && back.anchorCommitCid == entry.anchorCommitCid
-          && back.frameHex == entry.frameHex)
+    Ok back => expectEach [
+      ("the sequence number survives", expectEqual entry.seq back.seq),
+      (
+        "the timestamp survives",
+        expectEqual entry.timeSeconds back.timeSeconds,
+      ),
+      (
+        "the anchor commit CID survives",
+        expectEqual entry.anchorCommitCid back.anchorCommitCid,
+      ),
+      ("the frame bytes survive", expectEqual entry.frameHex back.frameHex),
+    ]
 
 {- | An entry that anchors to nothing round-trips as anchoring to nothing. The
    absent anchor is the empty third field, so this is also what shows an empty
@@ -118,11 +124,14 @@ test "an unanchored entry survives encode and decode as unanchored" =
   }
   match eventLogDecodeEntry (eventLogEncodeEntry entry)
     Err message => Fail message "the same entry" message
-    Ok back =>
-      expectTrue
-        (back.seq == 8
-          && back.anchorCommitCid == None
-          && back.frameHex == identityFrameHex)
+    Ok back => expectEach [
+      ("the sequence number survives", expectEqual 8 back.seq),
+      (
+        "the entry comes back unanchored",
+        expectEqual None back.anchorCommitCid,
+      ),
+      ("the frame bytes survive", expectEqual identityFrameHex back.frameHex),
+    ]
 
 test "an unanchored entry still writes four fields, with the third empty" =
   expectEqual
@@ -136,11 +145,21 @@ test "an unanchored entry still writes four fields, with the third empty" =
 
 -- # The recovery discriminator, over plain values
 
-test "an anchored entry is owed exactly when the head on disk is its anchor" =
-  expectTrue
-    (eventLogEntryOwed (Some someHead) (entryAt 1 1000)
-      && not (eventLogEntryOwed (Some "bafyreiotherhead") (entryAt 1 1000))
-      && not (eventLogEntryOwed None (entryAt 1 1000)))
+test "an anchored entry is owed exactly when the head on disk is its anchor" = expectEach
+  [
+    (
+      "the entry is owed against its own anchor",
+      expectTrue (eventLogEntryOwed (Some someHead) (entryAt 1 1000)),
+    ),
+    (
+      "it is not owed against a different head",
+      expectFalse (eventLogEntryOwed (Some "bafyreiotherhead") (entryAt 1 1000)),
+    ),
+    (
+      "it is not owed when the repository has no head",
+      expectFalse (eventLogEntryOwed None (entryAt 1 1000)),
+    ),
+  ]
 
 {- | The arm the commit-only rule had no answer for: an entry announcing no
    repository mutation is owed whatever the head is, INCLUDING a data directory
@@ -152,10 +171,20 @@ test "an unanchored entry is owed against every head, and against none" =
     anchorCommitCid = None,
     frameHex = identityFrameHex,
   }
-  expectTrue
-    (eventLogEntryOwed (Some someHead) entry
-      && eventLogEntryOwed (Some "bafyreiotherhead") entry
-      && eventLogEntryOwed None entry)
+  expectEach [
+    (
+      "the unanchored entry is owed against the staged head",
+      expectTrue (eventLogEntryOwed (Some someHead) entry),
+    ),
+    (
+      "it is owed against an unrelated head too",
+      expectTrue (eventLogEntryOwed (Some "bafyreiotherhead") entry),
+    ),
+    (
+      "it is owed when the repository has no head at all",
+      expectTrue (eventLogEntryOwed None entry),
+    ),
+  ]
 
 test "a truncated entry is rejected rather than half-read" =
   match eventLogDecodeEntry "7\t1700000000"
@@ -213,23 +242,41 @@ test "a cursor past the newest entry yields nothing" =
 
 -- # The retention window
 
-test "an entry exactly at the bound is live and one second older is not" =
-  expectTrue
-    (not (eventLogExpired 100 1000 900) && eventLogExpired 100 1000 899)
+test "an entry exactly at the bound is live and one second older is not" = expectEach
+  [
+    (
+      "an entry exactly at the bound is still live",
+      expectFalse (eventLogExpired 100 1000 900),
+    ),
+    (
+      "one second older than the bound has expired",
+      expectTrue (eventLogExpired 100 1000 899),
+    ),
+  ]
 
 test "the window partitions a listing without losing or reordering a row" =
   let rows = [(3, 3000, "c"), (1, 1000, "a"), (2, 2000, "b")]
   let (expired, live) = eventLogPartitionExpired 500 3000 rows
-  expectTrue
-    (map (row => rowName row) expired == ["a", "b"]
-      && map (row => rowName row) live == ["c"])
+  expectEach [
+    (
+      "the expired side holds the two oldest rows, in order",
+      expectEqual ["a", "b"] (map (row => rowName row) expired),
+    ),
+    (
+      "the live side holds the remaining row",
+      expectEqual ["c"] (map (row => rowName row) live),
+    ),
+  ]
 
 rowName : (Int, Int, String) -> String
 rowName (_, _, name) = name
 
 test "a sweep is due on every interval-th entry and on no other" = expectEach [
-  ("eventLogSweepsAt 256", expectTrue (eventLogSweepsAt 256)),
-  ("not (eventLogSweepsAt 255)", expectFalse (eventLogSweepsAt 255)),
+  (
+    "a sweep is due on the interval-th entry",
+    expectTrue (eventLogSweepsAt 256),
+  ),
+  ("no sweep is due one entry earlier", expectFalse (eventLogSweepsAt 255)),
 ]
 
 -- # The log on disk
@@ -340,10 +387,17 @@ planArm (Err message) = "error: \{message}"
 test "planning recovery leaves the pending entry and the log where they were" =
   let dir = stagedIn "plan-only" (Some "bafyreinewhead") commitFrameHex
   let arm = planArm (eventLogPlanRecovery dir (Some "bafyreinewhead"))
-  expectTrue
-    (arm == "owed"
-      && not (stagedIsEmpty (eventLogStaged dir))
-      && mustSeqs (eventLogRead dir 0) == [])
+  expectEach [
+    ("recovery plans the owed arm", expectEqual "owed" arm),
+    (
+      "the pending entry is still staged",
+      expectFalse (stagedIsEmpty (eventLogStaged dir)),
+    ),
+    (
+      "the log itself is still empty",
+      expectEqual [] (mustSeqs (eventLogRead dir 0)),
+    ),
+  ]
 
 {- | The injected failure: the entry for a commit is staged, and the commit's
    own persist then fails, so the head on disk is still the OLD one. Recovery
@@ -354,10 +408,16 @@ test "an event staged for a commit that did not persist is dropped" =
   let dir = stagedIn "torn-before-commit" (Some "bafyreinewhead") commitFrameHex
   match recoverAgainst dir (Some "bafyreioldhead")
     Err message => Fail message "an empty log" "an error"
-    Ok () =>
-      expectTrue
-        (mustSeqs (eventLogRead dir 0) == []
-          && stagedIsEmpty (eventLogStaged dir))
+    Ok () => expectEach [
+      (
+        "nothing was promoted into the log",
+        expectEqual [] (mustSeqs (eventLogRead dir 0)),
+      ),
+      (
+        "the staging area was cleared",
+        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+      ),
+    ]
 
 {- | The same drop, for an entry whose payload is NOT a commit event. An
    `#identity` emitted beside a commit anchors to that commit, so a commit that
@@ -372,10 +432,16 @@ test "a non-commit event anchored to a commit that did not persist is dropped" =
       identityFrameHex
   match recoverAgainst dir (Some "bafyreioldhead")
     Err message => Fail message "an empty log" "an error"
-    Ok () =>
-      expectTrue
-        (mustSeqs (eventLogRead dir 0) == []
-          && stagedIsEmpty (eventLogStaged dir))
+    Ok () => expectEach [
+      (
+        "nothing was promoted into the log",
+        expectEqual [] (mustSeqs (eventLogRead dir 0)),
+      ),
+      (
+        "the staging area was cleared",
+        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+      ),
+    ]
 
 {- | The mirror injected failure: the commit persisted and the process died
    before the promote, so the head on disk IS the staged entry's. Recovery must
@@ -384,10 +450,16 @@ test "an event staged for a commit that did persist is finished" =
   let dir = stagedIn "torn-after-commit" (Some "bafyreinewhead") commitFrameHex
   match recoverAgainst dir (Some "bafyreinewhead")
     Err message => Fail message "the event promoted" "an error"
-    Ok () =>
-      expectTrue
-        (mustSeqs (eventLogRead dir 0) == [1]
-          && stagedIsEmpty (eventLogStaged dir))
+    Ok () => expectEach [
+      (
+        "the staged event was promoted as sequence 1",
+        expectEqual [1] (mustSeqs (eventLogRead dir 0)),
+      ),
+      (
+        "the staging area was cleared",
+        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+      ),
+    ]
 
 -- The same finish for a non-commit payload anchored to the head that did land.
 test "a non-commit event anchored to the persisted head is finished" =
@@ -398,10 +470,16 @@ test "a non-commit event anchored to the persisted head is finished" =
       identityFrameHex
   match recoverAgainst dir (Some "bafyreinewhead")
     Err message => Fail message "the event promoted" "an error"
-    Ok () =>
-      expectTrue
-        (mustSeqs (eventLogRead dir 0) == [1]
-          && stagedIsEmpty (eventLogStaged dir))
+    Ok () => expectEach [
+      (
+        "the staged event was promoted as sequence 1",
+        expectEqual [1] (mustSeqs (eventLogRead dir 0)),
+      ),
+      (
+        "the staging area was cleared",
+        expectTrue (stagedIsEmpty (eventLogStaged dir)),
+      ),
+    ]
 
 {- | The arm that did not exist before: an entry announcing no repository
    mutation is finished against a head that names something else entirely, and
@@ -415,12 +493,24 @@ test "an unanchored event is finished whatever head the repository holds" =
     recoverAgainst mismatched (Some "bafyreisomethingelse"),
     recoverAgainst headless None,
   )
-    (Ok (), Ok ()) =>
-      expectTrue
-        (mustSeqs (eventLogRead mismatched 0) == [1]
-          && stagedIsEmpty (eventLogStaged mismatched)
-          && mustSeqs (eventLogRead headless 0) == [1]
-          && stagedIsEmpty (eventLogStaged headless))
+    (Ok (), Ok ()) => expectEach [
+      (
+        "the mismatched-head log promoted its event",
+        expectEqual [1] (mustSeqs (eventLogRead mismatched 0)),
+      ),
+      (
+        "the mismatched-head staging area was cleared",
+        expectTrue (stagedIsEmpty (eventLogStaged mismatched)),
+      ),
+      (
+        "the headless log promoted its event",
+        expectEqual [1] (mustSeqs (eventLogRead headless 0)),
+      ),
+      (
+        "the headless staging area was cleared",
+        expectTrue (stagedIsEmpty (eventLogStaged headless)),
+      ),
+    ]
     _ => Fail "recovery failed" "two promoted logs" "an error"
 
 -- An unanchored entry reads back out of the log unanchored: the arm that would
@@ -430,10 +520,16 @@ test "an unanchored event keeps its absent anchor through the log" =
   match recoverAgainst dir None
     Err message => Fail message "one unanchored entry" "an error"
     Ok () => match eventLogRead dir 0
-      Ok [stored] =>
-        expectTrue
-          (stored.anchorCommitCid == None
-            && stored.frameHex == identityFrameHex)
+      Ok [stored] => expectEach [
+        (
+          "the stored entry is still unanchored",
+          expectEqual None stored.anchorCommitCid,
+        ),
+        (
+          "its frame bytes are unchanged",
+          expectEqual identityFrameHex stored.frameHex,
+        ),
+      ]
       Ok entries =>
         Fail
           "expected exactly one stored entry"
@@ -521,8 +617,17 @@ test "an append leaves every entry already in the log untouched" =
     Err message => Fail message "forty untouched entries" "an error"
     Ok seq =>
       let after = mustEntries (eventLogRead dir 0)
-      expectTrue
-        (length before == 40 && seq == 41 && sameEntries before (take 40 after))
+      expectEach [
+        (
+          "the log held forty entries before the append",
+          expectEqual 40 (length before),
+        ),
+        ("the append is numbered forty-one", expectEqual 41 seq),
+        (
+          "the first forty entries are byte-for-byte what they were",
+          expectTrue (sameEntries before (take 40 after)),
+        ),
+      ]
 
 -- # A real commit's event, end to end
 
@@ -646,10 +751,16 @@ test "a real commit's frame is stored and read back byte for byte" =
               commitCidOf body,
             )
               (Some 1, [op], Some bodyCommitCid) => match opShape op
-                Some ("create", "app.bsky.feed.post/self") =>
-                  expectTrue
-                    (stored.anchorCommitCid == Some writtenHead
-                      && bodyCommitCid == writtenHead)
+                Some ("create", "app.bsky.feed.post/self") => expectEach [
+                  (
+                    "the stored entry is anchored to the head that was written",
+                    expectEqual (Some writtenHead) stored.anchorCommitCid,
+                  ),
+                  (
+                    "the frame body names that same commit CID",
+                    expectEqual writtenHead bodyCommitCid,
+                  ),
+                ]
                 _ =>
                   Fail
                     "the op naming app.bsky.feed.post/self with action create"

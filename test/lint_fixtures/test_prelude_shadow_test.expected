@@ -1,0 +1,14 @@
+warning: [rule-dead-code] private top-level 'isErr' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'isNone' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'isOk' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'isPending' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'isSome' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-missing-signature] top-level 'isErr' has no type signature. Add a `isErr : …` declaration
+warning: [rule-missing-signature] top-level 'isNone' has no type signature. Add a `isNone : …` declaration
+warning: [rule-missing-signature] top-level 'isOk' has no type signature. Add a `isOk : …` declaration
+warning: [rule-missing-signature] top-level 'isPending' has no type signature. Add a `isPending : …` declaration
+warning: [rule-missing-signature] top-level 'isSome' has no type signature. Add a `isSome : …` declaration
+warning: [rule-test-prelude-shadow] top-level `isErr` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration
+warning: [rule-test-prelude-shadow] top-level `isNone` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration
+warning: [rule-test-prelude-shadow] top-level `isOk` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration
+warning: [rule-test-prelude-shadow] top-level `isSome` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration

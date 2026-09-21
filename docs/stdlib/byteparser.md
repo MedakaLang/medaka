@@ -273,14 +273,14 @@ still has nothing to abstract over.
 ## `takeBytes`
 
 ```
-takeBytes : Int -> ByteParser (List Int)
+takeBytes : Int -> ByteParser Bytes
 ```
 
-Read exactly N bytes, returning them as a List Int.
+Read exactly N bytes, returning them as packed `Bytes`.
 
 ```medaka
 > runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
-Ok [10, 20, 30]
+Ok Bytes "0a141e"
 ```
 
 ## `takeSlice`

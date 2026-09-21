@@ -34,7 +34,7 @@ import http.{
 import json.{Json(..), get, parse}
 import list.{sort}
 import string.{fromUtf8, toUtf8}
-import test.{expectEach, expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectNotEqual}
 import lib.handlers.{pdsRegistry, pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
 import lib.server_core.{
@@ -392,7 +392,7 @@ test "the access audience is this PDS's hostname" =
   expectEqual (accessAudience account) accountHostText
 
 test "the refresh audience is not the access audience" =
-  expectTrue (refreshAudience account /= accessAudience account)
+  expectNotEqual (refreshAudience account) (accessAudience account)
 
 test "a token presented without the Bearer scheme is refused" =
   expectEqual (gatedWith "Authorization: \{goodToken}\r\n") "401 InvalidToken"
@@ -474,10 +474,16 @@ test "a public route answers with no credential at all" = expectEach [
 test "a public route still answers when a good token IS presented" =
   expectEqual (openWith (bearer goodToken)) accountDidText
 
-test "a public route is not closed by an unusable token" =
-  expectTrue
-    (openStatusWith (bearer expiredToken) == "200"
-      && openWith (bearer expiredToken) == "anonymous")
+test "a public route is not closed by an unusable token" = expectEach [
+  (
+    "the public route still answers 200",
+    expectEqual "200" (openStatusWith (bearer expiredToken)),
+  ),
+  (
+    "the caller is seen as anonymous rather than authenticated",
+    expectEqual "anonymous" (openWith (bearer expiredToken)),
+  ),
+]
 
 -- ── the real registry ───────────────────────────────────────────────────────
 

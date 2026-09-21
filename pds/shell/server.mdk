@@ -182,7 +182,7 @@ import time.{
   now,
   seconds,
 }
-import bytebuilder.{Builder, appendBytes, builderParts, newBuilder}
+import bytebuilder.{Builder, emitBytes, builderParts, newBuilder}
 import bytes as B
 import bytes.{Bytes, fromArray, sliceClamped, toArray}
 
@@ -1513,7 +1513,7 @@ retireConnection active slot census buf =
    store when it doesn't fit — a request delivered in K reads costs
    O(bytes), not O(bytes × K), which `buf ++ bytes` on a plain `Array Int`
    would cost because `++` copies its whole left operand on every call. The
-   doubling itself is `bytebuilder.appendBytes`'s: this module does no
+   doubling itself is `bytebuilder.emitBytes`'s: this module does no
    capacity arithmetic of its own.
 
    The live count is exactly what `scanRequestBoundaryWithin` calls `avail`:
@@ -1614,7 +1614,7 @@ readBufferBacking (ReadBuffer b _) =
    replaced by a doubled one first, copying the live prefix once (`blit`);
    the append itself is one more `blit`, of exactly `arrayLength bytes`
    bytes. Neither copy is proportional to bytes already buffered from
-   earlier reads — `appendBytes` grows at most once per call, to the
+   earlier reads — `emitBytes` grows at most once per call, to the
    smallest doubling that holds the result, however many capacity classes a
    single delivered chunk spans.
 
@@ -1628,7 +1628,7 @@ readBufferBacking (ReadBuffer b _) =
 export
 readBufferAppend : Array Int -> ReadBuffer -> Unit
 readBufferAppend bytes (ReadBuffer b _) =
-  appendBytes
+  emitBytes
     (optionOrPanic
       "readBufferAppend: every element must be a byte in 0..255"
       (fromArray bytes))
@@ -1638,7 +1638,7 @@ readBufferAppend bytes (ReadBuffer b _) =
 -- `readBufferAppend` performs. This is `readMore`'s door: a chunk off the
 -- socket arrives packed.
 readBufferAppendBytes : Bytes -> ReadBuffer -> Unit
-readBufferAppendBytes bytes (ReadBuffer b _) = appendBytes bytes b
+readBufferAppendBytes bytes (ReadBuffer b _) = emitBytes bytes b
 
 {- | A fresh buffer holding the live bytes from `from` to the end — the
    leftover a finished request carries into the next one
@@ -1653,7 +1653,7 @@ readBufferFrom : Int -> ReadBuffer -> ReadBuffer
 readBufferFrom from (ReadBuffer b charged) =
   let (backing, len) = builderParts b
   let fresh = newBuilder ()
-  let () = appendBytes (sliceClamped from len backing) fresh
+  let () = emitBytes (sliceClamped from len backing) fresh
   ReadBuffer fresh charged
 
 -- | The live bytes alone, for the one caller (`rejectBufferAt`) that hands

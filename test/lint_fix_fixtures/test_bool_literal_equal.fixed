@@ -1,0 +1,19 @@
+-- Fixture for rule-test-bool-literal-equal autofix (#3235).
+-- The `bothLits` / `plainEq` / `partialEq` / `notEqualVerb` rows are NEGATIVE:
+-- `--fix` must leave them byte-identical.
+
+eqTrueLeft a = expectTrue (a == 1)
+eqFalseLeft a = expectFalse (a == 1)
+eqTrueRight a = expectTrue (a == 1)
+eqFalseRight a = expectFalse (a == 1)
+nestedEq flag = if flag then expectTrue flag else expectFalse flag
+
+-- NEGATIVE: must stay untouched.
+bothLits = expectEqual True False
+plainEq a b = expectEqual a b
+partialEq = expectEqual True
+notEqualVerb a = expectNotEqual True (a == 1)
+
+-- POSITIVE: `--fix` reaches a `test` and a `prop` body.
+test "a bool literal inside a test body" = expectTrue (isReady 1)
+prop "a bool literal inside a prop body" (n : Int) = expectFalse (isReady n)

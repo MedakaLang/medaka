@@ -25,7 +25,7 @@
    `diff_compiler_lint`'s probe reads an environment variable the other five
    do not: `lint_main` builds its stdlib index from `$MEDAKA_ROOT/stdlib`, and
    indexes NOTHING when that is unset, which silences every
-   `rule-stdlib-reimpl` finding. Eight of its 42 fixtures answer differently
+   `rule-stdlib-reimpl` finding. Eight of its 46 fixtures answer differently
    without it and the goldens are the with-index answer, so an unset
    `MEDAKA_ROOT` reds those eight rather than passing on an empty index.
    `medaka gate run` sets it for every gate (`gate_cmd.gateArgs`); a bare
@@ -185,7 +185,7 @@ rows = [
     goldenSuffix = ".expected",
     sorted = True,
     stripUnit = True,
-    fixtures = 42,
+    fixtures = 46,
   },
   Row {
     gate = "diff_compiler_lint_fix",
@@ -195,7 +195,7 @@ rows = [
     goldenSuffix = ".fixed",
     sorted = False,
     stripUnit = False,
-    fixtures = 21,
+    fixtures = 23,
   },
 ]
 

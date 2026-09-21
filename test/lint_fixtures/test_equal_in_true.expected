@@ -1,0 +1,31 @@
+warning: [rule-dead-code] private top-level 'alreadyEqual' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'falseEq' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'falseGe' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'falseNe' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'nestedTrue' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'notEqDef' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'trueConj' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'trueEq' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'trueLt' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'trueNe' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'truePlain' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-missing-signature] top-level 'alreadyEqual' has no type signature. Add a `alreadyEqual : …` declaration
+warning: [rule-missing-signature] top-level 'falseEq' has no type signature. Add a `falseEq : …` declaration
+warning: [rule-missing-signature] top-level 'falseGe' has no type signature. Add a `falseGe : …` declaration
+warning: [rule-missing-signature] top-level 'falseNe' has no type signature. Add a `falseNe : …` declaration
+warning: [rule-missing-signature] top-level 'nestedTrue' has no type signature. Add a `nestedTrue : …` declaration
+warning: [rule-missing-signature] top-level 'notEqDef' has no type signature. Add a `notEqDef : …` declaration
+warning: [rule-missing-signature] top-level 'trueConj' has no type signature. Add a `trueConj : …` declaration
+warning: [rule-missing-signature] top-level 'trueEq' has no type signature. Add a `trueEq : …` declaration
+warning: [rule-missing-signature] top-level 'trueLt' has no type signature. Add a `trueLt : …` declaration
+warning: [rule-missing-signature] top-level 'trueNe' has no type signature. Add a `trueNe : …` declaration
+warning: [rule-missing-signature] top-level 'truePlain' has no type signature. Add a `truePlain : …` declaration
+warning: [rule-not-eq] negated equality. Rewrite as 'a /= 1'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectEqual 1 1'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectEqual a 1'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectEqual a 1'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectEqual b 2'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectNotEqual a 1'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectNotEqual a 1'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectNotEqual b 3'
+warning: [rule-test-equal-in-true] an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as 'expectNotEqual n 0'

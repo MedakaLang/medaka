@@ -1471,6 +1471,12 @@ printTestRunning : String -> Int -> String -> <IO> Unit
 printTestRunning target line name =
   putStrLn "  running \{target}:\{intToString line}: \{name}"
 
+-- Prefixes every line of `msg` with the 7-space runner indent, not just the
+-- first — a multi-line message (e.g. `expectNoFindings`'s `unlines`-joined
+-- body) would otherwise read as outdented against the surrounding report.
+indentVerdictMsg : String -> String
+indentVerdictMsg msg = joinNl (map ("       " ++ _) (splitNl msg))
+
 printTestVerdict : String -> Int -> String -> ExResult -> <IO> Unit
 printTestVerdict target line name result =
   let loc = "\{target}:\{intToString line}"
@@ -1478,10 +1484,10 @@ printTestVerdict target line name result =
     Pass _ _ => putStrLn "  ok   \{loc}: \{name}"
     Fail msg _ _ =>
       let _ = putStrLn "  FAIL \{loc}: \{name}"
-      putStrLn ("       " ++ msg)
+      putStrLn (indentVerdictMsg msg)
     Errored msg =>
       let _ = putStrLn "  FAIL \{loc}: \{name}"
-      putStrLn ("       " ++ msg)
+      putStrLn (indentVerdictMsg msg)
 
 tallyTest : ExResult -> Int -> Int -> Int -> (Int, Int, Int)
 tallyTest (Pass _ _) passed failed errors = (passed + 1, failed, errors)

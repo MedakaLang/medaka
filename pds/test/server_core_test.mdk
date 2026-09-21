@@ -14,7 +14,15 @@ import http.{
 }
 import array as A
 import string.{repeat, toUtf8}
-import test.{expectAll, expectEach, expectEqual, expectOkThen, expectTrue}
+import test.{
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectOkThen,
+  expectTrue,
+  fail,
+  pass,
+}
 import lib.cid.{cidForRaw}
 import lib.server_core.{
   Account,
@@ -205,7 +213,7 @@ test "Store insertion and lookup both retain defensive copies" =
   let cid = cidForRaw bytes
   expectOkThen
     (next => match storeGet cid next
-      None => expectTrue False
+      None => fail "expected the stored bytes to still be present"
       Some viewed =>
         let () = A.setInPlace 0 99 bytes
         let () = A.setInPlace 1 98 viewed
@@ -214,13 +222,13 @@ test "Store insertion and lookup both retain defensive copies" =
 
 test "classified parser exposes malformed framing without diagnostic matching" =
   match parseRequestClassified malformedRequest
-    Err (HttpMalformed _) => expectTrue True
-    _ => expectTrue False
+    Err (HttpMalformed _) => pass
+    _ => fail "expected an HttpMalformed classification"
 
 test "classified parser exposes resource excess without diagnostic matching" =
   match parseRequestClassified resourceRequest
-    Err (HttpResourceExcess _) => expectTrue True
-    _ => expectTrue False
+    Err (HttpResourceExcess _) => pass
+    _ => fail "expected an HttpResourceExcess classification"
 
 test "original parseRequest API retains its Result String contract" =
   expectTrue (isOk (parseRequest fixedQuery))
@@ -230,9 +238,9 @@ test "direct configured handle preserves Store for a fixed query" =
     (request =>
       let (next, response) = handle server testContext seededStore request
       expectEach [
-        ("seedPreserved next", expectTrue (seedPreserved next)),
+        ("the seeded store is left untouched", expectTrue (seedPreserved next)),
         (
-          "serializeResponse response == expected fixed response",
+          "the response is the exact fixed-query wire form",
           expectEqual
             (expectedTextResponse 200 "OK" "fixed")
             (serializeResponse response),
@@ -242,48 +250,87 @@ test "direct configured handle preserves Store for a fixed query" =
 
 test "fixed raw request returns successor Store and exact response bytes" =
   let (next, bytes) = handleBytes server testContext storeEmpty fixedPut
-  expectTrue
-    (storeSize next == 1
-      && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc")
-      && bytes == expectedTextResponse 201 "Created" "stored")
+  expectEach [
+    (
+      "the successor store holds exactly one block",
+      expectEqual 1 (storeSize next),
+    ),
+    (
+      "the stored block reads back as the posted bytes",
+      expectEqual
+        (Some (toUtf8 "abc"))
+        (storeGet (cidForRaw (toUtf8 "abc")) next),
+    ),
+    (
+      "the response is the exact 201 Created wire form",
+      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
+    ),
+  ]
 
 test "chunked raw request returns successor Store and exact response bytes" =
   let (next, bytes) = handleBytes server testContext storeEmpty chunkedPut
-  expectTrue
-    (storeSize next == 1
-      && storeGet (cidForRaw (toUtf8 "abc")) next == Some (toUtf8 "abc")
-      && bytes == expectedTextResponse 201 "Created" "stored")
+  expectEach [
+    (
+      "the successor store holds exactly one block",
+      expectEqual 1 (storeSize next),
+    ),
+    (
+      "the chunked body reassembles to the posted bytes",
+      expectEqual
+        (Some (toUtf8 "abc"))
+        (storeGet (cidForRaw (toUtf8 "abc")) next),
+    ),
+    (
+      "the response is the exact 201 Created wire form",
+      expectEqual (expectedTextResponse 201 "Created" "stored") bytes,
+    ),
+  ]
 
 test "malformed framing returns exact 400 and preserves Store" =
   let (next, bytes) =
     handleBytes server testContext seededStore malformedRequest
-  expectTrue
-    (seedPreserved next
-      && bytes
-        == expectedError
+  expectEach [
+    ("the seeded store is left untouched", expectTrue (seedPreserved next)),
+    (
+      "the response is the exact 400 Bad Request wire form",
+      expectEqual
+        (expectedError
           400
           "Bad Request"
           "InvalidRequest"
           "Malformed HTTP request")
+        bytes,
+    ),
+  ]
 
 test "unknown route returns exact 404 and preserves Store" =
   let (next, bytes) = handleBytes server testContext seededStore unknownRequest
-  expectTrue
-    (seedPreserved next
-      && bytes
-        == expectedError
+  expectEach [
+    ("the seeded store is left untouched", expectTrue (seedPreserved next)),
+    (
+      "the response is the exact 404 Not Found wire form",
+      expectEqual
+        (expectedError
           404
           "Not Found"
           "NotFound"
           "Unknown XRPC method: com.example.query.unknown")
+        bytes,
+    ),
+  ]
 
 test "resource excess returns exact 413 and preserves Store" =
   let (next, bytes) = handleBytes server testContext seededStore resourceRequest
-  expectTrue
-    (seedPreserved next
-      && bytes
-        == expectedError
+  expectEach [
+    ("the seeded store is left untouched", expectTrue (seedPreserved next)),
+    (
+      "the response is the exact 413 Payload Too Large wire form",
+      expectEqual
+        (expectedError
           413
           "Payload Too Large"
           "PayloadTooLarge"
           "HTTP request exceeds resource limits")
+        bytes,
+    ),
+  ]

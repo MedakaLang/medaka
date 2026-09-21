@@ -19,7 +19,14 @@
 
 import array.{sliceClamped}
 import string.{fromUtf8, toUtf8, repeat}
-import test.{expectEqual, expectOkThen, expectTrue}
+import test.{
+  expectAtMost,
+  expectEach,
+  expectEqual,
+  expectOkThen,
+  expectTrue,
+  fail,
+}
 import lib.httpclient.{
   HttpClientParseFailure(..),
   parseResponse,
@@ -60,8 +67,16 @@ test "chunked-body parse cost grows linearly, not quadratically, with chunk coun
   -- The bound below is generous (300x, not 100x) to absorb fixed per-call
   -- overhead at the smallest size without absorbing anything close to the
   -- quadratic shape it is meant to catch.
-  expectTrue
-    (costMedium <= costSmall * 300.0 && costLarge <= costMedium * 300.0)
+  expectEach [
+    (
+      "100 chunks cost no more than 300x the 10-chunk baseline",
+      expectAtMost (costSmall * 300.0) costMedium,
+    ),
+    (
+      "1000 chunks cost no more than 300x the 100-chunk baseline",
+      expectAtMost (costMedium * 300.0) costLarge,
+    ),
+  ]
 
 -- # Where a response ends
 
@@ -105,7 +120,7 @@ test "malformed response keeps the legacy PDS diagnostic and class" =
   match parseResponseClassified [||]
     Err (HttpClientMalformed message) =>
       expectEqual "httpclient: truncated status line; expected CRLF" message
-    _ => expectTrue False
+    _ => fail "expected an HttpClientMalformed classification"
 
 test "resource response keeps the legacy PDS diagnostic and class" =
   let input =
@@ -113,7 +128,7 @@ test "resource response keeps the legacy PDS diagnostic and class" =
   match parseResponseClassified input
     Err (HttpClientResourceExcess message) =>
       expectEqual "httpclient: chunk size exceeds resource limit" message
-    _ => expectTrue False
+    _ => fail "expected an HttpClientResourceExcess classification"
 
 test "a response that declares its length ends where it said it would" =
   let bytes = toUtf8 (declaredResponse "hello")
@@ -163,7 +178,7 @@ test "a chunked response missing its terminating chunk has not ended" =
 test "decoding a chunked response at its boundary yields the whole body" =
   let bytes = toUtf8 chunkedBody
   match responseBoundary bytes
-    None => expectTrue False
+    None => fail "the chunked response boundary did not resolve"
     Some at =>
       expectOkThen
         (response => expectEqual "abcde" (fromUtf8 (responseBody response)))

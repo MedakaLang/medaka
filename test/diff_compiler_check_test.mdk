@@ -107,7 +107,13 @@ import string.{
   words,
 }
 import test.{Expectation, fail, pass}
-import test_process.{boundedVerb, medakaBin, medakaRoot, scratchDir}
+import test_process.{
+  boundedVerb,
+  expectSpawnFailsAll,
+  medakaBin,
+  medakaRoot,
+  scratchDir,
+}
 
 -- # The table
 
@@ -753,33 +759,22 @@ selfNamedScratch = match scratchDir
     let dir = "\{root}/newtype_self_named_ctor"
     map (() => dir) (mkdirAll dir)
 
-selfNamedVerdict : String -> <Exec "_", IO> Option String
-selfNamedVerdict dir =
-  match boundedVerb medakaBin ["check", "\{dir}/use_nt.mdk"]
-    Err e => Some "could not spawn \{medakaBin}: \{e}"
-    Ok (code, out, err) =>
-      -- `medaka check` reports its diagnostics on stdout; stderr carries
-      -- only the binary's own notices.
-      if code == 0 then
-        Some
-          "a self-named newtype's private ctor was admitted through its type import"
-      else if contains "Unbound variable: NT" (out ++ err) then
-        None
-      else
-        Some
-          "expected the ctor spelling to be unbound, got exit \{code}: \{debug (out ++ err)}"
-
 selfNamedRun : <Exec "_", FileWrite "_", IO> Expectation
 selfNamedRun = match selfNamedScratch
   Err e => fail "could not make a scratch directory: \{e}"
   Ok dir => match writeAll dir selfNamedModules
     Err e => fail "could not write the probe modules: \{e}"
     Ok () =>
-      let finding = selfNamedVerdict dir
+      -- `medaka check` reports its diagnostics on stdout; stderr carries
+      -- only the binary's own notices, so grading the two concatenated
+      -- (`expectSpawnFailsAll`'s contract) still finds the needle.
+      let result =
+        expectSpawnFailsAll
+          medakaBin
+          ["check", "\{dir}/use_nt.mdk"]
+          ["Unbound variable: NT"]
       let _ = runVerb "rm" ["-rf", dir]
-      match finding
-        None => pass
-        Some m => fail m
+      result
 
 test "a self-named newtype imports as a type and its ctor spelling stays unbound" =
   selfNamedRun

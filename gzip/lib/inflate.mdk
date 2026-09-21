@@ -727,7 +727,7 @@ truncatedGz : Array Int
 truncatedGz = sliceClamped 0 20 randGz
 
 test "gunzipMember: a truncated stream is Err, not a hang" =
-  expectEqual True (isErr (gunzipMember truncatedGz))
+  expectTrue (isErr (gunzipMember truncatedGz))
 
 -- Corrupt one byte of the CRC-32 field in the trailer (the last 8 bytes,
 -- first 4 are CRC-32 LE — flip the low byte).

@@ -1,0 +1,35 @@
+-- Walking a byte string with the library's own vocabulary, with no `Array Int`
+-- anywhere in the path: `fold`, `forEach`, `any`, `all` and `map` each read the
+-- packed block by index.  The route they replace -- `toArray`, then a prelude
+-- walk over the array -- boxes a machine word per byte before the first step
+-- runs, which is the cost the packed representation exists to avoid, so a walk
+-- that still materialises an array defeats the type.
+--
+-- The three engines agree on the values; what the array-freedom claim rests on
+-- is the emitted IR for the five walks, checked in the slice report.
+--
+-- Eight bytes, not eight thousand: under the interpreter each walk costs one
+-- evaluator frame per byte (issue #3269).
+
+import bytes as B
+import bytes.{Bytes}
+
+subject : Bytes
+subject = B.fromArrayAssumeByteDomain [|3, 1, 4, 1, 5, 9, 2, 6|]
+
+sumBytes : Bytes -> Int
+sumBytes b = B.fold (+) 0 b
+
+countOver : Int -> Bytes -> Int
+countOver lim b =
+  let seen = Ref 0
+  let _ = B.forEach (x => if x > lim then seen := !seen + 1) b
+  !seen
+
+main = (
+  sumBytes subject,
+  countOver 3 subject,
+  B.any (== 9) subject,
+  B.all (< 10) subject,
+  B.toArray (B.map (* 2) subject),
+)

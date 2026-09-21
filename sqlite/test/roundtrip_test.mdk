@@ -10,7 +10,14 @@
 --
 -- Run with: `medaka test sqlite/test/roundtrip_test.mdk` from the sqlite project root.
 
-import test.{Expectation, expectTrue, expectEqual, expectAll, expectEach, fail}
+import test.{
+  Expectation,
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectOkThen,
+  expectTrue,
+}
 import test.dbfix.{q, qd}
 import byteparser.{runByteParser}
 import lib.varint.{sqVarint, sqVarintBytes}
@@ -76,9 +83,8 @@ hasNoDups [] = True
 hasNoDups (x :: rest) = if elem x rest then False else hasNoDups rest
 
 distinctIsUnique : String -> Expectation
-distinctIsUnique sql = match qd sql
-  Err e => fail e
-  Ok rows => expectTrue (hasNoDups rows)
+distinctIsUnique sql =
+  expectOkThen (rows => expectTrue (hasNoDups rows)) (qd sql)
 
 test "SELECT DISTINCT produces no duplicate rows" = expectAll [
   distinctIsUnique "SELECT DISTINCT age FROM users",
@@ -104,11 +110,12 @@ nonDecreasing (a :: b :: rest) =
 -- Ordered ascending ⇒ the projected ints are non-decreasing, and ORDER BY is a
 -- permutation (it neither drops nor invents rows), so the count is preserved.
 test "ORDER BY ASC is a sorted, count-preserving permutation" =
-  match q "SELECT age FROM users WHERE age IS NOT NULL ORDER BY age ASC"
-    Err e => fail e
-    Ok ordered => match q "SELECT age FROM users WHERE age IS NOT NULL"
-      Err e => fail e
-      Ok unordered => expectAll [
-        expectTrue (nonDecreasing (map firstInt ordered)),
-        expectEqual (length ordered) (length unordered),
-      ]
+  expectOkThen
+    (ordered =>
+      expectOkThen
+        (unordered => expectAll [
+          expectTrue (nonDecreasing (map firstInt ordered)),
+          expectEqual (length ordered) (length unordered),
+        ])
+        (q "SELECT age FROM users WHERE age IS NOT NULL"))
+    (q "SELECT age FROM users WHERE age IS NOT NULL ORDER BY age ASC")

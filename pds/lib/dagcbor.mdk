@@ -19,6 +19,7 @@ import bytebuilder.{
   emitU8,
   newBuilder,
 }
+import bytes.{fromArrayAssumeByteDomain}
 import byteparser.{
   BErr,
   BOk,
@@ -50,10 +51,6 @@ validBytes bytes i =
     bytes[i] >= 0 && bytes[i] <= 255 && validBytes bytes (i + 1)
   else
     True
-
-arrayBytes : Array Int -> Int -> List Int
-arrayBytes bytes i =
-  if i >= arrayLength bytes then [] else bytes[i] :: arrayBytes bytes (i + 1)
 
 emitArgument : Int -> Int -> Builder -> Unit
 emitArgument major value out =
@@ -118,12 +115,12 @@ emitValueAt (DcBytes bytes) _ out =
     Err "dagcbor: byte string element outside byte range 0..255"
   else
     emitArgument 2 (arrayLength bytes) out
-    emitBytes (arrayBytes bytes 0) out
+    emitBytes (fromArrayAssumeByteDomain bytes) out
     Ok ()
 emitValueAt (DcString text) _ out =
   let bytes = toUtf8 text
   emitArgument 3 (arrayLength bytes) out
-  emitBytes (arrayBytes bytes 0) out
+  emitBytes (fromArrayAssumeByteDomain bytes) out
   Ok ()
 emitValueAt (DcArray values) depth out =
   emitArgument 4 (length values) out
@@ -141,7 +138,7 @@ emitValueAt (DcLink cid) _ out =
   emitU8 0x2a out
   emitArgument 2 (arrayLength bytes + 1) out
   emitU8 0 out
-  emitBytes (arrayBytes bytes 0) out
+  emitBytes (fromArrayAssumeByteDomain bytes) out
   Ok ()
 
 emitValues : List DagCbor -> Int -> Builder -> Result String Unit

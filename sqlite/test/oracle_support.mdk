@@ -8,11 +8,11 @@
 
    A runner compares a row with `test.expectEqualLines`, over its
    `outLines` joined back with `"\n"`, and never with
-   `test.expectEqualText`: that one normalizes away a last line that is
-   exactly `0`, and
-   `projection_demo.mdk`'s `SELECT DISTINCT a*0` block ends in exactly that
-   line — a demo that dropped the block entirely would normalize to the same
-   text as one that printed it.
+   `test.expectEqualText`: that one normalizes away a trailing `()` or a
+   whole last line that is exactly `0` as a driver artifact, and
+   `projection_demo.mdk`'s `SELECT DISTINCT a*0` block legitimately ends in
+   a whole-line `0` that is part of the real answer, not a driver artifact
+   — `expectEqualLines` is what compares it untouched.
 
    The three runners' spawn primitives (`spawnRaw`/`spawnOut`/`seedDb`/
    `spawnEnv`/`emitterBin`) live here too, not because a spawn is a value

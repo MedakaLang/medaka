@@ -48,7 +48,7 @@ one byte each rather than one boxed machine word each. The result is a
 copy, so emitting more afterwards does not reach it.
 
 ```medaka
-> let buf = newBuilder () in let _ = emitBytes [0, 128, 255] buf in debug (buildBytes buf)
+> let buf = newBuilder () in let _ = emitBytes (fromArrayAssumeByteDomain [|0, 128, 255|]) buf in debug (buildBytes buf)
 "Bytes \"0080ff\""
 > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)
 True
@@ -64,10 +64,10 @@ emitU8 : Int -> Builder -> Unit
 
 Appends one byte. Panics when `b` falls outside `0` to `255`.
 
-### `appendBytes`
+### `emitBytes`
 
 ```
-appendBytes : Bytes -> Builder -> Unit
+emitBytes : Bytes -> Builder -> Unit
 ```
 
 Appends every byte of `src`, in order, in one bulk copy.
@@ -75,13 +75,12 @@ Appends every byte of `src`, in order, in one bulk copy.
 Amortized `O(1)` per byte: the backing block grows at most once, to the
 smallest doubling that holds the result, so appending `n` bytes costs one
 blit of the live prefix (on grow) plus one blit of `src` -- never `n`
-separate single-byte grows. `emitBytes` is the one-byte-at-a-time form,
-over a `List Int`.
+separate single-byte grows.
 
 ```medaka
-> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hi") buf in let _ = appendBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
+> let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hi") buf in let _ = emitBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
 "Bytes \"686921\""
-> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "") buf in debug (buildBytes buf)
+> let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "") buf in debug (buildBytes buf)
 "Bytes \"\""
 ```
 
@@ -104,18 +103,9 @@ block: either way the returned byte string goes stale rather than wrong,
 and a caller reading only `[0, len)` of it reads what it was handed.
 
 ```medaka
-> let buf = newBuilder () in let _ = appendBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
+> let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
 3
 ```
-
-### `emitBytes`
-
-```
-emitBytes : List Int -> Builder -> Unit
-```
-
-Appends each value in the list as one byte. The inverse of
-`byteparser.takeBytes`.
 
 ### `emitU16BE`
 

@@ -71,43 +71,82 @@ decLast bs = setAt 31 (bs[31] - 1) bs
 incLast : Array Int -> Array Int
 incLast bs = setAt 31 (bs[31] + 1) bs
 
-test "secret key accepts one and n - 1" =
-  expectTrue
-    (isOk (secretKeyFromBytes oneBytes)
-      && isOk (secretKeyFromBytes (decLast nBytes)))
+test "secret key accepts one and n - 1" = expectEach [
+  ("the scalar 1 is admitted", expectTrue (isOk (secretKeyFromBytes oneBytes))),
+  (
+    "the scalar n - 1 is admitted",
+    expectTrue (isOk (secretKeyFromBytes (decLast nBytes))),
+  ),
+]
 
-test "secret key rejects public short and long lengths" =
-  expectTrue
-    (isErr (secretKeyFromBytes (arrayMake 31 0))
-      && isErr (secretKeyFromBytes (arrayMake 33 0)))
+test "secret key rejects public short and long lengths" = expectEach [
+  (
+    "a 31-byte key is rejected as too short",
+    expectTrue (isErr (secretKeyFromBytes (arrayMake 31 0))),
+  ),
+  (
+    "a 33-byte key is rejected as too long",
+    expectTrue (isErr (secretKeyFromBytes (arrayMake 33 0))),
+  ),
+]
 
-test "secret key rejects zero, n, n + 1, and maximum" =
-  expectTrue
-    (isErr (secretKeyFromBytes (arrayMake 32 0))
-      && isErr (secretKeyFromBytes nBytes)
-      && isErr (secretKeyFromBytes (incLast nBytes))
-      && isErr (secretKeyFromBytes (arrayMake 32 255)))
+test "secret key rejects zero, n, n + 1, and maximum" = expectEach [
+  (
+    "the scalar zero is rejected",
+    expectTrue (isErr (secretKeyFromBytes (arrayMake 32 0))),
+  ),
+  (
+    "the group order n is rejected",
+    expectTrue (isErr (secretKeyFromBytes nBytes)),
+  ),
+  (
+    "the scalar n + 1 is rejected",
+    expectTrue (isErr (secretKeyFromBytes (incLast nBytes))),
+  ),
+  (
+    "the all-ones 32-byte maximum is rejected",
+    expectTrue (isErr (secretKeyFromBytes (arrayMake 32 255))),
+  ),
+]
 
-test "secret key rejects -1 in early middle and final positions" =
-  expectTrue
-    (isErr (secretKeyFromBytes (setAt 0 (-1) oneBytes))
-      && isErr (secretKeyFromBytes (setAt 16 (-1) oneBytes))
-      && isErr (secretKeyFromBytes (setAt 31 (-1) oneBytes)))
+test "secret key rejects -1 in early middle and final positions" = expectEach [
+  (
+    "a -1 byte at the first position is rejected",
+    expectTrue (isErr (secretKeyFromBytes (setAt 0 (-1) oneBytes))),
+  ),
+  (
+    "a -1 byte in the middle is rejected",
+    expectTrue (isErr (secretKeyFromBytes (setAt 16 (-1) oneBytes))),
+  ),
+  (
+    "a -1 byte at the final position is rejected",
+    expectTrue (isErr (secretKeyFromBytes (setAt 31 (-1) oneBytes))),
+  ),
+]
 
-test "secret key rejects 256 in early middle and final positions" =
-  expectTrue
-    (isErr (secretKeyFromBytes (setAt 0 256 oneBytes))
-      && isErr (secretKeyFromBytes (setAt 16 256 oneBytes))
-      && isErr (secretKeyFromBytes (setAt 31 256 oneBytes)))
+test "secret key rejects 256 in early middle and final positions" = expectEach [
+  (
+    "a 256 byte at the first position is rejected",
+    expectTrue (isErr (secretKeyFromBytes (setAt 0 256 oneBytes))),
+  ),
+  (
+    "a 256 byte in the middle is rejected",
+    expectTrue (isErr (secretKeyFromBytes (setAt 16 256 oneBytes))),
+  ),
+  (
+    "a 256 byte at the final position is rejected",
+    expectTrue (isErr (secretKeyFromBytes (setAt 31 256 oneBytes))),
+  ),
+]
 
 test "secret key stores a scalar before caller input mutates" =
   let mutable = arrayCopy oneBytes
   let admitted = secretKeyFromBytes mutable
   let () = A.setInPlace 31 0 mutable
   expectEach [
-    ("isOk admitted", expectTrue (isOk admitted)),
+    ("the original bytes were admitted", expectTrue (isOk admitted)),
     (
-      "isErr (secretKeyFromBytes mutable)",
+      "the caller's later mutation makes the same buffer inadmissible",
       expectTrue (isErr (secretKeyFromBytes mutable)),
     ),
   ]
@@ -122,23 +161,51 @@ test "public compact signatures round trip as exactly 64 bytes" =
       ])
     (signatureFromCompact knownCompact)
 
-test "public compact parsing rejects 63-byte and 65-byte lengths" =
-  expectTrue
-    (isErr (signatureFromCompact (arrayMake 63 0))
-      && isErr (signatureFromCompact (arrayMake 65 0)))
+test "public compact parsing rejects 63-byte and 65-byte lengths" = expectEach [
+  (
+    "a 63-byte compact signature is rejected as too short",
+    expectTrue (isErr (signatureFromCompact (arrayMake 63 0))),
+  ),
+  (
+    "a 65-byte compact signature is rejected as too long",
+    expectTrue (isErr (signatureFromCompact (arrayMake 65 0))),
+  ),
+]
 
-test "public compact parsing rejects non-byte elements" =
-  expectTrue
-    (isErr (signatureFromCompact (setAt 0 (-1) knownCompact))
-      && isErr (signatureFromCompact (setAt 63 256 knownCompact)))
+test "public compact parsing rejects non-byte elements" = expectEach [
+  (
+    "a -1 element in the r half is rejected",
+    expectTrue (isErr (signatureFromCompact (setAt 0 (-1) knownCompact))),
+  ),
+  (
+    "a 256 element in the s half is rejected",
+    expectTrue (isErr (signatureFromCompact (setAt 63 256 knownCompact))),
+  ),
+]
 
-test "public compact parsing rejects zero range and high-S components" =
-  expectTrue
-    (isErr (signatureFromCompact zeroRCompact)
-      && isErr (signatureFromCompact zeroSCompact)
-      && isErr (signatureFromCompact rangeRCompact)
-      && isErr (signatureFromCompact rangeSCompact)
-      && isErr (signatureFromCompact highSCompact))
+test "public compact parsing rejects zero range and high-S components" = expectEach
+  [
+    (
+      "a zero r component is rejected",
+      expectTrue (isErr (signatureFromCompact zeroRCompact)),
+    ),
+    (
+      "a zero s component is rejected",
+      expectTrue (isErr (signatureFromCompact zeroSCompact)),
+    ),
+    (
+      "an r component at the group order is rejected",
+      expectTrue (isErr (signatureFromCompact rangeRCompact)),
+    ),
+    (
+      "an s component at the group order is rejected",
+      expectTrue (isErr (signatureFromCompact rangeSCompact)),
+    ),
+    (
+      "a high-S signature is rejected",
+      expectTrue (isErr (signatureFromCompact highSCompact)),
+    ),
+  ]
 
 test "public signing rejects malformed digests before production" =
   expectOkThen

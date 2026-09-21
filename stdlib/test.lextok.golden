@@ -1216,6 +1216,46 @@ DEDENT
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "remainingCountMsg"
+COLON
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "remainingCountMsg"
+IDENT "rest"
+EQUAL
+INDENT
+LET
+IDENT "n"
+EQUAL
+INT 1
+PLUS
+IDENT "length"
+IDENT "rest"
+NEWLINE
+LET
+IDENT "noun"
+EQUAL
+IF
+IDENT "n"
+EQ_EQ
+INT 1
+THEN
+STRING "line"
+ELSE
+STRING "lines"
+NEWLINE
+INTERP_OPEN ""
+IDENT "intToString"
+IDENT "n"
+INTERP_MID " "
+IDENT "noun"
+INTERP_END " remaining"
+NEWLINE
+DEDENT
+NEWLINE
 IDENT "diffLineMsg"
 COLON
 UPPER "Int"
@@ -1244,7 +1284,7 @@ RBRACKET
 LPAREN
 IDENT "a"
 CONS
-UNDERSCORE
+IDENT "rest"
 RPAREN
 EQUAL
 INDENT
@@ -1254,7 +1294,10 @@ IDENT "n"
 INTERP_MID ": expected nothing but got "
 IDENT "debug"
 IDENT "a"
-INTERP_END ""
+INTERP_MID " ("
+IDENT "remainingCountMsg"
+IDENT "rest"
+INTERP_END ")"
 NEWLINE
 DEDENT
 NEWLINE
@@ -1263,7 +1306,7 @@ IDENT "n"
 LPAREN
 IDENT "e"
 CONS
-UNDERSCORE
+IDENT "rest"
 RPAREN
 LBRACKET
 RBRACKET
@@ -1275,7 +1318,10 @@ IDENT "n"
 INTERP_MID ": expected "
 IDENT "debug"
 IDENT "e"
-INTERP_END " but got nothing"
+INTERP_MID " but got nothing ("
+IDENT "remainingCountMsg"
+IDENT "rest"
+INTERP_END ")"
 NEWLINE
 DEDENT
 NEWLINE

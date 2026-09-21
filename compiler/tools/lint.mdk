@@ -257,6 +257,15 @@ ruleNameDirectiveReason = "rule-directive-reason"
 ruleNameRegexLiteral : String
 ruleNameRegexLiteral = "rule-regex-literal"
 
+ruleNameTestBoolLiteralEqual : String
+ruleNameTestBoolLiteralEqual = "rule-test-bool-literal-equal"
+
+ruleNameTestEqualInTrue : String
+ruleNameTestEqualInTrue = "rule-test-equal-in-true"
+
+ruleNameTestPreludeShadow : String
+ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
+
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
 -- `allRules` list literal) so the LLVM emitter's record-field scanner — which
@@ -558,6 +567,39 @@ regexLiteralRule = Rule {
   fix = None,
 }
 
+testBoolLiteralEqualRule : Rule
+testBoolLiteralEqualRule = Rule {
+  name = ruleNameTestBoolLiteralEqual,
+  descr =
+    "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestBoolLiteralEqual,
+  fix = Some testBoolLiteralEqualFix,
+}
+
+testEqualInTrueRule : Rule
+testEqualInTrueRule = Rule {
+  name = ruleNameTestEqualInTrue,
+  descr =
+    "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestEqualInTrue,
+  fix = Some testEqualInTrueFix,
+}
+
+testPreludeShadowRule : Rule
+testPreludeShadowRule = Rule {
+  name = ruleNameTestPreludeShadow,
+  descr =
+    "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestPreludeShadow,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -589,6 +631,9 @@ allRules = [
   duplicateBodySameFileRule,
   directiveReasonRule,
   regexLiteralRule,
+  testBoolLiteralEqualRule,
+  testEqualInTrueRule,
+  testPreludeShadowRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -3822,6 +3867,80 @@ fixImplMethodWith f (ImplMethod nm ps body) =
 noExcl : String -> Bool
 noExcl _ = False
 
+-- ── the in-tests variants of the two drivers above ───────────────────────────
+-- `exprRuleFindings`/`exprRuleFix` reach a `DFunDef` body, a `DImpl` method body
+-- and through a `DAttrib`, and stop there: a `test "…"` or `prop "…"` body is a
+-- `DTest`/`DProp`, which lands on their final wildcard arm and is never walked.
+-- Measured on this tree (#3235): the three `expectEqual True …` sites in
+-- `gzip/lib/huffman.mdk` and every one of the 26 sites the two test-verb rules
+-- below answer for live inside a `test "…"` body, so a rule built on the plain
+-- drivers reports a clean tree over code it never read.
+--
+-- These two variants add exactly the `DTest`/`DProp` descent and DELEGATE every
+-- other decl shape back to the plain driver, so the two walkers cannot drift.
+-- They are OPT-IN, taken only by `rule-test-bool-literal-equal` and
+-- `rule-test-equal-in-true`: the plain drivers are untouched, so the twelve
+-- other rules built on them — `rule-not-eq` included — keep exactly the reach
+-- they had. That asymmetry is deliberate and is NOT a half-finished migration:
+-- widening the plain drivers surfaces 23 pre-existing findings for five other
+-- gated max-ratchet rules across eight `stdlib/`+`compiler/` files, which is a
+-- drain of its own and not this rule's to pay.
+exprRuleFindingsInTests : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Option Loc -> Expr -> Finding) ->
+  Positions ->
+  List Decl ->
+  List Finding
+exprRuleFindingsInTests excl det mkFinding pos prog =
+  flatMap (exprRuleDeclLInTests excl det mkFinding) (declLocList pos prog)
+
+exprRuleDeclLInTests : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Option Loc -> Expr -> Finding) ->
+  (Decl, Option Loc) ->
+  List Finding
+exprRuleDeclLInTests excl det mkFinding (d, loc) =
+  map
+    ((hitLoc, hit) => mkFinding hitLoc hit)
+    (declRewriteHitsInTests excl det loc d)
+
+declRewriteHitsInTests : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  Option Loc ->
+  Decl ->
+  List (Option Loc, Expr)
+declRewriteHitsInTests _ det loc (DTest _ _ body) = collectRewrites loc det body
+declRewriteHitsInTests _ det loc (DProp _ _ _ body) =
+  collectRewrites loc det body
+-- `parseAttrib` wraps ANY decl, a test decl included, so the attributed case has
+-- to re-enter HERE rather than fall through to the plain driver's own `DAttrib`
+-- arm, which would drop back to the non-test walker one level down.
+declRewriteHitsInTests excl det loc (DAttrib _ d) =
+  declRewriteHitsInTests excl det loc d
+declRewriteHitsInTests excl det loc d = declRewriteHits excl det loc d
+
+exprRuleFixInTests : (String -> Bool) ->
+  (Expr -> Expr) ->
+  Decl ->
+  Option (List Decl)
+exprRuleFixInTests _ f (DTest pub name body) =
+  testDeclFix (DTest pub name) f body
+exprRuleFixInTests _ f (DProp pub name ps body) =
+  testDeclFix (DProp pub name ps) f body
+exprRuleFixInTests excl f (DAttrib a d) = match exprRuleFixInTests excl f d
+  Some [d2] => Some [DAttrib a d2]
+  _ => None
+exprRuleFixInTests excl f d = exprRuleFix excl f d
+
+-- Shared tail of the `DTest`/`DProp` fix arms: rebuild the body, and emit a
+-- replacement only when the location-stripped sexp changed — the same
+-- change-detection `exprRuleFix`'s own `DFunDef` arm uses. `rebuild` is the
+-- constructor with everything but the body already applied.
+testDeclFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
+testDeclFix rebuild f body =
+  let body2 = rewriteExprBU f body
+  if exprSexp body2 == exprSexp body then None else Some [rebuild body2]
+
 -- ── shared node predicates ────────────────────────────────────────────────────
 
 -- `e` is a logical negation `not X`; return the negated operand `X`.  `not` parses
@@ -6720,3 +6839,153 @@ regexLiteralErrFinding loc pat = match compile pat
     severity = SevWarning,
     loc = loc,
   }
+
+-- ── rule: test-bool-literal-equal ─────────────────────────────────────────────
+-- `expectEqual True e` → `expectTrue e`; `expectEqual False e` → `expectFalse e`,
+-- and the same with the literal on the RIGHT.  The rewrite is total: `expectTrue`
+-- and `expectFalse` are `Bool -> Expectation`, so the literal operand carries no
+-- information the named verb does not already carry, and dropping it also drops
+-- `expectEqual`'s `Debug` obligation rather than adding one.
+--
+-- A literal on BOTH sides (`expectEqual True False`) is left alone: neither
+-- operand is the subject under test, so there is no `e` to hand the named verb.
+testBoolLitEqOf : Expr -> Option Expr
+testBoolLitEqOf (EApp hd b) = match unwrapLoc hd
+  EApp f a =>
+    if isEVarNamed "expectEqual" f then testBoolLitEqSwap a b else None
+  _ => None
+testBoolLitEqOf _ = None
+
+testBoolLitEqSwap : Expr -> Expr -> Option Expr
+testBoolLitEqSwap a b
+  | isBoolLit (unwrapLoc a) && isBoolLit (unwrapLoc b) = None
+  | isTrueLit (unwrapLoc a) = Some (EApp (EVar "expectTrue") b)
+  | isFalseLit (unwrapLoc a) = Some (EApp (EVar "expectFalse") b)
+  | isTrueLit (unwrapLoc b) = Some (EApp (EVar "expectTrue") a)
+  | isFalseLit (unwrapLoc b) = Some (EApp (EVar "expectFalse") a)
+  | otherwise = None
+
+ruleTestBoolLiteralEqual : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleTestBoolLiteralEqual _ _ _ pos prog =
+  exprRuleFindingsInTests noExcl testBoolLitEqOf testBoolLitEqFinding pos prog
+
+testBoolLitEqFinding : Option Loc -> Expr -> Finding
+testBoolLitEqFinding loc rewritten = Finding {
+  rule = ruleNameTestBoolLiteralEqual,
+  message =
+    "`expectEqual` against a boolean literal. Rewrite as '\{exprToString rewritten}'",
+  severity = SevWarning,
+  loc = loc,
+}
+
+testBoolLiteralEqualFix : Oracle -> Decl -> Option (List Decl)
+testBoolLiteralEqualFix _ d =
+  exprRuleFixInTests noExcl (detApply testBoolLitEqOf) d
+
+-- ── rule: test-equal-in-true ──────────────────────────────────────────────────
+-- `expectTrue (a == b)` → `expectEqual a b`, `expectTrue (a /= b)` →
+-- `expectNotEqual a b`, and the `expectFalse` forms with the verb's polarity
+-- flipped.  The point is the FAILURE MESSAGE, not the assertion: `expectTrue`
+-- can only report "expected True, got False", where the equality verbs render
+-- both operands.
+--
+-- ONLY `==`/`/=`, for the same reason `rule-not-eq` excludes the orderings: a
+-- rewrite of `expectTrue (a < b)` would need an ordering-aware verb, a
+-- different one per operator, and the `expectFalse` polarity flip of an
+-- ordering is unsound for `Float` (NaN makes `not (a < b)` ≠ `a >= b`).
+--
+-- `expectEqual`/`expectNotEqual` carry a `Debug a` obligation that `expectTrue`
+-- does not, and a lint rule has no type environment to discharge it, so `--fix`
+-- on a comparison of a type with no `Debug` impl produces a file that no longer
+-- typechecks.  That failure is LOUD (the next `check` rejects it), which is what
+-- licenses shipping the fix at all.
+testEqInTrueOf : Expr -> Option Expr
+testEqInTrueOf (EApp hd arg)
+  | isEVarNamed "expectTrue" hd = testEqVerbOf False (unwrapLoc arg)
+  | isEVarNamed "expectFalse" hd = testEqVerbOf True (unwrapLoc arg)
+testEqInTrueOf _ = None
+
+-- `negated` = the wrapper was `expectFalse`, so the verb the operator names is
+-- replaced by its complement.
+testEqVerbOf : Bool -> Expr -> Option Expr
+testEqVerbOf negated (EBinOp "==" a b _) =
+  Some (testEqCall (if negated then "expectNotEqual" else "expectEqual") a b)
+testEqVerbOf negated (EBinOp "/=" a b _) =
+  Some (testEqCall (if negated then "expectEqual" else "expectNotEqual") a b)
+testEqVerbOf _ _ = None
+
+testEqCall : String -> Expr -> Expr -> Expr
+testEqCall nm a b = EApp (EApp (EVar nm) a) b
+
+ruleTestEqualInTrue : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleTestEqualInTrue _ _ _ pos prog =
+  exprRuleFindingsInTests noExcl testEqInTrueOf testEqInTrueFinding pos prog
+
+testEqInTrueFinding : Option Loc -> Expr -> Finding
+testEqInTrueFinding loc rewritten = Finding {
+  rule = ruleNameTestEqualInTrue,
+  message =
+    "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '\{exprToString rewritten}'",
+  severity = SevWarning,
+  loc = loc,
+}
+
+testEqualInTrueFix : Oracle -> Decl -> Option (List Decl)
+testEqualInTrueFix _ d = exprRuleFixInTests noExcl (detApply testEqInTrueOf) d
+
+-- ── rule: test-prelude-shadow ─────────────────────────────────────────────────
+-- A top-level `isOk`/`isErr`/`isSome`/`isNone` in a `*_test.mdk` file shadows the
+-- prelude function of that name for the rest of that file, while every OTHER
+-- module in the program — a `deriving`-generated impl body included — keeps
+-- calling the prelude one.  Two functions of one name then answer the same
+-- question and no diagnostic ever fires, because both spellings are individually
+-- well-typed.
+--
+-- Scoped to `*_test.mdk`: a non-test module that redeclares one of these names is
+-- making a considered choice about its own namespace, where a test file's copy is
+-- an author who did not know the prelude already had it.
+--
+-- Suggest-only (`fix = None`), for two independent reasons: (a) the local body
+-- may not be the prelude's body, so deleting it changes behaviour rather than
+-- preserving it, and lint has no type environment to prove otherwise; (b) `fix`
+-- rewrites ONE `Decl`, and a binding's `name : Type` signature is a SEPARATE
+-- `Decl`, so any deletion this rule could express leaves an orphan signature.
+preludeShadowedNames : List String
+preludeShadowedNames = ["isOk", "isErr", "isSome", "isNone"]
+
+ruleTestPreludeShadow : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleTestPreludeShadow _ path _ pos prog
+  | not (endsWith "_test.mdk" path) = []
+  | otherwise =
+    flatMap
+      preludeShadowHit
+      (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+
+preludeShadowHit : (String, Option Loc) -> List Finding
+preludeShadowHit (name, loc)
+  | contains name preludeShadowedNames = [preludeShadowFinding name loc]
+  | otherwise = []
+
+preludeShadowFinding : String -> Option Loc -> Finding
+preludeShadowFinding name loc = Finding {
+  rule = ruleNameTestPreludeShadow,
+  message =
+    "top-level `\{name}` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration",
+  severity = SevWarning,
+  loc = loc,
+}

@@ -188,6 +188,13 @@ test: medaka
 	./medaka test stdlib/hex.mdk
 	./medaka test --native stdlib/fs.mdk
 	./medaka test --native stdlib/test_process.mdk
+	## stdlib/test.mdk's own doctests and props, the assertion library every
+	## `*_test.mdk` in the tree imports. Its own module is outside every
+	## entry's import closure ([W-MODULE-BLIND]) and is not in
+	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without
+	## this line nothing would run them. `--native`: `readFile`/
+	## `expectGolden` are host primitives the interpreter does not bind.
+	./medaka test --native stdlib/test.mdk
 	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
 	## import closure ([W-MODULE-BLIND]), so its renderer-parity property
 	## (text/JSON/MCP cross-file findings agree) never runs otherwise.

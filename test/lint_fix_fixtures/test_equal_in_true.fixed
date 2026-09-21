@@ -1,0 +1,23 @@
+-- Fixture for rule-test-equal-in-true autofix (#3235).
+-- The `trueLt` / `falseGe` / `trueConj` / `truePlain` rows are NEGATIVE:
+-- `--fix` must leave them byte-identical.
+
+trueEq a = expectEqual a 1
+trueNe a = expectNotEqual a 1
+falseEq a = expectNotEqual a 1
+falseNe a = expectEqual a 1
+nestedTrue a b = if a then expectEqual b 2 else expectNotEqual b 3
+
+-- NEGATIVE: must stay untouched.
+trueLt a = expectTrue (a < 1)
+falseGe a = expectFalse (a >= 1)
+trueConj a b = expectTrue (a == 1 && b == 2)
+truePlain flag = expectTrue flag
+
+-- POSITIVE: `--fix` reaches a `test` and a `prop` body, which the shared
+-- expression-rule fix driver does not.
+test "an equality inside a test body" = expectEqual 1 1
+prop "an equality inside a prop body" (n : Int) = expectNotEqual n 0
+
+-- NEGATIVE: `rule-not-eq` is not opted into that descent, so this stays.
+test "a non-test rule does not reach a test body" = not (1 == 2)

@@ -492,10 +492,10 @@ test "buildHuffman: single length-9 code is NOT the exception (numUsed=1 alone i
 -- WIDENING note and `kraftCheck`'s own comment for why this is NOT the
 -- narrower single-code exception and is unconditional.
 test "buildHuffman: an all-zero-length table (numUsed=0) is Ok, the RFC's no-distance-codes-used shape" =
-  expectEqual True (isOk (buildHuffman [|0, 0, 0|]))
+  expectTrue (isOk (buildHuffman [|0, 0, 0|]))
 
 test "buildHuffmanStrict: an all-zero-length table (numUsed=0) is ALSO Ok (the exemption is unconditional, unlike the single-code one)" =
-  expectEqual True (isOk (buildHuffmanStrict [|0, 0, 0|]))
+  expectTrue (isOk (buildHuffmanStrict [|0, 0, 0|]))
 
 -- Decoding against a numUsed=0 table can never match any code — `decodeSym`
 -- reads up to `maxCodeLen` bits and then `Err`s, exactly puff.c's own
@@ -520,7 +520,7 @@ test "buildHuffmanStrict: single length-1 code is REJECTED (unlike buildHuffman,
     (buildHuffmanStrict [|1|])
 
 test "buildHuffman: single length-1 code is STILL accepted (buildHuffmanStrict did not regress this)" =
-  expectEqual True (isOk (buildHuffman [|1|]))
+  expectTrue (isOk (buildHuffman [|1|]))
 
 -- Truncated input, immediate: `decodeSym` on ANY table over an empty byte
 -- array cannot even read the first bit — `Err`, not a garbage symbol.

@@ -1,5 +1,5 @@
 # META
-source_lines=6722
+source_lines=6991
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lint.mdk — the `medaka lint` framework + seed rules.
@@ -260,6 +260,15 @@ ruleNameDirectiveReason = "rule-directive-reason"
 
 ruleNameRegexLiteral : String
 ruleNameRegexLiteral = "rule-regex-literal"
+
+ruleNameTestBoolLiteralEqual : String
+ruleNameTestBoolLiteralEqual = "rule-test-bool-literal-equal"
+
+ruleNameTestEqualInTrue : String
+ruleNameTestEqualInTrue = "rule-test-equal-in-true"
+
+ruleNameTestPreludeShadow : String
+ruleNameTestPreludeShadow = "rule-test-prelude-shadow"
 
 -- ── the registry ─────────────────────────────────────────────────────────────
 -- Each Rule is its own top-level binding (rather than an inline element of the
@@ -562,6 +571,39 @@ regexLiteralRule = Rule {
   fix = None,
 }
 
+testBoolLiteralEqualRule : Rule
+testBoolLiteralEqualRule = Rule {
+  name = ruleNameTestBoolLiteralEqual,
+  descr =
+    "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestBoolLiteralEqual,
+  fix = Some testBoolLiteralEqualFix,
+}
+
+testEqualInTrueRule : Rule
+testEqualInTrueRule = Rule {
+  name = ruleNameTestEqualInTrue,
+  descr =
+    "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestEqualInTrue,
+  fix = Some testEqualInTrueFix,
+}
+
+testPreludeShadowRule : Rule
+testPreludeShadowRule = Rule {
+  name = ruleNameTestPreludeShadow,
+  descr =
+    "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)",
+  severity = SevWarning,
+  enabled = True,
+  check = ruleTestPreludeShadow,
+  fix = None,
+}
+
 export
 allRules : List Rule
 allRules = [
@@ -593,6 +635,9 @@ allRules = [
   duplicateBodySameFileRule,
   directiveReasonRule,
   regexLiteralRule,
+  testBoolLiteralEqualRule,
+  testEqualInTrueRule,
+  testPreludeShadowRule,
 ]
 
 -- ── the cross-file registry ───────────────────────────────────────────────────
@@ -3826,6 +3871,80 @@ fixImplMethodWith f (ImplMethod nm ps body) =
 noExcl : String -> Bool
 noExcl _ = False
 
+-- ── the in-tests variants of the two drivers above ───────────────────────────
+-- `exprRuleFindings`/`exprRuleFix` reach a `DFunDef` body, a `DImpl` method body
+-- and through a `DAttrib`, and stop there: a `test "…"` or `prop "…"` body is a
+-- `DTest`/`DProp`, which lands on their final wildcard arm and is never walked.
+-- Measured on this tree (#3235): the three `expectEqual True …` sites in
+-- `gzip/lib/huffman.mdk` and every one of the 26 sites the two test-verb rules
+-- below answer for live inside a `test "…"` body, so a rule built on the plain
+-- drivers reports a clean tree over code it never read.
+--
+-- These two variants add exactly the `DTest`/`DProp` descent and DELEGATE every
+-- other decl shape back to the plain driver, so the two walkers cannot drift.
+-- They are OPT-IN, taken only by `rule-test-bool-literal-equal` and
+-- `rule-test-equal-in-true`: the plain drivers are untouched, so the twelve
+-- other rules built on them — `rule-not-eq` included — keep exactly the reach
+-- they had. That asymmetry is deliberate and is NOT a half-finished migration:
+-- widening the plain drivers surfaces 23 pre-existing findings for five other
+-- gated max-ratchet rules across eight `stdlib/`+`compiler/` files, which is a
+-- drain of its own and not this rule's to pay.
+exprRuleFindingsInTests : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Option Loc -> Expr -> Finding) ->
+  Positions ->
+  List Decl ->
+  List Finding
+exprRuleFindingsInTests excl det mkFinding pos prog =
+  flatMap (exprRuleDeclLInTests excl det mkFinding) (declLocList pos prog)
+
+exprRuleDeclLInTests : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  (Option Loc -> Expr -> Finding) ->
+  (Decl, Option Loc) ->
+  List Finding
+exprRuleDeclLInTests excl det mkFinding (d, loc) =
+  map
+    ((hitLoc, hit) => mkFinding hitLoc hit)
+    (declRewriteHitsInTests excl det loc d)
+
+declRewriteHitsInTests : (String -> Bool) ->
+  (Expr -> Option Expr) ->
+  Option Loc ->
+  Decl ->
+  List (Option Loc, Expr)
+declRewriteHitsInTests _ det loc (DTest _ _ body) = collectRewrites loc det body
+declRewriteHitsInTests _ det loc (DProp _ _ _ body) =
+  collectRewrites loc det body
+-- `parseAttrib` wraps ANY decl, a test decl included, so the attributed case has
+-- to re-enter HERE rather than fall through to the plain driver's own `DAttrib`
+-- arm, which would drop back to the non-test walker one level down.
+declRewriteHitsInTests excl det loc (DAttrib _ d) =
+  declRewriteHitsInTests excl det loc d
+declRewriteHitsInTests excl det loc d = declRewriteHits excl det loc d
+
+exprRuleFixInTests : (String -> Bool) ->
+  (Expr -> Expr) ->
+  Decl ->
+  Option (List Decl)
+exprRuleFixInTests _ f (DTest pub name body) =
+  testDeclFix (DTest pub name) f body
+exprRuleFixInTests _ f (DProp pub name ps body) =
+  testDeclFix (DProp pub name ps) f body
+exprRuleFixInTests excl f (DAttrib a d) = match exprRuleFixInTests excl f d
+  Some [d2] => Some [DAttrib a d2]
+  _ => None
+exprRuleFixInTests excl f d = exprRuleFix excl f d
+
+-- Shared tail of the `DTest`/`DProp` fix arms: rebuild the body, and emit a
+-- replacement only when the location-stripped sexp changed — the same
+-- change-detection `exprRuleFix`'s own `DFunDef` arm uses. `rebuild` is the
+-- constructor with everything but the body already applied.
+testDeclFix : (Expr -> Decl) -> (Expr -> Expr) -> Expr -> Option (List Decl)
+testDeclFix rebuild f body =
+  let body2 = rewriteExprBU f body
+  if exprSexp body2 == exprSexp body then None else Some [rebuild body2]
+
 -- ── shared node predicates ────────────────────────────────────────────────────
 
 -- `e` is a logical negation `not X`; return the negated operand `X`.  `not` parses
@@ -6724,6 +6843,156 @@ regexLiteralErrFinding loc pat = match compile pat
     severity = SevWarning,
     loc = loc,
   }
+
+-- ── rule: test-bool-literal-equal ─────────────────────────────────────────────
+-- `expectEqual True e` → `expectTrue e`; `expectEqual False e` → `expectFalse e`,
+-- and the same with the literal on the RIGHT.  The rewrite is total: `expectTrue`
+-- and `expectFalse` are `Bool -> Expectation`, so the literal operand carries no
+-- information the named verb does not already carry, and dropping it also drops
+-- `expectEqual`'s `Debug` obligation rather than adding one.
+--
+-- A literal on BOTH sides (`expectEqual True False`) is left alone: neither
+-- operand is the subject under test, so there is no `e` to hand the named verb.
+testBoolLitEqOf : Expr -> Option Expr
+testBoolLitEqOf (EApp hd b) = match unwrapLoc hd
+  EApp f a =>
+    if isEVarNamed "expectEqual" f then testBoolLitEqSwap a b else None
+  _ => None
+testBoolLitEqOf _ = None
+
+testBoolLitEqSwap : Expr -> Expr -> Option Expr
+testBoolLitEqSwap a b
+  | isBoolLit (unwrapLoc a) && isBoolLit (unwrapLoc b) = None
+  | isTrueLit (unwrapLoc a) = Some (EApp (EVar "expectTrue") b)
+  | isFalseLit (unwrapLoc a) = Some (EApp (EVar "expectFalse") b)
+  | isTrueLit (unwrapLoc b) = Some (EApp (EVar "expectTrue") a)
+  | isFalseLit (unwrapLoc b) = Some (EApp (EVar "expectFalse") a)
+  | otherwise = None
+
+ruleTestBoolLiteralEqual : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleTestBoolLiteralEqual _ _ _ pos prog =
+  exprRuleFindingsInTests noExcl testBoolLitEqOf testBoolLitEqFinding pos prog
+
+testBoolLitEqFinding : Option Loc -> Expr -> Finding
+testBoolLitEqFinding loc rewritten = Finding {
+  rule = ruleNameTestBoolLiteralEqual,
+  message =
+    "`expectEqual` against a boolean literal. Rewrite as '\{exprToString rewritten}'",
+  severity = SevWarning,
+  loc = loc,
+}
+
+testBoolLiteralEqualFix : Oracle -> Decl -> Option (List Decl)
+testBoolLiteralEqualFix _ d =
+  exprRuleFixInTests noExcl (detApply testBoolLitEqOf) d
+
+-- ── rule: test-equal-in-true ──────────────────────────────────────────────────
+-- `expectTrue (a == b)` → `expectEqual a b`, `expectTrue (a /= b)` →
+-- `expectNotEqual a b`, and the `expectFalse` forms with the verb's polarity
+-- flipped.  The point is the FAILURE MESSAGE, not the assertion: `expectTrue`
+-- can only report "expected True, got False", where the equality verbs render
+-- both operands.
+--
+-- ONLY `==`/`/=`, for the same reason `rule-not-eq` excludes the orderings: a
+-- rewrite of `expectTrue (a < b)` would need an ordering-aware verb, a
+-- different one per operator, and the `expectFalse` polarity flip of an
+-- ordering is unsound for `Float` (NaN makes `not (a < b)` ≠ `a >= b`).
+--
+-- `expectEqual`/`expectNotEqual` carry a `Debug a` obligation that `expectTrue`
+-- does not, and a lint rule has no type environment to discharge it, so `--fix`
+-- on a comparison of a type with no `Debug` impl produces a file that no longer
+-- typechecks.  That failure is LOUD (the next `check` rejects it), which is what
+-- licenses shipping the fix at all.
+testEqInTrueOf : Expr -> Option Expr
+testEqInTrueOf (EApp hd arg)
+  | isEVarNamed "expectTrue" hd = testEqVerbOf False (unwrapLoc arg)
+  | isEVarNamed "expectFalse" hd = testEqVerbOf True (unwrapLoc arg)
+testEqInTrueOf _ = None
+
+-- `negated` = the wrapper was `expectFalse`, so the verb the operator names is
+-- replaced by its complement.
+testEqVerbOf : Bool -> Expr -> Option Expr
+testEqVerbOf negated (EBinOp "==" a b _) =
+  Some (testEqCall (if negated then "expectNotEqual" else "expectEqual") a b)
+testEqVerbOf negated (EBinOp "/=" a b _) =
+  Some (testEqCall (if negated then "expectEqual" else "expectNotEqual") a b)
+testEqVerbOf _ _ = None
+
+testEqCall : String -> Expr -> Expr -> Expr
+testEqCall nm a b = EApp (EApp (EVar nm) a) b
+
+ruleTestEqualInTrue : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleTestEqualInTrue _ _ _ pos prog =
+  exprRuleFindingsInTests noExcl testEqInTrueOf testEqInTrueFinding pos prog
+
+testEqInTrueFinding : Option Loc -> Expr -> Finding
+testEqInTrueFinding loc rewritten = Finding {
+  rule = ruleNameTestEqualInTrue,
+  message =
+    "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '\{exprToString rewritten}'",
+  severity = SevWarning,
+  loc = loc,
+}
+
+testEqualInTrueFix : Oracle -> Decl -> Option (List Decl)
+testEqualInTrueFix _ d = exprRuleFixInTests noExcl (detApply testEqInTrueOf) d
+
+-- ── rule: test-prelude-shadow ─────────────────────────────────────────────────
+-- A top-level `isOk`/`isErr`/`isSome`/`isNone` in a `*_test.mdk` file shadows the
+-- prelude function of that name for the rest of that file, while every OTHER
+-- module in the program — a `deriving`-generated impl body included — keeps
+-- calling the prelude one.  Two functions of one name then answer the same
+-- question and no diagnostic ever fires, because both spellings are individually
+-- well-typed.
+--
+-- Scoped to `*_test.mdk`: a non-test module that redeclares one of these names is
+-- making a considered choice about its own namespace, where a test file's copy is
+-- an author who did not know the prelude already had it.
+--
+-- Suggest-only (`fix = None`), for two independent reasons: (a) the local body
+-- may not be the prelude's body, so deleting it changes behaviour rather than
+-- preserving it, and lint has no type environment to prove otherwise; (b) `fix`
+-- rewrites ONE `Decl`, and a binding's `name : Type` signature is a SEPARATE
+-- `Decl`, so any deletion this rule could express leaves an orphan signature.
+preludeShadowedNames : List String
+preludeShadowedNames = ["isOk", "isErr", "isSome", "isNone"]
+
+ruleTestPreludeShadow : StdlibIndex ->
+  String ->
+  String ->
+  Positions ->
+  List Decl ->
+  List Finding
+ruleTestPreludeShadow _ path _ pos prog
+  | not (endsWith "_test.mdk" path) = []
+  | otherwise =
+    flatMap
+      preludeShadowHit
+      (dedupeNamesLoc (flatMap topDefNameL (declLocList pos prog)))
+
+preludeShadowHit : (String, Option Loc) -> List Finding
+preludeShadowHit (name, loc)
+  | contains name preludeShadowedNames = [preludeShadowFinding name loc]
+  | otherwise = []
+
+preludeShadowFinding : String -> Option Loc -> Finding
+preludeShadowFinding name loc = Finding {
+  rule = ruleNameTestPreludeShadow,
+  message =
+    "top-level `\{name}` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration",
+  severity = SevWarning,
+  loc = loc,
+}
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
@@ -6798,6 +7067,12 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "ruleNameDirectiveReason" () (ELit (LString "rule-directive-reason")))
 (DTypeSig false "ruleNameRegexLiteral" (TyCon "String"))
 (DFunDef false "ruleNameRegexLiteral" () (ELit (LString "rule-regex-literal")))
+(DTypeSig false "ruleNameTestBoolLiteralEqual" (TyCon "String"))
+(DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
+(DTypeSig false "ruleNameTestEqualInTrue" (TyCon "String"))
+(DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
+(DTypeSig false "ruleNameTestPreludeShadow" (TyCon "String"))
+(DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -6852,8 +7127,14 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "directiveReasonRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "descr" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDirectiveReason")) (fa "fix" (EVar "None")))))
 (DTypeSig false "regexLiteralRule" (TyCon "Rule"))
 (DFunDef false "regexLiteralRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "descr" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRegexLiteral")) (fa "fix" (EVar "None")))))
+(DTypeSig false "testBoolLiteralEqualRule" (TyCon "Rule"))
+(DFunDef false "testBoolLiteralEqualRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "descr" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleTestBoolLiteralEqual")) (fa "fix" (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))))
+(DTypeSig false "testEqualInTrueRule" (TyCon "Rule"))
+(DFunDef false "testEqualInTrueRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameTestEqualInTrue")) (fa "descr" (ELit (LString "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleTestEqualInTrue")) (fa "fix" (EApp (EVar "Some") (EVar "testEqualInTrueFix"))))))
+(DTypeSig false "testPreludeShadowRule" (TyCon "Rule"))
+(DFunDef false "testPreludeShadowRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameTestPreludeShadow")) (fa "descr" (ELit (LString "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleTestPreludeShadow")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule") (EVar "regexLiteralRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule") (EVar "regexLiteralRule") (EVar "testBoolLiteralEqualRule") (EVar "testEqualInTrueRule") (EVar "testPreludeShadowRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -7964,6 +8245,22 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "fixImplMethodWith" ((PVar "f") (PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))))
 (DTypeSig false "noExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "noExcl" (PWild) (EVar "False"))
+(DTypeSig false "exprRuleFindingsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "exprRuleFindingsInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "pos") (PVar "prog")) (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "exprRuleDeclLInTests") (EVar "excl")) (EVar "det")) (EVar "mkFinding"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
+(DTypeSig false "exprRuleDeclLInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "exprRuleDeclLInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EVar "map") (ELam ((PTuple (PVar "hitLoc") (PVar "hit"))) (EApp (EApp (EVar "mkFinding") (EVar "hitLoc")) (EVar "hit")))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d"))))
+(DTypeSig false "declRewriteHitsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))))
+(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
+(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
+(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
+(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
+(DTypeSig false "exprRuleFixInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name"))) (EVar "f")) (EVar "body")))
+(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "ps"))) (EVar "f")) (EVar "body")))
+(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "excl")) (EVar "f")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "excl")) (EVar "f")) (EVar "d")))
+(DTypeSig false "testDeclFix" (TyFun (TyFun (TyCon "Expr") (TyCon "Decl")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "testDeclFix" ((PVar "rebuild") (PVar "f") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
 (DTypeSig false "notArgOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notArgOf" ((PCon "EApp" (PVar "hd") (PVar "x"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "not"))) (EVar "hd")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))
 (DFunDef false "notArgOf" (PWild) (EVar "None"))
@@ -8719,6 +9016,40 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
 (DTypeSig false "regexLiteralErrFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
 (DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EVar "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EVar "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))))
+(DTypeSig false "testBoolLitEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "testBoolLitEqOf" ((PCon "EApp" (PVar "hd") (PVar "b"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectEqual"))) (EVar "f")) (EApp (EApp (EVar "testBoolLitEqSwap") (EVar "a")) (EVar "b")) (EVar "None"))) (arm PWild () (EVar "None"))))
+(DFunDef false "testBoolLitEqOf" (PWild) (EVar "None"))
+(DTypeSig false "testBoolLitEqSwap" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "testBoolLitEqSwap" ((PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "b")))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "b"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "b"))) (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "a"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "a"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EVar "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "testBoolLiteralEqualFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "testBoolLiteralEqualFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testBoolLitEqOf"))) (EVar "d")))
+(DTypeSig false "testEqInTrueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "testEqInTrueOf" ((PCon "EApp" (PVar "hd") (PVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectTrue"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "False")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectFalse"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "True")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "testEqInTrueOf" (PWild) (EVar "None"))
+(DTypeSig false "testEqVerbOf" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "testEqVerbOf" ((PVar "negated") (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") PWild)) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "testEqCall") (EIf (EVar "negated") (ELit (LString "expectNotEqual")) (ELit (LString "expectEqual")))) (EVar "a")) (EVar "b"))))
+(DFunDef false "testEqVerbOf" ((PVar "negated") (PCon "EBinOp" (PLit (LString "/=")) (PVar "a") (PVar "b") PWild)) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "testEqCall") (EIf (EVar "negated") (ELit (LString "expectEqual")) (ELit (LString "expectNotEqual")))) (EVar "a")) (EVar "b"))))
+(DFunDef false "testEqVerbOf" (PWild PWild) (EVar "None"))
+(DTypeSig false "testEqCall" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "testEqCall" ((PVar "nm") (PVar "a") (PVar "b")) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "nm"))) (EVar "a"))) (EVar "b")))
+(DTypeSig false "ruleTestEqualInTrue" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleTestEqualInTrue" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testEqInTrueOf")) (EVar "testEqInTrueFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "testEqInTrueFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "testEqInTrueFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestEqualInTrue")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '")) (EApp (EVar "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "testEqualInTrueFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "testEqualInTrueFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testEqInTrueOf"))) (EVar "d")))
+(DTypeSig false "preludeShadowedNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "preludeShadowedNames" () (EListLit (ELit (LString "isOk")) (ELit (LString "isErr")) (ELit (LString "isSome")) (ELit (LString "isNone"))))
+(DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EVar "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "preludeShadowHit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "preludeShadowHit" ((PTuple (PVar "name") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "preludeShadowedNames")) (EListLit (EApp (EApp (EVar "preludeShadowFinding") (EVar "name")) (EVar "loc"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
+(DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Ns" true) (mem "TyConOrigin" true) (mem "TabKey" true) (mem "tabKeyOf" false) (mem "Loc" true) (mem "Lit" true) (mem "Ty" true) (mem "Constraint" true) (mem "Route" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" true) (mem "qualifiedLocal" false) (mem "RecPatField" true) (mem "Guard" true) (mem "Arm" true) (mem "ImplMethod" true) (mem "DoStmt" true) (mem "Section" true) (mem "InterpPart" true) (mem "Variant" true) (mem "ConPayload" true) (mem "GuardArm" true) (mem "FieldAssign" true) (mem "LetBind" true) (mem "FunClause" true) (mem "Expr" true) (mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false) (mem "declPosEndLine" false) (mem "parseWithPositions" false) (mem "parseWithPositionsLocated" false))))
@@ -8793,6 +9124,12 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "ruleNameDirectiveReason" () (ELit (LString "rule-directive-reason")))
 (DTypeSig false "ruleNameRegexLiteral" (TyCon "String"))
 (DFunDef false "ruleNameRegexLiteral" () (ELit (LString "rule-regex-literal")))
+(DTypeSig false "ruleNameTestBoolLiteralEqual" (TyCon "String"))
+(DFunDef false "ruleNameTestBoolLiteralEqual" () (ELit (LString "rule-test-bool-literal-equal")))
+(DTypeSig false "ruleNameTestEqualInTrue" (TyCon "String"))
+(DFunDef false "ruleNameTestEqualInTrue" () (ELit (LString "rule-test-equal-in-true")))
+(DTypeSig false "ruleNameTestPreludeShadow" (TyCon "String"))
+(DFunDef false "ruleNameTestPreludeShadow" () (ELit (LString "rule-test-prelude-shadow")))
 (DTypeSig false "matchParamRule" (TyCon "Rule"))
 (DFunDef false "matchParamRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameMatchParam")) (fa "descr" (ELit (LString "function body is a `match` on a bare parameter (prefer multi-clause; STYLE §8)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleMatchOnParam")) (fa "fix" (EApp (EVar "Some") (EVar "matchParamFix"))))))
 (DTypeSig false "derivableRule" (TyCon "Rule"))
@@ -8847,8 +9184,14 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "directiveReasonRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameDirectiveReason")) (fa "descr" (ELit (LString "a `-- lint-disable-*` directive with no comment in its own comment block stating the constraint that forced it — an issue number alone is not a reason (#2862)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDirectiveReason")) (fa "fix" (EVar "None")))))
 (DTypeSig false "regexLiteralRule" (TyCon "Rule"))
 (DFunDef false "regexLiteralRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameRegexLiteral")) (fa "descr" (ELit (LString "a string literal passed directly to `compile`/`mustCompile` fails to compile as a regex pattern"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleRegexLiteral")) (fa "fix" (EVar "None")))))
+(DTypeSig false "testBoolLiteralEqualRule" (TyCon "Rule"))
+(DFunDef false "testBoolLiteralEqualRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameTestBoolLiteralEqual")) (fa "descr" (ELit (LString "`expectEqual` against a `True`/`False` literal (either side). Prefer `expectTrue e` / `expectFalse e`"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleTestBoolLiteralEqual")) (fa "fix" (EApp (EVar "Some") (EVar "testBoolLiteralEqualFix"))))))
+(DTypeSig false "testEqualInTrueRule" (TyCon "Rule"))
+(DFunDef false "testEqualInTrueRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameTestEqualInTrue")) (fa "descr" (ELit (LString "an `==`/`/=` comparison wrapped in `expectTrue`/`expectFalse`. Prefer `expectEqual a b` / `expectNotEqual a b`, which report both operands on failure"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleTestEqualInTrue")) (fa "fix" (EApp (EVar "Some") (EVar "testEqualInTrueFix"))))))
+(DTypeSig false "testPreludeShadowRule" (TyCon "Rule"))
+(DFunDef false "testPreludeShadowRule" () (ERecordCreate "Rule" ((fa "name" (EVar "ruleNameTestPreludeShadow")) (fa "descr" (ELit (LString "a `*_test.mdk` file declares a top-level `isOk`/`isErr`/`isSome`/`isNone`, shadowing the prelude function of that name (suggest-only)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleTestPreludeShadow")) (fa "fix" (EVar "None")))))
 (DTypeSig true "allRules" (TyApp (TyCon "List") (TyCon "Rule")))
-(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule") (EVar "regexLiteralRule")))
+(DFunDef false "allRules" () (EListLit (EVar "matchParamRule") (EVar "derivableRule") (EVar "stdlibReimplRule") (EVar "bindThenDestructureRule") (EVar "lambdaSectionRule") (EVar "ifMaxMinRule") (EVar "andThenPureMapRule") (EVar "destructureInParamRule") (EVar "missingSignatureRule") (EVar "notEqRule") (EVar "boolSimplifyRule") (EVar "remParityRule") (EVar "doubleReverseRule") (EVar "whenUnlessRule") (EVar "complementPredicateRule") (EVar "matchToMapRule") (EVar "bindChainToDoRule") (EVar "deadCodeRule") (EVar "concatToInterpRule") (EVar "selfShadowExternRule") (EVar "preferAssignOpRule") (EVar "promissoryReaderRule") (EVar "orElseStaircaseRule") (EVar "cloneTypeRule") (EVar "clauseMapRule") (EVar "duplicateBodySameFileRule") (EVar "directiveReasonRule") (EVar "regexLiteralRule") (EVar "testBoolLiteralEqualRule") (EVar "testEqualInTrueRule") (EVar "testPreludeShadowRule")))
 (DTypeSig false "duplicateBodyRule" (TyCon "CrossFileRule"))
 (DFunDef false "duplicateBodyRule" () (ERecordCreate "CrossFileRule" ((fa "name" (EVar "ruleNameDuplicateBody")) (fa "descr" (ELit (LString "top-level function body is structurally identical to one in another file (copy-paste; consolidate)"))) (fa "severity" (EVar "SevWarning")) (fa "enabled" (EVar "True")) (fa "check" (EVar "ruleDuplicateBody")))))
 (DTypeSig true "allCrossFileRules" (TyApp (TyCon "List") (TyCon "CrossFileRule")))
@@ -9959,6 +10302,22 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "fixImplMethodWith" ((PVar "f") (PCon "ImplMethod" (PVar "nm") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "ImplMethod") (EVar "nm")) (EVar "ps")) (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))))
 (DTypeSig false "noExcl" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "noExcl" (PWild) (EVar "False"))
+(DTypeSig false "exprRuleFindingsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "exprRuleFindingsInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PVar "pos") (PVar "prog")) (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "exprRuleDeclLInTests") (EVar "excl")) (EVar "det")) (EVar "mkFinding"))) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))
+(DTypeSig false "exprRuleDeclLInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))) (TyFun (TyTuple (TyCon "Decl") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding")))))))
+(DFunDef false "exprRuleDeclLInTests" ((PVar "excl") (PVar "det") (PVar "mkFinding") (PTuple (PVar "d") (PVar "loc"))) (EApp (EApp (EMethodRef "map") (ELam ((PTuple (PVar "hitLoc") (PVar "hit"))) (EApp (EApp (EVar "mkFinding") (EVar "hitLoc")) (EVar "hit")))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d"))))
+(DTypeSig false "declRewriteHitsInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))) (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Decl") (TyApp (TyCon "List") (TyTuple (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Expr"))))))))
+(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DTest" PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
+(DFunDef false "declRewriteHitsInTests" (PWild (PVar "det") (PVar "loc") (PCon "DProp" PWild PWild PWild (PVar "body"))) (EApp (EApp (EApp (EVar "collectRewrites") (EVar "loc")) (EVar "det")) (EVar "body")))
+(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EApp (EApp (EVar "declRewriteHitsInTests") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
+(DFunDef false "declRewriteHitsInTests" ((PVar "excl") (PVar "det") (PVar "loc") (PVar "d")) (EApp (EApp (EApp (EApp (EVar "declRewriteHits") (EVar "excl")) (EVar "det")) (EVar "loc")) (EVar "d")))
+(DTypeSig false "exprRuleFixInTests" (TyFun (TyFun (TyCon "String") (TyCon "Bool")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DTest" (PVar "pub") (PVar "name") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EVar "DTest") (EVar "pub")) (EVar "name"))) (EVar "f")) (EVar "body")))
+(DFunDef false "exprRuleFixInTests" (PWild (PVar "f") (PCon "DProp" (PVar "pub") (PVar "name") (PVar "ps") (PVar "body"))) (EApp (EApp (EApp (EVar "testDeclFix") (EApp (EApp (EApp (EVar "DProp") (EVar "pub")) (EVar "name")) (EVar "ps"))) (EVar "f")) (EVar "body")))
+(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PCon "DAttrib" (PVar "a") (PVar "d"))) (EMatch (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "excl")) (EVar "f")) (EVar "d")) (arm (PCon "Some" (PList (PVar "d2"))) () (EApp (EVar "Some") (EListLit (EApp (EApp (EVar "DAttrib") (EVar "a")) (EVar "d2"))))) (arm PWild () (EVar "None"))))
+(DFunDef false "exprRuleFixInTests" ((PVar "excl") (PVar "f") (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFix") (EVar "excl")) (EVar "f")) (EVar "d")))
+(DTypeSig false "testDeclFix" (TyFun (TyFun (TyCon "Expr") (TyCon "Decl")) (TyFun (TyFun (TyCon "Expr") (TyCon "Expr")) (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl")))))))
+(DFunDef false "testDeclFix" ((PVar "rebuild") (PVar "f") (PVar "body")) (EBlock (DoLet false false (PVar "body2") (EApp (EApp (EVar "rewriteExprBU") (EVar "f")) (EVar "body"))) (DoExpr (EIf (EBinOp "==" (EApp (EVar "exprSexp") (EVar "body2")) (EApp (EVar "exprSexp") (EVar "body"))) (EVar "None") (EApp (EVar "Some") (EListLit (EApp (EVar "rebuild") (EVar "body2"))))))))
 (DTypeSig false "notArgOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
 (DFunDef false "notArgOf" ((PCon "EApp" (PVar "hd") (PVar "x"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "not"))) (EVar "hd")) (EApp (EVar "Some") (EVar "x")) (EVar "None")))
 (DFunDef false "notArgOf" (PWild) (EVar "None"))
@@ -10714,3 +11073,37 @@ regexLiteralErrFinding loc pat = match compile pat
 (DFunDef false "regexLiteralFindingArg" ((PVar "loc") PWild) (EApp (EApp (EVar "regexLiteralErrFinding") (EVar "loc")) (ELit (LString ""))))
 (DTypeSig false "regexLiteralErrFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "String") (TyCon "Finding"))))
 (DFunDef false "regexLiteralErrFinding" ((PVar "loc") (PVar "pat")) (EMatch (EApp (EVar "compile") (EVar "pat")) (arm (PCon "Err" (PRec "RegexError" ((rf "message" None) (rf "position" None)) false)) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile: "))) (EApp (EMethodRef "display") (EVar "message"))) (ELit (LString " (position "))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "position")))) (ELit (LString ")")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc"))))) (arm (PCon "Ok" PWild) () (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameRegexLiteral")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "regex pattern \"")) (EApp (EMethodRef "display") (EVar "pat"))) (ELit (LString "\" fails to compile")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))))
+(DTypeSig false "testBoolLitEqOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "testBoolLitEqOf" ((PCon "EApp" (PVar "hd") (PVar "b"))) (EMatch (EApp (EVar "unwrapLoc") (EVar "hd")) (arm (PCon "EApp" (PVar "f") (PVar "a")) () (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectEqual"))) (EVar "f")) (EApp (EApp (EVar "testBoolLitEqSwap") (EVar "a")) (EVar "b")) (EVar "None"))) (arm PWild () (EVar "None"))))
+(DFunDef false "testBoolLitEqOf" (PWild) (EVar "None"))
+(DTypeSig false "testBoolLitEqSwap" (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "testBoolLitEqSwap" ((PVar "a") (PVar "b")) (EIf (EBinOp "&&" (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "isBoolLit") (EApp (EVar "unwrapLoc") (EVar "b")))) (EVar "None") (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "b"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "a"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "b"))) (EIf (EApp (EVar "isTrueLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectTrue")))) (EVar "a"))) (EIf (EApp (EVar "isFalseLit") (EApp (EVar "unwrapLoc") (EVar "b"))) (EApp (EVar "Some") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (ELit (LString "expectFalse")))) (EVar "a"))) (EIf (EVar "otherwise") (EVar "None") (EApp (EVar "__fallthrough__") (ELit LUnit)))))))))
+(DTypeSig false "ruleTestBoolLiteralEqual" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleTestBoolLiteralEqual" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testBoolLitEqOf")) (EVar "testBoolLitEqFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "testBoolLitEqFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "testBoolLitEqFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestBoolLiteralEqual")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "`expectEqual` against a boolean literal. Rewrite as '")) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "testBoolLiteralEqualFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "testBoolLiteralEqualFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testBoolLitEqOf"))) (EVar "d")))
+(DTypeSig false "testEqInTrueOf" (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr"))))
+(DFunDef false "testEqInTrueOf" ((PCon "EApp" (PVar "hd") (PVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectTrue"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "False")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EIf (EApp (EApp (EVar "isEVarNamed") (ELit (LString "expectFalse"))) (EVar "hd")) (EApp (EApp (EVar "testEqVerbOf") (EVar "True")) (EApp (EVar "unwrapLoc") (EVar "arg"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "testEqInTrueOf" (PWild) (EVar "None"))
+(DTypeSig false "testEqVerbOf" (TyFun (TyCon "Bool") (TyFun (TyCon "Expr") (TyApp (TyCon "Option") (TyCon "Expr")))))
+(DFunDef false "testEqVerbOf" ((PVar "negated") (PCon "EBinOp" (PLit (LString "==")) (PVar "a") (PVar "b") PWild)) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "testEqCall") (EIf (EVar "negated") (ELit (LString "expectNotEqual")) (ELit (LString "expectEqual")))) (EVar "a")) (EVar "b"))))
+(DFunDef false "testEqVerbOf" ((PVar "negated") (PCon "EBinOp" (PLit (LString "/=")) (PVar "a") (PVar "b") PWild)) (EApp (EVar "Some") (EApp (EApp (EApp (EVar "testEqCall") (EIf (EVar "negated") (ELit (LString "expectEqual")) (ELit (LString "expectNotEqual")))) (EVar "a")) (EVar "b"))))
+(DFunDef false "testEqVerbOf" (PWild PWild) (EVar "None"))
+(DTypeSig false "testEqCall" (TyFun (TyCon "String") (TyFun (TyCon "Expr") (TyFun (TyCon "Expr") (TyCon "Expr")))))
+(DFunDef false "testEqCall" ((PVar "nm") (PVar "a") (PVar "b")) (EApp (EApp (EVar "EApp") (EApp (EApp (EVar "EApp") (EApp (EVar "EVar") (EVar "nm"))) (EVar "a"))) (EVar "b")))
+(DTypeSig false "ruleTestEqualInTrue" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleTestEqualInTrue" (PWild PWild PWild (PVar "pos") (PVar "prog")) (EApp (EApp (EApp (EApp (EApp (EVar "exprRuleFindingsInTests") (EVar "noExcl")) (EVar "testEqInTrueOf")) (EVar "testEqInTrueFinding")) (EVar "pos")) (EVar "prog")))
+(DTypeSig false "testEqInTrueFinding" (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Expr") (TyCon "Finding"))))
+(DFunDef false "testEqInTrueFinding" ((PVar "loc") (PVar "rewritten")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestEqualInTrue")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "an equality comparison inside `expectTrue`/`expectFalse` reports neither operand on failure. Rewrite as '")) (EApp (EMethodRef "display") (EApp (EVar "exprToString") (EVar "rewritten")))) (ELit (LString "'")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
+(DTypeSig false "testEqualInTrueFix" (TyFun (TyCon "Oracle") (TyFun (TyCon "Decl") (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "Decl"))))))
+(DFunDef false "testEqualInTrueFix" (PWild (PVar "d")) (EApp (EApp (EApp (EVar "exprRuleFixInTests") (EVar "noExcl")) (EApp (EVar "detApply") (EVar "testEqInTrueOf"))) (EVar "d")))
+(DTypeSig false "preludeShadowedNames" (TyApp (TyCon "List") (TyCon "String")))
+(DFunDef false "preludeShadowedNames" () (EListLit (ELit (LString "isOk")) (ELit (LString "isErr")) (ELit (LString "isSome")) (ELit (LString "isNone"))))
+(DTypeSig false "ruleTestPreludeShadow" (TyFun (TyCon "StdlibIndex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Positions") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Finding"))))))))
+(DFunDef false "ruleTestPreludeShadow" (PWild (PVar "path") PWild (PVar "pos") (PVar "prog")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "endsWith") (ELit (LString "_test.mdk"))) (EVar "path"))) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EDictApp "flatMap") (EVar "preludeShadowHit")) (EApp (EVar "dedupeNamesLoc") (EApp (EApp (EDictApp "flatMap") (EVar "topDefNameL")) (EApp (EApp (EVar "declLocList") (EVar "pos")) (EVar "prog"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "preludeShadowHit" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "Option") (TyCon "Loc"))) (TyApp (TyCon "List") (TyCon "Finding"))))
+(DFunDef false "preludeShadowHit" ((PTuple (PVar "name") (PVar "loc"))) (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "preludeShadowedNames")) (EListLit (EApp (EApp (EVar "preludeShadowFinding") (EVar "name")) (EVar "loc"))) (EIf (EVar "otherwise") (EListLit) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DTypeSig false "preludeShadowFinding" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyCon "Finding"))))
+(DFunDef false "preludeShadowFinding" ((PVar "name") (PVar "loc")) (ERecordCreate "Finding" ((fa "rule" (EVar "ruleNameTestPreludeShadow")) (fa "message" (EBinOp "++" (EBinOp "++" (ELit (LString "top-level `")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "` shadows the prelude function of that name for this file only; other modules, and any `deriving` impl, keep calling the prelude one. Remove the local declaration")))) (fa "severity" (EVar "SevWarning")) (fa "loc" (EVar "loc")))))
