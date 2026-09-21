@@ -272,14 +272,27 @@ elemIndexWithin lo hi v (Bytes bb) =
   let hi' = if hi < lo' then lo' else min hi n
   elemIndexGo v bb lo' hi'
 
-indexOfWithinGo : Bytes -> Int -> Bytes -> Int -> Int -> Option Int
-indexOfWithinGo needle nlen haystack pos lastPos =
+-- Whether the `n` bytes of `nb` equal `hb`'s `[pos, pos + n)`, read in place.
+-- Slicing that window out to compare it with `eq` would allocate an `n`-byte
+-- copy at every candidate position, which is the cost the packed
+-- representation exists to avoid.
+matchesAtGo : ByteBlock -> ByteBlock -> Int -> Int -> Int -> Bool
+matchesAtGo nb hb i pos n =
+  if i >= n then
+    True
+  else if byteBlockGetUnsafe i nb == byteBlockGetUnsafe (pos + i) hb then
+    matchesAtGo nb hb (i + 1) pos n
+  else
+    False
+
+indexOfWithinGo : ByteBlock -> Int -> ByteBlock -> Int -> Int -> Option Int
+indexOfWithinGo nb nlen hb pos lastPos =
   if pos > lastPos then
     None
-  else if slice haystack pos (pos + nlen) == needle then
+  else if matchesAtGo nb hb 0 pos nlen then
     Some pos
   else
-    indexOfWithinGo needle nlen haystack (pos + 1) lastPos
+    indexOfWithinGo nb nlen hb (pos + 1) lastPos
 
 {- | The index of the first occurrence of `needle` within `bytes[lo, hi)`, or
    `None`. `lo`/`hi` clamp into `bytes`, as `sliceClamped`'s do, and the
@@ -294,15 +307,12 @@ indexOfWithinGo needle nlen haystack pos lastPos =
    Some 2 -}
 export
 indexOfWithin : Int -> Int -> Bytes -> Bytes -> Option Int
-indexOfWithin lo hi needle (Bytes bb) =
+indexOfWithin lo hi (Bytes nb) (Bytes bb) =
   let n = byteBlockLength bb
   let lo' = if lo < 0 then 0 else min lo n
   let hi' = if hi < lo' then lo' else min hi n
-  let nlen = length needle
-  if nlen == 0 then
-    Some lo'
-  else
-    indexOfWithinGo needle nlen (Bytes bb) lo' (hi' - nlen)
+  let nlen = byteBlockLength nb
+  if nlen == 0 then Some lo' else indexOfWithinGo nb nlen bb lo' (hi' - nlen)
 
 {- | The index of the first occurrence of `needle` in `bytes`, or `None`.
    The needle is a whole `Bytes` value, where `elemIndex` searches for a
@@ -333,12 +343,15 @@ lastIndexOf needle haystack
   | otherwise = lastIndexOfGo needle haystack 0 None
 
 -- Walks forward from each hit, advancing one byte so overlapping matches
--- still count, and keeps the latest.
+-- still count, and keeps the latest. Searching the tail `[from, length)` in
+-- place rather than slicing it out keeps the walk allocation-free: the tail
+-- copy is `O(length)` per hit, so a needle that hits often costs quadratic
+-- bytes.
 lastIndexOfGo : Bytes -> Bytes -> Int -> Option Int -> Option Int
 lastIndexOfGo needle haystack from acc =
-  match indexOf needle (slice haystack from (length haystack))
+  match indexOfWithin from (length haystack) needle haystack
     None => acc
-    Some i => lastIndexOfGo needle haystack (from + i + 1) (Some (from + i))
+    Some i => lastIndexOfGo needle haystack (i + 1) (Some i)
 
 {- | Whether `needle` occurs anywhere in `haystack`. The empty needle occurs
    in every byte string.
