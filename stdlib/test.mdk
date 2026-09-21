@@ -384,13 +384,22 @@ normalizeTrailingUnit s = match stripSuffix "()" s
     Some "0" => optionOr s (stripSuffix "0" s)
     _ => s
 
--- Renders the first line at which two line lists diverge, 1-indexed.
+-- Renders "N line(s) remaining" for a nonempty tail, counting the head.
+remainingCountMsg : List String -> String
+remainingCountMsg rest =
+  let n = 1 + length rest
+  let noun = if n == 1 then "line" else "lines"
+  "\{intToString n} \{noun} remaining"
+
+-- Renders the first line at which two line lists diverge, 1-indexed.  When
+-- one side runs out first, the message names how many lines remain on the
+-- other side (including the one shown), not just the one line shown.
 diffLineMsg : Int -> List String -> List String -> String
 diffLineMsg n [] [] = "expected and actual differ only outside their lines"
-diffLineMsg n [] (a :: _) =
-  "line \{intToString n}: expected nothing but got \{debug a}"
-diffLineMsg n (e :: _) [] =
-  "line \{intToString n}: expected \{debug e} but got nothing"
+diffLineMsg n [] (a :: rest) =
+  "line \{intToString n}: expected nothing but got \{debug a} (\{remainingCountMsg rest})"
+diffLineMsg n (e :: rest) [] =
+  "line \{intToString n}: expected \{debug e} but got nothing (\{remainingCountMsg rest})"
 diffLineMsg n (e :: es) (a :: asL) =
   if e == a then
     diffLineMsg (n + 1) es asL
@@ -424,9 +433,10 @@ expectEqualText expected actual =
    diverge.
 
    `expectEqualText` without the normalizer: nothing is stripped, so a text
-   whose last line is exactly `0` compares as itself. A query result set
-   ending in a `0` row and one that printed no row at all are different
-   answers, and only this separates them.
+   whose last line is exactly `0` compares as itself. Use this whenever a
+   trailing `()` or whole-line `0` is part of the real answer rather than a
+   driver artifact — `expectEqualText`'s normalizer exists only to absorb
+   that artifact, not to disambiguate two genuinely different answers.
 
    Whole texts rather than line lists, so a caller holding captured output
    compares it directly; a caller holding lines joins them with `"\n"`.
@@ -436,7 +446,7 @@ expectEqualText expected actual =
    > expectEqualLines "a\nb" "a\nc"
    Fail "line 2: expected \"b\" but got \"c\"" "a\nb" "a\nc"
    > expectEqualLines "a" "a\nb"
-   Fail "line 2: expected nothing but got \"b\"" "a" "a\nb" -}
+   Fail "line 2: expected nothing but got \"b\" (1 line remaining)" "a" "a\nb" -}
 export
 expectEqualLines : String -> String -> Expectation
 expectEqualLines expected actual =

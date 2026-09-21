@@ -194,7 +194,7 @@ valueFailure r path actual = match readFile (goldenPath r path)
    "line 2: expected \"b\" but got \"c\""
 
    > diffNote "a" "a\nb"
-   "line 2: expected nothing but got \"b\"" -}
+   "line 2: expected nothing but got \"b\" (1 line remaining)" -}
 export
 diffNote : String -> String -> String
 diffNote expected actual = expectationMessage (expectEqualLines expected actual)

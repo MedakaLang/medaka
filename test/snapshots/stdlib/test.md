@@ -1,5 +1,5 @@
 # META
-source_lines=687
+source_lines=697
 stages=DESUGAR,MARK
 # SOURCE
 {- | Assertions for unit tests.
@@ -388,13 +388,22 @@ normalizeTrailingUnit s = match stripSuffix "()" s
     Some "0" => optionOr s (stripSuffix "0" s)
     _ => s
 
--- Renders the first line at which two line lists diverge, 1-indexed.
+-- Renders "N line(s) remaining" for a nonempty tail, counting the head.
+remainingCountMsg : List String -> String
+remainingCountMsg rest =
+  let n = 1 + length rest
+  let noun = if n == 1 then "line" else "lines"
+  "\{intToString n} \{noun} remaining"
+
+-- Renders the first line at which two line lists diverge, 1-indexed.  When
+-- one side runs out first, the message names how many lines remain on the
+-- other side (including the one shown), not just the one line shown.
 diffLineMsg : Int -> List String -> List String -> String
 diffLineMsg n [] [] = "expected and actual differ only outside their lines"
-diffLineMsg n [] (a :: _) =
-  "line \{intToString n}: expected nothing but got \{debug a}"
-diffLineMsg n (e :: _) [] =
-  "line \{intToString n}: expected \{debug e} but got nothing"
+diffLineMsg n [] (a :: rest) =
+  "line \{intToString n}: expected nothing but got \{debug a} (\{remainingCountMsg rest})"
+diffLineMsg n (e :: rest) [] =
+  "line \{intToString n}: expected \{debug e} but got nothing (\{remainingCountMsg rest})"
 diffLineMsg n (e :: es) (a :: asL) =
   if e == a then
     diffLineMsg (n + 1) es asL
@@ -428,9 +437,10 @@ expectEqualText expected actual =
    diverge.
 
    `expectEqualText` without the normalizer: nothing is stripped, so a text
-   whose last line is exactly `0` compares as itself. A query result set
-   ending in a `0` row and one that printed no row at all are different
-   answers, and only this separates them.
+   whose last line is exactly `0` compares as itself. Use this whenever a
+   trailing `()` or whole-line `0` is part of the real answer rather than a
+   driver artifact — `expectEqualText`'s normalizer exists only to absorb
+   that artifact, not to disambiguate two genuinely different answers.
 
    Whole texts rather than line lists, so a caller holding captured output
    compares it directly; a caller holding lines joins them with `"\n"`.
@@ -440,7 +450,7 @@ expectEqualText expected actual =
    > expectEqualLines "a\nb" "a\nc"
    Fail "line 2: expected \"b\" but got \"c\"" "a\nb" "a\nc"
    > expectEqualLines "a" "a\nb"
-   Fail "line 2: expected nothing but got \"b\"" "a" "a\nb" -}
+   Fail "line 2: expected nothing but got \"b\" (1 line remaining)" "a" "a\nb" -}
 export
 expectEqualLines : String -> String -> Expectation
 expectEqualLines expected actual =
@@ -747,10 +757,12 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectTextStartsWithAndContains" ((PVar "prefix") (PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "prefix")))) (ELit (LString ", substrings "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "needles")))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "actual"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text starting with ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "prefix")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual")) (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "actual")) (arm (PList) () (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual"))) (arm (PCons (PVar "missing") PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text containing ")) (EApp (EVar "display") (EApp (EVar "debug") (EVar "missing")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual"))))))))
 (DTypeSig false "normalizeTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EMatch (EApp (EVar "last") (EApp (EVar "lines") (EVar "s"))) (arm (PCon "Some" (PLit (LString "0"))) () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s")))) (arm PWild () (EVar "s"))))))
+(DTypeSig false "remainingCountMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "remainingCountMsg" ((PVar "rest")) (EBlock (DoLet false false (PVar "n") (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "length") (EVar "rest")))) (DoLet false false (PVar "noun") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 1))) (ELit (LString "line")) (ELit (LString "lines")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " "))) (EApp (EVar "display") (EVar "noun"))) (ELit (LString " remaining"))))))
 (DTypeSig false "diffLineMsg" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "diffLineMsg" ((PVar "n") (PList) (PList)) (ELit (LString "expected and actual differ only outside their lines")))
-(DFunDef false "diffLineMsg" ((PVar "n") (PList) (PCons (PVar "a") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected nothing but got "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString ""))))
-(DFunDef false "diffLineMsg" ((PVar "n") (PCons (PVar "e") PWild) (PList)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "e")))) (ELit (LString " but got nothing"))))
+(DFunDef false "diffLineMsg" ((PVar "n") (PList) (PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected nothing but got "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString " ("))) (EApp (EVar "display") (EApp (EVar "remainingCountMsg") (EVar "rest")))) (ELit (LString ")"))))
+(DFunDef false "diffLineMsg" ((PVar "n") (PCons (PVar "e") (PVar "rest")) (PList)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "e")))) (ELit (LString " but got nothing ("))) (EApp (EVar "display") (EApp (EVar "remainingCountMsg") (EVar "rest")))) (ELit (LString ")"))))
 (DFunDef false "diffLineMsg" ((PVar "n") (PCons (PVar "e") (PVar "es")) (PCons (PVar "a") (PVar "asL"))) (EIf (EBinOp "==" (EVar "e") (EVar "a")) (EApp (EApp (EApp (EVar "diffLineMsg") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "es")) (EVar "asL")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "e")))) (ELit (LString " but got "))) (EApp (EVar "display") (EApp (EVar "debug") (EVar "a")))) (ELit (LString "")))))
 (DTypeSig true "expectEqualText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Expectation"))))
 (DFunDef false "expectEqualText" ((PVar "expected") (PVar "actual")) (EBlock (DoLet false false (PVar "e") (EApp (EVar "normalizeTrailingUnit") (EVar "expected"))) (DoLet false false (PVar "a") (EApp (EVar "normalizeTrailingUnit") (EVar "actual"))) (DoExpr (EIf (EBinOp "==" (EVar "e") (EVar "a")) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EApp (EApp (EApp (EVar "diffLineMsg") (ELit (LInt 1))) (EApp (EVar "lines") (EVar "e"))) (EApp (EVar "lines") (EVar "a")))) (EVar "e")) (EVar "a"))))))
@@ -860,10 +872,12 @@ prop "expectEqualText never conflates a value with that value plus a digit" (n :
 (DFunDef false "expectTextStartsWithAndContains" ((PVar "prefix") (PVar "needles") (PVar "actual")) (EBlock (DoLet false false (PVar "expected") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "prefix ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "prefix")))) (ELit (LString ", substrings "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "needles")))) (ELit (LString "")))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EVar "startsWith") (EVar "prefix")) (EVar "actual"))) (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text starting with ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "prefix")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual")) (EMatch (EApp (EApp (EVar "missingTextNeedles") (EVar "needles")) (EVar "actual")) (arm (PList) () (EApp (EApp (EVar "Pass") (EVar "expected")) (EVar "actual"))) (arm (PCons (PVar "missing") PWild) () (EApp (EApp (EApp (EVar "Fail") (EBinOp "++" (EBinOp "++" (ELit (LString "expected text containing ")) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "missing")))) (ELit (LString "")))) (EVar "expected")) (EVar "actual"))))))))
 (DTypeSig false "normalizeTrailingUnit" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "normalizeTrailingUnit" ((PVar "s")) (EMatch (EApp (EApp (EVar "stripSuffix") (ELit (LString "()"))) (EVar "s")) (arm (PCon "Some" (PVar "s2")) () (EVar "s2")) (arm (PCon "None") () (EMatch (EApp (EVar "last") (EApp (EVar "lines") (EVar "s"))) (arm (PCon "Some" (PLit (LString "0"))) () (EApp (EApp (EVar "optionOr") (EVar "s")) (EApp (EApp (EVar "stripSuffix") (ELit (LString "0"))) (EVar "s")))) (arm PWild () (EVar "s"))))))
+(DTypeSig false "remainingCountMsg" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))
+(DFunDef false "remainingCountMsg" ((PVar "rest")) (EBlock (DoLet false false (PVar "n") (EBinOp "+" (ELit (LInt 1)) (EApp (EMethodRef "length") (EVar "rest")))) (DoLet false false (PVar "noun") (EIf (EBinOp "==" (EVar "n") (ELit (LInt 1))) (ELit (LString "line")) (ELit (LString "lines")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "noun"))) (ELit (LString " remaining"))))))
 (DTypeSig false "diffLineMsg" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String")))))
 (DFunDef false "diffLineMsg" ((PVar "n") (PList) (PList)) (ELit (LString "expected and actual differ only outside their lines")))
-(DFunDef false "diffLineMsg" ((PVar "n") (PList) (PCons (PVar "a") PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected nothing but got "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString ""))))
-(DFunDef false "diffLineMsg" ((PVar "n") (PCons (PVar "e") PWild) (PList)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "e")))) (ELit (LString " but got nothing"))))
+(DFunDef false "diffLineMsg" ((PVar "n") (PList) (PCons (PVar "a") (PVar "rest"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected nothing but got "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString " ("))) (EApp (EMethodRef "display") (EApp (EVar "remainingCountMsg") (EVar "rest")))) (ELit (LString ")"))))
+(DFunDef false "diffLineMsg" ((PVar "n") (PCons (PVar "e") (PVar "rest")) (PList)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "e")))) (ELit (LString " but got nothing ("))) (EApp (EMethodRef "display") (EApp (EVar "remainingCountMsg") (EVar "rest")))) (ELit (LString ")"))))
 (DFunDef false "diffLineMsg" ((PVar "n") (PCons (PVar "e") (PVar "es")) (PCons (PVar "a") (PVar "asL"))) (EIf (EBinOp "==" (EVar "e") (EVar "a")) (EApp (EApp (EApp (EVar "diffLineMsg") (EBinOp "+" (EVar "n") (ELit (LInt 1)))) (EVar "es")) (EVar "asL")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "line ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ": expected "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "e")))) (ELit (LString " but got "))) (EApp (EMethodRef "display") (EApp (EMethodRef "debug") (EVar "a")))) (ELit (LString "")))))
 (DTypeSig true "expectEqualText" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Expectation"))))
 (DFunDef false "expectEqualText" ((PVar "expected") (PVar "actual")) (EBlock (DoLet false false (PVar "e") (EApp (EVar "normalizeTrailingUnit") (EVar "expected"))) (DoLet false false (PVar "a") (EApp (EVar "normalizeTrailingUnit") (EVar "actual"))) (DoExpr (EIf (EBinOp "==" (EVar "e") (EVar "a")) (EApp (EApp (EVar "Pass") (EVar "e")) (EVar "a")) (EApp (EApp (EApp (EVar "Fail") (EApp (EApp (EApp (EVar "diffLineMsg") (ELit (LInt 1))) (EApp (EVar "lines") (EVar "e"))) (EApp (EVar "lines") (EVar "a")))) (EVar "e")) (EVar "a"))))))
