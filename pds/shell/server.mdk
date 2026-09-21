@@ -25,9 +25,11 @@ import http.{
   HttpFrame(..),
   HttpParseFailure,
   HttpScan,
+  httpScanBodyRemaining,
   httpScanInHeaders,
   httpScanStart,
   makeHeader,
+  maxHttpRequestBytes,
   parseRequestAt,
   Request,
   requestHeaders,
@@ -102,7 +104,11 @@ import lib.sync_event.{
   syncIdentityFrame,
   syncSyncFrame,
 }
-import lib.resource_limits.{rateLimitWindowSeconds}
+import lib.resource_limits.{
+  maxInFlightRequestBytes,
+  maxRateLimitIdentitiesPerWindow,
+  rateLimitWindowSeconds,
+}
 import lib.proxy.{
   UpstreamAnswer,
   proxyUpstreamFailureResponse,
@@ -128,10 +134,12 @@ import lib.server_core.{
 }
 import lib.store.{
   Store,
-  storeBlobEntries,
+  storeBlobCids,
   storeBlobMimeIndex,
   storeBlobMimeType,
   storeCredential,
+  storeGet,
+  storeHasBlob,
   storePreferences,
   storeSessionRows,
   storeRepo,
@@ -165,7 +173,15 @@ import shell.persist.{
 import shell.subscribe.{runSubscription}
 import lib.websocket.{handshakeResponseBytes}
 import string.{toUtf8}
-import time.{Duration, formatIso, fromEpochSeconds, monotonic, now, seconds}
+import time.{
+  Duration,
+  formatIso,
+  fromEpochSeconds,
+  millis,
+  monotonic,
+  now,
+  seconds,
+}
 import bytebuilder.{Builder, appendBytes, builderParts, newBuilder}
 import bytes as B
 import bytes.{Bytes, fromArray, sliceClamped, toArray}
@@ -215,6 +231,19 @@ writeTimeout = seconds 30
 -- | Bytes asked for per read. The buffer grows by what actually arrives.
 readChunkBytes : Int
 readChunkBytes = 65536
+
+-- | How long one read of a refused connection's leftover body waits before
+-- `drainRefused` gives up on it. Short: every read that finds bytes returns
+-- at once, so this is only ever spent once, on the read that finds the queue
+-- empty and ends the drain.
+lingerDrainWait : Duration
+lingerDrainWait = millis 250
+
+-- | How many such reads a refusal is willing to spend, which at
+-- `readChunkBytes` each is eight mebibytes — past any socket receive queue,
+-- and bounded work for a peer that keeps sending.
+lingerDrainReads : Int
+lingerDrainReads = 128
 
 {- | How many bytes of OS entropy each request is given.
 
@@ -372,6 +401,45 @@ maxQueuedProxiedCalls = 16
 proxyQueueWait : Duration
 proxyQueueWait = seconds 2
 
+{- | How many reads may wait for buffer headroom before one is refused (#2951).
+
+   The queue behind `maxInFlightRequestBytes` (`lib.resource_limits`), and a
+   count rather than a byte figure because what it bounds is the waiters
+   themselves: headroom is taken BEFORE the read it is for, so a waiter is
+   parked holding nothing but a task and the bytes it has already been charged
+   for, and what waiting costs on top of the budget is that task alone. The
+   bytes a waiter wants are not charged until it is granted them, which is
+   what keeps the budget a bound on what is held rather than on what has been
+   asked for.
+
+   A quarter of `maxConcurrentConnections`, the fraction `maxUnframedConnections`
+   also takes: past 64 connections stalled on headroom this process is
+   saturated enough that the 65th is better told now than held, and the
+   connections behind it are already bounded by the connection ceiling.
+
+   Exported so `pds/test/read_buffer_test.mdk` can name the bound it asserts
+   rather than repeating the number beside it, where the two would drift. -}
+export
+maxQueuedBufferedReads : Int
+maxQueuedBufferedReads = 64
+
+{- | How long a read waits for buffer headroom before it is refused (#2951).
+
+   Headroom comes back when another connection's request is answered or its
+   connection closes, so the wait is sized against the phase the waiters are
+   in rather than against a round trip: five seconds is `bodyProgressTimeout`,
+   the budget the body phase already gives one read, and a twelfth of
+   `requestTimeout`, so a request refused on it is nowhere near its own
+   deadline and a client that retries is right to.
+
+   Refusing without waiting at all would make a transient overlap of large
+   uploads indistinguishable from an attack, and closing a legitimate upload
+   part way through costs the client everything it has sent. Waiting without a
+   deadline would hold a connection open on headroom that a stalled peer
+   elsewhere may never give back. -}
+bufferQueueWait : Duration
+bufferQueueWait = seconds 5
+
 {- | How long one request's header section may take to arrive in full (#2772).
 
    Distinct from `requestTimeout` and far shorter: a header section is capped
@@ -480,7 +548,10 @@ persistTransition : String ->
   Store ->
   <FileRead "_", FileWrite "_"> Result String Unit
 persistTransition dir did nowSeconds before after = do
-  () <- if blobsMoved before after then persistBlobHalf dir after else Ok ()
+  () <- if blobsMoved before after then
+    persistBlobHalf dir before after
+  else
+    Ok ()
   () <- persistRepoHalf dir did nowSeconds before after
   () <- persistCredentialHalf dir before after
   () <- persistPreferencesHalf dir before after
@@ -808,19 +879,50 @@ declaredMimeType store cid = match storeBlobMimeType cid store
   Some declared => declared
   None => "application/octet-stream"
 
-blobRows : Store -> List (Cid, String, Array Int)
-blobRows store =
-  map
-    ((cid, bytes) => (cid, declaredMimeType store cid, bytes))
-    (storeBlobEntries store)
+{- | Whether the transition owes the blob area a write for one blob: it is new
+   in `after`, or its declared type is not what it was.
 
--- Every blob is rewritten, not just the new one, exactly as `persistRepo`
--- rewrites the whole block graph: a blob file's name is its content, so
--- rewriting one already on disk promotes the same bytes over themselves.
+   A blob's name is its content and `lib.store` exposes no way to remove one,
+   so a blob `before` already held under an unchanged declared type is already
+   on disk under the very name a rewrite would promote it to — and rewriting
+   it stages, fsyncs and renames both its files to replace them with
+   themselves. -}
+blobWriteOwed : Store -> Store -> Cid -> Bool
+blobWriteOwed before after cid =
+  not (storeHasBlob cid before)
+    || storeBlobMimeType cid before /= storeBlobMimeType cid after
+
+-- The rows `blobWriteOwed` selects, read out of `after` one at a time so that
+-- only a blob actually being written has its bytes copied at all. A CID the
+-- blob half lists and then cannot produce bytes for would be a torn store, so
+-- it refuses the persist rather than promoting a blob file over an empty one.
+blobRowsOwed : Store ->
+  Store ->
+  List Cid ->
+  Result String (List (Cid, String, Array Int))
+blobRowsOwed _ _ [] = Ok []
+blobRowsOwed before after (cid :: rest) =
+  if blobWriteOwed before after cid then match storeGet cid after
+    None =>
+      Err
+        "blob \{cidToString cid} is listed by the blob half but holds no bytes"
+    Some bytes => do
+      tail <- blobRowsOwed before after rest
+      Ok ((cid, declaredMimeType after cid, bytes) :: tail)
+  else
+    blobRowsOwed before after rest
+
+-- Only the blobs the transition owes are rewritten, not the whole area: a
+-- blob file's name is its content, so promoting one already on disk writes
+-- the same bytes over themselves, and doing that for every blob makes one
+-- upload cost the account's whole stored size.
 persistBlobHalf : String ->
   Store ->
+  Store ->
   <FileRead "_", FileWrite "_"> Result String Unit
-persistBlobHalf dir store = blobFileWrite dir (blobRows store)
+persistBlobHalf dir before after = do
+  rows <- blobRowsOwed before after (storeBlobCids after)
+  blobFileWrite dir rows
 
 headText : Repo -> String
 headText repo = cidToString (repoCommitCid (repoLatestCommit repo))
@@ -843,6 +945,7 @@ persistRepo dir repo = do
 data RateLimitAdmission =
   | RequestAdmitted RateLimitState
   | RequestRefused RateLimitState RateLimitClass
+  | RequestRefusedCapacity RateLimitState
 
 -- | What every request that reached the framer clears, whatever it routes to
 -- and whether or not it parsed.
@@ -923,6 +1026,7 @@ admitClasses state _ _ [] = RequestAdmitted state
 admitClasses state identity nowSeconds (cls :: rest) =
   match step state identity cls nowSeconds
     (next, Refused) => RequestRefused next cls
+    (next, RefusedCapacity) => RequestRefusedCapacity next
     (next, Admitted) => admitClasses next identity nowSeconds rest
 
 classMessage : RateLimitClass -> String
@@ -938,6 +1042,14 @@ classMessage RepoExportClass =
   "too many repository exports for this identity in the current window"
 classMessage ProxyClass =
   "too many proxied appview reads for this identity in the current window"
+
+-- | What a `RequestRefusedCapacity` refusal is told: this identity has not
+-- exceeded anything of its own — the shared per-window table is full of
+-- OTHER identities, and `classMessage`/`remainingInClass` would describe a
+-- usage this identity never accrued.
+capacityMessage : String
+capacityMessage =
+  "too many distinct client identities tracked in the current window"
 
 intHeader : String -> Int -> Header
 intHeader name value =
@@ -957,6 +1069,21 @@ rateLimitHeaderList state identity cls nowSeconds = [
   intHeader
     "ratelimit-remaining"
     (remainingInClass state identity cls nowSeconds),
+  intHeader
+    "ratelimit-reset"
+    (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
+]
+
+-- | Headers for a `RequestRefusedCapacity` refusal: `ratelimit-limit` names
+-- the cardinality cap itself rather than a class allowance, and
+-- `ratelimit-remaining` is `0` rather than `remainingInClass`'s answer —
+-- this identity has no row and no usage of its own, so the class allowance
+-- it would otherwise report is not what refused it, and reporting it would
+-- claim full allowance while refusing the request.
+rateLimitCapacityHeaderList : Int -> List Header
+rateLimitCapacityHeaderList nowSeconds = [
+  intHeader "ratelimit-limit" maxRateLimitIdentitiesPerWindow,
+  intHeader "ratelimit-remaining" 0,
   intHeader
     "ratelimit-reset"
     (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
@@ -983,6 +1110,13 @@ applyRateLimit limiterRef identity classes nowSeconds =
           (rateLimitFailureWithHeaders
             (classMessage cls)
             (rateLimitHeaderList next identity cls nowSeconds)))
+    RequestRefusedCapacity next =>
+      let () = limiterRef := next
+      Some
+        (xrpcFailureResponse
+          (rateLimitFailureWithHeaders
+            capacityMessage
+            (rateLimitCapacityHeaderList nowSeconds)))
 
 -- ── connection, subscription and proxy censuses ─────────────────────────────
 
@@ -1169,6 +1303,184 @@ admitProxiedCall census =
       _ <- awaitAny [WaitFlag (waiterGranted waiter), limit]
       liftIO (u => settleProxiedCall census waiter)
 
+-- ── the in-flight buffer budget ─────────────────────────────────────────────
+
+{- | A read waiting for buffer headroom: the flag a release grants it on, the
+   flag it abandons on, and how many bytes it is waiting for.
+
+   The byte count rides on the waiter rather than being re-derived when
+   headroom appears, because the grant runs on the releasing connection's task
+   and not on the waiter's: whoever gives bytes back has to be able to tell
+   whether the head of the queue fits in them without asking that connection
+   anything.
+
+   `granted` and `abandoned` are exclusive the way `ProxyWaiter`'s two flags
+   are, and reading `granted` first is what makes them so: a waiter that could
+   read both takes headroom already charged to it rather than abandoning a
+   charge nothing else will give back. -}
+export data BufferWaiter = BufferWaiter (Ref Bool) (Ref Bool) Int
+
+{- | How many bytes of inbound request every connection holds between them
+   right now — buffered, or reserved for a body still arriving — bounded by
+   `maxInFlightRequestBytes`, and how many reads are waiting for headroom,
+   bounded by `maxQueuedBufferedReads`.
+
+   A type of its own for the reason `ProxyCensus` is one, and it rides on
+   `Serving` beside it for the same reason: it is a counter no single
+   connection owns, and `Serving` is already on every function between
+   `acceptLoop` and the read that charges it. The two count opposite
+   directions — the buffers this server accumulates FROM its callers, and the
+   ones it accumulates from an upstream — so one crossed with the other would
+   bound the wrong resource while still looking like a census.
+
+   The waiter count is carried beside the list rather than read off its length,
+   because the list also holds waiters that have given up: their charge comes
+   off the moment they do, and only a release walking past them drops them. -}
+export data BufferCensus =
+  | BufferCensus (Ref Int) (Ref Int) (Ref (List BufferWaiter))
+
+-- | An empty budget, charged by nothing yet.
+export
+newBufferCensus : Unit -> BufferCensus
+newBufferCensus _ = BufferCensus (Ref 0) (Ref 0) (Ref [])
+
+-- | How many bytes every connection holds between them right now, buffered or
+-- reserved.
+export
+bufferedBytes : BufferCensus -> Int
+bufferedBytes (BufferCensus buffered _ _) = !buffered
+
+-- | How many reads are parked on headroom right now.
+export
+waitingReads : BufferCensus -> Int
+waitingReads (BufferCensus _ waiting _) = !waiting
+
+bufferWaiterBytes : BufferWaiter -> Int
+bufferWaiterBytes (BufferWaiter _ _ bytes) = bytes
+
+bufferWaiterGranted : BufferWaiter -> Ref Bool
+bufferWaiterGranted (BufferWaiter granted _ _) = granted
+
+bufferWaiterAbandoned : BufferWaiter -> Bool
+bufferWaiterAbandoned (BufferWaiter _ abandoned _) = !abandoned
+
+-- | Take `bytes` of headroom if that much is free. `False` means the budget is
+-- full and nothing was charged.
+export
+claimBufferBytes : BufferCensus -> Int -> Bool
+claimBufferBytes (BufferCensus buffered _ _) bytes =
+  if !buffered + bytes > maxInFlightRequestBytes then
+    False
+  else
+    let () = buffered := !buffered + bytes
+    True
+
+-- | Join the back of the headroom queue, or `None` when it is full — in which
+-- case nothing was charged and the read is refused now rather than later.
+export
+enqueueBufferBytes : BufferCensus -> Int -> Option BufferWaiter
+enqueueBufferBytes (BufferCensus _ waiting queue) bytes =
+  if !waiting >= maxQueuedBufferedReads then
+    None
+  else
+    let waiter = BufferWaiter (Ref False) (Ref False) bytes
+    let () = waiting := !waiting + 1
+    let () = queue := !queue ++ [waiter]
+    Some waiter
+
+-- | The first waiter still holding its place, and what is left behind it.
+-- Waiters that gave up are dropped on the way past rather than returned: their
+-- charge came off `waiting` when they abandoned.
+firstLiveBufferWaiter : List BufferWaiter ->
+  Option (BufferWaiter, List BufferWaiter)
+firstLiveBufferWaiter [] = None
+firstLiveBufferWaiter (waiter :: rest) =
+  if bufferWaiterAbandoned waiter then
+    firstLiveBufferWaiter rest
+  else
+    Some (waiter, rest)
+
+{- | Hand freed headroom to the reads that have waited longest for it, in
+   order, for as long as the one at the front still fits in what is free.
+
+   It stops at the first waiter that does not fit rather than looking past it
+   for a smaller one: this is a bound on bytes and not a scheduler, and a large
+   read passed over while small ones keep arriving would wait out its deadline
+   beside headroom it was never offered. The bytes are transferred the way
+   `releaseProxiedCall` transfers a slot — charged to the waiter before it
+   resumes — so there is no instant at which freed bytes are unowned for an
+   arriving read to take ahead of the queue. -}
+grantBufferHeadroom : BufferCensus -> Unit
+grantBufferHeadroom census = match census
+  BufferCensus buffered waiting queue => match firstLiveBufferWaiter !queue
+    None => queue := []
+    Some (waiter, rest) =>
+      if !buffered + bufferWaiterBytes waiter > maxInFlightRequestBytes then
+        queue := waiter :: rest
+      else
+        let () = queue := rest
+        let () = waiting := !waiting - 1
+        let () = buffered := !buffered + bufferWaiterBytes waiter
+        let () = bufferWaiterGranted waiter := True
+        grantBufferHeadroom census
+
+{- | Give `bytes` back to the budget and pass them on to whoever is waiting.
+
+   A saturated budget is a wait and never a deadlock, and what makes that true
+   is WHERE a connection asks for headroom, not that its request is bounded: a
+   connection past its header section holds a reservation for the whole of the
+   request it is framing (`readBufferTarget`), so it never waits on the budget
+   again before giving that reservation back, on the rebase a finished request
+   performs or on the connection's own retirement — both of which run this,
+   within `requestTimeout` either way. The connections that can still be
+   waiting are the ones inside a header section, which is capped at
+   `maxHttpHeaderBytes`, so the waiting set is never waiting on itself.
+
+   Charging a body incrementally instead would make that false, bounded request
+   or not: each waiter would then be holding part of a body and waiting for the
+   rest of it, and no member of that set could finish. -}
+export
+releaseBufferBytes : BufferCensus -> Int -> Unit
+releaseBufferBytes census bytes = match census
+  BufferCensus buffered _ _ =>
+    let () = buffered := !buffered - bytes
+    grantBufferHeadroom census
+
+{- | What a woken waiter holds: `True` when headroom was handed to it, `False`
+   when its wait ran out first.
+
+   The `False` arm is where the waiter leaves the queue — it stays in the list
+   until a release walks past it, but its charge comes off here, so a refused
+   read does not go on occupying a queue place it will never use. -}
+export
+settleBufferedRead : BufferCensus -> BufferWaiter -> Bool
+settleBufferedRead (BufferCensus _ waiting _) (BufferWaiter granted abandoned _) =
+  if !granted then
+    True
+  else
+    let () = abandoned := True
+    let () = waiting := !waiting - 1
+    False
+
+{- | Take `bytes` of buffer headroom, waiting in the queue for it while the
+   budget is full. `False` means the read is refused: the queue was full, or
+   `bufferQueueWait` ran out before headroom reached it.
+
+   It PARKS rather than polling, for the reason `admitProxiedCall` does: one
+   cooperative thread (`stdlib/async.mdk`) runs every other connection and
+   every open subscription too, so a wait that spun would turn a memory bound
+   into a global stall. -}
+admitBufferBytes : BufferCensus -> Int -> Async <Clock | e> Bool
+admitBufferBytes census bytes =
+  if claimBufferBytes census bytes then
+    deferPure True
+  else match enqueueBufferBytes census bytes
+    None => deferPure False
+    Some waiter => defer
+      limit <- deadlineAfter bufferQueueWait
+      _ <- awaitAny [WaitFlag (bufferWaiterGranted waiter), limit]
+      liftIO (u => settleBufferedRead census waiter)
+
 -- | Retire this connection's un-framed charge, if it still holds one.
 releaseUnframed : UnframedSlot -> Unit
 releaseUnframed (UnframedSlot unframed held) =
@@ -1186,9 +1498,10 @@ releaseWhenHeadersDone slot scan =
 
 -- | Retire everything one connection holds, on the one path every connection
 -- leaves by.
-retireConnection : Ref Int -> UnframedSlot -> Unit
-retireConnection active slot =
+retireConnection : Ref Int -> UnframedSlot -> BufferCensus -> ReadBuffer -> Unit
+retireConnection active slot census buf =
   let () = releaseUnframed slot
+  let () = retireReadBuffer census buf
   active := !active - 1
 
 -- ── the read buffer ─────────────────────────────────────────────────────────
@@ -1211,23 +1524,78 @@ retireConnection active slot =
    and `parseRequestAt` read it in place: no copy stands between a received
    byte and the framer that reads it.
 
+   The second field is how many of those bytes this connection has charged to
+   the process-wide `BufferCensus`. It rides here rather than beside the
+   buffer because it must survive `readBufferFrom`: a kept-alive connection's
+   buffer is replaced by a rebased one between requests, and the charge
+   belongs to the connection rather than to whichever of those values is
+   current, so `serveConnection` can give back exactly what its connection
+   still holds however many requests it served.
+
    Exported abstractly, with the operations below, for
    `pds/test/read_buffer_test.mdk`: the growth behavior is pure — a function
    of the bytes appended — and so can be asserted without a socket. The
    representation stays private — a caller outside this module cannot reach
    the `Builder`. -}
-export data ReadBuffer = ReadBuffer Builder
+export data ReadBuffer = ReadBuffer Builder (Ref Int)
 
 -- | An empty buffer; the backing store is allocated on the first append.
 export
 readBufferNew : Unit -> ReadBuffer
-readBufferNew _ = ReadBuffer (newBuilder ())
+readBufferNew _ = ReadBuffer (newBuilder ()) (Ref 0)
 
 -- | How many bytes are live, in O(1): a `Ref Int` deref, never a traversal of
 -- the backing store.
 export
 readBufferLen : ReadBuffer -> Int
-readBufferLen (ReadBuffer b) = let (_, len) = builderParts b in len
+readBufferLen (ReadBuffer b _) = let (_, len) = builderParts b in len
+
+-- | How many of this connection's bytes are charged to the budget right now.
+-- At least `readBufferLen`, and more while a reservation covers bytes the
+-- request it is framing has not delivered yet; the two are separate counters
+-- because the budget is given back by the connection, which by then holds a
+-- different buffer value.
+export
+readBufferCharged : ReadBuffer -> Int
+readBufferCharged (ReadBuffer _ charged) = !charged
+
+{- | Record `bytes` of headroom `admitBufferBytes` has just taken for this
+   connection. The process-wide total is charged at admission and this is the
+   connection's own half of the same number, so the two move together and a
+   retirement gives back what this connection holds rather than some share of
+   what everyone holds. -}
+export
+chargeReadBuffer : ReadBuffer -> Int -> Unit
+chargeReadBuffer (ReadBuffer _ charged) bytes = charged := !charged + bytes
+
+-- | Give back the `bytes` this connection has stopped holding.
+export
+releaseReadBuffer : BufferCensus -> ReadBuffer -> Int -> Unit
+releaseReadBuffer census (ReadBuffer _ charged) bytes =
+  let () = charged := !charged - bytes
+  releaseBufferBytes census bytes
+
+{- | Give back everything beyond the `keep` bytes the connection's rebased
+   buffer still carries: the finished request's own bytes, and the tail of its
+   reservation that the request never grew into.
+
+   The reservation is released at the same point its bytes are rather than
+   held to the connection's retirement, because it was taken for ONE request:
+   a kept-alive connection's next request reserves again from its own header
+   section, and one that carried its predecessor's reservation across would
+   hold a megabyte of headroom per request it had ever served. -}
+export
+rebaseReadBufferCharge : BufferCensus -> ReadBuffer -> Int -> Unit
+rebaseReadBufferCharge census buf keep =
+  releaseReadBuffer census buf (readBufferCharged buf - keep)
+
+-- | Give back everything this connection still holds, on the one path every
+-- connection leaves by. Idempotent, like `releaseUnframed`: a second call
+-- finds nothing charged and gives back nothing.
+export
+retireReadBuffer : BufferCensus -> ReadBuffer -> Unit
+retireReadBuffer census buf =
+  releaseReadBuffer census buf (readBufferCharged buf)
 
 readBufferIsEmpty : ReadBuffer -> Bool
 readBufferIsEmpty buf = readBufferLen buf == 0
@@ -1238,7 +1606,7 @@ readBufferIsEmpty buf = readBufferLen buf == 0
 -- without copying, so this costs nothing proportional to what is buffered.
 export
 readBufferBacking : ReadBuffer -> Bytes
-readBufferBacking (ReadBuffer b) =
+readBufferBacking (ReadBuffer b _) =
   let (backing, _) = builderParts b
   backing
 
@@ -1259,7 +1627,7 @@ readBufferBacking (ReadBuffer b) =
    `pds/test/trust_boundary_guards_test.mdk`'s `readbuffer-*` cells. -}
 export
 readBufferAppend : Array Int -> ReadBuffer -> Unit
-readBufferAppend bytes (ReadBuffer b) =
+readBufferAppend bytes (ReadBuffer b _) =
   appendBytes
     (optionOrPanic
       "readBufferAppend: every element must be a byte in 0..255"
@@ -1270,25 +1638,30 @@ readBufferAppend bytes (ReadBuffer b) =
 -- `readBufferAppend` performs. This is `readMore`'s door: a chunk off the
 -- socket arrives packed.
 readBufferAppendBytes : Bytes -> ReadBuffer -> Unit
-readBufferAppendBytes bytes (ReadBuffer b) = appendBytes bytes b
+readBufferAppendBytes bytes (ReadBuffer b _) = appendBytes bytes b
 
 {- | A fresh buffer holding the live bytes from `from` to the end — the
    leftover a finished request carries into the next one
    (`respondAt`'s `rest`). Copies the leftover once, the same single copy
-   `sliceClamped` performed on the old `Array Int` representation. -}
+   `sliceClamped` performed on the old `Array Int` representation.
+
+   The budget charge is carried across rather than restarted: this is the same
+   connection's buffer under a new value, and `respondAt` gives back exactly
+   the `from` bytes this drops. -}
+export
 readBufferFrom : Int -> ReadBuffer -> ReadBuffer
-readBufferFrom from (ReadBuffer b) =
+readBufferFrom from (ReadBuffer b charged) =
   let (backing, len) = builderParts b
   let fresh = newBuilder ()
   let () = appendBytes (sliceClamped from len backing) fresh
-  ReadBuffer fresh
+  ReadBuffer fresh charged
 
 -- | The live bytes alone, for the one caller (`rejectBufferAt`) that hands
 -- the whole buffer to `applyRequest` rather than a scanned `[0, boundary)`
 -- prefix.
 export
 readBufferLive : ReadBuffer -> Bytes
-readBufferLive (ReadBuffer b) =
+readBufferLive (ReadBuffer b _) =
   let (backing, len) = builderParts b
   sliceClamped 0 len backing
 
@@ -1311,23 +1684,33 @@ readBufferLive (ReadBuffer b) =
    while every signature still typechecked. The proxied-call census joins them
    for the same reason and not because it is configuration: it is the one
    counter only the outbound path charges, and this value is already on every
-   function between `acceptLoop` and `forwardProxied`. -}
-export data Serving = Serving TrustedProxy (Option Egress) ProxyCensus
+   function between `acceptLoop` and `forwardProxied`. The buffer budget joins
+   them on the same argument: it is charged by the inbound read and given back
+   by the connection's retirement, and both of those already hold this. -}
+export data Serving =
+  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus
 
 export
 makeServing : TrustedProxy -> Option Egress -> Ref Int -> Serving
 makeServing trustedProxy egress inFlight =
-  Serving trustedProxy egress (ProxyCensus inFlight (Ref 0) (Ref []))
+  Serving
+    trustedProxy
+    egress
+    (ProxyCensus inFlight (Ref 0) (Ref []))
+    (newBufferCensus ())
 
 export
 servingTrustedProxy : Serving -> TrustedProxy
-servingTrustedProxy (Serving trustedProxy _ _) = trustedProxy
+servingTrustedProxy (Serving trustedProxy _ _ _) = trustedProxy
 
 servingEgress : Serving -> Option Egress
-servingEgress (Serving _ egress _) = egress
+servingEgress (Serving _ egress _ _) = egress
 
 servingProxyCensus : Serving -> ProxyCensus
-servingProxyCensus (Serving _ _ census) = census
+servingProxyCensus (Serving _ _ census _) = census
+
+servingBufferCensus : Serving -> BufferCensus
+servingBufferCensus (Serving _ _ _ census) = census
 
 -- ── the stats line ──────────────────────────────────────────────────────────
 
@@ -1512,6 +1895,10 @@ serveConnection : Server ->
 serveConnection server dir storeRef limiterRef census serving conn active unframed =
   defer
     held <- liftIO (u => Ref True)
+    -- Bound here rather than passed inline, because the retirement below needs
+    -- the charge this connection accumulates: the value `connectionLoop` ends
+    -- holding is a rebased successor, but the charge ref inside it is this one.
+    buf <- liftIO (u => readBufferNew ())
     _ <- connectionLoop
       server
       dir
@@ -1521,10 +1908,15 @@ serveConnection server dir storeRef limiterRef census serving conn active unfram
       serving
       conn
       (UnframedSlot unframed held)
-      (readBufferNew ())
+      buf
       True
     _ <- A.close conn
-    liftIO (u => retireConnection active (UnframedSlot unframed held))
+    liftIO (u =>
+      retireConnection
+        active
+        (UnframedSlot unframed held)
+        (servingBufferCensus serving)
+        buf)
 
 {- | Serve requests over one connection until it closes, fails, or times out.
    `pending` is what a previous request left behind: a pipelined client sends
@@ -1678,27 +2070,180 @@ readMore : Server ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
 readMore server dir storeRef limiterRef census serving conn slot deadlines buf scan firstRequest =
   defer
-    received <- A.recvBytesWithin (silenceBudget scan) conn readChunkBytes
+    reserved <- reserveReadBuffer (servingBufferCensus serving) buf scan
+    if not reserved then
+      refuseOverBudget conn scan
+    else defer
+      let want = readSizeFor scan buf
+      received <- A.recvBytesWithin (silenceBudget scan) conn want
+      match received
+        Err message => deferPure (Err message)
+        Ok bytes =>
+          if B.length bytes == 0 then
+            deferPure (endOfStream buf)
+          else
+            let () = readBufferAppendBytes bytes buf
+            frameLoop
+              server
+              dir
+              storeRef
+              limiterRef
+              census
+              serving
+              conn
+              slot
+              deadlines
+              buf
+              scan
+              firstRequest
+
+{- | How much of the budget this connection must hold before it reads again:
+   enough to carry the request it is framing to a point it can decide at
+   without asking for more.
+
+   In the header section that is only what has already arrived plus the read
+   about to be asked for, because nothing longer is knowable there and the
+   section is capped at `maxHttpHeaderBytes` anyway.
+
+   Past it, it is the WHOLE of what the request still needs, taken once: a
+   `Content-Length` body's end position is fixed the instant the headers
+   terminate (`httpScanBodyRemaining`), and `len + remaining` is that position,
+   so this number does not move again for the rest of the body however many
+   reads deliver it. A chunked body declares its length one chunk at a time
+   and so reserves the per-request ceiling it could grow to instead.
+
+   Both are capped at `maxHttpRequestBytes` plus one read, because that is the
+   most any buffer can reach: `scanRequestBoundaryWithin` refuses one past
+   that ceiling, and the read that carries it past is the last it gets. The
+   cap is on a number the PEER chose, and it is held here rather than inferred
+   from the ceiling `http` happens to apply to a declared length today, so how
+   much of a promise this server will hold before the framer has graded it
+   does not depend on which of `http`'s ceilings is the tighter one.
+
+   Reserving the whole of it at once is what makes the budget a WAIT rather
+   than a deadlock. A connection charged for part of a body and then queued
+   for the rest is waiting on headroom every other such connection is also
+   holding part of and also waiting for, which nothing drains: measured, seven
+   concurrent 5 MiB uploads against the incremental shape cost six of them a
+   reset with no response, and a 40 KB `GET` beside them 4.876 s.
+
+   Exported so `pds/test/read_buffer_test.mdk` can assert that a fixed-length
+   body's target does not move as its bytes arrive, which is the whole of why
+   one admission is enough. -}
+export
+readBufferTarget : HttpScan -> ReadBuffer -> Int
+readBufferTarget scan buf =
+  let len = readBufferLen buf
+  let ceiling = maxHttpRequestBytes + readChunkBytes
+  if httpScanInHeaders scan then
+    len + readChunkBytes
+  else match httpScanBodyRemaining scan len
+    Some remaining => min ceiling (len + remaining)
+    None => ceiling
+
+{- | How many bytes to ask the socket for. A read inside a fixed-length body
+   is capped at what that body still needs, so nothing past the request's own
+   last byte is ever buffered against its reservation: a pipelined successor
+   stays in the kernel's receive queue until the read that frames it, which is
+   where it is budgeted for. Exported beside `readBufferTarget`: the cap is
+   what keeps a connection's live bytes within its reservation. -}
+export
+readSizeFor : HttpScan -> ReadBuffer -> Int
+readSizeFor scan buf =
+  if httpScanInHeaders scan then
+    readChunkBytes
+  else match httpScanBodyRemaining scan (readBufferLen buf)
+    Some remaining => min readChunkBytes remaining
+    None => readChunkBytes
+
+-- | Top this connection's charge up to what `readBufferTarget` says it needs,
+-- waiting for headroom if the budget is full. `False` means the read is
+-- refused and nothing further was charged. A target already covered charges
+-- nothing and never waits, which is what makes the body of a fixed-length
+-- request one admission rather than one per chunk.
+reserveReadBuffer : BufferCensus ->
+  ReadBuffer ->
+  HttpScan ->
+  Async <Clock | e> Bool
+reserveReadBuffer census buf scan =
+  let owed = readBufferTarget scan buf - readBufferCharged buf
+  if owed <= 0 then
+    deferPure True
+  else defer
+    admitted <- admitBufferBytes census owed
+    if admitted then
+      let () = chargeReadBuffer buf owed
+      deferPure True
+    else
+      deferPure False
+
+{- | What a read refused by the budget is told.
+
+   Closed unanswered while the header section is unterminated, the way this
+   phase's other two refusals are: no request has framed, so there is nothing
+   to answer about. Past it a request HAS framed its head — `httpScanInHeaders`
+   is how this module tells the two apart — and an already-headered refusal is
+   told 503 here for the reason `proxyCeilingResponse` tells one: a caller that
+   retries later is right to, and what is refused is what is in flight now.
+
+   Either way the connection closes and its retirement gives its whole charge
+   back, which is what lets the waiters behind it proceed. -}
+refuseOverBudget : Connection ->
+  HttpScan ->
+  Async <Clock, Net "_", Stdout | e> (Result String Unit)
+refuseOverBudget conn scan =
+  if httpScanInHeaders scan then
+    deferPure (Err "in-flight request buffer budget exceeded")
+  else defer
+    startedAt <- liftIO (u => monotonic ())
+    let bytes = serializeResponse (withAllowOrigin bufferCeilingResponse)
+    let trace = RequestTrace "" "" (identityLabel directIdentity) startedAt
+    _ <- A.sendAllWithin writeTimeout conn bytes
+    _ <- liftIO (u => logAccessBytes trace bytes)
+    _ <- drainRefused conn lingerDrainReads
+    deferPure (Err "in-flight request buffer budget exceeded")
+
+{- | Read away what the refused peer is still sending, discarding it, so that
+   the refusal above reaches it.
+
+   Closing a socket whose receive queue still holds bytes is a TCP RESET, and
+   a reset discards whatever the peer had not read yet — the response just
+   written included. Measured on this server: a peer told 503 with 4.9 MB of
+   body still in flight saw `ECONNRESET` and no status at all, and the same
+   peer with its body not yet sent saw the 503. Reading the leftover away is
+   what turns the close back into an orderly one.
+
+   Bounded on both axes, because the body being read away is the one this
+   server would not hold: nothing is buffered, so what it costs is `left`
+   reads and the one short wait that finds the queue already empty. A peer
+   still sending past that is told by the reset instead, which is the answer
+   it left this server no room for. -}
+drainRefused : Connection -> Int -> Async <Clock, Net "_" | e> Unit
+drainRefused conn left =
+  if left <= 0 then
+    deferPure ()
+  else defer
+    received <- A.recvBytesWithin lingerDrainWait conn readChunkBytes
     match received
-      Err message => deferPure (Err message)
+      Err _ => deferPure ()
       Ok bytes =>
         if B.length bytes == 0 then
-          deferPure (endOfStream buf)
+          deferPure ()
         else
-          let () = readBufferAppendBytes bytes buf
-          frameLoop
-            server
-            dir
-            storeRef
-            limiterRef
-            census
-            serving
-            conn
-            slot
-            deadlines
-            buf
-            scan
-            firstRequest
+          drainRefused conn (left - 1)
+
+-- | What a body refused past `maxInFlightRequestBytes` AND
+-- `maxQueuedBufferedReads` is told. Its own error name rather than
+-- `proxyCeilingResponse`'s: what ran out is this server's inbound buffer, not
+-- its outbound call budget, and a client that can tell them apart can tell
+-- whether retrying the same body is worth it.
+bufferCeilingResponse : Response
+bufferCeilingResponse =
+  xrpcErrorResponse
+    503
+    "Service Unavailable"
+    "RequestBufferLimitExceeded"
+    "too many request bodies are in flight on this server"
 
 -- | How long this read may find nothing: whichever phase's budget the scan is
 -- in. The deadline in `framePending` is only consulted between reads, so a peer
@@ -1846,6 +2391,17 @@ respondAt server dir storeRef limiterRef census serving conn slot buf boundary f
     Ok request => requestKeepAlive request
     Err _ => False
   let rest = readBufferFrom boundary buf
+  -- The framed request's own bytes stop being buffered here, whatever this
+  -- server goes on to answer with them: `rest` holds only what arrived after
+  -- the boundary, so the budget gets everything this connection held for the
+  -- request back now rather than at the connection's retirement. A kept-alive
+  -- connection that serves a thousand requests therefore holds one request's
+  -- bytes at a time, not a thousand.
+  let () =
+    rebaseReadBufferCharge
+      (servingBufferCensus serving)
+      buf
+      (readBufferLen buf - boundary)
   let identified = admissionIdentity (servingTrustedProxy serving) parsed
   -- Built once, here, and carried down every branch below: the log's identity
   -- is the one the request was CHARGED under, so a refused `X-Forwarded-For`

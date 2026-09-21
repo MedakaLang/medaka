@@ -78,7 +78,7 @@ import http.{
 }
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
-import list.{filter, last, sort, take}
+import list.{filter, last, take}
 import string.{fromUtf8, join, split, startsWith, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
@@ -144,8 +144,8 @@ import lib.server_core.{
 import lib.store.{
   Store,
   sessionFingerprint,
-  storeBlobCids,
-  storeBlobEntries,
+  storeBlobBytes,
+  storeBlobCidTexts,
   storeBlobMimeType,
   storeCredential,
   storeGet,
@@ -850,10 +850,6 @@ finishWrite store (Err response) = (store, response)
 finishWrite store (Ok (repo, output)) =
   (storeWithRepo repo store, jsonOkResponse output)
 
-totalBlobBytes : List (Cid, Array Int) -> Int
-totalBlobBytes [] = 0
-totalBlobBytes ((_, bytes) :: rest) = arrayLength bytes + totalBlobBytes rest
-
 {- | `com.atproto.repo.uploadBlob`: admit the raw body against `pds/lib/blob.
    mdk`'s `admitBlob` — the ONE place size/MIME admission happens — then
    record the admitted bytes and declared MIME type in the Store's blob half.
@@ -865,7 +861,7 @@ applyUploadBlob : Store ->
   Result Response (Store, Json)
 applyUploadBlob store media bytes = do
   let mimeType = "\{mediaTypeType media}/\{mediaTypeSubtype media}"
-  let accountUsedBytes = totalBlobBytes (storeBlobEntries store)
+  let accountUsedBytes = storeBlobBytes store
   ref <- admitBlobRef (admitBlob accountUsedBytes mimeType bytes)
   next <- match storePutBlob (blobRefCid ref) mimeType bytes store
     Err message =>
@@ -1401,14 +1397,16 @@ requireStandardLimit params = do
    unimplemented rather than silently ignored, the same policy
    `rejectUnimplementedParam` already applies to `getRepo`'s `since`.
 
-   The listed CIDs are SORTED by their base32 text before the cursor is
-   applied, because the cursor is compared as base32 text. `storeBlobCids`
-   yields CIDs in `lib.blockstore`'s own key order, which is the HEX of the
-   raw CID bytes, and hex order and base32-of-the-same-bytes order are
-   different relations. Paginating one order with a cursor drawn from the
-   other lets a client walk past a blob whose text sorts before the cursor,
-   and never see it again. Sorting here leaves `blockStoreCids`' order
-   alone for its other callers.
+   The listed CIDs must come out in base32-text order, because the cursor
+   is compared as base32 text. `storeBlobCids` yields CIDs in
+   `lib.blockstore`'s own key order, which is the HEX of the raw CID bytes,
+   and hex order and base32-of-the-same-bytes order are different
+   relations — pairing one order with a cursor drawn from the other lets a
+   client walk past a blob whose text sorts before the cursor, and never
+   see it again. `storeBlobCidTexts` sidesteps the mismatch instead of
+   sorting around it: it reads the blob index, which is keyed on
+   `cidToString cid` itself, so its `keys` come back already ascending in
+   the cursor's own order with no sort needed here.
 
    The CIDs come without their bytes: this route reports which blobs exist, and
    `storeBlobEntries` would copy every blob in the account to say so. -}
@@ -1419,7 +1417,7 @@ applyListBlobs account store params = do
   () <- rejectUnimplementedParam "since" params
   limit <- requireStandardLimit params
   cursor <- optionalParam "cursor" params
-  let allCids = sort (map cidToString (storeBlobCids store))
+  let allCids = storeBlobCidTexts store
   let remaining = match cursor
     None => allCids
     Some text => filter (> text) allCids
