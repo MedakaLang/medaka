@@ -61,7 +61,7 @@ import string.{
   unwords,
 }
 import io.{runVerb}
-import test.{Expectation(..)}
+import test.{Expectation(..), expectNoFindings}
 import test_process.{
   expectSpawnFails, expectSpawnOk, medakaBin, medakaRoot, underRoot
 }
@@ -344,22 +344,11 @@ breachesOf : Result String (List (String, String, String)) ->
 breachesOf (Err e) = Err e
 breachesOf (Ok edges) = map (h => breaches h edges) hooks
 
--- | Passes when a scan reported no violation lines.
-expectClean : String -> Result String (List String) -> Expectation
-expectClean what (Err e) =
-  Fail "\{what}: \{e}" "no violations" "the scan could not run"
-expectClean _ (Ok []) = Pass "no violations" "no violations"
-expectClean what (Ok hits) =
-  Fail
-    "\{what}:\n\{unlines (map indent hits)}"
-    "no violations"
-    "\{intToString (length hits)} violations"
-
 indent : String -> String
 indent line = "  \{line}"
 
 test "no pds/lib module reaches a test-only ForTest export" =
-  expectClean
+  expectNoFindings
     "real tree: pds/lib reaches a test-only export"
     (breachesOf productionEdges)
 
@@ -448,7 +437,7 @@ mutantBreaches extra = match withPrepended extra
    Without this the policy could pass by rejecting every alias, which would
    forbid ordinary code rather than the boundary breach. -}
 test "mutation control: an ordinary module alias is still accepted" =
-  expectClean
+  expectNoFindings
     "an alias of a module with no test-only exports was rejected"
     (mutantBreaches "import array as SafeArray")
 

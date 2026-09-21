@@ -256,6 +256,21 @@ sweepUnits units gradeOne rowFailure summarize = match scratchDir
     let _ = runVerb "rm" ["-rf", scratch]
     summarize (length graded) failures
 
+{- | The `summarize` most `sweepUnits` callers pass: a generic "N of M probe
+   rows failed" report, or `pass` when nothing failed.
+
+   Seven gate-test modules each re-derived this exact function under their
+   own local name. A gate whose failures need a different noun than "probe
+   rows" (a distinct census, an extra label) keeps its own `summarize`
+   instead of this one — genuinely different behavior, not the same
+   function twice. -}
+export
+summarizeSweep : Int -> List String -> Expectation
+summarizeSweep _ [] = pass
+summarizeSweep graded failures =
+  fail
+    "\{intToString (length failures)} of \{intToString graded} probe rows failed:\n\{unlines failures}"
+
 -- # Reading a spawned oracle's stdout
 
 {- | `s` without its trailing newlines.

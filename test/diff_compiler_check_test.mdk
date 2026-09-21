@@ -85,12 +85,13 @@
    corpora, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  batchSection, chompNewlines, stripUnitAutoPrint, sweepUnits
+  batchSection, chompNewlines, stripUnitAutoPrint, summarizeSweep, sweepUnits
 }
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
 import list.{dropWhile, reverse, somes, sort, takeWhile}
 import path.{basename, dirname, stem}
+import probe_runner.{processFailure, stderrTail}
 import string.{
   contains,
   drop,
@@ -430,25 +431,6 @@ gradeAgainst SubsetOfOutput expected actual =
 joinLines : List String -> String
 joinLines ls = chompNewlines (unlines ls)
 
-{- | How a spawn's exit code and stderr graded.
-
-   Every unit of every row is required to run clean: `code == 0` with no
-   `E-PANIC` on stderr. The retired scripts piped stderr to `/dev/null` and
-   never read `$?`, so a driver that panicked its way to the right bytes
-   passed them. -}
-processFailure : String -> String -> Int -> String -> Option String
-processFailure oracle unit code err =
-  if code == 0 && not (contains "E-PANIC" err) then
-    None
-  else
-    Some "\{unit}: \{oracle} exited \{intToString code}\{stderrTail err}"
-
-stderrTail : String -> String
-stderrTail "" = ""
-stderrTail err = match lines (chompNewlines err)
-  [] => ""
-  l :: _ => " — \{debug l}"
-
 -- | The short name a failure message calls one fixture by, corpus-qualified
 -- so a red run naming `resolve_fixtures/shadow` is unambiguous across the
 -- five corpora this gate sweeps.
@@ -575,22 +557,16 @@ gradeRow _ r = match unitsOf r.legs []
       failures = counted ++ values,
     }
 
-rowFailure : Outcome -> Option String
-rowFailure o = match o.failures
+driverRowFailure : Outcome -> Option String
+driverRowFailure o = match o.failures
   [] => None
   fs =>
     let body = unlines (map (f => "    \{f}") fs)
     Some
       "  \{o.label} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{chompNewlines body}"
 
-summarize : Int -> List String -> Expectation
-summarize _ [] = pass
-summarize graded failures =
-  fail
-    "\{intToString (length failures)} of \{intToString graded} driver rows failed:\n\{unlines failures}"
-
 test "every check front-end driver reproduces its corpora's goldens" =
-  sweepUnits rows gradeRow rowFailure summarize
+  sweepUnits rows gradeRow driverRowFailure summarizeSweep
 
 -- # The cycle chain a corpus cannot hold
 

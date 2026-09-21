@@ -17,7 +17,7 @@
 import bytes.{fromArray}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue}
 import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
 import lib.handlers.{pdsServer, serverLinksEmpty}
 import lib.server_core.{
@@ -313,7 +313,10 @@ test "a refusal repeats neither the password nor the identifier" =
       configuredStore
       (postJson "" createSessionNsid (loginJson accountHandleText "not it"))
   let text = fromUtf8 response
-  expectTrue (not (contains "not it" text) && not (contains "alice.test" text))
+  expectEach [
+    ("does not repeat the password", expectFalse (contains "not it" text)),
+    ("does not repeat the identifier", expectFalse (contains "alice.test" text)),
+  ]
 
 test "two logins in the same second issue different tokens" =
   let (_, first) = login testInstant 1 configuredStore
@@ -407,8 +410,14 @@ test "a refresh with the session's refresh token is 200" = match refreshed
 test "a refresh reports the rotated session as active" = match refreshed
   (_, response) => expectEqual (fieldBool "active" response) (Some True)
 
-test "a refresh issues a token pair that is not the one it replaced" =
-  expectTrue (rotatedAccess /= accessToken && rotatedRefresh /= refreshToken)
+test "a refresh issues a token pair that is not the one it replaced" = expectEach
+  [
+    ("rotatedAccess /= accessToken", expectNotEqual accessToken rotatedAccess),
+    (
+      "rotatedRefresh /= refreshToken",
+      expectNotEqual refreshToken rotatedRefresh,
+    ),
+  ]
 
 test "the rotated access token reaches a gated route" =
   let (_, response) =
@@ -547,4 +556,10 @@ test "logging out of one session leaves another open" =
       (contextAt (testInstant + 1) 11)
       afterClose
       (getQuery secondAccess getSessionNsid)
-  expectTrue (secondRefresh /= refreshToken && outcome response == "200 OK")
+  expectEach [
+    (
+      "secondRefresh /= refreshToken",
+      expectNotEqual refreshToken secondRefresh,
+    ),
+    ("outcome response == \"200 OK\"", expectEqual "200 OK" (outcome response)),
+  ]

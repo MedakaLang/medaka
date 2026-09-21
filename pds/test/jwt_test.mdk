@@ -22,7 +22,7 @@
    algorithm pin, the expiry window, and the subject/audience checks each
    individually load-bearing. -}
 
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectTrue}
 import base64.{decodeUrlSafe, encodeUrlSafe}
 import hex.{decode}
 import string.{fromUtf8, split, stripSuffix, toUtf8}
@@ -416,7 +416,10 @@ test "the emitted signature is canonical nonzero low-S P1363 r||s" =
   let canonical = match signatureFromCompact raw
     Ok _ => True
     Err _ => False
-  expectTrue (arrayLength raw == 64 && canonical)
+  expectEach [
+    ("arrayLength raw == 64", expectEqual 64 (arrayLength raw)),
+    ("signature is canonical low-S", expectTrue canonical),
+  ]
 
 -- The signature covers the first two segments and nothing else: recomputing it
 -- from them alone must reproduce the third.

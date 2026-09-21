@@ -4,20 +4,32 @@
    seeds a database, how the demo's own output is produced, and how the
    EXPECTED output is derived by asking the real `sqlite3` CLI the equivalent
    question. This module carries the part of that with no process in it — the
-   row shape, the two step languages, and the line comparison.
+   row shape and the two step languages.
 
-   The spawns stay OUT of here, in each runner's own file, deliberately:
-   `medaka gate verify`'s native-grading clause reads the source text of the
-   module a gate's `run =` names (`ungradedSpawnSites`,
-   `compiler/tools/gate_cmd.mdk`), so a spawn routed through this module would
-   be invisible to it. A runner therefore spawns and grades in one file and
-   reaches here only for values.
+   A runner compares a row with `test.expectEqualLines`, over its
+   `outLines` joined back with `"\n"`, and never with
+   `test.expectEqualText`: that one normalizes away a last line that is
+   exactly `0`, and
+   `projection_demo.mdk`'s `SELECT DISTINCT a*0` block ends in exactly that
+   line — a demo that dropped the block entirely would normalize to the same
+   text as one that printed it.
+
+   The three runners' spawn primitives (`spawnRaw`/`spawnOut`/`seedDb`/
+   `spawnEnv`/`emitterBin`) live here too, not because a spawn is a value
+   this module models, but because they were three byte-identical copies
+   before this module held them. `medaka gate verify`'s native-grading
+   clause follows a gate's own project-local imports one hop
+   (`gateReaches`/`relaysFor`, `compiler/tools/gate_cmd.mdk`), so a spawn
+   routed through this module is graded via the importing gate as long as
+   the gate names the spawning binding and the grading evidence sits within
+   that one hop — a spawn here is no longer invisible to it.
 
    Import what you need: `import test.oracle_support.{OracleRow(..), Step(..)}`. -}
 
+import io.{getEnvOr}
 import list.{dropWhileEnd, intercalate}
-import string.{join, lines, split}
-import test.{Expectation(..)}
+import string.{lines, split, trim, unwords}
+import test_process.{boundedVerbSeconds, medakaRoot, underRoot}
 
 -- # One row
 
@@ -122,69 +134,81 @@ export
 flatLines : List (List String) -> List String
 flatLines parts = intercalate [] parts
 
-{- | Passes when `actual` is `expected`, line for line, naming the first line
-   at which the two diverge.
+-- # Spawning a process under the tree
 
-   Line lists rather than whole texts, and this rather than
-   `test.expectEqualText`: that one normalizes away a last line that is
-   exactly `0`, and `projection_demo.mdk`'s `SELECT DISTINCT a*0` block ends
-   in exactly that line — a demo that dropped the block entirely would
-   normalize to the same text as one that printed it.
-
-   > expectLines ["a"] ["a"]
-   Pass "1 line" "1 line"
-   > expectLines ["a", "b"] ["a", "c"]
-   Fail "line 2: expected \"b\" but got \"c\"" "a\nb" "a\nc"
-   > expectLines ["a"] ["a", "b"]
-   Fail "line 2: expected end of output but got \"b\" (1 line remaining)" "a" "a\nb" -}
+{- | The Medaka native emitter binary a spawn should use: `MEDAKA_EMITTER` if
+   set, else the sibling `medaka_emitter` beside the tree's own `medaka`
+   binary. -}
 export
-expectLines : List String -> List String -> Expectation
-expectLines expected actual =
-  if expected == actual then
-    Pass (countMsg expected) (countMsg actual)
-  else
-    Fail
-      (firstDivergence 1 expected actual)
-      (join "\n" expected)
-      (join "\n" actual)
+emitterBin : <IO> String
+emitterBin = getEnvOr "MEDAKA_EMITTER" "\{medakaRoot}/medaka_emitter"
 
-{- | `e`, with `label` prefixed onto its message when it is a `Fail`.
-
-   For a comparison run under a label (which table, which database pair) the
-   label needs to travel WITH the failure message, not sit beside it — a
-   caller that only forwards the first `Fail` out of several labelled
-   comparisons (`test.expectAll`) would otherwise print a message with no way
-   to tell which comparison it came from.
-
-   > labelFail "t1" (Pass "a" "a")
-   Pass "a" "a"
-   > labelFail "t1" (Fail "line 1: expected \"a\" but got \"b\"" "a" "b")
-   Fail "t1: line 1: expected \"a\" but got \"b\"" "a" "b" -}
+{- | `MEDAKA_ROOT` and `MEDAKA_EMITTER`, exported the way the retired shell
+   oracles did: a gate shard exports neither on its own, and a `medaka
+   build` left to find its own emitter is one refactor away from being
+   graded on a verb that silently did nothing. -}
 export
-labelFail : String -> Expectation -> Expectation
-labelFail _ (Pass e a) = Pass e a
-labelFail label (Fail m e a) = Fail "\{label}: \{m}" e a
+spawnEnv : <IO> List String
+spawnEnv = ["MEDAKA_ROOT=\{medakaRoot}", "MEDAKA_EMITTER=\{emitterBin}"]
 
-countMsg : List String -> String
-countMsg ls = match length ls
-  1 => "1 line"
-  n => "\{intToString n} lines"
+{- | `cmd` run with `args` under a `secs` ceiling: the raw `(exit, stdout,
+   stderr)`, except a missing `cmd` (exit 127 through `env`) or a spawn that
+   never started, which are both reported as `Err` — "the binary was not on
+   PATH" is never read as "it printed nothing and exited 0".
 
-firstDivergence : Int -> List String -> List String -> String
-firstDivergence _ [] [] = "no divergence"
-firstDivergence n (e :: es) (a :: rest) =
-  if e == a then
-    firstDivergence (n + 1) es rest
-  else
-    "line \{intToString n}: expected \{debug e} but got \{debug a}"
--- The remaining case is one side running out first. It is ONE clause, not one
--- per side, because running out is a fact about the PAIR: the reader needs to
--- know which side stopped and how much of the other was still to come, and
--- splitting that across two messages makes the shorter side's count the thing
--- nobody prints.
-firstDivergence n expected actual =
-  "line \{intToString n}: expected \{tailMsg expected} but got \{tailMsg actual}"
+   `env` carries the two `spawnEnv` variables, which is the whole reason it
+   is here: Medaka has no `setEnv`. It ends up being `env` twice, harmlessly
+   — `boundedVerbSeconds` resolves `cmd` through an `env` of its own, which
+   is what makes a missing `cmd` report the host's 127 and its stderr rather
+   than `perl`'s failed `exec` returning as if the program had run and
+   printed nothing. -}
+export
+spawnRaw : Int ->
+  String ->
+  List String ->
+  <Exec "_", IO> Result String (Int, String, String)
+spawnRaw secs cmd args =
+  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
+    Err e =>
+      Err "spawn failed: could not start `\{unwords (cmd :: args)}`: \{e}"
+    Ok (127, _, err) =>
+      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
+    Ok triple => Ok triple
 
-tailMsg : List String -> String
-tailMsg [] = "end of output"
-tailMsg (l :: rest) = "\{debug l} (\{countMsg (l :: rest)} remaining)"
+{- | `spawnRaw`, demanding a clean exit: the row's stdout on 0, a named
+   failure otherwise. What every build/seed/build-and-run step goes
+   through: a row where the tool itself failed is not the same condition as
+   a row whose SQL was refused. -}
+export
+spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
+spawnOut secs cmd args = match spawnRaw secs cmd args
+  Err e => Err e
+  Ok (0, out, _) => Ok out
+  Ok (code, out, err) =>
+    Err
+      "`\{unwords (cmd :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
+
+-- Every seed statement runs under the same ceiling a direct query gets: a
+-- hang here is a defect of the row, not of the harness.
+seedTimeoutSeconds : Int
+seedTimeoutSeconds = 120
+
+{- | One `Seed`'s SQL text: itself, or read from the checked-in fixture it
+   names. -}
+export
+seedSql : Seed -> <FileRead "_", IO> Result String String
+seedSql (SeedSql sql) = Ok sql
+seedSql (SeedFile rel) = match readFile (underRoot rel)
+  Err e => Err "could not read \{rel}: \{e}"
+  Ok text => Ok text
+
+{- | `db` seeded through the real `sqlite3` CLI, one `Seed` statement at a
+   time, in order. -}
+export
+seedDb : String -> List Seed -> <Exec "_", FileRead "_", IO> Result String Unit
+seedDb _ [] = Ok ()
+seedDb db (s :: rest) = match seedSql s
+  Err e => Err e
+  Ok sql => match spawnOut seedTimeoutSeconds "sqlite3" [db, sql]
+    Err e => Err e
+    Ok _ => seedDb db rest

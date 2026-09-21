@@ -126,6 +126,12 @@ test: medaka
 	## fixtures that never execute. It also picks up the isProsePath/underDir
 	## doctests already in the file, which were equally unrun.
 	./medaka test compiler/tools/gate_cmd.mdk
+	## S-the-one-file-wall (#3234): same reason, for gate_cmd.mdk's `*_test.mdk`
+	## sibling. It drives the native-grading clause's import-following rules
+	## (`gradeViolations`) over fixture module sources, and a `*_test.mdk` under
+	## compiler/ is outside every entry's import closure ([W-MODULE-BLIND]), so
+	## without this line nothing walks it at all.
+	./medaka test compiler/tools/gate_cmd_test.mdk
 	## S-gate-registry (#2735): same reason, for gate_cmd.mdk's sibling. No
 	## gate script invokes `medaka test` on compiler/tools/gate_registry.mdk
 	## either, so without this line its tierPartOf/modePartOf/globMatch/

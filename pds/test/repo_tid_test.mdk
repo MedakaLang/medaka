@@ -2,7 +2,7 @@
    Protocol answer bytes remain only in the provenance-ledgered corpus. -}
 
 import string.{contains}
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectOkThen, expectTrue}
 import lib.nsid.{validateNsid}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.tid.{
@@ -26,13 +26,16 @@ mustTid micros clockId =
 
 test "TID encode and parse preserve timestamp clock and spelling" =
   let tid = mustTid 1700000000000000 7
-  match tidParse (tidToString tid)
-    Err _ => expectTrue False
-    Ok parsed =>
-      expectTrue
-        (tidMicros parsed == 1700000000000000
-          && tidClockId parsed == 7
-          && tidCompare tid parsed == Eq)
+  expectOkThen
+    (parsed => expectEach [
+      (
+        "tidMicros parsed == 1700000000000000",
+        expectEqual 1700000000000000 (tidMicros parsed),
+      ),
+      ("tidClockId parsed == 7", expectEqual 7 (tidClockId parsed)),
+      ("tidCompare tid parsed == Eq", expectEqual Eq (tidCompare tid parsed)),
+    ])
+    (tidParse (tidToString tid))
 
 test "TID lexical order follows microsecond order" =
   expectTrue
@@ -40,10 +43,15 @@ test "TID lexical order follows microsecond order" =
 
 test "TID monotonic next advances a backwards proposal" =
   let prior = mustTid 1700000000000000 7
-  match tidNext prior 1699999999999999 9
-    Err _ => expectTrue False
-    Ok next =>
-      expectTrue (tidMicros next == 1700000000000001 && tidClockId next == 9)
+  expectOkThen
+    (next => expectEach [
+      (
+        "tidMicros next == 1700000000000001",
+        expectEqual 1700000000000001 (tidMicros next),
+      ),
+      ("tidClockId next == 9", expectEqual 9 (tidClockId next)),
+    ])
+    (tidNext prior 1699999999999999 9)
 
 test "TID monotonic next preserves a newer proposal" =
   let prior = mustTid 1700000000000000 7

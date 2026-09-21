@@ -34,13 +34,15 @@
    Runs under `medaka test --native`: it spawns binaries and reads corpora,
    neither of which the interpreter binds. -}
 
-import compiler_cli_test_support.{chompNewlines, stripUnitAutoPrint, sweepUnits}
+import compiler_cli_test_support.{
+  chompNewlines, stripUnitAutoPrint, summarizeSweep, sweepUnits
+}
 import fs.{expectUnitCount, fixtureFiles, isFile, mkdirAll}
 import io.{runVerb}
 import list.{somes, sort}
 import path.{dirname, stem, stripPrefix}
 import string.{contains, endsWith, lines, unlines}
-import test.{Expectation, fail, pass}
+import test.{Expectation, expectEqualLines, expectationMessage, fail, pass}
 import test_process.{boundedVerb, medakaRoot, scratchDir}
 
 {- | One retired probe gate, as data.
@@ -183,24 +185,19 @@ valueFailure r path actual = match readFile (goldenPath r path)
    only `FAIL <name>` and left the reader to re-run the probe by hand; the
    first differing line says which edit to look at without that round trip.
 
+   Routes through `test.expectEqualLines` and reads back only its message —
+   this stays a `String`-returning helper because every call site here
+   already builds its own `Option String`/interpolated line around it,
+   never an `Expectation` on its own.
+
    > diffNote "a\nb" "a\nc"
-   "line 2: expected \"b\", got \"c\""
+   "line 2: expected \"b\" but got \"c\""
 
    > diffNote "a" "a\nb"
-   "line 2: expected (no line), got \"b\"" -}
+   "line 2: expected nothing but got \"b\"" -}
 export
 diffNote : String -> String -> String
-diffNote expected actual = firstMismatch 1 (lines expected) (lines actual)
-
-firstMismatch : Int -> List String -> List String -> String
-firstMismatch _ [] [] = "texts differ but no line does — check trailing bytes"
-firstMismatch n (e :: es) (a :: rest)
-  | e == a = firstMismatch (n + 1) es rest
-  | otherwise = "line \{intToString n}: expected \{debug e}, got \{debug a}"
-firstMismatch n [] (a :: _) =
-  "line \{intToString n}: expected (no line), got \{debug a}"
-firstMismatch n (e :: _) [] =
-  "line \{intToString n}: expected \{debug e}, got (no line)"
+diffNote expected actual = expectationMessage (expectEqualLines expected actual)
 
 -- # Grading a row
 
@@ -246,12 +243,6 @@ rowFailure o = match o.failures
     Some
       "  \{o.gate} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{chompNewlines body}"
 
-summarize : Int -> List String -> Expectation
-summarize _ [] = pass
-summarize graded failures =
-  fail
-    "\{intToString (length failures)} of \{intToString graded} probe rows failed:\n\{unlines failures}"
-
 {- | Grades every row: spawns its probe once per fixture, grades the spawn,
    and compares what it printed against that fixture's golden.
 
@@ -259,7 +250,7 @@ summarize graded failures =
    its own table and calls this; nothing else about a row is code. -}
 export
 gradeProbeRows : List Row -> <Exec "_", FileRead "_", IO> Expectation
-gradeProbeRows rows = sweepUnits rows gradeRow rowFailure summarize
+gradeProbeRows rows = sweepUnits rows gradeRow rowFailure summarizeSweep
 
 -- # Scratch space
 

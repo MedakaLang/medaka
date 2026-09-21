@@ -38,77 +38,34 @@
 
    Run: `medaka gate run sqlite/test/writer_oracle`. -}
 
--- The spawn primitives below (`spawnRaw`/`spawnOut`/`rowScratch`/`seedDb`/
--- `spawnEnv`/`emitterBin`) are byte-for-byte the same as `dml_oracle_test.mdk`'s
--- copies — deliberately, not an oversight: `medaka gate verify`'s native-grading
--- clause reads only the source text of the module a gate's `run =` names, so
--- moving these into a module the two files share would make the check see
--- nothing to grade in either file and pass having verified neither.
-import io.{getEnvOr, runVerb}
+-- `spawnRaw`/`spawnOut`/`seedDb`/`spawnEnv`/`emitterBin` moved to
+-- `test.oracle_support` under #3239/#3240: `medaka gate verify`'s
+-- native-grading clause now follows a gate's project-local imports one hop
+-- (`gateReaches`/`relaysFor`), so a spawn routed through that shared module
+-- is graded via the importing gate rather than invisible to it.
+-- `rowScratch` stays local — a fourth byte-identical copy with
+-- `dml_oracle_test.mdk`.
+import io.{runVerb}
 import list.{drop}
-import string.{join, split, trim, unwords}
-import test.{Expectation(..), expectEqual}
-import test.oracle_support.{expectLines, flatLines, outLines}
-import test_process.{
-  boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
-}
+import string.{join, split, trim}
+import test.{Expectation(..), expectEqual, expectEqualLines}
+import test.oracle_support.{Seed(..), flatLines, outLines, seedDb, spawnOut}
+import test_process.{medakaBin, scratchDir, underRoot}
 
 -- # Spawning
 --
--- Kept in THIS file, not `oracle_support`, for the same reason
--- `dml_oracle_test.mdk` keeps its own copy: `medaka gate verify`'s
--- native-grading clause reads only the source text of the module a gate's
--- `run =` names, so a spawn routed through a shared helper module would be
--- invisible to it.
+-- `spawnOut` here is `test.oracle_support`'s shared primitive.
 buildTimeoutSeconds : Int
 buildTimeoutSeconds = 600
 
 queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
-emitterBin : <IO> String
--- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-emitterBin =
-  let root = medakaRoot
-  getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
-
-spawnEnv : <IO> List String
--- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-spawnEnv =
-  let rootVar = "MEDAKA_ROOT=\{medakaRoot}"
-  let emitterVar = "MEDAKA_EMITTER=\{emitterBin}"
-  [rootVar, emitterVar]
-
-spawnRaw : Int ->
-  String ->
-  List String ->
-  <Exec "_", IO> Result String (Int, String, String)
--- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-spawnRaw secs cmd args =
-  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
-    Err e =>
-      Err "spawn failed: could not start `\{unwords (cmd :: args)}`: \{e}"
-    Ok (127, _, err) =>
-      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
-    Ok triple => Ok triple
-
-spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
--- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-spawnOut secs cmd args = match spawnRaw secs cmd args
-  Err e => Err e
-  Ok (0, out, _) => Ok out
-  Ok (code, out, err) =>
-    Err
-      "`\{unwords (cmd :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
-
 -- # Small process-backed primitives every row below is built from.
 
 rowScratch : String -> <Exec "_"> Result String String
--- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above
+-- the imports
 -- lint-disable-next-line rule-duplicate-body
 rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"
@@ -124,11 +81,6 @@ buildBin entry bin =
       "-o",
       bin,
     ])
-
-seedDb : String -> String -> <Exec "_", IO> Result String Unit
--- deliberate copy of dml_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-seedDb db sql = map (_ => ()) (spawnOut queryTimeoutSeconds "sqlite3" [db, sql])
 
 sqlite3Query : String -> String -> <Exec "_", IO> Result String String
 sqlite3Query db sql = spawnOut queryTimeoutSeconds "sqlite3" [db, sql]
@@ -260,7 +212,10 @@ runWriter db writer reader = do
 test "writer: literal gates match the hand-derived expected values" =
   match writerResult
     Err e => Fail e (join "\n" writerExpectedLines) "the row did not run"
-    Ok r => expectLines writerExpectedLines (writerReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" writerExpectedLines)
+        (join "\n" (writerReport r))
 
 test "writer: report matches sqlite/test/writer.golden" = match writerResult
   Err e => Fail e "the committed golden" "the row did not run"
@@ -270,7 +225,8 @@ test "writer: report matches sqlite/test/writer.golden" = match writerResult
         "could not read sqlite/test/writer.golden: \{e}"
         "sqlite/test/writer.golden"
         "unreadable"
-    Ok text => expectLines (outLines text) (writerReport r)
+    Ok text =>
+      expectEqualLines (join "\n" (outLines text)) (join "\n" (writerReport r))
 
 -- # writer_api
 --
@@ -481,7 +437,10 @@ runWriterApi writer reader dbUsers dbKv dbBlob dbReals = do
 test "writer_api: literal gates match the hand-derived expected values" =
   match writerApiResult
     Err e => Fail e (join "\n" writerApiExpectedLines) "the row did not run"
-    Ok r => expectLines writerApiExpectedLines (writerApiReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" writerApiExpectedLines)
+        (join "\n" (writerApiReport r))
 
 test "writer_api: report matches sqlite/test/writer_api.golden" =
   match writerApiResult
@@ -492,7 +451,10 @@ test "writer_api: report matches sqlite/test/writer_api.golden" =
           "could not read sqlite/test/writer_api.golden: \{e}"
           "sqlite/test/writer_api.golden"
           "unreadable"
-      Ok text => expectLines (outLines text) (writerApiReport r)
+      Ok text =>
+        expectEqualLines
+          (join "\n" (outLines text))
+          (join "\n" (writerApiReport r))
 
 -- # multipage_write
 --
@@ -621,7 +583,10 @@ runMultipage db writer reader = do
 test "multipage_write: literal gates match the hand-derived expected values" =
   match multipageResult
     Err e => Fail e (join "\n" multipageExpectedLines) "the row did not run"
-    Ok r => expectLines multipageExpectedLines (multipageReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" multipageExpectedLines)
+        (join "\n" (multipageReport r))
 
 test "multipage_write: report matches sqlite/test/multipage_write.golden" =
   match multipageResult
@@ -632,7 +597,10 @@ test "multipage_write: report matches sqlite/test/multipage_write.golden" =
           "could not read sqlite/test/multipage_write.golden: \{e}"
           "sqlite/test/multipage_write.golden"
           "unreadable"
-      Ok text => expectLines (outLines text) (multipageReport r)
+      Ok text =>
+        expectEqualLines
+          (join "\n" (outLines text))
+          (join "\n" (multipageReport r))
 
 test "multipage_write: 700 rows put the root page on an interior page (0x05) over >=3 leaves" =
   match multipageResult
@@ -653,12 +621,18 @@ test "multipage_write: 700 rows put the root page on an interior page (0x05) ove
 test "multipage_write: sqlite3 SELECT matches all 700 intended rows, not just first/last 3" =
   match multipageResult
     Err e => Fail e "700 matching rows" "the row did not run"
-    Ok r => expectLines (itemRows bigTableN) r.mpSelectAll
+    Ok r =>
+      expectEqualLines
+        (join "\n" (itemRows bigTableN))
+        (join "\n" r.mpSelectAll)
 
 test "multipage_write: Medaka reader round-trips all 700 rows through the interior root" =
   match multipageResult
     Err e => Fail e "700 matching rows" "the row did not run"
-    Ok r => expectLines (itemRows bigTableN) r.mpReaderRows
+    Ok r =>
+      expectEqualLines
+        (join "\n" (itemRows bigTableN))
+        (join "\n" r.mpReaderRows)
 
 -- # multitable_write
 --
@@ -807,7 +781,10 @@ runMultitable db writer reader = do
 test "multitable_write: literal gates match the hand-derived expected values" =
   match multitableResult
     Err e => Fail e (join "\n" multitableExpectedLines) "the row did not run"
-    Ok r => expectLines multitableExpectedLines (multitableReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" multitableExpectedLines)
+        (join "\n" (multitableReport r))
 
 test "multitable_write: report matches sqlite/test/multitable_write.golden" =
   match multitableResult
@@ -818,7 +795,10 @@ test "multitable_write: report matches sqlite/test/multitable_write.golden" =
           "could not read sqlite/test/multitable_write.golden: \{e}"
           "sqlite/test/multitable_write.golden"
           "unreadable"
-      Ok text => expectLines (outLines text) (multitableReport r)
+      Ok text =>
+        expectEqualLines
+          (join "\n" (outLines text))
+          (join "\n" (multitableReport r))
 
 test "multitable_write: 3 tables with distinct rootpages, >=1 interior + >=5 leaves" =
   match multitableResult
@@ -846,21 +826,26 @@ test "multitable_write: 3 tables with distinct rootpages, >=1 interior + >=5 lea
 test "multitable_write: sqlite3 SELECT matches all 700 intended `big` rows, not just first/last 2" =
   match multitableResult
     Err e => Fail e "700 matching rows" "the row did not run"
-    Ok r => expectLines (itemRows bigTableN) r.mtBigAll
+    Ok r =>
+      expectEqualLines (join "\n" (itemRows bigTableN)) (join "\n" r.mtBigAll)
 
 test "multitable_write: Medaka reader round-trips users" =
   match multitableResult
     Err e => Fail e "1|alice\n2|bob\n3|carol" "the row did not run"
-    Ok r => expectLines ["1|alice", "2|bob", "3|carol"] r.mtUsersReaderRows
+    Ok r =>
+      expectEqualLines "1|alice\n2|bob\n3|carol" (join "\n" r.mtUsersReaderRows)
 
 test "multitable_write: Medaka reader round-trips kv" = match multitableResult
   Err e => Fail e "one|1\ntwo|2\nthree|3" "the row did not run"
-  Ok r => expectLines ["one|1", "two|2", "three|3"] r.mtKvReaderRows
+  Ok r => expectEqualLines "one|1\ntwo|2\nthree|3" (join "\n" r.mtKvReaderRows)
 
 test "multitable_write: Medaka reader round-trips all 700 `big` rows through the interior root" =
   match multitableResult
     Err e => Fail e "700 matching rows" "the row did not run"
-    Ok r => expectLines (itemRows bigTableN) r.mtBigReaderRows
+    Ok r =>
+      expectEqualLines
+        (join "\n" (itemRows bigTableN))
+        (join "\n" r.mtBigReaderRows)
 
 -- # rowid_roundtrip
 --
@@ -942,7 +927,7 @@ runRowid : String ->
 runRowid src dst probe reader = do
   _ <- buildBin "sqlite/rowid_roundtrip_demo.mdk" probe
   _ <- buildBin "sqlite/main.mdk" reader
-  _ <- seedDb src rowidSeedSql
+  _ <- seedDb src [SeedSql rowidSeedSql]
   srcKvRowids <- sqlite3Lines src "SELECT rowid FROM kv ORDER BY rowid;"
   srcUsersRowids <- sqlite3Lines src "SELECT rowid FROM users ORDER BY rowid;"
   _ <- spawnOut queryTimeoutSeconds probe [src, dst]
@@ -970,7 +955,10 @@ runRowid src dst probe reader = do
 test "rowid_roundtrip: literal gates match the hand-derived expected values" =
   match rowidResult
     Err e => Fail e (join "\n" rowidExpectedLines) "the row did not run"
-    Ok r => expectLines rowidExpectedLines (rowidReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" rowidExpectedLines)
+        (join "\n" (rowidReport r))
 
 test "rowid_roundtrip: report matches sqlite/test/rowid_roundtrip.golden" =
   match rowidResult
@@ -981,7 +969,8 @@ test "rowid_roundtrip: report matches sqlite/test/rowid_roundtrip.golden" =
           "could not read sqlite/test/rowid_roundtrip.golden: \{e}"
           "sqlite/test/rowid_roundtrip.golden"
           "unreadable"
-      Ok text => expectLines (outLines text) (rowidReport r)
+      Ok text =>
+        expectEqualLines (join "\n" (outLines text)) (join "\n" (rowidReport r))
 
 test "rowid_roundtrip: non-IPK rowid gap survives rewrite (1,3,4), not renumbered to 1,2,3" =
   match rowidResult
@@ -998,8 +987,9 @@ test "rowid_roundtrip: IPK rowids preserved (1,5,9)" = match rowidResult
 -- separate Gate 5 did.
 test "rowid_roundtrip: Medaka reader round-trips kv" = match rowidResult
   Err e => Fail e "a|10\nb|30\nc|40" "the row did not run"
-  Ok r => expectLines ["a|10", "b|30", "c|40"] r.rrReaderKvRows
+  Ok r => expectEqualLines "a|10\nb|30\nc|40" (join "\n" r.rrReaderKvRows)
 
 test "rowid_roundtrip: Medaka reader round-trips users" = match rowidResult
   Err e => Fail e "1|alice\n5|bob\n9|carol" "the row did not run"
-  Ok r => expectLines ["1|alice", "5|bob", "9|carol"] r.rrReaderUsersRows
+  Ok r =>
+    expectEqualLines "1|alice\n5|bob\n9|carol" (join "\n" r.rrReaderUsersRows)
