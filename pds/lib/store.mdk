@@ -6,7 +6,11 @@
    shipped (`storeGet`/`storePut`/`storeSize` unchanged), plus each blob's
    declared MIME type recorded alongside it by `storePutBlob`/
    `storeBlobMimeType` — content addressing verifies bytes, not MIME, so the
-   declared type is state the routes must carry, not something a CID implies.
+   declared type is state the routes must carry, not something a CID implies —
+   plus a running byte total (`storeBlobBytes`) so an upload can be graded
+   against a per-account cap without walking every blob, and a base32-CID-text
+   index (`storeBlobCidTexts`) kept in the same order a sync cursor compares,
+   so paging needs no sort of its own.
 
    The **repository half** is the configured account's real signed repository
    state (`lib.repo`'s `Repo`), which Phase 4 record writes transition. It is
@@ -54,6 +58,7 @@ import lib.blockstore.{
   blockStoreEmpty,
   blockStoreEntries,
   blockStoreGet,
+  blockStoreHas,
   blockStorePut,
   blockStoreSize,
 }
@@ -64,7 +69,7 @@ import lib.repo.{Repo}
 import hmac.{ctEq}
 import sha256.{sha256}
 import json.{Json}
-import map.{Map(..), get, set, entries}
+import map.{Map(..), get, keys, set, entries}
 import string.{toUtf8}
 
 {- | One open session: the fingerprints of the access and refresh tokens it
@@ -87,14 +92,52 @@ emptyAuth : Auth
 emptyAuth = Auth None None []
 
 {- | The blob half: verified content-addressed bytes (`BlockStore` — the same
-   verification `lib.repo`'s own internal block store uses), plus each blob's
-   declared MIME type tracked alongside. Content addressing verifies bytes,
-   not MIME, so the type is not derivable from the CID and is not part of
-   `BlockStore`'s own representation. -}
-data BlobHalf = BlobHalf BlockStore (Map String String)
+   verification `lib.repo`'s own internal block store uses), an index of the
+   blobs it holds, and the running total of their lengths.
+
+   The index is keyed on a blob's base32 CID TEXT (`cidToString`) and not on
+   `BlockStore`'s own key, which is the HEX of the raw CID bytes. Hex order
+   and base32-of-the-same-bytes order are different relations, and the cursor
+   `com.atproto.sync.listBlobs` pages with is base32 text, so a pager reading
+   the hex order against that cursor walks past blobs it then never returns.
+   The index value carries the CID itself, so a key can be turned back into
+   the blob it names without re-decoding the text, and the declared MIME type,
+   which is `None` for a blob inserted through the byte-only `storePut`:
+   content addressing verifies bytes, not MIME, so the type is not derivable
+   from the CID and is not part of `BlockStore`'s own representation.
+
+   The total counts each distinct CID once, so it is what the account has
+   STORED and not what it has uploaded: re-uploading identical bytes leaves it
+   where it was, exactly as it leaves the block store where it was. Keeping it
+   here is what lets the account-usage check cost the same on a store of one
+   blob and a store of ten thousand. -}
+data BlobHalf = BlobHalf BlockStore (Map String (Cid, Option String)) Int
 
 blobHalfEmpty : BlobHalf
-blobHalfEmpty = BlobHalf blockStoreEmpty Tip
+blobHalfEmpty = BlobHalf blockStoreEmpty Tip 0
+
+-- The declared type recorded for a blob, or `None` for one that has no entry
+-- at all as well as one inserted without a type.
+declaredTypeOf : Cid -> BlobHalf -> Option String
+declaredTypeOf cid (BlobHalf _ index _) = match get (cidToString cid) index
+  Some (_, declared) => declared
+  None => None
+
+-- Insert one verified blob under an already-decided declared type. The byte
+-- total moves only when the block store gains a row: `blockStorePut` accepts
+-- an identical duplicate without storing it a second time, and a store that
+-- counted such a re-upload would refuse an account its own quota.
+blobHalfPut : Cid ->
+  Option String ->
+  Array Int ->
+  BlobHalf ->
+  Result String BlobHalf
+blobHalfPut cid declared bytes (BlobHalf blocks index total) =
+  let stored =
+    if blockStoreHas cid blocks then total else total + arrayLength bytes
+  map
+    (next => BlobHalf next (set (cidToString cid) (cid, declared) index) stored)
+    (blockStorePut cid bytes blocks)
 
 -- | Immutable verified protocol state. Its representation is private.
 export data Store = Store BlobHalf (Option Repo) Auth (List Json)
@@ -343,23 +386,38 @@ storeSessionsPrune now (Store blocks repo (Auth secret credential sessions) pref
 -- keeps its own blocks and is not counted here.
 export
 storeSize : Store -> Int
-storeSize (Store (BlobHalf blocks _) _ _ _) = blockStoreSize blocks
+storeSize (Store (BlobHalf blocks _ _) _ _ _) = blockStoreSize blocks
+
+{- | The total length of the distinct blobs the blob half holds, without
+   walking one of them.
+
+   `storeBlobEntries` answers the same question by handing back a copy of
+   every blob in the account, so an upload graded against a per-account byte
+   cap would otherwise read the whole account to decide one request. -}
+export
+storeBlobBytes : Store -> Int
+storeBlobBytes (Store (BlobHalf _ _ total) _ _ _) = total
+
+-- | Whether the blob half already holds a blob, without copying its bytes.
+export
+storeHasBlob : Cid -> Store -> Bool
+storeHasBlob cid (Store (BlobHalf blocks _ _) _ _ _) = blockStoreHas cid blocks
 
 -- | Look up a blob-half block, returning a defensive copy.
 export
 storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store (BlobHalf blocks _) _ _ _) = blockStoreGet cid blocks
+storeGet cid (Store (BlobHalf blocks _ _) _ _ _) = blockStoreGet cid blocks
 
 -- | Verify and immutably insert a blob-half block, returning the successor
 -- store. No MIME type is recorded — this is the byte-only primitive
--- `storePutBlob` is built on. The repository half is carried through
--- unchanged.
+-- `storePutBlob` is built on, and a type already declared for these bytes is
+-- kept rather than erased. The repository half is carried through unchanged.
 export
 storePut : Cid -> Array Int -> Store -> Result String Store
-storePut cid bytes (Store (BlobHalf blocks mimeTypes) repo auth prefs) =
+storePut cid bytes (Store half repo auth prefs) =
   map
-    (next => Store (BlobHalf next mimeTypes) repo auth prefs)
-    (blockStorePut cid bytes blocks)
+    (next => Store next repo auth prefs)
+    (blobHalfPut cid (declaredTypeOf cid half) bytes half)
 
 -- | Verify and immutably insert a blob-half block together with its declared
 -- MIME type, returning the successor store. `pds/lib/blob.mdk`'s `admitBlob`
@@ -367,29 +425,25 @@ storePut cid bytes (Store (BlobHalf blocks mimeTypes) repo auth prefs) =
 -- records what it already admitted.
 export
 storePutBlob : Cid -> String -> Array Int -> Store -> Result String Store
-storePutBlob cid mimeType bytes (Store (BlobHalf blocks mimeTypes) repo auth prefs) =
+storePutBlob cid mimeType bytes (Store half repo auth prefs) =
   map
-    (next =>
-      Store
-        (BlobHalf next (set (cidToString cid) mimeType mimeTypes))
-        repo
-        auth
-        prefs)
-    (blockStorePut cid bytes blocks)
+    (next => Store next repo auth prefs)
+    (blobHalfPut cid (Some mimeType) bytes half)
 
 -- | The declared MIME type of a blob-half entry inserted via `storePutBlob`,
 -- or `None` when the CID is absent (or was inserted through the byte-only
 -- `storePut`, which no route uses).
 export
 storeBlobMimeType : Cid -> Store -> Option String
-storeBlobMimeType cid (Store (BlobHalf _ mimeTypes) _ _ _) =
-  get (cidToString cid) mimeTypes
+storeBlobMimeType cid (Store half _ _ _) = declaredTypeOf cid half
 
 -- | Every distinct verified block in the blob half, CID-sorted and
--- defensively copied — the primitive `sync.listBlobs` wraps.
+-- defensively copied, byte payload included. No route calls this — every
+-- caller that only needs names or a byte total reaches for
+-- `storeBlobCids`/`storeBlobCidTexts`/`storeBlobBytes` instead.
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
-storeBlobEntries (Store (BlobHalf blocks _) _ _ _) = blockStoreEntries blocks
+storeBlobEntries (Store (BlobHalf blocks _ _) _ _ _) = blockStoreEntries blocks
 
 {- | Every distinct verified CID in the blob half, in canonical CID order and
    carrying no bytes — what `sync.listBlobs` pages over.
@@ -399,7 +453,18 @@ storeBlobEntries (Store (BlobHalf blocks _) _ _ _) = blockStoreEntries blocks
    the whole blob half. -}
 export
 storeBlobCids : Store -> List Cid
-storeBlobCids (Store (BlobHalf blocks _) _ _ _) = blockStoreCids blocks
+storeBlobCids (Store (BlobHalf blocks _ _) _ _ _) = blockStoreCids blocks
+
+{- | Every distinct blob's base32 CID TEXT, ascending in that text's own
+   order and carrying no bytes — what a cursor compared as base32 text pages
+   over.
+
+   `storeBlobCids` answers the same question in `lib.blockstore`'s key order,
+   which is the hex of the raw CID bytes; the two orders disagree, so a pager
+   holding a base32 cursor has to sort that one and cannot sort this one. -}
+export
+storeBlobCidTexts : Store -> List String
+storeBlobCidTexts (Store (BlobHalf _ index _) _ _ _) = keys index
 
 {- | The blob half's declared-type index: every CID text that has a declared
    MIME type, paired with it, in CID-text order and carrying no bytes.
@@ -412,4 +477,15 @@ storeBlobCids (Store (BlobHalf blocks _) _ _ _) = blockStoreCids blocks
    module exposes no way to remove one. -}
 export
 storeBlobMimeIndex : Store -> List (String, String)
-storeBlobMimeIndex (Store (BlobHalf _ mimeTypes) _ _ _) = entries mimeTypes
+storeBlobMimeIndex (Store (BlobHalf _ index _) _ _ _) =
+  declaredPairs (entries index)
+
+-- The declared-type index's rows that HAVE a declared type, in the index's
+-- own order. A blob inserted through the byte-only `storePut` has none and
+-- contributes no row, so the result is the same pairing a store that records
+-- types only on the typed insert would hold.
+declaredPairs : List (String, (Cid, Option String)) -> List (String, String)
+declaredPairs [] = []
+declaredPairs ((key, (_, declared)) :: rest) = match declared
+  Some mimeType => (key, mimeType) :: declaredPairs rest
+  None => declaredPairs rest
