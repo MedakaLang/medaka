@@ -17,6 +17,14 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "gzip/lib/inflate.mdk"
+count = 10
+
+[[entry]]
+file = "gzip/lib/container.mdk"
+count = 2
+
+[[entry]]
 file = "gzip/lib/huffman.mdk"
 count = 50
 
