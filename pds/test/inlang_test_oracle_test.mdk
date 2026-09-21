@@ -303,10 +303,10 @@ runLibSuite dir name =
 {- | The key one `libSuites` row is stored and looked up under.
 
    The roster spans two directories, so a bare module name is not a key: the
-   day `pds/lib/foo.mdk` and `pds/shell/foo.mdk` both exist, one row's
-   result silently answers for the other's floor and both `test` blocks read
-   as covered ([T-GLOBAL-TABLE]). Qualifying by directory makes the key as
-   specific as the file it names. -}
+   day a module named `foo` exists under both `pds/lib` and `pds/shell`, one
+   row's result silently answers for the other's floor and both `test`
+   blocks read as covered ([T-GLOBAL-TABLE]). Qualifying by directory makes
+   the key as specific as the file it names. -}
 libKeyOf : String -> String -> String
 libKeyOf dir name = "\{dir}/\{name}"
 
