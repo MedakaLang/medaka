@@ -113,6 +113,13 @@ public export data ResError =
   -- the message is a static how-to (ERROR-QUALITY: point at the fix, not a
   -- guess).
   | UnboundVariableIsModule String (Option Loc)
+  -- an alias-qualified reference (`Alias.name`) that fails to resolve, while the
+  -- BARE suffix `name` resolves elsewhere in scope (the prelude, or another
+  -- module) — the aliased module supplies an `impl` for that method but does
+  -- not itself define or re-export it, and `Alias.name` only binds names the
+  -- aliased module defines/re-exports itself (#1287). Fields: full qualified
+  -- name, alias, bare member name.
+  | UnboundQualifiedElsewhere String String String (Option Loc)
   -- trailing `Option String` = suggested constructor name: today ONLY a
   -- curated Haskell-alias exact match (`Just`→`Some`, …; see
   -- `haskellCtorAliases`), None otherwise — there is no general edit-distance
@@ -235,6 +242,7 @@ resErrorLoc : ResError -> Option Loc
 resErrorLoc (UnboundVariable _ l _) = l
 resErrorLoc (UnboundVariableExported _ _ l) = l
 resErrorLoc (UnboundVariableIsModule _ l) = l
+resErrorLoc (UnboundQualifiedElsewhere _ _ _ l) = l
 resErrorLoc (UnknownConstructor _ l _) = l
 resErrorLoc (UnknownType _ l _) = l
 resErrorLoc (UnknownEffect _ l) = l
@@ -785,14 +793,24 @@ checkVar cur env scope n
 -- already-imported module (audit #5 — the user needs a selective import, not
 -- a typo fix), report that specifically; otherwise fall back to the generic
 -- edit-distance/Haskell-alias UnboundVariable suggestion.
+-- An alias-qualified reference (`Alias.name`) has no unqualified spelling of
+-- its own — it only ever reaches `checkVar` as a joined "\{alias}.\{name}"
+-- string via `qualifiedLocal` (importedNamesMM's UseAlias arm) — so a SINGLE
+-- dot reliably marks one.  When the bare suffix resolves (the prelude, or
+-- another module) but the qualified form doesn't, the aliased module simply
+-- doesn't define/re-export that name itself (#1287); that is a more specific
+-- diagnosis than the generic UnboundVariable fallback below.
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
-unboundVarErrors cur env scope n = match modulesExportingName env n
-  m :: _ => [UnboundVariableExported n m cur]
-  [] =>
-    if isImportedModuleName env n then
-      [UnboundVariableIsModule n cur]
-    else
-      [UnboundVariable n cur (suggestName env scope n)]
+unboundVarErrors cur env scope n = match splitOnChar '.' n
+  [alias, bare] if lookupValue env scope bare =>
+    [UnboundQualifiedElsewhere n alias bare cur]
+  _ => match modulesExportingName env n
+    m :: _ => [UnboundVariableExported n m cur]
+    [] =>
+      if isImportedModuleName env n then
+        [UnboundVariableIsModule n cur]
+      else
+        [UnboundVariable n cur (suggestName env scope n)]
 
 -- module ids (of modules this file already imports) that export `n` as a
 -- value — deliberately NOT scope/local-shadow aware, since `unboundVarErrors`
@@ -2307,6 +2325,8 @@ resErrorSexp (UnboundVariableExported n m _) =
   "(UnboundVariableExported \{escStr n} \{escStr m})"
 resErrorSexp (UnboundVariableIsModule n _) =
   "(UnboundVariableIsModule \{escStr n})"
+resErrorSexp (UnboundQualifiedElsewhere n a b _) =
+  "(UnboundQualifiedElsewhere \{escStr n} \{escStr a} \{escStr b})"
 resErrorSexp (UnknownConstructor n _ _) =
   "(UnknownConstructor " ++ escStr n ++ ")"
 -- NOTE: the suggestion field is deliberately NOT serialized here either (mirrors
@@ -2424,6 +2444,8 @@ ppResError (UnboundVariableIsModule n _) =
   "Unbound variable: \{n}. '\{n}' is an imported module, not a value — a bare "
     ++ "'import \{n}' binds no names. Bind what you need: 'import \{n}.{name, "
     ++ "...}', or 'import \{n} as M' then 'M.name'"
+ppResError (UnboundQualifiedElsewhere n a b _) =
+  "Unbound variable: \{n}. '\{b}' is not defined (or re-exported) by the module aliased as '\{a}' — it resolves unqualified, from elsewhere (the prelude, or another module). An alias only qualifies names the aliased module itself defines or re-exports, not a name it merely has an `impl` for. Call it unqualified as '\{b}', or alias the module that actually defines it"
 ppResError (UnknownConstructor n _ s) = match s
   Some sug =>
     "Unknown constructor: \{n}. Did you mean '\{sug}'" ++ haskellNote n sug
@@ -2469,7 +2491,7 @@ ppResError (DuplicateSignature n _ None) =
 ppResError (DuplicateBinder k n _) =
   "Duplicate binder: '\{n}' is bound more than once in this \{k}. Each binder must be distinct — rename one occurrence"
 ppResError (AmbiguousOccurrence n mods _) =
-  "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase mods}. Qualify, or select with `import <mod>.{\{n}}`"
+  "Ambiguous occurrence: '\{n}' is exported by \{ambigModPhrase mods}. Qualify, or import it under a new name from one module: `import <mod>.{\{n} as <alias>}` — a plain `import <mod>.{\{n}}` still collides with the other module's wildcard import"
 -- No `Type.\{n}` spelling exists (a qualified constructor is a parse error), so the
 -- fix is a selective import of ONE owning type: `import <mod>.{T(..)}` — bringing in
 -- only that module's constructors — with the other left as a bare `import <mod>` (or
@@ -2512,6 +2534,7 @@ resErrorCode : ResError -> String
 resErrorCode (UnboundVariable _ _ _) = "R-UNBOUND"
 resErrorCode (UnboundVariableExported _ _ _) = "R-UNBOUND"
 resErrorCode (UnboundVariableIsModule _ _) = "R-UNBOUND"
+resErrorCode (UnboundQualifiedElsewhere _ _ _ _) = "R-UNBOUND"
 resErrorCode (UnknownConstructor _ _ _) = "R-UNKNOWN-CTOR"
 resErrorCode (UnknownType _ _ _) = "R-UNKNOWN-TYPE"
 resErrorCode (UnknownEffect _ _) = "R-UNKNOWN-EFFECT"
