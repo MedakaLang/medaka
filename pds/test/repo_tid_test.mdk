@@ -2,7 +2,7 @@
    Protocol answer bytes remain only in the provenance-ledgered corpus. -}
 
 import string.{contains}
-import test.{expectEach, expectEqual, expectOkThen, expectTrue}
+import test.{expectEach, expectEqual, expectFalse, expectOkThen, expectTrue}
 import lib.nsid.{validateNsid}
 import lib.repo.{repoInitFromKeyBytes}
 import lib.tid.{
@@ -59,19 +59,34 @@ test "TID monotonic next preserves a newer proposal" =
     (map tidToString (tidNext prior 1700000000000100 11))
     (map tidToString (tidEncode 1700000000000100 11))
 
-test "TID parser rejects length alphabet high bit and range" =
-  expectTrue
-    (errContains "13" (tidParse "3ke6kg3wk222")
-      && errContains "alphabet" (tidParse "3ke6kg3wk2220")
-      && errContains "high bit" (tidParse "k222222222222")
-      && errContains "53-bit" (tidParse "c222222222222"))
+test "TID parser rejects length alphabet high bit and range" = expectEach [
+  (
+    "a 12-character TID is rejected for its length",
+    expectTrue (errContains "13" (tidParse "3ke6kg3wk222")),
+  ),
+  (
+    "a character outside the base32-sortable alphabet is rejected",
+    expectTrue (errContains "alphabet" (tidParse "3ke6kg3wk2220")),
+  ),
+  (
+    "a leading character with the high bit set is rejected",
+    expectTrue (errContains "high bit" (tidParse "k222222222222")),
+  ),
+  (
+    "a timestamp past 53 bits is rejected",
+    expectTrue (errContains "53-bit" (tidParse "c222222222222")),
+  ),
+]
 
-test "TID encoder rejects timestamp and clock ranges" =
-  expectTrue
-    (isErr (tidEncode (-1) 0)
-      && isErr (tidEncode 9007199254740992 0)
-      && isErr (tidEncode 0 (-1))
-      && isErr (tidEncode 0 1024))
+test "TID encoder rejects timestamp and clock ranges" = expectEach [
+  ("a negative timestamp is rejected", expectTrue (isErr (tidEncode (-1) 0))),
+  (
+    "a timestamp past 2^53 is rejected",
+    expectTrue (isErr (tidEncode 9007199254740992 0)),
+  ),
+  ("a negative clock id is rejected", expectTrue (isErr (tidEncode 0 (-1)))),
+  ("a clock id past 10 bits is rejected", expectTrue (isErr (tidEncode 0 1024))),
+]
 
 test "repository rejects invalid DID before signing" =
   expectTrue
@@ -85,7 +100,14 @@ test "repository rejects invalid signing key before commit construction" =
       "bad signing key"
       (repoInitFromKeyBytes "did:plc:medaka" (arrayMake 32 0) (mustTid 1 0)))
 
-test "shared generic NSID authority accepts uppercase while retaining lowercase form" =
-  expectTrue
-    (not (isErr (validateNsid "Com.AtProto.test"))
-      && not (isErr (validateNsid "com.atproto.test")))
+test "shared generic NSID authority accepts uppercase while retaining lowercase form" = expectEach
+  [
+    (
+      "a mixed-case authority is accepted",
+      expectFalse (isErr (validateNsid "Com.AtProto.test")),
+    ),
+    (
+      "the lowercase spelling is still accepted",
+      expectFalse (isErr (validateNsid "com.atproto.test")),
+    ),
+  ]

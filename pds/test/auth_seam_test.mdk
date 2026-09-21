@@ -474,10 +474,16 @@ test "a public route answers with no credential at all" = expectEach [
 test "a public route still answers when a good token IS presented" =
   expectEqual (openWith (bearer goodToken)) accountDidText
 
-test "a public route is not closed by an unusable token" =
-  expectTrue
-    (openStatusWith (bearer expiredToken) == "200"
-      && openWith (bearer expiredToken) == "anonymous")
+test "a public route is not closed by an unusable token" = expectEach [
+  (
+    "the public route still answers 200",
+    expectEqual "200" (openStatusWith (bearer expiredToken)),
+  ),
+  (
+    "the caller is seen as anonymous rather than authenticated",
+    expectEqual "anonymous" (openWith (bearer expiredToken)),
+  ),
+]
 
 -- ── the real registry ───────────────────────────────────────────────────────
 

@@ -9,7 +9,9 @@ import test.{
   expectFalse,
   expectGreaterThan,
   expectNotEqual,
+  expectSatisfies,
   expectTrue,
+  fail,
 }
 import frontend.ast.{
   Decl(..), EvId(..), EvVal(..), Expr(..), Loc(..), Route(..), TyConOrigin(..)
@@ -483,7 +485,7 @@ test "finalized scheme queries drain numeric predicates on cold and keyed calls"
   expectEach [
     (
       "a failing declaration produces at least one error",
-      expectTrue (listLen failedErrors > 0),
+      expectGreaterThan 0 (listLen failedErrors),
     ),
     (
       "each query keeps a distinct Num slot",
@@ -645,7 +647,7 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
     ("repeated == afterFailure", expectEqual repeated afterFailure),
     (
       "a failing declaration produces at least one error code",
-      expectTrue (listLen failed > 0),
+      expectGreaterThan 0 (listLen failed),
     ),
     (
       "arithmeticErrorCodes' bindings for the cold query",
@@ -986,7 +988,7 @@ test "declared numeric result retains its quantifier and given at finalized quer
     ("repeated == afterFailure", expectEqual repeated afterFailure),
     (
       "a failing declaration produces at least one error",
-      expectTrue (listLen failed > 0),
+      expectGreaterThan 0 (listLen failed),
     ),
   ]
 
@@ -1436,6 +1438,15 @@ test "ordinary return shares declaration identity vector and goal destination" =
   let goals = map methodTraceGoalText trace
   let aggregate = map evIdText (methodEvInDecls "choose" typed)
   let wanted = map methodWantedView trace
+  let goalDiffers = match (goals, aggregate)
+    (goal :: _, Some methodGoal) => expectNotEqual methodGoal goal
+    _ => fail "expected at least one goal and an aggregate method-level goal"
+  let goalsAgree = match goals
+    first :: second :: third :: [] => expectEach [
+      ("the first and second goals agree", expectEqual first second),
+      ("the second and third goals agree", expectEqual second third),
+    ]
+    _ => fail "expected exactly three return goals in the trace"
   expectEach [
     (
       "trace stages are Produced, Checked, Stamped",
@@ -1459,18 +1470,8 @@ test "ordinary return shares declaration identity vector and goal destination" =
         [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
         (map methodTraceArgs trace),
     ),
-    (
-      "all three goals agree",
-      expectTrue (match goals
-        first :: second :: third :: [] => first == second && second == third
-        _ => False),
-    ),
-    (
-      "the goal differs from the aggregate method-level goal",
-      expectTrue (match (goals, aggregate)
-        (goal :: _, Some methodGoal) => goal /= methodGoal
-        _ => False),
-    ),
+    ("all three goals agree", goalsAgree),
+    ("the goal differs from the aggregate method-level goal", goalDiffers),
     (
       "every clause published exactly one outcome",
       expectEqual [True, True, True] (map methodTracePublishedOne trace),
@@ -2058,7 +2059,7 @@ test "ordinary return traces are fresh while cache hits replay no events" =
     ("first == afterFailure", expectEqual first afterFailure),
     (
       "a failing declaration produces at least one error",
-      expectTrue (listLen failedErrors > 0),
+      expectGreaterThan 0 (listLen failedErrors),
     ),
     (
       "cold is a fresh 0-error trace",
@@ -2186,6 +2187,59 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
   let coldInstance = returnMemoMethod "cachedChoose" cold
   let changedInstance = returnMemoMethod "cachedChoose" changed
   let coldGiven = returnMemoMethod "hidden" cold
+  let instancesDiffer = match (coldInstance, changedInstance)
+    (Some before, Some after) => expectEach [
+      (
+        "the cold request recorded an instance",
+        expectEqual "instance" before.mrmvOutcome,
+      ),
+      (
+        "the changed request recorded an instance",
+        expectEqual "instance" after.mrmvOutcome,
+      ),
+      (
+        "the cold instance's prerequisite is Need Int",
+        expectEqual
+          [("return_memo_prefix::Need", ["Int"])]
+          before.mrmvPrerequisites,
+      ),
+      (
+        "the changed instance's prerequisite is Need Bool",
+        expectEqual
+          [("return_memo_prefix::Need", ["Bool"])]
+          after.mrmvPrerequisites,
+      ),
+      (
+        "the cold instance published its evidence",
+        expectNotEqual "unpublished" before.mrmvEvidence,
+      ),
+      (
+        "the changed instance published its evidence",
+        expectNotEqual "unpublished" after.mrmvEvidence,
+      ),
+      (
+        "the two instances rest on different evidence",
+        expectNotEqual before.mrmvEvidence after.mrmvEvidence,
+      ),
+    ]
+    _ => fail "expected both requests to record a cachedChoose memo"
+  let givenMemo = match coldGiven
+    Some given => expectEach [
+      (
+        "the given memo's method arguments are a, a",
+        expectEqual (Some ["a", "a"]) given.mrmvArguments,
+      ),
+      (
+        "it was resolved as a given, not an instance",
+        expectEqual "given" given.mrmvOutcome,
+      ),
+      ("it carries no prerequisites", expectEqual [] given.mrmvPrerequisites),
+      (
+        "it published its evidence",
+        expectNotEqual "unpublished" given.mrmvEvidence,
+      ),
+    ]
+    _ => fail "expected a return memo for the given method 'hidden'"
   expectEach [
     ("cold has no errors", expectEqual 0 (returnMemoErrorCount cold)),
     ("cold == hit", expectEqual cold hit),
@@ -2194,11 +2248,11 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
     ("cold == backToP", expectEqual cold backToP),
     (
       "a failing entry produces at least one error",
-      expectTrue (returnMemoErrorCount failed > 0),
+      expectGreaterThan 0 (returnMemoErrorCount failed),
     ),
     (
       "a conflicting prefix produces at least one error",
-      expectTrue (returnMemoErrorCount conflict > 0),
+      expectGreaterThan 0 (returnMemoErrorCount conflict),
     ),
     (
       "the changed request re-derives with no errors",
@@ -2212,32 +2266,15 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
     ),
     (
       "a stale prefix re-derives rather than replaying the cache",
-      expectTrue (forcedStale /= changed),
+      expectNotEqual changed forcedStale,
     ),
     (
       "cold and changed instances have distinct prerequisites and evidence",
-      expectTrue (match (coldInstance, changedInstance)
-        (Some before, Some after) =>
-          before.mrmvOutcome == "instance"
-            && after.mrmvOutcome == "instance"
-            && before.mrmvPrerequisites
-              == [("return_memo_prefix::Need", ["Int"])]
-            && after.mrmvPrerequisites
-              == [("return_memo_prefix::Need", ["Bool"])]
-            && before.mrmvEvidence /= "unpublished"
-            && after.mrmvEvidence /= "unpublished"
-            && before.mrmvEvidence /= after.mrmvEvidence
-        _ => False),
+      instancesDiffer,
     ),
     (
       "the given memo carries the expected arguments and no prerequisites",
-      expectTrue (match coldGiven
-        Some given =>
-          given.mrmvArguments == Some ["a", "a"]
-            && given.mrmvOutcome == "given"
-            && given.mrmvPrerequisites == []
-            && given.mrmvEvidence /= "unpublished"
-        None => False),
+      givenMemo,
     ),
     (
       "mutation probe reports (True, True, True)",
@@ -2423,7 +2460,13 @@ test "block recursive Core keeps dictionary methods inside the captured closure"
     ("the bind matches the block-recursive shape", expectTrue shape),
     ("exactly one add route", expectEqual 1 (listLen addRoutes)),
     ("add routes == fromInt routes", expectEqual addRoutes fromIntRoutes),
-    ("no route is the empty string", expectFalse (contains "" addRoutes)),
+    (
+      "no route is the empty string",
+      expectSatisfies
+        "no route to be empty"
+        (rs => not (contains "" rs))
+        addRoutes,
+    ),
     ("no primitive-dispatch fallback", expectEqual 0 primCount),
   ]
 
@@ -2457,7 +2500,13 @@ test "nested lambda-group Core keeps dictionary dispatch in the group member" =
   expectEach [
     ("the bind matches the nested lambda-group shape", expectTrue shape),
     ("exactly one add route", expectEqual 1 (listLen addRoutes)),
-    ("no route is the empty string", expectFalse (contains "" addRoutes)),
+    (
+      "no route is the empty string",
+      expectSatisfies
+        "no route to be empty"
+        (rs => not (contains "" rs))
+        addRoutes,
+    ),
     ("no fromInt routes", expectEqual [] fromIntRoutes),
     ("no primitive-dispatch fallback", expectEqual 0 primCount),
   ]

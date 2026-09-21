@@ -161,45 +161,80 @@ test "§5.7: a single-frame masked text message" =
 test "§5.7: a fragmented unmasked text message, both frames" =
   let first = encodeServerFrame (Frame False Text (toUtf8 "Hel"))
   let second = encodeServerFrame (Frame True Continuation (toUtf8 "lo"))
-  expectTrue
-    (first == [|0x01, 0x03, 0x48, 0x65, 0x6c|]
-      && second == [|0x80, 0x02, 0x6c, 0x6f|])
+  expectEach [
+    (
+      "the opening frame is a non-final text frame carrying \"Hel\"",
+      expectEqual [|0x01, 0x03, 0x48, 0x65, 0x6c|] first,
+    ),
+    (
+      "the closing frame is a final continuation frame carrying \"lo\"",
+      expectEqual [|0x80, 0x02, 0x6c, 0x6f|] second,
+    ),
+  ]
 
 test "§5.7: an unmasked Ping request and a masked Pong response" =
   let ping = encodeServerFrame (Frame True Ping hello)
   let pong = encodeClientFrame sampleMaskKey (Frame True Pong hello)
-  expectTrue
-    (ping == [|0x89, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
-      && pong
-        == [|0x8a, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|])
+  expectEach [
+    (
+      "the server's Ping goes out unmasked",
+      expectEqual [|0x89, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|] ping,
+    ),
+    (
+      "the client's Pong goes out masked with the sample key",
+      expectEqual
+        [|0x8a, 0x85, 0x37, 0xfa, 0x21, 0x3d, 0x7f, 0x9f, 0x4d, 0x51, 0x58|]
+        pong,
+    ),
+  ]
 
 -- The two extended-length examples state a header and leave the payload
 -- unspecified, so these grade the header and the total length.
 test "§5.7: 256 bytes of binary in one unmasked frame uses the 16-bit length" =
   let body = make 256 0x61
   let wire = encodeServerFrame (Frame True Binary body)
-  expectTrue
-    (arrayLength wire == 4 + 256
-      && wire[0] == 0x82
-      && wire[1] == 0x7e
-      && wire[2] == 0x01
-      && wire[3] == 0x00)
+  expectEach [
+    (
+      "the frame is a 4-byte header plus the payload",
+      expectEqual (4 + 256) (arrayLength wire),
+    ),
+    ("the first byte marks a final binary frame", expectEqual 0x82 wire[0]),
+    (
+      "the second byte selects the 16-bit length form",
+      expectEqual 0x7e wire[1],
+    ),
+    (
+      "the 16-bit length's high byte carries the 0x01 of 256",
+      expectEqual 0x01 wire[2],
+    ),
+    ("the 16-bit length's low byte is zero", expectEqual 0x00 wire[3]),
+  ]
 
 test "§5.7: 64KiB of binary in one unmasked frame uses the 64-bit length" =
   let body = make 65536 0x62
   let wire = encodeServerFrame (Frame True Binary body)
-  expectTrue
-    (arrayLength wire == 10 + 65536
-      && wire[0] == 0x82
-      && wire[1] == 0x7f
-      && wire[2] == 0x00
-      && wire[3] == 0x00
-      && wire[4] == 0x00
-      && wire[5] == 0x00
-      && wire[6] == 0x00
-      && wire[7] == 0x01
-      && wire[8] == 0x00
-      && wire[9] == 0x00)
+  expectEach [
+    (
+      "the frame is a 10-byte header plus the payload",
+      expectEqual (10 + 65536) (arrayLength wire),
+    ),
+    ("the first byte marks a final binary frame", expectEqual 0x82 wire[0]),
+    (
+      "the second byte selects the 64-bit length form",
+      expectEqual 0x7f wire[1],
+    ),
+    ("the 64-bit length's byte 1 is zero", expectEqual 0x00 wire[2]),
+    ("the 64-bit length's byte 2 is zero", expectEqual 0x00 wire[3]),
+    ("the 64-bit length's byte 3 is zero", expectEqual 0x00 wire[4]),
+    ("the 64-bit length's byte 4 is zero", expectEqual 0x00 wire[5]),
+    ("the 64-bit length's byte 5 is zero", expectEqual 0x00 wire[6]),
+    (
+      "the 64-bit length's byte 6 carries the 0x01 of 65536",
+      expectEqual 0x01 wire[7],
+    ),
+    ("the 64-bit length's byte 7 is zero", expectEqual 0x00 wire[8]),
+    ("the 64-bit length's byte 8 is zero", expectEqual 0x00 wire[9]),
+  ]
 
 -- # Frame decoding — RFC 6455 §5.7's own bytes, read back
 
@@ -214,7 +249,7 @@ test "§5.7's masked text frame decodes to an unmasked \"Hello\"" =
   match decodedAs (decodeFrame FromClient maxPayload maskedHelloWire 0)
     None => expectTrue False
     Some (fin, opcode, payload, consumed) => expectEach [
-      ("fin", expectTrue fin),
+      ("the frame is final", expectTrue fin),
       ("opcode == Text", expectEqual Text opcode),
       ("fromUtf8 payload == \"Hello\"", expectEqual "Hello" (fromUtf8 payload)),
       ("consumed == 11", expectEqual 11 consumed),
@@ -224,7 +259,7 @@ test "§5.7's unmasked text frame decodes on the server-to-client side" =
   match decodedAs (decodeFrame FromServer maxPayload unmaskedHelloWire 0)
     None => expectTrue False
     Some (fin, opcode, payload, consumed) => expectEach [
-      ("fin", expectTrue fin),
+      ("the frame is final", expectTrue fin),
       ("opcode == Text", expectEqual Text opcode),
       ("fromUtf8 payload == \"Hello\"", expectEqual "Hello" (fromUtf8 payload)),
       ("consumed == 7", expectEqual 7 consumed),
@@ -267,7 +302,7 @@ test "a 16-bit-length frame this module encoded decodes back to its payload" =
   match decodedAs (decodeFrame FromServer maxPayload wire 0)
     None => expectTrue False
     Some (fin, opcode, payload, consumed) => expectEach [
-      ("fin", expectTrue fin),
+      ("the frame is final", expectTrue fin),
       ("opcode == Binary", expectEqual Binary opcode),
       ("payload == body", expectEqual body payload),
       ("consumed == arrayLength wire", expectEqual (arrayLength wire) consumed),
@@ -384,7 +419,7 @@ test "a 16-bit length field with only one of its two bytes needs more" =
 test "a close frame carries its status code big-endian, then the reason" =
   match closeFrame 1000 "bye"
     Frame fin opcode payload => expectEach [
-      ("fin", expectTrue fin),
+      ("the frame is final", expectTrue fin),
       ("opcode == Close", expectEqual Close opcode),
       (
         "payload == big-endian code + reason",

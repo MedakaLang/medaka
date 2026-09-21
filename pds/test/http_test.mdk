@@ -52,7 +52,15 @@ import http.{
   scanRequestBoundaryWithin,
   serializeResponse,
 }
-import test.{expectEach, expectEqual, expectOkThen, expectTrue}
+import test.{
+  expectEach,
+  expectEqual,
+  expectErr,
+  expectFalse,
+  expectOk,
+  expectOkThen,
+  expectTrue,
+}
 import bytes as B
 import bytes.{Bytes, encodeUtf8, fromArray}
 import string.{contains, toUtf8}
@@ -125,20 +133,42 @@ chunked =
 
 test "origin-form HTTP/1.1 request parses without a body" =
   let request = mustRequest simpleGet
-  expectTrue
-    (requestMethod request == "GET"
-      && requestTarget request
-        == "/xrpc/com.atproto.server.describeServer?detail=true"
-      && B.length (requestBody request) == 0
-      && requestKeepAlive request)
+  expectEach [
+    ("the method is GET", expectEqual "GET" (requestMethod request)),
+    (
+      "the target keeps its path and query verbatim",
+      expectEqual
+        "/xrpc/com.atproto.server.describeServer?detail=true"
+        (requestTarget request),
+    ),
+    (
+      "the request carries no body",
+      expectEqual 0 (B.length (requestBody request)),
+    ),
+    (
+      "the connection stays alive by default",
+      expectTrue (requestKeepAlive request),
+    ),
+  ]
 
 test "fixed-length framing preserves raw binary body and ordered duplicates" =
   let request = mustRequest fixedBinary
-  expectTrue
-    (requestBody request == mustBytes [|0, 128, 255|]
-      && names (requestHeaders request)
-        == ["host", "content-length", "connection", "x-repeat", "x-repeat"]
-      && not (requestKeepAlive request))
+  expectEach [
+    (
+      "the binary body survives byte for byte",
+      expectEqual (mustBytes [|0, 128, 255|]) (requestBody request),
+    ),
+    (
+      "the header names keep their order, repeats included",
+      expectEqual
+        ["host", "content-length", "connection", "x-repeat", "x-repeat"]
+        (names (requestHeaders request)),
+    ),
+    (
+      "the close token ends the connection",
+      expectFalse (requestKeepAlive request),
+    ),
+  ]
 
 test "header accessors return trimmed field bytes" =
   let request =
@@ -151,10 +181,17 @@ test "header accessors return trimmed field bytes" =
 
 test "chunked framing accepts extensions and ordered trailers" =
   let request = mustRequest chunked
-  expectTrue
-    (requestBody request == encodeUtf8 "Wikipedia"
-      && names (requestTrailers request) == ["x-checksum"]
-      && requestKeepAlive request)
+  expectEach [
+    (
+      "the chunks reassemble to the whole body",
+      expectEqual (encodeUtf8 "Wikipedia") (requestBody request),
+    ),
+    (
+      "the trailer section is preserved",
+      expectEqual ["x-checksum"] (names (requestTrailers request)),
+    ),
+    ("the connection stays alive", expectTrue (requestKeepAlive request)),
+  ]
 
 test "Connection close token matching is case-insensitive and comma aware" =
   let request =
@@ -357,15 +394,25 @@ test "fragment in request target is rejected" =
       "origin-form"
       (encodeUtf8 "GET /x#fragment HTTP/1.1\r\nHost: pds.example\r\n\r\n"))
 
-test "request target rejects raw braces and preserves percent-encoded braces" =
-  expectTrue
-    (rejects
-        "origin-form"
-        (encodeUtf8 "GET /x?value={bad} HTTP/1.1\r\nHost: pds.example\r\n\r\n")
-      && isOk
-        (parseRequest
+test "request target rejects raw braces and preserves percent-encoded braces" = expectEach
+  [
+    (
+      "a raw brace in the query is rejected",
+      expectTrue
+        (rejects
+          "origin-form"
           (encodeUtf8
-            "GET /x?value=%7Bgood%7D HTTP/1.1\r\nHost: pds.example\r\n\r\n")))
+            "GET /x?value={bad} HTTP/1.1\r\nHost: pds.example\r\n\r\n")),
+    ),
+    (
+      "the percent-encoded spelling of the same query is accepted",
+      expectTrue
+        (isOk
+          (parseRequest
+            (encodeUtf8
+              "GET /x?value=%7Bgood%7D HTTP/1.1\r\nHost: pds.example\r\n\r\n"))),
+    ),
+  ]
 
 test "HTTP/1.0 is rejected" =
   expectTrue
@@ -373,14 +420,22 @@ test "HTTP/1.0 is rejected" =
       "only HTTP/1.1"
       (encodeUtf8 "GET / HTTP/1.0\r\nHost: pds.example\r\n\r\n"))
 
-test "HTTP protocol name is case-sensitive" =
-  expectTrue
-    (rejects
+test "HTTP protocol name is case-sensitive" = expectEach [
+  (
+    "an all-lowercase protocol name is rejected",
+    expectTrue
+      (rejects
         "only HTTP/1.1"
-        (encodeUtf8 "GET / http/1.1\r\nHost: pds.example\r\n\r\n")
-      && rejects
+        (encodeUtf8 "GET / http/1.1\r\nHost: pds.example\r\n\r\n")),
+  ),
+  (
+    "a title-case protocol name is rejected",
+    expectTrue
+      (rejects
         "only HTTP/1.1"
-        (encodeUtf8 "GET / Http/1.1\r\nHost: pds.example\r\n\r\n"))
+        (encodeUtf8 "GET / Http/1.1\r\nHost: pds.example\r\n\r\n")),
+  ),
+]
 
 test "missing Host is rejected" =
   expectTrue (rejects "exactly one Host" (encodeUtf8 "GET / HTTP/1.1\r\n\r\n"))
@@ -391,25 +446,45 @@ test "duplicate Host is rejected" =
       "exactly one Host"
       (encodeUtf8 "GET / HTTP/1.1\r\nHost: one\r\nHost: two\r\n\r\n"))
 
-test "Host requires a syntactically valid authority" =
-  expectTrue
-    (rejects
+test "Host requires a syntactically valid authority" = expectEach [
+  (
+    "a Host with a space is rejected",
+    expectTrue
+      (rejects
         "valid authority"
-        (encodeUtf8 "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n")
-      && rejects
+        (encodeUtf8 "GET / HTTP/1.1\r\nHost: bad host\r\n\r\n")),
+  ),
+  (
+    "a Host with a non-numeric port is rejected",
+    expectTrue
+      (rejects
         "valid authority"
-        (encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example:not-a-port\r\n\r\n")
-      && isOk
+        (encodeUtf8 "GET / HTTP/1.1\r\nHost: pds.example:not-a-port\r\n\r\n")),
+  ),
+  (
+    "a bracketed IPv6 literal with a port is accepted",
+    expectTrue
+      (isOk
         (parseRequest
-          (encodeUtf8 "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n")))
+          (encodeUtf8 "GET / HTTP/1.1\r\nHost: [2001:db8::1]:2583\r\n\r\n"))),
+  ),
+]
 
-test "Host accepts explicit empty reg-name and IP-literal ports" =
-  expectTrue
-    (isOk
+test "Host accepts explicit empty reg-name and IP-literal ports" = expectEach [
+  (
+    "a reg-name with an empty port is accepted",
+    expectTrue
+      (isOk
         (parseRequest
-          (encodeUtf8 "GET / HTTP/1.1\r\nHost: example.com:\r\n\r\n"))
-      && isOk
-        (parseRequest (encodeUtf8 "GET / HTTP/1.1\r\nHost: [::1]:\r\n\r\n")))
+          (encodeUtf8 "GET / HTTP/1.1\r\nHost: example.com:\r\n\r\n"))),
+  ),
+  (
+    "an IP-literal with an empty port is accepted",
+    expectTrue
+      (isOk
+        (parseRequest (encodeUtf8 "GET / HTTP/1.1\r\nHost: [::1]:\r\n\r\n"))),
+  ),
+]
 
 test "malformed Connection token list is rejected" =
   expectTrue
@@ -418,40 +493,82 @@ test "malformed Connection token list is rejected" =
       (encodeUtf8
         "GET / HTTP/1.1\r\nHost: pds.example\r\nConnection: close,\r\n\r\n"))
 
-test "raw request ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkHttpRequestBytes maxHttpRequestBytes)
-      && isErr (checkHttpRequestBytes (maxHttpRequestBytes + 1)))
+test "raw request ceiling accepts at and rejects over" = expectEach [
+  (
+    "a raw request exactly at the ceiling is admitted",
+    expectOk (checkHttpRequestBytes maxHttpRequestBytes),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkHttpRequestBytes (maxHttpRequestBytes + 1)),
+  ),
+]
 
-test "combined header ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkHttpHeaderBytes maxHttpHeaderBytes)
-      && isErr (checkHttpHeaderBytes (maxHttpHeaderBytes + 1)))
+test "combined header ceiling accepts at and rejects over" = expectEach [
+  (
+    "the combined headers exactly at the ceiling is admitted",
+    expectOk (checkHttpHeaderBytes maxHttpHeaderBytes),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkHttpHeaderBytes (maxHttpHeaderBytes + 1)),
+  ),
+]
 
-test "decoded body ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkHttpBodyBytes maxHttpBodyBytes)
-      && isErr (checkHttpBodyBytes (maxHttpBodyBytes + 1)))
+test "decoded body ceiling accepts at and rejects over" = expectEach [
+  (
+    "a decoded body exactly at the ceiling is admitted",
+    expectOk (checkHttpBodyBytes maxHttpBodyBytes),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkHttpBodyBytes (maxHttpBodyBytes + 1)),
+  ),
+]
 
-test "request-line ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkHttpRequestLineBytes maxHttpRequestLineBytes)
-      && isErr (checkHttpRequestLineBytes (maxHttpRequestLineBytes + 1)))
+test "request-line ceiling accepts at and rejects over" = expectEach [
+  (
+    "a request line exactly at the ceiling is admitted",
+    expectOk (checkHttpRequestLineBytes maxHttpRequestLineBytes),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkHttpRequestLineBytes (maxHttpRequestLineBytes + 1)),
+  ),
+]
 
-test "header-field ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkHttpHeaderFields maxHttpHeaderFields)
-      && isErr (checkHttpHeaderFields (maxHttpHeaderFields + 1)))
+test "header-field ceiling accepts at and rejects over" = expectEach [
+  (
+    "the header fields exactly at the ceiling is admitted",
+    expectOk (checkHttpHeaderFields maxHttpHeaderFields),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkHttpHeaderFields (maxHttpHeaderFields + 1)),
+  ),
+]
 
-test "trailer-field ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkHttpTrailerFields maxHttpTrailerFields)
-      && isErr (checkHttpTrailerFields (maxHttpTrailerFields + 1)))
+test "trailer-field ceiling accepts at and rejects over" = expectEach [
+  (
+    "the trailer fields exactly at the ceiling is admitted",
+    expectOk (checkHttpTrailerFields maxHttpTrailerFields),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkHttpTrailerFields (maxHttpTrailerFields + 1)),
+  ),
+]
 
-test "chunk-count ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkHttpChunks maxHttpChunks)
-      && isErr (checkHttpChunks (maxHttpChunks + 1)))
+test "chunk-count ceiling accepts at and rejects over" = expectEach [
+  (
+    "the chunks exactly at the ceiling is admitted",
+    expectOk (checkHttpChunks maxHttpChunks),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkHttpChunks (maxHttpChunks + 1)),
+  ),
+]
 
 test "zero-length response serialization is exact and computes one length" =
   expectEqual
@@ -475,10 +592,17 @@ test "binary response serialization preserves header order and bytes" =
       0, 255
     |])
 
-test "response status outside the three-digit supported range is rejected" =
-  expectTrue
-    (isErr (makeResponse 99 "Continue" [] [||])
-      && isErr (makeResponse 600 "Nope" [] [||]))
+test "response status outside the three-digit supported range is rejected" = expectEach
+  [
+    (
+      "a status below 100 is refused",
+      expectTrue (isErr (makeResponse 99 "Continue" [] [||])),
+    ),
+    (
+      "a status above 599 is refused",
+      expectTrue (isErr (makeResponse 600 "Nope" [] [||])),
+    ),
+  ]
 
 test "response reason phrase injection is rejected" =
   expectTrue (isErr (makeResponse 200 "OK\r\nInjected: yes" [] [||]))
@@ -486,10 +610,17 @@ test "response reason phrase injection is rejected" =
 test "safe header constructor canonicalizes names" =
   expectEqual (headerName (mustHeader "X-Trace-ID" (toUtf8 "abc"))) "x-trace-id"
 
-test "invalid response header name and value injection are rejected" =
-  expectTrue
-    (isErr (makeHeader "Bad Name" (toUtf8 "value"))
-      && isErr (makeHeader "X-Test" (toUtf8 "ok\r\nInjected: yes")))
+test "invalid response header name and value injection are rejected" = expectEach
+  [
+    (
+      "a header name with a space is refused",
+      expectTrue (isErr (makeHeader "Bad Name" (toUtf8 "value"))),
+    ),
+    (
+      "a header value carrying CRLF is refused",
+      expectTrue (isErr (makeHeader "X-Test" (toUtf8 "ok\r\nInjected: yes"))),
+    ),
+  ]
 
 test "caller response framing fields are rejected" =
   let reserved = mustHeader "Content-Length" (toUtf8 "7")
@@ -503,15 +634,19 @@ test "query decoding preserves repeated names, empty values, and order" =
     mustRequest
       (encodeUtf8 "GET /x?a=1&a=&flag HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   match parseTargetQuery request
-    Ok (path, [QueryParam a1 v1, QueryParam a2 v2, QueryParam flag v3]) =>
-      expectTrue
-        (path == "/x"
-          && a1 == "a"
-          && v1 == "1"
-          && a2 == "a"
-          && v2 == ""
-          && flag == "flag"
-          && v3 == "")
+    Ok (path, [QueryParam a1 v1, QueryParam a2 v2, QueryParam flag v3]) => expectEach
+      [
+        ("the path is separated from the query", expectEqual "/x" path),
+        ("the first parameter keeps its name", expectEqual "a" a1),
+        ("the first parameter keeps its value", expectEqual "1" v1),
+        ("the repeated name is preserved, not merged", expectEqual "a" a2),
+        ("the second parameter's empty value is preserved", expectEqual "" v2),
+        ("the valueless parameter keeps its name", expectEqual "flag" flag),
+        (
+          "the valueless parameter decodes to the empty string",
+          expectEqual "" v3,
+        ),
+      ]
     _ => expectTrue False
 
 test "empty query component after question mark is accepted" =
@@ -587,11 +722,21 @@ test "media type and subtype are case-insensitive with bounded parameters" =
     (parseMediaType
       (toUtf8 "Application/JSON; Charset=\"utf-8\"; profile=atproto"))
 
-test "malformed and non-ASCII media types are rejected" =
-  expectTrue
-    (isErr (parseMediaType (toUtf8 "application"))
-      && isErr (parseMediaType (toUtf8 "text/plain; charset=\"unterminated"))
-      && isErr (parseMediaType [|97, 112, 112, 47, 255|]))
+test "malformed and non-ASCII media types are rejected" = expectEach [
+  (
+    "a media type with no subtype is refused",
+    expectTrue (isErr (parseMediaType (toUtf8 "application"))),
+  ),
+  (
+    "an unterminated quoted parameter is refused",
+    expectTrue
+      (isErr (parseMediaType (toUtf8 "text/plain; charset=\"unterminated"))),
+  ),
+  (
+    "a non-ASCII byte in the media type is refused",
+    expectTrue (isErr (parseMediaType [|97, 112, 112, 47, 255|])),
+  ),
+]
 
 test "JSON request body is syntax-checked after strict UTF-8 decoding" =
   match (decodeRequestBody
@@ -648,27 +793,54 @@ test "invalid text UTF-8 is rejected" =
 test "raw media types preserve binary bytes" =
   match (decodeRequestBody
     (requestWithBody "image/png" (mustBytes [|0, 128, 255|])))
-    Ok (RawBody mediaType bytes) =>
-      expectTrue
-        (mediaTypeType mediaType == "image"
-          && mediaTypeSubtype mediaType == "png"
-          && bytes == [|0, 128, 255|])
+    Ok (RawBody mediaType bytes) => expectEach [
+      (
+        "the media type is image",
+        expectEqual "image" (mediaTypeType mediaType),
+      ),
+      (
+        "the media subtype is png",
+        expectEqual "png" (mediaTypeSubtype mediaType),
+      ),
+      (
+        "the body bytes are passed through untouched",
+        expectEqual [|0, 128, 255|] bytes,
+      ),
+    ]
     _ => expectTrue False
 
-test "JSON body ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkJsonBodyBytes maxJsonBodyBytes)
-      && isErr (checkJsonBodyBytes (maxJsonBodyBytes + 1)))
+test "JSON body ceiling accepts at and rejects over" = expectEach [
+  (
+    "a JSON body exactly at the ceiling is admitted",
+    expectOk (checkJsonBodyBytes maxJsonBodyBytes),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkJsonBodyBytes (maxJsonBodyBytes + 1)),
+  ),
+]
 
-test "text body ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkTextBodyBytes maxTextBodyBytes)
-      && isErr (checkTextBodyBytes (maxTextBodyBytes + 1)))
+test "text body ceiling accepts at and rejects over" = expectEach [
+  (
+    "a text body exactly at the ceiling is admitted",
+    expectOk (checkTextBodyBytes maxTextBodyBytes),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkTextBodyBytes (maxTextBodyBytes + 1)),
+  ),
+]
 
-test "raw body ceiling accepts at and rejects over" =
-  expectTrue
-    (isOk (checkRawBodyBytes maxRawBodyBytes)
-      && isErr (checkRawBodyBytes (maxRawBodyBytes + 1)))
+test "raw body ceiling accepts at and rejects over" = expectEach [
+  (
+    "a raw body exactly at the ceiling is admitted",
+    expectOk (checkRawBodyBytes maxRawBodyBytes),
+  ),
+  (
+    "one unit past the ceiling is refused",
+    expectErr (checkRawBodyBytes (maxRawBodyBytes + 1)),
+  ),
+]
 
 -- Incremental framing: the scanner splits a stream into requests, so its
 -- verdict on a buffer and the one-shot parser's verdict on exactly that
@@ -788,11 +960,21 @@ feedOneByteAtATime input =
 test "scanner and one-shot parser agree across the whole HTTP corpus" =
   expectTrue (allAgree corpus)
 
-test "a byte-at-a-time feed asks for more until the completing byte frames it" =
-  expectTrue
-    (feedOneByteAtATime simpleGet
-      && feedOneByteAtATime fixedBinary
-      && feedOneByteAtATime chunked)
+test "a byte-at-a-time feed asks for more until the completing byte frames it" = expectEach
+  [
+    (
+      "a header-only request frames on its completing byte",
+      expectTrue (feedOneByteAtATime simpleGet),
+    ),
+    (
+      "a fixed-length request frames on its completing byte",
+      expectTrue (feedOneByteAtATime fixedBinary),
+    ),
+    (
+      "a chunked request frames on its completing byte",
+      expectTrue (feedOneByteAtATime chunked),
+    ),
+  ]
 
 test "a definitively malformed prefix is rejected rather than left pending" =
   match scanRequestBoundary (encodeUtf8 "GET / HTTP/1.0\r\n") 0
@@ -808,13 +990,28 @@ test "pipelined requests are framed one at a time from a single buffer" =
       parseRequestAt pipelined 0 first,
       parseRequestAt pipelined first second,
     )
-      (Ok head, Ok tail) =>
-        expectTrue
-          (first == B.length simpleGet
-            && second == B.length pipelined
-            && requestMethod head == "GET"
-            && requestMethod tail == "POST"
-            && requestBody tail == mustBytes [|0, 128, 255|])
+      (Ok head, Ok tail) => expectEach [
+        (
+          "the first boundary falls at the end of the first request",
+          expectEqual (B.length simpleGet) first,
+        ),
+        (
+          "the second boundary falls at the end of the buffer",
+          expectEqual (B.length pipelined) second,
+        ),
+        (
+          "the first request is the GET",
+          expectEqual "GET" (requestMethod head),
+        ),
+        (
+          "the second request is the POST",
+          expectEqual "POST" (requestMethod tail),
+        ),
+        (
+          "the second request's body is framed whole",
+          expectEqual (mustBytes [|0, 128, 255|]) (requestBody tail),
+        ),
+      ]
       _ => expectTrue False
     _ => expectTrue False
 
@@ -829,7 +1026,10 @@ test "trailing bytes frame the first request instead of failing the buffer" =
   match scanRequestBoundary stream 0
     HttpFramedAt at => expectEach [
       ("at == B.length simpleGet", expectEqual (B.length simpleGet) at),
-      ("isErr (parseRequest stream)", expectTrue (isErr (parseRequest stream))),
+      (
+        "the truncated stream does not parse",
+        expectTrue (isErr (parseRequest stream)),
+      ),
     ]
     _ => expectTrue False
 
@@ -895,18 +1095,41 @@ resumeCorpus =
 test "a resumed scan matches a whole-buffer scan one byte at a time" =
   expectTrue (allResumeAgree 1 resumeCorpus)
 
-test "a resumed scan matches a whole-buffer scan at other increments" =
-  expectTrue
-    (allResumeAgree 2 resumeCorpus
-      && allResumeAgree 3 resumeCorpus
-      && allResumeAgree 7 resumeCorpus
-      && allResumeAgree 4096 resumeCorpus)
+test "a resumed scan matches a whole-buffer scan at other increments" = expectEach
+  [
+    (
+      "2-byte increments agree with a whole-buffer scan",
+      expectTrue (allResumeAgree 2 resumeCorpus),
+    ),
+    (
+      "3-byte increments agree with a whole-buffer scan",
+      expectTrue (allResumeAgree 3 resumeCorpus),
+    ),
+    (
+      "7-byte increments agree with a whole-buffer scan",
+      expectTrue (allResumeAgree 7 resumeCorpus),
+    ),
+    (
+      "increments larger than the corpus agree with a whole-buffer scan",
+      expectTrue (allResumeAgree 4096 resumeCorpus),
+    ),
+  ]
 
-test "a resumed scan matches a whole-buffer scan from a pipelined offset" =
-  expectTrue
-    (resumeAgrees (B.length simpleGet) 1 pipelined
-      && resumeAgrees (B.length simpleGet) 1 (pipelined ++ chunked)
-      && resumeAgrees (B.length simpleGet) 3 (pipelined ++ chunked))
+test "a resumed scan matches a whole-buffer scan from a pipelined offset" = expectEach
+  [
+    (
+      "a byte-at-a-time resume from the pipelined offset agrees",
+      expectTrue (resumeAgrees (B.length simpleGet) 1 pipelined),
+    ),
+    (
+      "the same resume agrees with a third request appended",
+      expectTrue (resumeAgrees (B.length simpleGet) 1 (pipelined ++ chunked)),
+    ),
+    (
+      "3-byte increments from that offset agree too",
+      expectTrue (resumeAgrees (B.length simpleGet) 3 (pipelined ++ chunked)),
+    ),
+  ]
 
 -- A caller that accumulates into a backing array with spare capacity hands the
 -- scanner more bytes than it has received. Only the first `avail` bytes are

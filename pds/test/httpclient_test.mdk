@@ -19,7 +19,7 @@
 
 import array.{sliceClamped}
 import string.{fromUtf8, toUtf8, repeat}
-import test.{expectEqual, expectOkThen, expectTrue}
+import test.{expectAtMost, expectEach, expectEqual, expectOkThen, expectTrue}
 import lib.httpclient.{
   HttpClientParseFailure(..),
   parseResponse,
@@ -60,8 +60,16 @@ test "chunked-body parse cost grows linearly, not quadratically, with chunk coun
   -- The bound below is generous (300x, not 100x) to absorb fixed per-call
   -- overhead at the smallest size without absorbing anything close to the
   -- quadratic shape it is meant to catch.
-  expectTrue
-    (costMedium <= costSmall * 300.0 && costLarge <= costMedium * 300.0)
+  expectEach [
+    (
+      "100 chunks cost no more than 300x the 10-chunk baseline",
+      expectAtMost (costSmall * 300.0) costMedium,
+    ),
+    (
+      "1000 chunks cost no more than 300x the 100-chunk baseline",
+      expectAtMost (costMedium * 300.0) costLarge,
+    ),
+  ]
 
 -- # Where a response ends
 

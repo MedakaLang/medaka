@@ -22,7 +22,7 @@
    This file uses the BOUNDS-CHECKED public array API (`arr[i]`,
    `arr[i] := v`, `Array.setInPlace`) — no restricted internal externs. -}
 
-import test.{expectEach, expectEqual, expectTrue, expectFalse}
+import test.{expectEach, expectEqual, expectSatisfies, expectTrue, expectFalse}
 import test.algebra_support.{allPairs, allTriples}
 import array as A
 import lib.scalar.{
@@ -226,9 +226,12 @@ test "fixed-control select visits both choices without changing their values" =
 
 test "fixed-control negation agrees with scalar negation, including zero" = expectEach
   [
-    ("scNegateCt 0 = 0", expectTrue (scEqual (scNegateCt scZero) scZero)),
     (
-      "scNegateCt matches scNegate over samples",
+      "fixed-control negation leaves zero at zero",
+      expectTrue (scEqual (scNegateCt scZero) scZero),
+    ),
+    (
+      "fixed-control negation agrees with plain negation on every sample",
       expectTrue (all (a => scEqual (scNegateCt a) (scNegate a)) samples),
     ),
   ]
@@ -310,7 +313,10 @@ test "fromBytes >> toBytes round-trips at every limb boundary" =
   expectTrue (all roundTrips sampleBytes)
 
 test "toBytes is 32 bytes" =
-  expectTrue (all (a => arrayLength (scToBytes a) == 32) samples)
+  expectSatisfies
+    "every sample to encode to 32 bytes"
+    (all (n => n == 32))
+    (map (a => arrayLength (scToBytes a)) samples)
 
 test "fromBytes REJECTS n" = expectTrue (match scFromBytes nBytes
   Err _ => True
