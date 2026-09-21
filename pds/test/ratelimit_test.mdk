@@ -7,7 +7,9 @@ import bytes.{encodeUtf8}
 import http.{Header, makeHeader, parseRequest, requestHeaders}
 import list.{replicate}
 import string.{join, repeat, toUtf8}
-import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
+import test.{
+  expectAll, expectEach, expectEqual, expectFalse, expectNotEqual, expectTrue
+}
 import lib.resource_limits.{
   maxCreateSessionPerWindow,
   maxRateLimitIdentitiesPerWindow,
@@ -182,8 +184,12 @@ test "an identity under its allowance is admitted" =
   expectTrue (isAdmitted verdict)
 
 test "classAllowance is per-class, not one shared counter" = expectAll [
-  expectTrue (classAllowance ConnectionsClass /= classAllowance RequestsClass),
-  expectTrue (classAllowance WritesClass /= classAllowance CreateSessionClass),
+  expectNotEqual
+    (classAllowance ConnectionsClass)
+    (classAllowance RequestsClass),
+  expectNotEqual
+    (classAllowance WritesClass)
+    (classAllowance CreateSessionClass),
 ]
 
 -- (b) a refusal names RateLimitExceeded with status 429.
@@ -533,7 +539,7 @@ test "directIdentity is never refused by the cardinality cap" =
 -- shared number: `maxRequestsPerWindow` bounds a count of requests, while one
 -- export's response is bounded only by `maxCarBytes`.
 test "the repo-export ceiling is its own, not the shared request ceiling" =
-  expectTrue (classAllowance RepoExportClass /= classAllowance RequestsClass)
+  expectNotEqual (classAllowance RepoExportClass) (classAllowance RequestsClass)
 
 test "a spent repo-export allowance still admits a plain read" =
   let saturated =

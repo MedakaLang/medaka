@@ -345,7 +345,7 @@ test "a refusal repeats neither the password nor the identifier" =
 test "two logins in the same second issue different tokens" =
   let (_, first) = login testInstant 1 configuredStore
   let (_, second) = login testInstant 2 configuredStore
-  expectTrue (field "accessJwt" first /= field "accessJwt" second)
+  expectNotEqual (field "accessJwt" first) (field "accessJwt" second)
 
 -- # The access token
 

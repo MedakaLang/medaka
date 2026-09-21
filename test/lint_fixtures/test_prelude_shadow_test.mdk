@@ -1,0 +1,15 @@
+-- Fixture for rule-test-prelude-shadow (#3235), POSITIVE half.
+--
+-- The `_test.mdk` FILENAME SUFFIX is load-bearing: the rule is scoped to it, so
+-- this fixture must carry it to fire at all.  The negative half — the identical
+-- declarations in a file WITHOUT the suffix, which must produce no finding — is
+-- the sibling fixture test/lint_fixtures/test_prelude_shadow_ok.mdk.
+
+-- POSITIVE: all four names stdlib/core.mdk (the auto-prelude) already exports.
+isOk r = r == 0
+isErr r = r /= 0
+isSome o = o == 1
+isNone o = o /= 1
+
+-- NEGATIVE: a name the prelude does not export is this file's own to declare.
+isPending x = x == 2

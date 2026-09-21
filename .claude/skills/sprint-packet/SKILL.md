@@ -82,6 +82,11 @@ checklist in every packet. This completes edit ownership; it does not require
 running every referencing gate. License known required golden moves by path
 in §6, and choose the claim-bearing tests within its existing 3–5-check ceiling.
 
+When a site is a test file, name the assertion verb the slice should reach for,
+from the `write-tests` skill's § "The assertion vocabulary — pick the verb,
+don't hand-roll it" table — a packet that names the site but not the verb is
+how a hand-rolled `expectTrue (a == b)` lands.
+
 **§6 Acceptance — 3 to 5 checks, with expected output.** The minimal set that
 shows the slice does what it's supposed to and broke nothing major: build
 green, the primary-claim probe(s) with `MEDAKA_STRICT=1` and expected values

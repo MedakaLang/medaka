@@ -1,0 +1,8 @@
+warning: [rule-dead-code] private top-level 'isErr' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'isNone' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'isOk' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-dead-code] private top-level 'isSome' is unreachable from exports/main/doctests — remove it (dead code)
+warning: [rule-missing-signature] top-level 'isErr' has no type signature. Add a `isErr : …` declaration
+warning: [rule-missing-signature] top-level 'isNone' has no type signature. Add a `isNone : …` declaration
+warning: [rule-missing-signature] top-level 'isOk' has no type signature. Add a `isOk : …` declaration
+warning: [rule-missing-signature] top-level 'isSome' has no type signature. Add a `isSome : …` declaration
