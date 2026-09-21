@@ -124,7 +124,7 @@ test "RFC 3174 §7.3 TEST4: a 64-byte pattern ten times (exact block multiple)" 
             10))
       == "dea356a2cddd90c7a7ecedc5ebb563934f460452")
 
-test "the digest is 20 bytes" = expectEqual (arrayLength (sha1 (toUtf8 ""))) 20
+test "the digest is 20 bytes" = expectEqual 20 (arrayLength (sha1 (toUtf8 "")))
 
 -- # The opening handshake — RFC 6455 §1.3
 
@@ -282,12 +282,12 @@ test "§5.7's two fragments reassemble into one \"Hello\" message" =
     assembleFrame afterFirst (Frame True Continuation (toUtf8 "lo"))
   match (firstEvent, secondEvent, afterSecond)
     (EventPartial, EventMessage Text payload, None) =>
-      expectEqual (fromUtf8 payload) "Hello"
+      expectEqual "Hello" (fromUtf8 payload)
     _ => expectTrue False
 
 test "an unfragmented data frame is delivered without opening an assembly" =
   match assembleFrame None (Frame True Text hello)
-    (None, EventMessage Text payload) => expectEqual (fromUtf8 payload) "Hello"
+    (None, EventMessage Text payload) => expectEqual "Hello" (fromUtf8 payload)
     _ => expectTrue False
 
 test "a control frame interleaved in a fragmented message leaves it open" =
@@ -297,7 +297,7 @@ test "a control frame interleaved in a fragmented message leaves it open" =
     assembleFrame afterPing (Frame True Continuation (toUtf8 "lo"))
   match (pingEvent, finalEvent)
     (EventControl _, EventMessage Text payload) =>
-      expectEqual (fromUtf8 payload) "Hello"
+      expectEqual "Hello" (fromUtf8 payload)
     _ => expectTrue False
 
 test "a continuation frame with nothing open is refused with 1002 (§5.4)" =
@@ -432,7 +432,7 @@ test "decoding does not mutate the caller's read buffer" =
     11
   let before = arrayCopy wire
   let _ = decodeFrame FromClient maxPayload wire 0
-  expectEqual wire before
+  expectEqual before wire
 
 -- `fill` is imported for this one assertion: a payload built by mutation is
 -- the cheapest way to state "the length form, not the contents, is what is
@@ -442,5 +442,5 @@ test "an all-ones 126-byte payload round-trips through the 16-bit length form" =
   fill 0xff body
   let wire = encodeServerFrame (Frame True Binary body)
   match decodedAs (decodeFrame FromServer maxPayload wire 0)
-    Some (_, _, payload, _) => expectEqual payload body
+    Some (_, _, payload, _) => expectEqual body payload
     None => expectTrue False

@@ -169,10 +169,10 @@ expected2 = [|
 |]
 
 test "RFC 7914 §11 vector 1: P=passwd S=salt c=1 dkLen=64" =
-  expectEqual (pbkdf2HmacSha256 passwd salt1 1 64) expected1
+  expectEqual expected1 (pbkdf2HmacSha256 passwd salt1 1 64)
 
 test "RFC 7914 §11 vector 2: P=Password S=NaCl c=80000 dkLen=64" =
-  expectEqual (pbkdf2HmacSha256 passwordCap nacl 80000 64) expected2
+  expectEqual expected2 (pbkdf2HmacSha256 passwordCap nacl 80000 64)
 
 test "shorter dkLen truncates the same block stream rather than re-deriving" =
   let full = pbkdf2HmacSha256 passwd salt1 1 64

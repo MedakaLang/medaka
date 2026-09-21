@@ -272,7 +272,7 @@ reports only that the step did not reach its assertion; this keeps the
 error in the message, which is the only thing that says WHY.
 
 The payload needs no `Debug`, so this reaches a `Result` whose success
-type is a program type that derives nothing — the case the plain
+type is a program type that derives nothing, the case the plain
 `expectOk` cannot take.
 
 ```medaka

@@ -44,7 +44,7 @@
 -- (`gateReaches`/`relaysFor`), so a spawn routed through that shared module
 -- is graded via the importing gate rather than invisible to it.
 -- `rowScratch` stays local — a fourth byte-identical copy with
--- `dml_oracle_test.mdk`, out of this slice's scope.
+-- `dml_oracle_test.mdk`.
 import io.{runVerb}
 import list.{drop}
 import string.{join, split, trim}
@@ -64,8 +64,8 @@ queryTimeoutSeconds = 120
 -- # Small process-backed primitives every row below is built from.
 
 rowScratch : String -> <Exec "_"> Result String String
--- deliberate copy of dml_oracle_test.mdk's own — out of this slice's scope,
--- see the header note above the imports
+-- deliberate copy of dml_oracle_test.mdk's own, see the header note above
+-- the imports
 -- lint-disable-next-line rule-duplicate-body
 rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"

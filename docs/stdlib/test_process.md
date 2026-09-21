@@ -202,7 +202,7 @@ one thing: which rule fired, which file, and what to do instead. A single
 needle grades only the part it names, so a diagnostic that keeps its
 headline and drops its location still passes. The needles are matched in
 any order, against stdout and stderr concatenated, and need not share a
-line — `test.expectLineContainsAll` is the one that binds them
+line; `test.expectLineContainsAll` is the one that binds them
 together.
 
 An empty `needles` list grades the exit code alone, which is

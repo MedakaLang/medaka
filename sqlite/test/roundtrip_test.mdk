@@ -10,7 +10,7 @@
 --
 -- Run with: `medaka test sqlite/test/roundtrip_test.mdk` from the sqlite project root.
 
-import test.{Expectation, expectTrue, expectEqual, expectAll, fail}
+import test.{Expectation, expectTrue, expectEqual, expectAll, expectEach, fail}
 import test.dbfix.{q, qd}
 import byteparser.{runByteParser}
 import lib.varint.{sqVarint, sqVarintBytes}
@@ -68,7 +68,7 @@ stableQueries = [
 ]
 
 test "parse-render-parse is stable across the representative query set" =
-  expectAll (map (sql => expectTrue (parseStable sql)) stableQueries)
+  expectEach (map (sql => (sql, expectTrue (parseStable sql))) stableQueries)
 
 -- ── SELECT DISTINCT idempotence: the result carries no duplicate rows ───────
 hasNoDups : List (List Cell) -> Bool
