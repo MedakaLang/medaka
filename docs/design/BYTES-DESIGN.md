@@ -307,19 +307,21 @@ obligation of its own. The largest unexported group is `stdlib/http.mdk`'s
 `lowerAsciiBytes`/`allTokenBytes`/`validFieldValueBytes`/`trimLeftOwsBytes`/
 `trimRightOwsBytes`/`scanTokenEndBytes`/`skipOwsBytes`, each already the
 `Bytes`-typed twin of an `Array Int`-typed private original the module's own
-comment (`stdlib/http.mdk:355-363`) says B5 removes; also unexported:
+comment (`stdlib/http.mdk:354-361`) says B5 removes; also unexported:
 `stdlib/http.mdk`'s `validBytes`/`headHeaderBytes`/`requestBytesVerdict`/
 `decodeQueryBytes`/`validMediaBytes`, `stdlib/base32.mdk`'s `validBytes`,
 `stdlib/byteparser.mdk`'s `takeBytesGo`, `stdlib/sha256.mdk`'s `digestBytes`,
 `stdlib/bytes.mdk`'s `debugBytesHex`, `stdlib/hmac.mdk`'s `blockBytes`,
-`stdlib/pbkdf2.mdk`'s `hashBytes`, and `stdlib/net.mdk`'s `testSentBytes`.
+`stdlib/pbkdf2.mdk`'s `hashBytes`, `stdlib/net.mdk`'s `testSentBytes`, and
+`stdlib/net_async.mdk`'s `pendingRecvBytes`/`tryRecvBytes`/`recvBytesStep`/
+`recvUntilBytes`/`recvUntilBytesStep`/`recvBytesWake`.
 
 | Module | Export (current) | Current signature | B6 destination |
 |---|---|---|---|
 | `bytebuilder` | `buildBytes` | `Builder -> Bytes` | unchanged — already packed |
-| `bytebuilder` | `appendBytes` | `Bytes -> Builder -> Unit` | **this slice**: renamed to `emitBytes` |
-| `bytebuilder` | `emitBytes` | `List Int -> Builder -> Unit` | **this slice**: name retires, deleted |
-| `byteparser` | `takeBytes` | `Int -> ByteParser (List Int)` | **this slice**: `Int -> ByteParser Bytes` |
+| `bytebuilder` | `appendBytes` | `Bytes -> Builder -> Unit` | **2026-09-21: renamed to `emitBytes`** |
+| `bytebuilder` | `emitBytes` | `List Int -> Builder -> Unit` | **2026-09-21: name retires, deleted** |
+| `byteparser` | `takeBytes` | `Int -> ByteParser (List Int)` | **2026-09-21: `Int -> ByteParser Bytes`** |
 | `hex` | `encodeBytes` | `Bytes -> String` | unchanged — already packed |
 | `hex` | `decodeBytes` | `String -> Result String Bytes` | unchanged — already packed |
 | `bytes` | `writeStdoutBytes` | `Bytes -> <Stdout> Unit` | unchanged — already packed |
@@ -330,6 +332,8 @@ comment (`stdlib/http.mdk:355-363`) says B5 removes; also unexported:
 | `sha256` | `sha256FixedBytes` | `Array Int -> Array Int` | undecided — fixed-digest array, no `Bytes`-typed twin yet; not this ruling's call |
 | `hmac` | `hmacSha256FixedBytes` | `Array Int -> Array Int -> Array Int` | undecided — same reasoning as `sha256FixedBytes` |
 
-The two "this slice" rows are #3222's Half B, landed in the same change as
-this ruling — see the sprint report for the caller list and the go/no-go
-measurement.
+The two 2026-09-21 rows are #3222's Half B: byteparser's `takeBytes` takes the
+packed name; bytebuilder's `emitBytes` and `appendBytes` swap roles, so the
+`Bytes`-taking bulk form keeps the name that already said "bytes." Every real
+caller (`sqlite/lib`, `gzip/lib`, `pds/lib`, `pds/shell/server.mdk`) was
+updated in the same change.

@@ -26,7 +26,7 @@
 --   `leFloat64` — 64-bit IEEE 754 little-endian float
 
 import array.{reverse as arrayReverse}
-import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
+import bytes.{Bytes, fromArray, toArray}
 import list.{reverse}
 
 -- ---------------------------------------------------------------------------
@@ -292,7 +292,10 @@ export
 takeBytes : Int -> ByteParser Bytes
 takeBytes n =
   deferMap
-    (xs => fromArrayAssumeByteDomain (arrayFromList xs))
+    (xs =>
+      optionOrPanic
+        "takeBytes: every element must be a byte in 0..255"
+        (fromArray (arrayFromList xs)))
     (ByteParserE (takeBytesGo n []))
 
 takeBytesGo : Int -> List Int -> Array Int -> Int -> BResult (List Int)

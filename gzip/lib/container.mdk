@@ -109,6 +109,9 @@ hasFlag flg mask = bitAnd flg mask /= 0
 -- Parse
 -- ---------------------------------------------------------------------------
 
+-- `magic[0]`/`magic[1]` panic on a short `magic`; the only caller passes
+-- `takeBytes 2`'s result, which already errors on fewer than 2 bytes, so
+-- `magic` is always exactly 2 bytes here.
 checkMagic : Bytes -> ByteParser Unit
 checkMagic magic
   | magic[0] == gzipMagic0 && magic[1] == gzipMagic1 = deferPure ()

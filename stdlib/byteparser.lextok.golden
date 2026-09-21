@@ -12,7 +12,7 @@ IDENT "bytes"
 DOT_LBRACE
 UPPER "Bytes"
 COMMA
-IDENT "fromArrayAssumeByteDomain"
+IDENT "fromArray"
 COMMA
 IDENT "toArray"
 RBRACE
@@ -1063,11 +1063,18 @@ IDENT "deferMap"
 LPAREN
 IDENT "xs"
 FAT_ARROW
-IDENT "fromArrayAssumeByteDomain"
+INDENT
+IDENT "optionOrPanic"
+STRING "takeBytes: every element must be a byte in 0..255"
+LPAREN
+IDENT "fromArray"
 LPAREN
 IDENT "arrayFromList"
 IDENT "xs"
 RPAREN
+RPAREN
+NEWLINE
+DEDENT
 RPAREN
 LPAREN
 UPPER "ByteParserE"

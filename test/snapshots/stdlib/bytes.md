@@ -1,5 +1,5 @@
 # META
-source_lines=1042
+source_lines=1047
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -45,11 +45,16 @@ stages=DESUGAR,MARK
    `take`, `drop` and `splitAt`, `startsWith` and `endsWith`, `concat`, and
    the walks `fold`, `forEach`, `any`, `all` and `map`. `Bytes` has no
    element parameter, so it cannot be a `Foldable`, `Mappable` or
-   `Filterable` instance, and each of these is a plain function sharing a
-   name with the prelude's method, as `length` already does. Naming one of
-   them in an import list shadows the prelude's method for the whole
-   importing module, so reach them through an alias (`import bytes as B`,
-   then `B.fold`) from a module that uses both.
+   `Filterable` instance, and each of these is a plain function. `empty`,
+   `isEmpty`, `fold` and `map` share a name with a prelude interface method,
+   and `forEach`, `any` and `all` with a plain prelude function -- naming any
+   of the seven in an import list shadows it for the whole importing module,
+   as `length` already does. The other six (`take`, `drop`, `splitAt`,
+   `startsWith`, `endsWith`, `concat`) name nothing in the prelude, but do
+   collide with `list`'s exports of the same name if both modules are
+   imported unaliased into one file. All thirteen are reached through the
+   same alias (`import bytes as B`, then `B.fold`) for that consistency, not
+   because every one of them provokes a warning on its own.
 
    Under the interpreter (`medaka run`, `medaka test`), a walk over a byte
    string costs one evaluator frame per byte and the evaluator's call depth
