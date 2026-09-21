@@ -2,7 +2,8 @@
 
    It asserts that the doctests, `prop "…"` and `test "…"` declarations
    written inside `stdlib/*.mdk` are discovered and pass. Each module is
-   spawned as its own `medaka test` run; no external oracle is needed.
+   spawned as its own `medaka test` run — twice, once per engine, wherever
+   it can take both; no external oracle is needed.
 
    Why a roster is the only thing that runs them. A `stdlib/` module's types
    are walked whenever something imports it, but no importer runs its
@@ -45,14 +46,39 @@ import test_process.{
    statically reaching an extern the interpreter does not bind, a
    `NativeSpeed` row when the interpreter gets fast enough to carry it. A
    single undifferentiated "native" list cannot say which of those to
-   re-check. -}
-data Engine = Eval | NativeCapability | NativeSpeed
+   re-check.
+
+   `EvalAndNative` is not a third reason to prefer one engine but a pair of
+   spawns: the module runs under the interpreter and again under the native
+   backend, and both counts must equal its floor exactly, so the row passes
+   only when the two arms agree and agree at the committed number. Equality
+   rather than "both at least the floor" because the arms running different
+   numbers of assertions is itself the regression to catch; a rule that
+   only bounds them below lets one arm drop while it stays over the floor,
+   and nothing says so.
+
+   It is what a module takes whenever it can take both, because the eval
+   arm alone never typechecks the module the way a native build does — a
+   doctest that is not valid Medaka still passes under the interpreter,
+   which is how #3291's 91 unbuildable regex examples stayed green. A row
+   drains out of `EvalAndNative` the moment the two arms stop agreeing, and
+   then by moving to `Eval` with the reason written down, never by dropping
+   the second spawn. `async` is the row waiting to drain the other way: it
+   is `Eval` today only because its native doctest build fails whole-file
+   on two `sleep`-bearing examples (#3300), and it joins `EvalAndNative`
+   when that is fixed. -}
+data Engine = Eval | NativeCapability | NativeSpeed | EvalAndNative
 
 -- The extra `medaka test` arguments a module is spawned with.
+--
+-- `EvalAndNative` is two spawns and so has no single argument list;
+-- `runModule` matches it before it can reach here, and the arm below
+-- exists only because this function must be total.
 engineArgs : Engine -> List String
 engineArgs Eval = []
 engineArgs NativeCapability = ["--native"]
 engineArgs NativeSpeed = ["--native"]
+engineArgs EvalAndNative = []
 
 -- How a module's engine is named in this gate's own failure message, so a
 -- spawn error says which arm produced it.
@@ -60,6 +86,7 @@ engineLabel : Engine -> String
 engineLabel Eval = "eval"
 engineLabel NativeCapability = "native (capability)"
 engineLabel NativeSpeed = "native (speed)"
+engineLabel EvalAndNative = "eval+native"
 
 {- | The roster: module name, the assertion-count floor it commits, and the
    engine it runs under.
@@ -76,6 +103,13 @@ engineLabel NativeSpeed = "native (speed)"
    assertions from 29 `prop` declarations and 94 doctest lines, and reading
    the declarations alone commits a floor five times too low.
 
+   `EvalAndNative` is the column every row carries unless something stops
+   it, and the two arms must agree before the floor is graded at all. The
+   eval arm on its own runs a module's examples without ever building it,
+   so a doctest that is not valid Medaka passes there; the native arm is
+   what typechecks the generated file, and it is the only arm that can say
+   so.
+
    `NativeCapability` (four rows): the eval arm refuses the module outright
    with `E-PANIC: unbound identifier` on `listDir`, `readFile` or
    `runCommand` — host primitives `medaka test`'s interpreter capability
@@ -87,6 +121,15 @@ engineLabel NativeSpeed = "native (speed)"
    `test/diff_compiler_test_native.sh` asserts on. Its 123 assertions run
    only under the interpreter.
 
+   `async` is `Eval` for a reason that is a bug rather than a policy: its
+   native doctest build fails whole-file, so the native arm runs 0 of its
+   11 assertions rather than some of them. Two examples drive an `Async`
+   program with `sleep`, which performs `<Clock>`, and the doctest runner's
+   generated top-level binding admits only `<>` (#3300). No annotation
+   inside the example fixes an effect-row rejection, so this is not #3291's
+   defect wearing a different hat. The row moves to `EvalAndNative` when
+   #3300 closes.
+
    Two rows are worth knowing about when their floor moves. `regex`'s count
    includes two linear-time step-count sentinels that fail loudly if the
    Pike VM's sparse-set dedup or its priority cut is ever lost, so a drop
@@ -95,38 +138,38 @@ engineLabel NativeSpeed = "native (speed)"
    makes a reverted variable-key schedule visible at all. -}
 suites : List (String, (Int, Engine))
 suites = [
-  ("args", (44, Eval)),
-  ("array", (53, Eval)),
+  ("args", (44, EvalAndNative)),
+  ("array", (53, EvalAndNative)),
   ("async", (11, Eval)),
-  ("base32", (28, Eval)),
-  ("base64", (21, Eval)),
-  ("bits64", (31, Eval)),
-  ("bytebuilder", (69, Eval)),
-  ("byteparser", (33, Eval)),
-  ("bytes", (87, Eval)),
+  ("base32", (28, EvalAndNative)),
+  ("base64", (21, EvalAndNative)),
+  ("bits64", (31, EvalAndNative)),
+  ("bytebuilder", (69, EvalAndNative)),
+  ("byteparser", (33, EvalAndNative)),
+  ("bytes", (87, EvalAndNative)),
   ("core", (123, Eval)),
   ("fs", (8, NativeCapability)),
-  ("hash_map", (24, Eval)),
-  ("hash_set", (13, Eval)),
-  ("hex", (23, Eval)),
-  ("hmac", (12, Eval)),
-  ("http", (6, Eval)),
+  ("hash_map", (24, EvalAndNative)),
+  ("hash_set", (13, EvalAndNative)),
+  ("hex", (23, EvalAndNative)),
+  ("hmac", (12, EvalAndNative)),
+  ("http", (6, EvalAndNative)),
   ("io", (8, NativeCapability)),
-  ("json", (55, Eval)),
-  ("list", (158, Eval)),
-  ("math", (61, Eval)),
-  ("mut_bytes", (16, Eval)),
-  ("net", (3, Eval)),
-  ("nonempty", (15, Eval)),
-  ("path", (34, Eval)),
-  ("regex", (94, Eval)),
-  ("set", (64, Eval)),
+  ("json", (55, EvalAndNative)),
+  ("list", (158, EvalAndNative)),
+  ("math", (61, EvalAndNative)),
+  ("mut_bytes", (16, EvalAndNative)),
+  ("net", (3, EvalAndNative)),
+  ("nonempty", (15, EvalAndNative)),
+  ("path", (34, EvalAndNative)),
+  ("regex", (94, EvalAndNative)),
+  ("set", (64, EvalAndNative)),
   ("test", (72, NativeCapability)),
   ("test_process", (17, NativeCapability)),
-  ("time", (36, Eval)),
-  ("toml", (56, Eval)),
-  ("validation", (20, Eval)),
-  ("vector", (32, Eval)),
+  ("time", (36, EvalAndNative)),
+  ("toml", (56, EvalAndNative)),
+  ("validation", (20, EvalAndNative)),
+  ("vector", (32, EvalAndNative)),
 ]
 
 rosterNames : List String
@@ -195,11 +238,40 @@ exemptNames = map fst exempt
    refusal from the eval arm and a genuine assertion failure both surface as
    a nonzero exit, and only the label says which arm was asked. -}
 runModule : String -> Engine -> <Exec "_", IO> Result String Int
+runModule name EvalAndNative = runBothEngines (underRoot "stdlib/\{name}.mdk")
 runModule name engine =
   let path = underRoot "stdlib/\{name}.mdk"
   match testAssertionCount path (engineArgs engine)
     Err e => Err "\{path} (\{engineLabel engine}): \{e}"
     Ok n => Ok n
+
+{- | Runs one module twice, once under each engine, and returns the count
+   the two arms agree on.
+
+   Two spawns rather than one `--engines eval,native` spawn because that
+   form emits only the first engine's object under `--json`, which is the
+   only output `testAssertionCount` can grade.
+
+   The two counts must be equal, not merely both at or above the floor.
+   Reducing them to the lower one would pass a module whose native arm has
+   quietly stopped running some of its assertions, for as long as the
+   remainder stays over the floor; equality makes the divergence itself the
+   failure, and the message carries both numbers so the next reader knows
+   which arm moved. An arm that refuses to run at all is an `Err` naming
+   which one, since the two fail for unrelated reasons (the interpreter
+   over an unbound extern, the native backend over a doctest that does not
+   typecheck). -}
+runBothEngines : String -> <Exec "_", IO> Result String Int
+runBothEngines path = match testAssertionCount path []
+  Err e => Err "\{path} (eval arm of \{engineLabel EvalAndNative}): \{e}"
+  Ok evalRan => match testAssertionCount path ["--native"]
+    Err e => Err "\{path} (native arm of \{engineLabel EvalAndNative}): \{e}"
+    Ok nativeRan =>
+      if evalRan == nativeRan then
+        Ok evalRan
+      else
+        Err
+          "\{path} (\{engineLabel EvalAndNative}): the eval arm ran \{intToString evalRan} assertions and the native arm ran \{intToString nativeRan} — the arms must run the same assertions, so one of them has stopped discovering some"
 
 {- | Every rostered module run exactly once, shared by every assertion below
    — top-level nullary bindings are memoized, so a spawn placed here and
