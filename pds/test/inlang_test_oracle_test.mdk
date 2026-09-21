@@ -18,13 +18,17 @@
 
 import io.{readLines}
 import list.{lookup, somes}
-import string.{indexOf, stripPrefix}
+import string.{stripSuffix}
 import test.{Expectation(..)}
 import test_process.{
+  disagreeingFloorBlocks,
   missingTestFiles,
+  missingUnits,
   testAssertionCount,
   underRoot,
+  ungradedRosterRows,
   unrosteredTestFiles,
+  unrosteredUnits,
 }
 
 {- | Which engine a suite is spawned under, and why.
@@ -206,6 +210,205 @@ exempt = [
 exemptNames : List String
 exemptNames = map fst exempt
 
+{- # pds/lib/ + pds/shell/ — the library's own doctests, run by nothing
+   before this gate.
+
+   A second roster, over `pds/lib/*.mdk` and `pds/shell/*.mdk` modules rather
+   than `pds/test/*_test.mdk` suites — one project's whole library surface,
+   so one roster covers both directories; each row states which one it
+   resolves under. Floors measured on the binary at this base via `medaka
+   test --json <path>` (`summary.passed`); every row below exits 0 today. -}
+
+libSuites : List (String, String, Int)
+libSuites = [
+  ("lib", "accesslog", 1),
+  ("lib", "base58", 3),
+  ("lib", "blob", 6),
+  ("lib", "field", 2),
+  ("lib", "httpclient", 1),
+  ("lib", "multiformats", 15),
+  ("lib", "resource_limits", 1),
+  ("lib", "scalar", 4),
+  ("shell", "blobfile", 1),
+]
+
+libRosterNames : List String
+libRosterNames = map ((_, name, _) => name) libSuites
+
+{- | `pds/lib/*.mdk` and `pds/shell/*.mdk` modules with zero assertions of
+   their own — not suites this gate floors, but still accounted for so the
+   closure checks below cannot silently miss a new module. Spot-checked via
+   `medaka test --json pds/<dir>/<name>.mdk` at this base: each reports
+   `"summary":{"passed":0,...}`. -}
+libExempt : List (String, String)
+libExempt = [
+  ("atsyntax", "0 assertions"),
+  ("blockstore", "0 assertions"),
+  ("car", "0 assertions"),
+  ("cid", "0 assertions"),
+  ("cors", "0 assertions"),
+  ("credential", "0 assertions"),
+  ("dagcbor", "0 assertions"),
+  ("did_key", "0 assertions"),
+  ("event_log_record", "0 assertions"),
+  ("handlers", "0 assertions"),
+  ("hmac_sha256", "0 assertions"),
+  ("jwt", "0 assertions"),
+  ("lexjson", "0 assertions"),
+  ("mst", "0 assertions"),
+  ("nsid", "0 assertions"),
+  ("proxy", "0 assertions"),
+  ("query_params", "0 assertions"),
+  ("ratelimit", "0 assertions"),
+  ("repo", "0 assertions"),
+  ("secp256k1", "0 assertions"),
+  ("server_core", "0 assertions"),
+  ("sha1", "0 assertions"),
+  ("sign", "0 assertions"),
+  ("store", "0 assertions"),
+  ("sync_event", "0 assertions"),
+  ("tid", "0 assertions"),
+  ("websocket", "0 assertions"),
+  ("xrpc", "0 assertions"),
+  ("blockfile", "0 assertions"),
+  ("crawl", "0 assertions"),
+  ("dirlock", "0 assertions"),
+  ("egress", "0 assertions"),
+  ("eventlog", "0 assertions"),
+  ("keygen", "0 assertions"),
+  ("persist", "0 assertions"),
+  ("server", "0 assertions"),
+  ("subscribe", "0 assertions"),
+]
+
+libExemptNames : List String
+libExemptNames = map fst libExempt
+
+libKnownNames : List String
+libKnownNames = libRosterNames ++ libExemptNames
+
+-- | The module name a `pds/lib/` or `pds/shell/` directory entry names, or
+-- `None` when the entry is not a Medaka module.
+libModuleStem : String -> Option String
+libModuleStem name = stripSuffix ".mdk" name
+
+-- Runs one `pds/lib/` or `pds/shell/` module and returns its
+-- executed-assertion count, or an error naming the file and what went wrong.
+runLibSuite : String -> String -> <Exec "_", IO> Result String Int
+runLibSuite dir name =
+  match testAssertionCount (underRoot "pds/\{dir}/\{name}.mdk") []
+    Err e => Err "pds/\{dir}/\{name}.mdk: \{e}"
+    Ok n => Ok n
+
+{- | The key one `libSuites` row is stored and looked up under.
+
+   The roster spans two directories, so a bare module name is not a key: the
+   day a module named `foo` exists under both `pds/lib` and `pds/shell`, one
+   row's result silently answers for the other's floor and both `test`
+   blocks read as covered ([T-GLOBAL-TABLE]). Qualifying by directory makes
+   the key as specific as the file it names. -}
+libKeyOf : String -> String -> String
+libKeyOf dir name = "\{dir}/\{name}"
+
+-- Every `pds/lib/`/`pds/shell/` module run exactly once, shared by every
+-- assertion below — memoized the same way `results` is.
+libResults : <Exec "_", IO> List (String, (Int, Result String Int))
+libResults =
+  map
+    ((dir, name, floor) => (libKeyOf dir name, (floor, runLibSuite dir name)))
+    libSuites
+
+-- Grades one `pds/lib/`/`pds/shell/` module's floor, same shape as
+-- `floorExpectation`.
+libFloorExpectation : String -> String -> <Exec "_", IO> Expectation
+libFloorExpectation dir name = match lookup (libKeyOf dir name) libResults
+  None => Fail "pds/\{dir}/\{name}.mdk has no `libResults` entry" "" ""
+  Some (floor, Err e) =>
+    Fail e "\{intToString floor} assertions" "spawn/parse error"
+  Some (floor, Ok ran) =>
+    if ran >= floor then
+      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
+    else
+      Fail
+        "pds/\{dir}/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
+        "\{intToString floor} assertions"
+        "\{intToString ran} assertions"
+
+test "pds/lib/accesslog.mdk executed >= 1 assertions" =
+  libFloorExpectation "lib" "accesslog"
+
+test "pds/lib/base58.mdk executed >= 3 assertions" =
+  libFloorExpectation "lib" "base58"
+
+test "pds/lib/blob.mdk executed >= 6 assertions" =
+  libFloorExpectation "lib" "blob"
+
+test "pds/lib/field.mdk executed >= 2 assertions" =
+  libFloorExpectation "lib" "field"
+
+test "pds/lib/httpclient.mdk executed >= 1 assertions" =
+  libFloorExpectation "lib" "httpclient"
+
+test "pds/lib/multiformats.mdk executed >= 15 assertions" =
+  libFloorExpectation "lib" "multiformats"
+
+test "pds/lib/resource_limits.mdk executed >= 1 assertions" =
+  libFloorExpectation "lib" "resource_limits"
+
+test "pds/lib/scalar.mdk executed >= 4 assertions" =
+  libFloorExpectation "lib" "scalar"
+
+test "pds/shell/blobfile.mdk executed >= 1 assertions" =
+  libFloorExpectation "shell" "blobfile"
+
+libUnrosteredLibFiles : <FileRead "_", IO> Result String (List String)
+libUnrosteredLibFiles = match listDir (underRoot "pds/lib")
+  Err e => Err "could not list pds/lib: \{e}"
+  Ok names => Ok (unrosteredUnits libModuleStem libKnownNames names)
+
+test "every pds/lib/*.mdk module has a `libSuites` or `libExempt` row" =
+  match libUnrosteredLibFiles
+    Err e => Fail e "no unrostered modules" "listDir failed"
+    Ok [] => Pass "no unrostered modules" "no unrostered modules"
+    Ok extras =>
+      Fail
+        "unaccounted pds/lib/*.mdk module(s): \{debug extras} — add a row to `libSuites` in this file with the floor it commits today, or a `libExempt` row saying why it is not floored here"
+        "no unrostered modules"
+        "\{debug extras}"
+
+libUnrosteredShellFiles : <FileRead "_", IO> Result String (List String)
+libUnrosteredShellFiles = match listDir (underRoot "pds/shell")
+  Err e => Err "could not list pds/shell: \{e}"
+  Ok names => Ok (unrosteredUnits libModuleStem libKnownNames names)
+
+test "every pds/shell/*.mdk module has a `libSuites` or `libExempt` row" =
+  match libUnrosteredShellFiles
+    Err e => Fail e "no unrostered modules" "listDir failed"
+    Ok [] => Pass "no unrostered modules" "no unrostered modules"
+    Ok extras =>
+      Fail
+        "unaccounted pds/shell/*.mdk module(s): \{debug extras} — add a row to `libSuites` in this file with the floor it commits today, or a `libExempt` row saying why it is not floored here"
+        "no unrostered modules"
+        "\{debug extras}"
+
+libPhantomExemptions : <FileRead "_", IO> Result String (List String)
+libPhantomExemptions = match listDir (underRoot "pds/lib")
+  Err e => Err "could not list pds/lib: \{e}"
+  Ok libNames => match listDir (underRoot "pds/shell")
+    Err e => Err "could not list pds/shell: \{e}"
+    Ok shellNames =>
+      Ok (missingUnits libModuleStem libExemptNames (libNames ++ shellNames))
+
+test "every `libExempt` row names a module that exists" =
+  match libPhantomExemptions
+    Err e => Fail e "no phantom exemptions" "listDir failed"
+    Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
+    Ok extras =>
+      Fail
+        "`libExempt` names pds/lib or pds/shell module(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a module of that name"
+        "no phantom exemptions"
+        "\{debug extras}"
+
 {- | Runs a suite under its engine and returns its executed-assertion count,
    or an error naming the engine and what went wrong.
 
@@ -345,7 +548,7 @@ ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
 totalRan : <Exec "_", IO> Int
-totalRan = sum (map ranCountOf results)
+totalRan = sum (map ranCountOf results) + sum (map ranCountOf libResults)
 
 test "pds in-language suite ran at least one assertion" =
   if totalRan > 0 then
@@ -438,87 +641,30 @@ test "every `excluded` row names a rostered suite" = match danglingExclusions
 
    A block's TITLE is not evidence that the block graded the row it names,
    so the scan reads the title and the body's `floorExpectation` argument
-   together and credits a row only when they agree. -}
-
--- | The `<name>` in a line `test "pds/test/<name>.mdk executed >= …" = …`
--- written by this file for a roster row's floor assertion, or `None` for
--- any other line.
-checkedNameOf : String -> Option String
-checkedNameOf line = match stripPrefix "test \"pds/test/" line
-  None => None
-  Some rest => map (i => stringSlice 0 i rest) (indexOf ".mdk executed >=" rest)
+   together and credits a row only when they agree. The scan itself is
+   `test_process`'s `ungradedRosterRows`/`disagreeingFloorBlocks`, which
+   every roster module in the tree shares; this file only supplies the
+   title prefix its own blocks are spelled with and the call they grade
+   through. -}
 
 floorCallOpen : String
 floorCallOpen = "floorExpectation \""
 
--- | The roster name a `floorExpectation` call on `line` actually grades, or
--- `None` for any other line.
-gradedNameOf : String -> Option String
-gradedNameOf line = match indexOf floorCallOpen line
-  None => None
-  Some i =>
-    let rest =
-      stringSlice (i + stringLength floorCallOpen) (stringLength line) line
-    map (j => stringSlice 0 j rest) (indexOf "\"" rest)
-
-{- | Every floor-assertion title in this file's own source, paired with the
-   roster name the block's own body grades.
-
-   The two are independent: the title is prose, while the argument is what
-   `results` is looked up by. A block whose title names one row and whose
-   argument names another still passes its own assertion — that lookup is
-   real — but the titled row's floor is never applied and the graded row's
-   is applied twice, so reading the title alone marks a row covered by an
-   assertion that never graded it. -}
-titleArgPairs : List String -> List (String, Option String)
-titleArgPairs [] = []
-titleArgPairs (line :: rest) = match checkedNameOf line
-  None => titleArgPairs rest
-  Some titled => match gradedNameOf line
-    Some graded => (titled, Some graded) :: titleArgPairs rest
-    None => (titled, gradedAfter rest) :: titleArgPairs rest
-
--- | The roster name graded by the body following a title line: the lines up
--- to the next top-level `test` declaration, so a block that grades nothing
--- cannot borrow the following block's call.
-gradedAfter : List String -> Option String
-gradedAfter [] = None
-gradedAfter (line :: rest) = match stripPrefix "test \"" line
-  Some _ => None
-  None => match gradedNameOf line
-    Some graded => Some graded
-    None => gradedAfter rest
-
-agreeing : (String, Option String) -> Bool
-agreeing (titled, Some graded) = titled == graded
-agreeing (_, None) = False
-
 ownSourceLines : <IO> Result String (List String)
 ownSourceLines = readLines (underRoot "pds/test/inlang_test_oracle_test.mdk")
-
-{- | The names that have their own `test "pds/test/<name>.mdk executed >=
-   …"` block in this file AND are the name that block's body grades, from a
-   static scan of the file's own source text — never a `medaka test --json`
-   self-spawn, which would recurse into re-spawning every suite this file
-   already spawns (see the doc comment on `results` above).
-
-   A block whose title and argument disagree counts for neither name: the
-   titled row is not graded by it, and the graded row is covered by its own
-   block or not at all. -}
-checkedNames : <IO> Result String (List String)
-checkedNames =
-  map (ls => map fst (filter agreeing (titleArgPairs ls))) ownSourceLines
 
 -- | Rostered, non-excluded names with no `test` block that both names them
 -- in its title and grades them in its body.
 uncheckedRows : <IO> Result String (List String)
 uncheckedRows =
   map
-    (checked =>
-      filter
-        (n => not (elem n excludedNames) && not (elem n checked))
-        rosterNames)
-    checkedNames
+    (ls =>
+      ungradedRosterRows
+        "pds/test/"
+        floorCallOpen
+        (filter (n => not (elem n excludedNames)) rosterNames)
+        ls)
+    ownSourceLines
 
 test "every `suites` row has a matching `test` block (or is `excluded`)" =
   match uncheckedRows
@@ -530,20 +676,9 @@ test "every `suites` row has a matching `test` block (or is `excluded`)" =
         "no unchecked rows"
         "\{debug extras}"
 
--- | A disagreeing block rendered as `<name its title claims> -> <name its
--- body grades>`.
-renderDisagreement : (String, Option String) -> String
-renderDisagreement (titled, None) = "\{titled} -> grades nothing"
-renderDisagreement (titled, Some graded) = "\{titled} -> \{graded}"
-
 disagreeingBlocks : <IO> Result String (List String)
 disagreeingBlocks =
-  map
-    (ls =>
-      map
-        renderDisagreement
-        (filter (pair => not (agreeing pair)) (titleArgPairs ls)))
-    ownSourceLines
+  map (ls => disagreeingFloorBlocks "pds/test/" floorCallOpen ls) ownSourceLines
 
 test "every floor assertion grades the suite its own title names" =
   match disagreeingBlocks

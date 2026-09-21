@@ -17,13 +17,19 @@
    gate rather than going uncounted (the sqlite script never had this last
    check; see the roster test below). -}
 
+import io.{readLines}
 import list.{lookup}
+import string.{stripSuffix}
 import test.{Expectation(..)}
 import test_process.{
+  disagreeingFloorBlocks,
   missingTestFiles,
+  missingUnits,
   testAssertionCount,
   underRoot,
+  ungradedRosterRows,
   unrosteredTestFiles,
+  unrosteredUnits,
 }
 
 -- file:floor pairs — floor = the assertion count committed today. Adding
@@ -79,6 +85,160 @@ exempt = [
 
 exemptNames : List String
 exemptNames = map fst exempt
+
+{- # sqlite/lib/ — #2984: the library's own doctests, run by nothing before
+   this gate.
+
+   A second roster, over `sqlite/lib/*.mdk` modules rather than
+   `sqlite/test/*_test.mdk` suites — the file:floor shape and closure checks
+   are the same idea, applied to a different directory. Floors measured on
+   the binary at this base via `medaka test --json <path>` (`summary.passed`);
+   every row below exits 0 today. -}
+
+libSuites : List (String, Int)
+libSuites = [
+  ("btree", 1),
+  ("header", 2),
+  ("overflow", 23),
+  ("recordenc", 7),
+  ("recordfmt", 3),
+  ("rowtype", 2),
+  ("schemadef", 53),
+  ("select", 26),
+  ("sqlexec", 7),
+  ("sqlparse", 51),
+  ("sqlstmt", 41),
+  ("sqltoken", 11),
+  ("varint", 11),
+  ("writer", 4),
+]
+
+libRosterNames : List String
+libRosterNames = map fst libSuites
+
+{- | `sqlite/lib/*.mdk` modules with zero assertions of their own — not
+   suites this gate floors, but still accounted for so the closure check
+   below cannot silently miss a new module. Spot-checked via `medaka test
+   --json sqlite/lib/<name>.mdk` at this base: each reports
+   `"summary":{"passed":0,...}`. -}
+libExempt : List (String, String)
+libExempt = [
+  ("aggregate", "0 assertions"),
+  ("dbwriter", "0 assertions"),
+  ("indexlookup", "0 assertions"),
+  ("mutate", "0 assertions"),
+  ("query", "0 assertions"),
+  ("sqlite", "0 assertions"),
+]
+
+libExemptNames : List String
+libExemptNames = map fst libExempt
+
+-- | The module name a `sqlite/lib/` directory entry names, or `None` when
+-- the entry is not a Medaka module.
+libModuleStem : String -> Option String
+libModuleStem name = stripSuffix ".mdk" name
+
+-- Runs one `sqlite/lib/` module and returns its executed-assertion count,
+-- or an error naming the file and what went wrong.
+runLibSuite : String -> <Exec "_", IO> Result String Int
+runLibSuite name =
+  match testAssertionCount (underRoot "sqlite/lib/\{name}.mdk") []
+    Err e => Err "sqlite/lib/\{name}.mdk: \{e}"
+    Ok n => Ok n
+
+-- Every `sqlite/lib/` module run exactly once, shared by every assertion
+-- below — memoized the same way `results` is.
+libResults : <Exec "_", IO> List (String, (Int, Result String Int))
+libResults = map ((name, floor) => (name, (floor, runLibSuite name))) libSuites
+
+-- Grades one `sqlite/lib/` module's floor, same shape as `floorExpectation`.
+libFloorExpectation : String -> <Exec "_", IO> Expectation
+libFloorExpectation name = match lookup name libResults
+  None => Fail "sqlite/lib/\{name}.mdk has no `libResults` entry" "" ""
+  Some (floor, Err e) =>
+    Fail e "\{intToString floor} assertions" "spawn/parse error"
+  Some (floor, Ok ran) =>
+    if ran >= floor then
+      Pass "\{intToString floor} assertions" "\{intToString ran} assertions"
+    else
+      Fail
+        "sqlite/lib/\{name}.mdk — only \{intToString ran} assertions ran, expected >= \{intToString floor} (vacuous-green guard: discovery may have silently stopped finding tests)"
+        "\{intToString floor} assertions"
+        "\{intToString ran} assertions"
+
+test "sqlite/lib/btree.mdk executed >= 1 assertions" =
+  libFloorExpectation "btree"
+
+test "sqlite/lib/header.mdk executed >= 2 assertions" =
+  libFloorExpectation "header"
+
+test "sqlite/lib/overflow.mdk executed >= 23 assertions" =
+  libFloorExpectation "overflow"
+
+test "sqlite/lib/recordenc.mdk executed >= 7 assertions" =
+  libFloorExpectation "recordenc"
+
+test "sqlite/lib/recordfmt.mdk executed >= 3 assertions" =
+  libFloorExpectation "recordfmt"
+
+test "sqlite/lib/rowtype.mdk executed >= 2 assertions" =
+  libFloorExpectation "rowtype"
+
+test "sqlite/lib/schemadef.mdk executed >= 53 assertions" =
+  libFloorExpectation "schemadef"
+
+test "sqlite/lib/select.mdk executed >= 26 assertions" =
+  libFloorExpectation "select"
+
+test "sqlite/lib/sqlexec.mdk executed >= 7 assertions" =
+  libFloorExpectation "sqlexec"
+
+test "sqlite/lib/sqlparse.mdk executed >= 51 assertions" =
+  libFloorExpectation "sqlparse"
+
+test "sqlite/lib/sqlstmt.mdk executed >= 41 assertions" =
+  libFloorExpectation "sqlstmt"
+
+test "sqlite/lib/sqltoken.mdk executed >= 11 assertions" =
+  libFloorExpectation "sqltoken"
+
+test "sqlite/lib/varint.mdk executed >= 11 assertions" =
+  libFloorExpectation "varint"
+
+test "sqlite/lib/writer.mdk executed >= 4 assertions" =
+  libFloorExpectation "writer"
+
+libUnrosteredFiles : <FileRead "_", IO> Result String (List String)
+libUnrosteredFiles = match listDir (underRoot "sqlite/lib")
+  Err e => Err "could not list sqlite/lib: \{e}"
+  Ok names =>
+    Ok (unrosteredUnits libModuleStem (libRosterNames ++ libExemptNames) names)
+
+test "every sqlite/lib/*.mdk module has a `libSuites` or `libExempt` row" =
+  match libUnrosteredFiles
+    Err e => Fail e "no unrostered modules" "listDir failed"
+    Ok [] => Pass "no unrostered modules" "no unrostered modules"
+    Ok extras =>
+      Fail
+        "unaccounted sqlite/lib/*.mdk module(s): \{debug extras} — add a row to `libSuites` in this file with the floor it commits today, or a `libExempt` row saying why it is not floored here"
+        "no unrostered modules"
+        "\{debug extras}"
+
+libPhantomExemptions : <FileRead "_", IO> Result String (List String)
+libPhantomExemptions = match listDir (underRoot "sqlite/lib")
+  Err e => Err "could not list sqlite/lib: \{e}"
+  Ok names => Ok (missingUnits libModuleStem libExemptNames names)
+
+test "every `libExempt` row names a module that exists" =
+  match libPhantomExemptions
+    Err e => Fail e "no phantom exemptions" "listDir failed"
+    Ok [] => Pass "no phantom exemptions" "no phantom exemptions"
+    Ok extras =>
+      Fail
+        "`libExempt` names sqlite/lib module(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a module of that name"
+        "no phantom exemptions"
+        "\{debug extras}"
 
 -- Runs one suite under the default (eval) engine and returns its
 -- executed-assertion count, or an error naming the file and what went wrong.
@@ -145,7 +305,7 @@ ranCountOf (_, (_, Ok n)) = n
 ranCountOf (_, (_, Err _)) = 0
 
 totalRan : <Exec "_", IO> Int
-totalRan = sum (map ranCountOf results)
+totalRan = sum (map ranCountOf results) + sum (map ranCountOf libResults)
 
 test "sqlite in-language suite ran at least one assertion" =
   if totalRan > 0 then
@@ -187,3 +347,55 @@ test "every `exempt` row names a file that exists" = match phantomExemptions
       "`exempt` names sqlite/test file(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a file of that name"
       "no phantom exemptions"
       "\{debug extras}"
+
+{- # `libSuites`/assertion lockstep
+
+   `libResults` is a shared memoized binding computed for every `libSuites`
+   row whether or not anything asserts on it: a row with no `test` block of
+   its own is still spawned, and its verdict is silently discarded. The
+   closure checks above prove only that a MODULE is named somewhere; they
+   say nothing about whether an assertion grades it, and a block's TITLE is
+   not evidence either, since a title naming one row while its body grades
+   another passes a real lookup for the wrong row. The scan is
+   `test_process`'s `ungradedRosterRows`/`disagreeingFloorBlocks`, which
+   reads this file's own source text rather than hand-maintaining a second
+   list next to the `test` blocks (#2997). -}
+
+libFloorCallOpen : String
+libFloorCallOpen = "libFloorExpectation \""
+
+ownSourceLines : <IO> Result String (List String)
+ownSourceLines = readLines (underRoot "sqlite/test/inlang_test_oracle_test.mdk")
+
+uncheckedLibRows : <IO> Result String (List String)
+uncheckedLibRows =
+  map
+    (ls => ungradedRosterRows "sqlite/lib/" libFloorCallOpen libRosterNames ls)
+    ownSourceLines
+
+test "every `libSuites` row has a matching `test` block" =
+  match uncheckedLibRows
+    Err e => Fail e "no unchecked rows" "read failed"
+    Ok [] => Pass "no unchecked rows" "no unchecked rows"
+    Ok extras =>
+      Fail
+        "libSuites row(s) with no `test \"sqlite/lib/<name>.mdk executed >= …\"` block grading that same name: \{debug extras} — `libResults` is computed for them but never turned into an assertion (#2997)"
+        "no unchecked rows"
+        "\{debug extras}"
+
+disagreeingLibBlocks : <IO> Result String (List String)
+disagreeingLibBlocks =
+  map
+    (ls => disagreeingFloorBlocks "sqlite/lib/" libFloorCallOpen ls)
+    ownSourceLines
+
+test "every `libSuites` floor assertion grades the module its title names" =
+  match disagreeingLibBlocks
+    Err e => Fail e "no title/argument disagreements" "read failed"
+    Ok [] =>
+      Pass "no title/argument disagreements" "no title/argument disagreements"
+    Ok bad =>
+      Fail
+        "floor assertion block(s) whose title and `libFloorExpectation` argument name different modules: \{debug bad} — the titled row's floor is never applied and the graded row's is applied twice, while the row reads as covered"
+        "no title/argument disagreements"
+        "\{debug bad}"

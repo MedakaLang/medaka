@@ -1314,17 +1314,17 @@ find : Regex -> String -> Option Match
 find re s = matchOnce re s 0 False False
 
 -- Leftmost-first, not leftmost-longest: the alternation's order decides.
--- > map (m => m.text) (find (mustCompile "a|ab") "ab")
+-- > map (m => (m : Match).text) (find (mustCompile "a|ab") "ab")
 -- Some "a"
--- > map (m => m.text) (find (mustCompile "ab|a") "ab")
+-- > map (m => (m : Match).text) (find (mustCompile "ab|a") "ab")
 -- Some "ab"
--- > map (m => m.text) (find (mustCompile "a+") "aaa")
+-- > map (m => (m : Match).text) (find (mustCompile "a+") "aaa")
 -- Some "aaa"
--- > map (m => m.text) (find (mustCompile "a+?") "aaa")
+-- > map (m => (m : Match).text) (find (mustCompile "a+?") "aaa")
 -- Some "a"
--- > map (m => m.text) (find (mustCompile "<.+>") "<a><b>")
+-- > map (m => (m : Match).text) (find (mustCompile "<.+>") "<a><b>")
 -- Some "<a><b>"
--- > map (m => m.text) (find (mustCompile "<.+?>") "<a><b>")
+-- > map (m => (m : Match).text) (find (mustCompile "<.+?>") "<a><b>")
 -- Some "<a>"
 
 {- | The leftmost match that starts at or after `from`.
@@ -1332,7 +1332,7 @@ find re s = matchOnce re s 0 False False
    `from` is clamped to the subject. `^` and `$` still mean the ends of the
    whole subject, not of the searched tail.
 
-   > map (m => m.start) (findFrom 3 (mustCompile "a") "aaaaa")
+   > map (m => (m : Match).start) (findFrom 3 (mustCompile "a") "aaaaa")
    Some 3
    > findFrom 3 (mustCompile "^a") "aaaaa"
    None -}
@@ -1345,7 +1345,7 @@ findFrom from re s =
 
 {- | The match covering the whole subject, or `None`.
 
-   > map (m => m.text) (fullMatch (mustCompile "a|ab") "ab")
+   > map (m => (m : Match).text) (fullMatch (mustCompile "a|ab") "ab")
    Some "ab"
    > fullMatch (mustCompile "a") "ab"
    None -}
@@ -1409,9 +1409,9 @@ isFullMatchBytes re bytes start end =
    cuts a codepoint decodes the way `fromUtf8` decodes any malformed input.
    Keeping byte patterns ASCII is what keeps that from arising.
 
-   > map (m => m.text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   > map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
    Some "12"
-   > map (m => m.start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   > map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
    Some 1
    > findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
    None -}
@@ -1429,9 +1429,9 @@ findBytes re bytes start end =
    `\d*` over `"a1b"` reports the empty match before `a`, `"1"`, and the
    empty match at the end.
 
-   > map (m => m.text) (findAll (mustCompile "\\d+") "a1b22c")
+   > map (m => (m : Match).text) (findAll (mustCompile "\\d+") "a1b22c")
    ["1", "22"]
-   > map (m => m.text) (findAll (mustCompile "\\d*") "a1b")
+   > map (m => (m : Match).text) (findAll (mustCompile "\\d*") "a1b")
    ["", "1", ""] -}
 export
 findAll : Regex -> String -> List Match
@@ -1460,11 +1460,11 @@ findAllGo re s codes pos prevEnd acc =
       let acc2 = if keep then mkMatch re s slots :: acc else acc
       findAllGo re s codes next hi acc2
 
--- > map (m => m.text) (findAll (mustCompile "a*") "baaab")
+-- > map (m => (m : Match).text) (findAll (mustCompile "a*") "baaab")
 -- ["", "aaa", ""]
--- > map (m => (m.start, m.end)) (findAll (mustCompile "a*") "baaab")
+-- > map (m => ((m : Match).start, (m : Match).end)) (findAll (mustCompile "a*") "baaab")
 -- [(0, 0), (1, 4), (5, 5)]
--- > map (m => m.text) (findAll (mustCompile "") "abc")
+-- > map (m => (m : Match).text) (findAll (mustCompile "") "abc")
 -- ["", "", "", ""]
 
 -- # Groups
@@ -1477,13 +1477,13 @@ findAllGo re s codes pos prevEnd acc =
 -- Some [None]
 
 -- The classic leftmost-first submatch: `a` then `bcd`, not `ab` then `cd`.
--- > map (m => map (g => map (g2 => g2.text) g) m.groups) (find (mustCompile "(a|ab)(c|bcd)") "abcd")
+-- > map (m => map (g => map (g2 => (g2 : Group).text) g) m.groups) (find (mustCompile "(a|ab)(c|bcd)") "abcd")
 -- Some [Some "a", Some "bcd"]
 
 -- The last iteration of a repeated group is the one that is reported.
--- > map (m => map (g => map (g2 => g2.text) g) m.groups) (find (mustCompile "(a|b)*") "ab")
+-- > map (m => map (g => map (g2 => (g2 : Group).text) g) m.groups) (find (mustCompile "(a|b)*") "ab")
 -- Some [Some "b"]
--- > map (m => map (g => map (g2 => (g2.start, g2.end)) g) m.groups) (find (mustCompile "(a*)(a*)") "aa")
+-- > map (m => map (g => map (g2 => ((g2 : Group).start, (g2 : Group).end)) g) m.groups) (find (mustCompile "(a*)(a*)") "aa")
 -- Some [Some (0, 2), Some (2, 2)]
 
 -- # Replacing and splitting
@@ -1524,7 +1524,7 @@ replaceAll re repl s = replaceAllWith re (m => expandRepl repl m) s
    Nothing in the result is rescanned, so a replacement that looks like the
    pattern is left alone.
 
-   > replaceAllWith (mustCompile "\\d") (m => "[" ++ m.text ++ "]") "a1b2"
+   > replaceAllWith (mustCompile "\\d") (m => "[" ++ (m : Match).text ++ "]") "a1b2"
    "a[1]b[2]" -}
 export
 replaceAllWith : Regex -> (Match -> <e> String) -> String -> <e> String
@@ -1599,43 +1599,43 @@ splitGo s (m :: rest) beg _ acc =
 
 -- # Anchors, classes, and flags
 
--- > map (m => (m.start, m.end)) (find (mustCompile "^a*") "aab")
+-- > map (m => ((m : Match).start, (m : Match).end)) (find (mustCompile "^a*") "aab")
 -- Some (0, 2)
--- > map (m => m.start) (find (mustCompile "$") "abc")
+-- > map (m => (m : Match).start) (find (mustCompile "$") "abc")
 -- Some 3
 -- > isFullMatch (mustCompile "^abc$") "abc"
 -- True
--- > map (m => m.text) (find (mustCompile "\\bfoo\\b") "a foo bar")
+-- > map (m => (m : Match).text) (find (mustCompile "\\bfoo\\b") "a foo bar")
 -- Some "foo"
 -- > isMatch (mustCompile "\\bfoo\\b") "foobar"
 -- False
--- > map (m => m.text) (find (mustCompile "\\Bar\\b") "foobar")
+-- > map (m => (m : Match).text) (find (mustCompile "\\Bar\\b") "foobar")
 -- Some "ar"
--- > map (m => m.text) (find (mustCompile "[^a-z]+") "abc123")
+-- > map (m => (m : Match).text) (find (mustCompile "[^a-z]+") "abc123")
 -- Some "123"
--- > map (m => m.text) (find (mustCompile "[\\d.]+") "x3.14y")
+-- > map (m => (m : Match).text) (find (mustCompile "[\\d.]+") "x3.14y")
 -- Some "3.14"
 -- > isMatch (mustCompile ".") "\n"
 -- False
 -- > isMatch (mustCompile "(?s).") "\n"
 -- True
--- > map (m => m.start) (find (mustCompile "(?m)^b") "a\nb")
+-- > map (m => (m : Match).start) (find (mustCompile "(?m)^b") "a\nb")
 -- Some 2
--- > map (m => m.text) (find (mustCompile "(?i)AbC") "xxabcyy")
+-- > map (m => (m : Match).text) (find (mustCompile "(?i)AbC") "xxabcyy")
 -- Some "abc"
 -- > isFullMatch (mustCompile "(?i)[a-z]+") "AbC"
 -- True
 -- > isFullMatch (mustCompile "(?i)[^a-z]+") "AbC"
 -- False
--- > map (m => m.text) (find (mustCompile "a{2,3}") "aaaa")
+-- > map (m => (m : Match).text) (find (mustCompile "a{2,3}") "aaaa")
 -- Some "aaa"
--- > map (m => m.text) (find (mustCompile "a{2,3}?") "aaaa")
+-- > map (m => (m : Match).text) (find (mustCompile "a{2,3}?") "aaaa")
 -- Some "aa"
--- > map (m => m.text) (find (mustCompile "a{2}") "aaaa")
+-- > map (m => (m : Match).text) (find (mustCompile "a{2}") "aaaa")
 -- Some "aa"
--- > map (m => m.text) (find (mustCompile "a{2,}") "aaaa")
+-- > map (m => (m : Match).text) (find (mustCompile "a{2,}") "aaaa")
 -- Some "aaaa"
--- > map (m => m.text) (find (mustCompile "\\x41\\u{42}") "xABy")
+-- > map (m => (m : Match).text) (find (mustCompile "\\x41\\u{42}") "xABy")
 -- Some "AB"
 
 -- # Linear time

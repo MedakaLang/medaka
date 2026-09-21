@@ -92,8 +92,20 @@ preflight:
 ##    line here for every call-site-free compiler module.
 test: medaka
 	sh test/diff_compiler_ported.sh
-	./medaka test stdlib/list.mdk
-	./medaka test stdlib/core.mdk
+	## The floor gate for the whole `stdlib/` suite (#3214).  Every
+	## `stdlib/*.mdk` is reached through this one roster rather than a line of
+	## its own here: each row carries the executed-assertion floor that module
+	## commits and the engine it is spawned under, and a closure check fails
+	## when a stdlib module has neither a row nor a reasoned exemption — which
+	## is what a list of per-module lines cannot do, since a module absent from
+	## such a list is indistinguishable from one that needs no line.  The
+	## [W-MODULE-BLIND] reason each of those lines carried is stated once, in
+	## the roster module's own header.
+	## `--native` is for THIS module, not for the modules it grades: it lists
+	## `stdlib/` and spawns one `medaka test` per row, and both reach host
+	## primitives the interpreter does not bind.  Each graded module's own
+	## engine is the `Engine` column inside the roster.
+	./medaka test --native test/stdlib_suite_test.mdk
 	## The one DIRECTORY target, and the only thing anywhere that reaches
 	## `checkTestMdkRoster` (compiler/driver/medaka_cli.mdk): the roster check runs
 	## inside `runTestManyTargets`, which only a multi-target/directory invocation
@@ -150,51 +162,6 @@ test: medaka
 	## duplicate row, a negative count, a missing count field, findings with
 	## no row) are otherwise never run. Its sibling carries the six cases.
 	./medaka test compiler/tools/lint_baseline_test.mdk
-	## The `test/diff_compiler_*_test.mdk` gate modules' own library
-	## ([W-MODULE-BLIND]): nothing else walks stdlib/fs.mdk or
-	## stdlib/test_process.mdk, so their doctests — the anti-vacuity floors and
-	## the roster/count audits the migrated gates rest on — were fixtures that
-	## never executed. `--native` is not decoration: every file operation here
-	## is a host primitive the interpreter does not bind (`listDir` panics with
-	## `unbound identifier` under it), so the interpreter arm can only report a
-	## crash, never a pass.
-	## S-hashes: stdlib/hmac.mdk's RFC 4231 / boundary-key-length checks. Its
-	## own module is outside every entry's import closure ([W-MODULE-BLIND]),
-	## and it is not in test/diff_compiler_fmt_test.mdk's testReportCorpus list, so
-	## without this line nothing would run them and reverting the variable-key
-	## schedule would be caught by nothing.
-	./medaka test stdlib/hmac.mdk
-	## S-base32: stdlib/base32.mdk's RFC 4648 vectors and canonical-rejection
-	## checks. Its own module is outside every entry's import closure
-	## ([W-MODULE-BLIND]) and is not in test/diff_compiler_fmt_test.mdk's testReportCorpus
-	## file list, so without this line nothing would run them.
-	./medaka test stdlib/base32.mdk
-	## stdlib/http.mdk's resource-limit examples. Its own module is outside
-	## every entry's import closure ([W-MODULE-BLIND]) and is not in
-	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without this line
-	## nothing would run them.
-	./medaka test stdlib/http.mdk
-	## stdlib/bytes.mdk's doctests — the `Bytes` surface, including the
-	## out-of-range pairing (`get` answers `None` where `b[i]` panics). Nothing
-	## imports the module by design (keeping it out of the compiler's import
-	## closure is what makes it free of a seed re-mint), so it is outside every
-	## entry's import closure ([W-MODULE-BLIND]) and is not in
-	## test/diff_compiler_fmt_test.mdk's testReportCorpus list either.
-	./medaka test stdlib/bytes.mdk
-	## stdlib/hex.mdk's doctests, including the out-of-domain masking pin
-	## (`encode` on bytes outside 0..255). pds imports hex.mdk but that only
-	## exercises it as ordinary code, never runs its doctests; without this
-	## line nothing does ([W-MODULE-BLIND]).
-	./medaka test stdlib/hex.mdk
-	./medaka test --native stdlib/fs.mdk
-	./medaka test --native stdlib/test_process.mdk
-	## stdlib/test.mdk's own doctests and props, the assertion library every
-	## `*_test.mdk` in the tree imports. Its own module is outside every
-	## entry's import closure ([W-MODULE-BLIND]) and is not in
-	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without
-	## this line nothing would run them. `--native`: `readFile`/
-	## `expectGolden` are host primitives the interpreter does not bind.
-	./medaka test --native stdlib/test.mdk
 	## #2701 leg 3: compiler/tools/lint_test.mdk is outside every entry's
 	## import closure ([W-MODULE-BLIND]), so its renderer-parity property
 	## (text/JSON/MCP cross-file findings agree) never runs otherwise.
@@ -207,18 +174,12 @@ test: medaka
 	## appear across a run of draws, not a fixed alternation) would be a
 	## fixture that never executes.
 	./medaka test compiler/tools/prop_runner_test.mdk
-	## S-regex-engine: stdlib/regex.mdk's own doctests and props (the syntax
-	## table, the leftmost-first examples, the escape/split/findAll properties,
-	## and the two linear-time step-count sentinels that fail loudly if the
-	## Pike VM's sparse-set dedup or its priority cut is ever lost). Outside
-	## every entry's import closure ([W-MODULE-BLIND]) and not in
-	## test/diff_compiler_fmt_test.mdk's testReportCorpus list, so without this line
-	## nothing would run them.
-	./medaka test stdlib/regex.mdk
-	## …and the conformance table beside it, whose expected spans, captures,
-	## replacements and split pieces come from the published Go regexp and RE2
-	## test tables rather than from this engine. It is not enrolled as a gate,
-	## so this line is the only thing that runs it.
+	## The regex conformance table beside stdlib/regex.mdk, whose expected
+	## spans, captures, replacements and split pieces come from the published
+	## Go regexp and RE2 test tables rather than from this engine. It is not
+	## enrolled as a gate, so this line is the only thing that runs it.
+	## (stdlib/regex.mdk's own doctests and props are a roster row in
+	## test/stdlib_suite_test.mdk above, not a line of their own.)
 	./medaka test test/regex_conformance_test.mdk
 	## compiler/frontend/resolve.mdk carries its own `test "…"` block
 	## (the did-you-mean pool memo's once-per-Env discipline, #2800): the
@@ -226,6 +187,23 @@ test: medaka
 	## import closure, but nothing else runs `medaka test` on it, so
 	## without this line the memo assertions would never execute.
 	./medaka test compiler/frontend/resolve.mdk
+	## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
+	## in-language suite (lib + main) has no floor gate of any kind, and a
+	## directory target already grades every assertion in it with one exit
+	## code, so this is that, rather than a per-module roster row.
+	./medaka test gzip
+	## S-the-makefile-is-not-a-roster (#3081): a small fixed roster over the
+	## modules whose assertion counts no floor protects. Four are reached by
+	## nothing — `compiler/tools/gate_cost.mdk`, `compiler/support/util.mdk`
+	## and `compiler/support/manifest.mdk` are outside every entry's import
+	## closure ([W-MODULE-BLIND]), and `test/probe_runner.mdk` carries its own
+	## doctests that no other gate runs. Six are `gzip/lib/*.mdk`, which the
+	## `medaka test gzip` line above DOES run, but only as one exit code for
+	## the whole directory; `--json` is refused on a directory target, so no
+	## per-module count is committed anywhere else. `--native` is for THIS
+	## module, not the ones it grades: it spawns a `medaka test` subprocess
+	## per row via `runCommand`, an extern the interpreter does not bind.
+	./medaka test --native test/compiler_module_roster_test.mdk
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:

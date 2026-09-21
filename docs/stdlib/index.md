@@ -1054,6 +1054,8 @@ Assertions for a test that runs a program.
 - [`missingUnits`](test_process.md#missingunits)
 - [`unrosteredTestFiles`](test_process.md#unrosteredtestfiles)
 - [`missingTestFiles`](test_process.md#missingtestfiles)
+- [`ungradedRosterRows`](test_process.md#ungradedrosterrows)
+- [`disagreeingFloorBlocks`](test_process.md#disagreeingfloorblocks)
 
 ## [`time`](time.md)
 
