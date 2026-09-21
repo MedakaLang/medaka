@@ -16,7 +16,9 @@ rationale, and post-mortems, follow the links — and don't assume detail that i
 `.claude/skills/sprint-packet/SKILL.md`. Codex uses these same skills via the
 `.agents/skills` symlink; read [.codex/SPRINT.md](.codex/SPRINT.md) for its
 harness mappings. The orchestrator delegates implementation to sprint agents;
-packet checks are a ceiling, with thorough review once at the end.
+packet checks are a ceiling, with thorough review once at the end. Pi uses the same
+skills via that symlink; read [.pi/SPRINT.md](.pi/SPRINT.md) for its project-local
+sprint roles, automatic worktrees, and blocking tool calls.
 
 > **Claude project memories are available on this machine:**
 > `/root/.claude/projects/-root-medaka/memory/MEMORY.md`. Consult when durable project
