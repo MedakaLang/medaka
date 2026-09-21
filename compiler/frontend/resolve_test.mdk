@@ -19,7 +19,7 @@
 -- `readFile` call in a `test "…"` body fails to build under the default
 -- engine and succeeds under `medaka test --native`.
 
-import test.{expectEqual}
+import test.{expectEqual, expectTrue}
 import frontend.parser.{parse}
 import frontend.ast.{Decl(..), Variant(..), ConPayload(..), Field(..)}
 import support.util.{contains, filterList}
@@ -79,6 +79,18 @@ missingCompanion funNames field =
 missingCompanions : List String -> List String -> List String
 missingCompanions fields funNames =
   filterList (missingCompanion funNames) fields
+
+-- A parse that lands on the wrong file, or a `ModuleExports`/`exp*` rename
+-- the parse no longer matches, makes `fields` silently `[]` — the
+-- `expectEqual [] (missingCompanions ...)` below would then pass vacuously.
+-- This floor keeps that failure loud: `ModuleExports` has never had fewer
+-- than nine export-namespace fields.
+test "the field derivation itself is non-vacuous — at least nine ModuleExports fields are found" =
+  match readFile resolveSourcePath
+    Err e => expectEqual "read \{resolveSourcePath}" "failed: \{e}"
+    Ok src =>
+      let fields = moduleExportsFields (parse src)
+      expectTrue (length fields >= 9)
 
 test "every ModuleExports export-namespace field has a reExp*From companion, derived from resolve.mdk's own source" =
   match readFile resolveSourcePath
