@@ -18,6 +18,7 @@
 -- (`medaka run`), so this demo only runs once built (`medaka build`) — that
 -- is expected, not a bug in this file.
 
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import lib.inflate.{gunzipMember}
 import io.{eprintln}
 
@@ -29,11 +30,11 @@ runInflate inPath outPath = match readFileBytes inPath
   Err e =>
     let _ = eprintln "inflate_demo: could not read \{inPath}: \{e}"
     exit 1
-  Ok raw => match gunzipMember raw
+  Ok raw => match gunzipMember (fromArrayAssumeByteDomain raw)
     Err e =>
       let _ = eprintln "inflate_demo: \{e}"
       exit 1
-    Ok decoded => match writeFileBytes outPath decoded
+    Ok decoded => match writeFileBytes outPath (toArray decoded)
       Err e =>
         let _ = eprintln "inflate_demo: could not write \{outPath}: \{e}"
         exit 1

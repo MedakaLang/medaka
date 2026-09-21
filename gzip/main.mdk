@@ -31,21 +31,25 @@
 -- Run it with `medaka run gzip/main.mdk` AND with a `medaka build` — an
 -- interpreter-green result proves nothing about the compiled path.
 
-import array.{fromList, sliceClamped}
+import array.{fromList}
+import bytes as B
+import bytes.{Bytes}
 import lib.container.{GzipHeader, parseGzipHeader, parseGzipTrailer}
 import lib.crc32.{crc32}
 import lib.bitio.{newBitReader, getBits}
 
 -- `printf 'hello' | gzip -n -c`, byte for byte.
-helloGz : Array Int
-helloGz = fromList [
-  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16,
-  54, 5, 0, 0, 0
-]
+helloGz : Bytes
+helloGz =
+  B.fromArrayAssumeByteDomain
+    (fromList [
+      31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166,
+      16, 54, 5, 0, 0, 0
+    ])
 
 -- The uncompressed payload those bytes encode: "hello".
-helloBytes : Array Int
-helloBytes = fromList [104, 101, 108, 108, 111]
+helloBytes : Bytes
+helloBytes = B.fromArrayAssumeByteDomain (fromList [104, 101, 108, 108, 111])
 
 -- Render a DEFLATE block-type code (RFC 1951 §3.2.3) as its name.
 blockTypeName : Int -> String
@@ -56,7 +60,7 @@ blockTypeName _ = "reserved (invalid)"
 
 -- Read the 3-bit block header off the front of a DEFLATE stream: BFINAL then
 -- a 2-bit BTYPE, both LSB-first.
-describeFirstBlock : Array Int -> String
+describeFirstBlock : Bytes -> String
 describeFirstBlock payload =
   let r = newBitReader payload
   match getBits 1 r
@@ -76,7 +80,7 @@ main = match parseGzipHeader helloGz
   Err e => println ("header parse failed: " ++ e)
   Ok (hdr, off) =>
     let _ = println (describeHeader hdr off)
-    let payload = sliceClamped off (length helloGz - 8) helloGz
+    let payload = B.sliceClamped off (B.length helloGz - 8) helloGz
     let _ = println (describeFirstBlock payload)
     match parseGzipTrailer helloGz
       Err e => println ("trailer parse failed: " ++ e)
@@ -86,6 +90,6 @@ main = match parseGzipHeader helloGz
           println "trailer crc=\{debug storedCrc} isize=\{debug storedSize}"
         let _ = println "crc32 of \"hello\" = \{debug ourCrc}"
         let crcOk = ourCrc == storedCrc
-        let sizeOk = storedSize == length helloBytes
+        let sizeOk = storedSize == B.length helloBytes
         println
           "INTEGRATION: crc match=\{debug crcOk} size match=\{debug sizeOk}"

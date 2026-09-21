@@ -30,7 +30,7 @@
 -- Both tables are flat `Array Int`, matching the design doc's "no
 -- allocation in the inner loop" requirement; positions are absolute indices
 -- into the whole input (not wrapped mod window size), since the input lives
--- in one `Array Int` for the whole run and there is no reason to compact it.
+-- in one `Bytes` value for the whole run and there is no reason to compact it.
 --
 -- Tuning constants (the "compression-level knob" the design doc allows this
 -- phase to expose):
@@ -91,7 +91,9 @@
 -- is the "must not grow" guarantee `gzip/test/deflate_oracle.sh` checks
 -- against `/dev/urandom` input.
 
-import array.{get, make, sliceClamped, concat, range, makeWith}
+import array.{get, make, concat, range, makeWith}
+import bytes as B
+import bytes.{Bytes}
 import lib.bitio.{
   BitWriter,
   newBitWriter,
@@ -182,7 +184,6 @@ symEndOfBlock = 256
 -- exactly "delegate a hot monomorphic helper to a dict-passed prelude
 -- method". `Int` comparison needs no dictionary.
 -- ---------------------------------------------------------------------------
-
 minInt : Int -> Int -> Int
 minInt a b = if a < b then a else b  -- lint-disable-line rule-if-max-min
 
@@ -308,16 +309,16 @@ encodeMatch len dist w =
 -- candidates strictly before `p` (never `p` itself, never a duplicate/cyclic
 -- chain entry).
 data Matcher = Matcher {
-  input : Array Int,
+  input : Bytes,
   n : Int,
   head : Array Int,
   prevArr : Array Int,
   nextInsert : Ref Int,
 }
 
-newMatcher : Array Int -> Matcher
+newMatcher : Bytes -> Matcher
 newMatcher input =
-  let n = arrayLength input
+  let n = B.length input
   Matcher {
     input = input,
     n = n,
@@ -330,8 +331,8 @@ newMatcher input =
 hasHash : Int -> Int -> Bool
 hasHash pos n = pos + 2 < n
 
-byteAt : Array Int -> Int -> Int
-byteAt arr i = match get i arr
+byteAt : Bytes -> Int -> Int
+byteAt arr i = match B.get i arr
   Some v => v
   None => panic "deflate: byteAt index \{i} out of range (unreachable)"
 
@@ -346,7 +347,7 @@ prevGet prevArr p = match get p prevArr
 
 -- The 3-byte rolling hash at `pos` (caller must have already checked
 -- `hasHash pos n`).
-hash3At : Array Int -> Int -> Int
+hash3At : Bytes -> Int -> Int
 hash3At input pos =
   let b0 = byteAt input pos
   let b1 = byteAt input (pos + 1)
@@ -384,7 +385,7 @@ insertUpTo m target =
     ()
   else
     let _ = if hasHash cur m.n then insertOne m cur
-    let _ = m.nextInsert := cur + 1
+    m.nextInsert := cur + 1
     insertUpTo m target
 
 -- Walk the chain from `candidate` backwards (via `prevArr`), keeping the
@@ -413,10 +414,10 @@ findMatchChain m pos candidate chainLeft bestLen bestDist
         bestLen2
         bestDist2
 
-matchLenAt : Array Int -> Int -> Int -> Int -> Int
+matchLenAt : Bytes -> Int -> Int -> Int -> Int
 matchLenAt input pos candidate limit = matchLenGo input pos candidate limit 0
 
-matchLenGo : Array Int -> Int -> Int -> Int -> Int -> Int
+matchLenGo : Bytes -> Int -> Int -> Int -> Int -> Int
 matchLenGo input pos candidate limit acc
   | acc >= limit = acc
   | otherwise =
@@ -521,20 +522,20 @@ deflateScan m pos w
    into this byte, then 6 zero-padding bits from the EOB code and
    alignment), byte2 = 0 (remaining EOB bits + final padding).
 
-   > deflateFixedBytes (arrayFromList [65])
-   [|115, 4, 0|]
+   > deflateFixedBytes (B.fromArrayAssumeByteDomain (arrayFromList [65]))
+   Bytes "730400"
 
    The empty-input case is smaller still: just the 3-bit header + the
    7-bit EOB code = 10 bits = 2 bytes, byte0 = 0b00000011 = 3 (BFINAL=1,
    BTYPE-bit0=1, BTYPE-bit1=0, then 5 zero bits — the EOB code hasn't
    started yet), byte1 = 0 (the rest of EOB's 7 zero bits + padding).
 
-   > deflateFixedBytes ([||])
-   [|3, 0|]
+   > deflateFixedBytes (B.fromArrayAssumeByteDomain [||])
+   Bytes "0300"
 -}
-deflateFixedBytes : Array Int -> Array Int
+deflateFixedBytes : Bytes -> Bytes
 deflateFixedBytes input =
-  let n = arrayLength input
+  let n = B.length input
   let w = newBitWriter ()
   let _ = putBits 1 1 w
   let _ = putBits btypeFixedHuffman 2 w
@@ -543,7 +544,7 @@ deflateFixedBytes input =
   let _ = encodeEob w
   finishBitWriter w
 
-emitStoredBlock : Bool -> Int -> Int -> Array Int -> BitWriter -> Unit
+emitStoredBlock : Bool -> Int -> Int -> Bytes -> BitWriter -> Unit
 emitStoredBlock isLast offset len input w =
   let bfinal = if isLast then 1 else 0
   let _ = putBits bfinal 1 w
@@ -551,9 +552,9 @@ emitStoredBlock isLast offset len input w =
   let _ = alignByteW w
   let _ = putBits len 16 w
   let _ = putBits (bitAnd (bitNot len) mask16) 16 w
-  putBytesAligned (sliceClamped offset (offset + len) input) w
+  putBytesAligned (B.sliceClamped offset (offset + len) input) w
 
-emitStoredChunks : Array Int -> Int -> Int -> BitWriter -> Unit
+emitStoredChunks : Bytes -> Int -> Int -> BitWriter -> Unit
 emitStoredChunks input n offset w
   | offset >= n = ()
   | otherwise =
@@ -569,12 +570,12 @@ emitStoredChunks input n offset w
    blocks — a DEFLATE stream must end with a `BFINAL=1` block, and there
    must be at least one.
 
-   > arrayLength (deflateStored ([||]))
+   > B.length (deflateStored (B.fromArrayAssumeByteDomain [||]))
    5
 -}
-deflateStored : Array Int -> Array Int
+deflateStored : Bytes -> Bytes
 deflateStored input =
-  let n = arrayLength input
+  let n = B.length input
   let w = newBitWriter ()
   let _ =
     if n == 0 then
@@ -588,11 +589,11 @@ deflateStored input =
    module header's "stored-block fallback" section for the exact bound this
    guarantees. -}
 export
-deflate : Array Int -> Array Int
+deflate : Bytes -> Bytes
 deflate input =
   let fixedBytes = deflateFixedBytes input
   let storedBytes = deflateStored input
-  if arrayLength fixedBytes <= arrayLength storedBytes then
+  if B.length fixedBytes <= B.length storedBytes then
     fixedBytes
   else
     storedBytes
@@ -609,7 +610,7 @@ deflate input =
    half of Phase 4's container work; the parse/emit machinery itself already
    existed from Phase 1). -}
 export
-gzipCompress : Array Int -> Array Int
+gzipCompress : Bytes -> Bytes
 gzipCompress input =
   let hdr = GzipHeader {
     mtime = 0,
@@ -620,8 +621,8 @@ gzipCompress input =
   }
   let payload = deflate input
   let crc = crc32 input
-  let isize = bitAnd (arrayLength input) mask32
-  concat [|emitGzipHeader hdr, payload, emitGzipTrailer crc isize|]
+  let isize = bitAnd (B.length input) mask32
+  B.concat [emitGzipHeader hdr, payload, emitGzipTrailer crc isize]
 
 -- ---------------------------------------------------------------------------
 -- Tests — hand-derived exact bytes (`test`), and properties checked against
@@ -630,7 +631,7 @@ gzipCompress input =
 -- header and `gzip/README.md` "Testing policy".
 -- ---------------------------------------------------------------------------
 
-firstBlockType : Array Int -> Int
+firstBlockType : Bytes -> Int
 firstBlockType payload =
   let r = newBitReader payload
   match getBits 1 r
@@ -640,22 +641,30 @@ firstBlockType payload =
       Ok btype => btype
 
 test "deflateFixedBytes [|65|] matches the hand-derived RFC 1951 byte sequence" =
-  expectEqual [|115, 4, 0|] (deflateFixedBytes (arrayFromList [65]))
+  expectEqual
+    (B.fromArrayAssumeByteDomain [|115, 4, 0|])
+    (deflateFixedBytes (B.fromArrayAssumeByteDomain (arrayFromList [65])))
 
 test "deflateFixedBytes [||] matches the hand-derived RFC 1951 byte sequence (EOB only)" =
-  expectEqual [|3, 0|] (deflateFixedBytes [||])
+  expectEqual
+    (B.fromArrayAssumeByteDomain [|3, 0|])
+    (deflateFixedBytes (B.fromArrayAssumeByteDomain [||]))
 
 test "deflateStored [||] is one 5-byte empty stored block (1 header byte + LEN + NLEN)" =
-  expectEqual 5 (arrayLength (deflateStored [||]))
+  expectEqual 5 (B.length (deflateStored (B.fromArrayAssumeByteDomain [||])))
 
 test "deflate [||] picks fixed Huffman (2 bytes) over stored (5 bytes)" =
-  expectEqual [|3, 0|] (deflate [||])
+  expectEqual
+    (B.fromArrayAssumeByteDomain [|3, 0|])
+    (deflate (B.fromArrayAssumeByteDomain [||]))
 
 test "deflate of an empty input has BTYPE=1 (fixed Huffman)" =
-  expectEqual 1 (firstBlockType (deflate [||]))
+  expectEqual 1 (firstBlockType (deflate (B.fromArrayAssumeByteDomain [||])))
 
 test "inflate (deflate [|65|]) recovers the original single byte" =
-  expectEqual (Ok (arrayFromList [65])) (inflate (deflate (arrayFromList [65])))
+  expectEqual
+    (Ok (B.fromArrayAssumeByteDomain (arrayFromList [65])))
+    (inflate (deflate (B.fromArrayAssumeByteDomain (arrayFromList [65]))))
 
 -- A diverse, non-repeating 256-byte input (every byte value once): fixed
 -- Huffman's average code width is > 8 bits/byte here (144 symbols at 8 bits,
@@ -664,22 +673,22 @@ test "inflate (deflate [|65|]) recovers the original single byte" =
 -- fixed ~= ceil((3 + 144*8 + 112*9 + 7) / 8) = 272 bytes; stored =
 -- 256 + 5 = 261 bytes. 261 < 272, so `deflate` must pick BTYPE=0.
 test "deflate of all 256 distinct byte values picks the stored fallback (BTYPE=0)" =
-  let input = range 0 256
+  let input = B.fromArrayAssumeByteDomain (range 0 256)
   expectEqual 0 (firstBlockType (deflate input))
 
 test "inflate (deflate (all 256 distinct byte values)) round-trips exactly" =
-  let input = range 0 256
+  let input = B.fromArrayAssumeByteDomain (range 0 256)
   expectEqual (Ok input) (inflate (deflate input))
 
 -- 1000 repeated bytes: the whole point of `distance = 1` self-overlapping
 -- back-references (design doc, "the overlap case"). If the matcher is
 -- actually finding matches (not silently falling back to all-literal
 -- output), the compressed size must be far under 1000 bytes.
-repeatedInput : Array Int
-repeatedInput = make 1000 65
+repeatedInput : Bytes
+repeatedInput = B.fromArrayAssumeByteDomain (make 1000 65)
 
 test "deflate compresses 1000 repeated bytes to well under 1000 output bytes (LZ77 actually ran)" =
-  expectTrue (arrayLength (deflate repeatedInput) < 100)
+  expectTrue (B.length (deflate repeatedInput) < 100)
 
 test "inflate (deflate (1000 repeated bytes)) recovers the original exactly (distance=1 overlap)" =
   expectEqual (Ok repeatedInput) (inflate (deflate repeatedInput))
@@ -722,11 +731,12 @@ genPseudoRandom state count acc
     let next = lcgNext state
     genPseudoRandom next (count - 1) (next % 256 :: acc)
 
-pseudoRandomBytes : Array Int
-pseudoRandomBytes = arrayFromList (genPseudoRandom 12345 5000 [])
+pseudoRandomBytes : Bytes
+pseudoRandomBytes =
+  B.fromArrayAssumeByteDomain (arrayFromList (genPseudoRandom 12345 5000 []))
 
 test "deflate of 5000 pseudo-random-looking bytes is exactly 5005 bytes (1 stored chunk, hand-derived)" =
-  expectEqual 5005 (arrayLength (deflate pseudoRandomBytes))
+  expectEqual 5005 (B.length (deflate pseudoRandomBytes))
 
 test "deflate of 5000 pseudo-random-looking bytes has BTYPE=0 (stored)" =
   expectEqual 0 (firstBlockType (deflate pseudoRandomBytes))
@@ -735,7 +745,8 @@ test "inflate (deflate (5000 pseudo-random-looking bytes)) round-trips exactly (
   expectEqual (Ok pseudoRandomBytes) (inflate (deflate pseudoRandomBytes))
 
 test "gzipCompress \"hello\" round-trips through our OWN gunzipMember (crc/isize wiring; gunzip is the real proof)" =
-  let input = arrayFromList [104, 101, 108, 108, 111]
+  let input =
+    B.fromArrayAssumeByteDomain (arrayFromList [104, 101, 108, 108, 111])
   expectEqual (Ok input) (gunzipMember (gzipCompress input))
 
 -- ---------------------------------------------------------------------------
@@ -778,9 +789,10 @@ test "gzipCompress \"hello\" round-trips through our OWN gunzipMember (crc/isize
 -- the size test is a second, complementary signal ("a match — any match —
 -- was taken") but is NOT on its own a regression test for this defect.
 -- See the PR description for the full before/after transcript.
-pinLazyDeferInput : Array Int
+pinLazyDeferInput : Bytes
 pinLazyDeferInput =
-  concat [|arrayFromList [97, 98, 99, 90, 97, 98, 99], range 100 112|]
+  B.fromArrayAssumeByteDomain
+    (concat [|arrayFromList [97, 98, 99, 90, 97, 98, 99], range 100 112|])
 
 test "inflate (deflate pinLazyDeferInput) recovers the input exactly — deflateTryLazy self-match regression pin" =
   expectEqual (Ok pinLazyDeferInput) (inflate (deflate pinLazyDeferInput))
@@ -796,7 +808,7 @@ test "inflate (deflate pinLazyDeferInput) recovers the input exactly — deflate
 -- or worse under the bug's corrupted continuation) without depending on
 -- exact bit-packing beyond that coarse, safely-rounded bound.
 test "deflate pinLazyDeferInput actually takes the pos=4 match (compressed size proves it, not just round-trip luck)" =
-  expectTrue (arrayLength (deflate pinLazyDeferInput) < 20)
+  expectTrue (B.length (deflate pinLazyDeferInput) < 20)
 
 -- ---------------------------------------------------------------------------
 -- Properties
@@ -874,7 +886,7 @@ prop "distSymbolIdx/distBase/distExtra reconstruct the original distance, for an
 -- it are what actually cover match-finding.
 prop "inflate (deflate x) == x for arbitrary byte content (SELF-CONSISTENCY ONLY — see module header; does NOT exercise match-finding, see comment above)" (bytesIn : List Int) =
   let bs = map (b => bitAnd b 255) bytesIn
-  let input = arrayFromList bs
+  let input = B.fromArrayAssumeByteDomain (arrayFromList bs)
   match inflate (deflate input)
     Ok out => out == input
     Err _ => False
@@ -956,14 +968,14 @@ phraseTextFrom (r :: rest) =
 -- lazy check engaged), which the generic property structurally cannot.
 prop "inflate (deflate x) == x for STRUCTURED byte content — small alphabet + runs (reaches match-finding/lazy-deferral; the generic arbitrary property above cannot)" (rawInts : List Int) =
   let bs = structuredBytesFrom rawInts
-  let input = arrayFromList bs
+  let input = B.fromArrayAssumeByteDomain (arrayFromList bs)
   match inflate (deflate input)
     Ok out => out == input
     Err _ => False
 
 prop "inflate (deflate x) == x for Zipf-ish PHRASE text (repeated short tokens, skewed frequency — reaches match-finding on realistic text-shaped input)" (rawInts : List Int) =
   let bs = phraseTextFrom rawInts
-  let input = arrayFromList bs
+  let input = B.fromArrayAssumeByteDomain (arrayFromList bs)
   match inflate (deflate input)
     Ok out => out == input
     Err _ => False

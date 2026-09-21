@@ -1,4 +1,4 @@
--- | gzip.lib.bitio — a bit-granular cursor over `Array Int` bytes.
+-- | gzip.lib.bitio — a bit-granular cursor over `Bytes`.
 --
 -- `stdlib/byteparser.mdk` cannot serve DEFLATE: its state is a byte index,
 -- and DEFLATE needs a bit index. This module is that bit index, both ways
@@ -26,19 +26,21 @@
 -- Reading past the end of input is a real error path (a truncated `.gz` is
 -- not hypothetical) and returns `Err`, never garbage, never a hang.
 
-import array.{get, make}
+import array.{make}
 import vector.{Vector, new, push, toArray}
+import bytes as B
+import bytes.{Bytes}
 import test.{expectEqual}
 
 -- ---------------------------------------------------------------------------
 -- Reader
 -- ---------------------------------------------------------------------------
 
--- | LSB-first bit reader over an immutable byte array. `hold` accumulates
+-- | LSB-first bit reader over an immutable byte sequence. `hold` accumulates
 --   bits pulled from `src` starting at `pos`; `count` is how many of the low
 --   bits of `hold` are valid. Refilled a whole byte at a time.
 public export data BitReader = BitReader {
-  src : Array Int,
+  src : Bytes,
   pos : Ref Int,
   hold : Ref Int,
   count : Ref Int,
@@ -46,7 +48,7 @@ public export data BitReader = BitReader {
 
 -- | A fresh reader positioned at the start of `bytes`.
 export
-newBitReader : Array Int -> BitReader
+newBitReader : Bytes -> BitReader
 newBitReader bytes =
   BitReader { src = bytes, pos = Ref 0, hold = Ref 0, count = Ref 0 }
 
@@ -57,11 +59,11 @@ refillBits : Int -> BitReader -> Result String Unit
 refillBits n r =
   if r.count.value >= n then
     Ok ()
-  else match get r.pos.value r.src
+  else match B.get r.pos.value r.src
     Some b =>
-      let _ = r.hold := bitOr r.hold.value (shiftLeft b r.count.value)
-      let _ = r.count := r.count.value + 8
-      let _ = r.pos := r.pos.value + 1
+      r.hold := bitOr r.hold.value (shiftLeft b r.count.value)
+      r.count := r.count.value + 8
+      r.pos := r.pos.value + 1
       refillBits n r
     None =>
       Err
@@ -99,7 +101,7 @@ alignByte r =
   if extra == 0 then
     ()
   else
-    let _ = r.hold := shiftRight r.hold.value extra
+    r.hold := shiftRight r.hold.value extra
     r.count := r.count.value - extra
 
 -- | The index into `src` of the next byte that has not yet been returned to
@@ -116,14 +118,14 @@ bytePos r = r.pos.value - r.count.value / 8
 --   fail; this can). Each byte is read via `getBits 8`, which on an aligned
 --   reader returns the byte's value unchanged (bit 0 stays bit 0).
 export
-getBytesAligned : Int -> BitReader -> Result String (Array Int)
+getBytesAligned : Int -> BitReader -> Result String Bytes
 getBytesAligned n r =
   let out = new ()
   getBytesAlignedGo n r out
 
-getBytesAlignedGo : Int -> BitReader -> Vector Int -> Result String (Array Int)
+getBytesAlignedGo : Int -> BitReader -> Vector Int -> Result String Bytes
 getBytesAlignedGo n r out
-  | n <= 0 = Ok (toArray out)
+  | n <= 0 = Ok (B.fromArrayAssumeByteDomain (toArray out))
   | otherwise = do
     b <- getBits 8 r
     let _ = push b out
@@ -152,8 +154,8 @@ flushBytes : BitWriter -> Unit
 flushBytes w =
   if w.count.value >= 8 then
     let _ = push (bitAnd w.hold.value 255) w.buf
-    let _ = w.hold := shiftRight w.hold.value 8
-    let _ = w.count := w.count.value - 8
+    w.hold := shiftRight w.hold.value 8
+    w.count := w.count.value - 8
     flushBytes w
 
 -- | Append the low `n` bits of `v`, LSB-first (the same convention `getBits`
@@ -178,8 +180,8 @@ putBits v n w =
     panic "putBits: width \{intToString n} out of range (must be 0..32)"
   else
     let masked = bitAnd v (shiftLeft 1 n - 1)
-    let _ = w.hold := bitOr w.hold.value (shiftLeft masked w.count.value)
-    let _ = w.count := w.count.value + n
+    w.hold := bitOr w.hold.value (shiftLeft masked w.count.value)
+    w.count := w.count.value + n
     flushBytes w
 
 -- | Emit a Huffman CODE of `width` bits, most-significant-bit-of-the-code
@@ -212,13 +214,13 @@ alignByteW w =
 --   (a stored DEFLATE block's byte-aligned payload) — this does not align
 --   for you, for the same reason `getBytesAligned` doesn't on the read side.
 export
-putBytesAligned : Array Int -> BitWriter -> Unit
-putBytesAligned bytes w = putBytesAlignedGo bytes 0 (arrayLength bytes) w
+putBytesAligned : Bytes -> BitWriter -> Unit
+putBytesAligned bytes w = putBytesAlignedGo bytes 0 (B.length bytes) w
 
-putBytesAlignedGo : Array Int -> Int -> Int -> BitWriter -> Unit
+putBytesAlignedGo : Bytes -> Int -> Int -> BitWriter -> Unit
 putBytesAlignedGo bytes i n w
   | i >= n = ()
-  | otherwise = match get i bytes
+  | otherwise = match B.get i bytes
     Some b =>
       let _ = push b w.buf
       putBytesAlignedGo bytes (i + 1) n w
@@ -226,10 +228,10 @@ putBytesAlignedGo bytes i n w
 
 -- | Pad to a byte boundary and return the accumulated bytes.
 export
-finishBitWriter : BitWriter -> Array Int
+finishBitWriter : BitWriter -> Bytes
 finishBitWriter w =
   let _ = alignByteW w
-  toArray w.buf
+  B.fromArrayAssumeByteDomain (toArray w.buf)
 
 -- ---------------------------------------------------------------------------
 -- Pinned hand-derived facts (`test`) — small, exact, worked out by hand
@@ -237,8 +239,7 @@ finishBitWriter w =
 
 -- (helper backing the design-doc test below — three sequential reads off one
 -- reader, returned together since each `test` is a single expression)
-threeReads : Array Int ->
-  (Result String Int, Result String Int, Result String Int)
+threeReads : Bytes -> (Result String Int, Result String Int, Result String Int)
 threeReads bytes =
   let r = newBitReader bytes
   let a = getBits 4 r
@@ -247,19 +248,21 @@ threeReads bytes =
   (a, b, c)
 
 test "design-doc LSB-first shape: [0xAB,0xCD] read 4,4,8 -> 11,10,205" =
-  expectEqual (Ok 11, Ok 10, Ok 205) (threeReads [|0xAB, 0xCD|])
+  expectEqual
+    (Ok 11, Ok 10, Ok 205)
+    (threeReads (B.fromArrayAssumeByteDomain [|0xAB, 0xCD|]))
 
 test "getBits past end of input returns Err, not garbage or a hang" =
   expectEqual
     (Err "getBits: unexpected end of input (need 9 bit(s), have 8 buffered)")
-    (getBits 9 (newBitReader [|0xFF|]))
+    (getBits 9 (newBitReader (B.fromArrayAssumeByteDomain [|0xFF|])))
 
 -- After reading 3 bits of 0xFF (all-ones byte), 5 bits remain buffered from
 -- that byte; `alignByte` must discard exactly those 5, so the next read
 -- lands on byte 1 (0x00) rather than any leftover 0xFF bits leaking through.
 alignThenRead : Result String Int
 alignThenRead =
-  let r = newBitReader [|0xFF, 0x00|]
+  let r = newBitReader (B.fromArrayAssumeByteDomain [|0xFF, 0x00|])
   let _ = getBits 3 r
   let _ = alignByte r
   getBits 8 r
@@ -270,16 +273,16 @@ test "alignByte mid-byte discards exactly the unread fraction of the current byt
 -- After 4 bits read and an align, the reader must be sitting at byte index 1
 -- (byte 0 fully consumed by the align), so `getBytesAligned 3` returns bytes
 -- 1..3 verbatim.
-bytesAfterAlign : Result String (Array Int)
+bytesAfterAlign : Result String Bytes
 bytesAfterAlign =
-  let r = newBitReader [|1, 2, 3, 0xAB|]
+  let r = newBitReader (B.fromArrayAssumeByteDomain [|1, 2, 3, 0xAB|])
   do
     _ <- getBits 4 r
     let _ = alignByte r
     getBytesAligned 3 r
 
 test "getBytesAligned after alignByte returns raw bytes verbatim" =
-  expectEqual (Ok [|2, 3, 171|]) bytesAfterAlign
+  expectEqual (Ok (B.fromArrayAssumeByteDomain [|2, 3, 171|])) bytesAfterAlign
 
 -- `putCodeMSB` needs its OWN externally-derived pin, distinct from the LSB
 -- one above — the only other coverage it has is a round-trip `prop` against
@@ -287,7 +290,7 @@ test "getBytesAligned after alignByte returns raw bytes verbatim" =
 -- about what "MSB-first" means. If both were wrong the same way, that
 -- property would round-trip cleanly and stay green forever (exactly the
 -- symmetric-error hazard this module's own header warns about).
-codeBytes : Int -> Int -> Array Int
+codeBytes : Int -> Int -> Bytes
 codeBytes v width =
   let w = newBitWriter ()
   let _ = putCodeMSB v width w
@@ -299,7 +302,7 @@ codeBytes v width =
 -- output byte — a byte-aligned width-8 code comes out as the BIT REVERSAL
 -- of its value: 0b01110001 reversed is 0b10001110 = 128+8+4+2 = 142.
 test "putCodeMSB, byte-aligned width 8: literal 65's fixed code 113 (0b01110001) -> 142 (0b10001110)" =
-  expectEqual [|142|] (codeBytes 113 8)
+  expectEqual (B.fromArrayAssumeByteDomain [|142|]) (codeBytes 113 8)
 
 -- A non-byte-aligned width, where the "just reverse the byte" shortcut does
 -- NOT apply and a real bug would hide: a 5-bit flat distance code, symbol 13
@@ -309,7 +312,7 @@ test "putCodeMSB, byte-aligned width 8: literal 65's fixed code 113 (0b01110001)
 -- bit1=1, bit2=1, bit3=0, bit4=1 => value 2+4+16 = 22 = 0b10110); the
 -- unused top 3 bits of the byte are zero-padded by `finishBitWriter`.
 test "putCodeMSB, non-byte-aligned width 5: code 13 (0b01101) -> 22 (0b10110), zero-padded" =
-  expectEqual [|22|] (codeBytes 13 5)
+  expectEqual (B.fromArrayAssumeByteDomain [|22|]) (codeBytes 13 5)
 
 -- ---------------------------------------------------------------------------
 -- Properties (`prop`) — the real coverage: generated data, not hand-picked
@@ -412,7 +415,7 @@ prop "bytePos after alignByte equals ceil(bitsConsumed / 8)" (widthsRaw : List I
   let widths = map (w => 1 + abs w % 8) widthsRaw
   let totalBits = sumList widths
   let src = make (ceilDiv totalBits 8 + 1) 0
-  let r = newBitReader src
+  let r = newBitReader (B.fromArrayAssumeByteDomain src)
   match consumeWidths widths r
     Ok _ =>
       let _ = alignByte r
