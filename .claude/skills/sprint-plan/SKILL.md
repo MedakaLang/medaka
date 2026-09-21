@@ -71,15 +71,16 @@ deeper than this measured ~75% rework.
    current largest-files table if the slice might grow one of them.
 4. **Acceptance shape** — how we'll know it worked ("gate family X", "a new
    fixture class Y", "IR byte-identical"), not exact commands.
-5. **Model** — `sonnet` (default) or `opus` with a one-line why. Opus is the
-   right call for genuinely tricky slices: cross-cutting semantics, coupled
-   sites, anything where a wrong-but-plausible transform is easy. When
-   unsure, start sonnet; the orchestrator upgrades on a refusal.
-   **Codex / Pi:** apply the implementation-tier rubric in `.codex/SPRINT.md`
-   or `.pi/SPRINT.md`, respectively:
-   Terra/high is the default, including coupled-site work with a settled remedy.
-   A Sol/high choice must name the unresolved semantic or algorithmic decision,
-   not merely the severity, subsystem, file count, or test volume.
+5. **Model** — name the selected harness role, model/reasoning and a one-line
+   tier justification. **Claude:** `sonnet` by default, `opus` for genuinely
+   tricky slices (cross-cutting semantics, coupled sites, wrong-but-plausible
+   transformations); when unsure start sonnet and upgrade on a refusal.
+   **Codex / Pi:** use `.codex/SPRINT.md` or `.pi/SPRINT.md`, respectively,
+   instead of that Claude rubric. Terra/high is the default, including
+   coupled-site work with a settled remedy. Sol/high must name the unresolved
+   semantic or algorithmic decision, not merely severity, subsystem, file count
+   or test volume. Pi contracts/packets name the actual project agent and its
+   configured model, since dispatch has no per-call model override.
 6. **Depends-on / parallel-ok** — landing order by ID. Slices are executed
    SERIALLY by default. A pair may be marked `parallel-ok` ONLY with
    disjointness evidence in the contract: the two surface lists, a

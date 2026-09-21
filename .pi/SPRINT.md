@@ -12,6 +12,8 @@ Pi discovers the canonical skills through `.agents/skills`; do not copy them.
 Project context comes from `AGENTS.md`. The roles below explicitly read their
 shared role bodies, so those bodies remain the workflow authority; ignore their
 Claude frontmatter and apply this adapter's setup, models, and command handling.
+Fresh worktrees may not inherit the parent's saved Pi trust decision. Required
+skill/role reads are explicit; do not grant blanket trust to make them load.
 
 **Subagents are an extension, not a Pi built-in.** This adapter requires the
 installed `subagent` extension with the following contract: project-agent
@@ -53,9 +55,26 @@ Do not print credentials or dump the whole environment.
 
 `cwd` is the **source checkout**, not the writer's eventual directory. The
 extension mints a unique worktree and branch from that checkout's **HEAD**,
-not from `main` or a remote ref. Uncommitted edits are NOT copied. Before
-dispatch, commit the intended input, pin its SHA, and verify the source
-checkout's HEAD equals the packet base. Do not prepare a second writer tree.
+not from `main` or a remote ref. Uncommitted source files are NOT copied into
+the worktree. Before dispatch, commit the intended input, pin its SHA, and
+verify the source checkout's HEAD equals the packet base. Do not prepare a
+second writer tree.
+
+**Agent prompts are an exception:** discovery reads `.pi/agents` from the
+parent SESSION's working directory, not the supplied `cwd` or the new worktree.
+A dirty wrapper changes the child prompt despite an unchanged worktree HEAD.
+Before dispatch, require both commands below to succeed with empty output in
+the session's project tree (even if `cwd` names a different source checkout):
+
+```sh
+git -C <SESSION_TREE> diff --exit-code <base-sha> -- .pi/agents
+git -C <SESSION_TREE> status --short --untracked-files=all --ignored -- .pi/agents
+```
+
+The status command alone exits 0 even when dirty: inspect its output. A dirty,
+untracked, ignored, or base-mismatched role must be committed/aligned before
+use. This pins repository-owned prompts, not the user's global extensions,
+settings or model service. Keep those stable for the sprint too.
 
 The extension appends the actual absolute worktree path, branch, and base to
 the child's assignment. In packet §2, bind `TREE` to that injected path; use
