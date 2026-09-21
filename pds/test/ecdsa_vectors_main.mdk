@@ -41,10 +41,6 @@ scalar value =
 tcId : String -> Int
 tcId value = optionOrPanic "ecdsa_vectors: invalid tcId: \{value}" (toInt value)
 
-isErr : Result String a -> Bool
-isErr (Ok _) = False
-isErr (Err _) = True
-
 bump : Array Int -> Int -> Unit
 bump counts i = A.setInPlace i (counts[i] + 1) counts
 

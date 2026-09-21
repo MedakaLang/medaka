@@ -37,10 +37,6 @@ import lib.xrpc.{
   xrpcFailureStatus,
 }
 
-isErr : Result e a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
-
 appendBytes : Array Int -> Array Int -> Array Int
 appendBytes left right =
   let leftSize = arrayLength left

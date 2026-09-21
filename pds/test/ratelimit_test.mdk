@@ -7,7 +7,7 @@ import bytes.{encodeUtf8}
 import http.{Header, makeHeader, parseRequest, requestHeaders}
 import list.{replicate}
 import string.{join, repeat, toUtf8}
-import test.{expectAll, expectEqual, expectTrue}
+import test.{expectAll, expectEach, expectEqual, expectFalse, expectTrue}
 import lib.resource_limits.{
   maxCreateSessionPerWindow,
   maxRateLimitIdentitiesPerWindow,
@@ -39,9 +39,8 @@ import lib.xrpc.{
 }
 
 mustHeader : String -> String -> Header
-mustHeader name value = match makeHeader name (toUtf8 value)
-  Ok header => header
-  Err message => panic message
+mustHeader name value =
+  resultOrPanic "ratelimit_test: mustHeader" (makeHeader name (toUtf8 value))
 
 xffHeader : String -> Header
 xffHeader = mustHeader "x-forwarded-for"
@@ -59,8 +58,7 @@ labelOf (Err _) = "refused"
 -- | The identity a derivation that must succeed produced, for the cases that
 -- go on to make a rate-limit decision with it.
 mustIdentity : Result String ClientIdentity -> ClientIdentity
-mustIdentity (Ok identity) = identity
-mustIdentity (Err message) = panic message
+mustIdentity = resultOrPanic "ratelimit_test: mustIdentity"
 
 isRefused : RateLimitVerdict -> Bool
 isRefused Refused = True
@@ -552,12 +550,24 @@ test "a spent repo-export allowance still admits a plain read" =
     expectTrue (isAdmitted readVerdict),
   ]
 
-test "getRepo is the repo-export procedure and the other sync reads are not" = expectAll
+test "getRepo is the repo-export procedure and the other sync reads are not" = expectEach
   [
-    expectTrue (isRepoExportNsid "com.atproto.sync.getRepo"),
-    expectTrue (not (isRepoExportNsid "com.atproto.sync.getLatestCommit")),
-    expectTrue (not (isRepoExportNsid "com.atproto.sync.getBlob")),
-    expectTrue (not (isRepoExportNsid "com.atproto.sync.listBlobs")),
+    (
+      "getRepo is a repo-export NSID",
+      expectTrue (isRepoExportNsid "com.atproto.sync.getRepo"),
+    ),
+    (
+      "getLatestCommit is not",
+      expectFalse (isRepoExportNsid "com.atproto.sync.getLatestCommit"),
+    ),
+    (
+      "getBlob is not",
+      expectFalse (isRepoExportNsid "com.atproto.sync.getBlob"),
+    ),
+    (
+      "listBlobs is not",
+      expectFalse (isRepoExportNsid "com.atproto.sync.listBlobs"),
+    ),
   ]
 
 -- A read charged as a write would spend the far scarcer write allowance, so

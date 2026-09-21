@@ -2,7 +2,15 @@
 -- Every scope id is projected while its request graph is still live.  Tests
 -- compare immutable module/owner labels across requests, never raw ordinals.
 
-import test.{expectAll, expectEqual}
+import test.{
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectFalse,
+  expectGreaterThan,
+  expectNotEqual,
+  expectTrue,
+}
 import frontend.ast.{
   Decl(..), EvId(..), EvVal(..), Expr(..), Loc(..), Route(..), TyConOrigin(..)
 }
@@ -281,9 +289,8 @@ test "a Forge instance cannot discharge the numeric Num obligation" =
   ]
   let (errors, trace) = numericCheckObserved source
   expectAll [
-    expectEqual True (listLen errors > 0),
-    expectEqual
-      True
+    expectTrue (listLen errors > 0),
+    expectTrue
       (any
         (view =>
           view.ntvStage == NPTChecked && view.ntvInterface == "core::Num")
@@ -473,23 +480,32 @@ test "finalized scheme queries drain numeric predicates on cold and keyed calls"
   let (failedErrors, _) =
     numericCheckObserved "value : Int\nvalue = \"wrong\"\n"
   let afterFailure = numericSchemeObserved (Some (977, 983)) source
-  expectAll [
-    expectEqual True (listLen failedErrors > 0),
-    expectEqual (["N"], ["N"], ["N"]) (fst cold, fst keyed, fst repeated),
-    expectEqual
-      [
-        [NPTProduced, NPTChecked, NPTReturn],
-        [NPTProduced, NPTChecked, NPTReturn],
-        [NPTProduced, NPTChecked, NPTReturn],
-      ]
-      [
-        numericStages (snd cold),
-        numericStages (snd keyed),
-        numericStages (snd repeated),
-      ],
-    expectEqual (snd cold) (snd keyed),
-    expectEqual (snd keyed) (snd repeated),
-    expectEqual repeated afterFailure,
+  expectEach [
+    (
+      "a failing declaration produces at least one error",
+      expectTrue (listLen failedErrors > 0),
+    ),
+    (
+      "each query keeps a distinct Num slot",
+      expectEqual (["N"], ["N"], ["N"]) (fst cold, fst keyed, fst repeated),
+    ),
+    (
+      "numeric stages agree across cold, keyed, and repeated",
+      expectEqual
+        [
+          [NPTProduced, NPTChecked, NPTReturn],
+          [NPTProduced, NPTChecked, NPTReturn],
+          [NPTProduced, NPTChecked, NPTReturn],
+        ]
+        [
+          numericStages (snd cold),
+          numericStages (snd keyed),
+          numericStages (snd repeated),
+        ],
+    ),
+    ("cold == keyed", expectEqual (snd cold) (snd keyed)),
+    ("keyed == repeated", expectEqual (snd keyed) (snd repeated)),
+    ("repeated == afterFailure", expectEqual repeated afterFailure),
   ]
 
 arithmeticPreludeSource : String
@@ -606,34 +622,43 @@ test "declared and inferred arithmetic retain one Num slot at finalized queries"
   let failed = arithmeticErrorCodes "bad : Int\nbad = \"wrong\"\n"
   let afterFailure =
     arithmeticSchemeObserved (Some (1009, 1013)) arithmeticFunctionsSource
-  expectAll [
-    expectEqual
-      [
-        ("signedAdd", 1, "a -> a -> a"),
-        ("signedSub", 1, "a -> a -> a"),
-        ("signedMul", 1, "a -> a -> a"),
-        ("signedDiv", 1, "a -> a -> a"),
-        ("signedRem", 1, "a -> a -> a"),
-        ("inferredAdd", 1, "a -> a -> a"),
-        ("inferredSub", 1, "a -> a -> a"),
-        ("inferredMul", 1, "a -> a -> a"),
-        ("inferredDiv", 1, "a -> a -> a"),
-        ("inferredRem", 1, "a -> a -> a"),
-      ]
-      (fst cold),
-    expectEqual cold keyed,
-    expectEqual keyed repeated,
-    expectEqual repeated afterFailure,
-    expectEqual True (listLen failed > 0),
-    expectEqual
-      [
-        ("binding:signedRem", "binding:signedRem", 0),
-        ("binding:signedDiv", "binding:signedDiv", 0),
-        ("binding:signedMul", "binding:signedMul", 0),
-        ("binding:signedSub", "binding:signedSub", 0),
-        ("binding:signedAdd", "binding:signedAdd", 0),
-      ]
-      (snd cold),
+  expectEach [
+    (
+      "arities and schemes at the cold query",
+      expectEqual
+        [
+          ("signedAdd", 1, "a -> a -> a"),
+          ("signedSub", 1, "a -> a -> a"),
+          ("signedMul", 1, "a -> a -> a"),
+          ("signedDiv", 1, "a -> a -> a"),
+          ("signedRem", 1, "a -> a -> a"),
+          ("inferredAdd", 1, "a -> a -> a"),
+          ("inferredSub", 1, "a -> a -> a"),
+          ("inferredMul", 1, "a -> a -> a"),
+          ("inferredDiv", 1, "a -> a -> a"),
+          ("inferredRem", 1, "a -> a -> a"),
+        ]
+        (fst cold),
+    ),
+    ("cold == keyed", expectEqual cold keyed),
+    ("keyed == repeated", expectEqual keyed repeated),
+    ("repeated == afterFailure", expectEqual repeated afterFailure),
+    (
+      "a failing declaration produces at least one error code",
+      expectTrue (listLen failed > 0),
+    ),
+    (
+      "arithmeticErrorCodes' bindings for the cold query",
+      expectEqual
+        [
+          ("binding:signedRem", "binding:signedRem", 0),
+          ("binding:signedDiv", "binding:signedDiv", 0),
+          ("binding:signedMul", "binding:signedMul", 0),
+          ("binding:signedSub", "binding:signedSub", 0),
+          ("binding:signedAdd", "binding:signedAdd", 0),
+        ]
+        (snd cold),
+    ),
   ]
 
 arithmeticTraceObserved : String ->
@@ -950,13 +975,19 @@ test "declared numeric result retains its quantifier and given at finalized quer
   let failed = declaredNumErrorCodes "value : Int\nvalue = \"wrong\"\n"
   let afterFailure =
     declaredNumSchemeObserved (Some (991, 997)) declaredNumHelperSource
-  expectAll [
-    expectEqual [(1, "Int -> a")] (fst cold),
-    expectEqual [("binding:value", "binding:value", 0)] (snd cold),
-    expectEqual cold keyed,
-    expectEqual keyed repeated,
-    expectEqual repeated afterFailure,
-    expectEqual True (listLen failed > 0),
+  expectEach [
+    ("cold's arity/scheme", expectEqual [(1, "Int -> a")] (fst cold)),
+    (
+      "cold's binding trace",
+      expectEqual [("binding:value", "binding:value", 0)] (snd cold),
+    ),
+    ("cold == keyed", expectEqual cold keyed),
+    ("keyed == repeated", expectEqual keyed repeated),
+    ("repeated == afterFailure", expectEqual repeated afterFailure),
+    (
+      "a failing declaration produces at least one error",
+      expectTrue (listLen failed > 0),
+    ),
   ]
 
 test "declared numeric channels include nested results and independent quantifiers" =
@@ -1265,10 +1296,8 @@ test "wrapped return checking rejects an instance for only the result wrapper" =
   let (moduleErrors, _) = checkOneDiags [] core ("wrapped_return", program)
   let (flatErrors, _) = checkOneDiags [] core ("__user__", program)
   expectAll [
-    expectEqual
-      True
-      (contains "No impl of Seed for Int" (map tcMsg moduleErrors)),
-    expectEqual True (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
+    expectTrue (contains "No impl of Seed for Int" (map tcMsg moduleErrors)),
+    expectTrue (contains "No impl of Seed for Int" (map tcMsg flatErrors)),
   ]
 
 test "wrapped return routes use the specific instance's empty context" =
@@ -1290,7 +1319,7 @@ test "wrapped return routes survive an intervening failed request" =
   )
   let after = wrappedReturnRoutes (wrappedReturnSource True True)
   expectAll [
-    expectEqual True (listLen errors > 0),
+    expectTrue (listLen errors > 0),
     expectEqual (Some ["Int[]"]) before,
     expectEqual before after,
   ]
@@ -1407,56 +1436,83 @@ test "ordinary return shares declaration identity vector and goal destination" =
   let goals = map methodTraceGoalText trace
   let aggregate = map evIdText (methodEvInDecls "choose" typed)
   let wanted = map methodWantedView trace
-  expectAll [
-    expectEqual
-      [MRTProduced, MRTChecked, MRTStamped]
-      (map (entry => entry.mrtStage) trace),
-    expectEqual
-      ["identity_return", "identity_return", "identity_return"]
-      (map
-        (entry => match entry.mrtInterface.irOrigin
-          OriginModule moduleId => moduleId
-          _ => "<unresolved>")
-        trace),
-    expectEqual
-      [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
-      (map methodTraceArgs trace),
-    expectEqual True (match goals
-      first :: second :: third :: [] => first == second && second == third
-      _ => False),
-    expectEqual True (match (goals, aggregate)
-      (goal :: _, Some methodGoal) => goal /= methodGoal
-      _ => False),
-    expectEqual [True, True, True] (map methodTracePublishedOne trace),
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
-      [None, Some (MOVInstance _ ["Int", "Bool"] []), Some _] => True
-      _ => False),
-    expectEqual
-      [
-        Some MethodWantedView {
-          mwvBody = "Unit -> Pair Bool Int",
-          mwvInterface = "Choose",
-          mwvArguments = ["Int", "Bool"],
-          mwvDestinationShared = True,
-          mwvScopeShared = True,
-        },
-        Some MethodWantedView {
-          mwvBody = "Unit -> Pair Bool Int",
-          mwvInterface = "Choose",
-          mwvArguments = ["Int", "Bool"],
-          mwvDestinationShared = True,
-          mwvScopeShared = True,
-        },
-        Some MethodWantedView {
-          mwvBody = "Unit -> Pair Bool Int",
-          mwvInterface = "Choose",
-          mwvArguments = ["Int", "Bool"],
-          mwvDestinationShared = True,
-          mwvScopeShared = True,
-        },
-      ]
-      wanted,
+  expectEach [
+    (
+      "trace stages are Produced, Checked, Stamped",
+      expectEqual
+        [MRTProduced, MRTChecked, MRTStamped]
+        (map (entry => entry.mrtStage) trace),
+    ),
+    (
+      "every clause's interface origin is this module",
+      expectEqual
+        ["identity_return", "identity_return", "identity_return"]
+        (map
+          (entry => match entry.mrtInterface.irOrigin
+            OriginModule moduleId => moduleId
+            _ => "<unresolved>")
+          trace),
+    ),
+    (
+      "every clause's method args are Int, Bool",
+      expectEqual
+        [Some ["Int", "Bool"], Some ["Int", "Bool"], Some ["Int", "Bool"]]
+        (map methodTraceArgs trace),
+    ),
+    (
+      "all three goals agree",
+      expectTrue (match goals
+        first :: second :: third :: [] => first == second && second == third
+        _ => False),
+    ),
+    (
+      "the goal differs from the aggregate method-level goal",
+      expectTrue (match (goals, aggregate)
+        (goal :: _, Some methodGoal) => goal /= methodGoal
+        _ => False),
+    ),
+    (
+      "every clause published exactly one outcome",
+      expectEqual [True, True, True] (map methodTracePublishedOne trace),
+    ),
+    (
+      "the trace uses one outcome",
+      expectTrue (methodTraceUsesOneOutcome trace),
+    ),
+    (
+      "outcomes are None, an instance, then given",
+      expectTrue (match map methodOutcomeView trace
+        [None, Some (MOVInstance _ ["Int", "Bool"] []), Some _] => True
+        _ => False),
+    ),
+    (
+      "every clause wants the same Choose view",
+      expectEqual
+        [
+          Some MethodWantedView {
+            mwvBody = "Unit -> Pair Bool Int",
+            mwvInterface = "Choose",
+            mwvArguments = ["Int", "Bool"],
+            mwvDestinationShared = True,
+            mwvScopeShared = True,
+          },
+          Some MethodWantedView {
+            mwvBody = "Unit -> Pair Bool Int",
+            mwvInterface = "Choose",
+            mwvArguments = ["Int", "Bool"],
+            mwvDestinationShared = True,
+            mwvScopeShared = True,
+          },
+          Some MethodWantedView {
+            mwvBody = "Unit -> Pair Bool Int",
+            mwvInterface = "Choose",
+            mwvArguments = ["Int", "Bool"],
+            mwvDestinationShared = True,
+            mwvScopeShared = True,
+          },
+        ]
+        wanted,
+    ),
   ]
 
 methodCarrierStages : String -> String -> List MethodReturnTraceEntry
@@ -1479,12 +1535,12 @@ test "ordinary return given evidence feeds checking and route publication" =
         "use _ = choose ()",
       ])
   expectAll [
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
       [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
         checked == stamped
       _ => False),
-    expectEqual True (match trace
+    expectTrue (match trace
       [_, _, stamped] => match stamped.mrtRoute
         Some (RDictFwd _) => listLen stamped.mrtPrerequisites == 0
         _ => False
@@ -1525,12 +1581,12 @@ test "ordinary return instance evidence retains selected prerequisites" =
         "value = make ()",
       ])
   expectAll [
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
+    expectTrue (methodTraceUsesOneOutcome trace),
+    expectTrue (match map methodOutcomeView trace
       [None, Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])]), Some (MOVInstance _ ["Box Int"] [("Need", ["Int"])])] =>
         True
       _ => False),
-    expectEqual True (match trace
+    expectTrue (match trace
       [_, _, stamped] => match stamped.mrtRoute
         Some (RKey _ _) => listLen stamped.mrtPrerequisites == 1
         _ => False
@@ -1539,15 +1595,15 @@ test "ordinary return instance evidence retains selected prerequisites" =
 
 test "ordinary return validation rejects wrong selected instance" =
   let (_, rejected, _, _) = methodReturnResolutionMutationProbe ()
-  expectEqual True rejected
+  expectTrue rejected
 
 test "ordinary return validation rejects wrong prerequisites" =
   let (_, _, rejected, _) = methodReturnResolutionMutationProbe ()
-  expectEqual True rejected
+  expectTrue rejected
 
 test "ordinary return validation rejects checker evidence disagreement" =
   let (_, _, _, rejected) = methodReturnResolutionMutationProbe ()
-  expectEqual True rejected
+  expectTrue rejected
 
 test "ordinary return template records present and absent interface formals" =
   expectEqual
@@ -1624,20 +1680,32 @@ absentReturnSource reverseImpls ambient =
 
 test "absent return formal completes from the exact enclosing given" =
   let trace = methodCarrierStages "hidden" (absentReturnSource False True)
-  expectAll [
-    expectEqual
-      [None, Some ["a", "a"], Some ["a", "a"]]
-      (map methodTraceArgs trace),
-    expectEqual True (methodTraceUsesOneOutcome trace),
-    expectEqual True (match map methodOutcomeView trace
-      [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
-        checked == stamped
-      _ => False),
-    expectEqual True (match trace
-      [_, _, stamped] => match stamped.mrtRoute
-        Some (RDictFwd _) => True
-        _ => False
-      _ => False),
+  expectEach [
+    (
+      "arg trace is None then given twice",
+      expectEqual
+        [None, Some ["a", "a"], Some ["a", "a"]]
+        (map methodTraceArgs trace),
+    ),
+    (
+      "the trace uses one outcome",
+      expectTrue (methodTraceUsesOneOutcome trace),
+    ),
+    (
+      "the given and stamped outcomes agree",
+      expectTrue (match map methodOutcomeView trace
+        [None, Some (MOVGiven checked), Some (MOVGiven stamped)] =>
+          checked == stamped
+        _ => False),
+    ),
+    (
+      "the stamped clause routes through a dict-forward",
+      expectTrue (match trace
+        [_, _, stamped] => match stamped.mrtRoute
+          Some (RDictFwd _) => True
+          _ => False
+        _ => False),
+    ),
   ]
 
 absentReturnCodes : Bool -> List String
@@ -1650,10 +1718,8 @@ absentReturnCodes reverseImpls =
 
 test "absent return formal never fabricates a fresh instance parameter" = expectAll
   [
-    expectEqual
-      True
-      (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes False)),
-    expectEqual True (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes True)),
+    expectTrue (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes False)),
+    expectTrue (contains "T-AMBIGUOUS-INSTANCE" (absentReturnCodes True)),
   ]
 
 methodBodyThingDecls : Bool -> List String
@@ -1808,8 +1874,7 @@ test "absent return completion cannot leak from a sibling scope" =
         (methodCarrierStages "hidden" source))
   expectAll [
     expectEqual 2 (listLen checkedArgs),
-    expectEqual
-      True
+    expectTrue
       (checkedArgs == ["Bool", "Char"] || checkedArgs == ["Char", "Bool"]),
   ]
 
@@ -1985,14 +2050,32 @@ test "ordinary return traces are fresh while cache hits replay no events" =
   let hit = cachedMethodReturnObserved success
   let failedHit = cachedMethodReturnObserved "entry : Int\nentry = \"wrong\"\n"
   let afterFailedHit = cachedMethodReturnObserved success
-  expectAll [
-    expectEqual [MRTProduced, MRTChecked, MRTStamped] first,
-    expectEqual first afterFailure,
-    expectEqual True (listLen failedErrors > 0),
-    expectEqual (0, [MRTProduced, MRTChecked, MRTStamped]) cold,
-    expectEqual (0, []) hit,
-    expectEqual True (fst failedHit > 0 && snd failedHit == []),
-    expectEqual (0, []) afterFailedHit,
+  expectEach [
+    (
+      "first's stages are Produced, Checked, Stamped",
+      expectEqual [MRTProduced, MRTChecked, MRTStamped] first,
+    ),
+    ("first == afterFailure", expectEqual first afterFailure),
+    (
+      "a failing declaration produces at least one error",
+      expectTrue (listLen failedErrors > 0),
+    ),
+    (
+      "cold is a fresh 0-error trace",
+      expectEqual (0, [MRTProduced, MRTChecked, MRTStamped]) cold,
+    ),
+    ("hit is a fresh 0-error trace with no stages", expectEqual (0, []) hit),
+    (
+      "the failed hit records its own error and no stages",
+      expectEach [
+        ("fst failedHit > 0", expectGreaterThan 0 (fst failedHit)),
+        ("snd failedHit == []", expectEqual [] (snd failedHit)),
+      ],
+    ),
+    (
+      "afterFailedHit is a fresh 0-error trace",
+      expectEqual (0, []) afterFailedHit,
+    ),
   ]
 
 data ReturnMemoRequestView = ReturnMemoRequestView {
@@ -2103,36 +2186,65 @@ test "ordinary return memo fence preserves outcomes and evidence across requests
   let coldInstance = returnMemoMethod "cachedChoose" cold
   let changedInstance = returnMemoMethod "cachedChoose" changed
   let coldGiven = returnMemoMethod "hidden" cold
-  expectAll [
-    expectEqual 0 (returnMemoErrorCount cold),
-    expectEqual cold hit,
-    expectEqual cold afterFailed,
-    expectEqual cold afterConflict,
-    expectEqual cold backToP,
-    expectEqual True (returnMemoErrorCount failed > 0),
-    expectEqual True (returnMemoErrorCount conflict > 0),
-    expectEqual True (changed /= cold && returnMemoErrorCount changed == 0),
-    expectEqual True (forcedStale /= changed),
-    expectEqual True (match (coldInstance, changedInstance)
-      (Some before, Some after) =>
-        before.mrmvOutcome == "instance"
-          && after.mrmvOutcome == "instance"
-          && before.mrmvPrerequisites == [("return_memo_prefix::Need", ["Int"])]
-          && after.mrmvPrerequisites == [("return_memo_prefix::Need", ["Bool"])]
-          && before.mrmvEvidence /= "unpublished"
-          && after.mrmvEvidence /= "unpublished"
-          && before.mrmvEvidence /= after.mrmvEvidence
-      _ => False),
-    expectEqual True (match coldGiven
-      Some given =>
-        given.mrmvArguments == Some ["a", "a"]
-          && given.mrmvOutcome == "given"
-          && given.mrmvPrerequisites == []
-          && given.mrmvEvidence /= "unpublished"
-      None => False),
-    expectEqual (True, True, True) mutations,
-    expectEqual (0, 2, 1) retained,
-    expectEqual (0, 0, 0) teardown,
+  expectEach [
+    ("cold has no errors", expectEqual 0 (returnMemoErrorCount cold)),
+    ("cold == hit", expectEqual cold hit),
+    ("cold == afterFailed", expectEqual cold afterFailed),
+    ("cold == afterConflict", expectEqual cold afterConflict),
+    ("cold == backToP", expectEqual cold backToP),
+    (
+      "a failing entry produces at least one error",
+      expectTrue (returnMemoErrorCount failed > 0),
+    ),
+    (
+      "a conflicting prefix produces at least one error",
+      expectTrue (returnMemoErrorCount conflict > 0),
+    ),
+    (
+      "the changed request re-derives with no errors",
+      expectEach [
+        ("changed /= cold", expectNotEqual cold changed),
+        (
+          "returnMemoErrorCount changed == 0",
+          expectEqual 0 (returnMemoErrorCount changed),
+        ),
+      ],
+    ),
+    (
+      "a stale prefix re-derives rather than replaying the cache",
+      expectTrue (forcedStale /= changed),
+    ),
+    (
+      "cold and changed instances have distinct prerequisites and evidence",
+      expectTrue (match (coldInstance, changedInstance)
+        (Some before, Some after) =>
+          before.mrmvOutcome == "instance"
+            && after.mrmvOutcome == "instance"
+            && before.mrmvPrerequisites
+              == [("return_memo_prefix::Need", ["Int"])]
+            && after.mrmvPrerequisites
+              == [("return_memo_prefix::Need", ["Bool"])]
+            && before.mrmvEvidence /= "unpublished"
+            && after.mrmvEvidence /= "unpublished"
+            && before.mrmvEvidence /= after.mrmvEvidence
+        _ => False),
+    ),
+    (
+      "the given memo carries the expected arguments and no prerequisites",
+      expectTrue (match coldGiven
+        Some given =>
+          given.mrmvArguments == Some ["a", "a"]
+            && given.mrmvOutcome == "given"
+            && given.mrmvPrerequisites == []
+            && given.mrmvEvidence /= "unpublished"
+        None => False),
+    ),
+    (
+      "mutation probe reports (True, True, True)",
+      expectEqual (True, True, True) mutations,
+    ),
+    ("retention stats are (0, 2, 1)", expectEqual (0, 2, 1) retained),
+    ("teardown stats are (0, 0, 0)", expectEqual (0, 0, 0) teardown),
   ]
 
 data LocalCoreFacts = LocalCoreFacts Bool (List String) (List String) Int
@@ -2249,7 +2361,7 @@ test "Core IR round-trip preserves method occurrence arity" =
   match parseCProgram (cprogramToSexp original)
     CProgram [CBind "main" [CClause [] (CMethod "probe" arity RNone [] [])]] _ _ _ =>
       expectEqual 7 arity
-    _ => expectEqual True False
+    _ => expectTrue False
 
 emptyLocalCoreFacts : LocalCoreFacts
 emptyLocalCoreFacts = LocalCoreFacts False [] [] 0
@@ -2307,12 +2419,12 @@ blockRecCoreFacts =
 test "block recursive Core keeps dictionary methods inside the captured closure" =
   let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) =
     blockRecCoreFacts
-  expectAll [
-    expectEqual True shape,
-    expectEqual 1 (listLen addRoutes),
-    expectEqual addRoutes fromIntRoutes,
-    expectEqual False (contains "" addRoutes),
-    expectEqual 0 primCount,
+  expectEach [
+    ("the bind matches the block-recursive shape", expectTrue shape),
+    ("exactly one add route", expectEqual 1 (listLen addRoutes)),
+    ("add routes == fromInt routes", expectEqual addRoutes fromIntRoutes),
+    ("no route is the empty string", expectFalse (contains "" addRoutes)),
+    ("no primitive-dispatch fallback", expectEqual 0 primCount),
   ]
 
 lamThenGroupSource : String
@@ -2342,12 +2454,12 @@ lamThenGroupCoreFacts =
 test "nested lambda-group Core keeps dictionary dispatch in the group member" =
   let (LocalCoreFacts shape addRoutes fromIntRoutes primCount) =
     lamThenGroupCoreFacts
-  expectAll [
-    expectEqual True shape,
-    expectEqual 1 (listLen addRoutes),
-    expectEqual False (contains "" addRoutes),
-    expectEqual [] fromIntRoutes,
-    expectEqual 0 primCount,
+  expectEach [
+    ("the bind matches the nested lambda-group shape", expectTrue shape),
+    ("exactly one add route", expectEqual 1 (listLen addRoutes)),
+    ("no route is the empty string", expectFalse (contains "" addRoutes)),
+    ("no fromInt routes", expectEqual [] fromIntRoutes),
+    ("no primitive-dispatch fallback", expectEqual 0 primCount),
   ]
 
 localNumOwnSource : String

@@ -52,7 +52,8 @@
    corpus, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  Agreement(..), binaryRanClean, checkRunBuild, sweepUnits, verdictOf
+  Agreement(..), binaryRanClean, checkRunBuild, summarizeSweep, sweepUnits,
+  verdictOf
 }
 import fs.{fixtureDirs}
 import list.{sort}
@@ -1236,25 +1237,16 @@ gradeOne scratch r =
             Some msg => "\n\{msg}",
         }
 
-rowFailure : Graded -> Option String
-rowFailure g =
+cellRowFailure : Graded -> Option String
+cellRowFailure g =
   if g.ok then
     None
   else
     Some
       "  \{padRight 60 ' ' g.entry} check=\{padRight 7 ' ' g.checkV} run=\{padRight 7 ' ' g.runV} build=\{padRight 7 ' ' g.buildV} value=\{g.grade}\{g.note}"
 
--- The whole verdict table for the failing cells, since the vehicle swallows
--- anything a test body prints: a red run has to name every disagreeing cell
--- in one message or lose the rest.
-summarize : Int -> List String -> Expectation
-summarize _ [] = pass
-summarize graded failures =
-  fail
-    "\{intToString (length failures)} of \{intToString graded} cells disagree with their pinned verdict or value:\n\{unlines failures}"
-
 sweep : <Exec "_", FileRead "_", IO> Expectation
-sweep = sweepUnits table gradeOne rowFailure summarize
+sweep = sweepUnits table gradeOne cellRowFailure summarizeSweep
 
 -- A row may name a secondary entry point inside a fixture directory
 -- (`<dir>/order-swapped.mdk`), which grades that directory a second way;

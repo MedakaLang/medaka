@@ -32,10 +32,6 @@ corpusPaths u = match args ()
     panic
       "usage: secp256k1_public_key_main POINT_PUBLIC_KEY_CORPUS PDS_DID_KEY_CORPUS"
 
-isErr : Result String a -> Bool
-isErr (Ok _) = False
-isErr (Err _) = True
-
 keyBytes : Int -> Array Int
 keyBytes n = [|
   0,

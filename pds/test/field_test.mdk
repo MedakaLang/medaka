@@ -15,7 +15,8 @@
    rather than by hand-typed hex. -}
 
 import array.{setInPlace}
-import test.{expectEqual, expectTrue, expectFalse}
+import test.{expectEach, expectEqual, expectTrue, expectFalse}
+import test.algebra_support.{allPairs, allTriples}
 import lib.field.{
   Fe,
   feZero,
@@ -104,21 +105,8 @@ samples2 : List Fe
 samples2 =
   map feFromBytesReduce (map (bs => decBytes (decBytes bs)) sampleBytes)
 
-allPairs : (Fe -> Fe -> Bool) -> Bool
-allPairs f = pairsGo f samples samples2
-
-pairsGo : (Fe -> Fe -> Bool) -> List Fe -> List Fe -> Bool
-pairsGo f (a :: ax) (b :: bx) = f a b && pairsGo f ax bx
-pairsGo _ _ _ = True
-
--- The third operand is derived from the first, so every triple is distinct
--- without needing a third input list.
-allTriples : (Fe -> Fe -> Fe -> Bool) -> Bool
-allTriples f = triplesGo f samples samples2
-
-triplesGo : (Fe -> Fe -> Fe -> Bool) -> List Fe -> List Fe -> Bool
-triplesGo f (a :: ax) (b :: bx) = f a b (feAdd a feOne) && triplesGo f ax bx
-triplesGo _ _ _ = True
+feNext : Fe -> Fe
+feNext a = feAdd a feOne
 
 -- ── Additive structure ────────────────────────────────────────────────
 
@@ -128,16 +116,25 @@ test "a + (-a) = 0, over every limb boundary" =
 test "a + 0 = a" = expectTrue (all (a => feEqual (feAdd a feZero) a) samples)
 
 test "a - b = a + (-b)" =
-  expectTrue (allPairs (a b => feEqual (feSub a b) (feAdd a (feNegate b))))
+  expectTrue
+    (allPairs
+      (a b => feEqual (feSub a b) (feAdd a (feNegate b)))
+      samples
+      samples2)
 
 test "a - a = 0" = expectTrue (all (a => feIsZero (feSub a a)) samples)
 
 test "(a + b) + c = a + (b + c)" =
   expectTrue
-    (allTriples (a b c => feEqual (feAdd (feAdd a b) c) (feAdd a (feAdd b c))))
+    (allTriples
+      (a b c => feEqual (feAdd (feAdd a b) c) (feAdd a (feAdd b c)))
+      feNext
+      samples
+      samples2)
 
 test "a + b = b + a" =
-  expectTrue (allPairs (a b => feEqual (feAdd a b) (feAdd b a)))
+  expectTrue
+    (allPairs (a b => feEqual (feAdd a b) (feAdd b a)) samples samples2)
 
 test "-0 = 0" = expectTrue (feIsZero (feNegate feZero))
 
@@ -152,7 +149,10 @@ test "fixed-control zero/equality bits agree with the public predicates" =
 
 test "fixed-control select visits both choices without changing their values" =
   expectTrue
-    (allPairs (a b => feEqual (feSelect 0 a b) a && feEqual (feSelect 1 a b) b))
+    (allPairs
+      (a b => feEqual (feSelect 0 a b) a && feEqual (feSelect 1 a b) b)
+      samples
+      samples2)
 
 test "fixed-control negation agrees with field negation, including zero" =
   expectTrue
@@ -170,15 +170,23 @@ test "a * a = square a, over every limb boundary" =
 
 test "(a * b) * c = a * (b * c)" =
   expectTrue
-    (allTriples (a b c => feEqual (feMul (feMul a b) c) (feMul a (feMul b c))))
+    (allTriples
+      (a b c => feEqual (feMul (feMul a b) c) (feMul a (feMul b c)))
+      feNext
+      samples
+      samples2)
 
 test "a * b = b * a" =
-  expectTrue (allPairs (a b => feEqual (feMul a b) (feMul b a)))
+  expectTrue
+    (allPairs (a b => feEqual (feMul a b) (feMul b a)) samples samples2)
 
 test "a * (b + c) = a*b + a*c" =
   expectTrue
-    (allTriples (a b c =>
-      feEqual (feMul a (feAdd b c)) (feAdd (feMul a b) (feMul a c))))
+    (allTriples
+      (a b c => feEqual (feMul a (feAdd b c)) (feAdd (feMul a b) (feMul a c)))
+      feNext
+      samples
+      samples2)
 
 test "a * inverse a = 1 for every non-zero a" =
   expectTrue
@@ -237,8 +245,10 @@ test "fromBytesReduce ACCEPTS 2^256-1" =
 
 -- ── Parity ────────────────────────────────────────────────────────────
 
-test "isOdd 1 is True, isOdd 0 is False" =
-  expectTrue (feIsOdd feOne && not (feIsOdd feZero))
+test "isOdd 1 is True, isOdd 0 is False" = expectEach [
+  ("feIsOdd feOne", expectTrue (feIsOdd feOne)),
+  ("not (feIsOdd feZero)", expectFalse (feIsOdd feZero)),
+]
 
 -- `p` has an odd low byte, but public reduction maps it to the canonical
 -- representative 0. The raw limb representation is deliberately not public.

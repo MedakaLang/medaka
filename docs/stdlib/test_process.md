@@ -188,6 +188,35 @@ Pass "nonzero exit, output containing \"\"" "exit 3, output \"\""
 Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing \"boom\"" "exit 0, output \"\""
 ```
 
+### `expectSpawnFailsAll`
+
+```
+expectSpawnFailsAll : String -> List String -> List String -> <Exec _> Expectation
+```
+
+Passes when running `cmd` with `args` exits nonzero and its output
+contains EVERY string in `needles`.
+
+`expectSpawnFails` for a rejection whose diagnostic has to say more than
+one thing: which rule fired, which file, and what to do instead. A single
+needle grades only the part it names, so a diagnostic that keeps its
+headline and drops its location still passes. The needles are matched in
+any order, against stdout and stderr concatenated, and need not share a
+line; `test.expectLineContainsAll` is the one that binds them
+together.
+
+An empty `needles` list grades the exit code alone, which is
+`expectSpawnFails` with an empty needle.
+
+```medaka
+> expectSpawnFailsAll "sh" ["-c", "printf alpha-beta; exit 3"] ["alpha", "beta"]
+Pass "nonzero exit, output containing [\"alpha\", \"beta\"]" "exit 3, output \"alpha-beta\""
+> expectSpawnFailsAll "sh" ["-c", "printf alpha; exit 3"] ["alpha", "beta"]
+Fail "`sh -c printf alpha; exit 3` exited 3 but its output does not contain \"beta\": \"alpha\"" "nonzero exit, output containing [\"alpha\", \"beta\"]" "exit 3, output \"alpha\""
+> expectSpawnFailsAll "true" [] ["alpha"]
+Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing [\"alpha\"]" "exit 0, output \"\""
+```
+
 ### `expectSpawnOkLine`
 
 ```

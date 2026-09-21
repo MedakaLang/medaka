@@ -8,9 +8,35 @@ IDENT "runVerb"
 RBRACE
 NEWLINE
 IMPORT
+IDENT "json"
+DOT_LBRACE
+IDENT "asInt"
+COMMA
+IDENT "get"
+COMMA
+IDENT "parse"
+RBRACE
+NEWLINE
+IMPORT
+IDENT "list"
+DOT_LBRACE
+IDENT "somes"
+RBRACE
+NEWLINE
+IMPORT
 IDENT "string"
 DOT_LBRACE
 IDENT "contains"
+COMMA
+IDENT "endsWith"
+COMMA
+IDENT "lines"
+COMMA
+IDENT "startsWith"
+COMMA
+IDENT "stripSuffix"
+COMMA
+IDENT "trim"
 COMMA
 IDENT "unwords"
 RBRACE
@@ -75,6 +101,168 @@ STRING "MEDAKA"
 INTERP_OPEN ""
 IDENT "medakaRoot"
 INTERP_END "/medaka"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "spawnTimeoutSeconds"
+COLON
+UPPER "Int"
+NEWLINE
+IDENT "spawnTimeoutSeconds"
+EQUAL
+INT 60
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "boundedVerb"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "List"
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "String"
+COMMA
+UPPER "String"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "boundedVerb"
+IDENT "cmd"
+IDENT "args"
+EQUAL
+IDENT "boundedVerbSeconds"
+IDENT "spawnTimeoutSeconds"
+IDENT "cmd"
+IDENT "args"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "boundedVerbSeconds"
+COLON
+UPPER "Int"
+ARROW
+INDENT
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "Int"
+COMMA
+UPPER "String"
+COMMA
+UPPER "String"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "boundedVerbSeconds"
+IDENT "secs"
+IDENT "cmd"
+IDENT "args"
+EQUAL
+INDENT
+IDENT "runVerb"
+STRING "perl"
+LPAREN
+LBRACKET
+STRING "-e"
+COMMA
+INTERP_OPEN "alarm "
+IDENT "intToString"
+IDENT "secs"
+INTERP_END "; exec @ARGV"
+COMMA
+STRING "env"
+COMMA
+IDENT "cmd"
+RBRACKET
+PLUSPLUS
+IDENT "args"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "scratchDir"
+COLON
+LT
+UPPER "Exec"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "String"
+NEWLINE
+IDENT "scratchDir"
+EQUAL
+MATCH
+IDENT "runVerb"
+STRING "mktemp"
+LBRACKET
+STRING "-d"
+RBRACKET
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+IDENT "e"
+NEWLINE
+UPPER "Ok"
+LPAREN
+INT 0
+COMMA
+IDENT "out"
+COMMA
+UNDERSCORE
+RPAREN
+FAT_ARROW
+UPPER "Ok"
+LPAREN
+IDENT "trim"
+IDENT "out"
+RPAREN
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+UNDERSCORE
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN "mktemp -d exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ": "
+IDENT "err"
+INTERP_END ""
+NEWLINE
+DEDENT
 NEWLINE
 EXPORT
 NEWLINE
@@ -314,6 +502,726 @@ NEWLINE
 DEDENT
 NEWLINE
 DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectSpawnFailsAll"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+STRING "_"
+GT
+UPPER "Expectation"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "expectSpawnFailsAll"
+IDENT "cmd"
+IDENT "args"
+IDENT "needles"
+EQUAL
+INDENT
+LET
+IDENT "line"
+EQUAL
+IDENT "unwords"
+LPAREN
+IDENT "cmd"
+CONS
+IDENT "args"
+RPAREN
+NEWLINE
+LET
+IDENT "want"
+EQUAL
+INTERP_OPEN "nonzero exit, output containing "
+IDENT "debug"
+IDENT "needles"
+INTERP_END ""
+NEWLINE
+MATCH
+IDENT "runVerb"
+IDENT "cmd"
+IDENT "args"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Fail"
+INTERP_OPEN "could not run `"
+IDENT "line"
+INTERP_MID "`: "
+IDENT "e"
+INTERP_END ""
+IDENT "want"
+STRING "no spawn"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+IDENT "out"
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+INDENT
+LET
+IDENT "text"
+EQUAL
+IDENT "out"
+PLUSPLUS
+IDENT "err"
+NEWLINE
+LET
+IDENT "got"
+EQUAL
+INTERP_OPEN "exit "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ", output "
+IDENT "debug"
+IDENT "text"
+INTERP_END ""
+NEWLINE
+IF
+IDENT "code"
+EQ_EQ
+INT 0
+THEN
+INDENT
+UPPER "Fail"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_END "` exited 0, expected it to fail"
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+ELSE
+MATCH
+IDENT "filter"
+LPAREN
+IDENT "n"
+FAT_ARROW
+IDENT "not"
+LPAREN
+IDENT "contains"
+IDENT "n"
+IDENT "text"
+RPAREN
+RPAREN
+IDENT "needles"
+INDENT
+LBRACKET
+RBRACKET
+FAT_ARROW
+UPPER "Pass"
+IDENT "want"
+IDENT "got"
+NEWLINE
+IDENT "missing"
+CONS
+UNDERSCORE
+FAT_ARROW
+INDENT
+UPPER "Fail"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_MID "` exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID " but its output does not contain "
+IDENT "debug"
+IDENT "missing"
+INTERP_MID ": "
+IDENT "debug"
+IDENT "text"
+INTERP_END ""
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "expectSpawnOkLine"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+STRING "_"
+GT
+UPPER "Expectation"
+NEWLINE
+IDENT "expectSpawnOkLine"
+IDENT "cmd"
+IDENT "args"
+IDENT "wantLine"
+EQUAL
+INDENT
+LET
+IDENT "line"
+EQUAL
+IDENT "unwords"
+LPAREN
+IDENT "cmd"
+CONS
+IDENT "args"
+RPAREN
+NEWLINE
+LET
+IDENT "want"
+EQUAL
+INTERP_OPEN "exit 0, output with a line "
+IDENT "debug"
+IDENT "wantLine"
+INTERP_END ""
+NEWLINE
+MATCH
+IDENT "runVerb"
+IDENT "cmd"
+IDENT "args"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Fail"
+INTERP_OPEN "could not run `"
+IDENT "line"
+INTERP_MID "`: "
+IDENT "e"
+INTERP_END ""
+IDENT "want"
+STRING "no spawn"
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+IDENT "out"
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+INDENT
+LET
+IDENT "text"
+EQUAL
+IDENT "out"
+PLUSPLUS
+IDENT "err"
+NEWLINE
+LET
+IDENT "got"
+EQUAL
+INTERP_OPEN "exit "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ", output "
+IDENT "debug"
+IDENT "text"
+INTERP_END ""
+NEWLINE
+IF
+IDENT "code"
+NEQ
+INT 0
+THEN
+INDENT
+UPPER "Fail"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_MID "` exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID ", expected 0: "
+IDENT "debug"
+IDENT "text"
+INTERP_END ""
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+ELSE
+IF
+IDENT "elem"
+IDENT "wantLine"
+LPAREN
+IDENT "lines"
+IDENT "text"
+RPAREN
+THEN
+INDENT
+UPPER "Pass"
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+UPPER "Fail"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_MID "` exited 0 but no output line equals "
+IDENT "debug"
+IDENT "wantLine"
+INTERP_MID ": "
+IDENT "debug"
+IDENT "text"
+INTERP_END ""
+IDENT "want"
+IDENT "got"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "testFileStem"
+COLON
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "testFileStem"
+IDENT "name"
+EQUAL
+INDENT
+IF
+IDENT "endsWith"
+STRING "_test.mdk"
+IDENT "name"
+THEN
+IDENT "stripSuffix"
+STRING ".mdk"
+IDENT "name"
+ELSE
+UPPER "None"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "testAssertionCount"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+LT
+UPPER "Exec"
+STRING "_"
+COMMA
+UPPER "IO"
+GT
+UPPER "Result"
+UPPER "String"
+UPPER "Int"
+NEWLINE
+IDENT "testAssertionCount"
+IDENT "path"
+IDENT "extraArgs"
+EQUAL
+INDENT
+LET
+IDENT "args"
+EQUAL
+LBRACKET
+STRING "test"
+RBRACKET
+PLUSPLUS
+IDENT "extraArgs"
+PLUSPLUS
+LBRACKET
+IDENT "path"
+COMMA
+STRING "--json"
+RBRACKET
+NEWLINE
+LET
+IDENT "line"
+EQUAL
+IDENT "unwords"
+LPAREN
+IDENT "medakaBin"
+CONS
+IDENT "args"
+RPAREN
+NEWLINE
+MATCH
+IDENT "runVerb"
+IDENT "medakaBin"
+IDENT "args"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN "could not run `"
+IDENT "line"
+INTERP_MID "`: "
+IDENT "e"
+INTERP_END ""
+NEWLINE
+UPPER "Ok"
+LPAREN
+IDENT "code"
+COMMA
+IDENT "out"
+COMMA
+IDENT "err"
+RPAREN
+FAT_ARROW
+INDENT
+IF
+IDENT "code"
+NEQ
+INT 0
+THEN
+INDENT
+UPPER "Err"
+INTERP_OPEN "`"
+IDENT "line"
+INTERP_MID "` exited "
+IDENT "intToString"
+IDENT "code"
+INTERP_MID " — an assertion failed, or the file did not run: "
+IDENT "debug"
+LPAREN
+IDENT "out"
+PLUSPLUS
+IDENT "err"
+RPAREN
+INTERP_END ""
+NEWLINE
+DEDENT
+ELSE
+MATCH
+IDENT "parse"
+IDENT "out"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN ""
+IDENT "path"
+INTERP_MID ": --json output did not parse: "
+IDENT "e"
+INTERP_END ""
+NEWLINE
+UPPER "Ok"
+IDENT "j"
+FAT_ARROW
+MATCH
+IDENT "get"
+STRING "summary"
+IDENT "j"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN ""
+IDENT "path"
+INTERP_END ": no \"summary\" in --json output"
+NEWLINE
+UPPER "Some"
+IDENT "summary"
+FAT_ARROW
+MATCH
+IDENT "get"
+STRING "passed"
+IDENT "summary"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN ""
+IDENT "path"
+INTERP_END ": no \"summary.passed\" in --json output"
+NEWLINE
+UPPER "Some"
+IDENT "p"
+FAT_ARROW
+MATCH
+IDENT "asInt"
+IDENT "p"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN ""
+IDENT "path"
+INTERP_END ": \"summary.passed\" is not an integer"
+NEWLINE
+UPPER "Some"
+IDENT "n"
+FAT_ARROW
+UPPER "Ok"
+IDENT "n"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "unrosteredUnits"
+COLON
+LPAREN
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+RPAREN
+ARROW
+INDENT
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "unrosteredUnits"
+IDENT "namer"
+IDENT "known"
+IDENT "entries"
+EQUAL
+INDENT
+IDENT "filter"
+LPAREN
+IDENT "n"
+FAT_ARROW
+IDENT "not"
+LPAREN
+IDENT "elem"
+IDENT "n"
+IDENT "known"
+RPAREN
+RPAREN
+LPAREN
+IDENT "somes"
+LPAREN
+IDENT "map"
+IDENT "namer"
+IDENT "entries"
+RPAREN
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "missingUnits"
+COLON
+LPAREN
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+RPAREN
+ARROW
+INDENT
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "missingUnits"
+IDENT "namer"
+IDENT "wanted"
+IDENT "entries"
+EQUAL
+INDENT
+LET
+IDENT "present"
+EQUAL
+IDENT "somes"
+LPAREN
+IDENT "map"
+IDENT "namer"
+IDENT "entries"
+RPAREN
+NEWLINE
+IDENT "filter"
+LPAREN
+IDENT "n"
+FAT_ARROW
+IDENT "not"
+LPAREN
+IDENT "elem"
+IDENT "n"
+IDENT "present"
+RPAREN
+RPAREN
+IDENT "wanted"
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "unrosteredTestFiles"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "List"
+UPPER "String"
+ARROW
+LT
+UPPER "FileRead"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "unrosteredTestFiles"
+IDENT "dir"
+IDENT "known"
+EQUAL
+MATCH
+IDENT "listDir"
+IDENT "dir"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN "could not list "
+IDENT "dir"
+INTERP_MID ": "
+IDENT "e"
+INTERP_END ""
+NEWLINE
+UPPER "Ok"
+IDENT "names"
+FAT_ARROW
+UPPER "Ok"
+LPAREN
+IDENT "unrosteredUnits"
+IDENT "testFileStem"
+IDENT "known"
+IDENT "names"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "missingTestFiles"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "List"
+UPPER "String"
+ARROW
+LT
+UPPER "FileRead"
+STRING "_"
+GT
+UPPER "Result"
+UPPER "String"
+LPAREN
+UPPER "List"
+UPPER "String"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "missingTestFiles"
+IDENT "dir"
+IDENT "wanted"
+EQUAL
+MATCH
+IDENT "listDir"
+IDENT "dir"
+INDENT
+UPPER "Err"
+IDENT "e"
+FAT_ARROW
+UPPER "Err"
+INTERP_OPEN "could not list "
+IDENT "dir"
+INTERP_MID ": "
+IDENT "e"
+INTERP_END ""
+NEWLINE
+UPPER "Ok"
+IDENT "names"
+FAT_ARROW
+UPPER "Ok"
+LPAREN
+IDENT "missingUnits"
+IDENT "testFileStem"
+IDENT "wanted"
+IDENT "names"
+RPAREN
 NEWLINE
 DEDENT
 NEWLINE

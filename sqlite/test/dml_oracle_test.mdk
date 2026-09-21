@@ -35,94 +35,46 @@
 
    Run: `medaka gate run sqlite/test/dml_oracle`. -}
 
--- The spawn primitives below (`spawnRaw`/`spawnOut`/`rowScratch`/`seedDb`/
--- `spawnEnv`/`emitterBin`) are byte-for-byte the same as
--- `writer_oracle_test.mdk`'s copies — deliberately, not an oversight:
--- `medaka gate verify`'s native-grading clause reads only the source text of
--- the module a gate's `run =` names, so moving these into a module the two
--- files share would make the check see nothing to grade in either file and
--- pass having verified neither.
-import io.{getEnvOr, runVerb}
+-- `spawnRaw`/`spawnOut`/`seedDb`/`spawnEnv`/`emitterBin` moved to
+-- `test.oracle_support` under #3239/#3240: `medaka gate verify`'s
+-- native-grading clause now follows a gate's project-local imports one hop
+-- (`gateReaches`/`relaysFor`), so a spawn routed through that shared module
+-- is graded via the importing gate rather than invisible to it.
+-- `rowScratch` stays local — a fourth byte-identical copy with
+-- `writer_oracle_test.mdk`.
+import io.{runVerb}
 import list.{replicate}
-import string.{contains, join, startsWith, trim, unwords}
-import test.{Expectation(..), expectAll, expectEqual, expectTextContainsAll}
-import test.oracle_support.{expectLines, flatLines, labelFail, outLines}
-import test_process.{
-  boundedVerbSeconds, medakaBin, medakaRoot, scratchDir, underRoot
+import string.{contains, join, startsWith, trim}
+import test.{
+  Expectation(..),
+  expectAll,
+  expectEqual,
+  expectEqualLines,
+  expectTextContainsAll,
+  labelFail,
 }
+import test.oracle_support.{
+  Seed(..), flatLines, outLines, seedDb, spawnOut, spawnRaw
+}
+import test_process.{medakaBin, scratchDir, underRoot}
 
 -- # Spawning
 --
--- Kept in THIS file, not `oracle_support`, for the same reason
--- `oracle_test.mdk` keeps its own copy: `medaka gate verify`'s native-grading
--- clause reads only the source text of the module a gate's `run =` names, so
--- a spawn routed through a shared helper module would be invisible to it —
--- the check would find nothing to flag and pass having verified nothing.
---
--- `spawnOut` and `spawnRaw` are NOT the same function as `oracle_test.mdk`'s
--- `spawnOut`: this file also needs a TOLERANT form (`spawnRaw`) for the
--- `dml_oracle` sections, which legitimately expect either engine to REFUSE a
--- statement — a non-zero exit there is data, not a spawn failure. Splitting
--- the strict form on top of the tolerant one is a different decomposition
--- from `oracle_test.mdk`'s single four-clause function, not a copy of it.
+-- `spawnOut`/`spawnRaw` here are `test.oracle_support`'s shared primitives.
+-- This file needs the TOLERANT form (`spawnRaw`) too, for the `dml_oracle`
+-- sections, which legitimately expect either engine to REFUSE a statement —
+-- a non-zero exit there is data, not a spawn failure.
 buildTimeoutSeconds : Int
 buildTimeoutSeconds = 600
 
 queryTimeoutSeconds : Int
 queryTimeoutSeconds = 120
 
-emitterBin : <IO> String
--- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-emitterBin =
-  let root = medakaRoot
-  getEnvOr "MEDAKA_EMITTER" "\{root}/medaka_emitter"
-
-spawnEnv : <IO> List String
--- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-spawnEnv =
-  let rootVar = "MEDAKA_ROOT=\{medakaRoot}"
-  let emitterVar = "MEDAKA_EMITTER=\{emitterBin}"
-  [rootVar, emitterVar]
-
-{- | `cmd` run with `args` under a `secs` ceiling: the raw `(exit, stdout,
-   stderr)`, except a missing `cmd` (exit 127 through `env`) or a spawn that
-   never started, which are both reported as `Err` — there is no row in this
-   file where "the binary was not on PATH" should be read as "it printed
-   nothing and exited 0". -}
-spawnRaw : Int ->
-  String ->
-  List String ->
-  <Exec "_", IO> Result String (Int, String, String)
--- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-spawnRaw secs cmd args =
-  match boundedVerbSeconds secs "env" (spawnEnv ++ (cmd :: args))
-    Err e =>
-      Err "spawn failed: could not start `\{unwords (cmd :: args)}`: \{e}"
-    Ok (127, _, err) =>
-      Err "spawn failed: \{cmd} not found on PATH: \{trim err}"
-    Ok triple => Ok triple
-
-{- | `spawnRaw`, demanding a clean exit: the row's stdout on 0, a named
-   failure otherwise. What every build/seed/build-and-run step in this file
-   goes through — a row where the tool itself failed is not the same
-   condition as a row whose SQL was refused. -}
-spawnOut : Int -> String -> List String -> <Exec "_", IO> Result String String
--- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-spawnOut secs cmd args = match spawnRaw secs cmd args
-  Err e => Err e
-  Ok (0, out, _) => Ok out
-  Ok (code, out, err) =>
-    Err
-      "`\{unwords (cmd :: args)}` exited \{intToString code}: \{debug (out ++ err)}"
-
 -- # Small process-backed primitives every row below is built from.
 
 rowScratch : String -> <Exec "_"> Result String String
--- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
+-- deliberate copy of writer_oracle_test.mdk's own, see the header note
+-- above the imports
 -- lint-disable-next-line rule-duplicate-body
 rowScratch name = match scratchDir
   Err e => Err "\{name}: \{e}"
@@ -136,11 +88,6 @@ buildBin flags entry bin =
       buildTimeoutSeconds
       medakaBin
       (["build"] ++ flags ++ [underRoot entry, "-o", bin]))
-
-seedDb : String -> String -> <Exec "_", IO> Result String Unit
--- deliberate copy of writer_oracle_test.mdk's own, see the header note above the imports
--- lint-disable-next-line rule-duplicate-body
-seedDb db sql = map (_ => ()) (spawnOut queryTimeoutSeconds "sqlite3" [db, sql])
 
 copyFile : String -> String -> <Exec "_", IO> Result String Unit
 copyFile src dst = map (_ => ()) (spawnOut queryTimeoutSeconds "cp" [src, dst])
@@ -234,7 +181,7 @@ runDelete : String -> String -> String -> <Exec "_", IO> Result String DeleteRun
 runDelete db deleter reader = do
   _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
   _ <- buildBin [] "sqlite/main.mdk" reader
-  _ <- seedDb db deleteSeedSql
+  _ <- seedDb db [SeedSql deleteSeedSql]
   usersOut <- spawnOut queryTimeoutSeconds deleter [
     db, "users", "age", "ge", "30"
   ]
@@ -259,7 +206,10 @@ runDelete db deleter reader = do
 test "delete: literal gates match the hand-derived expected values" =
   match deleteResult
     Err e => Fail e (join "\n" deleteExpectedLines) "the row did not run"
-    Ok r => expectLines deleteExpectedLines (deleteReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" deleteExpectedLines)
+        (join "\n" (deleteReport r))
 
 test "delete: report matches sqlite/test/delete.golden" = match deleteResult
   Err e => Fail e "the committed golden" "the row did not run"
@@ -269,7 +219,8 @@ test "delete: report matches sqlite/test/delete.golden" = match deleteResult
         "could not read sqlite/test/delete.golden: \{e}"
         "sqlite/test/delete.golden"
         "unreadable"
-    Ok text => expectLines (outLines text) (deleteReport r)
+    Ok text =>
+      expectEqualLines (join "\n" (outLines text)) (join "\n" (deleteReport r))
 
 -- # delete_negative
 --
@@ -316,7 +267,7 @@ runNegative : String ->
   <Exec "_", FileRead "_", IO> Result String NegativeRun
 runNegative db deleter = do
   _ <- buildBin [] "sqlite/delete_demo.mdk" deleter
-  _ <- seedDb db negativeSeedSql
+  _ <- seedDb db [SeedSql negativeSeedSql]
   before <- readFileBytes db
   delOut <- spawnOut queryTimeoutSeconds deleter [db, "users", "age", "gt", "0"]
   after <- readFileBytes db
@@ -349,7 +300,10 @@ test "delete_negative: report matches sqlite/test/delete_negative.golden" =
           "could not read sqlite/test/delete_negative.golden: \{e}"
           "sqlite/test/delete_negative.golden"
           "unreadable"
-      Ok text => expectLines (outLines text) (negativeReport r)
+      Ok text =>
+        expectEqualLines
+          (join "\n" (outLines text))
+          (join "\n" (negativeReport r))
 
 -- # update
 --
@@ -434,7 +388,7 @@ runUpdate db dbIpk updater = do
   let kvArgs = [db, "kv", "v", "int", "0", "v", "gt", "25"]
   let ipkArgs = [dbIpk, "users", "id", "int", "999", "age", "ge", "0"]
   _ <- buildBin [] "sqlite/update_demo.mdk" updater
-  _ <- seedDb db updateSeedSql
+  _ <- seedDb db [SeedSql updateSeedSql]
   usersOut <- spawnOut queryTimeoutSeconds updater usersArgs
   kvOut <- spawnOut queryTimeoutSeconds updater kvArgs
   ic <- sqlite3Query db "PRAGMA integrity_check;"
@@ -442,7 +396,7 @@ runUpdate db dbIpk updater = do
     db
     "SELECT rowid,id,name,age FROM users ORDER BY rowid;"
   kvAfter <- sqlite3Query db "SELECT rowid,k,v FROM kv ORDER BY rowid;"
-  _ <- seedDb dbIpk updateIpkSeedSql
+  _ <- seedDb dbIpk [SeedSql updateIpkSeedSql]
   before <- readFileBytes dbIpk
   ipkOut <- spawnOut queryTimeoutSeconds updater ipkArgs
   after <- readFileBytes dbIpk
@@ -459,7 +413,10 @@ runUpdate db dbIpk updater = do
 test "update: literal gates match the hand-derived expected values" =
   match updateResult
     Err e => Fail e (join "\n" updateExpectedLines) "the row did not run"
-    Ok r => expectLines updateExpectedLines (updateReport r)
+    Ok r =>
+      expectEqualLines
+        (join "\n" updateExpectedLines)
+        (join "\n" (updateReport r))
 
 test "update: report matches sqlite/test/update.golden" = match updateResult
   Err e => Fail e "the committed golden" "the row did not run"
@@ -469,7 +426,8 @@ test "update: report matches sqlite/test/update.golden" = match updateResult
         "could not read sqlite/test/update.golden: \{e}"
         "sqlite/test/update.golden"
         "unreadable"
-    Ok text => expectLines (outLines text) (updateReport r)
+    Ok text =>
+      expectEqualLines (join "\n" (outLines text)) (join "\n" (updateReport r))
 
 -- # update_expr
 --
@@ -524,10 +482,10 @@ runUpdateExpr : String ->
   <Exec "_", FileRead "_", IO> Result String UpdateExprRun
 runUpdateExpr dbm dbs probe = do
   _ <- buildBin ["--allow-internal"] "sqlite/update_expr_demo.mdk" probe
-  _ <- seedDb dbm updateExprSeedSql
+  _ <- seedDb dbm [SeedSql updateExprSeedSql]
   _ <- copyFile dbm dbs
   probeOut <- spawnOut queryTimeoutSeconds probe [dbm]
-  _ <- seedDb dbs updateExprSqliteStmts
+  _ <- seedDb dbs [SeedSql updateExprSqliteStmts]
   ic <- sqlite3Query dbm "PRAGMA integrity_check;"
   diffs <- traverse (tableDiff dbm dbs) updateExprTables
   Ok UpdateExprRun {
@@ -545,7 +503,10 @@ tableDiff dbm dbs t = do
     [".mode list", ".nullvalue NULL", "SELECT * FROM \{t} ORDER BY id;"]
   mm <- sqlite3Args dbm args
   ss <- sqlite3Args dbs args
-  Ok (labelFail t (expectLines (outLines ss) (outLines mm)))
+  Ok
+    (labelFail
+      t
+      (expectEqualLines (join "\n" (outLines ss)) (join "\n" (outLines mm))))
 
 test "update_expr: arithmetic UPDATE matches the sqlite3 CLI on every table" =
   match updateExprResult
@@ -639,7 +600,7 @@ compareDbs label mdb sdb = do
   else do
     md <- dumpDb mdb
     sd <- dumpDb sdb
-    Ok (labelFail label (expectLines sd md))
+    Ok (labelFail label (expectEqualLines (join "\n" sd) (join "\n" md)))
 
 runCorpusSection : String ->
   String ->
@@ -709,7 +670,10 @@ dmlAuthored = [
 overflowLengths : String -> <Exec "_", IO> Result String Expectation
 overflowLengths db = do
   raw <- sqlite3Query db "SELECT length(body) FROM docs ORDER BY rowid;"
-  Ok (labelFail "overflow" (expectLines ["9000", "5000"] (outLines raw)))
+  Ok
+    (labelFail
+      "overflow"
+      (expectEqualLines "9000\n5000" (join "\n" (outLines raw))))
 
 -- ── section 4: CLI SELECT (byte-identical to the sqlite3 CLI) ────────────
 dmlSelects : List String
@@ -742,7 +706,9 @@ cliSelectOne cli mdb sdb q = do
   Ok
     (labelFail
       q
-      (expectLines (outLines (sout ++ serr)) (outLines (mout ++ merr))))
+      (expectEqualLines
+        (join "\n" (outLines (sout ++ serr)))
+        (join "\n" (outLines (mout ++ merr)))))
 
 cliSelectExpectation : String ->
   String ->
@@ -900,8 +866,8 @@ runDmlOutcome prefix = do
   _ <- buildBin [] "sqlite/main.mdk" cli
   _ <- buildBin [] "sqlite/dml_probe.mdk" probe
   e1 <- runCorpusSection cli "dml corpus" m1 s1 dmlCorpus
-  _ <- seedDb m2 dmlAuthoredSeedSql
-  _ <- seedDb s2 dmlAuthoredSeedSql
+  _ <- seedDb m2 [SeedSql dmlAuthoredSeedSql]
+  _ <- seedDb s2 [SeedSql dmlAuthoredSeedSql]
   e2 <- runCorpusSection
     cli
     "sqlite3-authored db, Medaka-mutated"
@@ -916,15 +882,15 @@ runDmlOutcome prefix = do
     dmlOverflow
   e3b <- overflowLengths m3
   eSelect <- cliSelectExpectation cli m1 s1
-  _ <- seedDb m5 dmlRejectSeedSql
+  _ <- seedDb m5 [SeedSql dmlRejectSeedSql]
   eReject <- runRejections cli m5
-  _ <- seedDb m6 dmlLowercaseIpkSeedSql
+  _ <- seedDb m6 [SeedSql dmlLowercaseIpkSeedSql]
   eM6 <- checkSchemaRefusal
     "lowercase IPK schema"
     cli
     m6
     "INSERT INTO t VALUES (2, 'b')"
-  _ <- seedDb m7 dmlIndexedSeedSql
+  _ <- seedDb m7 [SeedSql dmlIndexedSeedSql]
   eM7 <- checkSchemaRefusal
     "secondary-indexed schema"
     cli

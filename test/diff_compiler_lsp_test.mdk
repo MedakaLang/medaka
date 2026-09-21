@@ -77,7 +77,9 @@
    goldens, neither of which the interpreter binds. -}
 
 import array as A
-import compiler_cli_test_support.{boundedInTree, chompNewlines, sweepUnits}
+import compiler_cli_test_support.{
+  boundedInTree, chompNewlines, summarizeSweep, sweepUnits
+}
 import fs.{mkdirAll}
 import json.{
   JArray,
@@ -97,7 +99,7 @@ import json.{
 import list.{nub, reverse, somes, sort}
 import path.{basename}
 import string.{contains, join, lines, startsWith, trim, unlines}
-import test.{Expectation, fail, pass}
+import test.{fail, pass}
 import test_process.{medakaBin, medakaRoot}
 
 -- # Framing
@@ -1205,14 +1207,8 @@ probeFailure o = match o.findings
   fs =>
     Some "  \{o.name} (\{intToString (length fs)} findings):\n\{indentAll fs}"
 
-summarize : Int -> List String -> Expectation
-summarize _ [] = pass
-summarize graded failures =
-  fail
-    "\{intToString (length failures)} of \{intToString graded} LSP properties failed:\n\{unlines failures}"
-
 test "every LSP request set answers as its golden and its source say" =
-  sweepUnits probes gradeProbe probeFailure summarize
+  sweepUnits probes gradeProbe probeFailure summarizeSweep
 
 -- # The one session that cannot be pre-framed
 

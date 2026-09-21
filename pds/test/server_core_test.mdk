@@ -14,7 +14,7 @@ import http.{
 }
 import array as A
 import string.{repeat, toUtf8}
-import test.{expectAll, expectEqual, expectTrue}
+import test.{expectAll, expectEach, expectEqual, expectOkThen, expectTrue}
 import lib.cid.{cidForRaw}
 import lib.server_core.{
   Account,
@@ -189,25 +189,28 @@ test "an out-of-domain request array is refused at the door, not framed" = expec
 test "Store starts empty and delegates verified immutable insertion" =
   let bytes = [|1, 2, 3|]
   let cid = cidForRaw bytes
-  match storePut cid bytes storeEmpty
-    Err _ => expectTrue False
-    Ok next =>
-      expectTrue
-        (storeSize storeEmpty == 0
-          && storeSize next == 1
-          && storeGet cid next == Some [|1, 2, 3|])
+  expectOkThen
+    (next => expectEach [
+      ("storeSize storeEmpty == 0", expectEqual 0 (storeSize storeEmpty)),
+      ("storeSize next == 1", expectEqual 1 (storeSize next)),
+      (
+        "storeGet cid next == Some [1,2,3]",
+        expectEqual (Some [|1, 2, 3|]) (storeGet cid next),
+      ),
+    ])
+    (storePut cid bytes storeEmpty)
 
 test "Store insertion and lookup both retain defensive copies" =
   let bytes = [|4, 5, 6|]
   let cid = cidForRaw bytes
-  match storePut cid bytes storeEmpty
-    Err _ => expectTrue False
-    Ok next => match storeGet cid next
+  expectOkThen
+    (next => match storeGet cid next
       None => expectTrue False
       Some viewed =>
         let () = A.setInPlace 0 99 bytes
         let () = A.setInPlace 1 98 viewed
-        expectEqual (storeGet cid next) (Some [|4, 5, 6|])
+        expectEqual (storeGet cid next) (Some [|4, 5, 6|]))
+    (storePut cid bytes storeEmpty)
 
 test "classified parser exposes malformed framing without diagnostic matching" =
   match parseRequestClassified malformedRequest
@@ -220,19 +223,22 @@ test "classified parser exposes resource excess without diagnostic matching" =
     _ => expectTrue False
 
 test "original parseRequest API retains its Result String contract" =
-  match parseRequest fixedQuery
-    Ok _ => expectTrue True
-    Err _ => expectTrue False
+  expectTrue (isOk (parseRequest fixedQuery))
 
 test "direct configured handle preserves Store for a fixed query" =
-  match parseRequest fixedQuery
-    Err _ => expectTrue False
-    Ok request =>
+  expectOkThen
+    (request =>
       let (next, response) = handle server testContext seededStore request
-      expectTrue
-        (seedPreserved next
-          && serializeResponse response
-            == expectedTextResponse 200 "OK" "fixed")
+      expectEach [
+        ("seedPreserved next", expectTrue (seedPreserved next)),
+        (
+          "serializeResponse response == expected fixed response",
+          expectEqual
+            (expectedTextResponse 200 "OK" "fixed")
+            (serializeResponse response),
+        ),
+      ])
+    (parseRequest fixedQuery)
 
 test "fixed raw request returns successor Store and exact response bytes" =
   let (next, bytes) = handleBytes server testContext storeEmpty fixedPut

@@ -100,10 +100,9 @@ Source suite: `test/test_run.ml` (46 cases total).
 **Ported: 43 OCaml test cases → 99 Medaka test assertions** (many cases expand
 to multiple assertions — one per dispatch path or value branch).
 
-**Module resolution note:** `test/ported/test.mdk` is a symlink to
-`../../stdlib/test.mdk`. The loader resolves `import test` from the file's
-directory; the symlink makes `stdlib/test.mdk` available as `test` without
-modifying the stdlib directory or the project layout.
+**Module resolution note:** these files `import test` with no local copy or
+symlink in this directory. `stdlib/` is always a module search root, so the
+loader resolves `test` to `stdlib/test.mdk` directly.
 
 ### Skipped cases (3)
 

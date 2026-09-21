@@ -1,7 +1,7 @@
 -- Structural regressions for the Core free-variable walk used by shared TRMC
 -- analysis and LLVM closure capture.
 
-import test.{expectAll, expectEqual}
+import test.{expectAll, expectEqual, expectFalse, expectTrue}
 import frontend.ast.{Addr(..), Lit(..), Loc(..), Pat(..), Route(..)}
 import ir.core_ir.{CBind(..), CClause(..), CExpr(..)}
 import backend.trmc_analysis.{SelfRef(..), freeVars, trmcEligible}
@@ -74,8 +74,7 @@ trmcEligibleWith innerBody =
 
 test "TRMC rejects a hidden self-call but keeps an ordinary capture eligible" = expectAll
   [
-    expectEqual True (trmcEligibleWith (CVar "xs" AGlobal)),
-    expectEqual
-      False
+    expectTrue (trmcEligibleWith (CVar "xs" AGlobal)),
+    expectFalse
       (trmcEligibleWith (CApp (CVar "loop" AGlobal) (CVar "xs" AGlobal))),
   ]
