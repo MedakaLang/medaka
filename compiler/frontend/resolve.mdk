@@ -38,6 +38,8 @@ import frontend.ast.{
   UseMember(..),
   UsePath(..),
   useMemberLocal,
+  useMemberOrigin,
+  useMemberAlias,
   qualifiedLocal,
   PropParam(..),
   MethodDefault(..),
@@ -1729,6 +1731,49 @@ useStubNames (UseWild _) = []
 -- `singleFileImportErrors`, so contributing nothing is right.
 useStubNames (UseAlias _ _) = []
 
+-- ── the prelude's alias / member-rename bindings ───────────────────────────
+-- A `core` use-path binds nothing for scope (`useImportNames`, `oneImport`): the
+-- prelude is prepended to every module, so every core name is already in scope under
+-- its OWN spelling and re-binding it would be a no-op.  An alias is the exception,
+-- because it introduces a spelling the prelude did NOT supply — `import core as C`
+-- asks for `C.isEven`, `import core.{isEven as even2}` asks for `even2`, and neither
+-- name is anywhere in scope.  These two functions are the whole of what a core
+-- use-path contributes; the unaliased forms still contribute nothing.
+--
+-- 🔒 The name set is `coreAliasableValues`, NOT `coreExports`.  `coreExports` reports
+-- every core binding, private helpers included, because the prelude's names are in
+-- scope regardless of visibility and the export surface is only ever used to VALIDATE
+-- a core use-path (`coreUseErrors`) — not to bind one.  Binding from it would make
+-- `C.indexGo` reach a module-private helper that has no other spelling, i.e. mint a
+-- fresh public surface for it.  Pinned by `test/resolve_fixtures/core_alias_private.mdk`.
+coreAliasNames : List String -> UsePath -> List String
+coreAliasNames vals (UseAlias _ a) = map (qualifiedLocal a) vals
+coreAliasNames vals (UseGroup _ ms) = flatMap (coreRenamedMember vals) ms
+coreAliasNames _ _ = []
+
+-- a member rename binds its LOCAL name when the ORIGIN is a core value the prelude
+-- really exports; a plain member (no `as`) binds nothing, as it did before.
+coreRenamedMember : List String -> UseMember -> List String
+coreRenamedMember vals m = match useMemberAlias m
+  None => []
+  Some local => if contains (useMemberOrigin m) vals then [local] else []
+
+-- core's value surface as VISIBILITY sees it: the `export`ed standalones plus the
+-- methods of its `export interface`s.  Same two extractors `buildExports` runs over an
+-- ordinary module (`expValuesDirect` / `pubIfaceMethodSets`), so "what an alias of core
+-- can bind" is by construction "what an alias of an ordinary module could bind".
+coreAliasableValues : List Decl -> List String
+coreAliasableValues preludeDecls =
+  expValuesDirect preludeDecls
+    ++ flatMap identity (pubIfaceMethodSets preludeDecls)
+
+-- every alias/rename binding the program's `core` use-paths contribute.
+coreAliasImports : List String -> List Decl -> List String
+coreAliasImports vals prog = flatMap (coreAliasNames vals) (coreUsePaths prog)
+
+coreUsePaths : List Decl -> List UsePath
+coreUsePaths prog = filterList (p => useModId p == "core") (usePathsOf prog)
+
 useModId : UsePath -> String
 useModId (UseName ns) =
   if listLen ns > 1 then joinDot (initList ns) else firstOr "" ns
@@ -1769,7 +1814,9 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
   let pValues = whenL seed (preludeValueNames preludeDecls)
   let pFieldOwners = whenL seed (fieldOwnersOf preludeDecls)
   let uIfaces = interfaceList prog
-  let imported = importedNames prog
+  let imported =
+    importedNames prog
+      ++ whenL seed (coreAliasImports (coreAliasableValues preludeDecls) prog)
   let valuesM =
     omFromNames
       (externNames runtimeDecls ++ pValues ++ userValueNames prog ++ imported)
@@ -3215,6 +3262,9 @@ data PreludeScope = PreludeScope {
   psCtorsM : OrdMap Unit,
   psExternsM : OrdMap Unit,
   psCoreExports : ModuleExports,
+  -- what a `core` ALIAS may bind — the visibility-filtered surface, deliberately
+  -- narrower than `psCoreExports` (see `coreAliasNames`).
+  psCoreAliasValues : List String,
 }
 
 preludeScopeMemoRef : Ref (Option ((Int, Int), PreludeScope))
@@ -3236,6 +3286,7 @@ preludeScopeOf runtimeDecls preludeDecls =
     psCtorsM = omFromNames (primitiveConstructors ++ cts) omEmpty,
     psExternsM = omFromNames (externNames runtimeDecls) omEmpty,
     psCoreExports = coreExports preludeDecls,
+    psCoreAliasValues = coreAliasableValues preludeDecls,
   }
 
 -- The key is the `desugaredPreludeKey` generation pair the typechecker's own
@@ -3295,11 +3346,13 @@ buildEnvMM ps known prog internalGuard =
     ps.psTypesM
   else
     omFromNames primitiveTypes omEmpty)
-  let ctorsM = omFromNames (ctorNames prog ++ adds.iaCtors) (if seed then
-    ps.psCtorsM
-  else
-    omFromNames primitiveConstructors omEmpty)
-  let importedM = omFromNames adds.iaImported omEmpty
+  let ctorsM = omFromNames
+    (ctorNames prog ++ adds.iaCtors)
+    (if seed then ps.psCtorsM else omFromNames primitiveConstructors omEmpty)
+  -- `oneImport` gives `core` no adds at all; its alias/rename bindings come from the
+  -- prelude scope instead, which is the only place this path holds core's surface.
+  let coreAliased = whenL seed (coreAliasImports ps.psCoreAliasValues prog)
+  let importedM = omFromNames (adds.iaImported ++ coreAliased) omEmpty
   let env = Env {
     values = valuesM,
     types = typesM,
