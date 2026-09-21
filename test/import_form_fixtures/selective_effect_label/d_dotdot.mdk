@@ -1,0 +1,7 @@
+-- #3294 FIX-B: `(..)` on an effect label is meaningless (a label has no
+-- constructors or fields to bring) and must stay rejected, unlike the bare
+-- `Logging` spelling in s_use.mdk which correctly binds the label.
+import eff.{Logging(..), doLog}
+
+bad3 : Int -> <Logging> Int
+bad3 x = doLog x

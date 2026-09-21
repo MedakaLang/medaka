@@ -145,6 +145,10 @@ public export data ResError =
   -- direct `Ctor` import member), owning module.  A `newtype`'s constructor is
   -- unconditionally module-private (no `public newtype` spelling exists), so
   -- unlike NoExportedConstructors there is no `public export` remedy (#1311).
+  | EffectLabelNoMembers String String (Option Loc)
+  -- effect label name, owning module: `Label(..)` on an effect label — an
+  -- effect label has no constructors or fields to bring, unlike a type, so
+  -- `(..)` names nothing.  The bare `Label` import (no `(..)`) is unaffected.
   | AbstractFieldAccess String String (Option Loc)
   -- type name, field name: a record-pattern field on a type whose fields are not
   -- in scope because the type was exported abstractly (`export` without `public`)
@@ -264,6 +268,7 @@ resErrorLoc (ExternWithBody _ l) = l
 resErrorLoc (PrivateNameAccess _ _ l) = l
 resErrorLoc (NoExportedConstructors _ _ l) = l
 resErrorLoc (NewtypeCtorNotExported _ _ l) = l
+resErrorLoc (EffectLabelNoMembers _ _ l) = l
 resErrorLoc (AbstractFieldAccess _ _ l) = l
 resErrorLoc (UnknownModule _ l) = l
 resErrorLoc (NonRecursiveValueLet _ l) = l
@@ -2404,6 +2409,8 @@ resErrorSexp (NoExportedConstructors n m _) =
   "(NoExportedConstructors \{escStr n} \{escStr m})"
 resErrorSexp (NewtypeCtorNotExported n m _) =
   "(NewtypeCtorNotExported \{escStr n} \{escStr m})"
+resErrorSexp (EffectLabelNoMembers n m _) =
+  "(EffectLabelNoMembers \{escStr n} \{escStr m})"
 resErrorSexp (AbstractFieldAccess t f _) =
   "(AbstractFieldAccess \{escStr t} \{escStr f})"
 resErrorSexp (UnknownModule n _) = "(UnknownModule " ++ escStr n ++ ")"
@@ -2529,6 +2536,8 @@ ppResError (NoExportedConstructors n m _) =
   "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)`, or export them: declare '\{n}' a `public export data` where it is defined, and name it `\{n}(..)` in any `export import` that re-exports it (`public` is a parse error on `import`)"
 ppResError (NewtypeCtorNotExported n m _) =
   "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
+ppResError (EffectLabelNoMembers n m _) =
+  "'\{n}' is an effect label, not a type: `(..)` names constructors to bring into scope, and an effect label has none. Remove `(..)` and import '\{n}' directly"
 ppResError (AbstractFieldAccess t f _) =
   "'\{t}' is exported abstractly. Field '\{f}' is not accessible; declare it `public export` to expose its fields"
 ppResError (UnknownModule n _) = "Unknown module: " ++ n
@@ -2617,6 +2626,7 @@ resErrorCode (ExternWithBody _ _) = "R-EXTERN-WITH-BODY"
 resErrorCode (PrivateNameAccess _ _ _) = "R-PRIVATE-NAME"
 resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
 resErrorCode (NewtypeCtorNotExported _ _ _) = "R-NEWTYPE-CTOR-PRIVATE"
+resErrorCode (EffectLabelNoMembers _ _ _) = "R-EFFECT-LABEL-NO-MEMBERS"
 resErrorCode (AbstractFieldAccess _ _ _) = "R-ABSTRACT-FIELD"
 resErrorCode (UnknownModule _ _) = "R-UNKNOWN-MODULE"
 resErrorCode (NonRecursiveValueLet _ _) = "R-NONREC-VALUE-LET"
@@ -2910,6 +2920,10 @@ expandMemberNames exp (m@(UseMember name True loc _))
     -- keep the TYPE name bound (mirrors abstract `data`: `NT` itself is
     -- still importable, only its ctor is refused) but do NOT expand to the ctor.
     [(name, useMemberLocal m, loc)]
+  | contains name exp.expEffects =
+    -- `Label(..)` on an effect label: a label has no members to bring, unlike
+    -- a type — the empty arm is the refusal; see expandMemberErrs.
+    []
   | otherwise = match typeCtorsOf name exp
     Some ctors => (name, useMemberLocal m, loc) :: map (c => (c, c, loc)) ctors
     None => [(name, useMemberLocal m, loc)]
@@ -2933,6 +2947,8 @@ expandMemberErrs exp (UseMember name False loc _) =
 expandMemberErrs exp (UseMember name True loc _)
   | isNewtypeExport name exp =
     [NewtypeCtorNotExported name exp.modId (Some loc)]
+  | contains name exp.expEffects =
+    [EffectLabelNoMembers name exp.modId (Some loc)]
   | otherwise = match typeCtorsOf name exp
     Some _ => []
     None =>
