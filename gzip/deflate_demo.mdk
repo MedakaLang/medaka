@@ -23,6 +23,7 @@
 -- (`medaka run`), so this demo only runs once built (`medaka build`) — that
 -- is expected, not a bug in this file (same note as `inflate_demo.mdk`).
 
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import lib.deflate.{gzipCompress}
 import io.{eprintln}
 
@@ -35,8 +36,8 @@ runDeflate inPath outPath = match readFileBytes inPath
     let _ = eprintln "deflate_demo: could not read \{inPath}: \{e}"
     exit 1
   Ok raw =>
-    let compressed = gzipCompress raw
-    match writeFileBytes outPath compressed
+    let compressed = gzipCompress (fromArrayAssumeByteDomain raw)
+    match writeFileBytes outPath (toArray compressed)
       Err e =>
         let _ = eprintln "deflate_demo: could not write \{outPath}: \{e}"
         exit 1
