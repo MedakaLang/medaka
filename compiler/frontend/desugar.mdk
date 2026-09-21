@@ -1122,17 +1122,30 @@ pinTypeGo acc (t :: ts) = pinTypeGo (TyApp acc t) ts
 -- The rewrite is scoped to the aliases THIS file declares, and the parser forces a
 -- module alias to be Uppercase — so an ordinary `rec.field` access on a lowercase
 -- local can never be captured here.
+--
+-- Exported: a doctest example is parsed and desugared standalone (its own tiny
+-- `__dt_i__ = <expr>` program, with no `import … as A` decl of its own), so the
+-- doctest driver (`tools/doctest.mdk`) computes the TARGET module's aliases once
+-- and threads them in via `qualifyAliasRefsWith`, rather than this function ever
+-- seeing them.
+export
 moduleAliases : List Decl -> List String
 moduleAliases [] = []
 moduleAliases ((DUse _ (UseAlias _ a) _) :: rest) = a :: moduleAliases rest
 moduleAliases ((DAttrib _ d) :: rest) = moduleAliases [d] ++ moduleAliases rest
 moduleAliases (_ :: rest) = moduleAliases rest
 
+-- Same rewrite as `qualifyAliasRefs`, against an externally supplied alias list
+-- rather than one derived from `prog` — for a program (a doctest synth decl)
+-- that doesn't carry its own `import … as A` decls.
+export
+qualifyAliasRefsWith : List String -> List Decl -> List Decl
+qualifyAliasRefsWith [] prog = prog
+qualifyAliasRefsWith aliases prog = mapProg (rewriteAliasQual aliases) prog
+
 -- No alias in this file ⇒ the identity, so an alias-free program is untouched.
 qualifyAliasRefs : List Decl -> List Decl
-qualifyAliasRefs prog = match moduleAliases prog
-  [] => prog
-  aliases => mapProg (rewriteAliasQual aliases) prog
+qualifyAliasRefs prog = qualifyAliasRefsWith (moduleAliases prog) prog
 
 -- The head must be matched THROUGH `ELoc` — the parser wraps every atom in the
 -- transparent location wrapper, so the alias reference is `EFieldAccess (ELoc _ (EVar

@@ -1,5 +1,5 @@
 # META
-source_lines=1161
+source_lines=1174
 stages=DESUGAR,MARK
 # SOURCE
 -- Self-hosted desugar stage.  Lowers surface
@@ -1126,17 +1126,30 @@ pinTypeGo acc (t :: ts) = pinTypeGo (TyApp acc t) ts
 -- The rewrite is scoped to the aliases THIS file declares, and the parser forces a
 -- module alias to be Uppercase — so an ordinary `rec.field` access on a lowercase
 -- local can never be captured here.
+--
+-- Exported: a doctest example is parsed and desugared standalone (its own tiny
+-- `__dt_i__ = <expr>` program, with no `import … as A` decl of its own), so the
+-- doctest driver (`tools/doctest.mdk`) computes the TARGET module's aliases once
+-- and threads them in via `qualifyAliasRefsWith`, rather than this function ever
+-- seeing them.
+export
 moduleAliases : List Decl -> List String
 moduleAliases [] = []
 moduleAliases ((DUse _ (UseAlias _ a) _) :: rest) = a :: moduleAliases rest
 moduleAliases ((DAttrib _ d) :: rest) = moduleAliases [d] ++ moduleAliases rest
 moduleAliases (_ :: rest) = moduleAliases rest
 
+-- Same rewrite as `qualifyAliasRefs`, against an externally supplied alias list
+-- rather than one derived from `prog` — for a program (a doctest synth decl)
+-- that doesn't carry its own `import … as A` decls.
+export
+qualifyAliasRefsWith : List String -> List Decl -> List Decl
+qualifyAliasRefsWith [] prog = prog
+qualifyAliasRefsWith aliases prog = mapProg (rewriteAliasQual aliases) prog
+
 -- No alias in this file ⇒ the identity, so an alias-free program is untouched.
 qualifyAliasRefs : List Decl -> List Decl
-qualifyAliasRefs prog = match moduleAliases prog
-  [] => prog
-  aliases => mapProg (rewriteAliasQual aliases) prog
+qualifyAliasRefs prog = qualifyAliasRefsWith (moduleAliases prog) prog
 
 -- The head must be matched THROUGH `ELoc` — the parser wraps every atom in the
 -- transparent location wrapper, so the alias reference is `EFieldAccess (ELoc _ (EVar
@@ -1591,13 +1604,16 @@ desugar prog =
 (DTypeSig false "pinTypeGo" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty"))))
 (DFunDef false "pinTypeGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "pinTypeGo" ((PVar "acc") (PCons (PVar "t") (PVar "ts"))) (EApp (EApp (EVar "pinTypeGo") (EApp (EApp (EVar "TyApp") (EVar "acc")) (EVar "t"))) (EVar "ts")))
-(DTypeSig false "moduleAliases" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig true "moduleAliases" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "moduleAliases" ((PList)) (EListLit))
 (DFunDef false "moduleAliases" ((PCons (PCon "DUse" PWild (PCon "UseAlias" PWild (PVar "a")) PWild) (PVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "moduleAliases") (EVar "rest"))))
 (DFunDef false "moduleAliases" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "moduleAliases") (EListLit (EVar "d"))) (EApp (EVar "moduleAliases") (EVar "rest"))))
 (DFunDef false "moduleAliases" ((PCons PWild (PVar "rest"))) (EApp (EVar "moduleAliases") (EVar "rest")))
+(DTypeSig true "qualifyAliasRefsWith" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "qualifyAliasRefsWith" ((PList) (PVar "prog")) (EVar "prog"))
+(DFunDef false "qualifyAliasRefsWith" ((PVar "aliases") (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteAliasQual") (EVar "aliases"))) (EVar "prog")))
 (DTypeSig false "qualifyAliasRefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "qualifyAliasRefs" ((PVar "prog")) (EMatch (EApp (EVar "moduleAliases") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "aliases") () (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteAliasQual") (EVar "aliases"))) (EVar "prog")))))
+(DFunDef false "qualifyAliasRefs" ((PVar "prog")) (EApp (EApp (EVar "qualifyAliasRefsWith") (EApp (EVar "moduleAliases") (EVar "prog"))) (EVar "prog")))
 (DTypeSig false "rewriteAliasQual" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteAliasQual" ((PVar "aliases") (PAs "e" (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild))) (EMatch (EApp (EVar "stripLocE") (EVar "head")) (arm (PCon "EVar" (PVar "a")) () (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "aliases")) (EApp (EVar "EVar") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "f"))) (EVar "e"))) (arm PWild () (EVar "e"))))
 (DFunDef false "rewriteAliasQual" (PWild (PVar "e")) (EVar "e"))
@@ -2031,13 +2047,16 @@ desugar prog =
 (DTypeSig false "pinTypeGo" (TyFun (TyCon "Ty") (TyFun (TyApp (TyCon "List") (TyCon "Ty")) (TyCon "Ty"))))
 (DFunDef false "pinTypeGo" ((PVar "acc") (PList)) (EVar "acc"))
 (DFunDef false "pinTypeGo" ((PVar "acc") (PCons (PVar "t") (PVar "ts"))) (EApp (EApp (EVar "pinTypeGo") (EApp (EApp (EVar "TyApp") (EVar "acc")) (EVar "t"))) (EVar "ts")))
-(DTypeSig false "moduleAliases" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
+(DTypeSig true "moduleAliases" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "moduleAliases" ((PList)) (EListLit))
 (DFunDef false "moduleAliases" ((PCons (PCon "DUse" PWild (PCon "UseAlias" PWild (PVar "a")) PWild) (PVar "rest"))) (EBinOp "::" (EVar "a") (EApp (EVar "moduleAliases") (EVar "rest"))))
 (DFunDef false "moduleAliases" ((PCons (PCon "DAttrib" PWild (PVar "d")) (PVar "rest"))) (EBinOp "++" (EApp (EVar "moduleAliases") (EListLit (EVar "d"))) (EApp (EVar "moduleAliases") (EVar "rest"))))
 (DFunDef false "moduleAliases" ((PCons PWild (PVar "rest"))) (EApp (EVar "moduleAliases") (EVar "rest")))
+(DTypeSig true "qualifyAliasRefsWith" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl")))))
+(DFunDef false "qualifyAliasRefsWith" ((PList) (PVar "prog")) (EVar "prog"))
+(DFunDef false "qualifyAliasRefsWith" ((PVar "aliases") (PVar "prog")) (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteAliasQual") (EVar "aliases"))) (EVar "prog")))
 (DTypeSig false "qualifyAliasRefs" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyCon "Decl"))))
-(DFunDef false "qualifyAliasRefs" ((PVar "prog")) (EMatch (EApp (EVar "moduleAliases") (EVar "prog")) (arm (PList) () (EVar "prog")) (arm (PVar "aliases") () (EApp (EApp (EVar "mapProg") (EApp (EVar "rewriteAliasQual") (EVar "aliases"))) (EVar "prog")))))
+(DFunDef false "qualifyAliasRefs" ((PVar "prog")) (EApp (EApp (EVar "qualifyAliasRefsWith") (EApp (EVar "moduleAliases") (EVar "prog"))) (EVar "prog")))
 (DTypeSig false "rewriteAliasQual" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Expr") (TyCon "Expr"))))
 (DFunDef false "rewriteAliasQual" ((PVar "aliases") (PAs "e" (PCon "EFieldAccess" (PVar "head") (PVar "f") PWild))) (EMatch (EApp (EVar "stripLocE") (EVar "head")) (arm (PCon "EVar" (PVar "a")) () (EIf (EApp (EApp (EVar "contains") (EVar "a")) (EVar "aliases")) (EApp (EVar "EVar") (EApp (EApp (EVar "qualifiedLocal") (EVar "a")) (EVar "f"))) (EVar "e"))) (arm PWild () (EVar "e"))))
 (DFunDef false "rewriteAliasQual" (PWild (PVar "e")) (EVar "e"))

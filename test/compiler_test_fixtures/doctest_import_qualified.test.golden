@@ -1,0 +1,7 @@
+running doctests in test/compiler_test_fixtures/doctest_import_qualified.mdk
+  ok   test/compiler_test_fixtures/doctest_import_qualified.mdk:18: H.bump 1
+  ERROR test/compiler_test_fixtures/doctest_import_qualified.mdk:21: H.bogusMember 1
+        could not evaluate: H.bogusMember 1 (unresolved: H.bogusMember)
+  ok   test/compiler_test_fixtures/doctest_import_qualified.mdk:28: plain 1
+
+test/compiler_test_fixtures/doctest_import_qualified.mdk: 2/3 passed (0 failed, 1 errors)

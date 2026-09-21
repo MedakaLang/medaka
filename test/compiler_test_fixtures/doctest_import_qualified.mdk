@@ -1,0 +1,29 @@
+import doctest_import_qualified_helper as H
+
+-- Regression for GH issue #3206: a doctest example naming an import-alias-
+-- qualified value (`import … as H` ... `H.bump …`) never saw the target
+-- file's alias table — each example is parsed and desugared as its own
+-- standalone `__dt_i__ = <expr>` program, with no `import … as H` decl of
+-- its own — so the qualification never applied and `H.bump` reached eval as
+-- a bare, unbound `H`.  Forcing that thunk PANICS, and a panic is not
+-- catchable, so the file's OTHER doctests were never reported either.
+--
+-- The first example below proves the fix does more than avoid the crash:
+-- `H.bump` genuinely resolves (against the sibling helper module) and its
+-- value is checked.  The second names a member the helper doesn't export —
+-- it must fail as ITSELF, not take the file down.  The third is an
+-- ordinary, alias-free sibling: proof the file keeps running past the
+-- failing example.
+--
+-- > H.bump 1
+-- 2
+
+-- > H.bogusMember 1
+-- 2
+
+export
+plain : Int -> Int
+plain x = x + 1
+
+-- > plain 1
+-- 2
