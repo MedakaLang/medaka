@@ -57,6 +57,8 @@
 -- test but one.
 
 import array.{get, make, makeWith}
+import bytes as B
+import bytes.{Bytes}
 import lib.bitio.{
   BitReader,
   BitWriter,
@@ -264,7 +266,7 @@ buildHuffmanStrict lengths = buildHuffmanWith False lengths
    turned into a garbage symbol) or if no code of any length 1..15 matches
    (a malformed stream).
 
-   > decodeSym fixedLitLen (newBitReader [|142|])
+   > decodeSym fixedLitLen (newBitReader (B.fromArrayAssumeByteDomain [|142|]))
    Ok 65
 -}
 export
@@ -382,7 +384,7 @@ distExtra = [|
 
 -- Write one Huffman CODE (MSB-of-code-first, per `bitio.putCodeMSB`) into a
 -- fresh byte-aligned buffer.
-codeBytesFor : Int -> Int -> Array Int
+codeBytesFor : Int -> Int -> Bytes
 codeBytesFor code width =
   let w = newBitWriter ()
   let _ = putCodeMSB code width w
@@ -396,19 +398,25 @@ codeBytesFor code width =
 -- ties this module's decoder to a fact derived from the RFC and verified
 -- independently of both `bitio.mdk` and this file.
 test "decodeSym fixedLitLen over [|142|] (bit-reversed fixed code of literal 65) -> 65" =
-  expectEqual (Ok 65) (decodeSym fixedLitLen (newBitReader [|142|]))
+  expectEqual
+    (Ok 65)
+    (decodeSym fixedLitLen (newBitReader (B.fromArrayAssumeByteDomain [|142|])))
 
 -- A second RFC-derived fixed-table anchor, in the 7-bit range: symbol 256
 -- (block-end) has fixed code 0b0000000 (7 zero bits, RFC 1951 §3.2.6 table:
 -- 256-279 -> codes 0000000 through 0010111). Byte-aligned, its bit-reversal
 -- is still all zeros, so it emerges as a plain zero byte.
 test "decodeSym fixedLitLen over [|0|] (fixed code of symbol 256, block-end) -> 256" =
-  expectEqual (Ok 256) (decodeSym fixedLitLen (newBitReader [|0|]))
+  expectEqual
+    (Ok 256)
+    (decodeSym fixedLitLen (newBitReader (B.fromArrayAssumeByteDomain [|0|])))
 
 -- fixedDist is a flat 5-bit code: symbol 13 (0b01101) round-trips through
 -- `bitio.mdk`'s own independently-pinned `putCodeMSB 13 5 -> [|22|]` test.
 test "decodeSym fixedDist over [|22|] (bit-reversed flat 5-bit code of symbol 13) -> 13" =
-  expectEqual (Ok 13) (decodeSym fixedDist (newBitReader [|22|]))
+  expectEqual
+    (Ok 13)
+    (decodeSym fixedDist (newBitReader (B.fromArrayAssumeByteDomain [|22|])))
 
 -- buildHuffman on a small hand-worked length vector [2, 1, 3, 3] (symbols
 -- 0, 1, 2, 3 respectively). Kraft sum = 2^-2 + 2^-1 + 2^-3 + 2^-3
@@ -421,7 +429,7 @@ test "decodeSym fixedDist over [|22|] (bit-reversed flat 5-bit code of symbol 13
 -- Packed one after another (no padding) via `putCodeMSB` and decoded back
 -- in order — this exercises `decodeSym` advancing correctly across repeated
 -- calls on the SAME reader, not just a single isolated decode.
-lex233Bytes : Array Int
+lex233Bytes : Bytes
 lex233Bytes =
   let w = newBitWriter ()
   let _ = putCodeMSB 0 1 w
@@ -507,7 +515,7 @@ test "decodeSym over a numUsed=0 table errors rather than hanging or reading gar
       expectEqual
         (Err
           "decodeSym: invalid Huffman code (no match within \{maxCodeLen} bits)")
-        (decodeSym h (newBitReader [|0, 0, 0|]))
+        (decodeSym h (newBitReader (B.fromArrayAssumeByteDomain [|0, 0, 0|])))
     Err msg => fail "expected Ok from buildHuffman [0,0,0], got Err \{msg}"
 
 -- `buildHuffmanStrict` DOES still forbid the single-length-1 exception that
@@ -527,7 +535,7 @@ test "buildHuffman: single length-1 code is STILL accepted (buildHuffmanStrict d
 test "decodeSym over empty input is Err, not a hang or garbage symbol" =
   expectEqual
     (Err "getBits: unexpected end of input (need 1 bit(s), have 0 buffered)")
-    (decodeSym fixedLitLen (newBitReader [||]))
+    (decodeSym fixedLitLen (newBitReader (B.fromArrayAssumeByteDomain [||])))
 
 -- Truncated input, MID-symbol: a real mid-symbol truncation against the
 -- ACTUAL `fixedLitLen` table (the synthetic single-length-9 table used
@@ -548,10 +556,14 @@ test "decodeSym over empty input is Err, not a hang or garbage symbol" =
 test "decodeSym fixedLitLen, one truncating byte [|19|]: errors on the missing 9th bit" =
   expectEqual
     (Err "getBits: unexpected end of input (need 1 bit(s), have 0 buffered)")
-    (decodeSym fixedLitLen (newBitReader [|19|]))
+    (decodeSym fixedLitLen (newBitReader (B.fromArrayAssumeByteDomain [|19|])))
 
 test "decodeSym fixedLitLen, control: [|19, 0|] (9th bit supplied) decodes to symbol 144" =
-  expectEqual (Ok 144) (decodeSym fixedLitLen (newBitReader [|19, 0|]))
+  expectEqual
+    (Ok 144)
+    (decodeSym
+      fixedLitLen
+      (newBitReader (B.fromArrayAssumeByteDomain [|19, 0|])))
 
 -- ---------------------------------------------------------------------------
 -- Table structural checks — `lengthBase`/`lengthExtra`/`distBase`/`distExtra`
