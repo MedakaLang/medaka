@@ -2398,7 +2398,7 @@ test "Core IR round-trip preserves method occurrence arity" =
   match parseCProgram (cprogramToSexp original)
     CProgram [CBind "main" [CClause [] (CMethod "probe" arity RNone [] [])]] _ _ _ =>
       expectEqual 7 arity
-    _ => expectTrue False
+    _ => fail "expected the round-tripped CProgram to keep the same shape"
 
 emptyLocalCoreFacts : LocalCoreFacts
 emptyLocalCoreFacts = LocalCoreFacts False [] [] 0

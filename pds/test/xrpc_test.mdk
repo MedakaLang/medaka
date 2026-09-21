@@ -14,7 +14,7 @@ import http.{
 }
 import json.{stringify}
 import string.{toUtf8}
-import test.{expectEach, expectEqual, expectFalse, expectTrue}
+import test.{expectEach, expectEqual, expectFalse, expectTrue, fail, pass}
 import lib.nsid.{validateNsid}
 import lib.xrpc.{
   AuthPolicy(..),
@@ -236,7 +236,7 @@ test "GET query routing preserves repeated decoded values and order" =
           expectEqual "" flagValue,
         ),
       ]
-    _ => expectTrue False
+    _ => fail "expected a RouteCall to a QueryCall with the four query params"
 
 test "encoded and otherwise invalid XRPC method identities are rejected" = expectEach
   [
@@ -264,9 +264,8 @@ test "routing matches authority case-insensitively and returns registered spelli
   match (routeRequest
     registry
     (noBodyRequest "GET" "/xrpc/Com.AtProto.server.describeServer"))
-    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) => pass
+    _ => fail "expected a RouteCall to a QueryCall with no query params"
 
 test "empty XRPC method path is rejected without producing a call" =
   expectTrue
@@ -336,17 +335,15 @@ test "query admits zero-length framing and Content-Type" =
       "/xrpc/com.atproto.server.describeServer"
       "Content-Type: application/json\r\n"
       [||]))
-    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (QueryCall "com.atproto.server.describeServer" []) => pass
+    _ => fail "expected a RouteCall to a QueryCall with no query params"
 
 test "no-input procedure produces a typed call" =
   match (routeRequest
     registry
     (noBodyRequest "POST" "/xrpc/com.example.nobody.ping"))
-    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
+    _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
 -- The shape nearly every HTTP client gives a bodiless POST, and so the one
 -- `com.atproto.server.refreshSession` is reached by in the field.
@@ -354,9 +351,8 @@ test "no-input procedure admits a zero-length Content-Length" =
   match (routeRequest
     registry
     (bodyRequest "POST" "/xrpc/com.example.nobody.ping" "" [||]))
-    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
+    _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
 test "no-input procedure admits a Content-Type over a zero-length body" =
   match (routeRequest
@@ -366,9 +362,8 @@ test "no-input procedure admits a Content-Type over a zero-length body" =
       "/xrpc/com.example.nobody.ping"
       "Content-Type: application/json\r\n"
       [||]))
-    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) =>
-      expectTrue True
-    _ => expectTrue False
+    RouteCall _ (ProcedureNoInputCall "com.example.nobody.ping" []) => pass
+    _ => fail "expected a RouteCall to a ProcedureNoInputCall"
 
 test "no-input procedure rejects a body that carries bytes" =
   expectTrue
@@ -406,7 +401,7 @@ test "JSON procedure produces a typed parsed call" =
         expectEqual "{\"ok\":true}" (stringify value),
       ),
     ]
-    _ => expectTrue False
+    _ => fail "expected a RouteCall to a ProcedureJsonCall"
 
 test "text procedure produces a typed UTF-8 call" =
   let request =
@@ -428,7 +423,7 @@ test "text procedure produces a typed UTF-8 call" =
       ),
       ("the body decodes as UTF-8, accents intact", expectEqual "héllo" text),
     ]
-    _ => expectTrue False
+    _ => fail "expected a RouteCall to a ProcedureTextCall"
 
 test "wildcard raw procedure preserves text JSON and opaque media with exact bytes" =
   let textRequest =
@@ -504,7 +499,7 @@ test "wildcard raw procedure preserves text JSON and opaque media with exact byt
           expectEqual [|0, 128, 255|] opaqueBytes,
         ),
       ]
-    _ => expectTrue False
+    _ => fail "expected the JSON and opaque procedure calls to route"
 
 test "procedure query parameters preserve repeated names empty values and order" =
   let request =
@@ -536,7 +531,9 @@ test "procedure query parameters preserve repeated names empty values and order"
           expectEqual "" flagValue,
         ),
       ]
-    _ => expectTrue False
+    _ =>
+      fail
+        "expected a RouteCall to a ProcedureJsonCall with the three query params"
 
 test "missing duplicate and malformed body media classify as 415" = expectEach [
   (

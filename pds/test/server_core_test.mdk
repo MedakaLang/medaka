@@ -14,7 +14,15 @@ import http.{
 }
 import array as A
 import string.{repeat, toUtf8}
-import test.{expectAll, expectEach, expectEqual, expectOkThen, expectTrue}
+import test.{
+  expectAll,
+  expectEach,
+  expectEqual,
+  expectOkThen,
+  expectTrue,
+  fail,
+  pass,
+}
 import lib.cid.{cidForRaw}
 import lib.server_core.{
   Account,
@@ -205,7 +213,7 @@ test "Store insertion and lookup both retain defensive copies" =
   let cid = cidForRaw bytes
   expectOkThen
     (next => match storeGet cid next
-      None => expectTrue False
+      None => fail "expected the stored bytes to still be present"
       Some viewed =>
         let () = A.setInPlace 0 99 bytes
         let () = A.setInPlace 1 98 viewed
@@ -214,13 +222,13 @@ test "Store insertion and lookup both retain defensive copies" =
 
 test "classified parser exposes malformed framing without diagnostic matching" =
   match parseRequestClassified malformedRequest
-    Err (HttpMalformed _) => expectTrue True
-    _ => expectTrue False
+    Err (HttpMalformed _) => pass
+    _ => fail "expected an HttpMalformed classification"
 
 test "classified parser exposes resource excess without diagnostic matching" =
   match parseRequestClassified resourceRequest
-    Err (HttpResourceExcess _) => expectTrue True
-    _ => expectTrue False
+    Err (HttpResourceExcess _) => pass
+    _ => fail "expected an HttpResourceExcess classification"
 
 test "original parseRequest API retains its Result String contract" =
   expectTrue (isOk (parseRequest fixedQuery))

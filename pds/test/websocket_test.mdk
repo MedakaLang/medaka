@@ -22,7 +22,16 @@
 import array.{blit, fill, make, setInPlace}
 import hex.{encode}
 import string.{fromUtf8, toUtf8}
-import test.{expectEach, expectEqual, expectErr, expectOkThen, expectTrue}
+import test.{
+  expectEach,
+  expectEqual,
+  expectErr,
+  expectErrContains,
+  expectNone,
+  expectOkThen,
+  expectTrue,
+  fail,
+}
 import lib.sha1.{sha1, sha1FixedBytes}
 import lib.websocket.{
   AssembleEvent(..),
@@ -247,7 +256,7 @@ unmaskedHelloWire = [|0x81, 0x05, 0x48, 0x65, 0x6c, 0x6c, 0x6f|]
 
 test "§5.7's masked text frame decodes to an unmasked \"Hello\"" =
   match decodedAs (decodeFrame FromClient maxPayload maskedHelloWire 0)
-    None => expectTrue False
+    None => fail "the masked text frame failed to decode"
     Some (fin, opcode, payload, consumed) => expectEach [
       ("the frame is final", expectTrue fin),
       ("opcode == Text", expectEqual Text opcode),
@@ -257,7 +266,7 @@ test "§5.7's masked text frame decodes to an unmasked \"Hello\"" =
 
 test "§5.7's unmasked text frame decodes on the server-to-client side" =
   match decodedAs (decodeFrame FromServer maxPayload unmaskedHelloWire 0)
-    None => expectTrue False
+    None => fail "the unmasked text frame failed to decode"
     Some (fin, opcode, payload, consumed) => expectEach [
       ("the frame is final", expectTrue fin),
       ("opcode == Text", expectEqual Text opcode),
@@ -283,10 +292,10 @@ test "a second frame in the same buffer decodes at the reported offset" =
     0x6f,
   |]
   match decodedAs (decodeFrame FromServer maxPayload buffer 0)
-    None => expectTrue False
+    None => fail "the first frame in the buffer failed to decode"
     Some (_, first, _, consumed) =>
       match decodedAs (decodeFrame FromServer maxPayload buffer consumed)
-        None => expectTrue False
+        None => fail "the second frame in the buffer failed to decode"
         Some (_, second, payload, _) => expectEach [
           ("first == Ping", expectEqual Ping first),
           ("second == Text", expectEqual Text second),
@@ -300,7 +309,7 @@ test "a 16-bit-length frame this module encoded decodes back to its payload" =
   let body = make 300 0x61
   let wire = encodeServerFrame (Frame True Binary body)
   match decodedAs (decodeFrame FromServer maxPayload wire 0)
-    None => expectTrue False
+    None => fail "the 16-bit-length frame failed to decode"
     Some (fin, opcode, payload, consumed) => expectEach [
       ("the frame is final", expectTrue fin),
       ("opcode == Binary", expectEqual Binary opcode),
@@ -318,12 +327,14 @@ test "§5.7's two fragments reassemble into one \"Hello\" message" =
   match (firstEvent, secondEvent, afterSecond)
     (EventPartial, EventMessage Text payload, None) =>
       expectEqual "Hello" (fromUtf8 payload)
-    _ => expectTrue False
+    _ =>
+      fail
+        "expected EventPartial then EventMessage Text with no assembly left open"
 
 test "an unfragmented data frame is delivered without opening an assembly" =
   match assembleFrame None (Frame True Text hello)
     (None, EventMessage Text payload) => expectEqual "Hello" (fromUtf8 payload)
-    _ => expectTrue False
+    _ => fail "expected an EventMessage Text with no assembly left open"
 
 test "a control frame interleaved in a fragmented message leaves it open" =
   let (afterFirst, _) = assembleFrame None (Frame False Text (toUtf8 "Hel"))
@@ -333,7 +344,9 @@ test "a control frame interleaved in a fragmented message leaves it open" =
   match (pingEvent, finalEvent)
     (EventControl _, EventMessage Text payload) =>
       expectEqual "Hello" (fromUtf8 payload)
-    _ => expectTrue False
+    _ =>
+      fail
+        "expected an EventControl for the ping and EventMessage Text for the reassembled body"
 
 test "a continuation frame with nothing open is refused with 1002 (§5.4)" =
   let (_, event) = assembleFrame None (Frame True Continuation hello)
@@ -434,25 +447,25 @@ test "a close payload parses back to its code and reason" =
         ("code == 1000", expectEqual 1000 code),
         ("fromUtf8 reason == \"bye\"", expectEqual "bye" (fromUtf8 reason)),
       ]
-      None => expectTrue False)
+      None => fail "expected a close status, not the no-status case")
     (parseClosePayload [|0x03, 0xe8, 0x62, 0x79, 0x65|])
 
 test "an empty close payload is no status, not a zero status (§5.5.1)" =
-  match parseClosePayload [||]
-    Ok None => expectTrue True
-    _ => expectTrue False
+  expectOkThen expectNone (parseClosePayload [||])
 
 test "a one-byte close payload is a violation, not half a code (§5.5.1)" =
-  expectErr (parseClosePayload [|0x03|])
+  expectErrContains "1 byte" (parseClosePayload [|0x03|])
 
 test "close code 1005 may not appear on the wire (§7.4.1)" =
-  expectErr (parseClosePayload [|0x03, 0xed|])
+  expectErrContains
+    "may not appear on the wire"
+    (parseClosePayload [|0x03, 0xed|])
 
 test "a private-range close code 4000 is accepted (§7.4.2)" =
   expectOkThen
     (opt => match opt
       Some (code, _) => expectEqual 4000 code
-      None => expectTrue False)
+      None => fail "expected a close status, not the no-status case")
     (parseClosePayload [|0x0f, 0xa0|])
 
 -- A masked payload is unmasked into a FRESH array; the read buffer a caller
@@ -478,4 +491,4 @@ test "an all-ones 126-byte payload round-trips through the 16-bit length form" =
   let wire = encodeServerFrame (Frame True Binary body)
   match decodedAs (decodeFrame FromServer maxPayload wire 0)
     Some (_, _, payload, _) => expectEqual body payload
-    None => expectTrue False
+    None => fail "the 126-byte payload frame failed to decode"

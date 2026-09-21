@@ -60,6 +60,8 @@ import test.{
   expectOk,
   expectOkThen,
   expectTrue,
+  fail,
+  pass,
 }
 import bytes as B
 import bytes.{Bytes, encodeUtf8, fromArray}
@@ -177,7 +179,7 @@ test "header accessors return trimmed field bytes" =
         "GET / HTTP/1.1\r\nHost: pds.example\r\nX-Test:\t value \t\r\n\r\n")
   match requestHeaders request
     [_host, value] => expectEqual (headerValue value) (toUtf8 "value")
-    _ => expectTrue False
+    _ => fail "expected exactly two headers (Host, X-Test)"
 
 test "chunked framing accepts extensions and ordered trailers" =
   let request = mustRequest chunked
@@ -647,14 +649,14 @@ test "query decoding preserves repeated names, empty values, and order" =
           expectEqual "" v3,
         ),
       ]
-    _ => expectTrue False
+    _ => fail "expected exactly the three query params (a, a, flag)"
 
 test "empty query component after question mark is accepted" =
   let request =
     mustRequest (encodeUtf8 "GET /x? HTTP/1.1\r\nHost: pds.example\r\n\r\n")
   match parseTargetQuery request
     Ok (path, []) => expectEqual path "/x"
-    _ => expectTrue False
+    _ => fail "expected an Ok result with no query params"
 
 test "query percent decoding is exact and plus stays literal" =
   let request =
@@ -666,7 +668,7 @@ test "query percent decoding is exact and plus stays literal" =
       ("first == \"a+b c\"", expectEqual "a+b c" first),
       ("second == \"☃\"", expectEqual "☃" second),
     ]
-    _ => expectTrue False
+    _ => fail "expected exactly the two query params (q, snow)"
 
 test "malformed query percent escape is rejected" =
   expectTrue
@@ -743,8 +745,8 @@ test "JSON request body is syntax-checked after strict UTF-8 decoding" =
     (requestWithBody
       "Application/JSON; charset=utf-8"
       (encodeUtf8 "{\"ok\":true}")))
-    Ok (JsonBody _ _) => expectTrue True
-    _ => expectTrue False
+    Ok (JsonBody _ _) => pass
+    _ => fail "expected a JsonBody decode result"
 
 test "invalid JSON syntax is rejected" =
   expectTrue
@@ -782,7 +784,7 @@ test "text media types decode strict UTF-8" =
       ),
       ("text == \"héllo\"", expectEqual "héllo" text),
     ]
-    _ => expectTrue False
+    _ => fail "expected a TextBody decode result"
 
 test "invalid text UTF-8 is rejected" =
   expectTrue
@@ -807,7 +809,7 @@ test "raw media types preserve binary bytes" =
         expectEqual [|0, 128, 255|] bytes,
       ),
     ]
-    _ => expectTrue False
+    _ => fail "expected a RawBody decode result"
 
 test "JSON body ceiling accepts at and rejects over" = expectEach [
   (
@@ -978,8 +980,8 @@ test "a byte-at-a-time feed asks for more until the completing byte frames it" =
 
 test "a definitively malformed prefix is rejected rather than left pending" =
   match scanRequestBoundary (encodeUtf8 "GET / HTTP/1.0\r\n") 0
-    HttpFrameFailed _ => expectTrue True
-    _ => expectTrue False
+    HttpFrameFailed _ => pass
+    _ => fail "expected the malformed prefix to be rejected (HttpFrameFailed)"
 
 test "pipelined requests are framed one at a time from a single buffer" =
   match (
@@ -1012,14 +1014,14 @@ test "pipelined requests are framed one at a time from a single buffer" =
           expectEqual (mustBytes [|0, 128, 255|]) (requestBody tail),
         ),
       ]
-      _ => expectTrue False
-    _ => expectTrue False
+      _ => fail "expected both parseRequestAt calls to succeed"
+    _ => fail "expected both scanRequestBoundary calls to frame"
 
 test "a chunked request frames at its trailer terminator, not the buffer end" =
   let stream = chunked ++ simpleGet
   match scanRequestBoundary stream 0
     HttpFramedAt at => expectEqual at (B.length chunked)
-    _ => expectTrue False
+    _ => fail "expected the chunked request to frame at its trailer terminator"
 
 test "trailing bytes frame the first request instead of failing the buffer" =
   let stream = simpleGet ++ encodeUtf8 "x"
@@ -1031,7 +1033,7 @@ test "trailing bytes frame the first request instead of failing the buffer" =
         expectTrue (isErr (parseRequest stream)),
       ),
     ]
-    _ => expectTrue False
+    _ => fail "expected the first request to frame before the trailing byte"
 
 -- A resumable scan and a whole-buffer scan are the same framer, so they have to
 -- return the same verdict for every prefix a client could stop at. A boundary
@@ -1154,7 +1156,9 @@ test "a body short of its content length is pending, padding notwithstanding" =
     scanRequestBoundary padded 0,
   )
     (HttpNeedMore, HttpFramedAt at) => expectEqual at (B.length padded)
-    _ => expectTrue False
+    _ =>
+      fail
+        "expected HttpNeedMore on the short scan and HttpFramedAt on the full one"
 
 -- Scanning a padded backing array one received byte at a time has to agree with
 -- scanning the exact prefix of that many bytes, for every shape in the corpus.

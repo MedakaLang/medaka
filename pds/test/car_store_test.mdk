@@ -2,7 +2,7 @@
    independent expected CAR bytes remain exclusively in the vector corpus. -}
 
 import array as A
-import test.{expectEach, expectEqual, expectErr, expectFalse, expectTrue}
+import test.{expectEach, expectEqual, expectErr, expectFalse, expectTrue, fail}
 import lib.blockstore.{
   BlockStore,
   blockStoreAddMany,
@@ -166,4 +166,4 @@ test "decoded root identity is preserved" =
     mustCar (carDecode (mustBytes (carEncode [rootCid] [(rootCid, rootBytes)])))
   match carRoots car
     [decoded] => expectTrue (cidEqual rootCid decoded)
-    _ => expectTrue False
+    _ => fail "expected exactly one decoded root"
