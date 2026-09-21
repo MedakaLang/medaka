@@ -1,0 +1,7 @@
+-- THE NEGATIVE CONTROL, and the reason a hop keeps no EMPTY constructor row: this
+-- facade names `T` without `(..)`, so it re-exports the type abstractly and its
+-- constructors are deliberately not part of what this hop carries.  A consumer's
+-- `T(..)` must still be refused here -- carrying the type with an empty ctor list
+-- rather than no entry at all would expand `T(..)` to the type alone and raise
+-- nothing, turning a refusal into a silent bind of no constructor.
+export import i.{T, unT}

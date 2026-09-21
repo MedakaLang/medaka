@@ -1,0 +1,8 @@
+-- A hop re-exports what its own import spelling names: `mid` wrote `Color(..)`,
+-- so `Color` arrives here with its constructors and `Red` binds (#2309).  The hop
+-- that names `Color` WITHOUT `(..)` re-exports it abstractly and is the negative
+-- control in test/import_form_fixtures/reexport_ctor_visibility.
+import mid.{Color(..)}
+
+pick : Color
+pick = Red

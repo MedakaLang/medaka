@@ -1,0 +1,7 @@
+-- #1373, the drained pin's own program: one `RA`, one `Dup`, one `dx`, nothing to
+-- disambiguate anywhere in the graph, and the record form rejected `Unknown field:
+-- dx` before the hop carried the field's owning constructor.
+import bre.{RA, Dup, unRA}
+
+sevenHop : Int
+sevenHop = unRA (Dup { dx = 7 })

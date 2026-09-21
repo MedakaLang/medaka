@@ -1,0 +1,10 @@
+-- One hop, selective at both ends.  The consumer writes the constructor in
+-- expression AND pattern position, so a hop that carried the type and dropped its
+-- ctors is a row here rather than an unused import.
+import facade.{T(..), unT}
+
+mkOne : Int -> T
+mkOne n = MkT n
+
+readOne : T -> Int
+readOne (MkT n) = n + unT (MkT n)

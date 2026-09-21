@@ -1,0 +1,7 @@
+-- The DECLARING module: the type is `public export`, so its constructors are part
+-- of its public surface and every form that carries the type is entitled to carry
+-- them with it.
+public export data T = MkT Int
+
+export unT : T -> Int
+unT (MkT n) = n

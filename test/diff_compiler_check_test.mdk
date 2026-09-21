@@ -244,7 +244,7 @@ importFormsLeg = Leg {
   pairedWith = None,
   golden = InFixtureDir "expected",
   grade = SortedEqual,
-  fixtures = 6,
+  fixtures = 8,
 }
 
 rows : List Row

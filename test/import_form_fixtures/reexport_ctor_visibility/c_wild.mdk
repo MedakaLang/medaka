@@ -1,0 +1,10 @@
+-- The same use shape through the wildcard facade.  The two facade spellings have
+-- to agree, and they agree only by BOTH carrying the constructors: narrowing
+-- `{T(..)}` down to what a lossy `.*` carries would also make them agree.
+import facade_wild.{T(..), unT}
+
+mkTwo : Int -> T
+mkTwo n = MkT n
+
+readTwo : T -> Int
+readTwo x = unT x

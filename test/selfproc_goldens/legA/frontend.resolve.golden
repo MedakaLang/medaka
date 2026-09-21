@@ -31,6 +31,7 @@ buildFieldOwnerIndex : List (String, String) -> Map String (List String)
 builtInEffects : List String
 builtinTyOrigin : String -> (String, TyConOrigin)
 builtinTyOrigins : List (String, TyConOrigin)
+carriedTypeCtors : List String -> List String -> List (String, List String) -> List (String, List String)
 charMask : Int -> String -> Int
 charMaskGo : Int -> Array Char -> Int -> Int -> Int
 checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
@@ -280,6 +281,8 @@ reExpIfaceMethods : ModuleExports -> Map String ModuleExports -> List Decl -> Li
 reExpIfaceMethodsFrom : UsePath -> ModuleExports -> List (String, List String)
 reExpInterfaces : ModuleExports -> Map String ModuleExports -> List Decl -> List String
 reExpInterfacesFrom : UsePath -> ModuleExports -> List String
+reExpTypeCtors : ModuleExports -> Map String ModuleExports -> List Decl -> List (String, List String)
+reExpTypeCtorsFrom : UsePath -> ModuleExports -> List (String, List String)
 reExpTypes : ModuleExports -> Map String ModuleExports -> List Decl -> List String
 reExpTypesFrom : UsePath -> ModuleExports -> List String
 reExpValues : ModuleExports -> Map String ModuleExports -> List Decl -> List String

@@ -1,1 +1,2 @@
+-- The hop, spelled selectively.
 export import bmod.{RA, Dup, ACount, unRA}

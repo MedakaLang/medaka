@@ -2487,7 +2487,7 @@ ppResError (ExternWithBody n _) =
 ppResError (PrivateNameAccess n m _) =
   "Module '\{m}' has no exported name '\{n}'"
 ppResError (NoExportedConstructors n m _) =
-  "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)` or export with `public export`"
+  "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)`, or export them: declare '\{n}' a `public export data` where it is defined, and name it `\{n}(..)` in any `export import` that re-exports it (`public` is a parse error on `import`)"
 ppResError (NewtypeCtorNotExported n m _) =
   "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
 ppResError (AbstractFieldAccess t f _) =
@@ -3663,7 +3663,7 @@ buildExports coreExp known modId prog env = ModuleExports {
       ++ reExpValues coreExp known prog,
   expTypes = expTypesDirect prog ++ reExpTypes coreExp known prog,
   expCtors = expCtorsDirect prog ++ reExpCtors coreExp known prog,
-  expTypeCtors = expTypeCtorsDirect prog,
+  expTypeCtors = expTypeCtorsDirect prog ++ reExpTypeCtors coreExp known prog,
   expFieldOwners =
     expFieldOwnersDirect prog ++ reExpFieldOwners coreExp known prog,
   expInterfaces =
@@ -3857,6 +3857,45 @@ reExpCtorsFrom : UsePath -> ModuleExports -> List String
 reExpCtorsFrom path src =
   localsExportedFrom src.expCtors (reexportBindings path src)
 
+-- `expTypeCtors` is what `T(..)` expands through (`typeCtorsOf`), so a hop without
+-- this term hands its consumer a type it exports and no ctors to go with it — the
+-- consumer's `import facade.{T(..)}` is then refused as abstract even though the
+-- facade wrote `export import i.{T(..)}` (#2309).
+--
+-- A type whose ctors this hop does NOT carry (a plain `T` member) gets no entry
+-- rather than an empty one.  `Some []` would expand `T(..)` to the type alone and
+-- raise no NoExportedConstructors, silently binding nothing where the abstract-export
+-- refusal is the right answer.
+reExpTypeCtors : ModuleExports ->
+  OrdMap ModuleExports ->
+  List Decl ->
+  List (String, List String)
+reExpTypeCtors coreExp known prog =
+  flatMap (overPubUse coreExp known reExpTypeCtorsFrom) (pubUsePaths prog)
+
+reExpTypeCtorsFrom : UsePath -> ModuleExports -> List (String, List String)
+reExpTypeCtorsFrom path src =
+  let carried = reexportOrigins path src
+  carriedTypeCtors
+    (filterContains src.expTypes carried)
+    carried
+    src.expTypeCtors
+
+-- per re-exported type, the ctors this hop carries; a type carrying none is dropped.
+carriedTypeCtors : List String ->
+  List String ->
+  List (String, List String) ->
+  List (String, List String)
+carriedTypeCtors _ _ [] = []
+carriedTypeCtors types carried ((t, cs) :: rest)
+  | not (contains t types) = carriedTypeCtors types carried rest
+  | otherwise =
+    let kept = filterContains carried cs
+    if isEmptyL kept then
+      carriedTypeCtors types carried rest
+    else
+      (t, kept) :: carriedTypeCtors types carried rest
+
 reExpInterfaces : ModuleExports ->
   OrdMap ModuleExports ->
   List Decl ->
@@ -3900,10 +3939,17 @@ reExpFieldOwners : ModuleExports ->
 reExpFieldOwners coreExp known prog =
   flatMap (overPubUse coreExp known reExpFieldOwnersFrom) (pubUsePaths prog)
 
+-- `expFieldOwners` keys each field by its owning CONSTRUCTOR (`variantFieldOwners`),
+-- which equals the type name only for a self-named record — so a named-field VARIANT
+-- (`data RA = Dup { dx : Int } | ACount Int`) owns its fields under `Dup`.  Testing
+-- the re-exported names against `expTypes` alone therefore dropped every such field at
+-- the hop, and the consumer saw `Unknown field: dx` on a field that is declared
+-- (#1373).  `expTypes ++ expCtors` is the same domain the consumer side already
+-- accepts in `ownedFieldOwners`.
 reExpFieldOwnersFrom : UsePath -> ModuleExports -> List (String, String)
 reExpFieldOwnersFrom path src =
   ownersForTypes
-    (filterContains src.expTypes (reexportOrigins path src))
+    (filterContains (src.expTypes ++ src.expCtors) (reexportOrigins path src))
     src.expFieldOwners
 
 ownersForTypes : List String -> List (String, String) -> List (String, String)

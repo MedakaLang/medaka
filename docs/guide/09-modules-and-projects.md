@@ -159,7 +159,7 @@ main = println (balanceOf (mkAccount 100))
 exported with `public`. Trying the same on `Account` is refused at the import:
 
 ```
-./main.mdk:1:16: 'Account' exports no constructors from module 'account' (exported abstractly). Remove `(..)` or export with `public export`
+./main.mdk:1:16: 'Account' exports no constructors from module 'account' (exported abstractly). Remove `(..)`, or export them: declare 'Account' a `public export data` where it is defined, and name it `Account(..)` in any `export import` that re-exports it (`public` is a parse error on `import`)
 ```
 
 An abstract export is how a module keeps control of a type's representation.
@@ -173,6 +173,12 @@ export import list.{reverse, take}
 ```
 
 Importers of this module then see `reverse` and `take` as if it had defined them.
+
+A re-export carries whatever the import spelling beside it carries, constructors
+included: `export import account.{Point(..)}` re-exports `Point` with its
+constructors, and `export import account.{Point}` re-exports it abstractly. There is
+no separate spelling for the first — `public` applies to `data` declarations, never
+to an import.
 
 ## `medaka.toml` and project layout
 

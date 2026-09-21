@@ -1,0 +1,8 @@
+-- The refusal the negative control exists for.  `facade_plain` re-exported `T`
+-- abstractly, so `T(..)` here names constructors that hop never carried, and the
+-- diagnostic is the abstract-export one -- unchanged by constructors now crossing
+-- a hop that asks for them.
+import facade_plain.{T(..), unT}
+
+readThree : T -> Int
+readThree x = unT x
