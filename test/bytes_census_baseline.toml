@@ -17,6 +17,14 @@
 # Paths are relative to the repo root, matching every consumer above.
 
 [[entry]]
+file = "gzip/lib/bitio.mdk"
+count = 0
+
+[[entry]]
+file = "gzip/lib/crc32.mdk"
+count = 1
+
+[[entry]]
 file = "stdlib/hex.mdk"
 count = 6
 
