@@ -67,6 +67,45 @@ It also reads the first DEFLATE block header off the payload with the bit
 cursor, which reports `BFINAL=1 BTYPE=1 (fixed Huffman)` — what `gzip` really
 emits for an input this small.
 
+## Why some `Array Int` positions stayed `Array Int`
+
+The Bytes migration (epic #3134, milestone B5) converted the positions in
+this tree that hold actual byte data to `Bytes`, and deliberately left a
+number of `Array Int` positions alone. Those are not leftover work — each
+one holds a table whose elements are not byte data, so wrapping it in
+`Bytes` (whose domain is `0..255`) would either fail to type-check or,
+worse, type-check while asserting something false about the values it
+holds. The three recurring shapes:
+
+- **The RFC 1951 §3.2.5/§3.2.7 tables in `lib/huffman.mdk`.** Code-length
+  vectors (values 0..15), counts/offsets/symbol tables (symbol indices up
+  to 287), and the length/distance base and extra-bit tables (`distBase`'s
+  entries run up to 24577) are all indexed structures over the Huffman
+  alphabet, not data read off or written to a byte stream. Most of this
+  file — 49 of 51 positions — is one of these tables.
+- **The LZ77 hash table and chain in `lib/deflate.mdk`'s `Matcher`.**
+  `head[hash]` and `prevArr[pos]` hold input *positions* (domain `-1..n-1`,
+  sentinel `-1` for "none"), not byte values. `deflate.mdk` also has three
+  signature-identical single-entry readers over `Array Int -> Int -> Int`
+  (`tableAt` over the RFC tables, `prevGet` over the chain, `headGet` over
+  the hash table) plus a fourth, `byteAt`, that IS byte data — the four are
+  distinguished only by their call sites, never by their types, so a
+  signature-text search cannot tell them apart.
+- **`clOrder` in `lib/inflate.mdk`** — RFC 1951 §3.2.7's fixed permutation
+  `16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15`, used to
+  decode which code-length-alphabet slot each transmitted 3-bit length fills.
+  Its 19 elements are symbol indices (0..18), not bytes — but every element
+  also happens to be `<= 18`, so it sits inside the byte domain and a
+  `Bytes` conversion would type-check cleanly and pass every existing test.
+  That makes it the highest silent-miscoding risk in the tree: nothing
+  would go red, and the source would carry a permutation table mislabeled
+  as a byte sequence for the next reader to build on. `clOrder`, and
+  `lookupTable` (the generic reader that serves it and the RFC tables
+  above), must stay `Array Int`.
+
+Full per-position classification (all 126 positions across the tree, with
+per-line reasons): the sprint's own audit slice, S1 `the-audit` (#3290).
+
 ## Testing policy
 
 `test` and `prop` declarations are the primary coverage; doctests are
