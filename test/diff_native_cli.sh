@@ -259,6 +259,42 @@ if [ "$RUN_WIRED" = 1 ]; then
   fi
 fi
 
+# ── run: sequence bounds guards, interpreter arm (#3267, #3192, #3256) ───────
+# The four `Slice` impls (`Bytes`, `Array a`, `String`, `List a`) and
+# `array.blit` reject an out-of-range range. Each fixture feeds a range whose
+# `hi - lo` (or `off + len`) WRAPS, so a guard written in that additive form
+# admits it and reaches an unchecked read.
+#
+# This arm is the interpreter's; the built binary's reuses `mb_case` below. The
+# two engines share the stdlib guard but not the abort path, and only one of
+# them was loud before the fix: `slice_bytes_wrap` printed `[|1|]` at exit 0
+# under `run` while the built binary segfaulted, so pinning one engine would
+# have left the silent half uncovered.
+sl_run_case() {
+  sl_name="$1"; sl_f="$FIX/run/$sl_name.mdk"; sl_want="$2"
+  sl_err="$TMP/nat_${sl_name}_interp.err"
+  MEDAKA_ROOT="$ROOT" bound "$MEDAKA" run "$sl_f" >/dev/null 2>"$sl_err"
+  sl_status=$?
+  if [ "$sl_status" -eq 1 ] && grep -q "$sl_want" "$sl_err"; then
+    pass=$((pass+1)); printf 'ok   run/%s (exit 1, abort on stderr)\n' "$sl_name"
+  else
+    fail=$((fail+1)); printf 'FAIL run/%s (want exit 1 + stderr containing [%s], got exit %s stderr [%s])\n' \
+      "$sl_name" "$sl_want" "$sl_status" "$(cat "$sl_err" 2>/dev/null)"
+  fi
+}
+if [ "$RUN_WIRED" = 1 ]; then
+  sl_run_case slice_bytes_wrap    "E-SLICE-OOB"
+  sl_run_case slice_bytes_oob     "E-SLICE-OOB"
+  sl_run_case slice_array_wrap    "E-SLICE-OOB"
+  sl_run_case slice_array_oob     "E-SLICE-OOB"
+  sl_run_case slice_string_wrap   "E-SLICE-OOB"
+  sl_run_case slice_string_oob    "E-SLICE-OOB"
+  sl_run_case slice_list_wrap     "E-SLICE-OOB"
+  sl_run_case slice_list_oob      "E-SLICE-OOB"
+  sl_run_case array_blit_src_oob  "Array.blit: source out of bounds"
+  sl_run_case array_blit_dst_oob  "Array.blit: destination out of bounds"
+fi
+
 # ── test ──────────────────────────────────────────────────────────────────────
 TEST_FIXTURES="doc prop nodoc"
 TEST_WIRED=1
@@ -421,6 +457,23 @@ else
   mb_case mutbytes_blit_dst_oob "MutBytes.blit: destination out of bounds"
   mb_case emitu8_range       "Builder.emitU8: value out of range 0..255"
   mb_case emitu8_negative    "Builder.emitU8: value out of range 0..255"
+
+  # ── build: sequence bounds guards (#3267, #3192, #3256) ─────────────────
+  # The built-binary arm of the `sl_run_case` rows above, on the same ten
+  # fixtures: `mb_case`'s contract (build it, expect exit 1 and this text on
+  # stderr) is what these need too, so they share it rather than a copy.
+  # Native codegen is where the missing guard was loudest — `slice_bytes_wrap`
+  # segfaulted here while the interpreter printed a wrong byte at exit 0.
+  mb_case slice_bytes_wrap    "E-SLICE-OOB"
+  mb_case slice_bytes_oob     "E-SLICE-OOB"
+  mb_case slice_array_wrap    "E-SLICE-OOB"
+  mb_case slice_array_oob     "E-SLICE-OOB"
+  mb_case slice_string_wrap   "E-SLICE-OOB"
+  mb_case slice_string_oob    "E-SLICE-OOB"
+  mb_case slice_list_wrap     "E-SLICE-OOB"
+  mb_case slice_list_oob      "E-SLICE-OOB"
+  mb_case array_blit_src_oob  "Array.blit: source out of bounds"
+  mb_case array_blit_dst_oob  "Array.blit: destination out of bounds"
 fi
 
 # error/* — RETIRED with the OCaml oracle (native canonical; oracle-coupled leg

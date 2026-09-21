@@ -1,0 +1,2 @@
+-- `hi - lo` wraps to `maxBound` here; see slice_bytes_oob.mdk.
+main = println (slice [1, 2, 3] 1 minBound)

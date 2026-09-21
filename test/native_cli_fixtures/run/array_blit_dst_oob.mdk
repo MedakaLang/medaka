@@ -1,0 +1,8 @@
+import array.{blit, make}
+
+-- 4611686018427387903 is Int's maximum, so `dstOff + len` wraps negative: the
+-- bounds guard must not be written in that form.
+main =
+  let src = make 4 0
+  let dst = make 4 0
+  blit src 0 dst 4611686018427387903 2
