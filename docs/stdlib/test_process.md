@@ -270,7 +270,9 @@ needs the compiled engine is spawned with `["--native"]`. The count comes
 from `--json` rather than the human transcript, so a change to the
 transcript's shape cannot silently zero it. A suite that exits nonzero is
 an `Err`, never a count, because a failed assertion is not a smaller
-number of passing ones.
+number of passing ones. A failing run's captured output is carried as its
+tail (`outputTail`) rather than whole, since the message is read in a
+test transcript beside dozens of others.
 
 ### `unrosteredUnits`
 
@@ -336,4 +338,53 @@ The stems in `wanted` that name no `*_test.mdk` file in `dir`.
 The other half of a closed roster: a roster or exemption row naming a file
 that was renamed or deleted still reads as coverage, and only this
 reports it.
+
+## Grading a floor roster against its own `test` blocks
+
+### `ungradedRosterRows`
+
+```
+ungradedRosterRows : String -> String -> List String -> List String -> List String
+```
+
+The names in `roster` that no block in `sourceLines` both names in its
+title and grades in its body.
+
+`titlePrefix` is the path prefix the titles are spelled with (`"stdlib/"`,
+`"pds/test/"`, `"sqlite/lib/"`), and `callOpen` is the grading call's
+opening text up to its name argument's quote (`"floorExpectation \""`).
+`sourceLines` is the roster module's own source, read with `io.readLines`
+— never a `medaka test --json` self-spawn, which would recurse into
+re-spawning every unit the module already spawns.
+
+A block whose title and argument disagree counts for neither name: the
+titled row is not graded by it, and the graded row is covered by its own
+block or not at all. `disagreeingFloorBlocks` is what names that case.
+
+The roster is argument 3 and the scanned lines argument 4, matching
+`unrosteredUnits`' `known`/`entries` order; the two share a type, so an
+order that differed would make a swapped call a silent `[]`.
+
+```medaka
+> ungradedRosterRows "s/" "grade \"" ["a", "b"] ["test \"s/a.mdk executed >= 1 assertions\" = grade \"a\""]
+["b"]
+```
+
+### `disagreeingFloorBlocks`
+
+```
+disagreeingFloorBlocks : String -> String -> List String -> List String
+```
+
+The blocks in `sourceLines` whose title and grading call name different
+units, each rendered as `<titled> -> <graded>`.
+
+The other half of `ungradedRosterRows`, which only reports a row nothing
+grades: a block that grades the wrong row leaves the titled row's floor
+unapplied while the row still reads as covered, and only this names it.
+
+```medaka
+> disagreeingFloorBlocks "s/" "grade \"" ["test \"s/a.mdk executed >= 1 assertions\" = grade \"b\""]
+["a -> b"]
+```
 
