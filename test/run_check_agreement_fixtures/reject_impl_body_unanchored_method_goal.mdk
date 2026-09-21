@@ -1,0 +1,25 @@
+-- #564: an explicit impl-method body owns the unanchored result of `make`.
+-- Neither the impl head nor a declared method dictionary can determine which
+-- `Thing` instance supplies it, so the body must reject at the occurrence.
+data One = One
+data Two = Two
+
+interface Thing a where
+  make : Unit -> a
+  reveal : a -> Unit
+
+impl Thing One where
+  make _ = One
+  reveal _ = ()
+
+impl Thing Two where
+  make _ = Two
+  reveal _ = ()
+
+interface Host a where
+  host : a -> Unit
+
+impl Host Unit where
+  host _ = reveal (make ())
+
+main = println 0

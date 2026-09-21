@@ -1,7 +1,7 @@
 {- | Focused compact-codec and ECDSA value tests. Exact bulk answers remain in
    the registered native corpus gate; these cases keep discovery non-vacuous. -}
 
-import test.{expectTrue}
+import test.{expectEach, expectEqual, expectTrue}
 import hex.{decode}
 import lib.secp256k1.{
   EcdsaSignature,
@@ -25,7 +25,10 @@ knownCompact =
 test "compact P1363 signatures round trip as exactly 64 bytes" =
   let parsed = signature knownCompact
   let compact = ecdsaSignatureCompact parsed
-  expectTrue (arrayLength compact == 64 && compact == bytes knownCompact)
+  expectEach [
+    ("arrayLength compact == 64", expectEqual 64 (arrayLength compact)),
+    ("compact == bytes knownCompact", expectEqual (bytes knownCompact) compact),
+  ]
 
 test "compact parsing rejects zero, range, and high-S components" =
   let zeroR =

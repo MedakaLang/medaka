@@ -49,7 +49,7 @@ import string.{
   unlines,
   words,
 }
-import test.{Expectation(..)}
+import test.{Expectation(..), expectFindings, expectNoFindings}
 import test_process.{scratchDir, underRoot}
 
 -- # The files
@@ -487,72 +487,40 @@ firehoseTimeoutsIn : Result String String ->
 firehoseTimeoutsIn (Err e) = Err e
 firehoseTimeoutsIn (Ok path) = firehoseTimeouts path
 
--- # Grading
-
--- | Passes when the check reported no violation lines.
-expectClean : String -> Result String (List String) -> Expectation
-expectClean what (Err e) =
-  Fail "\{what}: \{e}" "no violations" "the check could not run"
-expectClean _ (Ok []) = Pass "no violations" "no violations"
-expectClean what (Ok hits) =
-  Fail
-    "\{what}:\n\{unlines (map indent hits)}"
-    "no violations"
-    "\{intToString (length hits)} violations"
-
-{- | Passes when the check reported at least one violation line — a mutation
-   control, where a clean report is the failure.
-
-   The count, not the text: a control proves the check can fire at all, and
-   pinning which label fired would restate the roster beside it. -}
-expectCaught : String -> Result String (List String) -> Expectation
-expectCaught what (Err e) =
-  Fail "\{what}: \{e}" "a violation" "the check could not run"
-expectCaught what (Ok []) =
-  Fail
-    "\{what}: the injected violation was not caught"
-    "a violation"
-    "no violations"
-expectCaught _ (Ok hits) =
-  Pass "a violation" "\{intToString (length hits)} violations"
-
-indent : String -> String
-indent line = "  \{line}"
-
 -- # The real tree
 
 test "pds.service carries every required hardening directive" =
-  expectClean
+  expectNoFindings
     "pds/pds.service is missing a required hardening directive"
     (missingDirectives service serviceDirectives)
 
 test "Caddyfile carries every required hardening directive" =
-  expectClean
+  expectNoFindings
     "pds/Caddyfile is missing a required hardening directive"
     (missingDirectives caddyfile caddyDirectives)
 
 test "Caddyfile keeps the request timeouts out of the firehose block" =
-  expectClean
+  expectNoFindings
     "pds/Caddyfile bounds a firehose subscription with a request timeout"
     (firehoseTimeouts caddyfile)
 
 test "pds-egress.service carries every required hardening directive" =
-  expectClean
+  expectNoFindings
     "pds/pds-egress.service is missing a required hardening directive"
     (missingDirectives egressService egressServiceDirectives)
 
 test "pds-egress.service has no blanket IPAddressAllow voiding its deny list" =
-  expectClean
+  expectNoFindings
     "pds/pds-egress.service has a blanket IPAddressAllow that voids its deny list"
     (presentForbidden egressService egressServiceForbidden)
 
 test "Caddyfile.egress carries every required hardening directive" =
-  expectClean
+  expectNoFindings
     "pds/Caddyfile.egress is missing a required hardening directive"
     (missingDirectives egressCaddyfile egressCaddyDirectives)
 
 test "Caddyfile.egress has no dynamic or header-driven upstream" =
-  expectClean
+  expectNoFindings
     "pds/Caddyfile.egress has a dynamic/header-driven upstream"
     (presentForbidden egressCaddyfile egressCaddyForbidden)
 
@@ -563,67 +531,67 @@ test "Caddyfile.egress has no dynamic or header-driven upstream" =
 -- covered.
 
 test "pds-backup.service carries the shared outbound-unit roster" =
-  expectClean
+  expectNoFindings
     "pds-backup.service is missing a required hardening directive"
     (missingDirectives backupService outboundUnitDirectives)
 
 test "pds-backup.service has no blanket IPAddressAllow" =
-  expectClean
+  expectNoFindings
     "pds-backup.service has a blanket IPAddressAllow that voids its deny list"
     (presentForbidden backupService outboundUnitForbidden)
 
 test "pds-healthping.service carries the shared outbound-unit roster" =
-  expectClean
+  expectNoFindings
     "pds-healthping.service is missing a required hardening directive"
     (missingDirectives healthpingService outboundUnitDirectives)
 
 test "pds-healthping.service has no blanket IPAddressAllow" =
-  expectClean
+  expectNoFindings
     "pds-healthping.service has a blanket IPAddressAllow that voids its deny list"
     (presentForbidden healthpingService outboundUnitForbidden)
 
 test "pds-alert@.service carries the shared outbound-unit roster" =
-  expectClean
+  expectNoFindings
     "pds-alert@.service is missing a required hardening directive"
     (missingDirectives alertService outboundUnitDirectives)
 
 test "pds-alert@.service has no blanket IPAddressAllow" =
-  expectClean
+  expectNoFindings
     "pds-alert@.service has a blanket IPAddressAllow that voids its deny list"
     (presentForbidden alertService outboundUnitForbidden)
 
 test "pds-backup.service carries its own oneshot and alert directives" =
-  expectClean
+  expectNoFindings
     "pds/pds-backup.service is missing a required directive"
     (missingDirectives backupService backupServiceDirectives)
 
 test "pds-backup.timer replays a missed backup" =
-  expectClean
+  expectNoFindings
     "pds/pds-backup.timer is missing a required directive"
     (missingDirectives backupTimer backupTimerDirectives)
 
 test "pds-healthping.service probes the health route and fails on HTTP errors" =
-  expectClean
+  expectNoFindings
     "pds/pds-healthping.service is missing a required directive"
     (missingDirectives healthpingService healthpingServiceDirectives)
 
 test "pds-healthping.timer carries its own schedule directives" =
-  expectClean
+  expectNoFindings
     "pds/pds-healthping.timer is missing a required directive"
     (missingDirectives healthpingTimer healthpingTimerDirectives)
 
 test "pds-healthping.timer does not replay a missed ping" =
-  expectClean
+  expectNoFindings
     "pds/pds-healthping.timer replays missed pings, which reports health for an outage"
     (presentForbidden healthpingTimer healthpingTimerForbidden)
 
 test "pds-alert@.service carries its own oneshot and curl directives" =
-  expectClean
+  expectNoFindings
     "pds/pds-alert@.service is missing a required directive"
     (missingDirectives alertService alertServiceDirectives)
 
 test "pds-alert@.service has no self-referential OnFailure" =
-  expectClean
+  expectNoFindings
     "pds/pds-alert@.service has a self-referential OnFailure"
     (presentForbidden alertService alertServiceForbidden)
 
@@ -635,7 +603,7 @@ test "pds-alert@.service has no self-referential OnFailure" =
 -- behind it is a roster entry nothing has shown can fail.
 
 test "mutation control: a stripped systemd directive (IPAddressDeny) is caught" =
-  expectCaught
+  expectFindings
     "a stripped systemd directive (IPAddressDeny)"
     (missingIn
       (mutantOf
@@ -645,7 +613,7 @@ test "mutation control: a stripped systemd directive (IPAddressDeny) is caught" 
       serviceDirectives)
 
 test "mutation control: a stripped systemd directive (MemoryMax) is caught" =
-  expectCaught
+  expectFindings
     "a stripped systemd directive (MemoryMax)"
     (missingIn
       (mutantOf
@@ -655,7 +623,7 @@ test "mutation control: a stripped systemd directive (MemoryMax) is caught" =
       serviceDirectives)
 
 test "mutation control: a stripped OnFailure= on pds.service is caught" =
-  expectCaught
+  expectFindings
     "a stripped OnFailure= on pds.service"
     (missingIn
       (mutantOf
@@ -665,7 +633,7 @@ test "mutation control: a stripped OnFailure= on pds.service is caught" =
       serviceDirectives)
 
 test "mutation control: a stripped Caddy HSTS header is caught" =
-  expectCaught
+  expectFindings
     "a stripped Caddy directive (Strict-Transport-Security)"
     (missingIn
       (mutantOf
@@ -675,7 +643,7 @@ test "mutation control: a stripped Caddy HSTS header is caught" =
       caddyDirectives)
 
 test "mutation control: a stripped Caddy request-body limit is caught" =
-  expectCaught
+  expectFindings
     "a stripped Caddy directive (max_size)"
     (missingIn
       (mutantOf
@@ -685,7 +653,7 @@ test "mutation control: a stripped Caddy request-body limit is caught" =
       caddyDirectives)
 
 test "mutation control: a stripped X-Forwarded-For overwrite is caught" =
-  expectCaught
+  expectFindings
     "a stripped X-Forwarded-For overwrite"
     (missingIn
       (mutantOf
@@ -730,7 +698,7 @@ withFirehoseTimeout (line :: rest) =
     line :: withFirehoseTimeout rest
 
 test "mutation control: an access log redirected away from the journal is caught" =
-  expectCaught
+  expectFindings
     "an access log redirected away from the journal"
     (missingIn
       (mutantOf caddyfile "Caddyfile.log-to-file" toJournalFile)
@@ -746,17 +714,17 @@ firehoseBounded =
   mutantOf caddyfile "Caddyfile.firehose-bounded" withFirehoseTimeout
 
 test "mutation control: a request timeout inside the firehose block is caught" =
-  expectCaught
+  expectFindings
     "a request timeout inside the firehose block"
     (firehoseTimeoutsIn firehoseBounded)
 
 test "mutation control: the firehose-bounded copy still passes the roster" =
-  expectClean
+  expectNoFindings
     "the firehose-bounded copy was expected to pass the directive roster"
     (missingIn firehoseBounded caddyDirectives)
 
 test "mutation control: a Caddyfile with no firehose block at all is caught" =
-  expectCaught
+  expectFindings
     "a Caddyfile serving the upgrade under the request path's timeouts"
     (firehoseTimeoutsIn
       (mutantOf
@@ -765,7 +733,7 @@ test "mutation control: a Caddyfile with no firehose block at all is caught" =
         (without (contains "reverse_proxy @firehose"))))
 
 test "mutation control: a dropped egress IPAddressDeny range is caught" =
-  expectCaught
+  expectFindings
     "a dropped egress IPAddressDeny range (172.16.0.0/12)"
     (missingIn
       (mutantOf
@@ -787,17 +755,17 @@ blanketAllowEgress =
     (appending "IPAddressAllow=any")
 
 test "mutation control: a blanket egress IPAddressAllow (any) is caught" =
-  expectCaught
+  expectFindings
     "a blanket egress IPAddressAllow (any)"
     (presentIn blanketAllowEgress egressServiceForbidden)
 
 test "mutation control: the blanket-allow copy still passes the egress roster" =
-  expectClean
+  expectNoFindings
     "the blanket-allow copy was expected to pass the directive roster"
     (missingIn blanketAllowEgress egressServiceDirectives)
 
 test "mutation control: a dynamic header-driven egress upstream is caught" =
-  expectCaught
+  expectFindings
     "a dynamic/header-driven egress upstream"
     (presentIn
       (mutantOf
@@ -809,7 +777,7 @@ test "mutation control: a dynamic header-driven egress upstream is caught" =
       egressCaddyForbidden)
 
 test "mutation control: a stripped egress upstream (chat) is caught" =
-  expectCaught
+  expectFindings
     "a stripped egress upstream (chat)"
     (missingIn
       (mutantOf
@@ -826,7 +794,7 @@ test "mutation control: a stripped egress upstream (chat) is caught" =
    Measured on the first real deploy — `curl http://<public-ip>:3128/`
    answered 200 until the directive was added. -}
 test "mutation control: a wildcard-bound egress listener is caught" =
-  expectCaught
+  expectFindings
     "a wildcard-bound egress listener"
     (missingIn
       (mutantOf
@@ -838,7 +806,7 @@ test "mutation control: a wildcard-bound egress listener is caught" =
 -- Without `admin off` Caddy claims 127.0.0.1:2019, which the inbound Caddy
 -- already holds, and this unit restart-loops on every start.
 test "mutation control: an egress config without admin off is caught" =
-  expectCaught
+  expectFindings
     "an egress config without `admin off`"
     (missingIn
       (mutantOf
@@ -850,7 +818,7 @@ test "mutation control: an egress config without admin off is caught" =
 -- The three outbound units share one roster, so this also proves that
 -- roster is wired to them and not only to the egress unit.
 test "mutation control: a dropped backup IPAddressDeny range is caught" =
-  expectCaught
+  expectFindings
     "a dropped backup IPAddressDeny range (169.254.0.0/16)"
     (missingIn
       (mutantOf
@@ -872,12 +840,12 @@ replayingHealthpingTimer =
     (appending "Persistent=true")
 
 test "mutation control: a replaying healthping timer is caught" =
-  expectCaught
+  expectFindings
     "a replaying healthping timer (Persistent=true)"
     (presentIn replayingHealthpingTimer healthpingTimerForbidden)
 
 test "mutation control: the Persistent=true copy still passes the timer roster" =
-  expectClean
+  expectNoFindings
     "the Persistent=true copy was expected to pass the directive roster"
     (missingIn replayingHealthpingTimer healthpingTimerDirectives)
 
@@ -885,7 +853,7 @@ test "mutation control: the Persistent=true copy still passes the timer roster" 
 -- feeding the dead-man's switch from a server answering every request with
 -- an error.
 test "mutation control: a healthping probe that ignores HTTP errors is caught" =
-  expectCaught
+  expectFindings
     "a healthping probe that ignores HTTP errors"
     (missingIn
       (mutantOf

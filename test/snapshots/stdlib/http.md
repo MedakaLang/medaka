@@ -1,5 +1,5 @@
 # META
-source_lines=2571
+source_lines=2598
 stages=DESUGAR,MARK
 # SOURCE
 {- | Pure, bounded HTTP/1.1 request framing and response building.
@@ -17,7 +17,7 @@ stages=DESUGAR,MARK
 
 import bytebuilder.{
   Builder,
-  emitBytes,
+  appendBytes,
   buildArray,
   buildBytes,
   emitU8,
@@ -30,6 +30,7 @@ import bytes.{
   decodeUtf8,
   elemIndexWithin,
   encodeUtf8,
+  fromArrayAssumeByteDomain,
   toArray,
 }
 import json.{Json, parse}
@@ -243,6 +244,10 @@ data RequestLine = RequestLine String String Int
 data HeaderBlock = HeaderBlock (List Header) Int Int
 data BodyMode = NoBody | FixedBody Int | ChunkedBody | UntilCloseBody
 data ParsedBody = ParsedBody Bytes (List Header) Int
+
+-- | The body of a request that framed no body at all.
+emptyBody : Bytes
+emptyBody = fromArrayAssumeByteDomain [||]
 
 -- | Structural classification for request-framing failures. The diagnostic is
 -- retained for direct parser callers, while the server can select 400 versus
@@ -1140,7 +1145,7 @@ parseChunkedChecked input pos headerBytes out total count = do
     ChunkBody dataPos size => do
       (chunk, _) <- readSliceAt input dataPos size
       next <- chunkDataEnd input (B.length input) dataPos size
-      let () = emitBytes chunk out
+      let () = appendBytes chunk out
       parseChunkedChecked input next headerBytes out (total + size) (count + 1)
 
 {- | Decode one complete chunked body beginning at `pos`. The result contains
@@ -1209,7 +1214,7 @@ chunkDataEnd input avail dataPos size =
 -- that index belong to whatever follows the request, so rejecting them is the
 -- one-shot parser's job rather than the body framer's.
 parseBody : BodyMode -> Bytes -> Int -> Int -> Result FrameError ParsedBody
-parseBody NoBody _ pos _ = Ok (ParsedBody empty [] pos)
+parseBody NoBody _ pos _ = Ok (ParsedBody emptyBody [] pos)
 parseBody (FixedBody size) input pos _ = do
   (body, finalPos) <- readSliceAt input pos size
   Ok (ParsedBody body [] finalPos)
@@ -1473,6 +1478,28 @@ httpScanInHeaders : HttpScan -> Bool
 httpScanInHeaders (HttpScan (PhaseLine _)) = True
 httpScanInHeaders (HttpScan (PhaseFields _ _ _ _ _)) = True
 httpScanInHeaders (HttpScan (PhaseBody _ _)) = False
+
+{- | How many further bytes this scan needs before the request it is framing is
+   complete, given the `avail` the scan was produced from, or `None` when that
+   is not settled yet.
+
+   Settled for exactly one shape: a body whose end position the header section
+   already fixed, which is a `Content-Length` body and a bodyless request. A
+   scan still inside the header section has not selected a body mode, and a
+   chunked body declares its length one chunk at a time, so neither can say
+   what is still owed and both report `None`.
+
+   Only this module can answer it, the scan's phase being private. A caller
+   that must reserve a resource for a whole request before accepting any of it
+   — `pds/shell/server.mdk`'s in-flight buffer budget — has no other route to
+   the number: the declared length is a header this module has already graded
+   into a body mode, and reading it again outside would be a second framer
+   able to disagree with this one. -}
+export
+httpScanBodyRemaining : HttpScan -> Int -> Option Int
+httpScanBodyRemaining (HttpScan (PhaseBody _ (BodyUntil finalPos))) avail =
+  Some (max 0 (finalPos - avail))
+httpScanBodyRemaining _ _ = None
 
 scanVerdict : Int -> Int -> HttpScan -> ScanOutcome -> (HttpFrame, HttpScan)
 scanVerdict _ start scanned (ScanFramed (FrameSpan _ finalPos)) =
@@ -2574,9 +2601,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
       () <- checkRawBodyBytes size
       Ok (RawBody mediaType (toArray packed))
 # DESUGAR
-(DUse false (UseGroup ("bytebuilder") ((mem "Builder" false) (mem "emitBytes" false) (mem "buildArray" false) (mem "buildBytes" false) (mem "emitU8" false) (mem "newBuilder" false))))
+(DUse false (UseGroup ("bytebuilder") ((mem "Builder" false) (mem "appendBytes" false) (mem "buildArray" false) (mem "buildBytes" false) (mem "emitU8" false) (mem "newBuilder" false))))
 (DUse false (UseAlias ("bytes") "B"))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "contains" false) (mem "decodeUtf8" false) (mem "elemIndexWithin" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "contains" false) (mem "decodeUtf8" false) (mem "elemIndexWithin" false) (mem "encodeUtf8" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "parse" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "toUtf8" false))))
@@ -2635,6 +2662,8 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DData Private "HeaderBlock" () ((variant "HeaderBlock" (ConPos (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int") (TyCon "Int")))) ())
 (DData Private "BodyMode" () ((variant "NoBody" (ConPos)) (variant "FixedBody" (ConPos (TyCon "Int"))) (variant "ChunkedBody" (ConPos)) (variant "UntilCloseBody" (ConPos))) ())
 (DData Private "ParsedBody" () ((variant "ParsedBody" (ConPos (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int")))) ())
+(DTypeSig false "emptyBody" (TyCon "Bytes"))
+(DFunDef false "emptyBody" () (EApp (EVar "fromArrayAssumeByteDomain") (EArrayLit)))
 (DData Public "HttpParseFailure" () ((variant "HttpMalformed" (ConPos (TyCon "String"))) (variant "HttpResourceExcess" (ConPos (TyCon "String")))) ())
 (DData Private "FrameError" () ((variant "Incomplete" (ConPos (TyCon "String"))) (variant "Fatal" (ConPos (TyCon "HttpParseFailure")))) ())
 (DTypeSig false "settle" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyVar "a"))))
@@ -2799,7 +2828,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "parseChunkSize" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "parseChunkSize" ((PVar "input") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "semi") (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 59))) (EVar "input")) (arm (PCon "None") () (EVar "end")) (arm (PCon "Some" (PVar "pos")) () (EVar "pos")))) (DoExpr (EIf (EBinOp "==" (EVar "semi") (EVar "start")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk size"))) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "parseHexSizeGo") (EVar "input")) (EVar "start")) (EVar "semi")) (ELit (LInt 0)))) (ELam ((PVar "size")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "semi")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EVar "size"))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
 (DTypeSig false "parseChunkedChecked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ParsedBody")))))))))
-(DFunDef false "parseChunkedChecked" ((PVar "input") (PVar "pos") (PVar "headerBytes") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "dataPos")) (EVar "dataPos")) (EVar "headerBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "dataPos")) (EVar "size"))) (ELam ((PTuple (PVar "chunk") PWild)) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "next")) (EVar "headerBytes")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1))))))))))))))
+(DFunDef false "parseChunkedChecked" ((PVar "input") (PVar "pos") (PVar "headerBytes") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EVar "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "dataPos")) (EVar "dataPos")) (EVar "headerBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "dataPos")) (EVar "size"))) (ELam ((PTuple (PVar "chunk") PWild)) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "appendBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "next")) (EVar "headerBytes")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EVar "count") (ELit (LInt 1))))))))))))))
 (DTypeSig true "parseChunked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))
 (DFunDef false "parseChunked" ((PVar "input") (PVar "pos")) (EApp (EApp (EVar "map") (ELam ((PCon "ParsedBody" (PVar "body") (PVar "trailers") (PVar "next"))) (ETuple (EVar "body") (EVar "trailers") (EVar "next")))) (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "pos")) (ELit (LInt 0))) (EApp (EVar "newBuilder") (ELit LUnit))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DData Private "ChunkHead" () ((variant "ChunkEnd" (ConPos (TyCon "Int"))) (variant "ChunkBody" (ConPos (TyCon "Int") (TyCon "Int")))) ())
@@ -2808,7 +2837,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "chunkDataEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
 (DFunDef false "chunkDataEnd" ((PVar "input") (PVar "avail") (PVar "dataPos") (PVar "size")) (EBlock (DoLet false false (PVar "afterChunk") (EBinOp "+" (EVar "dataPos") (EVar "size"))) (DoExpr (EIf (EBinOp ">" (EVar "afterChunk") (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated body at byte ")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "avail")))) (ELit (LString "")))) (EIf (EBinOp ">" (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))) (EVar "avail")) (EApp (EVar "incomplete") (ELit (LString "http: truncated CRLF after chunk data"))) (EIf (EBinOp "||" (EBinOp "/=" (EApp (EApp (EVar "index") (EVar "input")) (EVar "afterChunk")) (ELit (LInt 13))) (EBinOp "/=" (EApp (EApp (EVar "index") (EVar "input")) (EBinOp "+" (EVar "afterChunk") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "malformed") (ELit (LString "http: missing CRLF after chunk data"))) (EApp (EVar "Ok") (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))))))))))
 (DTypeSig false "parseBody" (TyFun (TyCon "BodyMode") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ParsedBody")))))))
-(DFunDef false "parseBody" ((PCon "NoBody") PWild (PVar "pos") PWild) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EVar "empty")) (EListLit)) (EVar "pos"))))
+(DFunDef false "parseBody" ((PCon "NoBody") PWild (PVar "pos") PWild) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EVar "emptyBody")) (EListLit)) (EVar "pos"))))
 (DFunDef false "parseBody" ((PCon "FixedBody" (PVar "size")) (PVar "input") (PVar "pos") PWild) (EApp (EApp (EVar "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "pos")) (EVar "size"))) (ELam ((PTuple (PVar "body") (PVar "finalPos"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EVar "body")) (EListLit)) (EVar "finalPos"))))))
 (DFunDef false "parseBody" ((PCon "ChunkedBody") (PVar "input") (PVar "pos") (PVar "headerBytes")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "pos")) (EVar "headerBytes")) (EApp (EVar "newBuilder") (ELit LUnit))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DFunDef false "parseBody" ((PCon "UntilCloseBody") (PVar "input") (PVar "pos") PWild) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EApp (EApp (EVar "slice") (EVar "input")) (EVar "pos")) (EApp (EVar "B.length") (EVar "input")))) (EListLit)) (EApp (EVar "B.length") (EVar "input")))))
@@ -2863,6 +2892,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseLine" PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseFields" PWild PWild PWild PWild PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseBody" PWild PWild))) (EVar "False"))
+(DTypeSig true "httpScanBodyRemaining" (TyFun (TyCon "HttpScan") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "httpScanBodyRemaining" ((PCon "HttpScan" (PCon "PhaseBody" PWild (PCon "BodyUntil" (PVar "finalPos")))) (PVar "avail")) (EApp (EVar "Some") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "finalPos") (EVar "avail")))))
+(DFunDef false "httpScanBodyRemaining" (PWild PWild) (EVar "None"))
 (DTypeSig false "scanVerdict" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HttpScan") (TyFun (TyCon "ScanOutcome") (TyTuple (TyCon "HttpFrame") (TyCon "HttpScan")))))))
 (DFunDef false "scanVerdict" (PWild (PVar "start") (PVar "scanned") (PCon "ScanFramed" (PCon "FrameSpan" PWild (PVar "finalPos")))) (ETuple (EApp (EApp (EVar "requestBytesVerdict") (EBinOp "-" (EVar "finalPos") (EVar "start"))) (EApp (EVar "HttpFramedAt") (EVar "finalPos"))) (EVar "scanned")))
 (DFunDef false "scanVerdict" (PWild PWild (PVar "scanned") (PCon "ScanFatal" (PVar "failure"))) (ETuple (EApp (EVar "HttpFrameFailed") (EVar "failure")) (EVar "scanned")))
@@ -3031,9 +3063,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig true "decodeRequestBody" (TyFun (TyCon "Request") (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "DecodedBody"))))
 (DFunDef false "decodeRequestBody" ((PCon "Request" PWild PWild (PVar "headers") PWild (PVar "packed") PWild)) (EApp (EApp (EVar "andThen") (EApp (EVar "contentType") (EVar "headers"))) (ELam ((PVar "mediaType")) (ELet false (PVar "size") (EApp (EVar "B.length") (EVar "packed")) (EMatch (EVar "mediaType") (arm (PCon "MediaType" (PLit (LString "application")) (PLit (LString "json"))) () (EApp (EApp (EVar "andThen") (EApp (EVar "checkJsonBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: JSON body is not valid UTF-8"))) (EMatch (EApp (EVar "parse") (EApp (EVar "fromUtf8") (EVar "body"))) (arm (PCon "Err" (PVar "message")) () (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "http: invalid JSON body: ")) (EApp (EVar "display") (EVar "message"))) (ELit (LString ""))))) (arm (PCon "Ok" (PVar "value")) () (EApp (EVar "Ok") (EApp (EApp (EVar "JsonBody") (EVar "mediaType")) (EVar "value")))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "MediaType" (PLit (LString "text")) PWild) () (EApp (EApp (EVar "andThen") (EApp (EVar "checkTextBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (ELet false (PVar "body") (EApp (EVar "toArray") (EVar "packed")) (EIf (EApp (EVar "not") (EApp (EApp (EVar "validUtf8From") (EVar "body")) (ELit (LInt 0)))) (EApp (EVar "Err") (ELit (LString "http: text body is not valid UTF-8"))) (EApp (EVar "Ok") (EApp (EApp (EVar "TextBody") (EVar "mediaType")) (EApp (EVar "fromUtf8") (EVar "body"))))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm PWild () (EApp (EApp (EVar "andThen") (EApp (EVar "checkRawBodyBytes") (EVar "size"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EApp (EApp (EVar "RawBody") (EVar "mediaType")) (EApp (EVar "toArray") (EVar "packed"))))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
 # MARK
-(DUse false (UseGroup ("bytebuilder") ((mem "Builder" false) (mem "emitBytes" false) (mem "buildArray" false) (mem "buildBytes" false) (mem "emitU8" false) (mem "newBuilder" false))))
+(DUse false (UseGroup ("bytebuilder") ((mem "Builder" false) (mem "appendBytes" false) (mem "buildArray" false) (mem "buildBytes" false) (mem "emitU8" false) (mem "newBuilder" false))))
 (DUse false (UseAlias ("bytes") "B"))
-(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "contains" false) (mem "decodeUtf8" false) (mem "elemIndexWithin" false) (mem "encodeUtf8" false) (mem "toArray" false))))
+(DUse false (UseGroup ("bytes") ((mem "Bytes" false) (mem "contains" false) (mem "decodeUtf8" false) (mem "elemIndexWithin" false) (mem "encodeUtf8" false) (mem "fromArrayAssumeByteDomain" false) (mem "toArray" false))))
 (DUse false (UseGroup ("json") ((mem "Json" false) (mem "parse" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseGroup ("string") ((mem "fromUtf8" false) (mem "toUtf8" false))))
@@ -3092,6 +3124,8 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DData Private "HeaderBlock" () ((variant "HeaderBlock" (ConPos (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int") (TyCon "Int")))) ())
 (DData Private "BodyMode" () ((variant "NoBody" (ConPos)) (variant "FixedBody" (ConPos (TyCon "Int"))) (variant "ChunkedBody" (ConPos)) (variant "UntilCloseBody" (ConPos))) ())
 (DData Private "ParsedBody" () ((variant "ParsedBody" (ConPos (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int")))) ())
+(DTypeSig false "emptyBody" (TyCon "Bytes"))
+(DFunDef false "emptyBody" () (EApp (EVar "fromArrayAssumeByteDomain") (EArrayLit)))
 (DData Public "HttpParseFailure" () ((variant "HttpMalformed" (ConPos (TyCon "String"))) (variant "HttpResourceExcess" (ConPos (TyCon "String")))) ())
 (DData Private "FrameError" () ((variant "Incomplete" (ConPos (TyCon "String"))) (variant "Fatal" (ConPos (TyCon "HttpParseFailure")))) ())
 (DTypeSig false "settle" (TyFun (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyVar "a")) (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyVar "a"))))
@@ -3256,7 +3290,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "parseChunkSize" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int"))))))
 (DFunDef false "parseChunkSize" ((PVar "input") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PVar "semi") (EMatch (EApp (EApp (EApp (EApp (EVar "elemIndexWithin") (EVar "start")) (EVar "end")) (ELit (LInt 59))) (EVar "input")) (arm (PCon "None") () (EVar "end")) (arm (PCon "Some" (PVar "pos")) () (EVar "pos")))) (DoExpr (EIf (EBinOp "==" (EVar "semi") (EVar "start")) (EApp (EVar "malformed") (ELit (LString "http: empty chunk size"))) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "parseHexSizeGo") (EVar "input")) (EVar "start")) (EVar "semi")) (ELit (LInt 0)))) (ELam ((PVar "size")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "parseChunkExtensionsGo") (EVar "input")) (EVar "semi")) (EVar "end"))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PLit LUnit) () (EApp (EVar "Ok") (EVar "size"))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))))))))
 (DTypeSig false "parseChunkedChecked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Builder") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ParsedBody")))))))))
-(DFunDef false "parseChunkedChecked" ((PVar "input") (PVar "pos") (PVar "headerBytes") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "dataPos")) (EVar "dataPos")) (EVar "headerBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "dataPos")) (EVar "size"))) (ELam ((PTuple (PVar "chunk") PWild)) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "emitBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "next")) (EVar "headerBytes")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))))))))))))))
+(DFunDef false "parseChunkedChecked" ((PVar "input") (PVar "pos") (PVar "headerBytes") (PVar "out") (PVar "total") (PVar "count")) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "chunkHeadStep") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "pos")) (EVar "pos")) (EVar "total")) (EDictApp "count"))) (ELam ((PVar "head")) (EMatch (EVar "head") (arm (PCon "ChunkEnd" (PVar "dataPos")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseFieldsChecked") (EVar "input")) (EVar "dataPos")) (EVar "dataPos")) (EVar "headerBytes")) (ELit (LInt 0))) (EVar "True")) (EListLit))) (ELam ((PVar "__do_x")) (EMatch (EVar "__do_x") (arm (PCon "HeaderBlock" (PVar "trailers") (PVar "finalPos") PWild) () (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EVar "buildBytes") (EVar "out"))) (EVar "trailers")) (EVar "finalPos")))) (arm PWild () (EApp (EVar "__fallthrough__") (ELit LUnit))))))) (arm (PCon "ChunkBody" (PVar "dataPos") (PVar "size")) () (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "dataPos")) (EVar "size"))) (ELam ((PTuple (PVar "chunk") PWild)) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EApp (EVar "chunkDataEnd") (EVar "input")) (EApp (EVar "B.length") (EVar "input"))) (EVar "dataPos")) (EVar "size"))) (ELam ((PVar "next")) (ELet false (PLit LUnit) (EApp (EApp (EVar "appendBytes") (EVar "chunk")) (EVar "out")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "next")) (EVar "headerBytes")) (EVar "out")) (EBinOp "+" (EVar "total") (EVar "size"))) (EBinOp "+" (EDictApp "count") (ELit (LInt 1))))))))))))))
 (DTypeSig true "parseChunked" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "HttpParseFailure")) (TyTuple (TyCon "Bytes") (TyApp (TyCon "List") (TyCon "Header")) (TyCon "Int"))))))
 (DFunDef false "parseChunked" ((PVar "input") (PVar "pos")) (EApp (EApp (EMethodRef "map") (ELam ((PCon "ParsedBody" (PVar "body") (PVar "trailers") (PVar "next"))) (ETuple (EVar "body") (EVar "trailers") (EVar "next")))) (EApp (EVar "settle") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "pos")) (ELit (LInt 0))) (EApp (EVar "newBuilder") (ELit LUnit))) (ELit (LInt 0))) (ELit (LInt 0))))))
 (DData Private "ChunkHead" () ((variant "ChunkEnd" (ConPos (TyCon "Int"))) (variant "ChunkBody" (ConPos (TyCon "Int") (TyCon "Int")))) ())
@@ -3265,7 +3299,7 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DTypeSig false "chunkDataEnd" (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "Int")))))))
 (DFunDef false "chunkDataEnd" ((PVar "input") (PVar "avail") (PVar "dataPos") (PVar "size")) (EBlock (DoLet false false (PVar "afterChunk") (EBinOp "+" (EVar "dataPos") (EVar "size"))) (DoExpr (EIf (EBinOp ">" (EVar "afterChunk") (EVar "avail")) (EApp (EVar "incomplete") (EBinOp "++" (EBinOp "++" (ELit (LString "http: truncated body at byte ")) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "avail")))) (ELit (LString "")))) (EIf (EBinOp ">" (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))) (EVar "avail")) (EApp (EVar "incomplete") (ELit (LString "http: truncated CRLF after chunk data"))) (EIf (EBinOp "||" (EBinOp "/=" (EApp (EApp (EMethodRef "index") (EVar "input")) (EVar "afterChunk")) (ELit (LInt 13))) (EBinOp "/=" (EApp (EApp (EMethodRef "index") (EVar "input")) (EBinOp "+" (EVar "afterChunk") (ELit (LInt 1)))) (ELit (LInt 10)))) (EApp (EVar "malformed") (ELit (LString "http: missing CRLF after chunk data"))) (EApp (EVar "Ok") (EBinOp "+" (EVar "afterChunk") (ELit (LInt 2))))))))))
 (DTypeSig false "parseBody" (TyFun (TyCon "BodyMode") (TyFun (TyCon "Bytes") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyApp (TyCon "Result") (TyCon "FrameError")) (TyCon "ParsedBody")))))))
-(DFunDef false "parseBody" ((PCon "NoBody") PWild (PVar "pos") PWild) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EMethodRef "empty")) (EListLit)) (EVar "pos"))))
+(DFunDef false "parseBody" ((PCon "NoBody") PWild (PVar "pos") PWild) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EVar "emptyBody")) (EListLit)) (EVar "pos"))))
 (DFunDef false "parseBody" ((PCon "FixedBody" (PVar "size")) (PVar "input") (PVar "pos") PWild) (EApp (EApp (EMethodRef "andThen") (EApp (EApp (EApp (EVar "readSliceAt") (EVar "input")) (EVar "pos")) (EVar "size"))) (ELam ((PTuple (PVar "body") (PVar "finalPos"))) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EVar "body")) (EListLit)) (EVar "finalPos"))))))
 (DFunDef false "parseBody" ((PCon "ChunkedBody") (PVar "input") (PVar "pos") (PVar "headerBytes")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "parseChunkedChecked") (EVar "input")) (EVar "pos")) (EVar "headerBytes")) (EApp (EVar "newBuilder") (ELit LUnit))) (ELit (LInt 0))) (ELit (LInt 0))))
 (DFunDef false "parseBody" ((PCon "UntilCloseBody") (PVar "input") (PVar "pos") PWild) (EApp (EVar "Ok") (EApp (EApp (EApp (EVar "ParsedBody") (EApp (EApp (EApp (EMethodRef "slice") (EVar "input")) (EVar "pos")) (EApp (EVar "B.length") (EVar "input")))) (EListLit)) (EApp (EVar "B.length") (EVar "input")))))
@@ -3320,6 +3354,9 @@ decodeRequestBody (Request _ _ headers _ packed _) = do
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseLine" PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseFields" PWild PWild PWild PWild PWild))) (EVar "True"))
 (DFunDef false "httpScanInHeaders" ((PCon "HttpScan" (PCon "PhaseBody" PWild PWild))) (EVar "False"))
+(DTypeSig true "httpScanBodyRemaining" (TyFun (TyCon "HttpScan") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Int")))))
+(DFunDef false "httpScanBodyRemaining" ((PCon "HttpScan" (PCon "PhaseBody" PWild (PCon "BodyUntil" (PVar "finalPos")))) (PVar "avail")) (EApp (EVar "Some") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EBinOp "-" (EVar "finalPos") (EVar "avail")))))
+(DFunDef false "httpScanBodyRemaining" (PWild PWild) (EVar "None"))
 (DTypeSig false "scanVerdict" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "HttpScan") (TyFun (TyCon "ScanOutcome") (TyTuple (TyCon "HttpFrame") (TyCon "HttpScan")))))))
 (DFunDef false "scanVerdict" (PWild (PVar "start") (PVar "scanned") (PCon "ScanFramed" (PCon "FrameSpan" PWild (PVar "finalPos")))) (ETuple (EApp (EApp (EVar "requestBytesVerdict") (EBinOp "-" (EVar "finalPos") (EVar "start"))) (EApp (EVar "HttpFramedAt") (EVar "finalPos"))) (EVar "scanned")))
 (DFunDef false "scanVerdict" (PWild PWild (PVar "scanned") (PCon "ScanFatal" (PVar "failure"))) (ETuple (EApp (EVar "HttpFrameFailed") (EVar "failure")) (EVar "scanned")))

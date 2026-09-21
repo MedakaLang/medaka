@@ -74,12 +74,14 @@
    corpora, neither of which the interpreter binds. -}
 
 import compiler_cli_test_support.{
-  batchSection, boundedInTree, chompNewlines, stripUnitAutoPrint, sweepUnits
+  batchSection, boundedInTree, chompNewlines, stripUnitAutoPrint,
+  summarizeSweep, sweepUnits
 }
 import fs.{fixtureDirs, fixtureFiles, mkdirAll}
 import io.{runVerb}
 import list.{dropWhile, reverse, somes, sort}
 import path.{basename, dirname, stem}
+import probe_runner.{stderrTail}
 import string.{contains, endsWith, join, lines, split, startsWith, unlines}
 import regex.{escape, mustCompile, isFullMatch}
 import test.{Expectation, fail, pass}
@@ -460,9 +462,12 @@ noEvalGolden = [
 
    `code == 0` with no `E-PANIC` on stderr is the same shape
    `binaryRanClean` asserts of a built binary: a process that printed the
-   right bytes on its way out of a panic has not passed. -}
-processFailure : String -> String -> Int -> String -> Option String
-processFailure oracle unit code err =
+   right bytes on its way out of a panic has not passed. Named distinctly
+   from `probe_runner.processFailure` (not a re-export of it) because this
+   one additionally drains `expectedPanics` above — a row that used to
+   panic and now runs clean fails here rather than passing silently. -}
+processFailurePinned : String -> String -> Int -> String -> Option String
+processFailurePinned oracle unit code err =
   let clean = code == 0 && not (contains "E-PANIC" err)
   let pinned = elem (oracle, unit) expectedPanics
   if clean && pinned then
@@ -471,12 +476,6 @@ processFailure oracle unit code err =
     None
   else
     Some "\{unit}: \{oracle} exited \{intToString code}\{stderrTail err}"
-
-stderrTail : String -> String
-stderrTail "" = ""
-stderrTail err = match lines (chompNewlines err)
-  [] => ""
-  l :: _ => " — \{debug l}"
 
 -- # Grading a row
 
@@ -533,7 +532,7 @@ oneFixture r path =
   match boundedVerb "\{medakaRoot}/\{r.oracle}" (argsFor r path)
     Err e => Some "\{labelOf r path}: could not spawn \{r.oracle}: \{e}"
     Ok (code, out, err) =>
-      match processFailure r.oracle (unitOf r path) code err
+      match processFailurePinned r.oracle (unitOf r path) code err
         Some m => Some m
         None => valueFailure r path (chompNewlines (stripUnitAutoPrint out))
 
@@ -564,7 +563,7 @@ batchedRow r paths =
       let section =
         p => chompNewlines (batchSection "===SELFHOST-FIX=== " p all)
       let values = somes (map (p => valueFailure r p (section p)) paths)
-      match processFailure r.oracle r.corpus code err
+      match processFailurePinned r.oracle r.corpus code err
         Some m => m :: values
         None => values
 
@@ -583,22 +582,16 @@ gradeRow _ r = match entriesOf r
     let values = if r.batched then batchedRow r paths else perFixture r paths
     Outcome { gate = r.gate, graded = found, failures = counted ++ values }
 
-rowFailure : Outcome -> Option String
-rowFailure o = match o.failures
+gateRowFailure : Outcome -> Option String
+gateRowFailure o = match o.failures
   [] => None
   fs =>
     let body = unlines (map (f => "    \{f}") fs)
     Some
       "  \{o.gate} (\{intToString (length fs)} findings over \{intToString o.graded} fixtures):\n\{chompNewlines body}"
 
-summarize : Int -> List String -> Expectation
-summarize _ [] = pass
-summarize graded failures =
-  fail
-    "\{intToString (length failures)} of \{intToString graded} gate rows failed:\n\{unlines failures}"
-
 test "every eval and Core IR oracle reproduces its corpus's goldens" =
-  sweepUnits rows gradeRow rowFailure summarize
+  sweepUnits rows gradeRow gateRowFailure summarizeSweep
 
 -- # The engine wall on a reached FFI extern
 

@@ -428,11 +428,12 @@ by a server that starts and still serves every undamaged blob.
 ## Rate limiting and `--trusted-proxy`
 
 `pds/shell/server.mdk` refuses a request with `429 Too Many Requests` once
-its caller's identity exceeds one of five independent per-window allowances
+its caller's identity exceeds one of six independent per-window allowances
 (`pds/lib/resource_limits.mdk`: `maxConnectionsPerWindow`,
 `maxRequestsPerWindow`, `maxWritesPerWindow`, `maxCreateSessionPerWindow`,
-`maxRepoExportsPerWindow`, all placeholders pending real traffic data,
-refilled every `rateLimitWindowSeconds`). `maxRepoExportsPerWindow` covers
+`maxRepoExportsPerWindow`, `maxProxiedCallsPerWindow`, all placeholders
+pending real traffic data, refilled every `rateLimitWindowSeconds`).
+`maxRepoExportsPerWindow` covers
 `com.atproto.sync.getRepo` alone: its response is a whole-repository CAR
 bounded only by `maxCarBytes`, so the request count that bounds every other
 read says nothing about the bytes this one emits. The refusal carries `error: "RateLimitExceeded"`
@@ -443,6 +444,22 @@ figure across classes. This is layered UNDER Caddy (see
 what this process does"), which owns the blunt, identity-blind ceiling in
 front of it; this process is the only layer that knows which caller is
 asking and what kind of request it made.
+
+Two further ceilings are not per-caller allowances and refuse differently.
+`maxRateLimitIdentitiesPerWindow` (`pds/lib/resource_limits.mdk`) caps how
+many DISTINCT identities the shared per-window table tracks at once; an
+identity arriving once that cap is already full is refused with a
+`RefusedCapacity` verdict (`pds/lib/ratelimit.mdk`) rather than `Refused` —
+it still gets `429`/`error: "RateLimitExceeded"`, but the message says "too
+many distinct client identities tracked in the current window" and the
+headers report the cardinality cap and zero remaining, since this identity
+has no allowance usage of its own to report. `maxInFlightRequestBytes`
+(`pds/lib/resource_limits.mdk`) bounds the total bytes reserved across every
+connection's request body at once, independent of any one caller's identity;
+past it, a new body is refused `503 Service Unavailable` with
+`error: "RequestBufferLimitExceeded"` — a different status and error name
+from the identity-scoped `429`s above, since what ran out is this server's
+own inbound buffer rather than one caller's budget.
 
 **Pass `--trusted-proxy` only when this process's peer genuinely is your
 reverse proxy** — Caddy, in the deployment this design targets — configured

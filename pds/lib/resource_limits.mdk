@@ -10,7 +10,9 @@
    `max*` and `check*` exports. The OUTBOUND direction — a response received
    from an off-box appview — is untrusted input by the same argument. Its
    decoded ceilings are compatibility aliases of `stdlib/http.mdk`'s shared
-   codec; only the PDS wire-accumulation ceiling below remains local policy. -}
+   codec; only the two PDS wire-accumulation ceilings below remain local
+   policy — one per outbound call, one across every inbound connection at
+   once, neither of which a codec grading one message can express. -}
 
 import http as H
 
@@ -151,6 +153,13 @@ checkDagCborDepth depth =
 export
 rateLimitWindowSeconds : Int
 rateLimitWindowSeconds = 60
+
+-- Row-count ceiling on each `pds/lib/ratelimit.mdk` window table: bounds how
+-- many distinct identities one window can track, not any class's per-identity
+-- allowance.
+export
+maxRateLimitIdentitiesPerWindow : Int
+maxRateLimitIdentitiesPerWindow = 5000
 
 export
 maxConnectionsPerWindow : Int
@@ -355,3 +364,36 @@ maxHttpClientWireBytes =
     + maxHttpClientHeaderBytes
     + maxHttpClientBodyBytes
     + maxHttpClientChunks * 16
+
+{- | How many bytes of inbound request every connection on this server may hold
+   buffered at once, summed across all of them (#2951).
+
+   The inbound counterpart of `maxHttpClientWireBytes` above, and here for the
+   same reason: `stdlib/http.mdk`'s `maxHttpRequestBytes` grades ONE arriving
+   request at six mebibytes, and a ceiling on their sum is not a question any
+   codec grading one message can be asked. Neither is it one the socket layer's
+   own ceilings answer — `maxConcurrentConnections` bounds the connections at
+   256 and `maxHttpRequestBytes` bounds each one's buffer, but nothing bounded
+   their product, which is about 1.5 gibibytes of live buffer against
+   `pds/pds.service`'s `MemoryMax=512M`. What that overrun costs is not the
+   caller's own request: one cgroup covers the whole unit, so the kill takes
+   every account's connections and every open subscription with it.
+
+   Thirty-two mebibytes is twice what all 256 connections holding one
+   `readChunkBytes` read each would take (16 MiB), so ordinary request traffic
+   does not reach it, and it still admits five concurrent requests at the full
+   per-request ceiling. Measured under a 7-connection saturation probe, its
+   worst case is 88.6 MB VmRSS — comfortably under `MemoryMax=512M` (17.3%).
+
+   It bounds what a connection HOLDS, which counts a reservation as well as a
+   live byte: the end position of a `Content-Length` body is fixed the instant
+   its header section terminates, and a connection that takes the whole of it
+   up front is one that never comes back to the budget for the rest of that
+   body — which is what keeps a saturated budget a wait rather than a set of
+   connections each holding part of a body and waiting for the other parts. A
+   chunked body declares nothing, so it reserves `maxHttpRequestBytes`, the
+   most it could reach. `pds/shell/server.mdk`'s `readBufferTarget` is where
+   that choice is made. -}
+export
+maxInFlightRequestBytes : Int
+maxInFlightRequestBytes = 33554432

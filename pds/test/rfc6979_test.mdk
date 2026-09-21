@@ -2,7 +2,7 @@
    answers stay in the registered vector gate; these assertions exercise the
    deterministic and injected internal routes without inline answer keys. -}
 
-import test.{expectTrue}
+import test.{expectEach, expectEqual, expectNotEqual}
 import lib.hmac_sha256.{hmacSha256FixedKey}
 import lib.scalar.{Sc, scFromBytes}
 import lib.secp256k1.{
@@ -30,38 +30,42 @@ test "fixed-key HMAC is deterministic, 32 bytes, and does not mutate inputs" =
   let messageBefore = arrayCopy message
   let first = hmacSha256FixedKey key message
   let second = hmacSha256FixedKey key message
-  expectTrue
-    (arrayLength first == 32
-      && first == second
-      && key == keyBefore
-      && message == messageBefore)
+  expectEach [
+    ("arrayLength first == 32", expectEqual 32 (arrayLength first)),
+    ("first == second", expectEqual second first),
+    ("key unchanged", expectEqual keyBefore key),
+    ("message unchanged", expectEqual messageBefore message),
+  ]
 
 test "RFC 6979 normal schedule deterministically produces two candidates" =
   let (a0, a1) = rfc6979CandidateBytesForTest secretOne zero32
   let (b0, b1) = rfc6979CandidateBytesForTest secretOne zero32
-  expectTrue
-    (arrayLength a0 == 32
-      && arrayLength a1 == 32
-      && a0 == b0
-      && a1 == b1
-      && a0 /= a1)
+  expectEach [
+    ("arrayLength a0 == 32", expectEqual 32 (arrayLength a0)),
+    ("arrayLength a1 == 32", expectEqual 32 (arrayLength a1)),
+    ("a0 == b0 (deterministic)", expectEqual b0 a0),
+    ("a1 == b1 (deterministic)", expectEqual b1 a1),
+    ("a0 /= a1 (the two candidates differ)", expectNotEqual a1 a0),
+  ]
 
 test "injected seam selects candidate 1 after the normal schedule" =
   let (normal0, normal1, validBit, selected) =
     rfc6979InjectedNonceProbeForTest secretOne zero32 zero32 0 oneBytes 1
-  expectTrue
-    (arrayLength normal0 == 32
-      && arrayLength normal1 == 32
-      && normal0 /= normal1
-      && validBit == 1
-      && selected == oneBytes)
+  expectEach [
+    ("arrayLength normal0 == 32", expectEqual 32 (arrayLength normal0)),
+    ("arrayLength normal1 == 32", expectEqual 32 (arrayLength normal1)),
+    ("normal0 /= normal1", expectNotEqual normal1 normal0),
+    ("validBit == 1", expectEqual 1 validBit),
+    ("selected == oneBytes", expectEqual oneBytes selected),
+  ]
 
 test "injected seam exposes two-candidate exhaustion after the normal schedule" =
   let (normal0, normal1, validBit, selected) =
     rfc6979InjectedNonceProbeForTest secretOne zero32 zero32 0 oneBytes 0
-  expectTrue
-    (arrayLength normal0 == 32
-      && arrayLength normal1 == 32
-      && normal0 /= normal1
-      && validBit == 0
-      && selected == zero32)
+  expectEach [
+    ("arrayLength normal0 == 32", expectEqual 32 (arrayLength normal0)),
+    ("arrayLength normal1 == 32", expectEqual 32 (arrayLength normal1)),
+    ("normal0 /= normal1", expectNotEqual normal1 normal0),
+    ("validBit == 0", expectEqual 0 validBit),
+    ("selected == zero32", expectEqual zero32 selected),
+  ]

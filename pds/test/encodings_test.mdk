@@ -12,7 +12,7 @@
 --   published — see the comment there) and the empty-input base58 edge
 --   (published nowhere in-family).
 
-import test.{expectEqual, expectTrue}
+import test.{expectEqual, expectErr, expectOk, expectTrue}
 import string.{repeat}
 import lib.base58.{base58btcEncode, base58btcDecode, base58btcMaxInputChars}
 import lib.multiformats.{
@@ -52,20 +52,16 @@ test "base58 round-trip: 3 leading zero bytes" =
 -- from base58btcAlphabet (draft-msporny-base58-02 §2) — verify structurally
 -- against decode rejection, not by asserting the character set from prose.
 
-isErr : Result e a -> Bool
-isErr (Err _) = True
-isErr (Ok _) = False
+test "base58 decode rejects '0'" = expectErr (base58btcDecode "0")
 
-test "base58 decode rejects '0'" = expectTrue (isErr (base58btcDecode "0"))
+test "base58 decode rejects 'O'" = expectErr (base58btcDecode "O")
 
-test "base58 decode rejects 'O'" = expectTrue (isErr (base58btcDecode "O"))
+test "base58 decode rejects 'I'" = expectErr (base58btcDecode "I")
 
-test "base58 decode rejects 'I'" = expectTrue (isErr (base58btcDecode "I"))
-
-test "base58 decode rejects 'l'" = expectTrue (isErr (base58btcDecode "l"))
+test "base58 decode rejects 'l'" = expectErr (base58btcDecode "l")
 
 test "base58 decode rejects embedded space" =
-  expectTrue (isErr (base58btcDecode "abc def"))
+  expectErr (base58btcDecode "abc def")
 
 -- ── the empty-input edge — published nowhere in-family (§3 deviation 3) ────
 -- Structural/definitional: an empty byte string is the multiplicative
@@ -108,15 +104,14 @@ test "uvarint round-trip: 16384" =
 -- ── uvarint truncated / over-long rejection ────────────────────────────────
 
 test "uvarint rejects truncated input (continuation bit set, no more bytes)" =
-  expectTrue (isErr (uvarintDecodeAll (arrayFromList [0x80])))
+  expectErr (uvarintDecodeAll (arrayFromList [0x80]))
 
 test "uvarint rejects over-long input (>9 bytes, continuation bit set throughout)" =
-  expectTrue
-    (isErr
-      (uvarintDecodeAll
-        (arrayFromList [
-          0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01
-        ])))
+  expectErr
+    (uvarintDecodeAll
+      (arrayFromList [
+        0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01
+      ]))
 
 -- ── multibase base58btc ─────────────────────────────────────────────────────
 
@@ -154,10 +149,10 @@ test "multicodecPrefix p256-pub == [0x80, 0x24]" =
 --    and live in pds/test/guard_probes_main.mdk + trust_boundary_guards.sh.
 
 test "base58btcDecode rejects input over the DoS ceiling" =
-  expectTrue (isErr (base58btcDecode (repeat (base58btcMaxInputChars + 1) "1")))
+  expectErr (base58btcDecode (repeat (base58btcMaxInputChars + 1) "1"))
 
 test "base58btcDecode accepts input AT the DoS ceiling (guard is not off by one)" =
-  expectTrue (not (isErr (base58btcDecode (repeat base58btcMaxInputChars "1"))))
+  expectOk (base58btcDecode (repeat base58btcMaxInputChars "1"))
 
 -- Not an answer key: nothing about the DECODED bytes is asserted, only that
 -- a realistically-sized legitimate base58btc string still decodes. The
@@ -165,11 +160,9 @@ test "base58btcDecode accepts input AT the DoS ceiling (guard is not off by one)
 -- characters, draft-msporny-base58-02 §5), used here purely as a length
 -- witness that the ceiling has ample headroom over real protocol values.
 test "base58btcDecode still accepts a realistic 60-character input" =
-  expectTrue
-    (not
-      (isErr
-        (base58btcDecode
-          "USm3fpXnKG5EUBx2ndxBDMPVciP5hGey2Jh4NDv6gmeo1LkMeiKrLJUUBk6Z")))
+  expectOk
+    (base58btcDecode
+      "USm3fpXnKG5EUBx2ndxBDMPVciP5hGey2Jh4NDv6gmeo1LkMeiKrLJUUBk6Z")
 
 -- Discriminating, not merely failing: before the explicit range arm this
 -- input was ALSO rejected, but as "non-minimal encoding" — a wrong

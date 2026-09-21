@@ -53,9 +53,13 @@ defaulting passes. This preserves the correspondence between the
 published scheme and its registered dictionary slots; inferred result-only
 numeric variables still default before generalization. The five local binding
 boundaries default only normalized unbound roots owned by the just-exited level;
-outer and deeper roots survive that boundary. Implementation-body defaulting and
-the SCC fallback retain their existing policies. Expected-result propagation,
-whole-graph defaulting, and finalized scheme queries remain tracked by
+outer and deeper roots survive that boundary. Generic-default and explicit-impl
+method bodies likewise own balanced inference levels through rigidity, then exit
+before one shared finalizer defaults body-local numeric roots and registers
+non-numeric ambiguity. Declared method dictionaries, impl-head roots and member
+types remain determination channels; deeper generalized locals are not captured.
+The SCC fallback retains its unrestricted defaulting policy. Expected-result
+propagation, whole-graph defaulting, and finalized scheme queries remain tracked by
 [#2646](https://github.com/MedakaLang/medaka/issues/2646). Measurements are in the
 [performance log](PERF-RESULTS.md#scoped-typechecker-contracts-and-cache-bypass-2026-09-11).
 

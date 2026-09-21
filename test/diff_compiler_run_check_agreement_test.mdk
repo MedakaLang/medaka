@@ -143,8 +143,8 @@ gradeOne scratch path =
           note = "",
         }
 
-rowFailure : Row -> Option String
-rowFailure r =
+agreementRowFailure : Row -> Option String
+agreementRowFailure r =
   if r.ok then
     None
   else
@@ -154,9 +154,9 @@ rowFailure r =
 -- The whole verdict table for the failing fixtures, since the vehicle
 -- swallows anything a test body prints: a red run has to name every
 -- disagreeing fixture in one message or lose the rest.
-summarize : String -> Int -> List String -> Expectation
-summarize _ _ [] = pass
-summarize what graded failures =
+summarizeAgreement : String -> Int -> List String -> Expectation
+summarizeAgreement _ _ [] = pass
+summarizeAgreement what graded failures =
   fail
     "\{intToString (length failures)} of \{intToString graded} fixtures \{what}:\n\{unlines failures}"
 
@@ -165,8 +165,8 @@ sweep entries =
   sweepUnits
     entries
     gradeOne
-    rowFailure
-    (summarize "disagree with their pinned verdict or value")
+    agreementRowFailure
+    (summarizeAgreement "disagree with their pinned verdict or value")
 
 {- | The corpus's fixtures: its top-level `.mdk` files. `fixtureFiles`
    carries the anti-vacuity floor, so a corpus that reads cleanly but holds
@@ -194,7 +194,7 @@ pinnedVerdict path = match readFile "\{corpus}/\{stem path}.expected"
 test "every fixture pins exactly one of ACCEPT or REJECT" = match mdkFixtures
   Err e => fail "\{corpus}: \{e}"
   Ok entries =>
-    summarize
+    summarizeAgreement
       "do not pin a verdict"
       (length entries)
       (somes (map pinnedVerdict entries))
@@ -205,7 +205,7 @@ test "every fixture pins exactly one of ACCEPT or REJECT" = match mdkFixtures
    anti-vacuity floor only catches one that emptied). Growing the corpus is
    expected: raise this number in the same commit that adds the fixture. -}
 declaredFixtureCount : Int
-declaredFixtureCount = 157
+declaredFixtureCount = 163
 
 test "check, run and build agree with every fixture's pinned verdict and value" =
   match mdkFixtures

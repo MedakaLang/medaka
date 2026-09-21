@@ -53,7 +53,7 @@
 import fs.{mkdirAll}
 import hex.{decode, encode}
 import json.{Json(..), jObject}
-import string.{take, toUtf8}
+import string.{repeat, take, toUtf8}
 import lib.blob.{admitBlob, blobCid}
 import lib.blockstore.{blockStoreFromBlocks}
 import lib.car.{carDecode}
@@ -589,6 +589,77 @@ runTransition dir =
     Err message => panic "store_persistence: transition failed: \{message}"
     Ok () => println "TRANSITION: PASS"
 
+-- ── one upload's share of the blob area (#2692) ─────────────────────────────
+
+{- | How many blobs the churn routes put in the account. The seed route
+   persists the first `churnCount - 1` one upload at a time, and the add
+   route persists the last one alone, so the gate can stat the blob area in
+   between and see what that ONE upload cost. -}
+churnCount : Int
+churnCount = 100
+
+-- A blob big enough that rewriting the account would dwarf rewriting one
+-- blob, and distinct per index so that every row is a distinct CID.
+churnBytes : Int -> Array Int
+churnBytes index =
+  toUtf8 "\{repeat 35 "store-persistence-churn-blob-"}\{intToString index}"
+
+churnRow : Int -> (Cid, String, Array Int)
+churnRow index =
+  let bytes = churnBytes index
+  (blobCid bytes, "application/octet-stream", bytes)
+
+churnRows : Int -> Int -> List (Cid, String, Array Int)
+churnRows index limit =
+  if index > limit then [] else churnRow index :: churnRows (index + 1) limit
+
+-- Uploads persisted the way a server persists them: one transition per
+-- upload, each publishing the store the previous one left.
+churnSeed : String ->
+  Int ->
+  Int ->
+  Store ->
+  <FileRead "_", FileWrite "_"> Result String Store
+churnSeed dir index limit store =
+  if index > limit then
+    Ok store
+  else
+    let next = putBlobs [churnRow index] store
+    match persistTransition dir accountDid eventFixtureTime store next
+      Err message => Err message
+      Ok () => churnSeed dir (index + 1) limit next
+
+runBlobChurnSeed : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobChurnSeed dir =
+  match churnSeed dir 1 (churnCount - 1) (storeFromRepo olderRepo)
+    Err message => panic "store_persistence: churn seed failed: \{message}"
+    Ok _ =>
+      let () = println "BLOB-CHURN-SEED count \{intToString (churnCount - 1)}"
+      println "BLOB-CHURN-SEED: PASS"
+
+reportChurnAdd : (Cid, String, Array Int) -> <IO> Unit
+reportChurnAdd (cid, mimeType, bytes) =
+  let () = println "BLOB-CHURN-ADD cid \{cidToString cid}"
+  let () = println "BLOB-CHURN-ADD size \{intToString (arrayLength bytes)}"
+  let () = println "BLOB-CHURN-ADD mime \{mimeType}"
+  println "BLOB-CHURN-ADD: PASS"
+
+{- | The last upload alone, against the store the seed route left on disk.
+
+   The earlier uploads are replayed into memory rather than read back, so the
+   `before` this transition is graded against is the very store the seed route
+   published — a store rebuilt by reading the blob area would hold the same
+   blobs, but reading it would also be the whole-account walk this route is
+   here to show is gone. -}
+runBlobChurnAdd : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobChurnAdd dir =
+  let before = putBlobs (churnRows 1 (churnCount - 1)) (storeFromRepo olderRepo)
+  let row = churnRow churnCount
+  let after = putBlobs [row] before
+  match persistTransition dir accountDid eventFixtureTime before after
+    Err message => panic "store_persistence: churn add failed: \{message}"
+    Ok () => reportChurnAdd row
+
 -- ── the crash-residue sweeps (#2572 part 2, #3052) ──────────────────────────
 
 presentLabel : Bool -> String
@@ -1039,6 +1110,8 @@ main = match args ()
     runEventRecover dir (repo _ => Some (cidToString (repoRootCid repo)))
   ["event-recover-unanchored", dir] => runEventRecover dir (_ _ => None)
   ["transition", dir] => runTransition dir
+  ["blob-churn-seed", dir] => runBlobChurnSeed dir
+  ["blob-churn-add", dir] => runBlobChurnAdd dir
   ["sweep-staging", dir] => runSweepStaging dir
   ["stray-entries", dir] => runStrayEntries dir
   ["genesis-init", dir] => runGenesisInit dir
@@ -1046,4 +1119,4 @@ main = match args ()
   ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|blob-churn-seed|blob-churn-add|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"

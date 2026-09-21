@@ -1,0 +1,15 @@
+-- The argument does not determine `b`; the method result and impl head share it.
+-- Preserve that root for the construction goal, then require the impl to declare
+-- the `Num b` evidence its body consumes.
+data Acc b = MkAcc b deriving (Display)
+
+interface Mk a where
+  mk : Unit -> a
+
+impl Mk (Acc b) where
+  mk _ = MkAcc 0
+
+value : Acc Float
+value = mk ()
+
+main = println value

@@ -34,7 +34,7 @@ import http.{
 import json.{Json(..), get, parse}
 import list.{sort}
 import string.{fromUtf8, toUtf8}
-import test.{expectEqual, expectTrue}
+import test.{expectEach, expectEqual, expectTrue}
 import lib.handlers.{pdsRegistry, pdsServer, serverLinksEmpty}
 import lib.jwt.{mintToken}
 import lib.server_core.{
@@ -466,8 +466,10 @@ test "a gated route on a store with no session secret is refused" =
       (postRequest (bearer goodToken) gatedNsid)
   expectEqual (refusal bytes) "401 InvalidToken"
 
-test "a public route answers with no credential at all" =
-  expectTrue (openStatusWith "" == "200" && openWith "" == "anonymous")
+test "a public route answers with no credential at all" = expectEach [
+  ("openStatusWith \"\" == \"200\"", expectEqual "200" (openStatusWith "")),
+  ("openWith \"\" == \"anonymous\"", expectEqual "anonymous" (openWith "")),
+]
 
 test "a public route still answers when a good token IS presented" =
   expectEqual (openWith (bearer goodToken)) accountDidText

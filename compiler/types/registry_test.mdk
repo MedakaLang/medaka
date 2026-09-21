@@ -32,7 +32,7 @@
 -- exists to avoid.
 -- lint-disable-file rule-duplicate-body
 
-import test.{expectEqual}
+import test.{expectEqual, expectFalse, expectTrue}
 import types.registry.{
   HeadKey(..),
   MultiRegistry,
@@ -249,9 +249,10 @@ ctorFoo = regKeyOfTab (tabKeyOf NsCtor (OriginModule "m") "Foo")
 bothFoos : Registry Int
 bothFoos = regInsertK ctorFoo 2 (regInsertK typeFoo 1 regEmpty)
 
-test "namespace separates two identically spelled registry keys" = expectEqual
-  (2, Some 1, Some 2)
-  (regSize bothFoos, regLookupK typeFoo bothFoos, regLookupK ctorFoo bothFoos)
+test "namespace separates two identically spelled registry keys" =
+  expectEqual
+    (2, Some 1, Some 2)
+    (regSize bothFoos, regLookupK typeFoo bothFoos, regLookupK ctorFoo bothFoos)
 
 -- ── F1: neither non-identity can become an identity ────────────────────────
 -- `identOriginOf` is total and REFUSES the empty module id, so no `Ident`
@@ -259,38 +260,40 @@ test "namespace separates two identically spelled registry keys" = expectEqual
 -- its own inhabitant, distinct from a module literally named `builtin`.
 -- (The `OriginUnresolved` arm of this property is still a doctest in
 -- `registry.mdk` — see the module header.)
-test "identOriginOf refuses an empty module id and keeps the origins apart" = expectEqual
-  [True, True, True, False, False]
-  [
-    identOriginOf (OriginModule "") == None,
-    identOriginOf OriginBuiltin == Some identOriginBuiltin,
-    identOriginOf (OriginModule "m") == identOriginOf (OriginModule "m"),
-    identOriginOf (OriginModule "m") == identOriginOf (OriginModule "n"),
-    identOriginOf OriginBuiltin == identOriginOf (OriginModule "builtin"),
-  ]
+test "identOriginOf refuses an empty module id and keeps the origins apart" =
+  expectEqual
+    [True, True, True, False, False]
+    [
+      identOriginOf (OriginModule "") == None,
+      identOriginOf OriginBuiltin == Some identOriginBuiltin,
+      identOriginOf (OriginModule "m") == identOriginOf (OriginModule "m"),
+      identOriginOf (OriginModule "m") == identOriginOf (OriginModule "n"),
+      identOriginOf OriginBuiltin == identOriginOf (OriginModule "builtin"),
+    ]
 
-test "mkIdent refuses the empty module id and mints the two good origins" = expectEqual
-  [True, True, True]
-  [
-    mkIdent NsType (OriginModule "") "Foo" == None,
-    mkIdent NsType (OriginModule "m") "Foo" == Some identTypeFooM,
-    mkIdent NsType OriginBuiltin "Foo" == Some identTypeFooBuiltin,
-  ]
+test "mkIdent refuses the empty module id and mints the two good origins" =
+  expectEqual
+    [True, True, True]
+    [
+      mkIdent NsType (OriginModule "") "Foo" == None,
+      mkIdent NsType (OriginModule "m") "Foo" == Some identTypeFooM,
+      mkIdent NsType OriginBuiltin "Foo" == Some identTypeFooBuiltin,
+    ]
 
 -- The fixture-fallback guard: every module-origin fixture is a `Some`, so
 -- none of them silently became the builtin fallback.
-test "every module-origin fixture mint is Some, not the fallback" = expectEqual
-  [True, True]
-  [
-    isSome (mkIdent NsType (OriginModule "m") "Foo"),
-    isSome (mkIdent NsType (OriginModule "ab") "c"),
-  ]
+test "every module-origin fixture mint is Some, not the fallback" =
+  expectEqual
+    [True, True]
+    [
+      isSome (mkIdent NsType (OriginModule "m") "Foo"),
+      isSome (mkIdent NsType (OriginModule "ab") "c"),
+    ]
 
 -- ── F2: the field-vs-method case `Ns`'s own doc-comment names, asserted on
 -- the renderer rather than through a registry.
 test "identKey separates the field and method namespaces" =
-  expectEqual
-    False
+  expectFalse
     (identKey (identSizeIn NsField) == identKey (identSizeIn NsMethod))
 
 -- The origin TAG is redundant by construction and this is the only thing that
@@ -298,47 +301,51 @@ test "identKey separates the field and method namespaces" =
 -- separates builtin from every module. Pinning the tag needs a BYTE-SHAPE
 -- assertion, because no property-level one can see it. `identKey` is four
 -- netstrings: ns, origin tag, origin module, name.
-test "identKey renders exactly four netstrings, tag included" = expectEqual
-  ["4:type7:builtin0:3:Foo", "4:type6:module1:m3:Foo"]
-  [identKey identTypeFooBuiltin, identKey identTypeFooM]
+test "identKey renders exactly four netstrings, tag included" =
+  expectEqual
+    ["4:type7:builtin0:3:Foo", "4:type6:module1:m3:Foo"]
+    [identKey identTypeFooBuiltin, identKey identTypeFooM]
 
 -- The count prefix: the only thing that can distinguish the prefix being
 -- there at all.
-test "regKeyRender leads with the identity COUNT" = expectEqual
-  [True, True, True]
-  [
-    startsWith "1:1" (regKeyRender (regKeyOf identTypeFooM)),
-    startsWith "1:2" (regKeyRender (regKeyN [identTypeFooM, identTypeBarM])),
-    startsWith "1:0" (regKeyRender (regKeyN [])),
-  ]
+test "regKeyRender leads with the identity COUNT" =
+  expectEqual
+    [True, True, True]
+    [
+      startsWith "1:1" (regKeyRender (regKeyOf identTypeFooM)),
+      startsWith "1:2" (regKeyRender (regKeyN [identTypeFooM, identTypeBarM])),
+      startsWith "1:0" (regKeyRender (regKeyN [])),
+    ]
 
 -- Adversarial boundary shift: `identKey` itself must differ, which is the
 -- property that keeps a shifted pair on two registry rows.
 test "identKey does not collide a module/name boundary shift" =
-  expectEqual False (identKey identShiftA == identKey identShiftB)
+  expectFalse (identKey identShiftA == identKey identShiftB)
 
 -- ── F3: #607 — two vectors differing only in WHICH position is absent ──────
 -- Both keys carry the SAME identities and differ only in which argument
 -- position the present head came from; under the discarded `Ident × [Ident]`
 -- row they would have been one key and one ambiguity diagnostic would have
 -- been dropped.
-test "an ordinal position separates two vectors with equal identities" = expectEqual
-  [False, True]
-  [
-    regKeyRender keyIxIntUndet == regKeyRender keyIxUndetInt,
-    regKeyTabs keyIxIntUndet == regKeyTabs keyIxUndetInt,
-  ]
+test "an ordinal position separates two vectors with equal identities" =
+  expectEqual
+    [False, True]
+    [
+      regKeyRender keyIxIntUndet == regKeyRender keyIxUndetInt,
+      regKeyTabs keyIxIntUndet == regKeyTabs keyIxUndetInt,
+    ]
 
 -- ── F3b: the same property THROUGH `dispKeyRender`'s join ──────────────────
 -- `regKeyRender`'s output is netstring-WRAPPED inside `dispKeyRender`, and
 -- that is what stops a raw join from reading a rigid position as an ordinal
 -- and re-conflating exactly what F3 keeps apart.
-test "dispKeyRender's join preserves the #607 separation" = expectEqual
-  [False, True]
-  [
-    dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxUndetInt [],
-    dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxIntUndet [],
-  ]
+test "dispKeyRender's join preserves the #607 separation" =
+  expectEqual
+    [False, True]
+    [
+      dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxUndetInt [],
+      dispKeyRender keyIxIntUndet [] == dispKeyRender keyIxIntUndet [],
+    ]
 
 -- ── F3c: a RIGID position is none of the other two facts ───────────────────
 -- Same vector, same position, three different facts at it. The conflations a
@@ -347,212 +354,257 @@ test "dispKeyRender's join preserves the #607 separation" = expectEqual
 -- head whose name were empty. The declaration arm is asserted on BOTH
 -- `TabKey` halves — `TkIdent` alone would leave the flat path, where every
 -- user declaration currently lands, untested.
-test "a rigid position is neither an absent one nor a declaration" = expectEqual
-  [False, False, False, False]
-  [
-    dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [],
-    dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")],
-    dispKeyRender keyIxBareAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")],
-    dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxBareAOnly [],
-  ]
+test "a rigid position is neither an absent one nor a declaration" =
+  expectEqual
+    [False, False, False, False]
+    [
+      dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [],
+      dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")],
+      dispKeyRender keyIxBareAOnly [] == dispKeyRender keyIxNoDecl [(0, "a")],
+      dispKeyRender keyIxDeclAOnly [] == dispKeyRender keyIxBareAOnly [],
+    ]
 
-test "a rigid's POSITION and NAME both discriminate" = expectEqual
-  [False, False, False]
-  [
-    dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(1, "a")],
-    dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(0, "b")],
-    dispKeyRender keyIxNoDecl [(0, "a"), (1, "b")] == dispKeyRender keyIxNoDecl [(0, "b"), (1, "a")],
-  ]
+test "a rigid's POSITION and NAME both discriminate" =
+  expectEqual
+    [False, False, False]
+    [
+      dispKeyRender keyIxNoDecl [(0, "a")]
+        == dispKeyRender keyIxNoDecl [(1, "a")],
+      dispKeyRender keyIxNoDecl [(0, "a")]
+        == dispKeyRender keyIxNoDecl [(0, "b")],
+      dispKeyRender keyIxNoDecl [(0, "a"), (1, "b")]
+        == dispKeyRender keyIxNoDecl [(0, "b"), (1, "a")],
+    ]
 
 -- ...and two occurrences of the SAME rigid name at the SAME position DO
 -- compare equal. That is not an oversight: it is what the bare-name key did,
 -- and the widening is answer-preserving by construction.
 test "the same rigid name at the same position compares equal" =
-  expectEqual
-    True
-    (dispKeyRender keyIxNoDecl [(0, "a")] == dispKeyRender keyIxNoDecl [(0, "a")])
+  expectTrue
+    (dispKeyRender keyIxNoDecl [(0, "a")]
+      == dispKeyRender keyIxNoDecl [(0, "a")])
 
 -- ── F3d: `headBucketKey`'s three-way classification ────────────────────────
 -- A rigid head yields NO key at all — the §8 I6.1 refusal. An ABSENT head
 -- does yield one (the empty identity block), and it can never equal a
 -- declaration's, because every declaration key carries at least one `TabKey`.
-test "headBucketKey refuses a rigid and separates absent from declared" = expectEqual
-  [False, True, False, False, True]
-  [
-    isSome (headBucketKey headRigidA),
-    isSome (headBucketKey None),
-    map regKeyRender (headBucketKey None) == map regKeyRender (headBucketKey headDeclFoo),
-    map regKeyRender (headBucketKey headDeclFoo) == map regKeyRender (headBucketKey headBareFoo),
-    map regKeyRender (headBucketKey headDeclFoo) == map regKeyRender (headBucketKey headDeclFoo),
-  ]
+test "headBucketKey refuses a rigid and separates absent from declared" =
+  expectEqual
+    [False, True, False, False, True]
+    [
+      isSome (headBucketKey headRigidA),
+      isSome (headBucketKey None),
+      map regKeyRender (headBucketKey None)
+        == map regKeyRender (headBucketKey headDeclFoo),
+      map regKeyRender (headBucketKey headDeclFoo)
+        == map regKeyRender (headBucketKey headBareFoo),
+      map regKeyRender (headBucketKey headDeclFoo)
+        == map regKeyRender (headBucketKey headDeclFoo),
+    ]
 
 -- A one-ident key and the same ident at slot 0 are DIFFERENT keys — the
 -- ordinal block is not silently equivalent to its absence.
 test "an ordinal block is not equivalent to its absence" =
-  expectEqual
-    False
-    (regKeyRender (regKeyOf identIfaceFooM) == regKeyRender (regKeyAt identIfaceFooM 0))
+  expectFalse
+    (regKeyRender (regKeyOf identIfaceFooM)
+      == regKeyRender (regKeyAt identIfaceFooM 0))
 
 -- The grouping is what keeps identity tuples apart, not a separator: `[A, B]`
 -- and `[B, A]` are different keys, and no concatenation of two 1-tuples
 -- equals a 2-tuple (the leading ident-count differs).
-test "identity tuples are ordered and their rendering concatenates" = expectEqual
-  [False, True, True]
-  [
-    regKeyRender (regKeyN [identTypeFooM, identTypeBarM]) == regKeyRender (regKeyN [identTypeBarM, identTypeFooM]),
-    identKeys [identTypeFooM, identTypeBarM] == identKey identTypeFooM ++ identKey identTypeBarM,
-    identKeys [identTypeFooM] == identKey identTypeFooM,
-  ]
+test "identity tuples are ordered and their rendering concatenates" =
+  expectEqual
+    [False, True, True]
+    [
+      regKeyRender (regKeyN [identTypeFooM, identTypeBarM])
+        == regKeyRender (regKeyN [identTypeBarM, identTypeFooM]),
+      identKeys [identTypeFooM, identTypeBarM]
+        == identKey identTypeFooM ++ identKey identTypeBarM,
+      identKeys [identTypeFooM] == identKey identTypeFooM,
+    ]
 
 -- `regInsertChecked`'s overwrite signal fires both ways.
-test "regInsertChecked reports overwrite and freshness" = expectEqual
-  [True, False]
-  [
-    snd (regInsertChecked identTypeFooM 99 (regInsert identTypeFooM 1 regEmpty)),
-    snd (regInsertChecked identTypeFooM 99 regEmpty),
-  ]
+test "regInsertChecked reports overwrite and freshness" =
+  expectEqual
+    [True, False]
+    [
+      snd
+        (regInsertChecked
+          identTypeFooM
+          99
+          (regInsert identTypeFooM 1 regEmpty)),
+      snd (regInsertChecked identTypeFooM 99 regEmpty),
+    ]
 
 -- ── F4: `regEntries` hands back the ORIGINAL identities ────────────────────
 -- Asserted by comparing the returned keys themselves, not merely by counting
 -- them: a `regEntries` returning two FABRICATED identities would pass a count.
 -- Enumeration is in `regKeyRender` order, and `4:type` sorts before
 -- `5:iface`, so `NsType` comes first.
-test "regEntries returns the original identities in render order" = expectEqual
-  [True, True, True]
-  [
-    map (e => regKeyTabs (fst e)) (regEntries regBothNs) == [[TkIdent identTypeFooM], [TkIdent identIfaceFooM]],
-    map snd (regEntries regBothNs) == [1, 2],
-    regKeys regBothNs == [regKeyOf identTypeFooM, regKeyOf identIfaceFooM],
-  ]
+test "regEntries returns the original identities in render order" =
+  expectEqual
+    [True, True, True]
+    [
+      map (e => regKeyTabs (fst e)) (regEntries regBothNs)
+        == [[TkIdent identTypeFooM], [TkIdent identIfaceFooM]],
+      map snd (regEntries regBothNs) == [1, 2],
+      regKeys regBothNs == [regKeyOf identTypeFooM, regKeyOf identIfaceFooM],
+    ]
 
 -- `mregAdd` never drops a registration to call order: both orders keep BOTH
 -- values, compared as a multiset since the internal list order is not itself
 -- the guarantee.
 test "mregAdd keeps both values under either call order" =
-  expectEqual
-    True
-    (sort (mregLookup identTypeFooM mregOrderA) == sort (mregLookup identTypeFooM mregOrderB))
+  expectTrue
+    (sort (mregLookup identTypeFooM mregOrderA)
+      == sort (mregLookup identTypeFooM mregOrderB))
 
-test "MultiRegistry enumeration and union keep every registration" = expectEqual
-  [True, True, True]
-  [
-    map (e => regKeyTabs (fst e)) (mregEntries mregOrderA) == [[TkIdent identTypeFooM]],
-    mregKeys mregOrderA == [regKeyOf identTypeFooM],
-    sort (mregLookup identTypeFooM (mregMerge mregOrderA mregOrderB)) == [1, 1, 2, 2],
-  ]
+test "MultiRegistry enumeration and union keep every registration" =
+  expectEqual
+    [True, True, True]
+    [
+      map (e => regKeyTabs (fst e)) (mregEntries mregOrderA)
+        == [[TkIdent identTypeFooM]],
+      mregKeys mregOrderA == [regKeyOf identTypeFooM],
+      sort (mregLookup identTypeFooM (mregMerge mregOrderA mregOrderB))
+        == [1, 1, 2, 2],
+    ]
 
 -- SetRegistry: membership under both the `Ident` and the `RegKey` entry
 -- points, and the ordinal discriminating on the latter.
-test "SetRegistry membership answers for its own key and no other" = expectEqual
-  [True, False, True, True, False]
-  [
-    sregMember identTypeFooM (sregAdd identTypeFooM sregEmpty),
-    sregMember identTypeBarM (sregAdd identTypeFooM sregEmpty),
-    sregKeys (sregAdd identTypeFooM sregEmpty) == [regKeyOf identTypeFooM],
-    sregMemberK (regKeyAt identIfaceFooM 3) (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty),
-    sregMemberK (regKeyAt identIfaceFooM 4) (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty),
-  ]
+test "SetRegistry membership answers for its own key and no other" =
+  expectEqual
+    [True, False, True, True, False]
+    [
+      sregMember identTypeFooM (sregAdd identTypeFooM sregEmpty),
+      sregMember identTypeBarM (sregAdd identTypeFooM sregEmpty),
+      sregKeys (sregAdd identTypeFooM sregEmpty) == [regKeyOf identTypeFooM],
+      sregMemberK
+        (regKeyAt identIfaceFooM 3)
+        (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty),
+      sregMemberK
+        (regKeyAt identIfaceFooM 4)
+        (sregAddK (regKeyAt identIfaceFooM 3) sregEmpty),
+    ]
 
 -- ── F4: `TabKey` — the assoc-list half ─────────────────────────────────────
 -- The mint is total, and each origin case lands where it must. (Its
 -- `OriginUnresolved` arm is still a doctest in `registry.mdk` — see the
 -- module header.)
-test "tabKeyOf routes each origin to the right TabKey half" = expectEqual
-  [False, True, True]
-  [
-    tabKeyOf NsType (OriginModule "apub") "Box" == TkIdent (Ident NsType identOriginBuiltin "Box"),
-    tabKeyOf NsType (OriginModule "") "Box" == TkBare NsType "Box",
-    tabKeyOf NsType OriginBuiltin "Box" == TkIdent (Ident NsType identOriginBuiltin "Box"),
-  ]
+test "tabKeyOf routes each origin to the right TabKey half" =
+  expectEqual
+    [False, True, True]
+    [
+      tabKeyOf NsType (OriginModule "apub") "Box"
+        == TkIdent (Ident NsType identOriginBuiltin "Box"),
+      tabKeyOf NsType (OriginModule "") "Box" == TkBare NsType "Box",
+      tabKeyOf NsType OriginBuiltin "Box"
+        == TkIdent (Ident NsType identOriginBuiltin "Box"),
+    ]
 
 -- `tabHasName` is the name-only membership predicate: it sees BOTH halves and
 -- returns no value, so it can never select a row.
-test "tabHasName sees both TabKey halves and selects no row" = expectEqual
-  [True, True, False, False]
-  [
-    tabHasName "Box" tabTable,
-    tabHasName "Box" [(tabU, 7)],
-    tabHasName "Bx" tabTable,
-    tabHasName "Box" ([] : List (TabKey, Int)),
-  ]
+test "tabHasName sees both TabKey halves and selects no row" =
+  expectEqual
+    [True, True, False, False]
+    [
+      tabHasName "Box" tabTable,
+      tabHasName "Box" [(tabU, 7)],
+      tabHasName "Bx" tabTable,
+      tabHasName "Box" ([] : List (TabKey, Int)),
+    ]
 
 -- ── F5: the identity/bare exclusion THROUGH THE RENDERED PATH ──────────────
 -- This is what an `OrdMap`-backed `Registry` actually compares; `tabKeyEq` is
 -- not consulted down here, so a `tabKeyRender` whose bare arm collided with
 -- an identity arm is caught only by this.
 test "a bare slot key never renders as an identity-bearing one" =
-  expectEqual False (regKeyRender slotUA == regKeyRender slotPA)
+  expectFalse (regKeyRender slotUA == regKeyRender slotPA)
 
 -- `regKeyOfTab` and `regKeyOf` agree on an identity-bearing key — the
 -- `List Ident` to `List TabKey` widening is answer-preserving for every
 -- pre-widening caller.
-test "regKeyOfTab agrees with regKeyOf on an identity-bearing key" = expectEqual
-  [True, True, True]
-  [
-    regKeyOfTab (TkIdent identIfaceFooM) == regKeyOf identIfaceFooM,
-    regKeyRender (regKeyOfTab (TkIdent identIfaceFooM)) == regKeyRender (regKeyOf identIfaceFooM),
-    regKeyTabAt (TkIdent identIfaceFooM) 3 == regKeyAt identIfaceFooM 3,
-  ]
+test "regKeyOfTab agrees with regKeyOf on an identity-bearing key" =
+  expectEqual
+    [True, True, True]
+    [
+      regKeyOfTab (TkIdent identIfaceFooM) == regKeyOf identIfaceFooM,
+      regKeyRender (regKeyOfTab (TkIdent identIfaceFooM))
+        == regKeyRender (regKeyOf identIfaceFooM),
+      regKeyTabAt (TkIdent identIfaceFooM) 3 == regKeyAt identIfaceFooM 3,
+    ]
 
 -- `tabKeyRender`'s identity arm IS `identKey`, unchanged, and namespace still
 -- discriminates on the bare half through the render too.
-test "tabKeyRender preserves identKey and keeps the bare half apart" = expectEqual
-  [True, False]
-  [
-    tabKeyRender (TkIdent identTypeFooM) == identKey identTypeFooM,
-    regKeyRender (regKeyOfTab (TkBare NsType "Same")) == regKeyRender (regKeyOfTab (TkBare NsIface "Same")),
-  ]
+test "tabKeyRender preserves identKey and keeps the bare half apart" =
+  expectEqual
+    [True, False]
+    [
+      tabKeyRender (TkIdent identTypeFooM) == identKey identTypeFooM,
+      regKeyRender (regKeyOfTab (TkBare NsType "Same"))
+        == regKeyRender (regKeyOfTab (TkBare NsIface "Same")),
+    ]
 
 -- The ident-COUNT prefix is present on a `TabKey`-built key exactly as on an
 -- `Ident`-built one.
 test "the identity count prefix survives a TabKey-built key" =
-  expectEqual True (startsWith "1:1" (regKeyRender slotPA))
+  expectTrue (startsWith "1:1" (regKeyRender slotPA))
 
 -- ── F5: `HeadKey` — the head-tycon projection's key ────────────────────────
 -- The mint is total, it delegates the identity question to `tabKeyOf`, and it
 -- is the one site that fixes the namespace to `NsType`.
-test "headKeyOfCon delegates the origin and fixes the namespace" = expectEqual
-  [False, True, True, False]
-  [
-    headKeyOfCon (OriginModule "apub") "Box" == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box")),
-    headKeyOfCon OriginBuiltin "Box" == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box")),
-    headKeyOfCon (OriginModule "") "Box" == HkDecl (TkBare NsType "Box"),
-    headKeyOfCon (OriginModule "apub") "Box" == HkDecl (tabKeyOf NsIface (OriginModule "apub") "Box"),
-  ]
+test "headKeyOfCon delegates the origin and fixes the namespace" =
+  expectEqual
+    [False, True, True, False]
+    [
+      headKeyOfCon (OriginModule "apub") "Box"
+        == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box")),
+      headKeyOfCon OriginBuiltin "Box"
+        == HkDecl (TkIdent (Ident NsType identOriginBuiltin "Box")),
+      headKeyOfCon (OriginModule "") "Box" == HkDecl (TkBare NsType "Box"),
+      headKeyOfCon (OriginModule "apub") "Box"
+        == HkDecl (tabKeyOf NsIface (OriginModule "apub") "Box"),
+    ]
 
 -- The point of the widening: two modules' same-named heads are now DISTINCT
 -- keys, where the old `Option String` made them the same string.
-test "two modules' same-named heads are distinct HeadKeys" = expectEqual
-  [False, True]
-  [headA == headZ, headA == headKeyOfCon (OriginModule "apub") "Box"]
+test "two modules' same-named heads are distinct HeadKeys" =
+  expectEqual
+    [False, True]
+    [headA == headZ, headA == headKeyOfCon (OriginModule "apub") "Box"]
 
 -- A declaration head and a rigid type variable never equate, in either
 -- direction — §8 I6.1, which is why `HkRigid` is a separate inhabitant rather
 -- than a `TkBare` holding a parameter name.
-test "a declaration head never equates with a rigid type variable" = expectEqual
-  [False, False, True]
-  [
-    headA == HkRigid "Box",
-    headU == HkRigid "Box",
-    HkRigid "Box" == HkRigid "Box",
-  ]
+test "a declaration head never equates with a rigid type variable" =
+  expectEqual
+    [False, False, True]
+    [
+      headA == HkRigid "Box",
+      headU == HkRigid "Box",
+      HkRigid "Box" == HkRigid "Box",
+    ]
 
 -- Inside the declaration half, `TabKey`'s own separation is inherited: an
 -- identity-bearing head is not an identity-less one, and two identity-less
 -- heads of the same name still match — which keeps the flat path answering
 -- exactly as it does today.
-test "HeadKey inherits TabKey's identity/bare separation" = expectEqual
-  [False, True]
-  [headA == headU, headU == HkDecl (TkBare NsType "Box")]
+test "HeadKey inherits TabKey's identity/bare separation" =
+  expectEqual
+    [False, True]
+    [headA == headU, headU == HkDecl (TkBare NsType "Box")]
 
 -- `headKeyIdent`: the identity a head carries, for a consumer selecting a ROW
 -- rather than keying a bucket. Two modules' same-named heads give DIFFERENT
 -- identities — the whole discrimination the record lookup in
 -- `types/typecheck.mdk` buys from it.
-test "headKeyIdent discriminates two modules' same-named heads" = expectEqual
-  [False, True, True]
-  [
-    headKeyIdent headA == headKeyIdent headZ,
-    headKeyIdent headA == headKeyIdent (headKeyOfCon (OriginModule "apub") "Box"),
-    headKeyIdent (headKeyOfCon OriginBuiltin "Box") == Some (Ident NsType identOriginBuiltin "Box"),
-  ]
+test "headKeyIdent discriminates two modules' same-named heads" =
+  expectEqual
+    [False, True, True]
+    [
+      headKeyIdent headA == headKeyIdent headZ,
+      headKeyIdent headA
+        == headKeyIdent (headKeyOfCon (OriginModule "apub") "Box"),
+      headKeyIdent (headKeyOfCon OriginBuiltin "Box")
+        == Some (Ident NsType identOriginBuiltin "Box"),
+    ]

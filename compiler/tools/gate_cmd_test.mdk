@@ -1,0 +1,257 @@
+-- Sibling test module for `compiler/tools/gate_cmd.mdk`.
+--
+-- A `*_test.mdk` file lives beside its subject and is NOT compiler source: it
+-- is excluded from the two build fingerprints and from the snapshot corpus,
+-- so adding or editing one never makes `./medaka` report itself stale and
+-- never demands a golden. See AGENTS.md's `[P-TEST-SIBLING]`.
+--
+-- This file covers the native-grading clause's import-following rules
+-- (`gradeViolations`, `compiler/tools/gate_cmd.mdk`). The clause reads a gate
+-- module plus the project-local modules it imports, one level, so that a gate
+-- doing all its spawning through a helper has something to grade rather than
+-- passing vacuously. Which imports are followed, whose file:line a violation
+-- names, and what an unfollowable import says are decided here, against
+-- fixture module sources rather than the tree: `gradeViolations` takes the
+-- import resolver as an argument, and these tests hand it a table.
+
+import test.{Expectation, expectEqual, expectTextContainsAll, expectTrue}
+import tools.gate_cmd.{ImportTarget(..), gradeViolations}
+import support.util.{listLen}
+
+-- ── the fixture resolver ─────────────────────────────────────────────────────
+
+-- A module id absent from the table resolves nowhere, which is what a gate
+-- importing a helper that does not exist looks like.
+resolveFrom : List (String, ImportTarget) -> String -> ImportTarget
+resolveFrom [] _ = Unresolvable
+resolveFrom ((k, v) :: rest) m = if k == m then v else resolveFrom rest m
+
+-- Every fixture gate is this name and path, so a violation's `file:line` is
+-- read against a known origin.
+gateName : String
+gateName = "fixture_gate"
+
+gatePath : String
+gatePath = "test/fixture_gate_test.mdk"
+
+violations : List (String, ImportTarget) -> String -> <IO> List String
+violations table src =
+  gradeViolations (m => resolveFrom table m) gateName gatePath src
+
+-- ── a helper that spawns and grades ──────────────────────────────────────────
+
+-- `spawnOut` reads the exit code it obtained, so the spawn is answered inside
+-- the helper itself; the gate only consumes the result.
+helperGradesSrc : String
+helperGradesSrc =
+  "import io.{runVerb}\n\nspawnOut : List String -> Result String String\nspawnOut args = match runVerb \"medaka\" args\n  Ok (code, out, err) => if code == 0 then Ok out else Err err\n  Err e => Err e\n"
+
+gateOverHelperSrc : String
+gateOverHelperSrc =
+  "import test.oracle_support.{spawnOut}\nimport test.{fail, pass}\n\ntest \"one row\" = match spawnOut [\"check\", \"row.mdk\"]\n  Ok out => if out == \"\" then fail \"empty\" else pass\n  Err e => fail e\n"
+
+test "a followed helper that grades its own spawn leaves the gate clean" =
+  expectEqual
+    []
+    (violations
+      [
+        (
+          "test.oracle_support",
+          Followed "test/oracle_support.mdk" helperGradesSrc,
+        ),
+        ("test", Elsewhere),
+      ]
+      gateOverHelperSrc)
+
+-- ── a helper that spawns and grades nothing ──────────────────────────────────
+
+-- The wall this file exists for: `spawnOut` hands back only the captured
+-- text, so nothing anywhere reads the exit code, and before the clause
+-- followed imports the gate module held no spawn marker at all and passed.
+helperUngradedSrc : String
+helperUngradedSrc =
+  "import io.{runVerb}\n\nspawnOut : List String -> Result String String\nspawnOut args = match runVerb \"medaka\" args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+ungradedTable : List (String, ImportTarget)
+ungradedTable = [
+  ("test.oracle_support", Followed "test/oracle_support.mdk" helperUngradedSrc),
+  ("test", Elsewhere),
+]
+
+test "a followed helper's ungraded spawn is one violation" =
+  expectEqual 1 (listLen (violations ungradedTable gateOverHelperSrc))
+
+test "it names the helper's own file and line, not the gate's" =
+  expectTextContainsAll
+    ["fixture_gate: test/oracle_support.mdk:3: `spawnOut` spawns a process"]
+    (firstOr "" (violations ungradedTable gateOverHelperSrc))
+
+firstOr : String -> List String -> String
+firstOr d [] = d
+firstOr _ (x :: _) = x
+
+-- ── a stdlib import is never followed ────────────────────────────────────────
+
+-- `stdlib/io.mdk` exports the spawn primitive itself and reads exit codes all
+-- over; following it would both bury the gate in sites it does not own and
+-- hand every gate a free grading marker. The gate below spawns in its own
+-- module and grades nothing, so it must stay a violation however loudly the
+-- stdlib module it imports grades.
+stdlibShapedSrc : String
+stdlibShapedSrc =
+  "runVerb : String -> List String -> Result String (Int, String, String)\nrunVerb cmd args = primRunVerb cmd args\n\nverdictOf : Int -> String\nverdictOf exit = if exit == 0 then \"ok\" else \"failed\"\n"
+
+gateSpawnsItselfSrc : String
+gateSpawnsItselfSrc =
+  "import io.{runVerb}\nimport test.{fail, pass}\n\ntest \"one row\" = match runVerb \"medaka\" [\"check\", \"row.mdk\"]\n  Ok (_, out, _) => if out == \"\" then fail \"empty\" else pass\n  Err e => fail e\n"
+
+test "a stdlib import neither hides the gate's own ungraded spawn" =
+  expectEqual
+    [
+      "fixture_gate: test/fixture_gate_test.mdk:4: `test \"one row\"` spawns a process (via runVerb/boundedVerb/boundedInTree/runMedaka/checkRunBuild) but neither it, anything it calls, nor anything calling it reads the exit code or stderr that spawn returned — grade them too, e.g. via compiler_cli_test_support's expectCheck*/expectVerbExitStartsWith*/binaryRanClean or test_process's expectSpawnFails/expectSpawnOkLine",
+    ]
+    (violations [("io", Elsewhere), ("test", Elsewhere)] gateSpawnsItselfSrc)
+
+-- The same fixture with `io` followed instead, to show what `Elsewhere` buys
+-- rather than assert it: the gate is charged a second time for the spawn
+-- primitive's own definition, a site inside a module it consumes and cannot
+-- edit.
+test "nor is charged the stdlib module's own spawn, which following would add" =
+  expectEqual
+    2
+    (listLen
+      (violations
+        [("io", Followed "stdlib/io.mdk" stdlibShapedSrc), ("test", Elsewhere)]
+        gateSpawnsItselfSrc))
+
+-- ── an import the analysis cannot follow is named, not skipped ───────────────
+
+test "an import naming no module file is a named error" =
+  expectTextContainsAll
+    ["imports 'test.nowhere', which names no module file"]
+    (firstOr "" (violations [("test", Elsewhere)] gateMissingImportSrc))
+
+gateMissingImportSrc : String
+gateMissingImportSrc =
+  "import test.nowhere.{spawnOut}\nimport test.{fail, pass}\n\ntest \"one row\" = match spawnOut [\"check\", \"row.mdk\"]\n  Ok out => if out == \"\" then fail \"empty\" else pass\n  Err e => fail e\n"
+
+-- A helper importing its own importer back is a cycle the loader rejects
+-- outright; saying so beats reporting a clean gate whose helper was never
+-- read.
+helperCycleSrc : String
+helperCycleSrc =
+  "import test.fixture_gate_test.{gateName}\nimport io.{runVerb}\n\nspawnOut : List String -> Result String String\nspawnOut args = match runVerb \"medaka\" args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+cycleTable : List (String, ImportTarget)
+cycleTable = [
+  ("test.oracle_support", Followed "test/oracle_support.mdk" helperCycleSrc),
+  (
+    "test.fixture_gate_test",
+    Followed "test/fixture_gate_test.mdk" gateOverHelperSrc,
+  ),
+  ("io", Elsewhere),
+  ("test", Elsewhere),
+]
+
+test "a helper importing the gate back is a named cycle error" =
+  expectTextContainsAll
+    ["imports 'test.oracle_support', which imports it back"]
+    (firstOr "" (violations cycleTable gateOverHelperSrc))
+
+test "the cycle is reported instead of a silently clean gate" =
+  expectTrue (listLen (violations cycleTable gateOverHelperSrc) > 0)
+
+-- ── the spawn one call deeper than the imported name ─────────────────────────
+
+-- A helper module exports a thin wrapper and keeps the spawn in a binding
+-- below it. The gate imports and names `spawnOut` only; `spawnRaw` is a name
+-- the gate never writes. Charging only bindings the gate names directly would
+-- leave `spawnRaw` never even considered — not checked and cleared, never
+-- looked at — which is the whole shared spawn layer going unwalled.
+helperWrapperUngradedSrc : String
+helperWrapperUngradedSrc =
+  "import io.{runVerb}\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = runVerb \"medaka\" args\n\nspawnOut : List String -> Result String String\nspawnOut args = match spawnRaw args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+wrapperUngradedTable : List (String, ImportTarget)
+wrapperUngradedTable = [
+  (
+    "test.oracle_support",
+    Followed "test/oracle_support.mdk" helperWrapperUngradedSrc,
+  ),
+  ("test", Elsewhere),
+]
+
+test "a spawn below the imported wrapper is still the gate's violation" =
+  expectEqual 1 (listLen (violations wrapperUngradedTable gateOverHelperSrc))
+
+test "it names the binding that spawns, not the wrapper the gate imported" =
+  expectTextContainsAll
+    ["fixture_gate: test/oracle_support.mdk:3: `spawnRaw` spawns a process"]
+    (firstOr "" (violations wrapperUngradedTable gateOverHelperSrc))
+
+-- The same two-binding shape with the lower binding reading its own exit code:
+-- reaching a site is not reporting it.
+helperWrapperGradedSrc : String
+helperWrapperGradedSrc =
+  "import io.{runVerb}\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = match runVerb \"medaka\" args\n  Ok (code, out, err) => if code == 0 then Ok (code, out, err) else Err err\n  Err e => Err e\n\nspawnOut : List String -> Result String String\nspawnOut args = match spawnRaw args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+test "the same shape with the lower binding grading leaves the gate clean" =
+  expectEqual
+    []
+    (violations
+      [
+        (
+          "test.oracle_support",
+          Followed "test/oracle_support.mdk" helperWrapperGradedSrc,
+        ),
+        ("test", Elsewhere),
+      ]
+      gateOverHelperSrc)
+
+-- The relay hop is bounded by what the GATE wrote: a gate importing some other
+-- name from the same helper module reaches neither the wrapper nor the spawn
+-- below it. Without this bound one shared runner module's spawn becomes a
+-- violation for every gate that imports anything at all from it.
+helperUnnamedSrc : String
+helperUnnamedSrc =
+  "import io.{runVerb}\n\noutLines : String -> List String\noutLines out = [out]\n\nspawnRaw : List String -> Result String (Int, String, String)\nspawnRaw args = runVerb \"medaka\" args\n\nspawnOut : List String -> Result String String\nspawnOut args = match spawnRaw args\n  Ok (_, out, _) => Ok out\n  Err e => Err e\n"
+
+gateNamesNeitherSrc : String
+gateNamesNeitherSrc =
+  "import test.oracle_support.{outLines}\nimport test.{fail, pass}\n\ntest \"one row\" = if outLines \"\" == [] then pass else fail \"no\"\n"
+
+test "a helper spawn the gate names no route to is not that gate's site" =
+  expectEqual
+    []
+    (violations
+      [
+        (
+          "test.oracle_support",
+          Followed "test/oracle_support.mdk" helperUnnamedSrc,
+        ),
+        ("test", Elsewhere),
+      ]
+      gateNamesNeitherSrc)
+
+-- ── an import block is not grading evidence ──────────────────────────────────
+
+-- Adjacent import lines fold into one chunk whose text unions every name on
+-- the run. An import that brings in a grading verb therefore sits in the same
+-- chunk text as an ungraded spawn helper imported two lines down, and reading
+-- that chunk as an answer would let the one vouch for the other — two names a
+-- module happens to need, not a code relationship.
+gateFoldedImportSrc : String
+gateFoldedImportSrc =
+  "import test_process.{expectSpawnFails}\nimport test.oracle_support.{spawnOut}\nimport test.{fail, pass}\n\ntest \"one row\" = match spawnOut [\"check\", \"row.mdk\"]\n  Ok out => if out == \"\" then fail \"empty\" else pass\n  Err e => fail e\n"
+
+foldedImportTable : List (String, ImportTarget)
+foldedImportTable = [
+  ("test.oracle_support", Followed "test/oracle_support.mdk" helperUngradedSrc),
+  ("test_process", Elsewhere),
+  ("test", Elsewhere),
+]
+
+test "a grading name imported beside the spawn helper does not answer for it" =
+  expectTextContainsAll
+    ["fixture_gate: test/oracle_support.mdk:3: `spawnOut` spawns a process"]
+    (firstOr "" (violations foldedImportTable gateFoldedImportSrc))
