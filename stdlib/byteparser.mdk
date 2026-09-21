@@ -25,6 +25,8 @@
 --   `leSint n`  — little-endian signed n-byte integer (two's-complement)
 --   `leFloat64` — 64-bit IEEE 754 little-endian float
 
+import array.{reverse as arrayReverse}
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
 import list.{reverse}
 
 -- ---------------------------------------------------------------------------
@@ -282,13 +284,16 @@ chainl1Rest p op acc =
       chainl1Rest p op (f acc y))
     (deferPure acc)
 
--- | Read exactly N bytes, returning them as a List Int.
+-- | Read exactly N bytes, returning them as packed `Bytes`.
 --
 -- > runByteParser (takeBytes 3) (arrayFromList [10, 20, 30, 40])
--- Ok [10, 20, 30]
+-- Ok Bytes "0a141e"
 export
-takeBytes : Int -> ByteParser (List Int)
-takeBytes n = ByteParserE (takeBytesGo n [])
+takeBytes : Int -> ByteParser Bytes
+takeBytes n =
+  deferMap
+    (xs => fromArrayAssumeByteDomain (arrayFromList xs))
+    (ByteParserE (takeBytesGo n []))
 
 takeBytesGo : Int -> List Int -> Array Int -> Int -> BResult (List Int)
 takeBytesGo n acc input pos
@@ -299,7 +304,7 @@ takeBytesGo n acc input pos
 -- | Read exactly N bytes, returning them as an Array Int slice.
 export
 takeSlice : Int -> ByteParser (Array Int)
-takeSlice n = deferMap arrayFromList (takeBytes n)
+takeSlice n = deferMap toArray (takeBytes n)
 
 -- ---------------------------------------------------------------------------
 -- Binary-specific primitives
@@ -416,7 +421,7 @@ export
 leFloat64 : ByteParser Float
 leFloat64 = defer
   bytes <- takeBytes 8
-  deferPure (bytesToFloat64 (arrayFromList (reverse bytes)) 0)
+  deferPure (bytesToFloat64 (arrayReverse (toArray bytes)) 0)
 
 -- ---------------------------------------------------------------------------
 -- Entry point

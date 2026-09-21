@@ -22,6 +22,7 @@ import byteparser.{
   failWith,
   anyByte,
 }
+import bytes.{Bytes, fromArrayAssumeByteDomain}
 
 -- | The parsed header fields the read path uses.
 public export data DbHeader = DbHeader {
@@ -55,38 +56,33 @@ headerReadVersion h = h.readVersion
 
 -- The expected magic bytes: "SQLite format 3\000".
 export
-magicBytes : List Int
-magicBytes = [
-  83,
-  81,
-  76,
-  105,
-  116,
-  101,
-  32,  -- "SQLite "
-  102,
-  111,
-  114,
-  109,
-  97,
-  116,  -- "format"
-  32,
-  51,
-  0,
-]  -- " 3\000"
+magicBytes : Bytes
+magicBytes = fromArrayAssumeByteDomain
+  [|
+    83,
+    81,
+    76,
+    105,
+    116,
+    101,
+    32,  -- "SQLite "
+    102,
+    111,
+    114,
+    109,
+    97,
+    116,  -- "format"
+    32,
+    51,
+    0,
+  |]  -- " 3\000"
 
--- | Compare a parsed byte list with the expected magic; fail with a message.
-checkMagic : List Int -> ByteParser Unit
+-- | Compare a parsed byte string with the expected magic; fail with a message.
+checkMagic : Bytes -> ByteParser Unit
 checkMagic got =
   deferUnless
-    (listIntEq got magicBytes)
+    (got == magicBytes)
     (failWith "not a SQLite database (bad magic string)")
-
--- Structural equality on List Int (avoids importing list/core derive here).
-listIntEq : List Int -> List Int -> Bool
-listIntEq [] [] = True
-listIntEq (x :: xs) (y :: ys) = if x == y then listIntEq xs ys else False
-listIntEq _ _ = False
 
 -- | The header parser: reads and validates the 100-byte header.
 --

@@ -13,7 +13,7 @@
 
 import bytebuilder.{
   Builder,
-  appendBytes,
+  emitBytes,
   buildArray,
   buildBytes,
   emitU8,
@@ -1136,7 +1136,7 @@ parseChunkedChecked input pos headerBytes out total count = do
     ChunkBody dataPos size => do
       (chunk, _) <- readSliceAt input dataPos size
       next <- chunkDataEnd input (B.length input) dataPos size
-      let () = appendBytes chunk out
+      let () = emitBytes chunk out
       parseChunkedChecked input next headerBytes out (total + size) (count + 1)
 
 {- | Decode one complete chunked body beginning at `pos`. The result contains

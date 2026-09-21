@@ -268,3 +268,68 @@ mechanism:
 `adoptByteBlockUnsafe`, `lendByteBlockUnsafe`, and `fromByteBlockPrefix` are
 the only exports naming `ByteBlock` directly (`stdlib/bytes.mdk`'s
 `# Kernel doors` section); B5 adds no more without a ruling.
+
+---
+
+## Ruling 7 — the `*Bytes` suffix names a shape, not a byte count (2026-09-20)
+
+A `*Bytes` suffix on an exported name is licensed only where it disambiguates
+that export from a differently-typed twin already living in the same
+module — the pattern `stdlib/regex.mdk` already has in `find`/`findBytes` and
+`isFullMatch`/`isFullMatchBytes`, where the bare name takes a `String` and the
+suffixed one takes a byte sequence. Outside that pattern, a name that already
+says "bytes" keeps its name at B6 and swaps its type from `List Int`/`Array
+Int` to the packed `Bytes`, rather than being renamed to something else — the
+suffix already told the truth about the *shape* of the value; only its
+representation changes.
+
+A `*Bytes` suffix that means something else entirely is not a suffix
+violation and is out of this ruling's scope: a byte *count*
+(`maxHttpRequestBytes : Int`, `checkHttpRequestBytes : Int -> Result String
+Unit`), or a fixed-size digest array with no `Bytes`-typed twin to
+disambiguate against yet (`sha256FixedBytes`, `hmacSha256FixedBytes`) — #3222's
+own recommendation flagged the digest-array case as B5/B6 territory without
+deciding it here, and this ruling does not decide it either.
+
+`stdlib/regex.mdk`'s `Vm.codes : Array Int` (Unicode codepoints on the
+`String` path) is unaffected by any of this — Ruling 5 above already put it
+permanently out of scope, for reasons that have nothing to do with naming.
+`isFullMatchBytes`/`findBytes` are a different, unrelated part of the same
+module: they take a byte buffer, not codepoints, and ARE inside this ruling's
+scope.
+
+### B6 rename table
+
+Derived by `git grep -nE '^[a-zA-Z0-9_]*Bytes[a-zA-Z0-9_]* :' -- 'stdlib/*.mdk'`
+(excluding `*_test.mdk`), filtered to **exported** names — an unexported
+`*Bytes` helper carrying the same suffix is not public API and has no B6
+obligation of its own. The largest unexported group is `stdlib/http.mdk`'s
+`lowerAsciiBytes`/`allTokenBytes`/`validFieldValueBytes`/`trimLeftOwsBytes`/
+`trimRightOwsBytes`/`scanTokenEndBytes`/`skipOwsBytes`, each already the
+`Bytes`-typed twin of an `Array Int`-typed private original the module's own
+comment (`stdlib/http.mdk:355-363`) says B5 removes; also unexported:
+`stdlib/http.mdk`'s `validBytes`/`headHeaderBytes`/`requestBytesVerdict`/
+`decodeQueryBytes`/`validMediaBytes`, `stdlib/base32.mdk`'s `validBytes`,
+`stdlib/byteparser.mdk`'s `takeBytesGo`, `stdlib/sha256.mdk`'s `digestBytes`,
+`stdlib/bytes.mdk`'s `debugBytesHex`, `stdlib/hmac.mdk`'s `blockBytes`,
+`stdlib/pbkdf2.mdk`'s `hashBytes`, and `stdlib/net.mdk`'s `testSentBytes`.
+
+| Module | Export (current) | Current signature | B6 destination |
+|---|---|---|---|
+| `bytebuilder` | `buildBytes` | `Builder -> Bytes` | unchanged — already packed |
+| `bytebuilder` | `appendBytes` | `Bytes -> Builder -> Unit` | **this slice**: renamed to `emitBytes` |
+| `bytebuilder` | `emitBytes` | `List Int -> Builder -> Unit` | **this slice**: name retires, deleted |
+| `byteparser` | `takeBytes` | `Int -> ByteParser (List Int)` | **this slice**: `Int -> ByteParser Bytes` |
+| `hex` | `encodeBytes` | `Bytes -> String` | unchanged — already packed |
+| `hex` | `decodeBytes` | `String -> Result String Bytes` | unchanged — already packed |
+| `bytes` | `writeStdoutBytes` | `Bytes -> <Stdout> Unit` | unchanged — already packed |
+| `net_async` | `recvBytes` | `Connection -> Int -> Async <Net "_" \| e> (Result String Bytes)` | unchanged — already packed |
+| `net_async` | `recvBytesWithin` | `Duration -> Connection -> Int -> Async <Clock, Net "_" \| e> (Result String Bytes)` | unchanged — already packed |
+| `regex` | `isFullMatchBytes` | `Regex -> Array Int -> Int -> Int -> Bool` | B6: same name, `Array Int -> Bytes` — the licensed twin of `isFullMatch : Regex -> String -> Bool` |
+| `regex` | `findBytes` | `Regex -> Array Int -> Int -> Int -> Option Match` | B6: same name, `Array Int -> Bytes` — the licensed twin of `find : Regex -> String -> Option Match` |
+| `sha256` | `sha256FixedBytes` | `Array Int -> Array Int` | undecided — fixed-digest array, no `Bytes`-typed twin yet; not this ruling's call |
+| `hmac` | `hmacSha256FixedBytes` | `Array Int -> Array Int -> Array Int` | undecided — same reasoning as `sha256FixedBytes` |
+
+The two "this slice" rows are #3222's Half B, landed in the same change as
+this ruling — see the sprint report for the caller list and the go/no-go
+measurement.

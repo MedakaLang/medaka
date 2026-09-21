@@ -55,6 +55,7 @@ import bytebuilder.{
   emitBytes,
   buildArray,
 }
+import bytes.{Bytes, fromArrayAssumeByteDomain}
 import string.{toUtf8, fromUtf8}
 import array  -- brings `impl Foldable Array` (toList) into scope; see AGENTS.md bare-import note
 import test.{expectEqual, fail}
@@ -108,10 +109,10 @@ hasFlag flg mask = bitAnd flg mask /= 0
 -- Parse
 -- ---------------------------------------------------------------------------
 
-checkMagic : List Int -> ByteParser Unit
-checkMagic [m0, m1]
-  | m0 == gzipMagic0 && m1 == gzipMagic1 = deferPure ()
-checkMagic _ = failWith "not a gzip stream (bad magic)"
+checkMagic : Bytes -> ByteParser Unit
+checkMagic magic
+  | magic[0] == gzipMagic0 && magic[1] == gzipMagic1 = deferPure ()
+  | otherwise = failWith "not a gzip stream (bad magic)"
 
 checkCm : Int -> ByteParser Unit
 checkCm cm
@@ -243,7 +244,7 @@ flagsOf h =
 emitOptionalField : Option String -> Builder -> Unit
 emitOptionalField None _ = ()
 emitOptionalField (Some s) buf =
-  emitBytes (toList (toUtf8 s)) buf
+  emitBytes (fromArrayAssumeByteDomain (toUtf8 s)) buf
   emitU8 0 buf
 
 {- | Emit a gzip member header. We never emit FEXTRA or FHCRC (there is

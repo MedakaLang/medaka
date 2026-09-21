@@ -24,9 +24,8 @@ import byteparser.{
 -- ─── helpers ───────────────────────────────────────────────────────────────
 
 showResult : Display a => String -> Result String a -> String
-showResult label r = match r
-  Ok a => "\{label}: Ok \{a}"
-  Err e => "\{label}: Err \{e}"
+showResult label (Ok a) = "\{label}: Ok \{a}"
+showResult label (Err e) = "\{label}: Err \{e}"
 
 -- ─── main ──────────────────────────────────────────────────────────────────
 -- IO sequencing uses a bare indented block (not `do` — IO is not a monad).
@@ -48,7 +47,7 @@ main =
   println
     (showResult
       "satisfy (>64)"
-      (runByteParser (satisfy (b => b > 64)) (arrayFromList [65, 66, 67])))
+      (runByteParser (satisfy (> 64)) (arrayFromList [65, 66, 67])))
   println ""
   println "=== many / some ==="
   println
@@ -72,9 +71,7 @@ main =
   println ""
   println "=== takeBytes ==="
   println
-    (showResult
-      "takeBytes 2 [65,66,67]"
-      (runByteParser (takeBytes 2) (arrayFromList [65, 66, 67])))
+    "takeBytes 2 [65,66,67]: \{debug (runByteParser (takeBytes 2) (arrayFromList [65, 66, 67]))}"
   println ""
   println "=== beUint (big-endian unsigned) ==="
   println

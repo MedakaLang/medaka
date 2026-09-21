@@ -95,6 +95,7 @@ import bytebuilder.{
   emitBeUint,
   buildArray,
 }
+import bytes.{fromArrayAssumeByteDomain}
 import list.{reverse, get, sortBy}
 import string.{toUtf8}
 import lib.header.{magicBytes}
@@ -203,9 +204,11 @@ encodeLeafCell rowid recBytes =
   let plen = arrayLength recBytes
   let local = localPayloadSize usableSize plen
   let buf = newBuilder ()
-  emitBytes (sqVarintBytes plen) buf
-  emitBytes (sqVarintBytes rowid) buf
-  emitBytes (toList (sliceClamped 0 local recBytes)) buf
+  emitBytes (fromArrayAssumeByteDomain (arrayFromList (sqVarintBytes plen))) buf
+  emitBytes
+    (fromArrayAssumeByteDomain (arrayFromList (sqVarintBytes rowid)))
+    buf
+  emitBytes (fromArrayAssumeByteDomain (sliceClamped 0 local recBytes)) buf
   -- Placeholder first-overflow-page pointer; `assignOverflow` patches it once
   -- page numbers are known.  Absent entirely when nothing spills.
   let _ = if local < plen then emitU32BE 0 buf
@@ -334,7 +337,9 @@ encodeInteriorCell : Int -> Int -> Array Int
 encodeInteriorCell childPage rowid =
   let buf = newBuilder ()
   emitU32BE childPage buf
-  emitBytes (sqVarintBytes rowid) buf
+  emitBytes
+    (fromArrayAssumeByteDomain (arrayFromList (sqVarintBytes rowid)))
+    buf
   buildArray buf
 
 -- | Encode a list of (left-child page, key-rowid) entries into interior cells,
@@ -1040,8 +1045,11 @@ encodeIndexLeafCell recBytes =
       "index key record of \{intToString plen} bytes needs an overflow page; multi-page/overflow indexes are not supported in v1"
   else
     let buf = newBuilder ()
-    let _ = emitBytes (sqVarintBytes plen) buf
-    let _ = emitBytes (toList recBytes) buf
+    let _ =
+      emitBytes
+        (fromArrayAssumeByteDomain (arrayFromList (sqVarintBytes plen)))
+        buf
+    let _ = emitBytes (fromArrayAssumeByteDomain recBytes) buf
     Ok (buildArray buf)
 
 -- | Encode every `(keyCell, rowid)` entry of one index into a sorted list of
