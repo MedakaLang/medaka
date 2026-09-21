@@ -172,7 +172,7 @@ mangleUnits coreDecls modules =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
-  let ctorExportsPerUnit = map unitCtorExportEntry allUnits
+  let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
   let coreOut =
     mangleUnitU exportsPerUnit ctorExportsPerUnit ("core", coreDecls)
   let modsOut = map (mangleModule exportsPerUnit ctorExportsPerUnit) modules
@@ -198,7 +198,7 @@ mangleUnitsEv coreDecls modules =
     withPreludeDefs
       (dedup (unitDefNames ("", coreDecls)))
       (buildExportsPerUnit [] allUnits)
-  let ctorExportsPerUnit = map unitCtorExportEntry allUnits
+  let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
   -- ONE map per unit, threaded to both readers: the decl rename and the evidence
   -- remap name the same symbols, and building the map twice was measured at +0.99%
   -- Ir on the emitter child over the compiler's own graph.
@@ -220,7 +220,7 @@ mangleUnitsEv coreDecls modules =
 -- SAME two builders and the same first-entry-wins fold `mangleUnitU` applies, so a
 -- route and the definition it names cannot be renamed differently.
 unitRenameMapEntry : List (String, List (String, String)) ->
-  List (String, List (String, List String)) ->
+  List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   (String, (OrdMap String, Bool, List Decl))
 unitRenameMapEntry exportsPerUnit ctorExportsPerUnit (mid, decls) =
@@ -318,7 +318,7 @@ mangleCtorCollisions coreDecls modules =
   if omSize collided == 0 then
     (coreDecls, modules)
   else
-    let ctorExportsPerUnit = map unitCtorExportEntry allUnits
+    let ctorExportsPerUnit = buildCtorExportsPerUnit [] allUnits
     let coreOut =
       mangleCtorUnitU collided ctorExportsPerUnit ("core", coreDecls)
     let modsOut = map (mangleCtorModule collided ctorExportsPerUnit) modules
@@ -389,7 +389,7 @@ evalMangleExemptCtor : String -> Bool
 evalMangleExemptCtor n = isReservedCtor n || n == "Pass" || n == "Fail"
 
 mangleCtorModule : OrdMap Unit ->
-  List (String, List (String, List String)) ->
+  List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   (String, List Decl)
 mangleCtorModule collided ctorExportsPerUnit (mid, decls) =
@@ -398,7 +398,7 @@ mangleCtorModule collided ctorExportsPerUnit (mid, decls) =
 -- `mangleUnitU`'s constructor half, with the map filtered down to colliding keys
 -- and the function half omitted entirely.
 mangleCtorUnitU : OrdMap Unit ->
-  List (String, List (String, List String)) ->
+  List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   List Decl
 mangleCtorUnitU collided ctorExportsPerUnit (mid, decls) =
@@ -593,10 +593,19 @@ lookupDefiner k ((n, d) :: rest) =
   if k == n then Some d else lookupDefiner k rest
 
 -- ── per-unit CONSTRUCTOR exports ──────────────────────────────────────────────
--- (mid, [(typeName, [ctorName])]) for the PUBLIC data/record types the unit
--- declares.  A reserved constructor (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False —
--- the emitter's fixed-tag set) is OMITTED so it is never mangled (mangling would
--- lose its reserved tag).
+-- (mid, [(typeName, definerMid, [ctorName])]) for the PUBLIC data/record types
+-- offered by the unit — its OWN declares (definerMid == mid) and, transitively,
+-- whatever an `export import` re-export brings in (definerMid == the ORIGINAL
+-- declaring module, chased through the chain exactly as `reexportFnEntries` does
+-- for functions — #1359).  A reserved constructor
+-- (Cons/Nil/Some/None/Ok/Err/Lt/Eq/Gt/True/False — the emitter's fixed-tag set) is
+-- OMITTED so it is never mangled (mangling would lose its reserved tag).
+--
+-- The `definerMid` field exists because a ctor's rename target is
+-- `<definerMid>__<ctor>`, and for a re-exported ctor that is NOT the same module
+-- that offers it to a further importer: `bmod`'s row can offer `Wid` (declared in
+-- `amod`) without `bmod` itself ever defining an `@amod__Wid`-shaped symbol, so the
+-- importer's rename entry must point at `amod`, the module that actually emits it.
 --
 -- 🚨 THIS ANSWERS A SCOPE QUESTION — "may an IMPORTER name this constructor?" — not
 -- "does this constructor exist?".  The unit's OWN constructors are mangled from a
@@ -640,15 +649,72 @@ lookupDefiner k ((n, d) :: rest) =
 -- gated on it and still indexes the ctor).  The arm has to be ABSENT, not filtered.
 --     This matches `eval.ctorsByTypeOf` (`compiler/eval/eval.mdk`), the
 -- interpreter-side peer, which reached the same shape from the same derivation.
-unitCtorExportEntry : (String, List Decl) ->
-  (String, List (String, List String))
-unitCtorExportEntry (mid, decls) = (mid, flatMap ctorExportEntries decls)
+-- dependency-ordered fold, mirroring `buildExportsPerUnit`: `acc` carries every
+-- earlier unit's already-computed row so a re-export can look up its source
+-- module's ctor exports (transitively — a >1-hop re-export chain still resolves
+-- to the true definer).
+buildCtorExportsPerUnit : List (String, List (String, String, List String)) ->
+  List (String, List Decl) ->
+  List (String, List (String, String, List String))
+buildCtorExportsPerUnit _ [] = []
+buildCtorExportsPerUnit acc ((mid, decls) :: rest) =
+  let entry = unitCtorExportEntry acc (mid, decls)
+  entry :: buildCtorExportsPerUnit (entry :: acc) rest
 
-ctorExportEntries : Decl -> List (String, List String)
-ctorExportEntries (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) =
-  [(tyname, filterList nonReservedCtor (map variantCtorName variants))]
-ctorExportEntries (DAttrib _ d) = ctorExportEntries d
-ctorExportEntries _ = []
+unitCtorExportEntry : List (String, List (String, String, List String)) ->
+  (String, List Decl) ->
+  (String, List (String, String, List String))
+unitCtorExportEntry acc (mid, decls) =
+  (mid, flatMap (ctorExportEntries mid acc) decls)
+
+ctorExportEntries : String ->
+  List (String, List (String, String, List String)) ->
+  Decl ->
+  List (String, String, List String)
+ctorExportEntries mid _ (DData { dataVis = VisPublic, dataName = tyname, dataCtors = variants }) =
+  [(tyname, mid, filterList nonReservedCtor (map variantCtorName variants))]
+ctorExportEntries _ acc (DUse True path _) =
+  let srcMid = useModIdU path
+  match lookupCtorExports srcMid acc
+    None => []
+    Some srcTypeEntries => reexportCtorMembers path srcTypeEntries
+ctorExportEntries mid acc (DAttrib _ d) = ctorExportEntries mid acc d
+ctorExportEntries _ _ _ = []
+
+-- names a `DUse True` (re-export) decl brings in, drawn from the source module's
+-- already-computed ctor-export row.  Mirrors `reexportMembers`'s three live arms
+-- (`UseName`/`UseAlias` contribute nothing, matching its own arms at :566-576).
+reexportCtorMembers : UsePath ->
+  List (String, String, List String) ->
+  List (String, String, List String)
+reexportCtorMembers (UseGroup _ members) srcTypeEntries =
+  flatMap (reexportCtorMember srcTypeEntries) members
+reexportCtorMembers (UseWild _) srcTypeEntries = srcTypeEntries
+reexportCtorMembers (UseName _) _ = []
+reexportCtorMembers (UseAlias _ _) _ = []
+
+-- `UseMember name True` (`name(..)`) re-exports the whole type named `name`;
+-- otherwise (or on a miss) `name` is offered only if it is itself a ctor spelling
+-- somewhere in the source row — mirroring `ctorMemberEntry`'s own wild/bare split.
+reexportCtorMember : List (String, String, List String) ->
+  UseMember ->
+  List (String, String, List String)
+reexportCtorMember srcTypeEntries (UseMember name wild _ _) =
+  if wild then match lookupCtorTypeEntry name srcTypeEntries
+    Some entry => [entry]
+    None => bareReexportCtor srcTypeEntries name
+  else
+    bareReexportCtor srcTypeEntries name
+
+bareReexportCtor : List (String, String, List String) ->
+  String ->
+  List (String, String, List String)
+bareReexportCtor [] _ = []
+bareReexportCtor ((tyname, definer, ctors) :: rest) name =
+  if contains name ctors then
+    [(tyname, definer, [name])]
+  else
+    bareReexportCtor rest name
 
 variantCtorName : Variant -> String
 variantCtorName (Variant n _) = n
@@ -679,7 +745,7 @@ isReservedCtor n =
 -- bare ctor name; reserved ctors are excluded at the export step so they never
 -- enter the map.
 buildUnitCtorRenameMap : String ->
-  List (String, List (String, List String)) ->
+  List (String, List (String, String, List String)) ->
   List Decl ->
   List (String, String)
 buildUnitCtorRenameMap mid ctorExportsPerUnit decls =
@@ -708,24 +774,21 @@ localCtorRenameEntry mid n = [(n, mangledName mid n)]
 -- ctors as implicit prelude (`Rep`'s RCon/RInt/… — Ordering/Option/Result ctors are
 -- reserved and were never entered).  Local-first ordering already shadows these.
 ctorImportEntries : String ->
-  List (String, List (String, List String)) ->
+  List (String, List (String, String, List String)) ->
   List Decl ->
   List (String, String)
 ctorImportEntries _ ctorExportsPerUnit decls =
   flatMap (declCtorImportEntries ctorExportsPerUnit) decls
     ++ coreCtorImportEntries ctorExportsPerUnit
 
-coreCtorImportEntries : List (String, List (String, List String)) ->
+coreCtorImportEntries : List (String, List (String, String, List String)) ->
   List (String, String)
 coreCtorImportEntries ctorExportsPerUnit =
   match lookupCtorExports "core" ctorExportsPerUnit
-    Some entries => flatMap coreCtorEntry entries
+    Some entries => flatMap typeCtorEntries entries
     None => []
 
-coreCtorEntry : (String, List String) -> List (String, String)
-coreCtorEntry (_, ctors) = flatMap (n => [(n, mangledName "core" n)]) ctors
-
-declCtorImportEntries : List (String, List (String, List String)) ->
+declCtorImportEntries : List (String, List (String, String, List String)) ->
   Decl ->
   List (String, String)
 declCtorImportEntries ctorExportsPerUnit (DUse _ path _) =
@@ -734,7 +797,7 @@ declCtorImportEntries ctorExportsPerUnit (DAttrib _ d) =
   declCtorImportEntries ctorExportsPerUnit d
 declCtorImportEntries _ _ = []
 
-useCtorPathEntries : List (String, List (String, List String)) ->
+useCtorPathEntries : List (String, List (String, String, List String)) ->
   UsePath ->
   List (String, String)
 useCtorPathEntries ctorExportsPerUnit path =
@@ -744,13 +807,13 @@ useCtorPathEntries ctorExportsPerUnit path =
   else match lookupCtorExports mid ctorExportsPerUnit
     None => []
     Some typeEntries => match path
-      UseGroup _ members => flatMap (ctorMemberEntry mid typeEntries) members
-      UseWild _ => flatMap (typeCtorEntries mid) typeEntries
+      UseGroup _ members => flatMap (ctorMemberEntry typeEntries) members
+      UseWild _ => flatMap typeCtorEntries typeEntries
       UseName _ => []
       -- `import m as A`: every ctor m exports is reachable as `A.Ctor`, which
       -- resolve has already shortened to `Ctor` by the time a tree gets here —
       -- so the binding set is `UseWild`'s (#1287).
-      UseAlias _ _ => flatMap (typeCtorEntries mid) typeEntries
+      UseAlias _ _ => flatMap typeCtorEntries typeEntries
 -- `import M.{T(..), Ctor, …}`: a `(..)` member is a TYPE whose ctors all come
 -- in; a bare member may be either a ctor name or a type — entered if it names
 -- a ctor M exports (a type-only member contributes nothing here).
@@ -791,62 +854,64 @@ useCtorPathEntries ctorExportsPerUnit path =
 -- underneath them says.  Residual table-level divergences from resolve, at the time
 -- of writing:
 --   * VISIBILITY — closed, see the `VisPublic` gate above.
---   * RE-EXPORT — `unitCtorExportEntry` has no `DUse True` arm, while the FUNCTION
---     map's `reexportOne` (above) does.  So a ctor reaching an importer through
---     `export import` reproduces #1300's exact symptom.  Filed and pinned as #1359;
---     deliberately NOT fixed here.
+--   * RE-EXPORT — closed (#1359): `ctorExportEntries` now has a `DUse True` arm
+--     (`reexportCtorMembers`) mirroring the FUNCTION map's `reexportOne`, chasing
+--     the re-export chain via `acc` to the ORIGINAL definer.
 --   * `DAttrib` — this file recurses through it, resolve's `expCtorsDirect` /
 --     `expTypeCtorsDirect` swallow it in their `_::rest` wildcard (that asymmetry is
 --     #1228).  Not exploitable: an attributed public data decl is not importable at
 --     all, so nothing reaches these arms to disagree about.
-ctorMemberEntry : String ->
-  List (String, List String) ->
+-- `mid` param is gone (#1359): each type entry now carries its own `definerMid`
+-- (a re-exported entry's may differ from the DUse target module), so the mangled
+-- name is built from THAT, never from the import path's own module id.
+ctorMemberEntry : List (String, String, List String) ->
   UseMember ->
   List (String, String)
-ctorMemberEntry mid typeEntries (UseMember name wild _ _) =
+ctorMemberEntry typeEntries (UseMember name wild _ _) =
   if wild then match lookupCtorTypeEntry name typeEntries
-    Some ctors =>
-      bareCtorMemberEntry mid typeEntries name
-        ++ flatMap (originCtorEntry mid) ctors
-    None => bareCtorMemberEntry mid typeEntries name
+    Some (_, definer, ctors) =>
+      bareCtorMemberEntry typeEntries name
+        ++ flatMap (originCtorEntry definer) ctors
+    None => bareCtorMemberEntry typeEntries name
   else
-    bareCtorMemberEntry mid typeEntries name
+    bareCtorMemberEntry typeEntries name
 
 -- `name` itself, iff M exports a CONSTRUCTOR so spelled.  Scans every type's ctor
--- list because the question is about ctor-ness, not about which type owns it.
-bareCtorMemberEntry : String ->
-  List (String, List String) ->
+-- list because the question is about ctor-ness, not about which type owns it; the
+-- OWNING entry's `definerMid`, not the DUse target, names the mangled origin.
+bareCtorMemberEntry : List (String, String, List String) ->
   String ->
   List (String, String)
-bareCtorMemberEntry mid typeEntries name =
-  if contains name (flatMap snd typeEntries) then
-    originCtorEntry mid name
+bareCtorMemberEntry [] _ = []
+bareCtorMemberEntry ((_, definer, ctors) :: rest) name =
+  if contains name ctors then
+    originCtorEntry definer name
   else
-    []
+    bareCtorMemberEntry rest name
 
-typeCtorEntries : String -> (String, List String) -> List (String, String)
-typeCtorEntries mid (_, ctors) = flatMap (originCtorEntry mid) ctors
+typeCtorEntries : (String, String, List String) -> List (String, String)
+typeCtorEntries (_, definer, ctors) = flatMap (originCtorEntry definer) ctors
 
 originCtorEntry : String -> String -> List (String, String)
 originCtorEntry mid n = [(n, mangledName mid n)]
 
 lookupCtorTypeEntry : String ->
-  List (String, List String) ->
-  Option (List String)
+  List (String, String, List String) ->
+  Option (String, String, List String)
 lookupCtorTypeEntry _ [] = None
-lookupCtorTypeEntry k ((t, cs) :: rest) =
-  if k == t then Some cs else lookupCtorTypeEntry k rest
+lookupCtorTypeEntry k ((e@(t, _, _)) :: rest) =
+  if k == t then Some e else lookupCtorTypeEntry k rest
 
 lookupCtorExports : String ->
-  List (String, List (String, List String)) ->
-  Option (List (String, List String))
+  List (String, List (String, String, List String)) ->
+  Option (List (String, String, List String))
 lookupCtorExports _ [] = None
 lookupCtorExports k ((m, es) :: rest) =
   if k == m then Some es else lookupCtorExports k rest
 
 -- a module keeps its mid in the output pair.
 mangleModule : List (String, List (String, String)) ->
-  List (String, List (String, List String)) ->
+  List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   (String, List Decl)
 mangleModule exportsPerUnit ctorExportsPerUnit (mid, decls) =
@@ -857,7 +922,7 @@ mangleModule exportsPerUnit ctorExportsPerUnit (mid, decls) =
 -- PLUS each imported bare name → its origin module's mangled symbol), then rewrite
 -- the unit's decls (definition names + all in-scope references).
 mangleUnitU : List (String, List (String, String)) ->
-  List (String, List (String, List String)) ->
+  List (String, List (String, String, List String)) ->
   (String, List Decl) ->
   List Decl
 mangleUnitU exportsPerUnit ctorExportsPerUnit (mid, decls) =
