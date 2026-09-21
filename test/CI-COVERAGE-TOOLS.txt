@@ -514,3 +514,12 @@ test/regex_conformance_test.mdk  the RE2/Go conformance table for stdlib/regex.m
                                asserted: the Makefile `test:` target names it explicitly
                                ([W-MODULE-BLIND]), so `make test` runs it, and CI's `inlang` job
                                runs `make test` and is green.
+test/stdlib_suite_test.mdk     the floor gate for the whole stdlib/ suite (#3214): one roster row
+                               per stdlib/*.mdk, each with the executed-assertion floor it commits
+                               and the engine it is spawned under. Deliberately not a
+                               test/gates.toml `run` target, for the same reason as
+                               test/regex_conformance_test.mdk above: a brand-new gate hits
+                               [W-SHARD-DERIVED]'s hard refusal (no cost-sample row exists for it
+                               yet), which reds the required ci-gen-drift context. Its behavior IS
+                               asserted: the Makefile `test:` target names it explicitly, so
+                               `make test` runs it, and CI's `inlang` job runs `make test`.
