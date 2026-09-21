@@ -3,8 +3,9 @@
 -- Both checksums are required by the gzip/zlib container formats: CRC-32
 -- trails a gzip member (RFC 1952 §2.3.1), Adler-32 trails a zlib stream
 -- (RFC 1950 §2.2). CRC-32 here is table-driven: `crcTable` is built once, as
--- a module-level `Array Int` (lazy top-level nullary — evaluated on first
--- use and cached, not recomputed per call).
+-- a module-level lookup table (lazy top-level nullary — evaluated on first
+-- use and cached, not recomputed per call); the message bytes checksummed
+-- by `crc32`/`adler32` are `Bytes`.
 --
 -- Medaka's `Int` is 63-bit, so every place the algorithm assumes 32-bit
 -- wraparound is masked explicitly with `crc32Mask` (0xFFFFFFFF).
@@ -13,6 +14,8 @@
 -- drag sign bits into the table build and the per-byte update.
 
 import array.{makeWith, get, fromList}
+import bytes as B
+import bytes.{Bytes, fromArrayAssumeByteDomain}
 import test.{expectEqual}
 
 -- ---------------------------------------------------------------------------
@@ -85,14 +88,14 @@ export
 crc32Final : Int -> Int
 crc32Final crc = bitXor crc crc32Mask
 
--- | CRC-32 (IEEE, gzip's checksum) of a byte array — the one-shot form of
+-- | CRC-32 (IEEE, gzip's checksum) of a byte sequence — the one-shot form of
 -- `crc32Init` / `crc32Update` / `crc32Final`.
 --
--- > crc32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])
+-- > crc32 (fromArrayAssumeByteDomain (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57]))
 -- 3421780262
 export
-crc32 : Array Int -> Int
-crc32 bytes = crc32Final (fold crc32Update crc32Init bytes)
+crc32 : Bytes -> Int
+crc32 bytes = crc32Final (B.fold crc32Update crc32Init bytes)
 
 -- ---------------------------------------------------------------------------
 -- Adler-32
@@ -107,15 +110,15 @@ adlerStep pair byte =
   let b2 = (b + a2) % adlerMod
   (a2, b2)
 
--- | Adler-32 checksum of a byte array: `(b << 16) | a`, `a` starts at 1,
+-- | Adler-32 checksum of a byte sequence: `(b << 16) | a`, `a` starts at 1,
 -- `b` starts at 0 (RFC 1950 §2.2).
 --
--- > adler32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])
+-- > adler32 (fromArrayAssumeByteDomain (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57]))
 -- 152961502
 export
-adler32 : Array Int -> Int
+adler32 : Bytes -> Int
 adler32 bytes =
-  let (a, b) = fold adlerStep (1, 0) bytes
+  let (a, b) = B.fold adlerStep (1, 0) bytes
   shiftLeft b 16 + a
 
 -- ---------------------------------------------------------------------------
@@ -130,23 +133,35 @@ adler32 bytes =
 -- sign-bit contamination — the specific way this could break on Medaka's
 -- Int, which native shiftRight makes safe by being a LOGICAL shift).
 
-test "crc32 of empty input is 0" = expectEqual 0 (crc32 (fromList []))
+test "crc32 of empty input is 0" =
+  expectEqual 0 (crc32 (fromArrayAssumeByteDomain (fromList [])))
 test "crc32 of a single byte matches zlib" =
-  expectEqual 3904355907 (crc32 (fromList [97]))
+  expectEqual 3904355907 (crc32 (fromArrayAssumeByteDomain (fromList [97])))
 test "crc32 check value \"123456789\" matches zlib" =
-  expectEqual 3421780262 (crc32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57]))
+  expectEqual
+    3421780262
+    (crc32
+      (fromArrayAssumeByteDomain
+        (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])))
 test "crc32 of high bytes (>= 0x80) matches zlib" =
-  expectEqual 3512481647 (crc32 (fromList [128, 255, 0, 129, 254]))
+  expectEqual
+    3512481647
+    (crc32 (fromArrayAssumeByteDomain (fromList [128, 255, 0, 129, 254])))
 
-test "adler32 of empty input is 1" = expectEqual 1 (adler32 (fromList []))
+test "adler32 of empty input is 1" =
+  expectEqual 1 (adler32 (fromArrayAssumeByteDomain (fromList [])))
 test "adler32 of a single byte matches zlib" =
-  expectEqual 6422626 (adler32 (fromList [97]))
+  expectEqual 6422626 (adler32 (fromArrayAssumeByteDomain (fromList [97])))
 test "adler32 check value \"123456789\" matches zlib" =
   expectEqual
     152961502
-    (adler32 (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57]))
+    (adler32
+      (fromArrayAssumeByteDomain
+        (fromList [49, 50, 51, 52, 53, 54, 55, 56, 57])))
 test "adler32 of high bytes (>= 0x80) matches zlib" =
-  expectEqual 142672639 (adler32 (fromList [128, 255, 0, 129, 254]))
+  expectEqual
+    142672639
+    (adler32 (fromArrayAssumeByteDomain (fromList [128, 255, 0, 129, 254])))
 
 -- An INDEPENDENT bit-serial CRC-32 reference: computes the same checksum by
 -- processing each byte one bit at a time (8 rounds of "shift, XOR the poly
@@ -176,12 +191,13 @@ refCrcBits : Int -> Int -> Int
 refCrcBits c 0 = c
 refCrcBits c n = refCrcBits (refCrcBit c) (n - 1)
 
-refCrc32 : Array Int -> Int
-refCrc32 bytes = bitXor (fold refCrcByte crc32Mask bytes) crc32Mask
+refCrc32 : Bytes -> Int
+refCrc32 bytes = bitXor (B.fold refCrcByte crc32Mask bytes) crc32Mask
 
 prop "crc32 (table-driven) agrees with an independent bit-serial reference" (bytes : List Int) =
   let bs = map mask8 bytes
-  crc32 (fromList bs) == refCrc32 (fromList bs)
+  crc32 (fromArrayAssumeByteDomain (fromList bs))
+    == refCrc32 (fromArrayAssumeByteDomain (fromList bs))
 
 -- Mask an arbitrary generated Int down to a single byte (0..255).
 mask8 : Int -> Int
@@ -190,7 +206,7 @@ mask8 n = bitAnd n 255
 -- Every CRC-32 result is a genuine 32-bit value — catches 63-bit sign-bit
 -- leakage, the specific way this algorithm could break on Medaka's Int.
 prop "crc32 of a single byte lands in 0..0xFFFFFFFF" (b : Int) =
-  let c = crc32 (fromList [mask8 b])
+  let c = crc32 (fromArrayAssumeByteDomain (fromList [mask8 b]))
   c >= 0 && c <= crc32Mask
 
 -- Adler-32's `a` component is an independent re-derivation of half the

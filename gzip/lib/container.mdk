@@ -53,8 +53,9 @@ import bytebuilder.{
   emitU8,
   emitU32LE,
   emitBytes,
-  buildArray,
+  buildBytes,
 }
+import bytes as B
 import bytes.{Bytes, fromArrayAssumeByteDomain}
 import string.{toUtf8, fromUtf8}
 import array  -- brings `impl Foldable Array` (toList) into scope; see AGENTS.md bare-import note
@@ -196,12 +197,14 @@ gzipHeaderParser = defer
 
    A minimal header (no optional fields; a real `gzip -n` stream, xfl=0/os=3):
 
-   > parseGzipHeader (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3])
+   > parseGzipHeader (fromArrayAssumeByteDomain (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3]))
    Ok (GzipHeader { mtime = 0, name = None, comment = None, xfl = 0, os = 3 }, 10)
 -}
 export
-parseGzipHeader : Array Int -> Result String (GzipHeader, Int)
-parseGzipHeader bytes = match runBP gzipHeaderParser bytes 0
+parseGzipHeader : Bytes -> Result String (GzipHeader, Int)
+-- `runBP` parses `Array Int` only (`stdlib/byteparser.mdk:52/58`), so the
+-- `Bytes` argument is unpacked here rather than at the combinator layer.
+parseGzipHeader bytes = match runBP gzipHeaderParser (B.toArray bytes) 0
   BOk h pos => Ok (h, pos)
   BErr msg pos => Err "\{msg} at byte \{pos}"
 
@@ -219,19 +222,23 @@ trailerParser = defer
    on inflate against the actual decompressed data by the module that owns
    inflation; this only decodes the trailer bytes.
 
-   > parseGzipTrailer (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0])
+   > parseGzipTrailer (fromArrayAssumeByteDomain (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0]))
    Ok (907060870, 5)
 -}
 export
-parseGzipTrailer : Array Int -> Result String (Int, Int)
+parseGzipTrailer : Bytes -> Result String (Int, Int)
 parseGzipTrailer bytes =
-  let n = arrayLength bytes
+  let n = B.length bytes
   if n < 8 then
     Err
       "gzip trailer: input too short (need at least 8 bytes for CRC32+ISIZE), got \{n}"
-  else match runBP trailerParser bytes (n - 8)
-    BOk pair _ => Ok pair
-    BErr msg pos => Err "\{msg} at byte \{pos}"
+  else
+    -- `runBP` parses `Array Int` only (`stdlib/byteparser.mdk:52/58`), so
+    -- only the last 8 bytes are unpacked, not the whole member.
+    let trailer = B.sliceClamped (n - 8) n bytes
+    match runBP trailerParser (B.toArray trailer) 0
+      BOk pair _ => Ok pair
+      BErr msg pos => Err "\{msg} at byte \{pos}"
 
 -- ---------------------------------------------------------------------------
 -- Emit
@@ -255,10 +262,10 @@ emitOptionalField (Some s) buf =
    library doesn't have yet); FNAME/FCOMMENT are emitted iff present.
 
    > emitGzipHeader GzipHeader { mtime = 0, name = None, comment = None, xfl = 0, os = 3 }
-   [|31, 139, 8, 0, 0, 0, 0, 0, 0, 3|]
+   Bytes "1f8b0800000000000003"
 -}
 export
-emitGzipHeader : GzipHeader -> Array Int
+emitGzipHeader : GzipHeader -> Bytes
 emitGzipHeader h =
   let buf = newBuilder ()
   emitU8 gzipMagic0 buf
@@ -270,21 +277,21 @@ emitGzipHeader h =
   emitU8 (bitAnd h.os 255) buf
   emitOptionalField h.name buf
   emitOptionalField h.comment buf
-  buildArray buf
+  buildBytes buf
 
 {- | Emit an 8-byte gzip trailer: CRC-32 of the uncompressed data, then
    ISIZE (uncompressed length mod 2^32), both little-endian.
 
    > emitGzipTrailer 907060870 5
-   [|134, 166, 16, 54, 5, 0, 0, 0|]
+   Bytes "86a6103605000000"
 -}
 export
-emitGzipTrailer : Int -> Int -> Array Int
+emitGzipTrailer : Int -> Int -> Bytes
 emitGzipTrailer crc isize =
   let buf = newBuilder ()
   emitU32LE crc buf
   emitU32LE isize buf
-  buildArray buf
+  buildBytes buf
 
 -- ---------------------------------------------------------------------------
 -- Tests — fixed cases from a real `.gz` stream (external oracle: system
@@ -307,7 +314,9 @@ test "parseGzipHeader: minimal header from `gzip -n`" =
       },
       10,
     ))
-    (parseGzipHeader (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3]))
+    (parseGzipHeader
+      (fromArrayAssumeByteDomain
+        (arrayFromList [31, 139, 8, 0, 0, 0, 0, 0, 0, 3])))
 
 -- `printf 'hello' > greet.txt && gzip -k -f greet.txt | xxd`:
 --   1f 8b 08 08 509b726a 00 03  6772656574 2e747874 00  cb48...
@@ -325,10 +334,11 @@ test "parseGzipHeader: FNAME set from a real gzip file" =
       20,
     ))
     (parseGzipHeader
-      (arrayFromList [
-        31, 139, 8, 8, 80, 155, 114, 106, 0, 3, 103, 114, 101, 101, 116, 46,
-        116, 120, 116, 0
-      ]))
+      (fromArrayAssumeByteDomain
+        (arrayFromList [
+          31, 139, 8, 8, 80, 155, 114, 106, 0, 3, 103, 114, 101, 101, 116, 46,
+          116, 120, 116, 0
+        ])))
 
 -- Trailer of the same `hello.gz`, cross-checked against
 -- `python3 -c "import zlib; print(zlib.crc32(b'hello'), len(b'hello'))"`
@@ -336,7 +346,9 @@ test "parseGzipHeader: FNAME set from a real gzip file" =
 test "parseGzipTrailer: crc/isize match zlib.crc32(b'hello')/len" =
   expectEqual
     (Ok (907060870, 5))
-    (parseGzipTrailer (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0]))
+    (parseGzipTrailer
+      (fromArrayAssumeByteDomain
+        (arrayFromList [134, 166, 16, 54, 5, 0, 0, 0])))
 
 -- The trailer parser reads only the LAST 8 bytes: pass the whole minimal
 -- `.gz` stream (header + 7-byte deflate payload + trailer) and it must skip
@@ -345,22 +357,27 @@ test "parseGzipTrailer: reads the LAST 8 bytes of a full member" =
   expectEqual
     (Ok (907060870, 5))
     (parseGzipTrailer
-      (arrayFromList [
-        31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166,
-        16, 54, 5, 0, 0, 0
-      ]))
+      (fromArrayAssumeByteDomain
+        (arrayFromList [
+          31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134,
+          166, 16, 54, 5, 0, 0, 0
+        ])))
 
 -- Error path: bad magic (first two bytes wrong). The failure position is 2,
 -- not 0: `takeBytes 2` already consumed both magic bytes before `checkMagic`
 -- runs (ByteParser position-threading is post-hoc, not lookahead).
 test "parseGzipHeader: bad magic is rejected" =
-  match parseGzipHeader (arrayFromList [0, 0, 8, 0, 0, 0, 0, 0, 0, 3])
+  let input =
+    fromArrayAssumeByteDomain (arrayFromList [0, 0, 8, 0, 0, 0, 0, 0, 0, 3])
+  match parseGzipHeader input
     Err msg => expectEqual "not a gzip stream (bad magic) at byte 2" msg
     Ok _ => fail "expected Err on bad magic"
 
 -- Error path: CM /= 8 (deflate is the only method gzip actually uses).
 test "parseGzipHeader: CM /= 8 is rejected" =
-  match parseGzipHeader (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3])
+  let input =
+    fromArrayAssumeByteDomain (arrayFromList [31, 139, 9, 0, 0, 0, 0, 0, 0, 3])
+  match parseGzipHeader input
     Err msg =>
       expectEqual
         "unsupported compression method (CM=9); only 8 (deflate) is supported at byte 3"
@@ -369,7 +386,9 @@ test "parseGzipHeader: CM /= 8 is rejected" =
 
 -- Error path: a reserved FLG bit (bit 5, value 32) is set.
 test "parseGzipHeader: a reserved FLG bit is rejected" =
-  match parseGzipHeader (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3])
+  let input =
+    fromArrayAssumeByteDomain (arrayFromList [31, 139, 8, 32, 0, 0, 0, 0, 0, 3])
+  match parseGzipHeader input
     Err msg =>
       expectEqual
         "reserved FLG bits (5,6,7) must be 0, got FLG=32 at byte 4"

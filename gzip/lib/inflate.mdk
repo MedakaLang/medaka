@@ -38,6 +38,8 @@
 
 import array.{get, make, sliceClamped}
 import vector.{Vector, new, push, get as maGet, toArray, fromList}
+import bytes as B
+import bytes.{Bytes}
 import lib.bitio.{
   BitReader,
   newBitReader,
@@ -150,13 +152,13 @@ checkNlen len nlen =
 -- Push every byte of `bytes` onto `out`, in order — this is what makes a
 -- stored block's payload part of the sliding window, not just part of the
 -- output (see the module header).
-pushAll : Array Int -> Vector Int -> Unit
-pushAll bytes out = pushAllGo bytes 0 (arrayLength bytes) out
+pushAll : Bytes -> Vector Int -> Unit
+pushAll bytes out = pushAllGo bytes 0 (B.length bytes) out
 
-pushAllGo : Array Int -> Int -> Int -> Vector Int -> Unit
+pushAllGo : Bytes -> Int -> Int -> Vector Int -> Unit
 pushAllGo bytes i n out
   | i >= n = ()
-  | otherwise = match get i bytes
+  | otherwise = match B.get i bytes
     Some b =>
       let _ = push b out
       pushAllGo bytes (i + 1) n out
@@ -456,17 +458,17 @@ inflateBlocks r out = do
 {- | Decode a raw DEFLATE stream (RFC 1951) — no gzip/zlib framing — to its
    uncompressed bytes.
 
-   > inflate (arrayFromList [1, 3, 0, 252, 255, 65, 66, 67])
-   Ok [|65, 66, 67|]
+   > inflate (B.fromArrayAssumeByteDomain (arrayFromList [1, 3, 0, 252, 255, 65, 66, 67]))
+   Ok Bytes "414243"
 -}
 export
-inflate : Array Int -> Result String (Array Int)
+inflate : Bytes -> Result String Bytes
 inflate bytes =
   let r = newBitReader bytes
   let out = new ()
   do
     _ <- inflateBlocks r out
-    Ok (toArray out)
+    Ok (B.fromArrayAssumeByteDomain (toArray out))
 
 -- ---------------------------------------------------------------------------
 -- gzip member decode: header + inflate + trailer validation
@@ -497,19 +499,19 @@ checkIsize ours stored =
    stored DEFLATE block for `"hi"`, verified against the system `gunzip`
    (`gunzip -c` on these exact bytes prints `hi`, exit 0).
 
-   > gunzipMember (arrayFromList [31,139,8,0,0,0,0,0,0,3,1,2,0,253,255,104,105,172,42,147,216,2,0,0,0])
-   Ok [|104, 105|]
+   > gunzipMember (B.fromArrayAssumeByteDomain (arrayFromList [31,139,8,0,0,0,0,0,0,3,1,2,0,253,255,104,105,172,42,147,216,2,0,0,0]))
+   Ok Bytes "6869"
 -}
 export
-gunzipMember : Array Int -> Result String (Array Int)
+gunzipMember : Bytes -> Result String Bytes
 gunzipMember bytes = do
   (hdr, off) <- parseGzipHeader bytes
-  let n = arrayLength bytes
-  let payload = sliceClamped off (n - 8) bytes
+  let n = B.length bytes
+  let payload = B.sliceClamped off (n - 8) bytes
   decoded <- inflate payload
   (storedCrc, storedIsize) <- parseGzipTrailer bytes
   _ <- checkCrc (crc32 decoded) storedCrc
-  _ <- checkIsize (arrayLength decoded) storedIsize
+  _ <- checkIsize (B.length decoded) storedIsize
   Ok decoded
 
 -- ---------------------------------------------------------------------------
@@ -523,15 +525,17 @@ gunzipMember bytes = do
 -- real, this round-trips to "hello" (the independent oracle:
 -- `python3 -c "import zlib; print(zlib.decompress(open('h.gz','rb').read(), 16+zlib.MAX_WBITS))"`
 -- on these exact bytes prints `b'hello'`).
-helloGz : Array Int
-helloGz = arrayFromList [
-  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166, 16,
-  54, 5, 0, 0, 0
-]
+helloGz : Bytes
+helloGz =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList [
+      31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 203, 72, 205, 201, 201, 7, 0, 134, 166,
+      16, 54, 5, 0, 0, 0
+    ])
 
 test "gunzipMember on real hello.gz (fixed Huffman) round-trips to \"hello\"" =
   expectEqual
-    (Ok (arrayFromList [104, 101, 108, 108, 111]))
+    (Ok (B.fromArrayAssumeByteDomain (arrayFromList [104, 101, 108, 108, 111])))
     (gunzipMember helloGz)
 
 -- `python3 -c "print('ab'*37)" | gzip -n -c` — a repetitive input that
@@ -542,19 +546,24 @@ test "gunzipMember on real hello.gz (fixed Huffman) round-trips to \"hello\"" =
 -- overlap case (distance=2), a sibling of the `distance=1` RLE case already
 -- covered by `copyBack`'s own unit tests above, now exercised end to end
 -- through Huffman decoding.
-abRepeatedGz : Array Int
-abRepeatedGz = arrayFromList [
-  31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 76, 74, 164, 18, 4, 0, 12, 130, 171, 154,
-  74, 0, 0, 0
-]
+abRepeatedGz : Bytes
+abRepeatedGz =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList [
+      31, 139, 8, 0, 0, 0, 0, 0, 0, 3, 75, 76, 74, 164, 18, 4, 0, 12, 130, 171,
+      154, 74, 0, 0, 0
+    ])
 
-abRepeatedBin : Array Int
-abRepeatedBin = arrayFromList [
-  97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97,
-  98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
-  97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97,
-  98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98
-]
+abRepeatedBin : Bytes
+abRepeatedBin =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList [
+      97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
+      97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
+      97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
+      97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98, 97, 98,
+      97, 98
+    ])
 
 test "gunzipMember: fixed-Huffman with distance=2 back-references round-trips" =
   expectEqual (Ok abRepeatedBin) (gunzipMember abRepeatedGz)
@@ -582,32 +591,38 @@ test "gunzipMember: fixed-Huffman with distance=2 back-references round-trips" =
 -- back-reference path end to end, independent of the gzip container.
 -- ---------------------------------------------------------------------------
 
-dynBytes : Array Int
-dynBytes = arrayFromList [
-  205, 204, 193, 13, 128, 32, 16, 68, 209, 86, 166, 2, 123, 26, 216, 5, 9, 44,
-  107, 4, 15, 88, 189, 148, 225, 233, 31, 94, 242, 243, 91, 46, 140, 201, 89,
-  226, 206, 173, 52, 152, 10, 43, 17, 93, 20, 178, 58, 109, 83, 104, 30, 43, 68,
-  83, 227, 84, 140, 101, 193, 27, 206, 39, 37, 99, 63, 144, 127, 51, 249, 0
-]
+dynBytes : Bytes
+dynBytes =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList [
+      205, 204, 193, 13, 128, 32, 16, 68, 209, 86, 166, 2, 123, 26, 216, 5, 9,
+      44, 107, 4, 15, 88, 189, 148, 225, 233, 31, 94, 242, 243, 91, 46, 140,
+      201, 89, 226, 206, 173, 52, 152, 10, 43, 17, 93, 20, 178, 58, 109, 83,
+      104, 30, 43, 68, 83, 227, 84, 140, 101, 193, 27, 206, 39, 37, 99, 63, 144,
+      127, 51, 249, 0
+    ])
 
 -- The plaintext `dynBytes` decodes to (ASCII bytes of the shuffled-word text
 -- above, repeated 3 times) — from the SAME python invocation, `list(data)`.
-dynExpected : Array Int
-dynExpected = arrayFromList [
-  103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32, 115, 116, 114, 101,
-  97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100, 101, 32, 100, 121,
-  110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100, 101, 102, 108, 97,
-  116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117, 102, 102, 109, 97,
-  110, 46, 32, 103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32, 115, 116,
-  114, 101, 97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100, 101, 32,
-  100, 121, 110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100, 101, 102,
-  108, 97, 116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117, 102, 102,
-  109, 97, 110, 46, 32, 103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32,
-  115, 116, 114, 101, 97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100,
-  101, 32, 100, 121, 110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100,
-  101, 102, 108, 97, 116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117,
-  102, 102, 109, 97, 110, 46, 32
-]
+dynExpected : Bytes
+dynExpected =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList [
+      103, 122, 105, 112, 32, 115, 116, 97, 116, 105, 99, 32, 115, 116, 114,
+      101, 97, 109, 32, 109, 101, 100, 97, 107, 97, 32, 99, 111, 100, 101, 32,
+      100, 121, 110, 97, 109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100, 101,
+      102, 108, 97, 116, 101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117,
+      102, 102, 109, 97, 110, 46, 32, 103, 122, 105, 112, 32, 115, 116, 97, 116,
+      105, 99, 32, 115, 116, 114, 101, 97, 109, 32, 109, 101, 100, 97, 107, 97,
+      32, 99, 111, 100, 101, 32, 100, 121, 110, 97, 109, 105, 99, 32, 98, 108,
+      111, 99, 107, 32, 100, 101, 102, 108, 97, 116, 101, 32, 115, 121, 109, 98,
+      111, 108, 32, 104, 117, 102, 102, 109, 97, 110, 46, 32, 103, 122, 105,
+      112, 32, 115, 116, 97, 116, 105, 99, 32, 115, 116, 114, 101, 97, 109, 32,
+      109, 101, 100, 97, 107, 97, 32, 99, 111, 100, 101, 32, 100, 121, 110, 97,
+      109, 105, 99, 32, 98, 108, 111, 99, 107, 32, 100, 101, 102, 108, 97, 116,
+      101, 32, 115, 121, 109, 98, 111, 108, 32, 104, 117, 102, 102, 109, 97,
+      110, 46, 32
+    ])
 
 test "inflate: real dynamic-Huffman raw DEFLATE stream (zlib -15) round-trips" =
   expectEqual (Ok dynExpected) (inflate dynBytes)
@@ -634,7 +649,7 @@ test "inflate: real dynamic-Huffman raw DEFLATE stream (zlib -15) round-trips" =
 --   the output array at all.
 -- ---------------------------------------------------------------------------
 
-repeatFirstBytes : Array Int
+repeatFirstBytes : Bytes
 repeatFirstBytes =
   let w = newBitWriter ()
   let _ = putBits 1 1 w  -- BFINAL = 1
@@ -663,49 +678,56 @@ test "inflate: dynamic Huffman rejects repeat-code 16 as the FIRST code-length s
 -- complement of 200. Cross-checked against
 -- `python3 -c "import zlib; d=open('rand.bin','rb').read(); print(zlib.crc32(d), len(d))"`
 -- -> 547945378 200.
-randGz : Array Int
-randGz = arrayFromList [
-  31, 139, 8, 0, 0, 0, 0, 0, 4, 3, 1, 200, 0, 55, 255, 190, 246, 7, 148, 140,
-  204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77, 123, 149, 186, 225, 117,
-  173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184, 216, 6, 73, 248, 122, 225,
-  141, 220, 91, 157, 16, 255, 181, 8, 13, 100, 202, 137, 199, 185, 210, 108,
-  225, 18, 33, 5, 206, 152, 26, 254, 127, 84, 202, 154, 167, 124, 252, 141, 136,
-  108, 34, 7, 38, 231, 155, 60, 142, 124, 93, 53, 248, 19, 246, 162, 230, 25,
-  186, 135, 220, 205, 123, 92, 159, 122, 220, 40, 141, 230, 159, 22, 167, 37,
-  109, 108, 254, 2, 19, 56, 91, 180, 254, 214, 119, 115, 189, 255, 31, 16, 146,
-  246, 3, 23, 72, 163, 157, 187, 251, 204, 138, 106, 133, 111, 74, 231, 32, 221,
-  125, 127, 246, 204, 166, 219, 42, 153, 120, 174, 43, 151, 52, 168, 18, 217, 6,
-  225, 250, 65, 150, 113, 82, 56, 11, 243, 88, 99, 138, 25, 128, 232, 218, 51,
-  248, 151, 250, 176, 60, 177, 73, 157, 39, 184, 131, 101, 125, 101, 91, 229,
-  23, 154, 250, 197, 248, 98, 90, 106, 191, 88, 196, 3, 162, 251, 168, 32, 200,
-  0, 0, 0
-]
+randGz : Bytes
+randGz =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList [
+      31, 139, 8, 0, 0, 0, 0, 0, 4, 3, 1, 200, 0, 55, 255, 190, 246, 7, 148,
+      140, 204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77, 123, 149, 186, 225,
+      117, 173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184, 216, 6, 73, 248,
+      122, 225, 141, 220, 91, 157, 16, 255, 181, 8, 13, 100, 202, 137, 199, 185,
+      210, 108, 225, 18, 33, 5, 206, 152, 26, 254, 127, 84, 202, 154, 167, 124,
+      252, 141, 136, 108, 34, 7, 38, 231, 155, 60, 142, 124, 93, 53, 248, 19,
+      246, 162, 230, 25, 186, 135, 220, 205, 123, 92, 159, 122, 220, 40, 141,
+      230, 159, 22, 167, 37, 109, 108, 254, 2, 19, 56, 91, 180, 254, 214, 119,
+      115, 189, 255, 31, 16, 146, 246, 3, 23, 72, 163, 157, 187, 251, 204, 138,
+      106, 133, 111, 74, 231, 32, 221, 125, 127, 246, 204, 166, 219, 42, 153,
+      120, 174, 43, 151, 52, 168, 18, 217, 6, 225, 250, 65, 150, 113, 82, 56,
+      11, 243, 88, 99, 138, 25, 128, 232, 218, 51, 248, 151, 250, 176, 60, 177,
+      73, 157, 39, 184, 131, 101, 125, 101, 91, 229, 23, 154, 250, 197, 248, 98,
+      90, 106, 191, 88, 196, 3, 162, 251, 168, 32, 200, 0, 0, 0
+    ])
 
 -- The 200 raw bytes `randGz` decompresses to (the payload bytes of `randGz`
 -- between the 10-byte header + 5-byte block header, and the 8-byte trailer).
-randBin : Array Int
-randBin = arrayFromList [
-  190, 246, 7, 148, 140, 204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77, 123,
-  149, 186, 225, 117, 173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184, 216, 6,
-  73, 248, 122, 225, 141, 220, 91, 157, 16, 255, 181, 8, 13, 100, 202, 137, 199,
-  185, 210, 108, 225, 18, 33, 5, 206, 152, 26, 254, 127, 84, 202, 154, 167, 124,
-  252, 141, 136, 108, 34, 7, 38, 231, 155, 60, 142, 124, 93, 53, 248, 19, 246,
-  162, 230, 25, 186, 135, 220, 205, 123, 92, 159, 122, 220, 40, 141, 230, 159,
-  22, 167, 37, 109, 108, 254, 2, 19, 56, 91, 180, 254, 214, 119, 115, 189, 255,
-  31, 16, 146, 246, 3, 23, 72, 163, 157, 187, 251, 204, 138, 106, 133, 111, 74,
-  231, 32, 221, 125, 127, 246, 204, 166, 219, 42, 153, 120, 174, 43, 151, 52,
-  168, 18, 217, 6, 225, 250, 65, 150, 113, 82, 56, 11, 243, 88, 99, 138, 25,
-  128, 232, 218, 51, 248, 151, 250, 176, 60, 177, 73, 157, 39, 184, 131, 101,
-  125, 101, 91, 229, 23, 154, 250, 197, 248, 98, 90, 106, 191, 88, 196, 3
-]
+randBin : Bytes
+randBin =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList [
+      190, 246, 7, 148, 140, 204, 149, 34, 157, 59, 105, 78, 139, 12, 231, 77,
+      123, 149, 186, 225, 117, 173, 39, 30, 68, 168, 225, 77, 156, 131, 16, 184,
+      216, 6, 73, 248, 122, 225, 141, 220, 91, 157, 16, 255, 181, 8, 13, 100,
+      202, 137, 199, 185, 210, 108, 225, 18, 33, 5, 206, 152, 26, 254, 127, 84,
+      202, 154, 167, 124, 252, 141, 136, 108, 34, 7, 38, 231, 155, 60, 142, 124,
+      93, 53, 248, 19, 246, 162, 230, 25, 186, 135, 220, 205, 123, 92, 159, 122,
+      220, 40, 141, 230, 159, 22, 167, 37, 109, 108, 254, 2, 19, 56, 91, 180,
+      254, 214, 119, 115, 189, 255, 31, 16, 146, 246, 3, 23, 72, 163, 157, 187,
+      251, 204, 138, 106, 133, 111, 74, 231, 32, 221, 125, 127, 246, 204, 166,
+      219, 42, 153, 120, 174, 43, 151, 52, 168, 18, 217, 6, 225, 250, 65, 150,
+      113, 82, 56, 11, 243, 88, 99, 138, 25, 128, 232, 218, 51, 248, 151, 250,
+      176, 60, 177, 73, 157, 39, 184, 131, 101, 125, 101, 91, 229, 23, 154, 250,
+      197, 248, 98, 90, 106, 191, 88, 196, 3
+    ])
 
 test "gunzipMember: real stored-block .gz round-trips byte for byte" =
   expectEqual (Ok randBin) (gunzipMember randGz)
 
 -- Corrupt NLEN (byte offset 13, one of the two NLEN bytes: 55 -> 56) so it is
 -- no longer the one's complement of LEN=200.
-corruptedNlenGz : Array Int
-corruptedNlenGz = arrayFromList (setAt 13 56 (toList randGz))
+corruptedNlenGz : Bytes
+corruptedNlenGz =
+  B.fromArrayAssumeByteDomain
+    (arrayFromList (setAt 13 56 (toList (B.toArray randGz))))
 
 setAt : Int -> a -> List a -> List a
 setAt _ _ [] = []
@@ -723,17 +745,18 @@ test "gunzipMember: a corrupted NLEN is rejected" =
 -- Truncate mid-payload (keep only the header + block header + a handful of
 -- payload bytes, well short of LEN=200 and short of the trailer). Must be an
 -- `Err`, not a hang and not a wrong-length success.
-truncatedGz : Array Int
-truncatedGz = sliceClamped 0 20 randGz
+truncatedGz : Bytes
+truncatedGz = B.sliceClamped 0 20 randGz
 
 test "gunzipMember: a truncated stream is Err, not a hang" =
   expectTrue (isErr (gunzipMember truncatedGz))
 
 -- Corrupt one byte of the CRC-32 field in the trailer (the last 8 bytes,
 -- first 4 are CRC-32 LE — flip the low byte).
-corruptedCrcGz : Array Int
+corruptedCrcGz : Bytes
 corruptedCrcGz =
-  arrayFromList (setAt (arrayLength randGz - 8) 0 (toList randGz))
+  B.fromArrayAssumeByteDomain
+    (arrayFromList (setAt (B.length randGz - 8) 0 (toList (B.toArray randGz))))
 
 test "gunzipMember: a corrupted trailer CRC-32 is rejected" =
   match gunzipMember corruptedCrcGz
@@ -748,16 +771,18 @@ test "gunzipMember: a corrupted trailer CRC-32 is rejected" =
 -- caller exists yet (see module header).
 -- ---------------------------------------------------------------------------
 
-copyBackResult : List Int -> Int -> Int -> Result String (Array Int)
+copyBackResult : List Int -> Int -> Int -> Result String Bytes
 copyBackResult seed distance len =
   let out = fromList seed
-  map (_ => toArray out) (copyBack distance len out)
+  map
+    (_ => B.fromArrayAssumeByteDomain (toArray out))
+    (copyBack distance len out)
 
 -- Design-doc-verified shape: `distance=1, length=4` over `[65,66]` is
 -- run-length encoding of the trailing byte, `66`, four more times.
 test "copyBack: distance=1 (RLE) repeats the trailing byte" =
   expectEqual
-    (Ok (arrayFromList [65, 66, 66, 66, 66, 66]))
+    (Ok (B.fromArrayAssumeByteDomain (arrayFromList [65, 66, 66, 66, 66, 66])))
     (copyBackResult [65, 66] 1 4)
 
 -- `distance == length(out)` is legal and refers to the very FIRST output
@@ -765,7 +790,7 @@ test "copyBack: distance=1 (RLE) repeats the trailing byte" =
 -- (which by then is the just-copied 65), yielding `[65, 66, 67, 65, 66]`.
 test "copyBack: distance == outLen refers to the first output byte (legal)" =
   expectEqual
-    (Ok (arrayFromList [65, 66, 67, 65, 66]))
+    (Ok (B.fromArrayAssumeByteDomain (arrayFromList [65, 66, 67, 65, 66])))
     (copyBackResult [65, 66, 67] 3 2)
 
 -- A general overlap case: `distance=2, length=5` over `[1, 2]` alternates
@@ -773,7 +798,7 @@ test "copyBack: distance == outLen refers to the first output byte (legal)" =
 -- later: seed `1,2` followed by 5 more copies `1,2,1,2,1`.
 test "copyBack: distance=2, length=5 alternates the seed bytes" =
   expectEqual
-    (Ok (arrayFromList [1, 2, 1, 2, 1, 2, 1]))
+    (Ok (B.fromArrayAssumeByteDomain (arrayFromList [1, 2, 1, 2, 1, 2, 1])))
     (copyBackResult [1, 2] 2 5)
 
 -- `distance > length(out)` is a malformed stream, not a wrap-around: `Err`.
@@ -815,7 +840,7 @@ prop "copyBack grows the output by exactly `length`, for any legal distance" (se
 -- a bug shared between "how this property builds a stored block" and "how
 -- `inflateStored` reads one" would have to be the SAME bug in both, not a
 -- tautology any encoding/decoding pair would pass.
-storedBlockStream : List Int -> Array Int
+storedBlockStream : List Int -> Bytes
 storedBlockStream bytes =
   let n = length bytes
   let lenLow = bitAnd n 255
@@ -823,16 +848,17 @@ storedBlockStream bytes =
   let nlen = bitAnd (bitNot n) mask16
   let nlenLow = bitAnd nlen 255
   let nlenHigh = shiftRight nlen 8
-  arrayFromList
-    (1
-      :: lenLow
-      :: lenHigh
-      :: nlenLow
-      :: nlenHigh
-      :: map (b => bitAnd b 255) bytes)
+  B.fromArrayAssumeByteDomain
+    (arrayFromList
+      (1
+        :: lenLow
+        :: lenHigh
+        :: nlenLow
+        :: nlenHigh
+        :: map (b => bitAnd b 255) bytes))
 
 prop "inflate of a hand-built single stored block round-trips arbitrary bytes" (bytes : List Int) =
   let masked = map (b => bitAnd b 255) bytes
   match inflate (storedBlockStream bytes)
-    Ok got => got == arrayFromList masked
+    Ok got => got == B.fromArrayAssumeByteDomain (arrayFromList masked)
     Err _ => False
