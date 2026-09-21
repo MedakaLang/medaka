@@ -195,7 +195,11 @@ export impl Index Bytes Int Int where
    [||] -}
 export impl Slice Bytes where
   slice (Bytes bb) lo hi =
-    if lo < 0 || hi > byteBlockLength bb || hi - lo < 0 then
+    -- `hi < lo` rather than `hi - lo < 0`, as in `Slice (Array a)`: the
+    -- difference wraps once `lo` and `hi` are far enough apart, and a range
+    -- that slips past the guard reaches `byteBlockBlit` with an out-of-range
+    -- offset.
+    if lo < 0 || hi > byteBlockLength bb || hi < lo then
       sliceError lo (hi - 1)
     else
       let dst = byteBlockMake (hi - lo)

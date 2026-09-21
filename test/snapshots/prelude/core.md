@@ -1,5 +1,5 @@
 # META
-source_lines=2078
+source_lines=2080
 stages=TYPES
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1262,7 +1262,12 @@ export interface Slice c where
    [|20, 30|] -}
 export impl Slice (Array a) where
   slice arr lo hi =
-    if lo < 0 || hi > arrayLength arr || hi - lo < 0 then
+    -- The emptiness test is `hi < lo`, not `hi - lo < 0`: the difference wraps
+    -- once `lo` and `hi` are far enough apart, so the subtracting form admits
+    -- the very ranges the guard exists to reject and lets `arrayGetUnsafe`
+    -- read off the end. The two `Slice` impls below and `Slice Bytes` in
+    -- `stdlib/bytes.mdk` carry the same test for the same reason.
+    if lo < 0 || hi > arrayLength arr || hi < lo then
       sliceError lo (hi - 1)
     else
       arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) arr)
@@ -1276,7 +1281,7 @@ export impl Slice (Array a) where
    "ell" -}
 export impl Slice String where
   slice s lo hi =
-    if lo < 0 || hi > stringLength s || hi - lo < 0 then
+    if lo < 0 || hi > stringLength s || hi < lo then
       sliceError lo (hi - 1)
     else
       stringSlice lo hi s
@@ -1290,10 +1295,7 @@ export impl Slice String where
    [20, 30] -}
 export impl Slice (List a) where
   slice xs lo hi =
-    if lo < 0 || hi - lo < 0 then
-      sliceError lo (hi - 1)
-    else
-      sliceListGo xs 0 lo hi
+    if lo < 0 || hi < lo then sliceError lo (hi - 1) else sliceListGo xs 0 lo hi
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in
 -- `[lo, hi)`, stop at `hi`.  Reaching the end of the chain while the running

@@ -1,5 +1,5 @@
 # META
-source_lines=2078
+source_lines=2080
 stages=DESUGAR,MARK
 # SOURCE
 {- | The prelude: the types, interfaces, and functions every Medaka program
@@ -1262,7 +1262,12 @@ export interface Slice c where
    [|20, 30|] -}
 export impl Slice (Array a) where
   slice arr lo hi =
-    if lo < 0 || hi > arrayLength arr || hi - lo < 0 then
+    -- The emptiness test is `hi < lo`, not `hi - lo < 0`: the difference wraps
+    -- once `lo` and `hi` are far enough apart, so the subtracting form admits
+    -- the very ranges the guard exists to reject and lets `arrayGetUnsafe`
+    -- read off the end. The two `Slice` impls below and `Slice Bytes` in
+    -- `stdlib/bytes.mdk` carry the same test for the same reason.
+    if lo < 0 || hi > arrayLength arr || hi < lo then
       sliceError lo (hi - 1)
     else
       arrayMakeWith (hi - lo) (i => arrayGetUnsafe (lo + i) arr)
@@ -1276,7 +1281,7 @@ export impl Slice (Array a) where
    "ell" -}
 export impl Slice String where
   slice s lo hi =
-    if lo < 0 || hi > stringLength s || hi - lo < 0 then
+    if lo < 0 || hi > stringLength s || hi < lo then
       sliceError lo (hi - 1)
     else
       stringSlice lo hi s
@@ -1290,10 +1295,7 @@ export impl Slice String where
    [20, 30] -}
 export impl Slice (List a) where
   slice xs lo hi =
-    if lo < 0 || hi - lo < 0 then
-      sliceError lo (hi - 1)
-    else
-      sliceListGo xs 0 lo hi
+    if lo < 0 || hi < lo then sliceError lo (hi - 1) else sliceListGo xs 0 lo hi
 
 -- Cons-chain walk for `Slice (List a)`: keep heads whose running index is in
 -- `[lo, hi)`, stop at `hi`.  Reaching the end of the chain while the running
@@ -2297,9 +2299,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "indexGo" ((PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EVar "indexGo") (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
-(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
-(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
-(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
+(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
+(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
+(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "sliceListGo" ((PCons (PVar "x") (PVar "xs")) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EBinOp ">=" (EVar "i") (EVar "lo")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))
@@ -2687,9 +2689,9 @@ prop "Hashable Array: equal arrays hash equally" (xs : List Int) =
 (DFunDef false "indexGo" ((PCons (PVar "h") (PVar "t")) (PVar "i0") (PVar "i")) (EIf (EBinOp "<=" (EVar "i") (ELit (LInt 0))) (EVar "h") (EApp (EApp (EApp (EVar "indexGo") (EVar "t")) (EVar "i0")) (EBinOp "-" (EVar "i") (ELit (LInt 1))))))
 (DImpl true "Index" ((TyCon "String") (TyCon "Int") (TyCon "Char")) () ((im "index" ((PVar "s") (PVar "i")) (EBlock (DoLet false false (PVar "cs") (EApp (EVar "stringToChars") (EVar "s"))) (DoExpr (EIf (EBinOp "||" (EBinOp "<" (EVar "i") (ELit (LInt 0))) (EBinOp ">=" (EVar "i") (EApp (EVar "arrayLength") (EVar "cs")))) (EApp (EVar "indexErrorAt") (EVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EVar "i")) (EVar "cs"))))))))
 (DInterface true false "Slice" ("c") () ((imethod "slice" (TyFun (TyVar "c") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyVar "c")))) None)))
-(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
-(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
-(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EBinOp "-" (EVar "hi") (EVar "lo")) (ELit (LInt 0)))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
+(DImpl true "Slice" ((TyApp (TyCon "Array") (TyVar "a"))) () ((im "slice" ((PVar "arr") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "arrayLength") (EVar "arr")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EVar "arrayMakeWith") (EBinOp "-" (EVar "hi") (EVar "lo"))) (ELam ((PVar "i")) (EApp (EApp (EVar "arrayGetUnsafe") (EBinOp "+" (EVar "lo") (EVar "i"))) (EVar "arr"))))))))
+(DImpl true "Slice" ((TyCon "String")) () ((im "slice" ((PVar "s") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp ">" (EVar "hi") (EApp (EVar "stringLength") (EVar "s")))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EVar "stringSlice") (EVar "lo")) (EVar "hi")) (EVar "s"))))))
+(DImpl true "Slice" ((TyApp (TyCon "List") (TyVar "a"))) () ((im "slice" ((PVar "xs") (PVar "lo") (PVar "hi")) (EIf (EBinOp "||" (EBinOp "<" (EVar "lo") (ELit (LInt 0))) (EBinOp "<" (EVar "hi") (EVar "lo"))) (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (ELit (LInt 0))) (EVar "lo")) (EVar "hi"))))))
 (DTypeSig false "sliceListGo" (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyVar "a")))))))
 (DFunDef false "sliceListGo" ((PList) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EVar "otherwise") (EApp (EApp (EVar "sliceError") (EVar "lo")) (EBinOp "-" (EVar "hi") (ELit (LInt 1)))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DFunDef false "sliceListGo" ((PCons (PVar "x") (PVar "xs")) (PVar "i") (PVar "lo") (PVar "hi")) (EIf (EBinOp ">=" (EVar "i") (EVar "hi")) (EListLit) (EIf (EBinOp ">=" (EVar "i") (EVar "lo")) (EBinOp "::" (EVar "x") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi"))) (EIf (EVar "otherwise") (EApp (EApp (EApp (EApp (EVar "sliceListGo") (EVar "xs")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "lo")) (EVar "hi")) (EApp (EVar "__fallthrough__") (ELit LUnit))))))

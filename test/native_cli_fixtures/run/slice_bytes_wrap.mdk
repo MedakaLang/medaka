@@ -1,0 +1,8 @@
+import bytes.{fromArrayAssumeByteDomain, toArray}
+
+-- `hi - lo` wraps positive when `lo` is `maxBound` and `hi` is `minBound`, so
+-- a guard written as `hi - lo < 0` admits this range and reaches an unchecked
+-- read; the guard must compare `hi` against `lo` directly.
+main =
+  let b = fromArrayAssumeByteDomain [|1, 2, 3|]
+  println (toArray (slice b maxBound minBound))

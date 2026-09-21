@@ -1381,12 +1381,12 @@ NEWLINE
 DEDENT
 ELSE
 IF
-IDENT "srcOff"
-PLUS
 IDENT "len"
 GT
 IDENT "arrayLength"
 IDENT "src"
+MINUS
+IDENT "srcOff"
 THEN
 INDENT
 IDENT "panic"
@@ -1395,12 +1395,12 @@ NEWLINE
 DEDENT
 ELSE
 IF
-IDENT "dstOff"
-PLUS
 IDENT "len"
 GT
 IDENT "arrayLength"
 IDENT "dst"
+MINUS
+IDENT "dstOff"
 THEN
 INDENT
 IDENT "panic"

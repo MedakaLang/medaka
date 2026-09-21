@@ -1,5 +1,5 @@
 # META
-source_lines=752
+source_lines=756
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `Array a`.
@@ -385,15 +385,19 @@ fill x arr = arrayFill x arr
 export
 blit : Array a -> Int -> Array a -> Int -> Int -> Unit
 blit src srcOff dst dstOff len =
+  -- Each bound is `len > length - off` rather than `off + len > length`: the
+  -- sum wraps negative for an `off` near `maxBound` and admits a copy that
+  -- then runs off the end. The negative-argument arms come first so the
+  -- subtraction cannot itself overflow. `mut_bytes.blit` guards the same way.
   if len < 0 then
     panic "Array.blit: negative length"
   else if srcOff < 0 then
     panic "Array.blit: negative srcOff"
   else if dstOff < 0 then
     panic "Array.blit: negative dstOff"
-  else if srcOff + len > arrayLength src then
+  else if len > arrayLength src - srcOff then
     panic "Array.blit: source out of bounds"
-  else if dstOff + len > arrayLength dst then
+  else if len > arrayLength dst - dstOff then
     panic "Array.blit: destination out of bounds"
   else
     arrayBlit src srcOff dst dstOff len
@@ -816,7 +820,7 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
 (DTypeSig true "fill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "fill" ((PVar "x") (PVar "arr")) (EApp (EApp (EVar "arrayFill") (EVar "x")) (EVar "arr")))
 (DTypeSig true "blit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
-(DFunDef false "blit" ((PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative dstOff"))) (EIf (EBinOp ">" (EBinOp "+" (EVar "srcOff") (EVar "len")) (EApp (EVar "arrayLength") (EVar "src"))) (EApp (EVar "panic") (ELit (LString "Array.blit: source out of bounds"))) (EIf (EBinOp ">" (EBinOp "+" (EVar "dstOff") (EVar "len")) (EApp (EVar "arrayLength") (EVar "dst"))) (EApp (EVar "panic") (ELit (LString "Array.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "srcOff")) (EVar "dst")) (EVar "dstOff")) (EVar "len"))))))))
+(DFunDef false "blit" ((PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "src")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "Array.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "dst")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "Array.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "srcOff")) (EVar "dst")) (EVar "dstOff")) (EVar "len"))))))))
 (DTypeSig true "sortInPlaceBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
 (DFunDef false "sortInPlaceBy" ((PVar "cmp") (PVar "arr")) (EBlock (DoLet false false (PVar "sorted") (EApp (EApp (EVar "sortBy") (EVar "cmp")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "sorted")) (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
 (DTypeSig true "sortInPlace" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
@@ -935,7 +939,7 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
 (DTypeSig true "fill" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
 (DFunDef false "fill" ((PVar "x") (PVar "arr")) (EApp (EApp (EVar "arrayFill") (EVar "x")) (EVar "arr")))
 (DTypeSig true "blit" (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Unit")))))))
-(DFunDef false "blit" ((PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative dstOff"))) (EIf (EBinOp ">" (EBinOp "+" (EVar "srcOff") (EVar "len")) (EApp (EVar "arrayLength") (EVar "src"))) (EApp (EVar "panic") (ELit (LString "Array.blit: source out of bounds"))) (EIf (EBinOp ">" (EBinOp "+" (EVar "dstOff") (EVar "len")) (EApp (EVar "arrayLength") (EVar "dst"))) (EApp (EVar "panic") (ELit (LString "Array.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "srcOff")) (EVar "dst")) (EVar "dstOff")) (EVar "len"))))))))
+(DFunDef false "blit" ((PVar "src") (PVar "srcOff") (PVar "dst") (PVar "dstOff") (PVar "len")) (EIf (EBinOp "<" (EVar "len") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative length"))) (EIf (EBinOp "<" (EVar "srcOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative srcOff"))) (EIf (EBinOp "<" (EVar "dstOff") (ELit (LInt 0))) (EApp (EVar "panic") (ELit (LString "Array.blit: negative dstOff"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "src")) (EVar "srcOff"))) (EApp (EVar "panic") (ELit (LString "Array.blit: source out of bounds"))) (EIf (EBinOp ">" (EVar "len") (EBinOp "-" (EApp (EVar "arrayLength") (EVar "dst")) (EVar "dstOff"))) (EApp (EVar "panic") (ELit (LString "Array.blit: destination out of bounds"))) (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "src")) (EVar "srcOff")) (EVar "dst")) (EVar "dstOff")) (EVar "len"))))))))
 (DTypeSig true "sortInPlaceBy" (TyFun (TyFun (TyVar "a") (TyFun (TyVar "a") (TyEffect () (Some "e") (TyCon "Ordering")))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyEffect () (Some "e") (TyCon "Unit")))))
 (DFunDef false "sortInPlaceBy" ((PVar "cmp") (PVar "arr")) (EBlock (DoLet false false (PVar "sorted") (EApp (EApp (EVar "sortBy") (EVar "cmp")) (EVar "arr"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "arrayBlit") (EVar "sorted")) (ELit (LInt 0))) (EVar "arr")) (ELit (LInt 0))) (EApp (EVar "arrayLength") (EVar "arr"))))))
 (DTypeSig true "sortInPlace" (TyConstrained ((cstr "Ord" (TyVar "a"))) (TyFun (TyApp (TyCon "Array") (TyVar "a")) (TyCon "Unit"))))
