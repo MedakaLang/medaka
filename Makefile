@@ -187,6 +187,11 @@ test: medaka
 	## import closure, but nothing else runs `medaka test` on it, so
 	## without this line the memo assertions would never execute.
 	./medaka test compiler/frontend/resolve.mdk
+	## S-the-libraries-nobody-runs (#2984-adjacent): `gzip/`'s whole
+	## in-language suite (lib + main) has no floor gate of any kind, and a
+	## directory target already grades every assertion in it with one exit
+	## code, so this is that, rather than a per-module roster row.
+	./medaka test gzip
 
 ## gates   — the FULL differential gate suite (all 82 test/diff_compiler_*.sh, in
 ##           parallel). Needs `make medaka` AND pre-built oracles:
