@@ -1,0 +1,5 @@
+-- The other declarer.  Its `Node` wraps the same payload type as ca's on
+-- purpose, so a collision that resolved to the wrong module would still
+-- typecheck and the fixture would be asserting the collision and not a
+-- downstream type mismatch that happens to stand in for it.
+public export data TB = Node Int

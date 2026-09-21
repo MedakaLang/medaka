@@ -1,0 +1,14 @@
+-- CONTROL — THE ALIAS MUST NOT POISON THE BARE NAME.  Both declarers reachable,
+-- one aliased, but only the bare `Node` is written.  Nothing strips cb's
+-- constructor onto the bare key, so this program means exactly what it meant
+-- before an alias carried constructors and contributes ZERO rows.  Widening the
+-- collision to every bare occurrence of a name some alias could also reach
+-- would light this up and reject a program that was always well defined.
+import ca.{TA(..)}
+import cb as B
+
+x : TA
+x = Node 1
+
+useB : B.TB -> Int
+useB _ = 0

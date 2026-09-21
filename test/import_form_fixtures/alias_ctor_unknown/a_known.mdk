@@ -1,0 +1,15 @@
+-- CONTROL — the alias really does carry constructors.  Without this row the
+-- fixture below could pass for the wrong reason: a spelling that binds no
+-- constructor at all also fails to bind `D.Nope`.  This module contributes ZERO
+-- rows, so the row that follows is about the MISSING name and nothing else.
+import decl as D
+
+v : D.Col
+v = D.Leaf
+
+w : D.Col
+w = D.Node { lbl = 3 }
+
+f : D.Col -> Int
+f D.Leaf = 0
+f (D.Node { lbl }) = lbl

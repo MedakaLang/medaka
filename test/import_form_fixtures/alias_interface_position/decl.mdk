@@ -1,0 +1,7 @@
+-- The declarer: an interface, and a type whose constructors the consumers reach
+-- through the same alias, so one fixture covers both namespaces an alias newly
+-- qualifies.
+public export data Col = Node { lbl : Int } | Leaf
+
+export interface Speak a where
+  speak : a -> Int

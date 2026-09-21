@@ -67,6 +67,7 @@ import support.util.{
   joinWith,
   orElseOpt,
   reverseL,
+  splitOnChar,
 }
 
 -- ── small helpers ─────────────────────────────────────────────────────────
@@ -323,14 +324,20 @@ desugarPat _ (PLit LUnit) = PCon "Unit" []
 desugarPat _ (PLit l) = PLit l
 desugarPat oracle (PTuple ps) =
   PCon (tupleCtorName (listLen ps)) (map (desugarPat oracle) ps)
-desugarPat oracle (PCon c args) = PCon c (map (desugarPat oracle) args)
+desugarPat oracle (PCon c args) =
+  PCon (oracleCtorName oracle c) (map (desugarPat oracle) args)
 desugarPat oracle (PCons h t) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle t]
 desugarPat _ (PList []) = PCon "Nil" []
 desugarPat oracle (PList (h :: rest)) =
   PCon "Cons" [desugarPat oracle h, desugarPat oracle (PList rest)]
 desugarPat oracle (PAs _ _ p) = desugarPat oracle p
-desugarPat oracle (PRec name fields _) = match oGetCtorFields oracle name
+desugarPat oracle (PRec name fields _) =
+  desugarRecPat oracle (oracleCtorName oracle name) fields
+desugarPat _ (PRng _ _ _) = PWild
+
+desugarRecPat : Oracle -> String -> List RecPatField -> Pat
+desugarRecPat oracle name fields = match oGetCtorFields oracle name
   -- Lower a record pattern to a constructor-tagged row.  This arm handles the
   -- `...` (open) form too: `...` means "and I don't care about the other
   -- FIELDS", never "...the CONSTRUCTOR", and `lookupRecField` already yields
@@ -344,7 +351,30 @@ desugarPat oracle (PRec name fields _) = match oGetCtorFields oracle name
 
   None => PWild
   Some fieldOrder => PCon name (map (lookupRecField oracle fields) fieldOrder)
-desugarPat _ (PRng _ _ _) = PWild
+
+-- `A.Leaf` written through a module alias (#1287).  The clause-coverage pass runs
+-- on the RAW pre-resolve tree, where the prefix is still attached, while every
+-- oracle table is keyed by the BARE constructor name — so a dotted head matches no
+-- row and the column degrades to "unknown constructor" in BOTH directions: a
+-- `PCon` head that covers nothing (a spurious W-NONEXHAUSTIVE-CLAUSES on a total
+-- group) and a `PRec` head whose field layout is unknown, which `desugarPat`
+-- collapses to `PWild` — the wildcard that hides a REAL gap.
+--
+-- The guard is the oracle itself, not an alias list: shorten only when the dotted
+-- spelling names no constructor and the bare suffix does.  A name with no dot, a
+-- dotted name the oracle already knows, and a suffix that is not a constructor are
+-- all returned untouched, so nothing outside the alias spelling moves.
+oracleCtorName : Oracle -> String -> String
+oracleCtorName oracle c = match splitOnChar '.' c
+  [_, base] => oracleKnownName oracle c base
+  _ => c
+
+oracleKnownName : Oracle -> String -> String -> String
+oracleKnownName oracle c base = match oGetCtorType oracle c
+  Some _ => c
+  None => match oGetCtorType oracle base
+    Some _ => base
+    None => c
 
 lookupRecField : Oracle -> List RecPatField -> String -> Pat
 lookupRecField oracle fields fn = match findRecField fn fields

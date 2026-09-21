@@ -1,0 +1,13 @@
+-- The MIXED spelling: one declarer selectively imported so its `Node` is bare,
+-- the other aliased.  The two spellings still collapse onto one bare table key,
+-- so the qualified one is a row.  The bare one is NOT: it means what it meant
+-- before aliases carried constructors at all, and only the spelling that gets
+-- stripped can land a second module's constructor on that key.
+import ca.{TA(..)}
+import cb as B
+
+x : TA
+x = Node 1
+
+y : B.TB
+y = B.Node 2

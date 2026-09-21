@@ -1,0 +1,3 @@
+-- The single declarer.  `public export` so the constructors are exportable at
+-- all; the question this fixture asks is about the ALIAS spelling reaching them.
+public export data Col = Node { lbl : Int } | Leaf

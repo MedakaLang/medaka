@@ -1,0 +1,12 @@
+-- CONTROL — USE SITE, NOT IMPORT SITE.  Both declarers aliased, the colliding
+-- constructor never written through either.  Aliasing an ambiguity you never
+-- name stays legal, so this module contributes ZERO rows; moving the check to
+-- the import statement would light it up.
+import ca as A
+import cb as B
+
+useA : A.TA -> Int
+useA _ = 1
+
+useB : B.TB -> Int
+useB _ = 2

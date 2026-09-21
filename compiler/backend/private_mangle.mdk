@@ -300,13 +300,14 @@ mangleRoute _ (r@(RScalar _)) = r
 -- elaborated module list they hand the driver, so the bodies have to be renamed by
 -- the same pass, not merely evaluated in a renamed env).
 --
--- ⚠️ NOT a total fix for #1292.  Two residuals stay live, both recorded rather than
--- silently inherited:
---   * a program that collides on the spellings `Pass`/`Fail` (the exemption);
---   * an alias-qualified constructor reference (`import m as A` … `A.Ctor`) —
---     `useCtorPathEntries`' `UseAlias` arm contributes no entry, so such a
---     reference is left bare while the definition is renamed.  Colliding-ctor
---     programs only; it fails LOUDLY (unbound) rather than silently.
+-- Not a total fix for #1292.  One residual stays live, recorded rather than
+-- silently inherited: a program that collides on the spellings `Pass`/`Fail` (the
+-- exemption).
+--
+-- The alias-qualified constructor reference (`import m as A` … `A.Ctor`) that used
+-- to be the second residual is gone (#1287): resolve now shortens such a reference
+-- to the bare ctor name before any tree reaches this pass, so `UseAlias` binds
+-- exactly what `UseWild` binds and the arms are written that way.
 export
 mangleCtorCollisions : List Decl ->
   List (String, List Decl) ->
@@ -746,7 +747,10 @@ useCtorPathEntries ctorExportsPerUnit path =
       UseGroup _ members => flatMap (ctorMemberEntry mid typeEntries) members
       UseWild _ => flatMap (typeCtorEntries mid) typeEntries
       UseName _ => []
-      UseAlias _ _ => []
+      -- `import m as A`: every ctor m exports is reachable as `A.Ctor`, which
+      -- resolve has already shortened to `Ctor` by the time a tree gets here —
+      -- so the binding set is `UseWild`'s (#1287).
+      UseAlias _ _ => flatMap (typeCtorEntries mid) typeEntries
 -- `import M.{T(..), Ctor, …}`: a `(..)` member is a TYPE whose ctors all come
 -- in; a bare member may be either a ctor name or a type — entered if it names
 -- a ctor M exports (a type-only member contributes nothing here).

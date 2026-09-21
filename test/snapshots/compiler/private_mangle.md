@@ -1,5 +1,5 @@
 # META
-source_lines=1734
+source_lines=1738
 stages=DESUGAR,MARK
 # SOURCE
 -- UNIVERSAL PER-MODULE NAME MANGLING for the flat multi-module EMIT path.
@@ -304,13 +304,14 @@ mangleRoute _ (r@(RScalar _)) = r
 -- elaborated module list they hand the driver, so the bodies have to be renamed by
 -- the same pass, not merely evaluated in a renamed env).
 --
--- ⚠️ NOT a total fix for #1292.  Two residuals stay live, both recorded rather than
--- silently inherited:
---   * a program that collides on the spellings `Pass`/`Fail` (the exemption);
---   * an alias-qualified constructor reference (`import m as A` … `A.Ctor`) —
---     `useCtorPathEntries`' `UseAlias` arm contributes no entry, so such a
---     reference is left bare while the definition is renamed.  Colliding-ctor
---     programs only; it fails LOUDLY (unbound) rather than silently.
+-- Not a total fix for #1292.  One residual stays live, recorded rather than
+-- silently inherited: a program that collides on the spellings `Pass`/`Fail` (the
+-- exemption).
+--
+-- The alias-qualified constructor reference (`import m as A` … `A.Ctor`) that used
+-- to be the second residual is gone (#1287): resolve now shortens such a reference
+-- to the bare ctor name before any tree reaches this pass, so `UseAlias` binds
+-- exactly what `UseWild` binds and the arms are written that way.
 export
 mangleCtorCollisions : List Decl ->
   List (String, List Decl) ->
@@ -750,7 +751,10 @@ useCtorPathEntries ctorExportsPerUnit path =
       UseGroup _ members => flatMap (ctorMemberEntry mid typeEntries) members
       UseWild _ => flatMap (typeCtorEntries mid) typeEntries
       UseName _ => []
-      UseAlias _ _ => []
+      -- `import m as A`: every ctor m exports is reachable as `A.Ctor`, which
+      -- resolve has already shortened to `Ctor` by the time a tree gets here —
+      -- so the binding set is `UseWild`'s (#1287).
+      UseAlias _ _ => flatMap (typeCtorEntries mid) typeEntries
 -- `import M.{T(..), Ctor, …}`: a `(..)` member is a TYPE whose ctors all come
 -- in; a bare member may be either a ctor name or a type — entered if it names
 -- a ctor M exports (a type-only member contributes nothing here).
@@ -1859,7 +1863,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "declCtorImportEntries" ((PVar "ctorExportsPerUnit") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declCtorImportEntries") (EVar "ctorExportsPerUnit")) (EVar "d")))
 (DFunDef false "declCtorImportEntries" (PWild PWild) (EListLit))
 (DTypeSig false "useCtorPathEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "useCtorPathEntries" ((PVar "ctorExportsPerUnit") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModIdU") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "lookupCtorExports") (EVar "mid")) (EVar "ctorExportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "typeEntries")) () (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "ctorMemberEntry") (EVar "mid")) (EVar "typeEntries"))) (EVar "members"))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EVar "flatMap") (EApp (EVar "typeCtorEntries") (EVar "mid"))) (EVar "typeEntries"))) (arm (PCon "UseName" PWild) () (EListLit)) (arm (PCon "UseAlias" PWild PWild) () (EListLit)))))))))
+(DFunDef false "useCtorPathEntries" ((PVar "ctorExportsPerUnit") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModIdU") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "lookupCtorExports") (EVar "mid")) (EVar "ctorExportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "typeEntries")) () (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EVar "flatMap") (EApp (EApp (EVar "ctorMemberEntry") (EVar "mid")) (EVar "typeEntries"))) (EVar "members"))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EVar "flatMap") (EApp (EVar "typeCtorEntries") (EVar "mid"))) (EVar "typeEntries"))) (arm (PCon "UseName" PWild) () (EListLit)) (arm (PCon "UseAlias" PWild PWild) () (EApp (EApp (EVar "flatMap") (EApp (EVar "typeCtorEntries") (EVar "mid"))) (EVar "typeEntries"))))))))))
 (DTypeSig false "ctorMemberEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "ctorMemberEntry" ((PVar "mid") (PVar "typeEntries") (PCon "UseMember" (PVar "name") (PVar "wild") PWild PWild)) (EIf (EVar "wild") (EMatch (EApp (EApp (EVar "lookupCtorTypeEntry") (EVar "name")) (EVar "typeEntries")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "++" (EApp (EApp (EApp (EVar "bareCtorMemberEntry") (EVar "mid")) (EVar "typeEntries")) (EVar "name")) (EApp (EApp (EVar "flatMap") (EApp (EVar "originCtorEntry") (EVar "mid"))) (EVar "ctors")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "bareCtorMemberEntry") (EVar "mid")) (EVar "typeEntries")) (EVar "name")))) (EApp (EApp (EApp (EVar "bareCtorMemberEntry") (EVar "mid")) (EVar "typeEntries")) (EVar "name"))))
 (DTypeSig false "bareCtorMemberEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
@@ -2254,7 +2258,7 @@ recPatFieldVarsPM (RecPatField _ _ (Some p)) = patVarsPM p
 (DFunDef false "declCtorImportEntries" ((PVar "ctorExportsPerUnit") (PCon "DAttrib" PWild (PVar "d"))) (EApp (EApp (EVar "declCtorImportEntries") (EVar "ctorExportsPerUnit")) (EVar "d")))
 (DFunDef false "declCtorImportEntries" (PWild PWild) (EListLit))
 (DTypeSig false "useCtorPathEntries" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))) (TyFun (TyCon "UsePath") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
-(DFunDef false "useCtorPathEntries" ((PVar "ctorExportsPerUnit") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModIdU") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "lookupCtorExports") (EVar "mid")) (EVar "ctorExportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "typeEntries")) () (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "ctorMemberEntry") (EVar "mid")) (EVar "typeEntries"))) (EVar "members"))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "typeCtorEntries") (EVar "mid"))) (EVar "typeEntries"))) (arm (PCon "UseName" PWild) () (EListLit)) (arm (PCon "UseAlias" PWild PWild) () (EListLit)))))))))
+(DFunDef false "useCtorPathEntries" ((PVar "ctorExportsPerUnit") (PVar "path")) (EBlock (DoLet false false (PVar "mid") (EApp (EVar "useModIdU") (EVar "path"))) (DoExpr (EIf (EBinOp "==" (EVar "mid") (ELit (LString "core"))) (EListLit) (EMatch (EApp (EApp (EVar "lookupCtorExports") (EVar "mid")) (EVar "ctorExportsPerUnit")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "typeEntries")) () (EMatch (EVar "path") (arm (PCon "UseGroup" PWild (PVar "members")) () (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EVar "ctorMemberEntry") (EVar "mid")) (EVar "typeEntries"))) (EVar "members"))) (arm (PCon "UseWild" PWild) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "typeCtorEntries") (EVar "mid"))) (EVar "typeEntries"))) (arm (PCon "UseName" PWild) () (EListLit)) (arm (PCon "UseAlias" PWild PWild) () (EApp (EApp (EDictApp "flatMap") (EApp (EVar "typeCtorEntries") (EVar "mid"))) (EVar "typeEntries"))))))))))
 (DTypeSig false "ctorMemberEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "UseMember") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))
 (DFunDef false "ctorMemberEntry" ((PVar "mid") (PVar "typeEntries") (PCon "UseMember" (PVar "name") (PVar "wild") PWild PWild)) (EIf (EVar "wild") (EMatch (EApp (EApp (EVar "lookupCtorTypeEntry") (EVar "name")) (EVar "typeEntries")) (arm (PCon "Some" (PVar "ctors")) () (EBinOp "++" (EApp (EApp (EApp (EVar "bareCtorMemberEntry") (EVar "mid")) (EVar "typeEntries")) (EVar "name")) (EApp (EApp (EDictApp "flatMap") (EApp (EVar "originCtorEntry") (EVar "mid"))) (EVar "ctors")))) (arm (PCon "None") () (EApp (EApp (EApp (EVar "bareCtorMemberEntry") (EVar "mid")) (EVar "typeEntries")) (EVar "name")))) (EApp (EApp (EApp (EVar "bareCtorMemberEntry") (EVar "mid")) (EVar "typeEntries")) (EVar "name"))))
 (DTypeSig false "bareCtorMemberEntry" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))))

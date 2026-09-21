@@ -1,0 +1,38 @@
+-- EVERY POSITION AN ALIAS REACHES, IN ONE MODULE, ASSERTED AS ACCEPTING.  The
+-- interface half of the alias spelling is carried by four occurrence positions
+-- that no other fixture in this corpus reaches through an alias -- the `impl`
+-- head, an impl `requires`, an interface-superclass `requires`, and the `=>`
+-- predicate -- and each is a separate parser call site, so one of them can
+-- regress while the other three still parse.  The module contributes ZERO rows:
+-- the assertion is that all of it resolves, and a fold that stopped reaching any
+-- one position would add a row here rather than go unnoticed.
+import decl as D
+
+data Mine = Mine
+
+data Box a = Box a
+
+impl D.Speak Mine where
+  speak _ = 1
+
+impl D.Speak (Box a) requires D.Speak a where
+  speak (Box x) = D.speak x
+
+interface Loud a requires D.Speak a where
+  loud : a -> Int
+
+impl Loud Mine where
+  loud x = D.speak x + 10
+
+h : D.Speak a => a -> Int
+h x = D.speak x
+
+v : D.Col
+v = D.Leaf
+
+w : D.Col
+w = D.Node { lbl = 3 }
+
+f : D.Col -> Int
+f D.Leaf = 0
+f (D.Node { lbl }) = lbl

@@ -1,7 +1,12 @@
 addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
+addStrippedCtorProv : Map String (List String) -> UsePath -> List String -> Map String (List String)
+aliasCtx : List String -> Map String TyConOrigin -> AliasCtx
+aliasIfaceMethods : UsePath -> List (String, List String) -> List (String, List String)
 aliasOfUsePath : UsePath -> List String
+aliasOriginBaseNames : List (String, String) -> List String
+aliasOwnerPairs : UsePath -> List (String, String) -> List (String, String)
 aliasStampHead : List String -> Ty -> String -> TyConOrigin -> (Ty, Bool)
 aliasTypeBinding : String -> String -> (String, String)
 ambigModPhrase : List String -> String
@@ -78,6 +83,8 @@ coreUseErrorsOf : ModuleExports -> Decl -> List ResError
 coreUsePaths : List Decl -> List UsePath
 ctorAmbigMods : Env -> String -> List String
 ctorAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
+ctorDeclaredIn : String -> String -> (String, String)
+ctorKey : String -> String
 ctorNames : List Decl -> List String
 ctorProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
 dataRecordNames : List Decl -> List String
@@ -128,6 +135,8 @@ filterContains : List String -> List String -> List String
 filterIfaceMethods : List String -> List (String, List String) -> List (String, List String)
 filterInSet : Map String Unit -> List String -> List String
 filterKeepOpen : List String -> List String -> List String
+filterNsFor : UsePath -> List String -> List String -> List String
+filterNsInSetFor : UsePath -> Map String Unit -> List String -> List String
 filterOutNamesIn : List String -> (ResError -> String) -> List ResError -> List ResError
 findDups : List String -> List String -> List String
 findDupsGo : Map String Unit -> List String -> List String
@@ -192,6 +201,7 @@ isImportedModuleName : Env -> String -> Bool
 isModId : String -> (String, List String) -> Bool
 isNewtypeExport : String -> ModuleExports -> Bool
 isPubExp : ModuleExports -> String -> Bool
+isTaggedOriginKey : String -> Bool
 isTransparentDecl : Decl -> Bool
 isTupleCtorTyName : String -> Bool
 isTypeAmbiguous : Env -> String -> Bool
@@ -344,6 +354,10 @@ startsUpper : String -> Bool
 startsWithAt : Array Char -> Bool
 stmtLoc : DoStmt -> Option Loc
 storeSugPool : Ref (Option (List SugCand)) -> List SugCand -> List SugCand
+strippedCtorAmbiguity : List String -> List (UsePath, List String) -> List (String, List String)
+strippedCtorKey : UsePath -> List (String, List String) -> String -> List (String, List String)
+strippedCtorKeys : UsePath -> List (String, List String) -> List String -> List (String, List String)
+strippedCtorProv : Map String (List String) -> List (UsePath, List String) -> Map String (List String)
 stubOrUnknown : Map String ModuleExports -> UsePath -> String -> Loc -> ImportAdds
 sugCandOf : String -> SugCand
 sugPoolOf : List String -> List SugCand
@@ -357,6 +371,7 @@ suggestName : Env -> Scope -> String -> Option String
 suggestNameFuzzy : Env -> Scope -> String -> Option String
 suggestType : Env -> String -> Option String
 suggestTypeFuzzy : Env -> String -> Option String
+taggedOriginBaseNames : List (String, String) -> List String
 takeOriginTrace : Unit -> List (String, List Decl)
 topBinderNames : List Decl -> List String
 tupleCtorTyNames : List String
@@ -369,9 +384,37 @@ typeDeclaredIn : String -> String -> (String, String)
 typeOriginExports : Map String (List (String, String)) -> String -> List Decl -> List (String, String)
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String
+unqualAliasDecl : List String -> Map String TyConOrigin -> Decl -> Decl
 unqualAliasTyName : List String -> String -> String
+unqualArm : AliasCtx -> Arm -> Arm
+unqualClause : AliasCtx -> FunClause -> FunClause
+unqualConstraint : AliasCtx -> Constraint -> Constraint
+unqualCtor : AliasCtx -> String -> String
+unqualDecl : AliasCtx -> Decl -> Decl
+unqualExpr : AliasCtx -> Expr -> Expr
+unqualFieldAssign : AliasCtx -> FieldAssign -> FieldAssign
+unqualGuard : AliasCtx -> Guard -> Guard
+unqualGuardArm : AliasCtx -> GuardArm -> GuardArm
+unqualHead : AliasCtx -> String -> String
+unqualIfExported : AliasCtx -> String -> Bool -> String
+unqualIfaceMethod : AliasCtx -> IfaceMethod -> IfaceMethod
+unqualIfaceName : AliasCtx -> String -> String
+unqualImplMethod : AliasCtx -> ImplMethod -> ImplMethod
+unqualInterp : AliasCtx -> InterpPart -> InterpPart
+unqualKv : AliasCtx -> (Expr, Expr) -> (Expr, Expr)
+unqualLetBind : AliasCtx -> LetBind -> LetBind
+unqualPat : AliasCtx -> Pat -> Pat
+unqualRecPatField : AliasCtx -> RecPatField -> RecPatField
+unqualRequire : AliasCtx -> Require -> Require
+unqualSection : AliasCtx -> Section -> Section
+unqualStmt : AliasCtx -> DoStmt -> DoStmt
+unqualStmts : AliasCtx -> List DoStmt -> List DoStmt
+unqualSuper : AliasCtx -> Super -> Super
+untagOriginKey : String -> String
 untaggedOriginKeys : List (String, String) -> List String
+useBaseName : UsePath -> String -> String
 useImportNames : UsePath -> List String
+useLocalName : UsePath -> String -> String
 useMemberBinding : UseMember -> (String, String)
 useModId : UsePath -> String
 usePathLocsOf : List Decl -> List (UsePath, Loc)

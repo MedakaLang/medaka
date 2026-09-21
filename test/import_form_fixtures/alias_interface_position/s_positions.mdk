@@ -1,0 +1,34 @@
+-- The SELECTIVE spelling of the same imports, side by side with the alias one
+-- above, which is what this corpus exists to hold: the two forms name the same
+-- exports and must agree about what resolves.  If the alias form ever drops a
+-- namespace the selective form carries, this pair is where it shows.
+import decl.{Col(..), Speak, speak}
+
+data Yours = Yours
+
+data Crate a = Crate a
+
+impl Speak Yours where
+  speak _ = 1
+
+impl Speak (Crate a) requires Speak a where
+  speak (Crate x) = speak x
+
+interface Quiet a requires Speak a where
+  quiet : a -> Int
+
+impl Quiet Yours where
+  quiet x = speak x + 10
+
+k : Speak a => a -> Int
+k x = speak x
+
+vv : Col
+vv = Leaf
+
+ww : Col
+ww = Node { lbl = 3 }
+
+ff : Col -> Int
+ff Leaf = 0
+ff (Node { lbl }) = lbl
