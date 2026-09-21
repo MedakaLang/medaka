@@ -1,10 +1,22 @@
-{- | Floor gate for four modules that no roster, gate or production entry
-   reaches today (#3081): `test/probe_runner.mdk`, plus three compiler
-   modules ([W-MODULE-BLIND] — outside every entry's import closure, so
-   `make medaka`, `make check-self` and `test/typecheck_compiler_source.sh`
-   walk none of them) that this gate picks up alongside it:
+{- | Floor gate for the modules whose assertions no floor anywhere protects
+   (#3081), from three unrelated directories.
+
+   Four are reached by nothing at all: `test/probe_runner.mdk`, plus three
+   compiler modules ([W-MODULE-BLIND] — outside every entry's import
+   closure, so `make medaka`, `make check-self` and
+   `test/typecheck_compiler_source.sh` walk none of them),
    `compiler/tools/gate_cost.mdk`, `compiler/support/util.mdk` and
    `compiler/support/manifest.mdk`.
+
+   Six are `gzip/lib/*.mdk`. Those are RUN — `Makefile`'s `test:` target
+   carries a `medaka test gzip` directory target over the whole project —
+   but a directory target grades one exit code for the lot and `medaka test
+   gzip --json` is refused outright ("directory targets are not supported"),
+   so no per-module count is committed anywhere and a module that silently
+   stopped discovering its own assertions would still exit 0. The rows below
+   are that missing floor, not a second way to run them. `gzip/main.mdk` and
+   the two demo mains carry no assertion at all, so they take no row: `>= 0`
+   would read as coverage while asserting nothing.
 
    THE ANTI-ROT GUARD (docs/ops/TESTING-DESIGN.md §0: "this didn't run" is
    indistinguishable from "this passed"): a `medaka test` file with zero
@@ -12,10 +24,9 @@
    module's executed-assertion count (`summary.passed` from `medaka test
    --json`) must meet the floor committed below.
 
-   A fixed, small, non-growing set of four modules from two unrelated
-   directories plus `test/` itself, so this is four explicit `test "…"`
-   declarations rather than a directory-walk closure check (the shape
-   `test/stdlib_suite_test.mdk` uses, over the whole of `stdlib/`).
+   A fixed, small, non-growing set, so this is one explicit `test "…"`
+   declaration per module rather than a directory-walk closure check (the
+   shape `test/stdlib_suite_test.mdk` uses, over the whole of `stdlib/`).
 
    `Makefile`'s `test:` target invokes this file directly, and
    `test/CI-COVERAGE-TOOLS.txt` records why it is reached there rather than
@@ -51,3 +62,21 @@ test "compiler/support/manifest.mdk executed >= 8 assertions" =
 
 test "test/probe_runner.mdk executed >= 4 assertions" =
   floorExpectation "test/probe_runner.mdk" 4
+
+test "gzip/lib/bitio.mdk executed >= 9 assertions" =
+  floorExpectation "gzip/lib/bitio.mdk" 9
+
+test "gzip/lib/container.mdk executed >= 14 assertions" =
+  floorExpectation "gzip/lib/container.mdk" 14
+
+test "gzip/lib/crc32.mdk executed >= 16 assertions" =
+  floorExpectation "gzip/lib/crc32.mdk" 16
+
+test "gzip/lib/deflate.mdk executed >= 29 assertions" =
+  floorExpectation "gzip/lib/deflate.mdk" 29
+
+test "gzip/lib/huffman.mdk executed >= 27 assertions" =
+  floorExpectation "gzip/lib/huffman.mdk" 27
+
+test "gzip/lib/inflate.mdk executed >= 17 assertions" =
+  floorExpectation "gzip/lib/inflate.mdk" 17

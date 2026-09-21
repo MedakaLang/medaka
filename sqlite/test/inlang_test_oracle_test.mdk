@@ -17,14 +17,17 @@
    gate rather than going uncounted (the sqlite script never had this last
    check; see the roster test below). -}
 
+import io.{readLines}
 import list.{lookup}
 import string.{stripSuffix}
 import test.{Expectation(..)}
 import test_process.{
+  disagreeingFloorBlocks,
   missingTestFiles,
   missingUnits,
   testAssertionCount,
   underRoot,
+  ungradedRosterRows,
   unrosteredTestFiles,
   unrosteredUnits,
 }
@@ -344,3 +347,55 @@ test "every `exempt` row names a file that exists" = match phantomExemptions
       "`exempt` names sqlite/test file(s) that do not exist: \{debug extras} — a stale exemption re-opens the roster to a file of that name"
       "no phantom exemptions"
       "\{debug extras}"
+
+{- # `libSuites`/assertion lockstep
+
+   `libResults` is a shared memoized binding computed for every `libSuites`
+   row whether or not anything asserts on it: a row with no `test` block of
+   its own is still spawned, and its verdict is silently discarded. The
+   closure checks above prove only that a MODULE is named somewhere; they
+   say nothing about whether an assertion grades it, and a block's TITLE is
+   not evidence either, since a title naming one row while its body grades
+   another passes a real lookup for the wrong row. The scan is
+   `test_process`'s `ungradedRosterRows`/`disagreeingFloorBlocks`, which
+   reads this file's own source text rather than hand-maintaining a second
+   list next to the `test` blocks (#2997). -}
+
+libFloorCallOpen : String
+libFloorCallOpen = "libFloorExpectation \""
+
+ownSourceLines : <IO> Result String (List String)
+ownSourceLines = readLines (underRoot "sqlite/test/inlang_test_oracle_test.mdk")
+
+uncheckedLibRows : <IO> Result String (List String)
+uncheckedLibRows =
+  map
+    (ls => ungradedRosterRows "sqlite/lib/" libFloorCallOpen libRosterNames ls)
+    ownSourceLines
+
+test "every `libSuites` row has a matching `test` block" =
+  match uncheckedLibRows
+    Err e => Fail e "no unchecked rows" "read failed"
+    Ok [] => Pass "no unchecked rows" "no unchecked rows"
+    Ok extras =>
+      Fail
+        "libSuites row(s) with no `test \"sqlite/lib/<name>.mdk executed >= …\"` block grading that same name: \{debug extras} — `libResults` is computed for them but never turned into an assertion (#2997)"
+        "no unchecked rows"
+        "\{debug extras}"
+
+disagreeingLibBlocks : <IO> Result String (List String)
+disagreeingLibBlocks =
+  map
+    (ls => disagreeingFloorBlocks "sqlite/lib/" libFloorCallOpen ls)
+    ownSourceLines
+
+test "every `libSuites` floor assertion grades the module its title names" =
+  match disagreeingLibBlocks
+    Err e => Fail e "no title/argument disagreements" "read failed"
+    Ok [] =>
+      Pass "no title/argument disagreements" "no title/argument disagreements"
+    Ok bad =>
+      Fail
+        "floor assertion block(s) whose title and `libFloorExpectation` argument name different modules: \{debug bad} — the titled row's floor is never applied and the graded row's is applied twice, while the row reads as covered"
+        "no title/argument disagreements"
+        "\{debug bad}"

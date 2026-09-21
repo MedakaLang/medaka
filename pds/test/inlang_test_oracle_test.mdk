@@ -18,13 +18,15 @@
 
 import io.{readLines}
 import list.{lookup, somes}
-import string.{indexOf, stripPrefix, stripSuffix}
+import string.{stripSuffix}
 import test.{Expectation(..)}
 import test_process.{
+  disagreeingFloorBlocks,
   missingTestFiles,
   missingUnits,
   testAssertionCount,
   underRoot,
+  ungradedRosterRows,
   unrosteredTestFiles,
   unrosteredUnits,
 }
@@ -298,16 +300,28 @@ runLibSuite dir name =
     Err e => Err "pds/\{dir}/\{name}.mdk: \{e}"
     Ok n => Ok n
 
+{- | The key one `libSuites` row is stored and looked up under.
+
+   The roster spans two directories, so a bare module name is not a key: the
+   day `pds/lib/foo.mdk` and `pds/shell/foo.mdk` both exist, one row's
+   result silently answers for the other's floor and both `test` blocks read
+   as covered ([T-GLOBAL-TABLE]). Qualifying by directory makes the key as
+   specific as the file it names. -}
+libKeyOf : String -> String -> String
+libKeyOf dir name = "\{dir}/\{name}"
+
 -- Every `pds/lib/`/`pds/shell/` module run exactly once, shared by every
 -- assertion below — memoized the same way `results` is.
 libResults : <Exec "_", IO> List (String, (Int, Result String Int))
 libResults =
-  map ((dir, name, floor) => (name, (floor, runLibSuite dir name))) libSuites
+  map
+    ((dir, name, floor) => (libKeyOf dir name, (floor, runLibSuite dir name)))
+    libSuites
 
 -- Grades one `pds/lib/`/`pds/shell/` module's floor, same shape as
 -- `floorExpectation`.
 libFloorExpectation : String -> String -> <Exec "_", IO> Expectation
-libFloorExpectation dir name = match lookup name libResults
+libFloorExpectation dir name = match lookup (libKeyOf dir name) libResults
   None => Fail "pds/\{dir}/\{name}.mdk has no `libResults` entry" "" ""
   Some (floor, Err e) =>
     Fail e "\{intToString floor} assertions" "spawn/parse error"
@@ -627,87 +641,30 @@ test "every `excluded` row names a rostered suite" = match danglingExclusions
 
    A block's TITLE is not evidence that the block graded the row it names,
    so the scan reads the title and the body's `floorExpectation` argument
-   together and credits a row only when they agree. -}
-
--- | The `<name>` in a line `test "pds/test/<name>.mdk executed >= …" = …`
--- written by this file for a roster row's floor assertion, or `None` for
--- any other line.
-checkedNameOf : String -> Option String
-checkedNameOf line = match stripPrefix "test \"pds/test/" line
-  None => None
-  Some rest => map (i => stringSlice 0 i rest) (indexOf ".mdk executed >=" rest)
+   together and credits a row only when they agree. The scan itself is
+   `test_process`'s `ungradedRosterRows`/`disagreeingFloorBlocks`, which
+   every roster module in the tree shares; this file only supplies the
+   title prefix its own blocks are spelled with and the call they grade
+   through. -}
 
 floorCallOpen : String
 floorCallOpen = "floorExpectation \""
 
--- | The roster name a `floorExpectation` call on `line` actually grades, or
--- `None` for any other line.
-gradedNameOf : String -> Option String
-gradedNameOf line = match indexOf floorCallOpen line
-  None => None
-  Some i =>
-    let rest =
-      stringSlice (i + stringLength floorCallOpen) (stringLength line) line
-    map (j => stringSlice 0 j rest) (indexOf "\"" rest)
-
-{- | Every floor-assertion title in this file's own source, paired with the
-   roster name the block's own body grades.
-
-   The two are independent: the title is prose, while the argument is what
-   `results` is looked up by. A block whose title names one row and whose
-   argument names another still passes its own assertion — that lookup is
-   real — but the titled row's floor is never applied and the graded row's
-   is applied twice, so reading the title alone marks a row covered by an
-   assertion that never graded it. -}
-titleArgPairs : List String -> List (String, Option String)
-titleArgPairs [] = []
-titleArgPairs (line :: rest) = match checkedNameOf line
-  None => titleArgPairs rest
-  Some titled => match gradedNameOf line
-    Some graded => (titled, Some graded) :: titleArgPairs rest
-    None => (titled, gradedAfter rest) :: titleArgPairs rest
-
--- | The roster name graded by the body following a title line: the lines up
--- to the next top-level `test` declaration, so a block that grades nothing
--- cannot borrow the following block's call.
-gradedAfter : List String -> Option String
-gradedAfter [] = None
-gradedAfter (line :: rest) = match stripPrefix "test \"" line
-  Some _ => None
-  None => match gradedNameOf line
-    Some graded => Some graded
-    None => gradedAfter rest
-
-agreeing : (String, Option String) -> Bool
-agreeing (titled, Some graded) = titled == graded
-agreeing (_, None) = False
-
 ownSourceLines : <IO> Result String (List String)
 ownSourceLines = readLines (underRoot "pds/test/inlang_test_oracle_test.mdk")
-
-{- | The names that have their own `test "pds/test/<name>.mdk executed >=
-   …"` block in this file AND are the name that block's body grades, from a
-   static scan of the file's own source text — never a `medaka test --json`
-   self-spawn, which would recurse into re-spawning every suite this file
-   already spawns (see the doc comment on `results` above).
-
-   A block whose title and argument disagree counts for neither name: the
-   titled row is not graded by it, and the graded row is covered by its own
-   block or not at all. -}
-checkedNames : <IO> Result String (List String)
-checkedNames =
-  map (ls => map fst (filter agreeing (titleArgPairs ls))) ownSourceLines
 
 -- | Rostered, non-excluded names with no `test` block that both names them
 -- in its title and grades them in its body.
 uncheckedRows : <IO> Result String (List String)
 uncheckedRows =
   map
-    (checked =>
-      filter
-        (n => not (elem n excludedNames) && not (elem n checked))
-        rosterNames)
-    checkedNames
+    (ls =>
+      ungradedRosterRows
+        "pds/test/"
+        floorCallOpen
+        (filter (n => not (elem n excludedNames)) rosterNames)
+        ls)
+    ownSourceLines
 
 test "every `suites` row has a matching `test` block (or is `excluded`)" =
   match uncheckedRows
@@ -719,20 +676,9 @@ test "every `suites` row has a matching `test` block (or is `excluded`)" =
         "no unchecked rows"
         "\{debug extras}"
 
--- | A disagreeing block rendered as `<name its title claims> -> <name its
--- body grades>`.
-renderDisagreement : (String, Option String) -> String
-renderDisagreement (titled, None) = "\{titled} -> grades nothing"
-renderDisagreement (titled, Some graded) = "\{titled} -> \{graded}"
-
 disagreeingBlocks : <IO> Result String (List String)
 disagreeingBlocks =
-  map
-    (ls =>
-      map
-        renderDisagreement
-        (filter (pair => not (agreeing pair)) (titleArgPairs ls)))
-    ownSourceLines
+  map (ls => disagreeingFloorBlocks "pds/test/" floorCallOpen ls) ownSourceLines
 
 test "every floor assertion grades the suite its own title names" =
   match disagreeingBlocks
