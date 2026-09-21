@@ -184,7 +184,6 @@ symEndOfBlock = 256
 -- exactly "delegate a hot monomorphic helper to a dict-passed prelude
 -- method". `Int` comparison needs no dictionary.
 -- ---------------------------------------------------------------------------
-
 minInt : Int -> Int -> Int
 minInt a b = if a < b then a else b  -- lint-disable-line rule-if-max-min
 
@@ -386,7 +385,7 @@ insertUpTo m target =
     ()
   else
     let _ = if hasHash cur m.n then insertOne m cur
-    let _ = m.nextInsert := cur + 1
+    m.nextInsert := cur + 1
     insertUpTo m target
 
 -- Walk the chain from `candidate` backwards (via `prevArr`), keeping the

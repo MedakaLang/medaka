@@ -232,11 +232,13 @@ parseGzipTrailer bytes =
   if n < 8 then
     Err
       "gzip trailer: input too short (need at least 8 bytes for CRC32+ISIZE), got \{n}"
-  else match runBP trailerParser (B.toArray bytes) (n - 8)
-    -- `runBP` parses `Array Int` only (`stdlib/byteparser.mdk:52/58`).
-
-    BOk pair _ => Ok pair
-    BErr msg pos => Err "\{msg} at byte \{pos}"
+  else
+    -- `runBP` parses `Array Int` only (`stdlib/byteparser.mdk:52/58`), so
+    -- only the last 8 bytes are unpacked, not the whole member.
+    let trailer = B.sliceClamped (n - 8) n bytes
+    match runBP trailerParser (B.toArray trailer) 0
+      BOk pair _ => Ok pair
+      BErr msg pos => Err "\{msg} at byte \{pos}"
 
 -- ---------------------------------------------------------------------------
 -- Emit

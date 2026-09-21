@@ -36,7 +36,7 @@ import test.{expectEqual}
 -- Reader
 -- ---------------------------------------------------------------------------
 
--- | LSB-first bit reader over an immutable byte array. `hold` accumulates
+-- | LSB-first bit reader over an immutable byte sequence. `hold` accumulates
 --   bits pulled from `src` starting at `pos`; `count` is how many of the low
 --   bits of `hold` are valid. Refilled a whole byte at a time.
 public export data BitReader = BitReader {
