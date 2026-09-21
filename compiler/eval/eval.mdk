@@ -36,6 +36,7 @@ import frontend.ast.{
   UseMember(..),
   useMemberOrigin,
   useMemberLocal,
+  useMemberAlias,
   qualifiedLocal,
   Decl(..),
   DataVis(..),
@@ -4166,7 +4167,7 @@ buildModInfos coreExports exportsMap ((mid, decls) :: rest) =
   -- first-wins and would otherwise pick the wrong module's arity (E-NOT-A-FUNCTION).
   let modCtors = collectCtors decls
   let localCells = map (n => (n, Ref VUnit)) (map fst grps ++ map fst modCtors)
-  let imports = importFrameOf exportsMap decls
+  let imports = importFrameOf coreExports exportsMap decls
   -- #1542: tag this module's env with its own file, LAST in the frame list so
   -- an ordinary name lookup (which resolves in localCells/imports/globalCells
   -- almost always) never reaches it — only the once-per-call lookup in
@@ -4472,19 +4473,41 @@ ctorNamesOfDecl _ = []
 -- names resolving to a ctor/global are
 -- omitted (reached via the global frame instead).
 export
-importFrameOf : List (String, ModExports (Value e)) ->
+importFrameOf : ModExports (Value e) ->
+  List (String, ModExports (Value e)) ->
   List Decl ->
   List (String, Ref (Value e))
-importFrameOf exportsMap decls = flatMap (useImports exportsMap) decls
+importFrameOf coreExports exportsMap decls =
+  flatMap (useImports coreExports exportsMap) decls
 
-useImports : List (String, ModExports (Value e)) ->
+useImports : ModExports (Value e) ->
+  List (String, ModExports (Value e)) ->
   Decl ->
   List (String, Ref (Value e))
-useImports exportsMap (DUse _ path _) =
-  match lookupAssoc (useModuleId path) exportsMap
+useImports coreExports exportsMap (DUse _ path _) =
+  if useModuleId path == "core" then
+    coreAliasCells path coreExports
+  else match lookupAssoc (useModuleId path) exportsMap
     None => []
     Some exports => resolveMembers path exports
-useImports _ _ = []
+useImports _ _ _ = []
+
+-- `core` is not in `exportsMap` — the prelude is installed straight into the GLOBAL
+-- frame, which is why an unaliased core reference needs no import frame entry at all.
+-- An ALIAS is the exception: `C.isEven` and a member rename's `even2` are spellings the
+-- global frame does not hold, so they get a frame entry pointing at the very same cell.
+-- Only the renamed members of a `UseGroup` are bound; a plain member would enter the
+-- global cell under its own name and shadow itself.  `resolve.coreAliasNames` decides
+-- the same two forms at the scope layer, and the engine may not bind a spelling that
+-- layer refuses.
+coreAliasCells : UsePath -> ModExports (Value e) -> List (String, Ref (Value e))
+coreAliasCells (p@(UseAlias _ _)) me = resolveMembers p me
+coreAliasCells (UseGroup quals ms) me =
+  resolveMembers (UseGroup quals (filterList memberIsRenamed ms)) me
+coreAliasCells _ _ = []
+
+memberIsRenamed : UseMember -> Bool
+memberIsRenamed m = isSome (useMemberAlias m)
 
 -- cells re-exported by a `pub import`.
 --

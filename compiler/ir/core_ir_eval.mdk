@@ -677,7 +677,7 @@ cBuildModInfos disp coreExports exportsMap ((mid, decls) :: rest) =
   let modCtors = collectCtors decls
   let localCells =
     map (n => (n, Ref VUnit)) (map cBindName cbinds ++ map fst modCtors)
-  let imports = importFrameOf exportsMap decls
+  let imports = importFrameOf coreExports exportsMap decls
   let menv = EvalEnv [localCells, imports, globalCells]
   -- IMPORT ALIASING (Core-IR port of the eval.mdk fix — these two module drivers are
   -- parallel and their frame semantics MUST move in lockstep): a module also exports the

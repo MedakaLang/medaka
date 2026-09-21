@@ -65,9 +65,14 @@ closeMissing : List String -> List String -> Map String Unit -> Map String Unit
 collectImports : Map String ModuleExports -> List Decl -> ImportAdds
 contigGo : Map String Unit -> List String -> List Decl -> List ResError
 contiguityErrors : List Decl -> List ResError
+coreAliasImports : List String -> List Decl -> List String
+coreAliasNames : List String -> UsePath -> List String
+coreAliasableValues : List Decl -> List String
 coreExports : List Decl -> ModuleExports
+coreRenamedMember : List String -> UseMember -> List String
 coreUseErrors : List Decl -> List Decl -> List ResError
 coreUseErrorsOf : ModuleExports -> Decl -> List ResError
+coreUsePaths : List Decl -> List UsePath
 ctorAmbigMods : Env -> String -> List String
 ctorAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List String)
 ctorNames : List Decl -> List String

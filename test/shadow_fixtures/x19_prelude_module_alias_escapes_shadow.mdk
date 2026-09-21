@@ -1,0 +1,28 @@
+-- X19 (SHADOW-SEMANTICS S1-PRELUDE (b), the recovery table) -- the escape hatch itself.
+--
+-- S1-PRELUDE (a) hands a colliding bare name to whatever the module declares, which leaves
+-- a module with no way to name the prelude binding it just displaced.  The recovery table
+-- answers that with an explicit `import core as C`, and this cell is what makes that answer
+-- an assertion rather than prose.
+--
+--   PINNED: `eq` is the module's own standalone (False), `C.eq` is the prelude's `Eq`
+--     method reaching past it (True) -- so the pair is `(False, True)`.
+--   The interesting half is the SECOND component.  `(False, False)` would mean the alias
+--     spelling collapsed onto the bare name before resolution and landed on the shadow,
+--     which is precisely what a member RENAME does (x20) and what a module alias must not.
+--
+-- A module alias survives inference as a dotted occurrence on purpose: `renameAliasedMethods`
+-- de-aliases a member rename but deliberately leaves `A.name` alone, and
+-- `resolveAliasMethodSpellings` puts the occurrence back under its origin name only after
+-- inference.  That asymmetry is the whole difference between this cell and x20, and neither
+-- cell is decidable from the other's value.
+--
+-- VALUES HAND-DERIVED FROM S1-PRELUDE (b), NOT CAPTURED: at the time this was written the
+-- alias form did not resolve at all (`Unbound variable: C.eq` on check, run and build), so
+-- there was no arm to capture from.
+import core as C
+
+eq : Int -> Int -> Bool
+eq _ _ = False
+
+main = println (eq 1 1, C.eq 1 1)

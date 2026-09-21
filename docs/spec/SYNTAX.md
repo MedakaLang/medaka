@@ -782,6 +782,7 @@ main = println (EA.emit ++ emitB)
 | `import m as A` | binds every non-method VALUE `m` exports as `A.name`. Does **not** bind bare `name`. |
 | `import m.sub as A` | same, for a nested module path |
 | `import m.{a as b, c}` | binds `m`'s `a` as `b`, plus `c`. Does **not** bind bare `a`. |
+| `import core as C` / `import core.{a as b}` | the implicit prelude takes both forms like any other module (#95). The bare prelude names stay in scope either way — an explicit `core` import adds spellings, it never replaces them. The alias surface is core's EXPORTS, so a private core helper is not reachable as `C.name`. |
 
 **An alias REPLACES the unqualified import** (like Python's `import x as y`, or
 Haskell's `qualified`). That is what makes a collision resolvable: `import emit_a as A`
@@ -799,6 +800,18 @@ that makes a bare `import map` (binding no names at all) still change dispatch b
 their bare origin name too, alongside `A.name`; only `m`'s non-method values are
 alias-qualified-only. Fixed 2026-09-16 (#1812): `check`, `run`, `build`, the LSP, and the
 MCP tools all now agree on this.
+
+**The consequence, for every module: a member RENAME of a method does not out-scope a
+local binding of the origin name; a module ALIAS does.** `import m.{size as sz}` is
+rewritten to the origin name before resolution — it is a second spelling of one cell, not
+a second binding — so a module that also declares its own `size` gets *that* one when it
+writes `sz`. `import m as M` keeps the dotted spelling all the way through inference, so
+`M.size` reaches the method past the local declaration. This is not a prelude rule: the
+implicit prelude, aliasable as of #95, is just the case where it is easiest to hit,
+because its names are in scope everywhere without an import. Pinned at
+`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk` (module alias, reaches
+the method) and `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`
+(member rename, lands on the local binding).
 
 Rules, each a real error rather than a silent no-op:
 

@@ -972,6 +972,56 @@ table = [
     pinned = "",
   },
   Row {
+    entry = "x19_prelude_module_alias_escapes_shadow.mdk",
+    label =
+      "X19 (S1-PRELUDE (b), the recovery table) THE ESCAPE HATCH ITSELF, and the corpus had no cell for it: S1-PRELUDE (a) hands the colliding bare name to the module`s own declaration, and every x-cell above grades that displacement -- none grades whether the displaced prelude binding can still be NAMED. `import core as C` is the recovery spelling the table prescribes, and the pinned `(False, True)` is the whole of its content: the first component is the module`s own `eq`, the second is the prelude`s `Eq` method reached past it. `(False, False)` is the failure this cell exists to catch, and it is not hypothetical -- it is exactly what the RENAME spelling does at x20, so the two cells are numerically distinguishable in one component only. Mechanism: a module alias survives inference as a dotted occurrence (renameAliasedMethods de-aliases a member rename and deliberately leaves `A.name` alone; resolveAliasMethodSpellings restores the origin name only after inference). VALUES HAND-DERIVED FROM S1-PRELUDE (b), NOT CAPTURED -- at base the spelling did not resolve at all (`Unbound variable: C.eq` on all three verbs), so no arm could serve as an oracle",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(False, True)\n",
+  },
+  Row {
+    entry = "x20_prelude_member_rename_lands_on_shadow.mdk",
+    label =
+      "X20 (S1-PRELUDE (b)) x19`s member-RENAME twin, and the OPPOSITE value from the same topology: `(False, False)`, both components the module`s own `eq`. The two recovery spellings are not interchangeable and this pair is what says so -- a reader who transcribes x19`s value here destroys the distinction. WHY: a method is global-by-name, one dispatch cell per name, so an alias of a method is a second SPELLING and not a second binding; renameAliasedMethods rewrites `eqM` back to `eq` before resolution, and `eq` is then whatever this module`s scope holds, which is the standalone. GENERAL, not prelude-specific -- the same rewrite governs a rename of any module`s method, which is why `docs/spec/SYNTAX.md`s alias table states it as a consequence rather than this corpus pinning it as a prelude quirk. Not a defect to be drained: not de-aliasing leaves the renamed reference bound to nothing, which is why the rewrite has two halves that must agree. VALUES HAND-DERIVED, NOT CAPTURED -- at base the rename did not bind (`Unbound variable: eqM. Did you mean 'eq'`)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(False, False)\n",
+  },
+  Row {
+    entry = "x21_prelude_alias_private_helper_reject.mdk",
+    label =
+      "X21 (S1-PRELUDE (b) boundary, #2640) the recovery spelling`s SURFACE, which x19 alone cannot bound: `C.<name>` reaches core`s EXPORT surface, computed the same way an ordinary module`s is, and not core`s whole top-level namespace. `indexGo` is an unexported top-level binding of `stdlib/core.mdk`, so this is a located REJECT on check, run and build. The positive control rides inside the diagnostic -- it suggests `C.index`, the exported sibling, which IS reachable -- so a regression that widened the alias surface turns this one cell green while leaving every other x-cell untouched. #2640 asks the different question of whether `check` should bind a private core helper under its BARE name (it does today, and `withPreludeDefs` keeps the emit-side row widened to match until that is ruled); this cell neither answers nor depends on it, because the alias surface is narrower either way",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+  },
+  Row {
+    entry = "x22_prelude_alias_constrained_standalone.mdk",
+    label =
+      "X22 (S1-PRELUDE (b)) x19`s CONSTRAINED twin and the ARITY axis, standing to x19 as x5 stands to x4. x19 and x20 name unconstrained callees, so they grade the scope layer and nothing under it; `clamp` is `Ord a => a -> a -> a -> a` and elaboration PREPENDS a `$dict` parameter to a `=>`-constrained prelude function, so an alias spelling that binds in scope while carrying no dict-arity row yields a callee applied one argument short. `check` cannot see that: it exits 0. MEASURED at the half-wired state, both failures: `run` E-PANIC `intToString: not an Int`, build `CDict head 'C.clamp' is not a known top-level function`. Pinned `10`, byte-identical to bare `clamp 0 10 42`, which is the denotation the alias is required to share. The dict-arity and obligation tables key the implicit prelude as `\"\"` and not `\"core\"` (see importTableMid), which is why this cell is the one that moves when that translation is wrong",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "10\n",
+  },
+  Row {
+    entry = "x23_prelude_alias_denotes_bare_name.mdk",
+    label =
+      "X23 (S1-PRELUDE (b)) the DENOTATION assertion with no collision and no boundary in the program -- the property the recovery spellings exist to have before any shadow is in play. Pinned `True` is a conjunction over both spellings and two receivers, so a cell that bound some other `isEven`, or bound nothing and defaulted, cannot pass by getting one comparison right. Both spellings appear because they take different paths through inference (the module alias stays dotted, the member rename is rewritten to the origin name first), and a cell naming one grades one. An exit-code reading of this row is worth nothing: every way of getting the denotation wrong still exits 0 and prints False, which is why the corpus grades the VALUE on all three arms",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\n",
+  },
+  Row {
     entry = "i29_importer_selective_import_displaced/main.mdk",
     label =
       "I29 (#2738) an interface method nameable by its TYPE name displaces a SELECTIVELY IMPORTED standalone of a DIFFERENT scheme. The i3 topology with the standalone`s domain widened to cover the receiver, so both candidates typecheck and the displacement is observable only as a value plus a diagnostic. RESOLUTION IS UNCHANGED AND CONFORMANT -- S1 makes `peek` an importer shadow (S1-NS (a)(i), the TYPE arm: `import peekable.{Peekable}` names the interface), S2`s importer arm finds `impl Peekable Box` at the receiver`s head, so it dispatches: `peek=7`, not `peek=(\"box\", 7)`. What was S0 is the SILENCE: the user wrote the strongest statement the language offers about which `peek` is meant and got the other one at exit 0 on check, run and build alike. VALUES AND VERDICTS DERIVED FROM S1/S2 AND FROM THE RULING BEFORE THE BINARY WAS BUILT, per [W-QUIETER] in reverse. Also asserts `W-IMPORT-METHOD-SHADOW` fires on check/run/build stderr alike",

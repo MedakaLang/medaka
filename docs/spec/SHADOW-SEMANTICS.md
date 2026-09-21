@@ -810,19 +810,32 @@ Given an occurrence of bare name `N` in module `M`:
   > repair always exists, and (b) exists because Medaka's does not (see the
   > recovery paragraph).
   >
-  > **The recovery, MEASURED 2026-08-10 on a cold `make medaka` of this branch.**
-  > (b) obliges the diagnostic to name a repair, so the repair had to be measured
-  > before (b) could be written. **Two work; three plausible ones do not**, and the
-  > message must name only the working ones:
+  > **The recovery, first MEASURED 2026-08-10, RE-MEASURED 2026-09-20 on both arms
+  > of the prelude-aliasing change (`#95`), `MEDAKA_STRICT=1`, all three verbs plus
+  > the executed binary.** (b) obliges the diagnostic to name a repair, so the
+  > repair had to be measured before (b) could be written. **Three now bind; two
+  > never did; and none of the five is clean on `run`** — the `run` column is a
+  > single pre-existing defect, stated once below the table rather than five times
+  > inside it. The message must name only the spellings that bind:
   >
   > | Spelling | Verdict |
   > |---|---|
-  > | Rename the interface method (or the local use) | **WORKS** — and is the only repair that needs nothing new |
-  > | A shim module: a module that does **not** declare the colliding interface calls bare prelude `N` and exports it under a fresh name; `M` imports that | **WORKS** — `check` 0 / `run` correct / built binary correct. Follows directly from S1's per-module shadow-hood |
-  > | `import core as C` → `C.N` | **DOES NOT WORK** — `Unbound variable: C.N`, and it fails **with no collision present at all**, so aliasing the implicit prelude is simply unimplemented (contrast `import list as L` → `L.take`, which works). §1.1's table recorded this for `eq` in 2026-07-14; re-measured for `count` |
-  > | `import core.{N as pN}` → `pN` | **DOES NOT WORK** — `Unbound variable: pN. Did you mean 'N'` |
-  > | `import core.{N}` (plain, no rename) | **DOES NOT RECOVER** — the interface method still wins; writing the import explicitly changes nothing |
-  > | `import <shim> as S` → `S.N`, where the shim is `export import core.{N}` | **DOES NOT WORK, AND IS AN S0** — `check` exit 0 typing `S.N` as the *interface method*'s scheme, then a **SIGSEGV** from the built binary. Without the collision the same spelling builds a binary that prints the right answer, so the collision is the trigger. Filed separately; **do not name this spelling in any message** |
+  > | Rename the interface method (or the local use) | **WORKS** — all three verbs, and is the only repair that needs nothing new. The one row the `run` defect below does not touch, because it leaves no collision behind |
+  > | A shim module: a module that does **not** declare the colliding interface calls bare prelude `N` and exports it under a fresh name; `M` imports that | **BINDS; `check` 0 and the built binary is correct; `run` FAILS** — located `E-NOT-A-FUNCTION: applied non-function: 99` inside the shim. Measured at `8d9d267f1` and unchanged by `#95`, so this is the standing state of the repair this table has prescribed since 2026-08-10, not a regression. The 2026-08-10 row claimed *`run` correct* and that half is now refuted |
+  > | `import core as C` → `C.N` | **BINDS as of `#95`; `check` 0 and the built binary is correct; `run` FAILS** the same way as the shim row. Previously `Unbound variable: C.N`, failing **with no collision present at all** — aliasing the implicit prelude was unimplemented, which is what `#95` implemented. With no collision present it is now correct on all three verbs (`test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk`, `test/shadow_fixtures/x22_prelude_alias_constrained_standalone.mdk` and `test/shadow_fixtures/x23_prelude_alias_denotes_bare_name.mdk`) |
+  > | `import core.{N as pN}` → `pN` | **BINDS as of `#95`, and DOES NOT RECOVER** — a member rename resolves to the ORIGIN bare name before resolution runs (`renameAliasedMethods`), so `pN` lands on whatever holds `N` in this module, which is the interface method. General to every module, not a prelude quirk; stated in `docs/spec/SYNTAX.md`'s alias table and pinned at `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`. Previously `Unbound variable: pN. Did you mean 'N'` |
+  > | `import core.{N}` (plain, no rename) | **DOES NOT RECOVER** — the interface method still wins; writing the import explicitly changes nothing. Unchanged by `#95` |
+  > | `import <shim> as S` → `S.N`, where the shim is `export import core.{N}` | **DOES NOT WORK, AND IS AN S0** — `check` exit 0 typing `S.N` as the *interface method*'s scheme, then a failing binary. **The 2026-08-10 SIGSEGV is GONE; re-measured 2026-09-20 at `8d9d267f1` and unchanged by `#95`, the binary now exits 1 with `E-DISPATCH-NO-IMPL`, and `run` exits 1 with `E-NOT-A-FUNCTION`.** Still S0-shaped, because `check` still accepts a program that cannot execute. **Not drained.** Without the collision the same spelling builds a binary that prints the right answer, so the collision is the trigger. Filed separately; **do not name this spelling in any message** |
+  >
+  > 🚨 **The `run` column is ONE defect, and it is not the prelude's.** Every row
+  > above that leaves the collision standing fails under `run` and succeeds in the
+  > built binary, because the tree-walking evaluator keys a method by its bare name
+  > in one program-global cell (`globalCells`/`coalesceImpls`), so the module's
+  > `impl` has already taken `N` before any recovery spelling is consulted. The
+  > emitter does not, which is why the binary is right. This is the same
+  > run-versus-binary split recorded at matrix row 49 and filed as `#1497`; it
+  > predates `#95` on the shim row, which is the arm that isolates it, and `#95`
+  > neither widened nor narrowed it.
   >
   > **There is no `hiding`/exclusion syntax** — derived, not assumed: a
   > case-insensitive word-bounded grep for `hiding` over `compiler/`, `stdlib/` and
@@ -1582,16 +1595,16 @@ new rule takes away that the old one gave. What still works:
 | **Operators** (`==`, `/=`, `<`, `+`, `++`, …) | **YES** | They desugar through the method-call path and never touch the bare-name funDef intersection (row 24, UNREACHABLE). A module with `impl Eq Foo` *and* a standalone `eq` still evaluates `Foo 1 == Foo 2` correctly. Covers `Eq`/`Ord`/`Num`/`Semigroup`. |
 | **A written `=>` constraint** (S5 carve-out) | **YES** | `sizeOf : Sizeable a => a -> Int ; sizeOf x = size x` dispatches — including N-way. For a non-operator interface this is the **only** in-module route. Gated by `definer_shadow_nway`. |
 | **Any other module** | **YES** | Shadow-hood is per-module (S1). A module that does not define a colliding standalone is completely unaffected — including the prelude's own bodies (P0-21). |
-| **Module alias** — `import core as C` → `C.eq` | **NO** | `Unbound variable: C.eq` |
-| **Member alias** — `import core.{eq as eqM}` → `eqM` | **NO** | `Unbound variable: eqM. Did you mean 'eq'` |
+| **Module alias** — `import core as C` → `C.eq` | **YES**, since `#95` | Re-measured 2026-09-20 on both arms. `(eq 1 1, C.eq 1 1)` in a module whose own `eq` returns `False` prints `(False, True)` on `check`, `run` and the built binary alike. The dotted spelling is what makes it work: it survives inference and is restored to the origin method only afterwards. Pinned at `test/shadow_fixtures/x19_prelude_module_alias_escapes_shadow.mdk`. |
+| **Member alias** — `import core.{eq as eqM}` → `eqM` | **NO** — it binds now, and lands on the shadow | Re-measured 2026-09-20: the same program prints `(False, False)`. A member rename is rewritten to the ORIGIN bare name before resolution (`renameAliasedMethods`), and the origin bare name is the one this module has shadowed. **General to every module**, not a prelude quirk — `docs/spec/SYNTAX.md`'s alias table states it. Pinned at `test/shadow_fixtures/x20_prelude_member_rename_lands_on_shadow.mdk`. |
 | **Interface-qualified** — `Eq.eq x y` | **NO** | No such syntax. |
 
-**Recommended follow-up (not a blocker):** make `import core.{eq as eqM}` resolve.
-The member-alias machinery already exists and is gated
-(`test/eval_modules_fixtures/import_alias/` aliases a *user* interface's method);
-the prelude is simply not reachable as an importable module for aliasing. It is a
-contained change to `resolve.mdk`'s import handling and needs **no new syntax**.
-Until then the answer for a user is: **rename your function.**
+**The 2026-07-14 follow-up is discharged, and it named the wrong spelling.** It
+recommended making `import core.{eq as eqM}` resolve. Both prelude spellings
+resolve as of `#95`, and the member rename is *still* not a route for the reason
+its row gives: a rename is a second spelling of one global-by-name method, not a
+second binding, so it cannot out-scope a local shadow of the origin name. The
+module alias is the route, and it was the one the follow-up did not name.
 
 ## 2. Decision matrix (re-observed 2026-07-14, post-`eb92cdff`; now GATED)
 

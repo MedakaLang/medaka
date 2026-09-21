@@ -1,0 +1,29 @@
+-- X20 (SHADOW-SEMANTICS S1-PRELUDE (b)) -- x19's member-RENAME twin, opposite value.
+--
+-- The two recovery spellings are not interchangeable, and this cell is the one that says so.
+--
+--   PINNED: `(False, False)` -- BOTH components are the module's own `eq`.
+--   x19's `(False, True)` is the same program with `import core as C` / `C.eq` in place of
+--     the rename.  Transcribing either value onto the other cell destroys the distinction
+--     this pair exists to hold.
+--
+-- WHY the rename does not escape: a method is global-by-name -- one dispatch cell per name,
+-- never a per-module binding -- so an alias of a method is a second SPELLING, not a second
+-- binding.  `renameAliasedMethods` rewrites `eqM` back to `eq` before any resolution runs,
+-- and `eq` is then whatever this module's scope says it is, which here is the standalone.
+-- This is GENERAL, not a property of the prelude: the same rewrite governs a rename of any
+-- module's method.  `docs/spec/SYNTAX.md`'s alias table states it as a consequence.
+--
+-- A reader tempted to call this a defect should note what the alternative costs: not
+-- de-aliasing a renamed method leaves the renamed reference bound to nothing, which is why
+-- the rewrite has two halves that must agree (`compiler/types/typecheck.mdk`,
+-- `renameAliasedMethods`).
+--
+-- VALUES HAND-DERIVED FROM THE RULE ABOVE, NOT CAPTURED: at the time this was written the
+-- rename did not bind at all (`Unbound variable: eqM. Did you mean 'eq'`).
+import core.{eq as eqM}
+
+eq : Int -> Int -> Bool
+eq _ _ = False
+
+main = println (eq 1 1, eqM 1 1)
