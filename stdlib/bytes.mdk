@@ -35,7 +35,23 @@
 
    `mut_bytes` holds `MutBytes`, the mutable, fixed-length sibling, and the
    way to build a byte string a byte at a time: its `freeze` hands back a
-   `Bytes` and its `thaw` goes the other way, both by copy. -}
+   `Bytes` and its `thaw` goes the other way, both by copy.
+
+   The list vocabulary is here monomorphically: `empty` and `isEmpty`,
+   `take`, `drop` and `splitAt`, `startsWith` and `endsWith`, `concat`, and
+   the walks `fold`, `forEach`, `any`, `all` and `map`. `Bytes` has no
+   element parameter, so it cannot be a `Foldable`, `Mappable` or
+   `Filterable` instance, and each of these is a plain function sharing a
+   name with the prelude's method, as `length` already does. Naming one of
+   them in an import list shadows the prelude's method for the whole
+   importing module, so reach them through an alias (`import bytes as B`,
+   then `B.fold`) from a module that uses both.
+
+   Under the interpreter (`medaka run`, `medaka test`), a walk over a byte
+   string costs one evaluator frame per byte and the evaluator's call depth
+   is capped at 25,000, so a walk over a byte string that long exits with
+   `E-STACK-OVERFLOW` instead of answering. The cap is the interpreter's, not
+   the byte string's: compiled code (`medaka build`) has none. -}
 
 -- The representation is a `ByteBlock`, the runtime's packed byte buffer, and
 -- every operation here reads it directly rather than through an `Array Int`
@@ -57,6 +73,18 @@
 -- which the wasm backend cannot assemble, and cost them work they spend on
 -- nothing they use.
 --
+-- This module's `map` shadows `Mappable.map` for this file as well as for an
+-- importer, so an example here that would have reached the prelude's method
+-- on an `Option` -- `map length (fromArray …)` -- goes through `option`
+-- instead.  Reaching for `map` on anything but a `Bytes` inside this file
+-- silently picks the one below and fails when its `Bytes` pattern meets the
+-- other value.
+--
+-- The interpreter walk ceiling the module doc states is issue #3269: the
+-- evaluator has no tail-call optimisation, so every loop here recurses, and
+-- 25,000 is `E-STACK-OVERFLOW`'s threshold.  Removing it is #2594's arc, not
+-- this module's.  It is why every doctest subject here stays small.
+--
 -- The `++` gap the module doc describes is issue #3204: a `let`-bound `++`
 -- reaches the runtime's untyped concatenation instead of this module's
 -- `Semigroup` instance.  It dispatches from infix position, an operator
@@ -67,7 +95,7 @@
 -- why the doc points a caller at it.
 
 import core.{
-  Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Hashable
+  Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Monoid, Hashable
 }
 import array.{findIndex, fromList}
 import string.{toDigit}
@@ -81,8 +109,8 @@ import string.{toDigit}
    with a `ByteBlock` in their signature are the kernel doors, gathered in
    the `# Kernel doors` section at the end of this module.
 
-   > map length (fromArray [|1, 2, 3|])
-   Some 3 -}
+   > option 0 length (fromArray [|1, 2, 3|])
+   3 -}
 export newtype Bytes = Bytes ByteBlock
 
 -- # Conversion
@@ -90,8 +118,8 @@ export newtype Bytes = Bytes ByteBlock
 {- | The byte string holding the elements of `arr`, or `None` when any element
    falls outside `0` to `255`.
 
-   > map toArray (fromArray [|104, 105|])
-   Some [|104, 105|]
+   > option [||] toArray (fromArray [|104, 105|])
+   [|104, 105|]
    > fromArray [|104, 256|]
    None
    > fromArray [|-1|]
@@ -146,6 +174,20 @@ toArray (Bytes bb) = byteBlockToIntArray bb
 export
 length : Bytes -> Int
 length (Bytes bb) = byteBlockLength bb
+
+{- | Whether `b` holds no bytes.
+
+   Like `length`, this is a function rather than `Foldable`'s method, and
+   shadows that method for a module that names it in an import list, so
+   reach it through an alias from a module that uses both.
+
+   > isEmpty (fromArrayAssumeByteDomain [||])
+   True
+   > isEmpty (encodeUtf8 "hi")
+   False -}
+export
+isEmpty : Bytes -> Bool
+isEmpty (Bytes bb) = byteBlockLength bb == 0
 
 {- | The byte at index `i`, or `None` when `i` is out of range.
 
@@ -228,6 +270,49 @@ sliceClamped lo hi (Bytes bb) =
   let dst = byteBlockMake (hi' - lo')
   let _ = byteBlockBlit bb lo' dst 0 (hi' - lo')
   Bytes dst
+
+{- | The first `n` bytes of `b`, or all of them when `b` is shorter. Empty
+   when `n <= 0`.
+
+   The result is a copy, as `slice`'s is.
+
+   > toArray (take 2 (fromArrayAssumeByteDomain [|10, 20, 30|]))
+   [|10, 20|]
+   > toArray (take 9 (fromArrayAssumeByteDomain [|10, 20|]))
+   [|10, 20|] -}
+export
+take : Int -> Bytes -> Bytes
+take n b = sliceClamped 0 n b
+
+-- > toArray (take (-1) (fromArrayAssumeByteDomain [|10, 20|]))
+-- [||]
+
+{- | The bytes of `b` after the first `n`. Empty when `n` is at least `b`'s
+   length, and the whole of `b` when `n <= 0`.
+
+   The result is a copy, as `slice`'s is.
+
+   > toArray (drop 2 (fromArrayAssumeByteDomain [|10, 20, 30|]))
+   [|30|]
+   > toArray (drop 9 (fromArrayAssumeByteDomain [|10, 20|]))
+   [||] -}
+export
+drop : Int -> Bytes -> Bytes
+drop n b = sliceClamped n (length b) b
+
+-- > toArray (drop (-1) (fromArrayAssumeByteDomain [|10, 20|]))
+-- [|10, 20|]
+
+{- | The first `n` bytes of `b`, and the rest.
+
+   `(take n b, drop n b)`, so both halves are copies and both ends of the
+   split clamp into `b`.
+
+   > let (a, b) = splitAt 2 (fromArrayAssumeByteDomain [|10, 20, 30|]) in (toArray a, toArray b)
+   ([|10, 20|], [|30|]) -}
+export
+splitAt : Int -> Bytes -> (Bytes, Bytes)
+splitAt n b = (take n b, drop n b)
 
 elemIndexGo : Int -> ByteBlock -> Int -> Int -> Option Int
 elemIndexGo v bb i n =
@@ -364,6 +449,166 @@ export
 contains : Bytes -> Bytes -> Bool
 contains needle haystack = isSome (indexOf needle haystack)
 
+{- | Whether `b` begins with `prefix`. The empty prefix begins every byte
+   string.
+
+   > startsWith (encodeUtf8 "he") (encodeUtf8 "hello")
+   True
+   > startsWith (encodeUtf8 "lo") (encodeUtf8 "hello")
+   False -}
+export
+startsWith : Bytes -> Bytes -> Bool
+startsWith (Bytes nb) (Bytes bb) =
+  let nlen = byteBlockLength nb
+  nlen <= byteBlockLength bb && matchesAtGo nb bb 0 0 nlen
+
+-- > startsWith (fromArrayAssumeByteDomain [||]) (encodeUtf8 "hello")
+-- True
+-- > startsWith (encodeUtf8 "hello!") (encodeUtf8 "hello")
+-- False
+
+{- | Whether `b` ends with `suffix`. The empty suffix ends every byte string.
+
+   > endsWith (encodeUtf8 "lo") (encodeUtf8 "hello")
+   True
+   > endsWith (encodeUtf8 "he") (encodeUtf8 "hello")
+   False -}
+export
+endsWith : Bytes -> Bytes -> Bool
+endsWith (Bytes nb) (Bytes bb) =
+  let nlen = byteBlockLength nb
+  let hlen = byteBlockLength bb
+  nlen <= hlen && matchesAtGo nb bb 0 (hlen - nlen) nlen
+
+-- > endsWith (fromArrayAssumeByteDomain [||]) (encodeUtf8 "hello")
+-- True
+-- > endsWith (encodeUtf8 "hello!") (encodeUtf8 "hello")
+-- False
+
+-- # Iteration
+
+-- Every walk in this section reads the block by index rather than going
+-- through `toArray`, which would box a machine word per byte to hand the
+-- same values back.
+
+foldGo : (b -> Int -> <e> b) -> b -> ByteBlock -> Int -> Int -> <e> b
+foldGo f acc bb i n =
+  if i >= n then
+    acc
+  else
+    foldGo f (f acc (byteBlockGetUnsafe i bb)) bb (i + 1) n
+
+{- | `f` applied to an accumulator and each byte of `b` in turn, from `init`
+   and left to right.
+
+   `Foldable`'s method over the bytes, monomorphically: the element type is
+   `Int` because a byte is one, and `Bytes` has no element parameter to make
+   it an instance. Named in an import list it shadows the prelude's method
+   for the whole importing module, exactly as `length` does, so reach it
+   through an alias -- `import bytes as B`, then `B.fold`.
+
+   > fold (acc b => acc + b) 0 (fromArrayAssumeByteDomain [|1, 2, 3|])
+   6
+   > fold (acc b => acc + b) 0 (fromArrayAssumeByteDomain [||])
+   0 -}
+export
+fold : (b -> Int -> <e> b) -> b -> Bytes -> <e> b
+fold f init (Bytes bb) = foldGo f init bb 0 (byteBlockLength bb)
+
+forEachGo : (Int -> <e> Unit) -> ByteBlock -> Int -> Int -> <e> Unit
+forEachGo f bb i n =
+  if i >= n then
+    ()
+  else
+    let _ = f (byteBlockGetUnsafe i bb)
+    forEachGo f bb (i + 1) n
+
+{- | Runs `f` on each byte of `b` in order, for its effect.
+
+   > let acc = Ref [] in let _ = forEach (x => acc := x :: !acc) (fromArrayAssumeByteDomain [|7, 8, 9|]) in !acc
+   [9, 8, 7] -}
+export
+forEach : (Int -> <e> Unit) -> Bytes -> <e> Unit
+forEach f (Bytes bb) = forEachGo f bb 0 (byteBlockLength bb)
+
+-- `any` and `all` stop at the byte that settles the answer, where the
+-- prelude's `fold`-built versions visit the whole container.  A predicate
+-- over a megabyte buffer is the reason this module has them at all.
+
+anyGo : (Int -> <e> Bool) -> ByteBlock -> Int -> Int -> <e> Bool
+anyGo f bb i n =
+  if i >= n then
+    False
+  else if f (byteBlockGetUnsafe i bb) then
+    True
+  else
+    anyGo f bb (i + 1) n
+
+{- | Whether at least one byte of `b` satisfies `f`. `False` on an empty byte
+   string. Stops at the first byte that satisfies `f`.
+
+   > any (x => x > 200) (fromArrayAssumeByteDomain [|1, 250, 3|])
+   True
+   > any (x => x > 200) (fromArrayAssumeByteDomain [|1, 2, 3|])
+   False -}
+export
+any : (Int -> <e> Bool) -> Bytes -> <e> Bool
+any f (Bytes bb) = anyGo f bb 0 (byteBlockLength bb)
+
+-- > any (x => x > 200) (fromArrayAssumeByteDomain [||])
+-- False
+
+allGo : (Int -> <e> Bool) -> ByteBlock -> Int -> Int -> <e> Bool
+allGo f bb i n =
+  if i >= n then
+    True
+  else if f (byteBlockGetUnsafe i bb) then
+    allGo f bb (i + 1) n
+  else
+    False
+
+{- | Whether every byte of `b` satisfies `f`. `True` on an empty byte string.
+   Stops at the first byte that does not satisfy `f`.
+
+   > all (x => x < 200) (fromArrayAssumeByteDomain [|1, 2, 3|])
+   True
+   > all (x => x < 200) (fromArrayAssumeByteDomain [|1, 250, 3|])
+   False -}
+export
+all : (Int -> <e> Bool) -> Bytes -> <e> Bool
+all f (Bytes bb) = allGo f bb 0 (byteBlockLength bb)
+
+-- > all (x => x < 200) (fromArrayAssumeByteDomain [||])
+-- True
+
+mapGo : (Int -> <e> Int) -> ByteBlock -> ByteBlock -> Int -> Int -> <e> Unit
+mapGo f src dst i n =
+  if i >= n then
+    ()
+  else
+    let v = f (byteBlockGetUnsafe i src)
+    if v < 0 || v > 255 then
+      panic "Bytes.map: value out of range 0..255"
+    else
+      let _ = byteBlockSetUnsafe i v dst
+      mapGo f src dst (i + 1) n
+
+{- | The byte string of the same length holding `f` applied to each byte of
+   `b`.
+
+   Panics when `f` answers a value outside `0` to `255`, the same domain
+   check `mutBytes.setInPlace` applies, so no `Bytes` holds anything else.
+
+   > toArray (map (x => x + 1) (fromArrayAssumeByteDomain [|7, 8, 9|]))
+   [|8, 9, 10|] -}
+export
+map : (Int -> <e> Int) -> Bytes -> <e> Bytes
+map f (Bytes bb) =
+  let n = byteBlockLength bb
+  let dst = byteBlockMake n
+  let _ = mapGo f bb dst 0 n
+  Bytes dst
+
 -- # Combining
 
 {- | The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
@@ -381,6 +626,46 @@ export impl Semigroup Bytes where
     let _ = byteBlockBlit a 0 dst 0 na
     let _ = byteBlockBlit b 0 dst na nb
     Bytes dst
+
+{- | `empty` is the byte string of no bytes, the identity for `append` and
+   `++`.
+
+   > toArray (empty : Bytes)
+   [||]
+   > length (append empty (encodeUtf8 "hi"))
+   2 -}
+export impl Monoid Bytes where
+  empty = Bytes (byteBlockMake 0)
+
+concatLength : List Bytes -> Int -> Int
+concatLength [] acc = acc
+concatLength (b :: rest) acc = concatLength rest (acc + length b)
+
+-- Sums the lengths, then blits each part into one buffer of that size: the
+-- `foldRight append empty` spelling would allocate an intermediate byte
+-- string per part and copy every earlier part again into each one.
+concatFill : List Bytes -> ByteBlock -> Int -> Unit
+concatFill [] _ _ = ()
+concatFill ((Bytes src) :: rest) dst off =
+  let n = byteBlockLength src
+  let _ = byteBlockBlit src 0 dst off n
+  concatFill rest dst (off + n)
+
+{- | The byte strings joined end to end, in one new byte string.
+
+   > toArray (concat [fromArrayAssumeByteDomain [|1, 2|], fromArrayAssumeByteDomain [|3|]])
+   [|1, 2, 3|]
+   > decodeUtf8 (concat [encodeUtf8 "hé", encodeUtf8 "llo"])
+   Some "héllo" -}
+export
+concat : List Bytes -> Bytes
+concat parts =
+  let dst = byteBlockMake (concatLength parts 0)
+  let _ = concatFill parts dst 0
+  Bytes dst
+
+-- > toArray (concat ([] : List Bytes))
+-- [||]
 
 -- # Comparison
 

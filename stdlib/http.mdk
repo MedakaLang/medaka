@@ -26,7 +26,6 @@ import bytes.{
   decodeUtf8,
   elemIndexWithin,
   encodeUtf8,
-  fromArrayAssumeByteDomain,
   toArray,
 }
 import json.{Json, parse}
@@ -240,10 +239,6 @@ data RequestLine = RequestLine String String Int
 data HeaderBlock = HeaderBlock (List Header) Int Int
 data BodyMode = NoBody | FixedBody Int | ChunkedBody | UntilCloseBody
 data ParsedBody = ParsedBody Bytes (List Header) Int
-
--- | The body of a request that framed no body at all.
-emptyBody : Bytes
-emptyBody = fromArrayAssumeByteDomain [||]
 
 -- | Structural classification for request-framing failures. The diagnostic is
 -- retained for direct parser callers, while the server can select 400 versus
@@ -1210,7 +1205,7 @@ chunkDataEnd input avail dataPos size =
 -- that index belong to whatever follows the request, so rejecting them is the
 -- one-shot parser's job rather than the body framer's.
 parseBody : BodyMode -> Bytes -> Int -> Int -> Result FrameError ParsedBody
-parseBody NoBody _ pos _ = Ok (ParsedBody emptyBody [] pos)
+parseBody NoBody _ pos _ = Ok (ParsedBody empty [] pos)
 parseBody (FixedBody size) input pos _ = do
   (body, finalPos) <- readSliceAt input pos size
   Ok (ParsedBody body [] finalPos)

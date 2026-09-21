@@ -39,6 +39,22 @@ dispatches from either position.
 way to build a byte string a byte at a time: its `freeze` hands back a
 `Bytes` and its `thaw` goes the other way, both by copy.
 
+The list vocabulary is here monomorphically: `empty` and `isEmpty`,
+`take`, `drop` and `splitAt`, `startsWith` and `endsWith`, `concat`, and
+the walks `fold`, `forEach`, `any`, `all` and `map`. `Bytes` has no
+element parameter, so it cannot be a `Foldable`, `Mappable` or
+`Filterable` instance, and each of these is a plain function sharing a
+name with the prelude's method, as `length` already does. Naming one of
+them in an import list shadows the prelude's method for the whole
+importing module, so reach them through an alias (`import bytes as B`,
+then `B.fold`) from a module that uses both.
+
+Under the interpreter (`medaka run`, `medaka test`), a walk over a byte
+string costs one evaluator frame per byte and the evaluator's call depth
+is capped at 25,000, so a walk over a byte string that long exits with
+`E-STACK-OVERFLOW` instead of answering. The cap is the interpreter's, not
+the byte string's: compiled code (`medaka build`) has none.
+
 ### `Bytes`
 
 ```
@@ -55,11 +71,11 @@ with a `ByteBlock` in their signature are the kernel doors, gathered in
 the `# Kernel doors` section at the end of this module.
 
 ```medaka
-> map length (fromArray [|1, 2, 3|])
-Some 3
+> option 0 length (fromArray [|1, 2, 3|])
+3
 ```
 
-Instances: [`Index`](#index-bytes-int-int), [`Slice`](#slice-bytes), [`Semigroup`](#semigroup-bytes), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Hashable`](#hashable-bytes), [`Debug`](#debug-bytes)
+Instances: [`Index`](#index-bytes-int-int), [`Slice`](#slice-bytes), [`Semigroup`](#semigroup-bytes), [`Monoid`](#monoid-bytes), [`Eq`](#eq-bytes), [`Ord`](#ord-bytes), [`Hashable`](#hashable-bytes), [`Debug`](#debug-bytes)
 
 ## Conversion
 
@@ -73,8 +89,8 @@ The byte string holding the elements of `arr`, or `None` when any element
 falls outside `0` to `255`.
 
 ```medaka
-> map toArray (fromArray [|104, 105|])
-Some [|104, 105|]
+> option [||] toArray (fromArray [|104, 105|])
+[|104, 105|]
 > fromArray [|104, 256|]
 None
 > fromArray [|-1|]
@@ -141,6 +157,25 @@ that uses both.
 6
 ```
 
+### `isEmpty`
+
+```
+isEmpty : Bytes -> Bool
+```
+
+Whether `b` holds no bytes.
+
+Like `length`, this is a function rather than `Foldable`'s method, and
+shadows that method for a module that names it in an import list, so
+reach it through an alias from a module that uses both.
+
+```medaka
+> isEmpty (fromArrayAssumeByteDomain [||])
+True
+> isEmpty (encodeUtf8 "hi")
+False
+```
+
 ### `get`
 
 ```
@@ -181,6 +216,58 @@ where `b.[lo..hi]` raises a slice error.
 [|10, 20|]
 > toArray (sliceClamped 3 1 (fromArrayAssumeByteDomain [|10, 20|]))
 [||]
+```
+
+### `take`
+
+```
+take : Int -> Bytes -> Bytes
+```
+
+The first `n` bytes of `b`, or all of them when `b` is shorter. Empty
+when `n <= 0`.
+
+The result is a copy, as `slice`'s is.
+
+```medaka
+> toArray (take 2 (fromArrayAssumeByteDomain [|10, 20, 30|]))
+[|10, 20|]
+> toArray (take 9 (fromArrayAssumeByteDomain [|10, 20|]))
+[|10, 20|]
+```
+
+### `drop`
+
+```
+drop : Int -> Bytes -> Bytes
+```
+
+The bytes of `b` after the first `n`. Empty when `n` is at least `b`'s
+length, and the whole of `b` when `n <= 0`.
+
+The result is a copy, as `slice`'s is.
+
+```medaka
+> toArray (drop 2 (fromArrayAssumeByteDomain [|10, 20, 30|]))
+[|30|]
+> toArray (drop 9 (fromArrayAssumeByteDomain [|10, 20|]))
+[||]
+```
+
+### `splitAt`
+
+```
+splitAt : Int -> Bytes -> (Bytes, Bytes)
+```
+
+The first `n` bytes of `b`, and the rest.
+
+`(take n b, drop n b)`, so both halves are copies and both ends of the
+split clamp into `b`.
+
+```medaka
+> let (a, b) = splitAt 2 (fromArrayAssumeByteDomain [|10, 20, 30|]) in (toArray a, toArray b)
+([|10, 20|], [|30|])
 ```
 
 ### `elemIndex`
@@ -295,7 +382,139 @@ True
 False
 ```
 
+### `startsWith`
+
+```
+startsWith : Bytes -> Bytes -> Bool
+```
+
+Whether `b` begins with `prefix`. The empty prefix begins every byte
+string.
+
+```medaka
+> startsWith (encodeUtf8 "he") (encodeUtf8 "hello")
+True
+> startsWith (encodeUtf8 "lo") (encodeUtf8 "hello")
+False
+```
+
+### `endsWith`
+
+```
+endsWith : Bytes -> Bytes -> Bool
+```
+
+Whether `b` ends with `suffix`. The empty suffix ends every byte string.
+
+```medaka
+> endsWith (encodeUtf8 "lo") (encodeUtf8 "hello")
+True
+> endsWith (encodeUtf8 "he") (encodeUtf8 "hello")
+False
+```
+
+## Iteration
+
+### `fold`
+
+```
+fold : (b -> Int -> <e> b) -> b -> Bytes -> <e> b
+```
+
+`f` applied to an accumulator and each byte of `b` in turn, from `init`
+and left to right.
+
+`Foldable`'s method over the bytes, monomorphically: the element type is
+`Int` because a byte is one, and `Bytes` has no element parameter to make
+it an instance. Named in an import list it shadows the prelude's method
+for the whole importing module, exactly as `length` does, so reach it
+through an alias -- `import bytes as B`, then `B.fold`.
+
+```medaka
+> fold (acc b => acc + b) 0 (fromArrayAssumeByteDomain [|1, 2, 3|])
+6
+> fold (acc b => acc + b) 0 (fromArrayAssumeByteDomain [||])
+0
+```
+
+### `forEach`
+
+```
+forEach : (Int -> <e> Unit) -> Bytes -> <e> Unit
+```
+
+Runs `f` on each byte of `b` in order, for its effect.
+
+```medaka
+> let acc = Ref [] in let _ = forEach (x => acc := x :: !acc) (fromArrayAssumeByteDomain [|7, 8, 9|]) in !acc
+[9, 8, 7]
+```
+
+### `any`
+
+```
+any : (Int -> <e> Bool) -> Bytes -> <e> Bool
+```
+
+Whether at least one byte of `b` satisfies `f`. `False` on an empty byte
+string. Stops at the first byte that satisfies `f`.
+
+```medaka
+> any (x => x > 200) (fromArrayAssumeByteDomain [|1, 250, 3|])
+True
+> any (x => x > 200) (fromArrayAssumeByteDomain [|1, 2, 3|])
+False
+```
+
+### `all`
+
+```
+all : (Int -> <e> Bool) -> Bytes -> <e> Bool
+```
+
+Whether every byte of `b` satisfies `f`. `True` on an empty byte string.
+Stops at the first byte that does not satisfy `f`.
+
+```medaka
+> all (x => x < 200) (fromArrayAssumeByteDomain [|1, 2, 3|])
+True
+> all (x => x < 200) (fromArrayAssumeByteDomain [|1, 250, 3|])
+False
+```
+
+### `map`
+
+```
+map : (Int -> <e> Int) -> Bytes -> <e> Bytes
+```
+
+The byte string of the same length holding `f` applied to each byte of
+`b`.
+
+Panics when `f` answers a value outside `0` to `255`, the same domain
+check `mutBytes.setInPlace` applies, so no `Bytes` holds anything else.
+
+```medaka
+> toArray (map (x => x + 1) (fromArrayAssumeByteDomain [|7, 8, 9|]))
+[|8, 9, 10|]
+```
+
 ## Combining
+
+### `concat`
+
+```
+concat : List Bytes -> Bytes
+```
+
+The byte strings joined end to end, in one new byte string.
+
+```medaka
+> toArray (concat [fromArrayAssumeByteDomain [|1, 2|], fromArrayAssumeByteDomain [|3|]])
+[|1, 2, 3|]
+> decodeUtf8 (concat [encodeUtf8 "hé", encodeUtf8 "llo"])
+Some "héllo"
+```
 
 ## Comparison
 
@@ -504,6 +723,22 @@ Backs `++`.
 [|1, 2, 3|]
 > decodeUtf8 (encodeUtf8 "hé" ++ encodeUtf8 "llo")
 Some "héllo"
+```
+
+### `Monoid Bytes`
+
+```
+impl Monoid Bytes
+```
+
+`empty` is the byte string of no bytes, the identity for `append` and
+`++`.
+
+```medaka
+> toArray (empty : Bytes)
+[||]
+> length (append empty (encodeUtf8 "hi"))
+2
 ```
 
 ### `Eq Bytes`
