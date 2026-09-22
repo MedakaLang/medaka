@@ -44642,6 +44642,10 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- the module's own entry for the same bare name.
 -- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
 -- `None` = unkeyed, no memo.
+-- Exported (S-2, #3321) for `check_policy.mdk`'s `runManifest`: the one consumer
+-- outside this file that needs BOTH halves (errs to refuse before a name lookup,
+-- schemes to satisfy one) over a graph that may carry more than one module.
+export
 checkModulesEntryFullSplitK : Option (Int, Int) ->
   List Decl ->
   List Decl ->

@@ -1,5 +1,5 @@
 # META
-source_lines=4286
+source_lines=4367
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/driver/medaka_cli.mdk — the native `medaka` CLI dispatcher (Phase C
@@ -330,6 +330,7 @@ import tools.check_policy.{
   PolicyArgs(..),
   PolicyOutcome(..),
   runManifest,
+  ManifestResult(..),
   ManifestArgs(..),
 }
 
@@ -3579,6 +3580,13 @@ runManifestCmd argv0 =
   runManifestArgs
     (ManifestArgs (firstPositional a) (optDefault (lastValue "--fn" a) "main"))
 
+-- `medaka manifest` loads and analyzes the target exactly as `medaka check`
+-- does (S-2, #3321): the multi-file loader, then `check`'s own resolve and
+-- typecheck diagnostics, refusing on anything `check` would refuse — an
+-- ill-typed target, an unresolvable import, or a missing `--fn` binding — all
+-- to STDERR at exit 1, nothing on stdout.  A target that imports a sibling
+-- module now resolves normally instead of never being reached (the old
+-- `runManifest` read exactly one file).
 runManifestArgs : ManifestArgs -> <IO> Unit
 runManifestArgs (ManifestArgs None _) =
   dieMsg "usage: medaka manifest <file.mdk> [--fn name]"
@@ -3586,14 +3594,87 @@ runManifestArgs (ManifestArgs (Some target) fn) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  let r = do
-    rsrc <- readPreludeFile rtPath
-    csrc <- readPreludeFile corePath
-    tsrc <- readFile target
-    Ok (putStr (runManifest rsrc csrc tsrc fn))
-  match r
+  let stdlibDir = root ++ "/stdlib"
+  let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+  match readPreludeFile rtPath
     Err msg => dieMsg msg
-    Ok v => v
+    Ok rsrc => match readPreludeFile corePath
+      Err msg => dieMsg msg
+      Ok csrc => match readFile target
+        Err msg => dieMsg msg
+        Ok tsrc => match parseResult tsrc
+          Err e => dieMsg (ppParseError tsrc target e)
+          Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
+            Err lerr =>
+              let _ = ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
+              exit 1
+            Ok modsWithPath =>
+              let mods = map dropPathTriple modsWithPath
+              let pathMap = map modIdToPath modsWithPath
+              let trusted = projectTrustedMods target roots stdlibDir mods
+              let preludeKey =
+                Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+              let rtD = desugaredPrelude rsrc
+              let coreD = desugaredPrelude csrc
+              let modsD = map desugarPair mods
+              -- Resolve-phase errors (bad/missing import, private-name access) are
+              -- the loader's own diagnostics, not a typecheck concern — gate on
+              -- them exactly like `checkRoute`'s multi-module arm before ever
+              -- calling into `runManifest`'s typecheck.
+              runManifestResolveGate
+                pathMap
+                trusted
+                preludeKey
+                rtD
+                coreD
+                modsD
+                tsrc
+                target
+                fn
+
+-- Split out of `runManifestArgs` so the resolve gate and the typecheck-then-
+-- lookup step each read as one thing (S-2, #3321).
+runManifestResolveGate : List (String, String) ->
+  List String ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  String ->
+  <IO> Unit
+runManifestResolveGate pathMap trusted preludeKey rtD coreD modsD tsrc target fn =
+  let resDiags =
+    ppResolveErrorsByFile
+      (resolveModulesErrorsByFile
+        pathMap
+        False
+        trusted
+        preludeKey
+        rtD
+        coreD
+        modsD)
+  match resDiags
+    "" => match runManifest preludeKey rtD coreD modsD fn
+      ManifestOk toml =>
+        let _ = putStr toml
+        ()
+      ManifestTypeErrors errs =>
+        let _ =
+          ePutStrLn
+            (joinNl
+              (map
+                (d =>
+                  ppDiagCliLines (srcLinesArr tsrc) target (diagOfTypeError d))
+                errs))
+        exit 1
+      ManifestNoSuchFn name =>
+        let _ = ePutStrLn "no '\{name}' entry found"
+        exit 1
+    _ =>
+      let _ = ePutStrLn resDiags
+      exit 1
 
 -- ── lint ──────────────────────────────────────────────────────────────────
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
@@ -4325,7 +4406,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false) (mem "CodeMode" true))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "lintCacheCtx" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runCrossFileReport" false) (mem "runCrossFileReportCached" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "lintTargetExists" false) (mem "expandLintTarget" false))))
-(DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestArgs" true))))
+(DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestResult" true) (mem "ManifestArgs" true))))
 (DTypeSig false "medakaVersion" (TyCon "String"))
 (DFunDef false "medakaVersion" () (ELit (LString "0.1.0-preview")))
 (DTypeSig false "medakaVersionString" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -4653,7 +4734,9 @@ runMcpServerFromEnv _ =
 (DFunDef false "runManifestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "manifestArgSpec")) (EVar "argv0"))) (DoExpr (EApp (EVar "runManifestArgs") (EApp (EApp (EVar "ManifestArgs") (EApp (EVar "firstPositional") (EVar "a"))) (EApp (EApp (EVar "optDefault") (EApp (EApp (EVar "lastValue") (ELit (LString "--fn"))) (EVar "a"))) (ELit (LString "main"))))))))
 (DTypeSig false "runManifestArgs" (TyFun (TyCon "ManifestArgs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "None") PWild)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka manifest <file.mdk> [--fn name]"))))
-(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EVar "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "fn"))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
+(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "target")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "target")) (EVar "stdlibDir")) (EVar "lerr")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EVar "map") (EVar "dropPathTriple")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EVar "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EVar "map") (EVar "desugarPair")) (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runManifestResolveGate") (EVar "pathMap")) (EVar "trusted")) (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "tsrc")) (EVar "target")) (EVar "fn")))))))))))))))))
+(DTypeSig false "runManifestResolveGate" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "runManifestResolveGate" ((PVar "pathMap") (PVar "trusted") (PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "tsrc") (PVar "target") (PVar "fn")) (EBlock (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "False")) (EVar "trusted")) (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "fn")) (arm (PCon "ManifestOk" (PVar "toml")) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "toml"))) (DoExpr (ELit LUnit)))) (arm (PCon "ManifestTypeErrors" (PVar "errs")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EApp (EApp (EVar "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target")) (EApp (EVar "diagOfTypeError") (EVar "d"))))) (EVar "errs"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "ManifestNoSuchFn" (PVar "name")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "' entry found"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "resDiags"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
 (DTypeSig false "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
 (DTypeSig false "lintArgSpec" (TyCon "ArgSpec"))
@@ -4762,7 +4845,7 @@ runMcpServerFromEnv _ =
 (DUse false (UseGroup ("tools" "codemod") ((mem "findCodemod" false) (mem "codemodMk" false) (mem "codemodWarnDecls" false) (mem "codemodListing" false) (mem "codemodSource" false) (mem "CodeMode" true))))
 (DUse false (UseGroup ("tools" "lint_cmd") ((mem "lintCacheCtx" false) (mem "runLintJsonCmd" false) (mem "lintFilesToDiagTriples" false) (mem "baselineFileCodes" false) (mem "runCrossFileReport" false) (mem "runCrossFileReportCached" false) (mem "resolveLintTargets" false) (mem "lintFilesGo" false))))
 (DUse false (UseGroup ("support" "cli_targets") ((mem "lintTargetExists" false) (mem "expandLintTarget" false))))
-(DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestArgs" true))))
+(DUse false (UseGroup ("tools" "check_policy") ((mem "runCheckPolicy" false) (mem "PolicyArgs" true) (mem "PolicyOutcome" true) (mem "runManifest" false) (mem "ManifestResult" true) (mem "ManifestArgs" true))))
 (DTypeSig false "medakaVersion" (TyCon "String"))
 (DFunDef false "medakaVersion" () (ELit (LString "0.1.0-preview")))
 (DTypeSig false "medakaVersionString" (TyFun (TyCon "Unit") (TyEffect ("IO") None (TyCon "String"))))
@@ -5090,7 +5173,9 @@ runMcpServerFromEnv _ =
 (DFunDef false "runManifestCmd" ((PVar "argv0")) (EBlock (DoLet false false (PVar "a") (EApp (EApp (EVar "requireArgs") (EVar "manifestArgSpec")) (EVar "argv0"))) (DoExpr (EApp (EVar "runManifestArgs") (EApp (EApp (EVar "ManifestArgs") (EApp (EVar "firstPositional") (EVar "a"))) (EApp (EApp (EVar "optDefault") (EApp (EApp (EVar "lastValue") (ELit (LString "--fn"))) (EVar "a"))) (ELit (LString "main"))))))))
 (DTypeSig false "runManifestArgs" (TyFun (TyCon "ManifestArgs") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "None") PWild)) (EApp (EVar "dieMsg") (ELit (LString "usage: medaka manifest <file.mdk> [--fn name]"))))
-(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "r") (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "rtPath"))) (ELam ((PVar "rsrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readPreludeFile") (EVar "corePath"))) (ELam ((PVar "csrc")) (EApp (EApp (EMethodRef "andThen") (EApp (EVar "readFile") (EVar "target"))) (ELam ((PVar "tsrc")) (EApp (EVar "Ok") (EApp (EVar "putStr") (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "rsrc")) (EVar "csrc")) (EVar "tsrc")) (EVar "fn"))))))))))) (DoExpr (EMatch (EVar "r") (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "v")) () (EVar "v"))))))
+(DFunDef false "runManifestArgs" ((PCon "ManifestArgs" (PCon "Some" (PVar "target")) (PVar "fn"))) (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "rtPath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/runtime.mdk")))) (DoLet false false (PVar "corePath") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib/core.mdk")))) (DoLet false false (PVar "stdlibDir") (EBinOp "++" (EVar "root") (ELit (LString "/stdlib")))) (DoLet false false (PVar "roots") (EBinOp "++" (EApp (EVar "entrySearchRoots") (EApp (EVar "dirOf2") (EVar "target"))) (EListLit (EVar "stdlibDir")))) (DoExpr (EMatch (EApp (EVar "readPreludeFile") (EVar "rtPath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "rsrc")) () (EMatch (EApp (EVar "readPreludeFile") (EVar "corePath")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "csrc")) () (EMatch (EApp (EVar "readFile") (EVar "target")) (arm (PCon "Err" (PVar "msg")) () (EApp (EVar "dieMsg") (EVar "msg"))) (arm (PCon "Ok" (PVar "tsrc")) () (EMatch (EApp (EVar "parseResult") (EVar "tsrc")) (arm (PCon "Err" (PVar "e")) () (EApp (EVar "dieMsg") (EApp (EApp (EApp (EVar "ppParseError") (EVar "tsrc")) (EVar "target")) (EVar "e")))) (arm (PCon "Ok" PWild) () (EMatch (EApp (EApp (EApp (EVar "loadProgramFilesLocatedE") (ELam (PWild) (EVar "None"))) (EVar "target")) (EVar "roots")) (arm (PCon "Err" (PVar "lerr")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EApp (EApp (EApp (EVar "moduleLoadErrText") (EVar "tsrc")) (EVar "target")) (EVar "stdlibDir")) (EVar "lerr")))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "Ok" (PVar "modsWithPath")) () (EBlock (DoLet false false (PVar "mods") (EApp (EApp (EMethodRef "map") (EVar "dropPathTriple")) (EVar "modsWithPath"))) (DoLet false false (PVar "pathMap") (EApp (EApp (EMethodRef "map") (EVar "modIdToPath")) (EVar "modsWithPath"))) (DoLet false false (PVar "trusted") (EApp (EApp (EApp (EApp (EVar "projectTrustedMods") (EVar "target")) (EVar "roots")) (EVar "stdlibDir")) (EVar "mods"))) (DoLet false false (PVar "preludeKey") (EApp (EVar "Some") (ETuple (EApp (EVar "desugaredPreludeKey") (EVar "rsrc")) (EApp (EVar "desugaredPreludeKey") (EVar "csrc"))))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rsrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "csrc"))) (DoLet false false (PVar "modsD") (EApp (EApp (EMethodRef "map") (EVar "desugarPair")) (EVar "mods"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "runManifestResolveGate") (EVar "pathMap")) (EVar "trusted")) (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "tsrc")) (EVar "target")) (EVar "fn")))))))))))))))))
+(DTypeSig false "runManifestResolveGate" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyEffect ("IO") None (TyCon "Unit"))))))))))))
+(DFunDef false "runManifestResolveGate" ((PVar "pathMap") (PVar "trusted") (PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "tsrc") (PVar "target") (PVar "fn")) (EBlock (DoLet false false (PVar "resDiags") (EApp (EVar "ppResolveErrorsByFile") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "resolveModulesErrorsByFile") (EVar "pathMap")) (EVar "False")) (EVar "trusted")) (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")))) (DoExpr (EMatch (EVar "resDiags") (arm (PLit (LString "")) () (EMatch (EApp (EApp (EApp (EApp (EApp (EVar "runManifest") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD")) (EVar "fn")) (arm (PCon "ManifestOk" (PVar "toml")) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "toml"))) (DoExpr (ELit LUnit)))) (arm (PCon "ManifestTypeErrors" (PVar "errs")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EApp (EVar "joinNl") (EApp (EApp (EMethodRef "map") (ELam ((PVar "d")) (EApp (EApp (EApp (EVar "ppDiagCliLines") (EApp (EVar "srcLinesArr") (EVar "tsrc"))) (EVar "target")) (EApp (EVar "diagOfTypeError") (EVar "d"))))) (EVar "errs"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))) (arm (PCon "ManifestNoSuchFn" (PVar "name")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (ELit (LString "no '")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "' entry found"))))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1)))))))) (arm PWild () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EVar "resDiags"))) (DoExpr (EApp (EVar "exit") (ELit (LInt 1))))))))))
 (DTypeSig false "lintHelpText" (TyCon "String"))
 (DFunDef false "lintHelpText" () (EApp (EVar "stringConcat") (EListLit (ELit (LString "medaka lint — Lint files/dirs against style rules\n")) (ELit (LString "\n")) (ELit (LString "Usage:\n")) (ELit (LString "  medaka lint [paths...] [flags]\n")) (ELit (LString "\n")) (ELit (LString "  --fix                 rewrite fixable findings in-place\n")) (ELit (LString "  --json                emit the {\"files\":[...]} structured-diagnostics\n")) (ELit (LString "                       envelope instead of human text (--fix is ignored)\n")) (ELit (LString "  --cache                reuse per-file results for files whose content is\n")) (ELit (LString "                       unchanged (opt-in, like ESLint's --cache)\n")) (ELit (LString "  --disable=r1,r2,...    suppress findings from the named rules\n")) (ELit (LString "  --only=r1,...          keep only findings from the named rules\n")) (ELit (LString "  --deny=r1,...          promote findings from the named rules to error\n")) (ELit (LString "  --baseline=<file>      error only where a file's per-rule finding count\n")) (ELit (LString "                       exceeds its row in <file> (counts may fall freely)\n")) (ELit (LString "  --write-baseline=<f>   regenerate <f> from this run instead of reporting\n")) (ELit (LString "\n")) (ELit (LString "Target resolution: explicit file args are linted in order; a single\n")) (ELit (LString "directory arg lints its top-level .mdk files (not recursive); no args\n")) (ELit (LString "finds the medaka.toml project root and lints its top-level .mdk files.\n")) (ELit (LString "Exit 0 unless a SevError finding exists.\n")))))
 (DTypeSig false "lintArgSpec" (TyCon "ArgSpec"))

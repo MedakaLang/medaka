@@ -1,0 +1,10 @@
+-- WS-1c manifest gate fixture (S-2, #3321 case 5): imports `tick` from a
+-- sibling module (`manifest_xmod_helper.mdk`); `entry`'s inferred <Clock> row
+-- must still reach the manifest across the import boundary.
+-- lint-disable-file rule-dead-code
+import manifest_xmod_helper.{tick}
+
+entry : Unit -> <Clock> Unit
+entry u =
+  let _ = tick
+  ()

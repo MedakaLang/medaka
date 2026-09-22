@@ -113,6 +113,58 @@ if [ -f "$NET_FIX" ]; then
   fi
 fi
 
+# ── case 5: `manifest` refuses what `check` refuses (S-2, #3321) ──────────────
+# `medaka manifest` must now load/analyze the target exactly as `medaka check`
+# does and refuse — diagnostics on stderr, nothing on stdout, exit 1 — for an
+# ill-typed target, an unresolvable import, and a missing `--fn` binding; and
+# it must resolve a target that imports a sibling module (previously never
+# reached — the old implementation read exactly one file).
+
+assert_refuse() {
+  # $1 = case name, $2 = target, $3 = --fn value (may be empty for default)
+  name="$1"; target="$2"; fnarg="$3"
+  out="$(mktemp)"; err="$(mktemp)"
+  if [ -n "$fnarg" ]; then
+    "$NATIVE" manifest --fn "$fnarg" "$target" > "$out" 2> "$err"
+  else
+    "$NATIVE" manifest "$target" > "$out" 2> "$err"
+  fi
+  rc=$?
+  if [ "$rc" = "1" ] && [ ! -s "$out" ] && [ -s "$err" ]; then
+    ok_case "$name (exit 1, empty stdout, stderr diagnostics)"
+  else
+    fail_case "$name" "rc=$rc stdout=$(cat "$out") stderr=$(cat "$err")"
+  fi
+  rm -f "$out" "$err"
+}
+
+# case 1: ill-typed target
+assert_refuse "manifest-illtyped" \
+  "$ROOT/test/check_policy_fixtures/type_error_plugin.mdk" "transform"
+
+# case 2: unresolvable target (bad import)
+assert_refuse "manifest-unresolvable" \
+  "$ROOT/test/check_policy_fixtures/manifest_unresolvable_plugin.mdk" ""
+
+# case 3: --fn names no binding at all
+assert_refuse "manifest-fn-nosuch" \
+  "$ROOT/test/check_policy_fixtures/missing_entry_plugin.mdk" "nosuch"
+
+# case 5: sibling-module import now resolves and the imported effect reaches
+# the manifest.
+XMOD_FIX="$ROOT/test/check_policy_fixtures/manifest_xmod_main.mdk"
+[ -f "$XMOD_FIX" ] || { fail_case "xmod-golden" "missing $XMOD_FIX"; }
+if [ -f "$XMOD_FIX" ]; then
+  got="$(perl -e 'alarm 90; exec @ARGV' "$NATIVE" manifest "$XMOD_FIX" --fn entry 2>&1)"
+  expected='[package.capabilities]
+Clock = true'
+  if [ "$got" = "$expected" ]; then
+    ok_case "xmod-golden (sibling-import target resolves, imported effect reaches the manifest)"
+  else
+    fail_case "xmod-golden" "expected: $expected; got: $got"
+  fi
+fi
+
 echo ""
 printf '%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1

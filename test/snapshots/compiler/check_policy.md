@@ -1,5 +1,5 @@
 # META
-source_lines=732
+source_lines=757
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/check_policy.mdk — the native `medaka check-policy` capability
@@ -63,7 +63,12 @@ import types.repr.{
   drender,
 }
 import types.typecheck.{
-  checkOneSchemeFull, dsub, decodeProductParam, decodeSetParam
+  checkOneSchemeFull,
+  checkModulesEntryFullSplitK,
+  dsub,
+  decodeProductParam,
+  decodeSetParam,
+  TcDiag,
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
@@ -648,33 +653,53 @@ joinTomlLines (x :: xs) = "\{x}\n\{joinTomlLines xs}"
 -- differs from check-policy's "transform" which is the plugin convention).
 public export data ManifestArgs = ManifestArgs (Option String) String
 
--- Run manifest extraction: typecheck the file, read the named fn's inferred
--- effect row, return TOML.
--- Returns (toml, fnEffects) so the caller can also drive round-trip validation.
+-- Outcome of a manifest lookup over an ELABORATED (already loader-resolved)
+-- program: type errors REFUSE before `fnName` is ever looked up, and a name
+-- absent from the scheme list refuses distinctly from a name whose scheme
+-- carries no effect row (a pure/value binding, S-4's case — that one still
+-- emits `ManifestOk "[package.capabilities]\n"`, not a refusal).
+public export data ManifestResult =
+  | ManifestOk String
+  | ManifestTypeErrors (List TcDiag)
+  | ManifestNoSuchFn String
+
+-- Run manifest extraction over an elaborated program: `modsD` is the loader's
+-- module list, each module's decls already DESUGARED, dependency-first with
+-- the entry last (`lastModPair`'s convention in medaka_cli.mdk) — the same
+-- shape `checkRoute`'s multi-module arm builds as `modsD`.  Resolve-phase
+-- errors (bad/missing import) are the CALLER's job: `runManifestArgs` gates on
+-- `resolveModulesErrorsByFile` before ever reaching this function, exactly
+-- like `checkRoute` does, so `modsD` here is always resolve-clean.
 export
-runManifest : String -> String -> String -> String -> String
-runManifest rtSrc coreSrc src fnName =
-  let rawUser = parse src
-  let userD = desugar rawUser
-  let rtD = desugaredPrelude rtSrc
-  let coreD = desugaredPrelude coreSrc
+runManifest : Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String ->
+  ManifestResult
+runManifest preludeKey rtD coreD modsD fnName =
   -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in the scheme list
   -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
   -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make the policy check silently ACCEPT an <IO> function as
-  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-  -- which is why this site was parked on the Flat wrapper until #1116 grew
-  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) =
-    checkOneSchemeFull rtD coreD ("__user__", userD)
-  let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
-  let fnEffects = match lookupAssoc fnName effTable
-    None => []
-    Some e => e
-  manifestToml fnEffects
+  -- from the table would make manifest extraction silently answer "no effects" for
+  -- an <IO> function. `checkModulesEntryFullSplitK` returns the ENTRY module's own
+  -- schemes (terminal in `modsD`) separate from the prelude's, so this concats
+  -- OWN FIRST: `lookupAssoc` is a first-match scan, and an entry redefinition of a
+  -- prelude name must win its own lookup.
+  let (coreSchemes, entrySchemes, errs, _warns) =
+    checkModulesEntryFullSplitK preludeKey rtD coreD modsD
+  match errs
+    [] =>
+      let schemes = entrySchemes ++ coreSchemes
+      -- Existence is checked against the FULL scheme list, never `fnEffectsTable`
+      -- (see `runCheckPolicy`'s identical comment above): `fnEffectsTable`
+      -- deliberately omits verified-pure/arrowless bindings, so using it as a name
+      -- index would refuse a real pure entry exactly like an absent one.
+      match lookupAssoc fnName schemes
+        None => ManifestNoSuchFn fnName
+        Some sch => ManifestOk (manifestToml (schemeEffects sch))
+    _ => ManifestTypeErrors errs
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
 -- PPrefix (Some s) → "Label=s"
@@ -741,7 +766,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "drender" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
@@ -925,8 +950,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "joinTomlLines" ((PList)) (ELit (LString "")))
 (DFunDef false "joinTomlLines" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "x"))) (ELit (LString "\n"))) (EApp (EVar "display") (EApp (EVar "joinTomlLines") (EVar "xs")))) (ELit (LString ""))))
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
-(DTypeSig true "runManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "runManifest" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EApp (EVar "manifestToml") (EVar "fnEffects")))))
+(DData Public "ManifestResult" () ((variant "ManifestOk" (ConPos (TyCon "String"))) (variant "ManifestTypeErrors" (ConPos (TyApp (TyCon "List") (TyCon "TcDiag")))) (variant "ManifestNoSuchFn" (ConPos (TyCon "String")))) ())
+(DTypeSig true "runManifest" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyCon "ManifestResult")))))))
+(DFunDef false "runManifest" ((PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "fnName")) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "entrySchemes") (PVar "errs") (PVar "_warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "entrySchemes") (EVar "coreSchemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "ManifestNoSuchFn") (EVar "fnName"))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "ManifestOk") (EApp (EVar "manifestToml") (EApp (EVar "schemeEffects") (EVar "sch"))))))))) (arm PWild () (EApp (EVar "ManifestTypeErrors") (EVar "errs")))))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EVar "map") (EVar "atomToAllowTok")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowTok" (TyFun (TyCon "Atom") (TyCon "String")))
@@ -948,7 +974,7 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false))))
 (DUse false (UseGroup ("tools" "check") ((mem "checkHasErrors" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "Mono" true) (mem "EffRow" true) (mem "Atom" true) (mem "Param" true) (mem "normalize" false) (mem "tupleSpine" false) (mem "effrowLabels" false) (mem "atomLabel" false) (mem "atomParam" false) (mem "drender" false))))
-(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false))))
+(DUse false (UseGroup ("types" "typecheck") ((mem "checkOneSchemeFull" false) (mem "checkModulesEntryFullSplitK" false) (mem "dsub" false) (mem "decodeProductParam" false) (mem "decodeSetParam" false) (mem "TcDiag" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "evalModulesRootEnv" false) (mem "apply" false) (mem "outputRef" false) (mem "ppValue" false))))
 (DUse false (UseGroup ("support" "util") ((mem "sortUniqS" false) (mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "lookupAssoc" false) (mem "contains" false))))
 (DData Public "PolicyArgs" () ((variant "PolicyArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String") (TyCon "String")))) ())
@@ -1132,8 +1158,9 @@ runManifestAtoms rtSrc coreSrc src fnName =
 (DFunDef false "joinTomlLines" ((PList)) (ELit (LString "")))
 (DFunDef false "joinTomlLines" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "x"))) (ELit (LString "\n"))) (EApp (EMethodRef "display") (EApp (EVar "joinTomlLines") (EVar "xs")))) (ELit (LString ""))))
 (DData Public "ManifestArgs" () ((variant "ManifestArgs" (ConPos (TyApp (TyCon "Option") (TyCon "String")) (TyCon "String")))) ())
-(DTypeSig true "runManifest" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String"))))))
-(DFunDef false "runManifest" ((PVar "rtSrc") (PVar "coreSrc") (PVar "src") (PVar "fnName")) (EBlock (DoLet false false (PVar "rawUser") (EApp (EVar "parse") (EVar "src"))) (DoLet false false (PVar "userD") (EApp (EVar "desugar") (EVar "rawUser"))) (DoLet false false (PVar "rtD") (EApp (EVar "desugaredPrelude") (EVar "rtSrc"))) (DoLet false false (PVar "coreD") (EApp (EVar "desugaredPrelude") (EVar "coreSrc"))) (DoLet false false (PTuple (PVar "preludeSchemes") (PVar "ownSchemes")) (EApp (EApp (EApp (EVar "checkOneSchemeFull") (EVar "rtD")) (EVar "coreD")) (ETuple (ELit (LString "__user__")) (EVar "userD")))) (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "ownSchemes") (EVar "preludeSchemes"))) (DoLet false false (PVar "effTable") (EApp (EVar "fnEffectsTable") (EVar "schemes"))) (DoLet false false (PVar "fnEffects") (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "effTable")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PVar "e")) () (EVar "e")))) (DoExpr (EApp (EVar "manifestToml") (EVar "fnEffects")))))
+(DData Public "ManifestResult" () ((variant "ManifestOk" (ConPos (TyCon "String"))) (variant "ManifestTypeErrors" (ConPos (TyApp (TyCon "List") (TyCon "TcDiag")))) (variant "ManifestNoSuchFn" (ConPos (TyCon "String")))) ())
+(DTypeSig true "runManifest" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyFun (TyCon "String") (TyCon "ManifestResult")))))))
+(DFunDef false "runManifest" ((PVar "preludeKey") (PVar "rtD") (PVar "coreD") (PVar "modsD") (PVar "fnName")) (EBlock (DoLet false false (PTuple (PVar "coreSchemes") (PVar "entrySchemes") (PVar "errs") (PVar "_warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EVar "errs") (arm (PList) () (EBlock (DoLet false false (PVar "schemes") (EBinOp "++" (EVar "entrySchemes") (EVar "coreSchemes"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "fnName")) (EVar "schemes")) (arm (PCon "None") () (EApp (EVar "ManifestNoSuchFn") (EVar "fnName"))) (arm (PCon "Some" (PVar "sch")) () (EApp (EVar "ManifestOk") (EApp (EVar "manifestToml") (EApp (EVar "schemeEffects") (EVar "sch"))))))))) (arm PWild () (EApp (EVar "ManifestTypeErrors") (EVar "errs")))))))
 (DTypeSig true "manifestToAllowStr" (TyFun (TyApp (TyCon "List") (TyCon "Atom")) (TyCon "String")))
 (DFunDef false "manifestToAllowStr" ((PVar "atoms")) (EBlock (DoLet false false (PVar "toks") (EApp (EApp (EMethodRef "map") (EVar "atomToAllowTok")) (EVar "atoms"))) (DoExpr (EApp (EApp (EVar "joinWith") (ELit (LString ","))) (EVar "toks")))))
 (DTypeSig false "atomToAllowTok" (TyFun (TyCon "Atom") (TyCon "String")))

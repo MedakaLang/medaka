@@ -326,6 +326,7 @@ import tools.check_policy.{
   PolicyArgs(..),
   PolicyOutcome(..),
   runManifest,
+  ManifestResult(..),
   ManifestArgs(..),
 }
 
@@ -3575,6 +3576,13 @@ runManifestCmd argv0 =
   runManifestArgs
     (ManifestArgs (firstPositional a) (optDefault (lastValue "--fn" a) "main"))
 
+-- `medaka manifest` loads and analyzes the target exactly as `medaka check`
+-- does (S-2, #3321): the multi-file loader, then `check`'s own resolve and
+-- typecheck diagnostics, refusing on anything `check` would refuse — an
+-- ill-typed target, an unresolvable import, or a missing `--fn` binding — all
+-- to STDERR at exit 1, nothing on stdout.  A target that imports a sibling
+-- module now resolves normally instead of never being reached (the old
+-- `runManifest` read exactly one file).
 runManifestArgs : ManifestArgs -> <IO> Unit
 runManifestArgs (ManifestArgs None _) =
   dieMsg "usage: medaka manifest <file.mdk> [--fn name]"
@@ -3582,14 +3590,87 @@ runManifestArgs (ManifestArgs (Some target) fn) =
   let root = envOr "MEDAKA_ROOT" defaultMedakaRoot
   let rtPath = root ++ "/stdlib/runtime.mdk"
   let corePath = root ++ "/stdlib/core.mdk"
-  let r = do
-    rsrc <- readPreludeFile rtPath
-    csrc <- readPreludeFile corePath
-    tsrc <- readFile target
-    Ok (putStr (runManifest rsrc csrc tsrc fn))
-  match r
+  let stdlibDir = root ++ "/stdlib"
+  let roots = entrySearchRoots (dirOf2 target) ++ [stdlibDir]
+  match readPreludeFile rtPath
     Err msg => dieMsg msg
-    Ok v => v
+    Ok rsrc => match readPreludeFile corePath
+      Err msg => dieMsg msg
+      Ok csrc => match readFile target
+        Err msg => dieMsg msg
+        Ok tsrc => match parseResult tsrc
+          Err e => dieMsg (ppParseError tsrc target e)
+          Ok _ => match loadProgramFilesLocatedE (_ => None) target roots
+            Err lerr =>
+              let _ = ePutStrLn (moduleLoadErrText tsrc target stdlibDir lerr)
+              exit 1
+            Ok modsWithPath =>
+              let mods = map dropPathTriple modsWithPath
+              let pathMap = map modIdToPath modsWithPath
+              let trusted = projectTrustedMods target roots stdlibDir mods
+              let preludeKey =
+                Some (desugaredPreludeKey rsrc, desugaredPreludeKey csrc)
+              let rtD = desugaredPrelude rsrc
+              let coreD = desugaredPrelude csrc
+              let modsD = map desugarPair mods
+              -- Resolve-phase errors (bad/missing import, private-name access) are
+              -- the loader's own diagnostics, not a typecheck concern — gate on
+              -- them exactly like `checkRoute`'s multi-module arm before ever
+              -- calling into `runManifest`'s typecheck.
+              runManifestResolveGate
+                pathMap
+                trusted
+                preludeKey
+                rtD
+                coreD
+                modsD
+                tsrc
+                target
+                fn
+
+-- Split out of `runManifestArgs` so the resolve gate and the typecheck-then-
+-- lookup step each read as one thing (S-2, #3321).
+runManifestResolveGate : List (String, String) ->
+  List String ->
+  Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String ->
+  String ->
+  String ->
+  <IO> Unit
+runManifestResolveGate pathMap trusted preludeKey rtD coreD modsD tsrc target fn =
+  let resDiags =
+    ppResolveErrorsByFile
+      (resolveModulesErrorsByFile
+        pathMap
+        False
+        trusted
+        preludeKey
+        rtD
+        coreD
+        modsD)
+  match resDiags
+    "" => match runManifest preludeKey rtD coreD modsD fn
+      ManifestOk toml =>
+        let _ = putStr toml
+        ()
+      ManifestTypeErrors errs =>
+        let _ =
+          ePutStrLn
+            (joinNl
+              (map
+                (d =>
+                  ppDiagCliLines (srcLinesArr tsrc) target (diagOfTypeError d))
+                errs))
+        exit 1
+      ManifestNoSuchFn name =>
+        let _ = ePutStrLn "no '\{name}' entry found"
+        exit 1
+    _ =>
+      let _ = ePutStrLn resDiags
+      exit 1
 
 -- ── lint ──────────────────────────────────────────────────────────────────
 -- Parse target file(s) and run lint rules over the raw pre-desugar AST.
