@@ -720,9 +720,12 @@ A module's exports fall into nine namespaces
 (`compiler/frontend/resolve.mdk`'s `ExpNs` block): values, types,
 constructors, type→constructor sets (what `T(..)` expands), field owners,
 interfaces, interface methods, effect labels, and newtype constructors
-(always module-private — never importable or re-exportable). The table
-states, for each form, whether it brings a namespace's names into scope
-(`import`) or forwards them across a re-export hop (`export import`):
+(always module-private — never importable or re-exportable). The block
+carries one further descriptor that binds no names and so has no row below:
+which exported types withhold their constructors (`export data` without
+`public`), a subset of the types namespace that only sharpens a diagnostic.
+The table states, for each form, whether it brings a namespace's names into
+scope (`import`) or forwards them across a re-export hop (`export import`):
 
 | Namespace | `import m.name` / `.{a, b}` | `import m.{T(..)}` | `import m.*` | `import m as A` | `export import m.{...}` | `export import m.*` |
 |---|---|---|---|---|---|---|

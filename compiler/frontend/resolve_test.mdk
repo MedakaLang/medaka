@@ -50,7 +50,7 @@ fieldName (Field n _) = n
 -- Every top-level binding name resolve.mdk defines (one entry per clause,
 -- duplicates included — only membership is ever asked of this list). A
 -- nullary binding like `nsValues = ExpNs { … }` is a `DFunDef` with no
--- parameters, so the nine descriptors are in here.
+-- parameters, so every descriptor is in here.
 topLevelFunNames : List Decl -> List String
 topLevelFunNames [] = []
 topLevelFunNames ((DFunDef _ n _ _) :: rest) = n :: topLevelFunNames rest

@@ -2742,6 +2742,11 @@ public export data ModuleExports = ModuleExports {
   modId : String,
   expValues : List String,
   expTypes : List String,
+  -- the `expTypes` members that are `export data` without `public`.  A type
+  -- with no entry in `expTypeCtors` is not the same set: a `type` alias has no
+  -- constructor family at all, so "exported abstractly" is not a thing that can
+  -- be said about it, and no `public export` would give it constructors.
+  expAbstractData : List String,
   expCtors : List String,
   expTypeCtors : List (String, List String),
   expFieldOwners : List (String, String),
@@ -2853,6 +2858,20 @@ newtypeTypeOfCtor name exp = lookupAssoc name exp.expNewtypeCtors
 -- is `name` a `newtype` this module exports (checked by TYPE name, for `T(..)`)?
 isNewtypeExport : String -> ModuleExports -> Bool
 isNewtypeExport name exp = contains name (map snd exp.expNewtypeCtors)
+
+-- Does a plain selective member's spelling name an export of this module in a
+-- namespace OTHER than the constructor one — the type itself, an interface, or
+-- an effect label?  A constructor spelling is not privileged over those, so
+-- both ctor refusals below must stand down when one of them applies:
+-- `import m.{Eq}` against a module exporting `interface Eq` and, in an
+-- unrelated type, a ctor spelled `Eq` asks for the interface.  `expValues` is
+-- absent by grammar, not by omission — a top-level binding cannot be
+-- capitalized, so no value name can collide with a constructor spelling.
+bindsNonCtorExport : ModuleExports -> String -> Bool
+bindsNonCtorExport exp name =
+  contains name exp.expTypes
+    || contains name exp.expInterfaces
+    || contains name exp.expEffects
 
 -- ── usePaths / pubUsePaths ─────────────────────────────────────────────────
 usePathsOf : List Decl -> List UsePath
@@ -2968,25 +2987,19 @@ pubErrLoc exp (n, loc) =
 -- A plain member that names an exported TYPE binds that type, even when the
 -- same spelling is also a `newtype`'s constructor (`newtype Bytes = Bytes
 -- ByteBlock`): `import bytes.{Bytes}` asks for the type, exactly as `T(..)`
--- on a newtype keeps `T` bound below, and only a name that is a newtype ctor
--- and NOT an exported type is a ctor request to refuse (#3205).  The ctor half
--- of a self-named type is kept out of scope by `realImport`'s `iaCtors`.
+-- on a newtype keeps `T` bound below, and only a name that is a constructor
+-- and NOTHING else this module exports is a ctor request to refuse (#3205,
+-- #3314) — `bindsNonCtorExport` is that test.  The ctor half of a self-named
+-- type is kept out of scope by `realImport`'s `iaCtors`.
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
-expandMemberNames exp (m@(UseMember name False loc _)) =
-  match newtypeTypeOfCtor name exp
-    -- the empty arm is the refusal; see expandMemberErrs
-    Some _ =>
-      if contains name exp.expTypes then [(name, useMemberLocal m, loc)] else []
-    None =>
-      if contains name exp.expTypes then
-        -- a self-named type/ctor: the plain member binds the TYPE (#3205's
-        -- same reasoning, extended from newtypes to ordinary data)
-        [(name, useMemberLocal m, loc)]
-      else match typeOfCtor name exp
-        -- a bare data constructor, not also a type name of its own: the
-        -- empty arm is the refusal (#3314); see expandMemberErrs
-        Some _ => []
-        None => [(name, useMemberLocal m, loc)]
+expandMemberNames exp (m@(UseMember name False loc _))
+  | bindsNonCtorExport exp name = [(name, useMemberLocal m, loc)]
+  | otherwise = match newtypeTypeOfCtor name exp
+    -- the empty arms are the refusals; see expandMemberErrs
+    Some _ => []
+    None => match typeOfCtor name exp
+      Some _ => []
+      None => [(name, useMemberLocal m, loc)]
 expandMemberNames exp (m@(UseMember name True loc _))
   | isNewtypeExport name exp =
     -- keep the TYPE name bound (mirrors abstract `data`: `NT` itself is
@@ -3008,19 +3021,14 @@ pubErrExpanded : ModuleExports -> (String, String, Loc) -> List ResError
 pubErrExpanded exp (origin, _, loc) = pubErrLoc exp (origin, loc)
 
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
-expandMemberErrs exp (UseMember name False loc _) =
-  match newtypeTypeOfCtor name exp
-    Some tyName =>
-      if contains name exp.expTypes then
-        []  -- a type import; see expandMemberNames
-      else
-        [NewtypeCtorNotExported tyName exp.modId (Some loc)]
-    None =>
-      if contains name exp.expTypes then
-        []  -- a self-named type/ctor; see expandMemberNames
-      else match typeOfCtor name exp
-        Some tyName => [BareCtorImport name tyName (Some loc)]
-        None => []
+expandMemberErrs exp (UseMember name False loc _)
+  -- a type / interface / effect-label import; see expandMemberNames
+  | bindsNonCtorExport exp name = []
+  | otherwise = match newtypeTypeOfCtor name exp
+    Some tyName => [NewtypeCtorNotExported tyName exp.modId (Some loc)]
+    None => match typeOfCtor name exp
+      Some tyName => [BareCtorImport name tyName (Some loc)]
+      None => []
 expandMemberErrs exp (UseMember name True loc _)
   | isNewtypeExport name exp =
     [NewtypeCtorNotExported name exp.modId (Some loc)]
@@ -3317,12 +3325,12 @@ aliasAbstractCtorsFrom known (path@(UseAlias _ a)) =
       map (t => (qualifiedLocal a t, exp.modId)) (abstractlyExportedTypes exp)
 aliasAbstractCtorsFrom _ _ = []
 
--- Types this module exports (`expTypes`) but not through `expTypeCtors` —
--- `export data` without `public`, the same abstract-export test
--- `expandMemberErrs`'s `T(..)` arm makes at the selective-import site.
+-- Types this module exports whose constructors it withholds — `export data`
+-- without `public`.  Not "every exported type with no `expTypeCtors` entry":
+-- that also catches a `type` alias, which has no constructor family to
+-- withhold and for which the abstract-export remedy names nothing real.
 abstractlyExportedTypes : ModuleExports -> List String
-abstractlyExportedTypes exp =
-  filterList (t => isNone (typeCtorsOf t exp)) exp.expTypes
+abstractlyExportedTypes exp = exp.expAbstractData
 
 -- ── type-name / interface-name provenance / ambiguity (#1110) ───────────────
 -- The TYPE and INTERFACE peers of the two blocks above, deliberately built from
@@ -3824,6 +3832,9 @@ coreExports preludeDecls = ModuleExports {
   modId = "core",
   expValues = preludeValueNames preludeDecls,
   expTypes = dataRecordNames preludeDecls,
+  -- the prelude ignores visibility markers, so none of its types withholds
+  -- constructors
+  expAbstractData = [],
   expCtors = ctorNames preludeDecls,
   expTypeCtors = typeCtorsAllOf preludeDecls,
   expFieldOwners = fieldOwnersOf preludeDecls,
@@ -3853,7 +3864,7 @@ typeCtorsAllOf (_ :: rest) = typeCtorsAllOf rest
 -- tenth namespace is a tenth descriptor, not a tenth member of three
 -- separate per-namespace function families.
 --
--- The nine descriptors cannot share one `List`: `ModuleExports`' fields carry
+-- The descriptors cannot share one `List`: `ModuleExports`' fields carry
 -- three different element types (`List String`, `List (String, List String)`,
 -- `List (String, String)`), so each descriptor is parameterized by its own
 -- element type and the table is one contiguous BLOCK rather than one list.
@@ -3894,6 +3905,22 @@ nsTypes = ExpNs {
       _ => [],
   nsCarry =
     path src => localsExportedFrom src.expTypes (reexportBindings path src),
+}
+
+-- VisAbstract data & record (the type name only) — the subset of `nsTypes`
+-- whose constructors exist but are withheld.  Carriage mirrors `nsTypes`:
+-- abstractness travels with the type name through an `export import` facade,
+-- so a facade's consumer gets the same answer the defining module would give.
+nsAbstractData : ExpNs String
+nsAbstractData = ExpNs {
+  nsGet = exp => exp.expAbstractData,
+  nsDirectOf =
+    d => match d
+      DData { dataVis = VisAbstract, dataName = n } => [n]
+      _ => [],
+  nsCarry =
+    path src =>
+      localsExportedFrom src.expAbstractData (reexportBindings path src),
 }
 
 -- pub newtype ctor + VisPublic data ctors (VisAbstract exports NO ctors)
@@ -4059,6 +4086,8 @@ buildExports coreExp known modId prog env = ModuleExports {
       ++ publicIfaceMethodVals prog env
       ++ carriedIn nsValues coreExp known prog,
   expTypes = directIn nsTypes prog ++ carriedIn nsTypes coreExp known prog,
+  expAbstractData =
+    directIn nsAbstractData prog ++ carriedIn nsAbstractData coreExp known prog,
   expCtors = directIn nsCtors prog ++ carriedIn nsCtors coreExp known prog,
   expTypeCtors =
     directIn nsTypeCtors prog ++ carriedIn nsTypeCtors coreExp known prog,

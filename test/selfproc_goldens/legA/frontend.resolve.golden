@@ -30,6 +30,7 @@ bestOfNames : SugQuery -> List String -> Option String
 bestOfPool : SugQuery -> List SugCand -> Option String
 bindOneOrigin : Map String String -> String -> String -> List (String, String)
 bindTypeOrigin : Map String String -> (String, String) -> List (String, String)
+bindsNonCtorExport : ModuleExports -> String -> Bool
 bitsAtMost : Int -> Int -> Bool
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnvMM : PreludeScope -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
@@ -241,6 +242,7 @@ newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
 noCarry : UsePath -> ModuleExports -> List a
 noteOriginTrace : String -> List Decl -> Unit
+nsAbstractData : ExpNs String
 nsCtors : ExpNs String
 nsEffects : ExpNs String
 nsFieldOwners : ExpNs (String, String)
