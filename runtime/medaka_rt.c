@@ -2632,6 +2632,68 @@ long long mdk_net_set_timeout(long long fd_tagged, long long ms_tagged) {
  * are GC-allocated like the blocking shims above.  POSIX only, so one code
  * path serves Linux and macOS. */
 
+/* Opt-in SIGTERM readiness for pdsd. The handler may run on any thread; it
+ * writes only to a nonblocking pipe and sets a sig_atomic_t. No allocator,
+ * Medaka callback, or scheduler operation runs in signal context. The byte is
+ * only a wakeup: the flag is the durable observation if writes coalesce or
+ * the pipe is full. Install before publishing readiness. Other executables
+ * retain POSIX's default SIGTERM disposition unless they call this extern. */
+static volatile sig_atomic_t mdk_pds_term_seen = 0;
+static int mdk_pds_term_write_fd = -1;
+static int mdk_pds_term_read_fd = -1;
+
+static void mdk_pds_term_handler(int signum) {
+  (void)signum;
+  int saved = errno;
+  mdk_pds_term_seen = 1;
+  unsigned char byte = 1;
+  if (mdk_pds_term_write_fd >= 0)
+    (void)write(mdk_pds_term_write_fd, &byte, 1);
+  errno = saved;
+}
+
+/* pdsSignalStart : Unit -> Result String Int; called once after binding.
+ * Both ends are nonblocking and close-on-exec; a failed setup leaves the
+ * process's prior SIGTERM disposition untouched. */
+long long mdk_pds_signal_start(long long unit) {
+  (void)unit;
+  if (mdk_pds_term_read_fd >= 0)
+    return mdk_err(mdk_str_cstr("pdsSignalStart: already installed"));
+  int ends[2];
+  if (pipe(ends) != 0) return mdk_err(mdk_str_cstr(strerror(errno)));
+  for (int i = 0; i < 2; i++) {
+    int flags = fcntl(ends[i], F_GETFL, 0);
+    int fdflags = fcntl(ends[i], F_GETFD, 0);
+    if (flags < 0 || fdflags < 0 ||
+        fcntl(ends[i], F_SETFL, flags | O_NONBLOCK) != 0 ||
+        fcntl(ends[i], F_SETFD, fdflags | FD_CLOEXEC) != 0) {
+      int err = errno;
+      close(ends[0]); close(ends[1]);
+      return mdk_err(mdk_str_cstr(strerror(err)));
+    }
+  }
+  struct sigaction action = {0};
+  action.sa_handler = mdk_pds_term_handler;
+  sigemptyset(&action.sa_mask);
+  mdk_pds_term_seen = 0;
+  mdk_pds_term_write_fd = ends[1];
+  if (sigaction(SIGTERM, &action, NULL) != 0) {
+    int err = errno;
+    mdk_pds_term_write_fd = -1;
+    close(ends[0]); close(ends[1]);
+    return mdk_err(mdk_str_cstr(strerror(err)));
+  }
+  mdk_pds_term_read_fd = ends[0];
+  return mdk_ok(MDK_NET_TAG(ends[0]));
+}
+
+/* pdsSignalRequested : Unit -> Bool. No pipe drain is needed: one SIGTERM
+ * ends admission permanently, and the pipe remains readable until exit. */
+long long mdk_pds_signal_requested(long long unit) {
+  (void)unit;
+  return MDK_NET_TAG(mdk_pds_term_seen != 0);
+}
+
 /* ioPoll : Array Int -> Array Int -> Int -> Result String (Array Int)
  * fds and interests are parallel arrays (interest bit 1 = readable, bit 2 =
  * writable); timeout is milliseconds (-1 = wait forever).  Returns one

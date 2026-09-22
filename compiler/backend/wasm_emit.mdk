@@ -1891,6 +1891,8 @@ isNetExternW name = contains name [
   "netClose",
   "netSetTimeout",
   "ioPoll",
+  "pdsSignalStart",
+  "pdsSignalRequested",
   "netSetNonblock",
   "netConnectStart",
   "netConnectCheck",

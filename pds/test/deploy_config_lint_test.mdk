@@ -99,6 +99,7 @@ serviceDirectives = [
   ("TasksMax", "^TasksMax="),
   ("LimitNOFILE", "^LimitNOFILE="),
   ("StartLimitBurst", "^StartLimitBurst="),
+  ("TimeoutStopSec-110s", "^TimeoutStopSec=110s$"),
   ("IPAddressDeny", "^IPAddressDeny=any"),
   ("IPAddressAllow", "^IPAddressAllow=.*localhost"),
   ("CapabilityBoundingSet", "^CapabilityBoundingSet="),
@@ -494,6 +495,28 @@ test "pds.service carries every required hardening directive" =
     "pds/pds.service is missing a required hardening directive"
     (missingDirectives service serviceDirectives)
 
+-- systemd accepts repeated assignments; a weaker final row overrides the
+-- roster's 110s line. Exactly one effective stop allowance must remain.
+stopTimeoutFindings : String -> <FileRead "_"> Result String (List String)
+stopTimeoutFindings path = match readFile path
+  Err e => Err e
+  Ok text =>
+    let directives = filter (startsWith "TimeoutStopSec=") (lines text)
+    if directives == ["TimeoutStopSec=110s"] then
+      Ok []
+    else
+      Ok ["\{path}: expected only TimeoutStopSec=110s"]
+
+stopTimeoutIn : Result String String ->
+  <FileRead "_"> Result String (List String)
+stopTimeoutIn (Err e) = Err e
+stopTimeoutIn (Ok path) = stopTimeoutFindings path
+
+test "pds.service has exactly one effective 110s stop timeout" =
+  expectNoFindings
+    "pds.service must allow its 95s drain plus 15s margin"
+    (stopTimeoutFindings service)
+
 test "Caddyfile carries every required hardening directive" =
   expectNoFindings
     "pds/Caddyfile is missing a required hardening directive"
@@ -601,6 +624,25 @@ test "pds-alert@.service has no self-referential OnFailure" =
 -- property removed, or one voiding construct added, and requires the same
 -- check that passes above to fire on it. A roster entry with no control
 -- behind it is a roster entry nothing has shown can fail.
+
+test "mutation control: a stripped 110s stop allowance is caught" =
+  expectFindings
+    "a stripped TimeoutStopSec=110s"
+    (missingIn
+      (mutantOf
+        service
+        "pds.service.no-stop-timeout"
+        (without (startsWith "TimeoutStopSec=")))
+      serviceDirectives)
+
+test "mutation control: a later 90s stop allowance is caught" =
+  expectFindings
+    "a later 90s TimeoutStopSec overriding 110s"
+    (stopTimeoutIn
+      (mutantOf
+        service
+        "pds.service.short-stop-timeout"
+        (appending "TimeoutStopSec=90s")))
 
 test "mutation control: a stripped systemd directive (IPAddressDeny) is caught" =
   expectFindings
@@ -893,9 +935,9 @@ gradedPatterns =
     + length alertServiceForbidden
 
 patternFloor : Int
-patternFloor = 100
+patternFloor = 101
 
-test "deploy_config_lint grades at least PATTERN_FLOOR=100 patterns" =
+test "deploy_config_lint grades at least PATTERN_FLOOR=101 patterns" =
   if gradedPatterns >= patternFloor then
     Pass
       ">= \{intToString patternFloor} patterns"
@@ -922,9 +964,9 @@ declaredAssertions =
     (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
 
 assertionFloor : Int
-assertionFloor = 43
+assertionFloor = 46
 
-test "deploy_config_lint declares at least ASSERTION_FLOOR=43 `test` blocks" =
+test "deploy_config_lint declares at least ASSERTION_FLOOR=46 `test` blocks" =
   let want = ">= \{intToString assertionFloor} `test` blocks"
   match declaredAssertions
     Err e =>

@@ -3386,6 +3386,8 @@ isNetExtern name = contains name [
   "netClose",
   "netSetTimeout",
   "ioPoll",
+  "pdsSignalStart",
+  "pdsSignalRequested",
   "netSetNonblock",
   "netConnectStart",
   "netConnectCheck",
@@ -3473,6 +3475,18 @@ emitNetExtern e env "netSetTimeout" args = match emitArgs e env args
   _ => panic "llvm: netSetTimeout takes two arguments"
 -- Readiness shims (async runtime): every arg is a tagged Int, a Bool (tagged
 -- like an Int), or a boxed Array; every result is a boxed Result.
+emitNetExtern e env "pdsSignalStart" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_pds_signal_start(i64 \{u})"
+    (r, LTCon)
+  _ => panic "llvm: pdsSignalStart takes one argument"
+emitNetExtern e env "pdsSignalRequested" args = match emitArgs e env args
+  [u] =>
+    let r = freshReg e
+    let _ = emit e "  \{r} = call i64 @mdk_pds_signal_requested(i64 \{u})"
+    (r, LTBool)
+  _ => panic "llvm: pdsSignalRequested takes one argument"
 emitNetExtern e env "ioPoll" args = match emitArgs e env args
   [fds, ints, ms] =>
     let r = freshReg e

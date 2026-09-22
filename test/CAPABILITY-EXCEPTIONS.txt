@@ -122,6 +122,8 @@ netTcpConnect	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netTcpListen	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 # --- net readiness (8): the async runtime's non-blocking half (ASYNC-RUNTIME-DESIGN
 #     §4.2 / #497). Same posture as the ten above: native-first. ---
+pdsSignalStart	interp	BUG	native-only opt-in POSIX signal/pipe, interpreter has no signal host binding or --allow-net
+pdsSignalRequested	interp	BUG	native-only opt-in POSIX signal flag, interpreter has no signal host binding or --allow-net
 ioPoll	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netConnectCheck	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
 netConnectStart	interp	BUG	implemented by llvm, missing from interp — BUG(T7)
@@ -200,6 +202,8 @@ netShutdown	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.
 netTcpAccept	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTcpConnect	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netTcpListen	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
+pdsSignalStart	wasm	PERMANENT	POSIX SIGTERM self-pipe and fd readiness are native-only; wasm_emit rejects the net family
+pdsSignalRequested	wasm	PERMANENT	POSIX SIGTERM state is native-only; wasm_emit rejects the net family
 ioPoll	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netConnectCheck	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead
 netConnectStart	wasm	PERMANENT	raw BSD sockets have no WasmGC equivalent (wasm_emit.mdk gapL, ~line 4590/6311) — build for a native target instead

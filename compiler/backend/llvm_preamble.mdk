@@ -176,6 +176,8 @@ preambleLines = [
   "declare i64 @mdk_net_shutdown(i64, i64)",
   "declare i64 @mdk_net_close(i64)",
   "declare i64 @mdk_net_set_timeout(i64, i64)",
+  "declare i64 @mdk_pds_signal_start(i64)",
+  "declare i64 @mdk_pds_signal_requested(i64)",
   "declare i64 @mdk_io_poll(i64, i64, i64)",
   "declare i64 @mdk_net_set_nonblock(i64, i64)",
   "declare i64 @mdk_net_connect_start(i64, i64)",

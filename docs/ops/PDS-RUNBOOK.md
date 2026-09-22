@@ -105,6 +105,33 @@ gh workflow run nightly.yml --ref <deploy-branch-or-tag>
 
 then re-poll the two commands above once it completes.
 
+## Graceful stop during a soak
+
+A `pdsd` started with `pds serve` opts into SIGTERM handling once it has bound
+its listener. On SIGTERM it logs `serve: SIGTERM received; admission stopped;
+draining connections`, closes the listener, finishes already-framed requests
+(including their synchronous stage/persist/promote sequence), stops accepting
+new requests on kept-alive sockets, and sends WebSocket subscribers a normal
+1000 Close frame. Once connections retire it logs `serve: shutdown complete;
+connections drained` and exits 0. Check both lines and the exit status in
+the journal; a missing completion line is not a clean stop. No signal handler
+runs repository code: a nonblocking POSIX self-pipe wakes the cooperative
+scheduler. Other Medaka binaries retain the ordinary SIGTERM default.
+
+A peer that stops sending a request can use its existing 60-second request
+budget; a response write can take another 30 seconds. The drain has a
+95-second monotonic deadline after admission stops: if it expires, the server
+logs `serve: shutdown deadline (95s); terminating remaining connections` to
+stderr and exits between scheduler steps. This is a forced stop, **not** a
+successful drain; investigate stalled requests and verify the event-log
+recovery line on restart before counting more soak time. A blocking filesystem
+operation inside one synchronous persist step is not preemptible by the
+scheduler; the checked-in `pds/pds.service` pins `TimeoutStopSec=110s`,
+leaving 15 seconds after the app's deadline (systemd's 90-second default is
+too short). Verify the installed unit still carries that setting and treat a
+supervisor-forced kill as a crash/recovery event. A deliberate stop still resets the uninterrupted soak
+clock; do not stitch two windows across it.
+
 ## 4. The soak rule
 
 `docs/ops/PDS-LAUNCH-PLAN.md` names a soak ("G-QUIET closes. Soak begins.",
