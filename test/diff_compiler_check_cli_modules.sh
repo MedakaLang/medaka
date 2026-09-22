@@ -1207,14 +1207,14 @@ unwrap (MkConfig n) = n
 EOF
 # NOT a sibling of the entry, so it must spell the import from the PROJECT root.
 cat > "$TMP/nest/lib/thing.mdk" <<'EOF'
-import src.util.{Config, MkConfig, unwrap}
+import src.util.{Config(..), unwrap}
 
 export bump : Config -> Config
 bump c = MkConfig (unwrap c + 1)
 EOF
 # The entry IS a sibling, so it spells the same file the other way.
 cat > "$TMP/nest/src/main.mdk" <<'EOF'
-import util.{Config, MkConfig, unwrap}
+import util.{Config(..), unwrap}
 import lib.thing.{bump}
 
 main = println (unwrap (bump (MkConfig 41)))
@@ -1253,7 +1253,7 @@ fi
 # pre-existing fixture could fail, which is exactly why it is pinned here.  It must
 # now be accepted for the RIGHT reason: one module, one impl.  84 = describe (42).
 cat > "$TMP/nest/src/impls.mdk" <<'EOF'
-import util.{Config, MkConfig, Describe(..), describe}
+import util.{Config(..), Describe(..), describe}
 import lib.thing.{bump}
 
 main = println (describe (bump (MkConfig 41)))
@@ -1313,7 +1313,7 @@ export interface Desc a where
   desc : a -> Int
 EOF
 cat > "$TMP/nest3/src/other.mdk" <<'EOF'
-import u.{Cfg, MkCfg, Desc(..), desc}
+import u.{Cfg(..), Desc(..), desc}
 
 export impl Desc Cfg where
   desc (MkCfg n) = n
@@ -1322,7 +1322,7 @@ export viaSibling : Int
 viaSibling = desc (MkCfg 1)
 EOF
 cat > "$TMP/nest3/lib/t.mdk" <<'EOF'
-import src.u.{Cfg, MkCfg, Desc(..), desc}
+import src.u.{Cfg(..), Desc(..), desc}
 
 export impl Desc Cfg where
   desc (MkCfg n) = n + 1
@@ -2879,7 +2879,7 @@ area26 s = match s
   Circle26 r => r * r
 EOF
 cat > "$TMP/main26.mdk" <<'EOF'
-import mid26.{Shape26, Circle26, area26}
+import mid26.{Shape26(..), area26}
 
 main = println (area26 (Circle26 3))
 EOF

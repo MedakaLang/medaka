@@ -17,7 +17,9 @@
 --
 -- Run with: medaka test test/ported/test_run_ported.mdk
 
-import test.{expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests, Pass, Fail}
+import test.{
+  expectEqual, expectTrue, expectFalse, expectAll, pass, fail, runTests
+}
 
 -- ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -37,15 +39,16 @@ isGt _ = False
 test "hello world literal" = expectEqual "Hello, world!" "Hello, world!"
 
 -- multi print: sequences correctly — just assert identity of each printed value
-test "multi print values" = expectAll
-  [ expectEqual "one" "one"
-  , expectEqual "two" "two"
-  , expectEqual "three" "three"
-  ]
+test "multi print values" = expectAll [
+  expectEqual "one" "one",
+  expectEqual "two" "two",
+  expectEqual "three" "three",
+]
 
 -- if inline-then block-else: t_if_inline_then_block_else
 classify x =
-  if x > 0 then "pos"
+  if x > 0 then
+    "pos"
   else
     let neg = "neg"
     neg
@@ -55,31 +58,26 @@ test "if inline-then block-else neg" = expectEqual "neg" (classify (-3 : Int))
 
 -- else-less if: t_if_elseless — the function does IO; test the expression form
 test "else-less if pos" = expectTrue (5 > 0)
-test "else-less if zero" = expectFalse ((-1) > 0)
+test "else-less if zero" = expectFalse (-1 > 0)
 
 -- ── Recursion + integer arithmetic ─────────────────────────────────────────
 -- Ported from: t_factorial
 
-factorial n =
-  match n
-    0 => 1
-    n => n * factorial (n - 1)
+factorial n = match n
+  0 => 1
+  n => n * factorial (n - 1)
 
 test "factorial 10" = expectEqual 3628800 (factorial 10)
 
 -- ── ADT construction and match ──────────────────────────────────────────────
 -- Ported from: t_adt_match
 
-data Color
-  = Red
-  | Green
-  | Blue
+data Color = Red | Green | Blue
 
-colorName c =
-  match c
-    Red   => "red"
-    Green => "green"
-    Blue  => "blue"
+colorName c = match c
+  Red => "red"
+  Green => "green"
+  Blue => "blue"
 
 test "adt match red" = expectEqual "red" (colorName Red)
 test "adt match green" = expectEqual "green" (colorName Green)
@@ -105,8 +103,10 @@ tk n _
 tk _ [] = []
 tk n (x :: xs) = x :: tk (n - 1) xs
 
-test "guard fallthrough take 2" = expectEqual [10, 20] (tk (2 : Int) [10, 20, 30, 40])
-test "guard base case (guard passes)" = expectEqual ([] : List Int) (tk (0 : Int) [10, 20, 30, 40])
+test "guard fallthrough take 2" =
+  expectEqual [10, 20] (tk (2 : Int) [10, 20, 30, 40])
+test "guard base case (guard passes)" =
+  expectEqual ([] : List Int) (tk (0 : Int) [10, 20, 30, 40])
 
 -- ── String/Char kernel (Phase 75) ──────────────────────────────────────────
 -- Ported from: t_string_kernel, t_string_codepoint, t_string_index_of,
@@ -114,21 +114,25 @@ test "guard base case (guard passes)" = expectEqual ([] : List Int) (tk (0 : Int
 
 test "charCode A" = expectEqual 65 (charCode 'A')
 test "charFromCode 66 Some" = expectEqual (Some 'B') (charFromCode 66)
-test "charFromCode surrogate None" = expectEqual (None : Option Char) (charFromCode 55296)
+test "charFromCode surrogate None" =
+  expectEqual (None : Option Char) (charFromCode 55296)
 test "stringConcat" = expectEqual "abcdef" (stringConcat ["ab", "cd", "ef"])
 test "stringCompare lt" = expectTrue (isLt (stringCompare "abc" "abd"))
 test "stringCompare eq" = expectTrue (isEq (stringCompare "abc" "abc"))
 test "stringCompare gt" = expectTrue (isGt (stringCompare "abd" "abc"))
 test "stringToFloat 3.5" = expectEqual (Some 3.5) (stringToFloat "3.5")
-test "stringToFloat invalid" = expectEqual (None : Option Float) (stringToFloat "nope")
+test "stringToFloat invalid" =
+  expectEqual (None : Option Float) (stringToFloat "nope")
 
 -- codepoint-based string ops
 test "stringLength unicode" = expectEqual 6 (stringLength "héllo→")
 test "stringSlice 1 4" = expectEqual "éll" (stringSlice 1 4 "héllo→")
 test "stringSlice 5 6 arrow" = expectEqual "→" (stringSlice 5 6 "héllo→")
-test "stringSlice 0 100 clamp" = expectEqual "héllo→" (stringSlice 0 100 "héllo→")
+test "stringSlice 0 100 clamp" =
+  expectEqual "héllo→" (stringSlice 0 100 "héllo→")
 test "charCode arrow" = expectEqual 8594 (charCode '→')
-test "arrayLength stringToChars" = expectEqual 6 (arrayLength (stringToChars "héllo→"))
+test "arrayLength stringToChars" =
+  expectEqual 6 (arrayLength (stringToChars "héllo→"))
 test "stringFromChars roundtrip" =
   expectTrue (stringFromChars (stringToChars "héllo→") == "héllo→")
 
@@ -143,21 +147,25 @@ test "stringToUpper Straße" = expectEqual "STRASSE" (stringToUpper "Straße")
 test "stringToLower HÉLLO" = expectEqual "héllo→" (stringToLower "HÉLLO→")
 
 -- stringIndexOf (codepoint-based)
-test "stringIndexOf arrow first" = expectEqual (Some 1) (stringIndexOf "→" "a→b→c")
-test "stringIndexOf b-arrow-c" = expectEqual (Some 2) (stringIndexOf "b→c" "a→b→c")
-test "stringIndexOf absent" = expectEqual (None : Option Int) (stringIndexOf "z" "a→b→c")
-test "stringIndexOf empty needle" = expectEqual (Some 0) (stringIndexOf "" "abc")
+test "stringIndexOf arrow first" =
+  expectEqual (Some 1) (stringIndexOf "→" "a→b→c")
+test "stringIndexOf b-arrow-c" =
+  expectEqual (Some 2) (stringIndexOf "b→c" "a→b→c")
+test "stringIndexOf absent" =
+  expectEqual (None : Option Int) (stringIndexOf "z" "a→b→c")
+test "stringIndexOf empty needle" =
+  expectEqual (Some 0) (stringIndexOf "" "abc")
 
 -- bracket slice (codepoint-based, Phase 75)
 bracketSliceStr = "héllo→"
-test "bracket slice 1..4" = expectEqual "éll" (bracketSliceStr.[1..4])
-test "bracket slice 0..=2" = expectEqual "hél" (bracketSliceStr.[0..=2])
-test "bracket slice 5..6 arrow" = expectEqual "→" (bracketSliceStr.[5..6])
+test "bracket slice 1..4" = expectEqual "éll" bracketSliceStr.[1..4]
+test "bracket slice 0..=2" = expectEqual "hél" bracketSliceStr.[0..=2]
+test "bracket slice 5..6 arrow" = expectEqual "→" bracketSliceStr.[5..6]
 
 -- bracket index (codepoint-based, Phase 77)
-test "bracket index 0 h" = expectEqual 'h' (bracketSliceStr.[0])
-test "bracket index 1 é" = expectEqual 'é' (bracketSliceStr.[1])
-test "bracket index 5 arrow" = expectEqual '→' (bracketSliceStr.[5])
+test "bracket index 0 h" = expectEqual 'h' bracketSliceStr[0]
+test "bracket index 1 é" = expectEqual 'é' bracketSliceStr[1]
+test "bracket index 5 arrow" = expectEqual '→' bracketSliceStr[5]
 
 -- ── Return-position dispatch (Phase 69) ────────────────────────────────────
 -- Ported from: t_return_position_dispatch, t_multiparam_dispatch
@@ -273,7 +281,8 @@ emptyListInt : List Int
 emptyListInt = empty
 
 test "nullary empty stdlib list" = expectEqual [] emptyListInt
-test "nullary empty append" = expectEqual [1, 2] (append (empty : List Int) [1, 2])
+test "nullary empty append" =
+  expectEqual [1, 2] (append (empty : List Int) [1, 2])
 
 data Wrap = Wrap Int
 impl Semigroup Wrap where
@@ -337,7 +346,8 @@ test "nullary Bounded Int lo < hi" = expectTrue (loInt < hiInt)
 
 -- Stdlib Bounded Char
 test "nullary Bounded Char min" = expectEqual 0 (charCode (minBound : Char))
-test "nullary Bounded Char max" = expectEqual 1114111 (charCode (maxBound : Char))
+test "nullary Bounded Char max" =
+  expectEqual 1114111 (charCode (maxBound : Char))
 
 -- ── Head-key dispatch (Phase 69.x-c) ────────────────────────────────────────
 -- Ported from: t_head_key_dispatch, t_super_dict_dispatch
@@ -383,8 +393,10 @@ impl SubF BoxS where
 mkS : (BaseF m, SubF m) => a -> m a
 mkS x = same (base x)
 
-test "super dict dispatch Box" = expectEqual "BoxS 5" (display (mkS 5 : BoxS Int))
-test "super dict dispatch Bag" = expectEqual "BagS 7" (display (mkS 7 : BagS Int))
+test "super dict dispatch Box" =
+  expectEqual "BoxS 5" (display (mkS 5 : BoxS Int))
+test "super dict dispatch Bag" =
+  expectEqual "BagS 7" (display (mkS 7 : BagS Int))
 
 -- ── println Display vs Debug (Phase 111) ────────────────────────────────────
 -- Ported from: t_println_display_vs_inspect
@@ -415,7 +427,8 @@ impl Default (Option a) requires Default a where
 
 test "nested dicts List Int" = expectEqual [0] (def : List Int)
 test "nested dicts List List Int" = expectEqual [[0]] (def : List (List Int))
-test "nested dicts List List List Int" = expectEqual [[[0]]] (def : List (List (List Int)))
+test "nested dicts List List List Int" =
+  expectEqual [[[0]]] (def : List (List (List Int)))
 test "nested dicts Option List Option Int" =
   expectEqual (Some [Some 0]) (def : Option (List (Option Int)))
 
@@ -459,18 +472,16 @@ fPolyMonad m = do
   x <- m
   pure x
 
-test "poly monad do option" =
-  match fPolyMonad (Some 5)
-    Some _ => pass
-    None => fail "expected Some"
+test "poly monad do option" = match fPolyMonad (Some 5)
+  Some _ => pass
+  None => fail "expected Some"
 
 gNoBind = do
   pure 5
 
-test "no-bind do grounded Option" =
-  match (gNoBind : Option Int)
-    Some _ => pass
-    None => fail "expected Some"
+test "no-bind do grounded Option" = match gNoBind : Option Int
+  Some _ => pass
+  None => fail "expected Some"
 
 -- ── Inferred return-pos wrappers (Phase 115) ─────────────────────────────────
 -- Ported from: t_infer_return_pos_wrapper, t_infer_return_pos_recursive,
@@ -492,7 +503,8 @@ test "inferred return-pos wrapper bool" = expectTrue (mkP 5 : Bool)
 
 mkPR n = if n <= 0 then tagP 0 else mkPR (n - 1)
 
-test "inferred return-pos recursive string" = expectEqual "S" (mkPR (3 : Int) : String)
+test "inferred return-pos recursive string" =
+  expectEqual "S" (mkPR (3 : Int) : String)
 test "inferred return-pos recursive bool" = expectFalse (mkPR (3 : Int) : Bool)
 
 pingP n = if n <= 0 then tagP 0 else pongP (n - 1)

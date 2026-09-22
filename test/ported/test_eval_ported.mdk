@@ -20,7 +20,7 @@
 --
 -- Run with: medaka test test/ported/test_eval_ported.mdk
 
-import test.{expectEqual, expectTrue, expectFalse, fail, Fail}
+import test.{expectEqual, expectTrue, expectFalse, fail}
 
 -- ── Constants ────────────────────────────────────────────────────────────────
 -- Ported from: t_int, t_float, t_string, t_triple_string, t_triple_multiline,
@@ -30,11 +30,11 @@ test "int literal" = expectEqual 42 (42 : Int)
 test "float literal" = expectEqual 3.14 (3.14 : Float)
 test "string literal" = expectEqual "hi" "hi"
 test "triple-quoted string" = expectEqual "hi" """hi"""
-test "triple-quoted multiline" =
-  expectEqual "hello\nworld\n" """
+test "triple-quoted multiline" = expectEqual "hello\nworld\n" """
   hello
   world
   """
+
 test "bool literal" = expectTrue True
 test "unit literal" = expectEqual () ()
 
@@ -45,7 +45,7 @@ test "add" = expectEqual 5 (2 + 3 : Int)
 test "sub" = expectEqual 6 (10 - 4 : Int)
 test "mul" = expectEqual 12 (3 * 4 : Int)
 test "div" = expectEqual 5 (10 / 2 : Int)
-test "neg" = expectEqual (-5) (-(5) : Int)
+test "neg" = expectEqual (-5) (-5 : Int)
 test "string concat ++" = expectEqual "hello world" ("hello" ++ " world")
 
 -- ── Float arithmetic and modulo (Phase 17/70) ────────────────────────────────
@@ -90,7 +90,8 @@ test "partial application" = expectEqual 7 (add3 4)
 
 test "left section (2 * _)" = expectEqual 10 ((2 * _) (5 : Int))
 test "left section (10 - _)" = expectEqual 7 ((10 - _) (3 : Int))
-test "left section map" = expectEqual [2, 4, 6] (map (2 * _) ([1, 2, 3] : List Int))
+test "left section map" =
+  expectEqual [2, 4, 6] (map (2 * _) ([1, 2, 3] : List Int))
 test "bare section (+)" = expectEqual 5 ((+) (2 : Int) 3)
 test "bare section (-)" = expectEqual 6 ((-) (10 : Int) 4)
 test "bare section (==) true" = expectTrue ((==) (1 : Int) 1)
@@ -98,7 +99,8 @@ test "bare section (==) false" = expectFalse ((==) (1 : Int) 2)
 test "bare section (::)" = expectEqual [1, 2, 3] ((::) (1 : Int) [2, 3])
 test "bare section fold" = expectEqual 10 (fold (+) 0 ([1, 2, 3, 4] : List Int))
 test "multi-param lambda 2" = expectEqual 3 ((x y => x + y) (1 : Int) 2)
-test "multi-param lambda 3" = expectEqual 10 ((f a b => f a + b) (x => x * 2) (3 : Int) 4)
+test "multi-param lambda 3" =
+  expectEqual 10 ((f a b => f a + b) (x => x * 2) (3 : Int) 4)
 
 -- ── Recursion ────────────────────────────────────────────────────────────────
 -- Ported from: t_factorial, t_list_len
@@ -106,10 +108,9 @@ test "multi-param lambda 3" = expectEqual 10 ((f a b => f a + b) (x => x * 2) (3
 factRec n = if n <= 1 then 1 else n * factRec (n - 1)
 test "factorial 5" = expectEqual 120 (factRec (5 : Int))
 
-listLen xs =
-  match xs
-    [] => 0
-    (_ :: rest) => 1 + listLen rest
+listLen xs = match xs
+  [] => 0
+  _ :: rest => 1 + listLen rest
 test "list length" = expectEqual 4 (listLen [1, 2, 3, 4])
 
 -- ── Pattern matching ─────────────────────────────────────────────────────────
@@ -118,23 +119,20 @@ test "list length" = expectEqual 4 (listLen [1, 2, 3, 4])
 --              t_match_constructor, t_match_list_head, t_as_pattern_head,
 --              t_as_pattern_empty, t_aspat_lambda_param
 
-classifyN n =
-  match n
-    0 => "zero"
-    1 => "one"
-    _ => "other"
+classifyN n = match n
+  0 => "zero"
+  1 => "one"
+  _ => "other"
 test "match literal" = expectEqual "one" (classifyN 1)
 
-swapPair p =
-  match p
-    (a, b) => (b, a)
+swapPair p = match p
+  (a, b) => (b, a)
 test "match tuple" = expectEqual (2, 1) (swapPair (1, 2))
 
-signFn n =
-  match n
-    x if x > 0 => 1
-    x if x < 0 => (-1)
-    _ => 0
+signFn n = match n
+  x if x > 0 => 1
+  x if x < 0 => -1
+  _ => 0
 test "match guard pos" = expectEqual 1 (signFn (3 : Int))
 test "match guard neg" = expectEqual (-1) (signFn (-3 : Int))
 test "match guard zero" = expectEqual 0 (signFn (0 : Int))
@@ -144,7 +142,8 @@ tkFn n _
 tkFn _ [] = []
 tkFn n (x :: xs) = x :: tkFn (n - 1) xs
 test "guard fallthrough take" = expectEqual [1, 2] (tkFn (2 : Int) [1, 2, 3, 4])
-test "guard fallthrough base" = expectEqual ([] : List Int) (tkFn (0 : Int) [1, 2, 3, 4])
+test "guard fallthrough base" =
+  expectEqual ([] : List Int) (tkFn (0 : Int) [1, 2, 3, 4])
 
 classifyFt n
   | n < 0 = 0
@@ -152,34 +151,34 @@ classifyFt n
 classifyFt _ = 2
 test "guard fallthrough classify" = expectEqual 2 (classifyFt (7 : Int))
 
-tkInline n _ | n <= 0 = []
+tkInline n _
+  | n <= 0 = []
 tkInline _ [] = []
 tkInline n (x :: xs) = x :: tkInline (n - 1) xs
 test "inline guard form" = expectEqual [1, 2] (tkInline (2 : Int) [1, 2, 3, 4])
 
 data Shape = Circle Int | Square Int
-areaFn s =
-  match s
-    Circle r => r * r
-    Square w => w * w
+areaFn s = match s
+  Circle r => r * r
+  Square w => w * w
 test "match constructor" = expectEqual 25 (areaFn (Circle 5))
 
-headOrZero xs =
-  match xs
-    [] => 0
-    (x :: _) => x
+headOrZero xs = match xs
+  [] => 0
+  x :: _ => x
 test "match list head" = expectEqual 10 (headOrZero ([10, 20, 30] : List Int))
 
-firstAndAll xs =
-  match xs
-    ys@(x :: _) => (x, ys)
-    ys@[] => (0, ys)
-test "as-pattern cons" = expectEqual (10, [10, 20, 30]) (firstAndAll [10, 20, 30])
+firstAndAll xs = match xs
+  ys@(x :: _) => (x, ys)
+  ys@[] => (0, ys)
+test "as-pattern cons" =
+  expectEqual (10, [10, 20, 30]) (firstAndAll [10, 20, 30])
 test "as-pattern nil" = expectEqual (0, []) (firstAndAll [])
 
 test "as-pattern lambda param" =
-  expectEqual (10, [20, 30], [10, 20, 30])
-    ((lst@(h :: t) => (h, t, lst)) [10, 20, 30])
+  expectEqual
+    (10, [20, 30], [10, 20, 30])
+    (((lst@(h :: t)) => (h, t, lst)) [10, 20, 30])
 
 -- ── Records ──────────────────────────────────────────────────────────────────
 -- Ported from: t_record, t_record_update, t_variant_update, t_record_update_nested,
@@ -206,7 +205,7 @@ data Address = { city : String }
 data Person = { name : String, address : Address }
 addrVal = Address { city = "Cambridge" }
 personVal = Person { name = "Alice", address = addrVal }
-person2Val = { personVal | address.city = "Boston" }
+person2Val = { personVal | address = { personVal.address | city = "Boston" } }
 test "nested record update" = expectEqual "Boston" person2Val.address.city
 test "nested record update unchanged" = expectEqual "Alice" person2Val.name
 
@@ -216,8 +215,13 @@ data Person2 = { name : String, address : Address2 }
 cVal = Country { code = "UK" }
 addr2Val = Address2 { country = cVal }
 person3Val = Person2 { name = "Alice", address = addr2Val }
-person4Val = { person3Val | address.country.code = "US" }
-test "deep nested record update" = expectEqual "US" person4Val.address.country.code
+person4Val = { person3Val |
+  address = { person3Val.address |
+    country = { person3Val.address.country | code = "US" },
+  },
+}
+test "deep nested record update" =
+  expectEqual "US" person4Val.address.country.code
 
 -- ── Tuples ───────────────────────────────────────────────────────────────────
 -- Ported from: t_tuple
@@ -236,10 +240,13 @@ test "list cons" = expectEqual [0, 1, 2] (0 :: [1, 2])
 doubleFn x = x * 2
 test "map" = expectEqual [2, 4, 6] (map doubleFn [1, 2, 3])
 isEvenFn x = x == 0 || x == 2 || x == 4 || x == 6
-test "filter" = expectEqual [2, 4, 6] (filter isEvenFn ([1, 2, 3, 4, 5, 6] : List Int))
-test "fold" = expectEqual 15 (fold (x => y => x + y) 0 ([1, 2, 3, 4, 5] : List Int))
+test "filter" =
+  expectEqual [2, 4, 6] (filter isEvenFn ([1, 2, 3, 4, 5, 6] : List Int))
+test "fold" =
+  expectEqual 15 (fold (x => y => x + y) 0 ([1, 2, 3, 4, 5] : List Int))
 test "foldMap string" = expectEqual "abc" (foldMap (s => s) ["a", "b", "c"])
-test "foldMap list" = expectEqual [1, 1, 2, 2, 3, 3] (foldMap (x => [x, x]) [1, 2, 3])
+test "foldMap list" =
+  expectEqual [1, 1, 2, 2, 3, 3] (foldMap (x => [x, x]) [1, 2, 3])
 
 data SumM = MkSumM Int
 impl Semigroup SumM where
@@ -277,7 +284,7 @@ test "do Option some" = expectEqual (Some 8) doOptionSome
 
 doOptionNone = do
   x <- Some 5
-  _ <- (None : Option Int)
+  _ <- None : Option Int
   pure x
 test "do Option none" = expectEqual (None : Option Int) doOptionNone
 
@@ -289,12 +296,12 @@ test "do Result ok" = expectEqual (Ok 5 : Result String Int) doResultOk
 
 doResultErr = do
   x <- Ok 10
-  _ <- (Err "oops" : Result String Int)
+  _ <- Err "oops" : Result String Int
   pure x
 test "do Result err" = expectEqual (Err "oops" : Result String Int) doResultErr
 
 doSeqShort = do
-  (None : Option Int)
+  None : Option Int
   pure 1
 test "do seq short-circuit" = expectEqual (None : Option Int) doSeqShort
 
@@ -350,7 +357,7 @@ test "ref set and read" = expectEqual 42 refResult
 -- Ported from: t_block_let_recursive
 
 countdownFn n =
-  let go i = if i == 0 then n else go (i - 1)
+  let go = i => if i == 0 then n else go (i - 1)
   go 3
 test "block-let recursive fn" = expectEqual 42 (countdownFn (42 : Int))
 
@@ -360,65 +367,77 @@ test "block-let recursive fn" = expectEqual 42 (countdownFn (42 : Int))
 --              t_where_multi_clause, t_where_multi_clause_with_guards,
 --              t_toplevel_multi_clause, t_where_on_new_line
 
-whereR1 = double 5 where
-  double x = x * 2
+whereR1 = double 5
+  where
+    double x = x * 2
 test "where single helper" = expectEqual 10 whereR1
 
-whereR2 = double 5 + triple 5 where
-  double x = x * 2
-  triple x = x * 3
+whereR2 = double 5 + triple 5
+  where
+    double x = x * 2
+    triple x = x * 3
 test "where multiple helpers" = expectEqual 25 whereR2
 
-whereR3 = result where
-  base = 10
-  result = base + 5
+whereR3 = result
+  where
+    base = 10
+    result = base + 5
 test "where sequential" = expectEqual 15 whereR3
 
-whereR4 = outer 3 where
-  outer n = inner n + 1
-  inner k = k * 2
+whereR4 = outer 3
+  where
+    outer n = inner n + 1
+    inner k = k * 2
 test "where nested" = expectEqual 7 whereR4
 
-whereR5 = isEvenW 4 where
-  isEvenW n = if n == 0 then True else isOddW (n - 1)
-  isOddW n = if n == 0 then False else isEvenW (n - 1)
+whereR5 = isEvenW 4
+  where
+    isEvenW n = if n == 0 then True else isOddW (n - 1)
+    isOddW n = if n == 0 then False else isEvenW (n - 1)
 test "where mutual recursion" = expectTrue whereR5
 
-classifyW n = classifyWGo n where
-  classifyWGo m = match m
-    x => doubled x
-  doubled y = y * 2
+classifyW n = classifyWGo n
+  where
+    classifyWGo m = match m
+      x => doubled x
+    doubled y = y * 2
 test "where match arm" = expectEqual 10 (classifyW (5 : Int))
 
-countPos xs = fold g 0 xs where
-  g acc x
-    | x > 0 = acc + 1
-    | otherwise = acc
-test "where guards" = expectEqual 2 (countPos ([(-1), 2, (-3), 4] : List Int))
+countPos xs = fold g 0 xs
+  where
+    g acc x
+      | x > 0 = acc + 1
+      | otherwise = acc
+test "where guards" = expectEqual 2 (countPos ([-1, 2, -3, 4] : List Int))
 
-findGt n xs = fold g None xs where
-  g (Some a) _ = Some a
-  g None x = if x > n then Some x else None
+findGt n xs = fold g None xs
+  where
+    g (Some a) _ = Some a
+    g None x = if x > n then Some x else None
 test "where multi-clause" = expectEqual (Some 3) (findGt (2 : Int) [1, 2, 3, 4])
 
-findFirstW f xs = fold g None xs where
-  g (acc@Some _) _ = acc
-  g None x
-    | f x = Some x
-    | otherwise = None
-test "where multi-clause + guards" = expectEqual (Some 20) (findFirstW (x => x > 10) [1, 5, 20, 30])
-
-describeW 0 = "zero"
-describeW _ = "other"
-test "top-level multi-clause" = expectEqual ("zero", "other") (describeW 0, describeW 7)
-
-findFirstNewline f xs = fold g None xs
+findFirstW f xs = fold g None xs
   where
-    g (acc@Some _) _ = acc
+    g (acc@(Some _)) _ = acc
     g None x
       | f x = Some x
       | otherwise = None
-test "where on new line" = expectEqual (Some 20) (findFirstNewline (x => x > 10) [1, 5, 20, 30])
+test "where multi-clause + guards" =
+  expectEqual (Some 20) (findFirstW (x => x > 10) [1, 5, 20, 30])
+
+describeW 0 = "zero"
+describeW _ = "other"
+test "top-level multi-clause" =
+  expectEqual ("zero", "other") (describeW 0, describeW 7)
+
+findFirstNewline f xs = fold g None xs
+  where
+    g (acc@(Some _)) _ = acc
+    g None x
+      | f x = Some x
+      | otherwise = None
+test "where on new line" =
+  expectEqual (Some 20) (findFirstNewline (x => x > 10) [1, 5, 20, 30])
 
 -- ── Top-level function guards ────────────────────────────────────────────────
 -- Ported from: t_guard_basic_neg, t_guard_basic_pos, t_guard_basic_zero,
@@ -434,25 +453,26 @@ test "guard basic pos" = expectEqual "pos" (classifyG (5 : Int))
 test "guard basic zero" = expectEqual "zero" (classifyG (0 : Int))
 
 classifyPG o
-  | Some y <- o, y > 0 = "pos"
-  | Some y <- o = "nonpos"
+  | (Some y) <- o, y > 0 = "pos"
+  | (Some y) <- o = "nonpos"
   | otherwise = "missing"
 test "pguard bind match" = expectEqual "pos" (classifyPG (Some (7 : Int)))
-test "pguard bind fallthrough" = expectEqual "nonpos" (classifyPG (Some (-2 : Int)))
+test "pguard bind fallthrough" =
+  expectEqual "nonpos" (classifyPG (Some (-2 : Int)))
 test "pguard bind fail" = expectEqual "missing" (classifyPG (None : Option Int))
 
 keepPos [] = []
 keepPos (x :: xs)
-  | Some y <- x = y :: keepPos xs
+  | (Some y) <- x = y :: keepPos xs
   | None <- x = keepPos xs
 test "pguard filterMap" = expectEqual [1, 3] (keepPos [Some 1, None, Some 3])
 
-describeOpt o =
-  match o
-    n if Some y <- n, y > 0 => "some-pos"
-    n if Some _ <- n => "some-nonpos"
-    _ => "none"
-test "pguard match arm" = expectEqual "some-nonpos" (describeOpt (Some (-1 : Int)))
+describeOpt o = match o
+  n if (Some y) <- n, y > 0 => "some-pos"
+  n if (Some _) <- n => "some-nonpos"
+  _ => "none"
+test "pguard match arm" =
+  expectEqual "some-nonpos" (describeOpt (Some (-1 : Int)))
 
 -- ── Newtype declarations ─────────────────────────────────────────────────────
 -- Ported from: t_newtype_wrap, t_newtype_unwrap, t_newtype_deriving_num_add,
@@ -486,9 +506,11 @@ bInterp = "bar"
 test "interp two holes" = expectEqual "foo and bar" "\{aInterp} and \{bInterp}"
 nInterp = "Alice"
 greetingInterp = "Hi"
-test "interp expr" = expectEqual "Hi, Alice! Welcome." "\{greetingInterp}, \{nInterp}! Welcome."
-test "interp triple basic" = expectEqual "Hello, world!" """Hello, \{nameInterp}!"""
-test "interp triple two holes" = expectEqual "foo and bar" """\{aInterp} and \{bInterp}"""
+test "interp expr" =
+  expectEqual "Hi, Alice! Welcome." "\{greetingInterp}, \{nInterp}! Welcome."
+test "interp triple basic" = expectEqual "Hello, world!" "Hello, \{nameInterp}!"
+test "interp triple two holes" =
+  expectEqual "foo and bar" "\{aInterp} and \{bInterp}"
 nInt = 42
 test "interp int hole" = expectEqual "count: 42" "count: \{nInt}"
 cChar = 'z'
@@ -497,7 +519,8 @@ xsList = ["a", "b"]
 test "interp nested unquoted" = expectEqual "items: [a, b]" "items: \{xsList}"
 data ColorInterp = RedInterp | GreenInterp deriving (Display)
 cColor = GreenInterp
-test "interp derived Display" = expectEqual "color: GreenInterp" "color: \{cColor}"
+test "interp derived Display" =
+  expectEqual "color: GreenInterp" "color: \{cColor}"
 
 -- ── Unary operators ──────────────────────────────────────────────────────────
 -- Ported from: t_bang_true, t_bang_false, t_bang_chain
@@ -515,7 +538,7 @@ test "escape tab" = expectEqual "a\tb" "a\tb"
 test "escape quote" = expectEqual "a\"b" "a\"b"
 test "escape null" = expectEqual "a\0b" "a\0b"
 test "escape cr" = expectEqual "a\rb" "a\rb"
-test "escape unicode" = expectEqual "\u{2603}" "\u{2603}"
+test "escape unicode" = expectEqual "☃" "☃"
 test "lone newline not collapsed" = expectEqual "\n" "\n"
 test "leading newline not dedented" = expectEqual "\n  foo" "\n  foo"
 
@@ -600,9 +623,10 @@ test "prefix return-position" = expectEqual 1 pickNResult
 --              t_pf_dispatch_both_list, t_pf_dispatch_both_option
 
 myMax : (Foldable t, Ord a) => t a -> Option a
-myMax xs = fold stepMax None xs where
-  stepMax None x = Some x
-  stepMax (Some m) x = Some (max m x)
+myMax xs = fold stepMax None xs
+  where
+    stepMax None x = Some x
+    stepMax (Some m) x = Some (max m x)
 
 test "point-free on List" = expectEqual (Some 3) (myMax ([3, 1, 2] : List Int))
 test "point-free on Option" = expectEqual (Some 5) (myMax (Some (5 : Int)))
@@ -623,11 +647,13 @@ findNoneR : Option Int
 findNoneR = find (x => x > 0) None
 test "find on None" = expectEqual (None : Option Int) findNoneR
 test "count on List" = expectEqual 3 (count (x => x > 0) [1, 2, 3])
-test "fold on Some" = expectEqual 10 (fold (acc x => acc + x) 0 (Some (10 : Int)))
+test "fold on Some" =
+  expectEqual 10 (fold (acc x => acc + x) 0 (Some (10 : Int)))
 foldNoneR : Int
 foldNoneR = fold (acc x => acc + x) 0 (None : Option Int)
 test "fold on None" = expectEqual 0 foldNoneR
-test "fold on Ok" = expectEqual 7 (fold (acc x => acc + x) 0 (Ok 7 : Result String Int))
+test "fold on Ok" =
+  expectEqual 7 (fold (acc x => acc + x) 0 (Ok 7 : Result String Int))
 test "length Some" = expectEqual 1 (length (Some 5))
 lengthNoneR : Int
 lengthNoneR = length (None : Option Int)
@@ -641,11 +667,13 @@ test "map on Some" = expectEqual (Some 6) (map (x => x + 1) (Some 5))
 letRecFact = let fact n = if n == 0 then 1 else n * fact (n - 1) in fact 5
 test "let rec factorial" = expectEqual 120 letRecFact
 
-letRecAcc = let go acc n = if n <= 0 then acc else go (acc + n) (n - 1) in go 0 5
+letRecAcc =
+  let go acc n = if n <= 0 then acc else go (acc + n) (n - 1) in go 0 5
 test "let rec accumulator" = expectEqual 15 letRecAcc
 
-sumTo n = go 0 n where
-  go acc k = if k <= 0 then acc else go (acc + k) (k - 1)
+sumTo n = go 0 n
+  where
+    go acc k = if k <= 0 then acc else go (acc + k) (k - 1)
 test "where self-rec" = expectEqual 15 (sumTo (5 : Int))
 
 -- ── Field assignment (Phase 28) ──────────────────────────────────────────────
@@ -677,9 +705,7 @@ test "record pat rest" = expectEqual 99 recPatRestR
 -- Ported from: t_named_ctor_create_eval, t_named_ctor_pat_eval,
 --              t_named_ctor_field_order_eval
 
-data EventE
-  = ClickE { x : Int, y : Int }
-  | ScrollE Int
+data EventE = ClickE { x : Int, y : Int } | ScrollE Int
 
 clickCreated = ClickE { x = 10, y = 20 }
 clickCreatedXY = match clickCreated
@@ -728,8 +754,12 @@ test "iface default with where helper" = expectEqual "Hi there" (helloW 42)
 -- ── if let (Phase 38) ────────────────────────────────────────────────────────
 -- Ported from: t_if_let_match, t_if_let_no_match
 
-test "if let match" = expectEqual 5 (if let Some x = Some (5 : Int) then x else 0)
-test "if let no match" = expectEqual 0 (if let Some x = (None : Option Int) then x else 0)
+test "if let match" = expectEqual 5 (match Some (5 : Int)
+  Some x => x
+  _ => 0)
+test "if let no match" = expectEqual 0 (match None : Option Int
+  Some x => x
+  _ => 0)
 
 -- ── Recursive constrained functions (Phase 74 follow-up) ────────────────────
 -- Ported from: t_rec_eq_constraint_true, t_rec_eq_constraint_false,
@@ -779,23 +809,20 @@ test "range list empty" = expectEqual ([] : List Int) [5..3]
 -- Ported from: t_range_pat_int_hit, t_range_pat_int_miss,
 --              t_range_pat_int_inclusive_boundary, t_range_pat_char_hit,
 --              t_range_pat_char_miss
-rangePat n =
-  match n
-    1..9 => True
-    _ => False
+rangePat n = match n
+  1..9 => True
+  _ => False
 test "range pat int hit" = expectTrue (rangePat 5)
 test "range pat int miss" = expectFalse (rangePat 9)
 
-rangePatInc n =
-  match n
-    1..=9 => True
-    _ => False
+rangePatInc n = match n
+  1..=9 => True
+  _ => False
 test "range pat int inclusive boundary" = expectTrue (rangePatInc 9)
 
-isLowerFn c =
-  match c
-    'a'..='z' => True
-    _ => False
+isLowerFn c = match c
+  'a'..='z' => True
+  _ => False
 test "range pat char hit" = expectTrue (isLowerFn 'g')
 test "range pat char miss" = expectFalse (isLowerFn 'G')
 
@@ -815,7 +842,7 @@ signFnKw : Int -> Int
 signFnKw =
   x => match x
     n if n > 0 => 1
-    n if n < 0 => (-1)
+    n if n < 0 => -1
     _ => 0
 test "function guard" = expectEqual (-1) (signFnKw (-5))
 
@@ -829,7 +856,9 @@ test "function guard" = expectEqual (-1) (signFnKw (-5))
 -- not because the guard is missing there (a non-lambda expression-level
 -- `let rec` is correctly rejected — measured).
 
-letRecInline = let rec fact = n => if n == 0 then 1 else n * fact (n - 1) in fact 6
+letRecInline = fact 6
+  where
+    fact = n => if n == 0 then 1 else n * fact (n - 1)
 test "let rec inline" = expectEqual 720 letRecInline
 
 -- ── Top-level binding order (Phase 59.5) ─────────────────────────────────────
@@ -854,10 +883,7 @@ test "order zero-param chain" = expectEqual 42 orderA
 -- ── Leading-operator continuation ────────────────────────────────────────────
 -- Ported from: t_cont_logical_eval
 
-contFn a b c =
-  a
-  && b
-  || c
+contFn a b c = a && b || c
 test "leading-op continuation" = expectTrue (contFn True False True)
 
 -- ── Generic deriving (to_rep) ─────────────────────────────────────────────────
@@ -875,7 +901,8 @@ genPositionalName = match to_rep (RGBGen 1 2 3)
 genPositionalLen = match to_rep (RGBGen 1 2 3)
   RCon _ fields => length fields
   _ => 0
-test "generic data positional ctor name" = expectEqual "RGBGen" genPositionalName
+test "generic data positional ctor name" =
+  expectEqual "RGBGen" genPositionalName
 test "generic data positional field count" = expectEqual 3 genPositionalLen
 
 -- nullary: RCon "RedG" []
@@ -884,7 +911,7 @@ genNullaryName = match to_rep RedG
   _ => ""
 genNullaryLen = match to_rep RedG
   RCon _ fields => length fields
-  _ => (-1)
+  _ => -1
 test "generic data nullary ctor name" = expectEqual "RedG" genNullaryName
 test "generic data nullary field count" = expectEqual 0 genNullaryLen
 
