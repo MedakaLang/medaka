@@ -1506,8 +1506,34 @@ sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/marker.md
 corpus = ["test/core_ir_typed_modules_fixtures"]
 toolchain = []
 
+# The verdict + value + diagnostic-code table, and the coverage self-audit that
+# reads it. The module name is what keeps this row's cost history: `baselineKey`
+# strips `_test.mdk` exactly as it strips `.sh`, so the migrated row derives the
+# same key the script carried.
 [[gate]]
 name = "diff_compiler_dict_semantics"
+area = "infra"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_dict_semantics_test.mdk"
+oracles = []
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk"]
+corpus = ["test/dict_fixtures"]
+toolchain = ["clang"]
+
+# What is left of that script once the table above moved out: the scheme lines,
+# the emitted-IR asserts, the declaration-order permutation, the per-verb
+# warning surface, and the diagnostic spans. `split-first` because the editorial
+# split is what is still owed — five shapes remain in one file, and the last two
+# become scripts and rows of their own, after which this row and its file go.
+# The corpus is narrowed to what the script actually reads: `must_fail_fixtures`
+# and `typecheck_error_fixtures` appear only inside row labels.
+[[gate]]
+name = "diff_compiler_dict_semantics_residue"
 area = "infra"
 shard = "gates_2"
 project = "compiler"
@@ -1518,7 +1544,7 @@ migration = "split-first"
 run = "test/diff_compiler_dict_semantics.sh"
 oracles = []
 sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics.sh"]
-corpus = ["test/dict_fixtures", "test/must_fail_fixtures", "test/typecheck_error_fixtures"]
+corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]

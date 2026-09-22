@@ -1,0 +1,2488 @@
+{- | The verdict, value and diagnostic-code conformance table for
+   `docs/spec/DICT-SEMANTICS.md`, over `test/dict_fixtures`.
+
+   Every row pins what the binary does, not what the spec says should
+   happen. A gate that asserted the spec would simply be red, and a red
+   gate teaches people to ignore it. A divergence is pinned with a label
+   naming its issue, so this table doubles as the conformance ledger and
+   self-drains: the day a fix lands the row goes red and whoever fixed it
+   re-pins the cell.
+
+   The converse is the more dangerous half. A captured value records what
+   the engine did, not what is correct. Every `pinned` below was
+   hand-derived from the spec first, in the fixture's own header comment,
+   and only then compared against the binary. Where they agree the row is
+   conformant; where they disagree the label says so and names the issue.
+   Three engines agreeing does not prove correctness — several known S0s
+   had every engine equally wrong, which is why `diff_compiler_engines`
+   cannot see them.
+
+   A row's `label` is load-bearing, not decoration. Several rows are
+   numerically indistinguishable from an outcome that was a bug, so the
+   label carries why the verdict is what it is and which fix moved it. A
+   reader who transcribes the verdicts and paraphrases the labels destroys
+   the pin.
+
+   Clause §7's single-evaluator law is a claim about values ("two
+   evaluators … must agree, value-for-value, on every elaborated core
+   program"), so an `AllExact` row asserts the run engine's stdout, the
+   built binary's stdout and `pinned` are all byte-identical. An
+   exit-code-only gate is blind to "build exits 0 printing a wrong number",
+   which is #607's build-path symptom.
+
+   A rejecting row additionally pins the diagnostic code `check --json`
+   reports, or a row could pass by being rejected for an unrelated reason —
+   a typo in a fixture would otherwise grade green. `Absent` is the other
+   half, and the #1155 closedness pair needs it: its two files differ only
+   in whether the goal is closed, both exit nonzero from the same coherence
+   reject, and the only observable difference is that the open one must not
+   carry `T-AMBIGUOUS-INSTANCE`. Without a negative assertion that pair
+   would grade green with the closedness gate deleted.
+
+   Two value modes are live. The shell gate this table was lifted out of
+   also carried `BUILD_EXACT` (build's stdout alone, for a row `run`
+   rejects by design, optionally written `<run-stdout>%%<build-stdout>` to
+   pin how far `run` got before dying) and `SPLIT_EXACT` (a §7 violation
+   ledger where both engines accept and must disagree, so the row reds the
+   day they converge). Neither had a single row at the time this moved, so
+   each is re-expressible as a `Mode` constructor plus a `gradeValue` arm
+   rather than carried here ungraded. `Agreement` keeps every stream apart,
+   so both remain expressible unchanged.
+
+   No row grades `run`'s stderr. The harness grades `check`'s diagnostic
+   code, every engine's stdout and every exit code, but cannot assert a
+   runtime panic's signature (#1130), so a row whose pinned failure is a
+   run-time panic pins the exit code and the stdout reached, never the
+   reason.
+
+   The per-row verdict table is rendered into the failure message rather
+   than printed: `medaka test --native` runs a test body inside a probe
+   whose stdout it parses back as a sentinel transcript, so anything the
+   body prints on its own account never reaches a reader.
+
+   Runs under `medaka test --native`: it spawns subprocesses and reads the
+   corpus, neither of which the interpreter binds. -}
+
+import compiler_cli_test_support.{
+  Agreement(..), checkRunBuild, runMedaka, summarizeSweep, sweepUnits, verdictOf
+}
+import fs.{expectUnitCount, fixtureDirs}
+import list.{somes, sort}
+import path.{basename}
+import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unwords}
+import test.{Expectation, fail, pass}
+import test_process.{medakaRoot, testAssertionCount, unrosteredUnits}
+
+-- Fixtures are located through MEDAKA_ROOT rather than the working
+-- directory: `medaka gate run` exports it and inherits whatever cwd the
+-- caller had.
+corpus : <IO> String
+corpus = "\{medakaRoot}/test/dict_fixtures"
+
+{- | What a row asserts about the stdout of a fixture that runs.
+
+   `NoValue` is for a row where nothing ran to completion. `AllExact`
+   requires the run engine's stdout, the built binary's stdout and the
+   pinned value to be byte-identical. -}
+data Mode = NoValue | AllExact
+
+{- | A diagnostic code `medaka check --json` must report for a row, or must
+   not report. `Absent` is what makes a pair of fixtures sharing a verdict,
+   an exit code and a stdout tell each other apart. -}
+-- Not a `Result` clone worth collapsing: neither arm is a failure, both carry
+-- the same kind of String, and `Result String String` would leave every one of
+-- the table's code literals unable to say which polarity it asserts.
+-- lint-disable-next-line rule-clone-type
+data CodeAssert = Present String | Absent String
+
+{- | One conformance row: the entry path under the corpus, the label
+   carrying why the row reads as it does, the verdict each verb owes, what
+   the fixture prints, and the diagnostic codes `check --json` owes. -}
+data Row = Row {
+  entry : String,
+  label : String,
+  expCheck : String,
+  expRun : String,
+  expBuild : String,
+  mode : Mode,
+  pinned : String,
+  codes : List CodeAssert,
+}
+
+table : List Row
+table = [
+  Row {
+    entry = "s1-nary-predicate-enforced.mdk",
+    label =
+      "§1/§4 an n-ary predicate is ONE joint obligation: an unsatisfiable `Ix String Bool` is a located reject (#607 regression pin -- was exit 0 + a run-time panic)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s1-nary-predicate-scheme-kept.mdk",
+    label =
+      "§1/§4 the positive half: a satisfied 2-ary constraint dispatches (scheme asserted in section 2)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [],
+  },
+  Row {
+    entry = "return-absent-given-char-first.mdk",
+    label =
+      "#2981 absent ordinary-return formal: the enclosing Hidden Int Bool given supplies b even when Char is declared first",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "12\n",
+    codes = [],
+  },
+  Row {
+    entry = "return-absent-given-bool-first.mdk",
+    label =
+      "#2981 declaration-order twin: the same qualified given still supplies Hidden Int Bool",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "12\n",
+    codes = [],
+  },
+  Row {
+    entry = "return-absent-complete-vector-control.mdk",
+    label =
+      "#2981 retained must-fail control: both interface formals occur in the method type and the ambient Hidden Int Bool given produces 12",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "12\n",
+    codes = [],
+  },
+  Row {
+    entry = "return-absent-given-prerequisite.mdk",
+    label =
+      "#2981 completed predicate retains the selected Hidden Int Bool row Seed Bool prerequisite",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "return-absent-given-missing-prerequisite.mdk",
+    label =
+      "#2981 negative prerequisite control: Hidden Int Bool requires the absent Seed Bool implementation",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "return-absent-undetermined-char-first.mdk",
+    label =
+      "#2981 no enclosing evidence: two rows matching the visible Int position reject instead of choosing Char first",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "return-absent-undetermined-bool-first.mdk",
+    label =
+      "#2981 no enclosing evidence, reversed declarations: the same partial goal rejects instead of choosing Bool first",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-d1-test-body-num-default/main.mdk",
+    label =
+      "§6.3 D1/D4: closed test-body Num defaults before Eq/Debug checking; explicit Float and generalized local variables retain their determination channels",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "0\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-d1-prop-body-num-default.mdk",
+    label =
+      "§6.3 D1/D4: property-body Num defaults, while a Float parameter and generalized local function remain caller selected",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "0\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-d2-test-body-num-unsatisfied.mdk",
+    label =
+      "§6.3 D2: substituting Int leaves Need Int unsatisfied and must reject before execution",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s6-d2-test-body-ambiguous.mdk",
+    label =
+      "§6.3 D2: Int defaulting exposes two incomparable Need instances and the ground co-predicate must reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Present "W-INCOMPARABLE-IMPLS"],
+  },
+  Row {
+    entry = "s6-d4-test-body-outer-live/main.mdk",
+    label =
+      "§6.3 D4: an outer monomorphic variable stays live across test bodies until the later Float use determines it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "0\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-drain-quiescence-inferred-scheme.mdk",
+    label =
+      "§6.3 quiescence drain, INFERRED-scheme half of the measured `DrainDiags` population (#2705 / SA-10a item 17): the inferred scheme of `top` quantifies the `Sh a` receiver, so the graph-end drain replays that goal with `a` still unbound and the `_ => reportAmbiguousImpl` arm of `routeUndeterminedTop` manufactures a `T-AMBIGUOUS-INSTANCE` on it (#3031), at a STALE location inside the body of `impl Sh Bool`. `DrainRollback` discards the drain diagnostics on every check driver, so `check` must stay SILENT -- the `!T-AMBIGUOUS-INSTANCE` cell is what goes RED the day that residual reaches a shipped verb, which is the signal that the `DrainDiags` deletion condition has moved. No numeric literal appears anywhere in the file, so this is NOT the undefaulted-`Num` class #2646 owes",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "22\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-drain-quiescence-declared-scheme.mdk",
+    label =
+      "§6.3 quiescence drain, DECLARED-scheme twin of the row above: here the receiver is quantified by a WRITTEN signature (`nonlead : (Ixd a b, Shb b) => b -> a -> a`) and an unannotated `relay` carries it to graph end, so a #3031 fix that consulted only a binding`s own INFERRED scheme would close one half of the population and leave this one standing. Same pin, same drain signal: `check` must not report `T-AMBIGUOUS-INSTANCE`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s3-min-subsumes.mdk",
+    label =
+      "§3 `inst` selects min⊑(match(IE,π)): `impl Default Int` beats `impl Default a` DESPITE being declared second (#609 regression pin -- first-match would print 0)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nary-requires-goal-vector.mdk",
+    label =
+      "§1/§3 `match(IE,C τ̄)` is ONE φ against the WHOLE vector: a nested `requires Ix a Char` at `Sh (Box Int)` has the SINGLETON matching set {`Ix Int Char`}, so `Ix Int Bool` never reaches the selector at all (#1154 regression pin -- the arg-0-only fallback made both match, they were incomparable, and DECLARATION ORDER printed 111 at exit 0 on both engines). Section 4 permutes it too. ⚠️ SINGLE-entry `requires`, the arity at which route order and dict-slot order cannot disagree -- the multi-entry row below raises it. ⚠️ Pins the `requires` leg ONLY; the `=>`-constrained-signature leg of the same defect is #1161, whose ROUTING half F-3a-ii fixed and whose row is s3-nary-sig-constraint-goal-vector below",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "222\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nary-requires-multi-entry.mdk",
+    label =
+      "§1/§3 the same judgement at a TWO-ENTRY `requires Dbg2 a, Ix a Char`: the second obligation grounds to `Ix Int Char` and its matching set is again the singleton, so 222+5=227 (pre-fix this printed 116). ⚠️ THE MULTI-PARAMETER PREDICATE IS LAST HERE, WHICH IS WHY THIS ROW WAS GREEN WHILE ITS SIBLING WAS NOT -- an impl-`requires` body read whichever slot was registered LAST, so the last entry came out right by accident. Keep the clause as written; the OTHER ordering is now graded beside it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "227\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nary-requires-multi-entry-swapped.mdk",
+    label =
+      "§1/§3 THE SAME TWO-ENTRY `requires` WITH THE ENTRIES SWAPPED (`requires Ix a Char, Dbg2 a`) -- the #1154 RESIDUAL, DRAINED 2026-08-23 by S-obligation-nary-payload and re-pointed here from test/must_fail_fixtures/1154-multi-entry-requires-decl-order-decides per [G-PIN-DRAIN]. Reordering the entries changes no program meaning, so this row and the one above must agree: 227 both ways. It printed 116 for exactly as long as the two files disagreed. ⚠️ NOT a goal-vector or routing defect -- the routes were already correct at every position; the loss was WHICH DICT SLOT THE BODY READ (`activeDictVars` keyed on the tyvar id, which both entries share, first-match = LAST registered). Fixed by `implReqDictVarOf`, the impl-`requires` twin of #1177`s predicate-keyed resolution. Section 4 permutes the two `impl Ix` blocks too",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "227\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nested-obligation-most-specific.mdk",
+    label =
+      "§2 uniformity + §3 `inst`/`assum`: the nested `requires` obligation of the general instance resolves MOST-SPECIFICALLY at the construction goal (the #203 shape from §3`s own worked example)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "99\n109\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-assum-inst-precedence-xmod/main.mdk",
+    label =
+      "§3 `assum`-BEFORE-`inst` PRECEDENCE, CROSS-MODULE -- #2548s named gap: every existing assum/inst precedence row (this fixture`s single-module sibling above, `s6-1-4-*`, `s-nary-given-*`) is single-file, so none of them can see `resetState` reminiting `perRun` per module (`compiler/types/typecheck.mdk:9305-9308`) landing between the goal that must use `assum` and the goal that must use `inst`. LAYOUT: iface.mdk declares `interface Tag2` + `impl Tag2 Int` + `impl Tag2 Bool`; mix.mdk (a SEPARATE module importing iface.mdk) declares `mix : Tag2 a => a -> Int; mix x = tagn x + tagn (True : Bool)`; main.mdk calls `mix` at two ground types. SPEC ANSWER hand-derived from §3s precedence paragraph (full derivation in the fixture header): at `mix (5 : Int)`, `tagn x` poses goal `Tag2 a` -- LITERALLY the declared predicate at this instantiation -- so `assum` discharges it from the caller`s own dict (1); `tagn (True : Bool)` poses `Tag2 Bool`, structurally distinct from the rigid assumption `Tag2 a`, so `assum` stays silent and `inst` commits to `impl Tag2 Bool` (2); total 3. At `mix (True : Bool)`, both terms come from `impl Tag2 Bool` (2+2=4) but by the TWO DIFFERENT RULES the first fixture used the two DIFFERENT impls for. MEASURED: check/run/build all agree, 3 then 4, on this branch. ⚠️ Declaration-order permutation (section 4) is STRUCTURALLY UNREACHABLE here -- section 4 is scoped to flat `test/dict_fixtures/*.mdk` files and this is a directory fixture -- so it was verified BY HAND instead: swapping `impl Tag2 Int`/`impl Tag2 Bool` in iface.mdk and rerunning check/run/build reproduces the identical 3/4 on every verb (neither goal is an overlapping-impl choice; each ground goal has exactly one matching impl, so no `⊑`-minimality is even exercised -- the permutation is a sanity control on this row, not its main claim). ⚠️ No section-2 scheme row is possible, same reason as `s4-gen-residual-xmod`: bare `check` filters the scheme dump to the ENTRYs own bindings and `mix` is not one",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n4\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-prefix-predicate-foo-first.mdk",
+    label =
+      "§3 nominal ownership, structured ground `requires`: the `foo` body must consume its own `D Int` given even though its rendered dictionary name prefixes sibling `foo_bar`; #2895 regression order one",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-prefix-predicate-foo-bar-first.mdk",
+    label =
+      "§3 nominal ownership declaration-order twin: placing the `foo_bar` impl first must not change the given owned by `foo` or the exact result",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-prefix-scalar-nested-foo-first.mdk",
+    label =
+      "§3 nominal ownership through the nested scalar forwarding path: sibling `foo`/`foo_bar` method bodies own separate `D a` givens; interface and impl both list `foo` first",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-prefix-scalar-nested-foo-bar-first.mdk",
+    label =
+      "§3 nominal ownership nested declaration-order twin: interface and impl both list `foo_bar` first, while `foo` still returns exactly 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-prefix-scalar-nested-crossed-impl-first.mdk",
+    label =
+      "§3 positional body-scope pairing with crossed orders: interface lists `foo` first and impl lists `foo_bar` first; spelling recovery would mispair them",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-prefix-scalar-nested-crossed-interface-first.mdk",
+    label =
+      "§3 positional body-scope pairing with the opposite crossed orders: interface lists `foo_bar` first and impl lists `foo` first",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-prefix-scalar-nested-global-control.mdk",
+    label =
+      "§3 direct-global control for nested scalar forwarding, separating nominal sibling ownership from ordinary given-before-instance behavior",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-scope-local-inherits-outer-given.mdk",
+    label =
+      "§3 accepted local-scope carveout: a local lambda inherits the enclosing function body scope and sees its `D a` given, producing exactly 7",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nested-obligation-two-levels.mdk",
+    label =
+      "§2/§7 recursive evidence under overlap: the innermost most-specific Tag instance yields 99 and two enclosing general instances each add 10. Both engines must retain every prerequisite and print the sentinel 7 followed by 119 (#323 regression guard); the no-overlap sibling yields 31",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n119\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nested-no-overlap-control.mdk",
+    label =
+      "CONTROL for #323: identical depth, overlapping impl REMOVED -- eval handles depth-3 recursive context discharge fine (31), so #323`s trigger is the OVERLAP, not the depth",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "31\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-min-fully-general-sibling.mdk",
+    label =
+      "§3 `inst` = min⊑(match) WITH A FULLY-GENERAL SIBLING -- the #1128 DRAIN (F-3b). `impl Tag a` beside `impl Tag (Box Int)`: goal `Tag (Box Int)` matches BOTH and min⊑ takes the concrete one (99); goals `Tag (Box String)` / `Tag (Box Bool)` match the general one ALONE, because no substitution makes `Box Int` into `Box String` (10, 10). This row pinned the WRONG 99/99/99 until 2026-08-01; the value below is the SPEC answer the fixture`s own header hand-derived before the fix existed, not a recapture of what the engine started doing",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "99\n10\n10\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-fn-typed-impl-heads-discriminated.mdk",
+    label =
+      "§3 `inst` DISCRIMINATES TWO FUNCTION-TYPED IMPL HEADS -- the #1617 DRAIN, and the third member of the `noneHeadTag` family after #1128 above and #1154 below. `impl Sz (Int -> Int)` beside `impl Sz (Bool -> Bool)`: `headTyconTy`s `_ => None` arm swallowed `TyFun`, both heads shared the ONE `noneHeadTag` bucket, and the value was decided by DECLARATION ORDER at exit 0 with `check --json` clean -- this ordering printed `(5, 5)`, the reversed one `(9, 9)`, and `build` exited 1 with `arg-tag dispatch on impl type that owns no constructors`. `(5, 9)` is the SPEC answer the fixtures own header hand-derived from the two signatures, not a recapture. ⚠️ THE VALUE CELL IS ONLY HALF THIS ROW: the defects signature was ORDER-DEPENDENCE, which a single-order value pin passes by construction, so the discriminating half is Section 4 -- this file is a FLAT `.mdk` with 2 impls of one interface precisely so the permuter derives it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(5, 9)\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-effect-carrying-impl-head-routes.mdk",
+    label =
+      "§3 head projection + §7 single-evaluator law at an EFFECT-CARRYING impl head -- the #1618 DRAIN. ONE interface, ONE `impl Sz (<Stdout> Int)`, ONE call: `typecheck.headTyconTy` answered None for the `TyEffect` head while eval`s and `core_ir_lower`s `headTycon` STRIPPED the effect to `Int`, so the front end resolved a call the EMITTER then could not find -- `check` 0 and `run` 2 were both already CORRECT and `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. ⚠️ THE LOAD-BEARING CELL IS **build**, not the value: check and run pass on a compiler that still has this bug, and it is `ALL_EXACT`s requirement that build ACCEPT with stdout byte-identical to run`s and to the pinned 2 that makes the row discriminate. ⚠️ ONE impl block, so Section 4 derives no pair here -- correctly, there is no declaration order to be free of; its sibling drain above carries that axis",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-constrained-impl-head-routes.mdk",
+    label =
+      "§3 head projection + §7 single-evaluator law at a CONSTRAINED impl head with a HEADED body -- the #1630 fix, third member of the arm set above. ONE interface, ONE `impl Sz (Eq a => Int)`, ONE call: `eval.headTycon` peeled `TyConstrained` and filed the impl under `Int` while `typecheck.headTyNode` peeled only `TyApp`/`TyEffect`, so the caller side stamped `__none__` -- `check` 0 and `run` 2 were both already CORRECT and `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. ⚠️ THE LOAD-BEARING CELL IS **build**, not the value, exactly as for #1618 above: `ALL_EXACT` requires build to ACCEPT with stdout byte-identical to run`s and to the pinned 2. ⚠️ THE HEADED BODY IS THE POINT: `Eq a => a` is a different program, correctly still headless, and was never broken -- do not simplify the head",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-constrained-headed-impl-vs-plain-sibling.mdk",
+    label =
+      "§3 head projection at a CONSTRAINED headed impl BESIDE A PLAIN SIBLING -- the #1630 row that grades the SILENT-WRONGNESS channel, and the reason the two one-impl rows must not be read as statements about the class. `impl Sz (Eq a => Box Int)` beside `impl Sz (Box Bool)`: pre-fix the constrained impl left the `Box` bucket on the typecheck side only, the two impls stopped being discriminable, and DECLARATION ORDER decided the value at exit 0 with `check` clean -- measured on a base arm built from this branch with the one-line peel deleted, this order printed 26 (13+13) and the reverse 28 (14+14), `build` exited 1 with `no impl of method ‘sz’ for type ‘__none__’`. 27 is the SPEC answer hand-derived from the two impl bodies, not a recapture. ⚠️ SO #1630`s S1 GRADES ITS REPORTED SHAPE, NOT THE CLASS: at ONE impl `check` and `run` were already correct, which is a property of one impl. ⚠️ TWO impl blocks of one interface, so Section 4 DOES derive a permutation pair here -- unlike its two siblings, and deliberately: order-dependence was the pre-fix signature",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "27\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-constrained-effect-impl-head-routes.mdk",
+    label =
+      "§3 head projection with TWO STACKED WRAPPERS over one headed body -- the #1630 COMPOSITION row. `impl Sz (Eq a => <Stdout> Int)` puts the `TyConstrained` peel on top of #1618`s `TyEffect` peel; pre-fix it failed byte-identically to its sibling (check 0, run 6, build 1 with `no impl of method ‘sz’ for type ‘__none__’`), which is the measurement showing the #1618 peel alone did NOT reach a head an outer wrapper hides. ⚠️ NOT A DUPLICATE: a fix special-casing the reported shape `TyConstrained cs (TyCon …)` greens the sibling row and REDS this one -- that is this row`s whole job. ⚠️ Load-bearing cell is **build**",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "6\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-w1-cyclic-superinterface-rejected.mdk",
+    label =
+      "§3 W1 the superclass relation must be ACYCLIC (else `super`-search loops) -- statically rejected, not hung",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CYCLIC-SUPERINTERFACE"],
+  },
+  Row {
+    entry = "s3-w3-method-scheme-rigidity-constraint.mdk",
+    label =
+      "§3 W3 method-scheme fidelity, CONSTRAINT axis: an impl body may not need a class the method scheme does not license (#814 vein)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC"],
+  },
+  Row {
+    entry = "s3-w3-method-scheme-rigidity-pinned-type.mdk",
+    label =
+      "§3 W3 method-scheme fidelity, PINNED-TYPE axis: an impl body may not fix a caller-owned method variable even with no constraint involved",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC"],
+  },
+  Row {
+    entry = "s3-w3-default-method-rigidity.mdk",
+    label =
+      "§3 W3 DEFAULT-BODY half: W3 also governs \"the class`s default, which is checked by this same rule\". A different site (`checkDefaultMethodRigidity`) from the two impl-body rows, and the corpus previously had NO fixture declaring a default body inside an `interface` at all",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-IMPL-TOO-SPECIFIC"],
+  },
+  Row {
+    entry = "s2-method-level-constraint-abstract.mdk",
+    label =
+      "§2 EXCEPTION: a method whose OWN signature adds a constraint over a fresh variable not fixed by the instance keeps that dict ABSTRACT -- projection yields a value still awaiting it. The two lines apply the SAME slot at TWO different `b`, which a construction-time-baked dict could not do",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1/2\n1/True\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-implreq-nonlead-positional-identity.mdk",
+    label =
+      "#1981 DRAIN: two impl-`requires` predicates share their lead argument and differ only at non-lead positions. Each complete predicate is one slot; the exact evaluator and native answer is 333 + 111 = 444",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "444\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-implreq-nonlead-positional-identity-swapped.mdk",
+    label =
+      "#1981 ORDER INVARIANT: exchanging only the two `requires` predicates must not exchange or collapse their routes. Full positional identity still produces exactly 444",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "444\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-implreq-nonlead-ground-control.mdk",
+    label =
+      "#1981 CONTROL: the same two calls selected directly at the ground impl head also produce 444, separating the carrier route from ordinary Ix dispatch",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "444\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-implreq-nested-positional-identity.mdk",
+    label =
+      "WHOLE-PREDICATE IDENTITY: nested `TApp` positions in two impl-`requires` predicates remain distinct; the first call consumes slot 0 and the second slot 1, producing 300 + 100 = 400",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "400\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-implreq-nested-positional-identity-swapped.mdk",
+    label =
+      "WHOLE-PREDICATE IDENTITY ORDER CONTROL: swapping the nested impl-`requires` predicates swaps neither call-site meaning nor slot identity; exact result remains 400",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "400\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-nested-encl-positional-identity.mdk",
+    label =
+      "WHOLE-PREDICATE DECLARED CONTEXT: two declared predicates differing only below `TApp` retain distinct dictionary slots and produce exactly 400",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "400\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-nested-encl-positional-identity-swapped.mdk",
+    label =
+      "WHOLE-PREDICATE DECLARED CONTEXT ORDER CONTROL: exchanging the two nested declared predicates preserves their distinct routes and exact 400 result",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "400\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-predicate-iface-decl-negative/main.mdk",
+    label =
+      "INTERFACE DECLARATION IDENTITY: a signature constrained by `amod.Same` cannot cover a body obligation for the distinct `zmod.Same`, despite identical spelling and argument vector",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "s-predicate-iface-decl-structured-negative/main.mdk",
+    label =
+      "STRUCTURED REGISTRY IDENTITY: a structured `zmod.Same (Wrap a)` obligation cannot consume the same-spelled foreign `amod.Same a` evidence; both missing signature coverage and missing impl remain visible",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT", Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-predicate-iface-decl-positive/main.mdk",
+    label =
+      "SAME-DECLARATION TRANSPORT CONTROL: selectively imported interface identity survives wildcard value import and wildcard re-export transport, producing one value through each route",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(111, 211, 311)\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-self-prelude-ordering-only.mdk",
+    label =
+      "SELF-PRELUDE SINGLETON NEGATIVE CONTROL: declaring only `Ordering` is an ordinary user module, not core; the separately seeded prelude still makes the duplicate declaration reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "R-DUPLICATE-DEF"],
+  },
+  Row {
+    entry = "s-self-prelude-foldable-only.mdk",
+    label =
+      "SELF-PRELUDE SINGLETON NEGATIVE CONTROL: declaring only `Foldable` is an ordinary user module, not core; the separately seeded prelude still makes the duplicate declaration reject",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "R-DUPLICATE-DEF"],
+  },
+  Row {
+    entry = "s-predicate-unknown-operator-control.mdk",
+    label =
+      "UNKNOWN-VECTOR CONTROL: an operator occurrence with no recoverable predicate vector retains the explicit Unknown route and exact result 5",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-min-fully-general-control.mdk",
+    label =
+      "THE ONE-TOKEN CONTROL for #1128: byte-identical to it except the general impl`s head reads `(Box a)` not `a`. Answers 99/10/10 CORRECTLY, which is what makes #1128`s trigger claim (a BARE TYPE-VARIABLE head, not the tycon) an observation rather than an inference",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "99\n10\n10\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-dict-param-order.mdk",
+    label =
+      "§8 I1 / §4 `gen` ORDER half: a TWO-predicate signature, with the two impls at the same type but different bodies so only POSITION distinguishes the dicts. Every other ACCEPTED fixture abstracts at most one dict, so order was previously never elaborated at all",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "503\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-sig-declared-context-kept.mdk",
+    label =
+      "§4 `gen-sig` (#619): a declared predicate the body NEVER DISPATCHES ON is still abstracted and still displayed (#610 regression pin -- the value 9 is identical either way, so only the section-2 scheme assertion can see this)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "9\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-sig-violating-caller-rejected.mdk",
+    label =
+      "§4 `var`: the declared context RESTRICTS CALLERS even when the body contains no method occurrence (#610 regression pin -- was exit 0)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s4-gen-sig-body-needs-more-rejected.mdk",
+    label =
+      "§4 `gen-sig` side condition `Q_sig ⊩ P`ᵢ` with `Q_sig` EMPTY: a signature is a contract the body must satisfy, not a floor it can raise -- rejected, never silently widened",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "s4-gen-sig-num-result-rejected.mdk",
+    label =
+      "§4 signature authority: an unconstrained result variable cannot satisfy the body literal Num requirement; reject at the definition instead of silently narrowing the signature to Int (#830 numeric pin)",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "s4-gen-sig-num-result-control.mdk",
+    label =
+      "§4 concrete result control: the declared Int result supplies the literal instance while the argument remains polymorphic; the call returns 42",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
+    label =
+      "§4 `gen-sig` + §3 `super` + §6 C2 diamond: `B a` inferred by the body is entailed by the declared `C a` via requires-closure, so it is DROPPED from the scheme (not merged); `super` is projection, and both diamond arms agree",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "23\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-residual-inferred-context.mdk",
+    label =
+      "§4 `gen` + §4.2 OD2 -- THE ISSUE 1549 DRAIN, LEGAL CELL. The predicate a body poses is `Tag (Wrap t)`; §3 `inst` reduces it through `impl Tag (Wrap a) requires Tag a` and the RESIDUAL `Tag t` is over a generalizable var, so it is `P` and `gen` abstracts a dict for it. Pre-fix the residual was DROPPED: check printed `nest : a -> String` at exit 0, run printed this same `wrap(int)` for the wrong reason, and the BUILT BINARY SEGFAULTED (139) because the missing predicate was also the missing dict param. ⚠️ THE VALUE ROW ALONE IS INERT HERE -- run printed it before and after; the discriminating assertions are the section-2 scheme and the section-3 dict arity",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wrap(int)\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-residual-unwitnessed-caller-rejected.mdk",
+    label =
+      "§4 `var` over the SAME residual: once `Tag a` is in the scheme a caller must discharge it, and `Tag NoTag` has no instance. Pre-fix all three verbs exited 0 and run printed `wrap(int)` -- `NoTag` dispatched through `impl Tag Int` by declaration order (adding `impl Tag Bool` above it printed `wrap(bool)`, measured). This is the half a scheme-display assertion cannot reach: displaying the context without POSING the goal keeps the sibling green and still accepts this file",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s4-gen-residual-no-requires-control.mdk",
+    label =
+      "THE ONE-TOKEN CONTROL + FALSE-REJECT CANARY for the two rows above: identical except the `Wrap` impl drops its `requires`. With no residual, `P` is EMPTY, `nest : a -> String` is the CORRECT principal scheme and `nest NoTag` is LEGAL. A reducer that deferred the goals own free vars instead of the matched instances residual would invent `Tag a` here; the section-2 row asserts the context stays empty, which the value cannot see",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wrap\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-sig-residual-uncovered-rejected.mdk",
+    label =
+      "§4 `gen-sig` side condition with `Q_sig` EMPTY and the inferred predicate arriving as a `requires` RESIDUAL -- the SIGNATURED cell of issue 1549. Pre-fix accepted at exit 0 with a segfaulting binary, because the coverage check reads the same inferred-obligation projection that dropped it. ⚠️ Distinct from s4-gen-sig-body-needs-more-rejected: that predicate is inferred DIRECTLY, so a checker testing the RECORDED `Tag (Wrap a)` finds no bare-tyvar argument at all and stays silent here",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "s4-gen-residual-xmod/main.mdk",
+    label =
+      "§4 `gen` + §4.2 OD6(a) ACROSS A MODULE BOUNDARY -- the MULTI-MODULE cell of issue 1549, and the only fixture here that can see a scheme context or a dict arity failing to CROSS one. The residual is produced in wrapimpl.mdk, deferred into a scheme in nest.mdk, and discharged by `var` in main.mdk. Pre-fix: check 0, run `wrap(int)`, build 0, BINARY 139 -- the single-file cells reached through the module path. ⚠️ No section-2 row is possible: bare `check` filters the scheme dump to the ENTRY`s own bindings and `nest` is not one, so the section-3 dict-arity row carries the discrimination",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wrap(int)\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-sig-residual-covered-control.mdk",
+    label =
+      "THE ACCEPT-SIDE CONTROL for the row above -- without it that reject cannot be told from \"gen-sig rejects EVERY residual under a signature\". Three legitimate coverings in one file: the residual IS the declared predicate; the residual `Eq a` is entailed by the declared `Ord a` through `interface Ord a requires Eq a` and is DROPPED not merged (section 2 asserts the scheme stays `Ord a =>`); and a CONCRETE argument whose reduction bottoms out ground, leaving no residual at all",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wrap(int)\nTrue\nwrap(int)\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-residual-mixed-vector-rejected.mdk",
+    label =
+      "§4 `gen`/§4.2 OD2 -- ISSUE 1560 reject half. A residual whose argument vector MIXES a concrete-headed argument with a bare tyvar (`Conv (Wrap t) u`) is reduced per-argument, so `Conv a b` reaches `f`s context and §4 `var` poses it at the call: `f NoConv True` has no witness and is rejected. Pre-fix the predicate was dropped, all three verbs exited 0 and the binary segfaulted. The legal joint-residual/RDict half is now pinned separately below",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s4-gen-residual-mixed-vector-accepted.mdk",
+    label =
+      "ISSUE 1560 accept half, at the residual arity the routing machinery can honour: the vector is MIXED (`Conv (Wrap t) u`) and the residual is the 1-ary `Tag t`, so `f` abstracts one dict and prints `w:int`. ⚠️ THE VALUE ROW IS INERT -- base printed `w:int` too (arg-tag fallback landed on `impl Tag Int`); the DISCRIMINATION is the section-3 dict-arity row, arity 2 pre-fix vs 3 post",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "start\nw:int\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-joint-residual-rdict-native.mdk",
+    label =
+      "#1560 DRAIN, legal joint residual: `Conv (Wrap t) u` reduces to ONE `Conv t u` predicate, whose dictionary is forwarded to the conditional impl. Evaluator and built native must agree exactly on the two-line answer",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "start\nw:int-bool\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-joint-residual-direct-control.mdk",
+    label =
+      "#1560 CONTROL: the same two-parameter dictionary arrives directly rather than through a conditional-impl residual. Exact agreement on `int-bool` localises a failure to joint residual forwarding",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "start\nint-bool\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-residual-mixed-no-requires-control.mdk",
+    label =
+      "THE ONE-TOKEN CONTROL + FALSE-REJECT CANARY for the two mixed-vector rows: the same shape with the `requires` removed, so there is no residual and the context must stay EMPTY (section 2 asserts that -- the value cannot). A reducer deferring the GOALs free vars instead of the matched instances residual would invent `Conv a b` here and reject a legal program",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "start\nw\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-requires-depth-exceeded-rejected.mdk",
+    label =
+      "§3 `inst` -- ISSUE 1562, the DRAIN. `requires`-nesting 33 deep crosses the reducers depth bound, which used to be SILENT: it returned the same `[]` as \"no matching impl\", the predicate was dropped from both the scheme and the `λ d̄.` prefix, and the program landed back in 1549s S0 (check 0 on `deep : a -> String`, build 0, BINARY 139). It is now a located reject. Its SPAN is pinned in section 6",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-REQUIRES-DEPTH"],
+  },
+  Row {
+    entry = "s4-requires-depth-at-limit-control.mdk",
+    label =
+      "THE AT-LIMIT CONTROL for the row above and the false-reject canary for making exhaustion loud: ONE fewer `Wrap` (depth 32, exactly the bound). Built and EXECUTED, so it distinguishes \"the bound is now loud\" from \"the bound moved\" -- a change to `residualReduceFuel` in EITHER direction reds one of these two files. Pre-fix this depth was ALSO silently dropped and its binary segfaulted",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-rec-shared-dict-params.mdk",
+    label =
+      "§4 `gen-rec` (#44 vein): a mutually-recursive group shares ONE `λ d̄.` prefix; recursive occurrences reuse the group`s dict params instead of re-entering entailment",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\nTrue\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-rec-nary-one-predicate-slot.mdk",
+    label =
+      "§4 `gen-rec` n-ary slot discriminator: `Ix a b` is one predicate with two bound ids, so the recursive call forwards exactly one dict and the exact answer remains 7. Re-shattering ids into cardinality shifts the recursive arguments",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-rec-inferred-context.mdk",
+    label =
+      "§4 `gen-rec` with the context INFERRED rather than ascribed -- the `gen` sourcing, a different code path from its `gen-sig` twin per #610`s mechanism note. ⚠️ BOTH bodies dispatch, so this row does NOT discriminate group sourcing from per-binding sourcing (an earlier revision wrongly claimed it did); it is a regression guard on the schemes and values. The discriminating form is the asymmetric row below",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\nTrue\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-gen-rec-inferred-asymmetric.mdk",
+    label =
+      "§4 `gen-rec` DISCRIMINATOR -- #1133 DRAINED: an INFERRED mutually-recursive group in which only ONE body dispatches must still share the group`s `Sz a` dict. Preserving the operator site`s evidence owner threads that dict through the asymmetric cross-call; check reports both `Sz a =>` schemes and eval/native now agree on the hand-derived `True` / `True`. Controls: the ascribed twin and symmetric inferred row remain unchanged",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "True\nTrue\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-return-position-dispatch.mdk",
+    label =
+      "§5 RESULT position: `mk : Int -> a` has no argument whose runtime tag reveals the instance, so dispatch can only come from the statically-determined dictionary. Both calls pass an identical Int literal",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s5-phantom-ambiguous-use-rejected.mdk",
+    label =
+      "§5 PHANTOM position, AMBIGUOUS use: §4 `var` cannot discharge `Mk ?a` with nothing fixing `?a`, so the SPEC rejects it too (§5 says only HOW a phantom dispatches, never that this program resolves). CONFORMANT ON THE VERDICT, with the caveat that spec and impl reject at different SITES -- spec the use, impl the declaration -- which the spec leaves unspecified",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-PHANTOM-METHOD"],
+  },
+  Row {
+    entry = "s5-phantom-determined-use-rejected.mdk",
+    label =
+      "§5 PHANTOM position, DETERMINED use -- LEDGER #1134 (OPEN, S3 OVER-REJECTION): inside `useBoth : Mk a => a -> Int` the dict is in scope over a RIGID `a`, so §3 `assum` discharges it and §5 `(method)` projects -- the spec ACCEPTS and prints 7. The checker rejects at the DECLARATION regardless. Paired with the ambiguous row this proves the impl rejects a strict SUPERSET of what the spec does. ⚠️ Drains on #1134 (BEHAVIOUR), never on #1107 (d), which is spec-only and changes no behaviour",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-PHANTOM-METHOD"],
+  },
+  Row {
+    entry = "s5-argtag-unsound-under-overlap.mdk",
+    label =
+      "§5 arg-tag dispatch is an OPTIMIZATION, not a semantics: two calls with the same runtime `List` head tag must answer 99 and 10, which no arg-tag selector can do. ALSO the one-token control for the s3-min-fully-general-sibling S0",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "99\n10\n",
+    codes = [],
+  },
+  Row {
+    entry = "s6-c1-duplicate-heads-rejected.mdk",
+    label =
+      "§6 C1 + §3: two α-equal heads are mutually ⊑, so there is no UNIQUE ⊑-minimum -- ambiguous overlap, rejected. Duplicate heads never tie-break. ⚠️ THE ROW F-3d DELIBERATELY DID NOT WIDEN: α-equal heads SATISFY condition (a) (they are ⊑-comparable), so this was never (a)`s to demote -- it is a C1 violation, and F-3d demotes (a) alone. It also has no second line of defence: `entryCovers` makes equal heads cover each other, so the goal-site min⊑ reject never sees this shape",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-c1-xmod-same-spelled-ifaces-accepted/main.mdk",
+    label =
+      "§6 C1 -- TWO SAME-SPELLED INTERFACES IN UNRELATED MODULES ARE TWO CLASSES, SO COHERENCE MUST ACCEPT. #1438s COHERENCE-channel repro, moved here from the drained must_fail pin `1438-same-spelled-interfaces-collapse-in-coherence`: a pin asserts a bug still reproduces, so a fix removes it and the S0 has NO guard unless a positive row replaces it. `amod` and `zmod` each declare their OWN `interface Same a` -- disjoint methods (`foo` vs `bar`), no import edge in either direction -- and each impls it at the SAME head `Int`; the entry uses one method from each, so neither import can be dead-code-argued away. SPEC ANSWER hand-derived from module-qualified interface identity, not read off a binary: an interface is identified by its DECLARATION, so `amod.Same` and `zmod.Same` are two classes whose impls occupy two different (class, head) cells -- there is no C1 pair to find, and reporting one is a FALSE REJECT on a legal program. ACCEPT, value 109 = 1*100 + (2+7), reachable only when BOTH impls are selected, one per class. 🚨 MEASURED AS A FALSE REJECT ON A PRE-A-3.7 BASE BINARY (cold-built at 7aae8b83, its own stdlib/runtime/emitter): check exit 1 emitting `T-CONFLICTING-IMPL` with the message ``Conflicting `impl Same`. Defined in amod and zmod`` and a null range, run 1, build 1 -- coherence keyed the interface half of an impl by SPELLING while the obligation channel already keyed it by IDENTITY, so the two checkers disagreed about whether these were one class. On this binary `CohImpl`s interface half is an `IfaceRef` compared through `cohSameIface`/`sameTyConHead` and all three verbs accept at 109. The `!T-CONFLICTING-IMPL` assertion is what makes the row FAIL-CAPABLE: re-key that half back to spelling and it reds. ⚠️ THE SHARED HEAD IS LOAD-BEARING -- coherences HEAD half is already identity-aware (`cohGoR`s `TCon` arm), so two module-local heads would mask the interface half entirely. ⚠️ #1438 STAYS OPEN: only its COHERENCE reach drained. The identity collapse survives in the obligation channels bare compatibility leg, pinned separately, and is #1482/#1507 territory",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "109\n",
+    codes = [Absent "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-c1-xmod-shared-iface-conflict-control/main.mdk",
+    label =
+      "CONTROL for the row above, and the canary that keeps it honest: the SAME module topology (one entry, two impl modules, one head `Int`) with ONE thing varied -- `Same` is declared ONCE in `idef.mdk` and IMPORTED by both impl modules, so the two `impl Same Int` name the SAME class and this IS a C1 violation. REJECT, T-CONFLICTING-IMPL. Without it the accepting sibling cannot be told from `the cross-module coherence arm stopped checking`: deleting the sweep, or making `cohSameIface` answer False everywhere, accepts BOTH files, and an accept-only row would call that progress. ⚠️ Cross-module BY CONSTRUCTION -- the two impls live in modules neither of which imports the other, so no per-module sweep can see the pair, only the whole-graph one; the message comes from `cohCrossModuleMsg` through `cohPushHard`, which names both owning modules and carries a NULL span on purpose (#414: a span only helps a consumer that files against the spans own file). ⚠️ BEHAVES IDENTICALLY ON BOTH ARMS, deliberately -- MEASURED REJECT on the same pre-A-3.7 BASE binary. It is a false-accept canary, not an arm discriminator",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-1c-multimodule-overlap/main.mdk",
+    label =
+      "§6.1.2 \"acceptance is per-goal\" ACROSS MODULES, and the only in-tree coverage of the cross-module coherence-WARNING path (globalCoherenceConflict`s soft half / cohSoftOnto / prependDiagOpt), which had none. TWO ⊑-incomparable pairs placed differently: `C` with both impls in lib.mdk (same-module -- seen by lib`s own sweep AND the whole-graph one, which is why `cohSoftInScope` exists) and `D` split across lib.mdk/other.mdk (no per-module sweep can see it). Both goals are `(Pair Int Bool)`, which matches ONLY the `Pair Int a` head of each pair -- a singleton matching set, trivially its own ⊑-minimum -- so the program is ACCEPTED and prints 1+10=11 while both declarations warn. Section 5 asserts each message appears EXACTLY ONCE on run",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n",
+    codes = [Present "W-INCOMPARABLE-IMPLS"],
+  },
+  Row {
+    entry = "s6-1c-unrelated-warning-not-surfaced.mdk",
+    label =
+      "SECTION-5: a program whose only warning is an UNRELATED `W-NONEXHAUSTIVE`. `check` reports it (asserted here); since S-warning-parity (#2400/F4) section 5 now asserts single-file `run`/`build` DO too -- the widened single-file arm has no cross-module spew hazard to withhold it from. The earlier EMPTY controls (s3-min-subsumes, s8-i2) carry no channel warning at all and stay inert either way",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [Present "W-NONEXHAUSTIVE", Absent "W-INCOMPARABLE-IMPLS"],
+  },
+  Row {
+    entry = "s6-c1-hard-and-soft-in-one-file.mdk",
+    label =
+      "§6 C1 + §6.1.2 -- THE ONLY ROW THAT EXERCISES `cohScan`s TWO-SLOT RETURN. One file carrying BOTH coherence classes, with the SOFT pair reached FIRST by the reverse-declaration-order scan: `Tag Bool` twice (mutually ⊑ -- a C1 violation, HARD) plus `Tag (Pair Int a)`/`Tag (Pair a Int)` (⊑-incomparable -- condition (a) alone, SOFT). ⚠️ THE DISCRIMINATOR: a ONE-slot classified scan would stop at the soft pair and ACCEPT this file at exit 0 with only a warning, so the row asserts the ERROR is present, not merely that some diagnostic is. Pre-F-3d the whole file reported ONE diagnostic and never the duplicate, because the scan returned the first conflict and stopped. ⚠️ `!T-AMBIGUOUS-INSTANCE`: `main`s goal `Tag Bool` matches BOTH duplicates, and the goal-site arm must NOT fire -- `entryCovers` `tyHeadEqV` makes equal heads cover each other -- which is exactly why that class cannot be demoted",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [
+      Present "T-CONFLICTING-IMPL",
+      Present "W-INCOMPARABLE-IMPLS",
+      Absent "T-AMBIGUOUS-INSTANCE",
+    ],
+  },
+  Row {
+    entry = "s6-1c-per-goal-unique-min-accepted.mdk",
+    label =
+      "§6.1 choice-point 2 -- THE #614/#311 DRAIN (F-3d): the §6.1 SEPARATING CASE, now conformant. `Pair Int Int` is ⊑ both `Pair Int a` and `Pair a Int` and is the unique ⊑-minimum at the goal, so §3 `inst` selects it and both engines print 3. The value is the SPEC answer the fixture`s own header hand-derived while the row was still pinned to a REJECT, not a recapture. The declaration-time (a) sweep still fires as the `W-INCOMPARABLE-IMPLS` WARNING §6.1 licenses -- asserted here, since a positive-only pin could not tell the demotion from (a) having been deleted",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [Present "W-INCOMPARABLE-IMPLS", Absent "T-CONFLICTING-IMPL"],
+  },
+  Row {
+    entry = "s6-1c-incomparable-no-minimum-control.mdk",
+    label =
+      "CONTROL for #614: the same program with the unique ⊑-minimum DELETED. Genuinely ambiguous, so (a) AND (c) both reject. Since #1155 (F-3c) the reject is the goal-site T-AMBIGUOUS-INSTANCE; since F-3d the declaration-time (a) finding beside it is a WARNING. ⚠️ The pair`s ARGUMENT INVERTED at F-3d and that is why both rows survive: it used to show adding the ⊑-minimum changes NOTHING (condition (a) by construction); it now shows adding it flips the sibling to ACCEPT-with-3, i.e. acceptance really is per-goal. A single accepting row could not establish that -- an implementation that simply stopped checking would accept both",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Present "W-INCOMPARABLE-IMPLS"],
+  },
+  Row {
+    entry = "s6-c1-rigid-goal-no-minimum.mdk",
+    label =
+      "§6 C1 AT A RIGID-VARIABLE GOAL -- the #1155 (F-3c) drain, and the goal-site half of C1`s requantification off \"ground\" onto \"the goals `inst` decides\". A user `impl Index (List (List b)) k c` beside the prelude`s `impl Index (List b) Int b`: at the CLOSED-but-not-ground goal `Index (List (List a)) Int (List a)` both match under §3 and neither ⊑ the other, so there is no ⊑-minimum. PRE-#1155 this printed `[1, 2]` at exit 0 on BOTH engines -- the prelude won on declaration index, silently. Coherence structurally cannot see it (its input is user decls only, and there is one user impl), which is why this needed the SELECTOR-keyed reject and not the declaration-time one",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-c1-rigid-goal-unique-min-control.mdk",
+    label =
+      "CONTROL 1/3 for the row above: user impl made STRICTLY MORE SPECIFIC (`Index (List (List b)) Int (List b)`), so min⊑(match) is the singleton {user} and §3 `inst` selects it -- ACCEPT, printing the second row `[3]`, a value ONLY that impl can produce. This is what rules out the three duller readings of its sibling`s reject (goal discharged by `assum` and never reaching `inst`; user impl not registered at a prelude-occupied head; prelude always wins) -- every one of those predicts `[1, 2]` here",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[3]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s6-c1-rigid-goal-no-user-impl-baseline.mdk",
+    label =
+      "CONTROL 2/3: the same program with the user impl DELETED. The matching set is the SINGLETON {prelude}, trivially its own ⊑-minimum, so the rigid goal is well-formed and RESOLVES -- `[1, 2]`. Pins that the sibling`s reject is \"this rigid goal has no ⊑-minimum\", not \"a rigid goal cannot be resolved\". Also the exact value the buggy sibling printed, which is what made that S0 invisible",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "[1, 2]\n",
+    codes = [],
+  },
+  Row {
+    entry = "s6-c1-rigid-goal-no-call-discriminator.mdk",
+    label =
+      "CONTROL 3/3, and the one that makes \"rigid\" an ASSERTION rather than a label: identical to s6-c1-rigid-goal-no-minimum except `main` NEVER CALLS `firstRow`, so the ONLY `Index` goal the program poses is the DEFINITION-SITE rigid one and there is no ground goal anywhere. A reject keyed to groundness would ACCEPT this file. It rejects identically, which is #1155 acceptance item 2 stated as an experiment",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-2-t3-closed-goal-reported.mdk",
+    label =
+      "§6.2 T3 CLOSED half of the #1155 closedness pair. Two ⊑-incomparable USER impls; since F-3d coherence (a) only WARNS about them, so the GROUND goal `Sh (Q Int Bool (List Int))` reaching the min⊑ selector is the whole of this file`s reject. Carries the goal-site error AND the declaration-time warning",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE", Present "W-INCOMPARABLE-IMPLS"],
+  },
+  Row {
+    entry = "s6-2-t4-open-goal-deferred.mdk",
+    label =
+      "§6.2 T4 OPEN half, and the ONLY in-tree test of the closedness gate. ONE TOKEN from its sibling (`[1]` -> `[]`), so `?e` is an unbound metavariable no scheme quantifies. SAME candidate set, SAME no-unique-minimum arm -- but T4 defers a non-closed goal rather than deciding it, so the goal-site reject MUST NOT fire. Since F-3d that makes the pair an ACCEPT-vs-REJECT discriminator as well. ⚠️ KEEP THE `!` ASSERTION: verdict alone cannot say the sibling`s reject came from the min⊑ arm rather than from anything else, so a positive-only row would be strictly weaker against the regression this exists for. ⚠️ The pinned value 1 is DECLARATION-ORDER-DECIDED, not correct -- see the §4 KNOWN-BAD row and #1183",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [Present "W-INCOMPARABLE-IMPLS", Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-t4-channel-multimodule/main.mdk",
+    label =
+      "§6.2 T4 IN A NON-ENTRY MODULE -- the multi-module twin of `s6-2-t4-open-goal-deferred.mdk` above, and the only fixture that can grade `runBuildWarnCodes`s `W-OPEN-GOAL-COMMITTED` entry (#3027 / D3, compiler/driver/diagnostics.mdk). The open goal `Sh (Q Int Bool (List a))` and both ⊑-incomparable heads live in lib.mdk, so the commitment is reported for an IMPORTED module. ⚠️ SINGLE-FILE CANNOT STATE THIS: single-file `run`/`build` take `allWarnTriples` and widen past the allowlist entirely, so deleting the allowlist entry leaves every single-file row green -- MEASURED, by deleting `openGoalCommitWarnCode` from `runBuildWarnCodes` and rebuilding: the code vanished from THIS fixtures `run`/`build` stderr and stayed on `s6-2-t4-open-goal-deferred.mdk`s. The discriminating rows are in section 5; this row pins the VERDICT (T4 defers a non-closed goal, so no reject), the declaration-order-decided VALUE (1 -- the #1183 residue, not a correct answer) and the `check --json` CODE, which nothing in the tree asserted before (`test/t4_census.sh` is report-only and grades nothing)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [Present "W-OPEN-GOAL-COMMITTED", Absent "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "s6-1-3-commit-at-elaboration-site.mdk",
+    label =
+      "§6.1 choice-point 3: selection COMMITS AT THE ELABORATION SITE. A rigid-variable goal inside a signed binding takes the general instance (11) and is NOT retroactively re-resolved when the caller instantiates at Int, while the same ground predicate resolved directly gives 99. ⚠️ DO NOT \"FIX\" 11 TO 99",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n99\n",
+    codes = [],
+  },
+  Row {
+    entry = "i4-xmod-method-level-slot-rejected/main.mdk",
+    label =
+      "§8 I4 -- A METHOD-LEVEL `=>` SLOT NAMES ITS OWN CLASS. The FOURTH channel that discriminates under #1446 (`recordMethodLevelSlotObls` via `methodLevelConstraintSlots`/`constraintSlotVarIface`/`Constraint.constraintOrigin`), and the one that had NO coverage at all -- a different producer and a different carrier from the impl-`requires` pair below, so a change re-widening only this one would leave those green. SPEC ANSWER hand-derived from §3: `peek : Sizer b => h -> b -> Int` is declared in `zmod` where the only `Sizer` in scope is `zmod`s, so the Constraint denotes `zmod.Sizer`; `useCell n = peek Cell n` at `n : Int` instantiates the slot at `b := Int`, posing `zmod.Sizer Int`; `match(IE, …)` is EMPTY because the graph`s only `impl Sizer Int` is `amod.Sizer`s, a different declaration with a disjoint method set. REJECT, T-NO-IMPL. 🚨 THE HIGHEST-VALUE ROW OF THE SET -- BASE SHIPS A SEGFAULTING BINARY. MEASURED on a $BASE-built binary: check exit 0 (`main : Unit`), build exit 0, and ./out exit 139 `runtime error [E-FATAL-SIGNAL]: fatal memory fault (segmentation fault)`, because the slot was discharged against a dictionary shaped for `amod.Sizer` (`{weight}`) and projecting `bulk` reads a slot that is not there. `pl`/`po` return a wrong ANSWER; this one corrupts memory. ⚠️ The diagnostic lands in `zmod.mdk`, not in the entry",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i4-xmod-method-level-slot-control/main.mdk",
+    label =
+      "CONTROL for the row above. `zmod` gains its own `impl Sizer Int`, so `match(IE, zmod.Sizer Int)` is the singleton {zmod`s impl} and `peek Cell 3` = `bulk 3` = 3+7 = 10. `10` is a value ONLY `zmod`s impl can produce (`amod`s `weight n = n * 100` would give 300), so the pair separates `the reject was removed` from `the wrong impl was selected`. Rules out the duller readings of the sibling`s reject -- `a method-level => slot cannot be discharged across modules`, `any same-spelled interface poisons the goal`, `Holder`s impl cannot see Sizer` -- each of which predicts a reject here too. ⚠️ Two edits from the sibling, not one: `amod`s impl also moves to head `Bool`, because with both at `Int` BOTH ARMS reject T-CONFLICTING-IMPL (coherence still keys the interface half by SPELLING while the obligation channel keys it by identity -- recorded on #1482). ⚠️ Behaves identically on both arms, deliberately",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "10\n",
+    codes = [],
+  },
+  Row {
+    entry = "i4-xmod-requires-foreign-iface-rejected/main.mdk",
+    label =
+      "§8 I4 -- A CONDITIONAL INSTANCE`s `requires` NAMES ITS OWN CLASS, NOT A SAME-SPELLED FOREIGN ONE. The #1438 collision shape reached through the `requires` channel, and THE arm-discriminating row for #1446: a 2704-file two-arm corpus differential over test/ came back EMPTY, so nothing already in the tree witnesses that change. SPEC ANSWER hand-derived from §3 before any binary was run: `zmod`s `requires Sizer a` is an OCCURRENCE resolved in `zmod`s scope, so it denotes `zmod.Sizer` (method `bulk`); at the goal `Debug (Wrap Int)` it discharges to `zmod.Sizer Int`; `match(IE, zmod.Sizer Int)` is EMPTY because the graph`s only `impl Sizer Int` belongs to `amod.Sizer`, a different declaration with a disjoint method set (`weight`). REJECT, T-NO-IMPL, no value to pin. 🚨 MEASURED ON A $BASE-BUILT BINARY, this exact program: check exit 0 (`main : Unit`, a SILENT ACCEPT), build exit 0, and THE BUILT BINARY EXITS 1 with `runtime error [E-NONEXHAUSTIVE-MATCH]` -- base ships a dying binary from a program check called clean, because `bulk` was discharged against a dictionary shaped for `amod.Sizer` (`{weight}`). If a later unit re-widens the `requires` channel to spelling, this row goes GREEN-BY-ACCEPTING and that S0 is back. ⚠️ The `requires` channel keeps identity because `requireOrigin` and `implOrigin` are BOTH occurrence-layer, filled by one `fillIfaceOccOrigin` walk in one scope. The METHOD-OCCURRENCE channel is deliberately NOT covered (it crosses to the decl layer) -- see `recordImplObligation` and #1482",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i4-xmod-requires-own-iface-control/main.mdk",
+    label =
+      "CONTROL for the row above, and the VALUE is what makes it one: `zmod` gains its own `impl Sizer Int`, so `match(IE, zmod.Sizer Int)` is the singleton {zmod`s impl} and `bulk 3` = 3+7 = 10, printing `W10`. `W10` is a value ONLY `zmod`s impl can produce (`amod`s `weight n = n * 100` would give `W300`), so the PAIR separates `the reject was removed` from `the wrong impl was selected` -- a verdict-only control could not. It rules out the duller readings of the sibling`s reject (`a conditional instance cannot discharge `requires` across modules`; `any same-spelled interface in the graph poisons the goal`), each of which predicts a reject here too. ⚠️ TWO EDITS FROM THE SIBLING, NOT ONE, AND THE SECOND IS FORCED: `amod`s impl also moves from head `Int` to head `Bool`, because with both at `Int` BOTH ARMS reject `T-CONFLICTING-IMPL` before the obligation channel is reached. #1446 gave the OBLIGATION channel an identity; COHERENCE still keys the interface half by SPELLING (the KeyBuckets side, kept spelling-scoped by #1317 T1), so the two checkers disagree about whether `amod.Sizer` and `zmod.Sizer` are one class. Pre-existing in direction, out of scope here, recorded on #1482. ⚠️ BEHAVES IDENTICALLY ON BOTH ARMS, deliberately -- a goal with one candidate is not a witness to an identity re-key",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "W10\n",
+    codes = [],
+  },
+  Row {
+    entry = "i4-xmod-sig-constraint-foreign-iface-rejected/main.mdk",
+    label =
+      "S8 I4 -- A SIGNATURE `=>` CONSTRAINT NAMES ITS OWN CLASS, NOT A SAME-SPELLED FOREIGN ONE. This is #1438s OWN repro, moved here verbatim by U1b (#1482) when it DRAINED that issues `must_fail` pin: a pin asserts a bug still reproduces, so a fix removes it and the S0 has NO guard unless a positive row replaces it. SPEC ANSWER hand-derived from S3 + S8 I4, not read off a binary: `zmod` declares its own `interface Sizer a where bulk` AND `useBulk : Sizer b => b -> Int` in the same module and imports nothing, so the `=>` occurrence unambiguously denotes `zmod.Sizer`; `useBulk 3` instantiates `b := Int`, posing `zmod.Sizer Int`; `match(IE, zmod.Sizer Int)` is EMPTY because the graphs only `impl Sizer Int` belongs to `amod.Sizer`, a different declaration with a disjoint method set (`weight`, not `bulk`). REJECT, T-NO-IMPL, no value to pin. 🚨 MEASURED ON A main-BUILT BINARY AT 709db738, BEFORE U1b: check exit 0 (`main : Unit`, a SILENT ACCEPT), run E-PANIC `unbound identifier: bulk`, build exit 0 and the binary SEGFAULTS at 139 -- because `bulk` was projected out of a dictionary shaped for `amod.Sizer` (`{weight}`). ⚠️ DIFFERENT PRODUCER from the `requires` and method-level rows above: this one reaches the collision through a constrained bindings `=>` slot re-instantiated at a CROSS-MODULE call site (`funConstraintIfacesRef` + `schemeObligationsRef`, the two tables U1b widened), and before U1b exactly those rows rejected while this one did not. ⚠️ Topologically discriminating by construction: the goal is posed by `zmod`s signature and elaborated when `zmod` is processed, NOT in `main` -- `main` is always topologically last and would be a false null",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i4-xmod-sig-constraint-own-iface-control/main.mdk",
+    label =
+      "CONTROL for the row above, and the VALUE is what makes it one: `zmod` gains its own `impl Sizer Int` (`bulk n = n + 7`), so `match(IE, zmod.Sizer Int)` is the singleton {zmods impl} and `useBulk 3` = 10. `10` is a value ONLY `zmod`s impl can produce (`amod`s `weight n = n * 100` would give 300), so the PAIR separates `the reject was removed` from `the wrong impl was selected` -- a verdict-only control could not. It rules out the duller readings of the siblings reject (`a cross-module constrained callee cannot discharge its => at all`; `any same-spelled interface in the graph poisons the goal`), each of which predicts a reject here too. ⚠️ TWO EDITS FROM THE SIBLING, NOT ONE, AND THE SECOND IS FORCED: `amod`s impl also moves from head `Int` to head `Bool`, because with both at `Int` BOTH ARMS reject `T-CONFLICTING-IMPL` before the obligation channel is reached. U1b gave the OBLIGATION channel an identity; COHERENCE still keys the interface half by SPELLING (the KeyBuckets side, kept spelling-scoped by #1317 T1), so the two checkers still disagree about whether `amod.Sizer` and `zmod.Sizer` are one class. Pre-existing in direction, out of scope for U1b, recorded on #1482 -- the same note the `requires` control carries",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "10\n",
+    codes = [],
+  },
+  Row {
+    entry = "i4-xmod-method-occurrence-foreign-iface-rejected/main.mdk",
+    label =
+      "§8 I4 -- A BARE METHOD OCCURRENCE NAMES ITS OWN CLASS, NOT A SAME-SPELLED FOREIGN ONE. U1c (#1507)s row, and the SURVIVING half of #1438: `zmod`s `useBulk` carries NO signature at all -- there is no `=>` slot for U1b (#1482) to have touched -- so the goal is posed purely by the bare method occurrence `bulk x`, `recordImplObligation`s producer. Moved here verbatim from the drained `must_fail` pin `1507-xmod-iface-name-collision-method-occurrence`: a pin asserts a bug still reproduces, so draining it removes the guard unless a positive row replaces it. SPEC ANSWER hand-derived from S8 I4, not read off a binary: `zmod` declares its own `interface Sizer a where bulk`, imports nothing, so `bulk` inside `useBulk`s own body unambiguously denotes `zmod.Sizer`; `useBulk 3` instantiates the occurrences dispatch type at `Int`, posing `zmod.Sizer Int`; `match(IE, zmod.Sizer Int)` is EMPTY because the graphs only `impl Sizer Int` belongs to `amod.Sizer`, a different declaration with a disjoint method set (`weight`, not `bulk`). REJECT, T-NO-IMPL, no value to pin. 🚨 MEASURED ON A main-BUILT BINARY BEFORE U1c: check exit 0 (`main : Unit`, SILENT ACCEPT), run E-PANIC `unbound identifier: bulk`, build exit 0 and the binary SEGFAULTS at 139 -- `bulk` projected out of a dictionary shaped for `amod.Sizer` (`{weight}`). ⚠️ DIFFERENT PRODUCER from `i4-xmod-sig-constraint-foreign-iface-rejected`: that rows `useBulk` IS signed (`Sizer b => b -> Int`), reaching the collision through `funConstraintIfacesRef`/`schemeObligationsRef`; this rows is unsigned, reaching it through `pushPendingObl` at the bare method occurrence -- the one channel U1b deliberately left untouched. ⚠️ MEASURED, not claimed by construction: the diagnostic lands at `main.mdk:48:16`, not in `zmod.mdk` -- `useBulk` is UNSIGNED, so its constraint is inferred/generalized into its own scheme and the obligation entails where that scheme is instantiated (the call in `main`), not at `zmod`s processing. An earlier revision of this row claimed the zmod-processing-time mechanism by analogy with the sig-constraint sibling above; that analogy does not hold for an unsigned forwarder. The rows DISCRIMINATION (base silent-accept+segfault, branch reject) is unaffected by this correction",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i4-xmod-method-occurrence-own-iface-control/main.mdk",
+    label =
+      "CONTROL for the row above, and the VALUE is what makes it one: `zmod` gains its own `impl Sizer Int` (`bulk n = n + 7`), still with NO signature on `useBulk`, so `match(IE, zmod.Sizer Int)` is the singleton {zmods impl} and `useBulk 3` = 10. `10` is a value ONLY `zmod`s impl can produce, so the PAIR separates `the reject was removed` from `the wrong impl was selected` -- a verdict-only control could not. Rules out the duller readings of the siblings reject (`a bare cross-module method occurrence cannot dispatch at all`; `any same-spelled interface in the graph poisons the goal`), each of which predicts a reject here too. ⚠️ TWO EDITS FROM THE SIBLING, NOT ONE, AND THE SECOND IS FORCED: `amod`s impl also moves from head `Int` to head `Bool`, because with both at `Int` BOTH ARMS reject `T-CONFLICTING-IMPL` before the obligation channel is reached -- COHERENCE still keys the interface half by SPELLING (kept spelling-scoped by #1317 T1), so the two checkers still disagree about whether `amod.Sizer` and `zmod.Sizer` are one class. Pre-existing in direction, out of scope for U1c, recorded on #1482 -- the same note the `requires` and `sig-constraint` controls carry. ⚠️ BEHAVES IDENTICALLY ON BOTH ARMS, deliberately -- a goal with one candidate is not a witness to an identity re-key",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "10\n",
+    codes = [],
+  },
+  Row {
+    entry = "i4-xmod-method-and-iface-different-modules-rejected/main.mdk",
+    label =
+      "§8 I4 -- A NEW INSTANCE OF #1438s CLASS: the METHOD occurrence and the impls resolved INTERFACE-NAME arrive from TWO DIFFERENT modules, neither of which is the constrained call sites own module. `u.mdk` imports `pmth` (a value, FROM p.Same) and the TYPE `Same` FROM g.Same -- never p.Same the type -- so `impl Same P where gmth _ = 7` unambiguously resolves to g.Same (implOrigin = g), while `use1 x = pmth x` calls pmths OWN declaring interface, p.Same. SPEC ANSWER hand-derived from S8 I4: `use1 (P 3)` poses `p.Same P`; `match(IE, p.Same P)` is EMPTY because the graphs only `impl Same _` is g.Same P, a different declaration with disjoint methods (gmth vs pmth). REJECT, T-NO-IMPL. 🚨 MEASURED ON A main-BUILT BINARY BEFORE U1c: check exit 0 (SILENT ACCEPT, the bare goal matched g.Sames impl by SPELLING alone), build exit 0, binary SEGFAULTS at 139",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i4-xmod-method-and-iface-different-modules-control/main.mdk",
+    label =
+      "CONTROL for the row above, and the VALUE is what makes it one: `use1` now calls `gmth` (also imported from g) instead of `pmth`. gmths OWN declaring interface is g.Same, matching `impl Same P`s implOrigin = g exactly, so `match(IE, g.Same P)` is the singleton {this impl} and `use1 (P 3)` = 7. `7` is a value ONLY this impl can produce, so the PAIR separates `the reject was removed` from `the wrong impl was selected` -- a verdict-only control could not. Rules out the duller readings of the siblings reject (`a method imported from one module and an impl resolved via another can never discharge together`; `any same-spelled interface in the graph poisons the goal`), each of which predicts a reject here too. ONE-TOKEN diff from the sibling (`pmth x` -> `gmth x`). ⚠️ BEHAVES IDENTICALLY ON BOTH ARMS, deliberately -- a goal with one candidate is not a witness to an identity re-key",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "i4-rule3-ambiguous-xmod-identity/main.mdk",
+    label =
+      "§8 I4 + §3 `inst` -- THE RULE-3 AMBIGUITY REJECT WITH ORIGIN-CARRYING IMPLS (#1446 T2). `checkUndeterminedObligation``s RULE 3 is guarded on `implCountForIfaceU >= 2`, and it is the ONE consequence of a missed `ImplUniverse` lookup that goes QUIET rather than loud: a miss reads as the count 0 and `T-AMBIGUOUS-INSTANCE` simply stops emitting. The four existing ambiguity fixtures (test/typecheck_error_fixtures/ambiguous_*) are all SINGLE-FILE; this one is cross-module. 🚨 IT DOES NOT DISCRIMINATE THE #1446 RE-KEY AND AN EARLIER VERSION OF THIS ROW CLAIMED IT DID: the stated counterfactual (reader keys TkBare => count 0 => ACCEPT at exit 0) is UNREACHABLE, refuted by building that exact neutered compiler -- `insertUnivImplKeys` indexes every identity-carrying impl under its bare spelling too, so the bare bucket holds both head tags and the count is 2 either way. It also behaves identically on the BASE binary. KEPT as a §3 CONFORMANCE row (RULE 3 must reject a genuinely ambiguous cross-module goal), NOT as evidence for the re-key; the arm-discriminating coverage is i4-xmod-requires-foreign-iface-rejected. SPEC ANSWER hand-derived, not captured: `roundtrip : Mk a => Int -> Int` fixes `a` in neither argument nor result, so `match(IE, Mk ?a)` = {Widget, Gadget}, mutually ⊑-incomparable, no unique ⊑-minimum, genuinely ambiguous. ⚠️ The diagnostic lands at `lib.mdk``s own body, not at the entry`s call -- see the fixture header",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-AMBIGUOUS-INSTANCE"],
+  },
+  Row {
+    entry = "i7-flatten-arm-fresh-universe.mdk",
+    label =
+      "§8 I7 + §7.1 -- THE FLATTEN-ARM / MODULE-ARM PARTITION TRIPWIRE (#1446). The Module arm`s `ImplUniverse` is whole-graph and outlives `resetState` (#1112 A-3.4 PR2 retired the three `obUniv*` accumulator rows this named; the Module arm now projects stage K`s `IE` via `ieUniverseAt`), and the five prelude-FLATTENED internal passes have no prelude boundary, so an identity-keyed row written by a stamped pass and read by a flattened one would MISS. It does not reproduce, for a STRUCTURAL reason: there are exactly TWO `ImplUniverse` sources and they are ARM-GATED (the `Flat` arm builds a fresh `buildImplUniverse prog`; only `Module` reads the whole-graph one; all five flattened sites route to `Flat`). ⚠️ THAT SEPARATION IS NOW LOAD-BEARING AND E-1 (#1115) IS THE UNIT THAT BREAKS IT -- this row is what must go RED instead of silently missing. No imports, so `check` takes the Flat arm while `run`/`build` additionally drive the flattened discovery passes; every dispatch is a PRELUDE impl reached through a conditional instance, and all four I7 classes (Num/Eq/Ord/Semigroup) are exercised on one file. ⚠️ HONEST LIMIT: an end-to-end consequence pin, not a direct assertion about which universe object a pass read -- it cannot tell `the partition held` from `it broke and both universes agreed`. Treat RED as `read the arm partition again`, not as a diagnosis",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "6\n[Some 1, None]\n[1, 2, 3]\nTrue\nTrue\n",
+    codes = [],
+  },
+  Row {
+    entry = "i7-qual4-gate-num.mdk",
+    label =
+      "§8 I7 qual. 4 -- THE GATE, class `Num` (#1539). The prelude is present, so the operator`s `Num Blob` predicate IS synthesized and `Blob` cannot discharge it. The gate is the ONLY thing between this file and exit 0: with `builtinClassPresent BNum` stubbed to False the row flips REJECT->ACCEPT, MEASURED on a stubbed build. Operands are signature-typed params, never literals -- `Blob 1 + Blob 2` reports a numlit-taint `Type mismatch` the unify raises whether or not the gate fired, and cannot discriminate it",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i7-qual4-gate-eq.mdk",
+    label =
+      "§8 I7 qual. 4 -- THE GATE, class `Eq` (#1539). Sibling of the `Num` row; `Blob` is deliberately not `deriving Eq`, since an impl would discharge the obligation and the row would pass whether or not the gate fired",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i7-qual4-gate-ord.mdk",
+    label =
+      "§8 I7 qual. 4 -- THE GATE, class `Ord` (#1539). Sibling of the `Num` row. `Ord a requires Eq a`, so the superclass is demanded too; the FIRST diagnostic is the `Ord` one, which section 6 pins by span",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i7-qual4-gate-semigroup.mdk",
+    label =
+      "§8 I7 qual. 4 -- THE GATE, class `Semigroup` (#1539). Sibling of the `Num` row, for the `++` seam",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "i7-qual4-user-class-same-spelling.mdk",
+    label =
+      "§8 I7 qual. 2+4 -- THE U1 DISCRIMINATOR (#1539). ⚠️ THIS ROW PINS A PROTECTION, NOT A RULE, AND IS SUPPOSED TO GO RED. I7 qual. 2 says a user MAY declare an interface spelled `Num` and \"it is never rejected for that\"; the tree rejects it `R-DUPLICATE-DEF` because the prelude`s decls are FLATTENED into the user`s list, so the collision reads as a within-module duplicate. §7.1 U1 makes the prelude a node and this reject evaporates. WHOEVER LANDS U1 OWNS THIS ROW: do not re-bless to ACCEPT and move on -- re-pin it as the I7 conformance discriminator it becomes (program ACCEPTED, `frobnicate` resolves to the USER`s class, and `1 + 1` still demands the PRELUDE`s `Num` and prints 2). Until #1539 the gate asked `ifaceRegistered \"Num\"`, a table THIS declaration writes to; it now asks `builtinClassPresent BNum`, so the answer no longer depends on this file",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "R-DUPLICATE-DEF"],
+  },
+  Row {
+    entry = "s6-1-4-supers-per-construction-goal.mdk",
+    label =
+      "§6.1 choice-point 4 / §6 C2 / §3 `super` -- #1127 DRAINED (S-predicate-representation, #1177`s fix). The row is RE-PINNED to the SPEC ANSWER exactly as its fixture header instructed (\"the row goes RED the day native starts printing 77 ... re-pin it to ALL_EXACT 77\\n77 and close #1127\"), never re-blessed to whatever the binary now says: 77/77 was hand-derived in that header BEFORE anything ran. The build arm reached the GENERAL `D`-dict because a use site was resolved by its constraint VAR`s id rather than by its PREDICATE (`enclDictVarOf`), which is the same defect #1177 pinned one channel over; both drained in one change. The control `s6-1-4-direct-constraint-control` (the `assum` arm, always correct) is what keeps this row honest -- the two must now agree",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "77\n77\n",
+    codes = [],
+  },
+  Row {
+    entry = "s6-1-4-direct-constraint-control.mdk",
+    label =
+      "CONTROL for #1127: the SAME instance set, goal and call shape with `D a` declared DIRECTLY, so `dm` is reached by §3 `assum` instead of `super`. Native is CORRECT here (77/77), which localises the defect to the superclass-projection arm rather than to min⊑ selection",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "77\n77\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-independent-dict-arity/main.mdk",
+    label =
+      "§8 I1: dict arity is keyed by BINDING IDENTITY, not bare name -- two modules` same-named `widget` abstract 1 and 0 dicts respectively (arity asserted structurally in section 3)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-unconstrained-poly-callee/main.mdk",
+    label =
+      "§8 I1, THE EVAL-PATH HALF ITS `s8-i1-samename-independent-dict-arity/` SIBLING CANNOT ASSERT (RUN-XMOD-049, #1425). That sibling`s two arity rows in section 3 read the EMIT path, where `runEmitWith` has already run `mangleUnits` and made the bare keys accidentally identity-bearing, so they are structurally incapable of failing on this defect class however broken the eval path is; and its value row cannot see it either, because its `pick` is MONOMORPHIC so define and call site agree on the phantom slot and the number is right by accident. Here the unconstrained same-named binding is POLYMORPHIC (`a -> a`), so a phantom leading dict parameter is VALUE-OBSERVABLE -- it returns the dictionary instead of its argument. Hand-derived, not captured: `C.pick (1 : Int)` = `sz 1 + 100` = 101, `U.use 1` = `pick 1 + 200` = 201. MEASURED KNOWN-BAD at a1086fbb: `run` printed 101 and then died `E-PANIC: unknown op `+`` (the phantom dict being added to 200) while `build`+execute printed the correct 101/201. ⚠️ THE ENTRY`S IMPORT ORDER IS LOAD-BEARING -- `umod` first; in the other order this fixture is GREEN AT BASE and asserts nothing, because #1425`s two sites mask each other. See main.mdk`s header",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-wildcard-import-callee/main.mdk",
+    label =
+      "§8 I1 UNDER THE WILDCARD IMPORT SPELLING (RUN-XMOD-054, #1425 F1). The two siblings above grade the ALIASED and same-module-local spellings; no fixture in this tree contained a wildcard import paired with a same-named constrained sibling, and `grep -rn \"^import [a-z_]*\\.\\*\" compiler/ stdlib/` returns ZERO files -- so fixpoint, selfproc and check-self are all structurally blind to this class, which is how the #1425 dict-arity fix repaired the aliased arm and broke this one with every gate green. A wildcard-imported name contributed no row to `currentImportDefinersRef`, so `declaredConstraintFor` fell through to the bare-name table and `cmod.pick``s constrained row answered for `umod.pick`. Hand-derived, not captured: `C.pick (1 : Int)` = 101, `pick 1 + 200` = 201. MEASURED KNOWN-BAD at fb7f3544 in BOTH import orders: `run` printed 101 then died `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` exited 0, the built binary was correct. ⚠️ Order-INVARIANT, so `test/diff_compiler_import_order.sh` reports it \"invariant\" and PASSES on the broken compiler -- the value assertion here is the only thing that sees it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-wildcard-transitive-definer/main.mdk",
+    label =
+      "§8 I1 wildcard spelling where the ENTRY NEVER NAMES the colliding module -- `cmod` is two hops away, reachable only through `smod`. RUN-XMOD-054`s reason for calling F1 a SEAM symptom rather than an arm symptom: the poisoning reach of a bare-name arity table is the whole LOADED module set, not the entry`s own import list. Distinguishes a definer resolution keyed on the graph from one re-narrowed to the entry`s own clauses -- that regression keeps the `-wildcard-import-callee/` sibling green and reds this. Hand-derived: `hop 1` = 101, `pick 1 + 200` = 201. MEASURED KNOWN-BAD at fb7f3544, both orders: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "1426-wildcard-samename-verb-agreement/main.mdk",
+    label =
+      "#1426 (wildcard-import escape), RE-POINTED HERE when the RUN-XMOD-054 seam repair drained it out of `test/must_fail_fixtures/1426-wildcard-samename-check-passes-run-build-fail/` (modules byte-identical). Same mechanism as the two rows above in the #739/#1070/#1326 family: `ps.h : Display a => a -> String` vs the wildcard-imported unconstrained `qs.h : a -> a`. The pin graded ONE verb; all four cells are graded here. Spec answer, from the pin`s own claim.txt: the program is well-typed and prints `ok / 5` at exit 0 on every verb. MEASURED KNOWN-BAD at fb7f3544: `check` 0 but `run` and `build` BOTH exit 1 with a generic `error: type error in main.mdk` -- three verbs, two answers. ⚠️ The pin recorded it ORDER-INDEPENDENT, so `import_order` cannot grade it either",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ok / 5\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-reexport-selective-through-wildcard/main.mdk",
+    label =
+      "§8 I1 ACROSS A SELECTIVE RE-EXPORT REACHED BY A WILDCARD IMPORT (RUN-XMOD-062, #1425 F1 third relocation). The two `-wildcard-` rows above grade a name a wildcard-imported module DECLARES; `rmod` here declares NOTHING and only `export import umod.{pick}`. The RUN-XMOD-054 repair`s supply walk enumerated declared exports, so this name got no row in `currentImportDefinersRef`, `declaredConstraintFor` fell to the source-blind bare-name table, and `cmod.pick``s CONSTRAINED row answered for the unconstrained `umod.pick`. Hand-derived from the two declared signatures, not captured: `C.pick (1 : Int)` = `sz 1 + 100` = 101, `pick 1 + 200` = 201; a re-export changes neither binding`s identity. MEASURED KNOWN-BAD at b313d767 in BOTH import orders: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`, `check` exit 0, built binary CORRECT -- three verbs, two answers. ⚠️ Order-INVARIANT, so `import_order` reports it \"invariant\" and PASSES on the broken compiler",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-reexport-wildcard-through-wildcard/main.mdk",
+    label =
+      "§8 I1 across a WILDCARD RE-EXPORT reached by a wildcard import (RUN-XMOD-062). Varies exactly ONE token against the row above -- `export import umod.*` instead of `export import umod.{pick}` -- which is the discrimination this row exists for: a supply side that resolves re-exports by ENUMERATING their forms can cover the selective spelling and miss this one, and from the sibling alone that failure is indistinguishable from \"already fixed\". Hand-derived: 101 / 201. MEASURED KNOWN-BAD at b313d767: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-reexport-transitive-definer/main.mdk",
+    label =
+      "§8 I1 across a re-export where THE ENTRY NAMES NEITHER MODULE (RUN-XMOD-062): `cmod` is two hops away behind `smod`, and `pick``s definer `umod` is reachable only through `rmod``s `export import`. Same reason its `-wildcard-transitive-definer/` sibling exists one relocation earlier -- the poisoning reach of a bare-name arity table is the whole LOADED module set, not the entry`s import list -- so a definer resolution re-narrowed to the entry`s own clauses keeps both rows above green and reds this. Hand-derived: `S.hop 1` = 101, `pick 1 + 200` = 201. MEASURED KNOWN-BAD at b313d767: `run` 101 then `E-NOT-A-FUNCTION: applied non-function: <dict:>`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i1-samename-reexport-selective-import-control/main.mdk",
+    label =
+      "CONTROL for the three `-reexport-` rows above and the DISCRIMINATOR proving the variable is the IMPORT FORM (RUN-XMOD-062): byte-identical to `-selective-through-wildcard/` except main.mdk`s first line, `import rmod.{pick}` here against `import rmod.*` there. MEASURED CORRECT at b313d767 while its wildcard twin panicked -- which is how the third relocation was identified as the same seam defect rather than a new one. Also the row that catches the repair`s widening of the NAMED forms: a named import`s row now carries the TRUE definer (`umod`) rather than the spelled module (`rmod`), so if that resolution ever stops working this cell moves while nothing else does. Hand-derived: 101 / 201",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n201\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i2-global-instance-env/main.mdk",
+    label =
+      "§8 I2 / §6 C4: `IE` is assembled across the WHOLE import graph -- the sole `impl Sz Coin` is reached only transitively, and `main` never imports its module at all",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-i3-evidence-travels/main.mdk",
+    label =
+      "§8 I3: a constrained binding does not re-resolve its own predicates -- the only impl is declared DOWNSTREAM of `twice`, so the dict provably came from the call site",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "42\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nary-sig-constraint-goal-vector.mdk",
+    label =
+      "§1/§3 `match(IE,C τ̄)` on the `=>`-CONSTRAINED-SIGNATURE leg: `useIx : Ix a Char => a -> Int` at `a := Int` gives the goal `Ix Int Char`, whose matching set is the SINGLETON {`Ix Int Char`} -- `Ix Int Bool` never reaches the selector. 222 (#1161 regression pin -- the signature`s predicate was SHATTERED into one dict slot per BARE-TYVAR argument, so `Char` was discarded at registration, the arg-0-only goal made both impls match, they are incomparable, and DECLARATION ORDER printed 111 at exit 0 on both engines). Section 4 permutes it. ⚠️ THIS ROW IS ALSO THE ACCEPT-DIRECTION GUARD FOR THE OBLIGATION-CHANNEL NARROWING that drained #1161 symptom 2: a GROUND predicate argument with a satisfying impl present must still be ACCEPTED, and routed to that impl rather than to the competing `Ix Int Bool`. An over-rejecting tightening of `declaredOblOne` reds this row before anything else. Symptom 2 itself (an UNSATISFIABLE `Ix a Bool =>` accepted at exit 0, context dropped from the scheme) DRAINED 2026-08-23 and is now graded at s3-sig-constraint-unsatisfiable-rejects.mdk below",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "222\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-nary-sig-constraint-structured-arg.mdk",
+    label =
+      "§3 the same judgement with a STRUCTURED predicate argument, `Ix a (List b) =>`: the goal `Ix Int (List Char)` again matches a singleton, 222. THE ONLY DEFENCE against the substitution half of the #1161 fix -- the stored vector lives in the SIGNATURE`s instantiation vars, so a top-level-only substitution leaves the interior `b` of `List b` a stale signature var, `matchTyMonos` fails against BOTH ground heads, and an EMPTY candidate set degrades to first-declared (measured during scoping: 222 -> 111). ⚠️ F-3c (#1155) structurally CANNOT cover this class: `pickMostSpecificEntry []` returns None rather than taking the ambiguity arm, so an empty candidate set stays silently first-match even after that arm goes loud",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "222\n",
+    codes = [],
+  },
+  Row {
+    entry = "s3-sig-constraint-unsatisfiable-rejects.mdk",
+    label =
+      "§3 THE REJECT DIRECTION of the same leg -- #1161 SYMPTOM 2, DRAINED 2026-08-23 by S-obligation-nary-payload and re-pointed here from test/must_fail_fixtures/1161-sig-constraint-unsatisfiable-accepted per [G-PIN-DRAIN]. `useIx : Ix a Bool => a -> Int` called at `a = Int` gives the goal `Ix Int Bool`; the program declares only `impl Ix Int Char`, so §3`s matching set is EMPTY and the goal is a missing-instance rejection. It was ACCEPTED at exit 0 printing 222 -- the body of an impl the goal matches on NEITHER argument -- because the obligation payload was IDS ONLY (`VecObl.voIds`), `constraintArgMonos` answered `None` for the ground argument `Bool`, and `declaredOblOne` discarded the whole predicate: nothing recorded, nothing checked, and `check` printed the scheme as `useIx : a -> Int` with the context silently gone. ⚠️ ONE impl, so Section 4 derives no permutation pair -- deliberately: the defect here was ACCEPTANCE, not order",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s9-vector-valued-entailment-rejected.mdk",
+    label =
+      "§9 signature authority: the `Q_sig ⊩ P`ᵢ` side condition is VECTOR-VALUED -- `{Ix a b, Ix c d}` does not entail a joint `Ix a d` even though every ARGUMENT appears. The row that separates a real n-ary obligation from #607`s two single-param facts",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-CONSTRAINT"],
+  },
+  Row {
+    entry = "b1-xmod-default-inherited-tag/main.mdk",
+    label =
+      "ARCH B-2 (B-2.2-b1): `keyForSite`s NO-ROW arm. A CROSS-MODULE method-less impl inherits the interface default -- `fillImplDefaults` is same-module only, so the impl has no method entry, the candidate scan cannot see it, and `optionOr tag` supplies the `<TAG>` of `@mdk_default_sz_Box`. Its SAME-MODULE twin in the same program takes the ordinary tagged route. ⚠️ THE VALUE CANNOT DISCRIMINATE (both arms answer 42 and both exit 0 even with a wrong symbol, until the link fails) -- section 3 carries it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "4242\n",
+    codes = [],
+  },
+  Row {
+    entry = "b1-xmod-default-absent-rejected/main.mdk",
+    label =
+      "THE FAIL-CAPABLE HALF of the row above: the same program with the interface default DELETED, one dimension flipped. Must stay a LOUD reject naming the missing method. It also BOUNDS the no-row arms live population to the default-inheriting shape -- with no default there is nothing for `emitDefaultRKey` to lift and no engine ever runs it",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-INCOMPLETE-IMPL"],
+  },
+  Row {
+    entry = "b1-p4-super-slot-unique-heads/main.mdk",
+    label =
+      "ORGAN 4 (P4) TRIPWIRE, UNIQUE-HEAD half. `both` declares one predicate and `expandSupersPairs` APPENDS a `Base` super slot, so the definition takes 2 dicts for a 1-argument function. With ONE impl per interface the collision gate is False at BOTH slots, so both still carry the bare head tag and the SAME dict constant is passed twice -- `B-2.2-b1` deliberately does NOT move this program, and this row is what proves it did not widen identity unconditionally. Distinct bodies make a copied route observable (a super slot resolving to the subs row prints 202)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "201\n",
+    codes = [],
+  },
+  Row {
+    entry = "b1-p4-super-slot-colliding-heads/main.mdk",
+    label =
+      "ORGAN 4 (P4) TRIPWIRE, COLLIDING-HEAD half -- where the word IS expected to move. Two impls of `Base` at head `Box` turn the collision gate True at the appended super slot only, so the two slots carry DIFFERENT words: section 3 pins that the site passes two DISTINCT dict constants here where the sibling passes one twice. ⚠️ 201 is also what a wrongly-routed super slot can print (203 is the `Box String` row), so the value is a floor and the symbols are the assertion",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "201\n",
+    codes = [],
+  },
+  Row {
+    entry = "b1-p4-super-slot-no-base-impl-rejected/main.mdk",
+    label =
+      "NEGATIVE CONTROL (PC1) for both P4 rows: delete `impl Base T` and the superinterface obligation rejects at exit 1. Without it, a regression that made the appended super slot VANISH rather than mis-resolve would keep every other P4 assertion green while the tripwire stopped watching anything",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-MISSING-SUPER-IMPL"],
+  },
+  Row {
+    entry = "b1-xmod-same-spelled-iface-impl-selection/main.mdk",
+    label =
+      "§8 I4 + §3 `inst` -- THE ISSUE 1514 DRAIN, and the ONLY row in this corpus whose VALUE the module-qualified identity decides. Promoted from the drained must_fail pin `1514-xmod-same-spelled-iface-impl-selection`: a pin asserts a bug STILL REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row replaces it. TWO UNRELATED modules (no import edge either way) each declare their OWN `Same`/`Blob`/`impl Same Blob`, and each computes its own value INSIDE ITS OWN MODULE, so neither goal has a second candidate. SPEC ANSWER hand-derived from §8 I4 (an interface is identified by its DECLARATION): aValue = 10+1 = 11, zValue = 10+100 = 110, bystanderValue = 5+1+1 = 7. 🚨 MEASURED PRE-BITE, in the drained pins own recorded cells: check exit 0, `run` printed 11 / 11 / 7 -- SILENT WRONGNESS, zValue taking amods `n + 1` -- while the BUILT BINARY printed the correct 11 / 110 / 7. The two engines actively DISAGREED, which is what makes the drain causal; ALL_EXACT requires them to agree with each other AND with the pinned value, so that state fails this row twice over. ⚠️ THE FIVE `b1-*` ROWS ABOVE DO NOT COVER THIS -- they pin the WIRE FORMAT, and the colliding-heads row separates its impls by TYPE ARGUMENT (`Box Int` vs `Box String`), which the pre-bite word already separated; the module prefix is decoration there. ⚠️ SCOPE BOUND (DEBT.md D-2): the DIRECT shape only. The WRAPPER shape -- dispatch reaching the collision through a function in a third module -- is measurably NOT drained and stays import-order-dependent on both arms. A drained fixture is not a drained class",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n110\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "b1-xmod-distinct-spelled-iface-control/main.mdk",
+    label =
+      "CONTROL for the row above, promoted from the same must_fail pins own `control.mdk`. ONE dimension varied: whether the two unrelated modules interface/type/method spellings COLLIDE. `amod.mdk` and `bystander.mdk` are BYTE-IDENTICAL to the siblings; `zmod2.mdk` keeps zmods shape and arithmetic byte-for-byte and spells them `Same2`/`Blob2`/`sizeOf2`. ⚠️ THE VALUE IS THE SAME AS THE SIBLINGS ON PURPOSE -- the answer must not depend on the collision -- so this pair is read by WHICH MEMBER REDS, not by their values differing: sibling red + control green localises a regression to the collision, both red says cross-module dispatch broke generally. That contrast is not hypothetical -- pre-bite the sibling`s `run` printed 11 / 11 / 7 while this file already printed 11 / 110 / 7 on the same binary, which is what made the defect attributable to the spelling collision rather than to the module boundary",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "11\n110\n7\n",
+    codes = [],
+  },
+  Row {
+    entry = "b1-xmod-same-spelled-iface-constrained-wrapper/main.mdk",
+    label =
+      "§8 I4 + §3 -- THE SAME COLLISION REACHED THROUGH A CONSTRAINED WRAPPER, and the row that pins a DETERMINISTIC NATIVE SEGFAULT out of existence. The direct-dispatch sibling above with ONE structural variable added: each module routes its call through its own `Same a => a -> Int` wrapper, so the site is GENERIC and receives a dict CONSTANT as an argument. Heads are DISTINCT (`ABlob`/`ZBlob`); the interface SPELLING is all the two unrelated modules share. SPEC ANSWER hand-derived: each wrapper is declared in the module whose `Same` is the only one in its scope, so its predicate denotes that modules class and each goal has a singleton matching set -- 10+1 = 11 and 10+100 = 110, i.e. (11, 110). 🚨 MEASURED ON TWO PRE-BUILT ARMS: base built at exit 0 and the BINARY SEGFAULTED 3 runs of 3 (139, E-FATAL-SIGNAL) while `run` answered (11, 11); branch answers (11, 110) on both engines at exit 0. IR-read mechanism: base handed the SAME dict constant to both generic calls while the dispatcher tested one tag in BOTH arms, so no arm matched and control fell through to `unreachable`. ⚠️ NOT PRESENTED AS FIXING A FILED ISSUE -- it is an EMERGENT consequence of the route-word change and no issue we have identified covers it; the row exists so the repair cannot be silently lost. ⚠️ THE VALUE ALONE IS INSUFFICIENT and the section-3 rows are not decoration: base`s `run` answered (11, 11) while base`s BINARY died, so a run-only grade would see a wrong value and never the crash, and an exit-code-only grade would see 139-vs-0 without knowing why. ⚠️ THE WRAPPER IS THE VARIABLE -- without it the same two modules merely answer wrongly (that is the sibling); the dict-taking generic site is what turns a wrong selection into a memory fault",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "(11, 110)\n",
+    codes = [],
+  },
+  Row {
+    entry = "b4bii-xmod-same-spelled-iface-requires-decl-order/main.mdk",
+    label =
+      "§8 I4 + §3 -- THE B-4b-ii SUPPLY DISCRIMINATOR, and the ONE row whose VERDICT the supply decides. Two unrelated modules each declare their own `interface Same a` (disjoint methods `bar`/`foo`, no import edge either way) and each impls it at the SAME SHARED head `Box a` from a third module; `amod`s impl carries `requires Eq a`, `zmod`s carries none. SPEC ANSWER hand-derived from §8 I4 BEFORE any binary was run: `foo (Box Opaque)` may only discharge against `zmod.Same`s impl, which has no context, so the `Eq`-less `Opaque` needs nothing -- 1; `bar (Box 1)` discharges `amod`s `requires Eq a` at `Eq Int`, which holds -- 2; total 3, ACCEPT. 🚨 MEASURED AS A FALSE REJECT ON THE B-4b-i BASE BINARY (this worktree, its own stdlib/runtime/emitter): check/run/build ALL exit 1 with ``No impl of Eq for Opaque`` pointed at `foo (Box Opaque)` -- a constraint the program never wrote, imposed by the OTHER modules class, because `findMatchingImplReqsU`s CONCRETE leg re-minted its query through `ifaceRefBare` and compared a bare SPELLING while its own HEADLESS sibling leg (`univHeadless` -> `oblIfaceKey`) was already identity-keyed. The `!T-NO-IMPL` assertion is what makes the row FAIL-CAPABLE: re-mint that query bare and it reds. ⚠️ THE SHARED HEAD IS LOAD-BEARING, exactly as `s6-c1-xmod-same-spelled-ifaces-accepted`s header records -- the selectors HEAD half is already identity-aware, so two module-local heads would mask the interface half entirely. ⚠️ AND THE `-swapped` SIBLING IS HALF THE ASSERTION: it is this program with the two module names exchanged and nothing else, and it ACCEPTED at 3 on that same base binary. Either fixture ALONE passes an order-decided compiler",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry =
+      "b4bii-xmod-same-spelled-iface-requires-decl-order-swapped/main.mdk",
+    label =
+      "CONTROL for the row above, and a control in the strict sense: it flips exactly ONE dimension -- which of the two same-spelled classes sorts first -- and the correct answer is UNCHANGED at 3, by the identical derivation. It ACCEPTED at 3 on the B-4b-i base binary while its sibling was rejected, and that asymmetry IS the finding: an answer decided by declaration order is invisible from whichever ordering happens to be lucky, so a compiler that selects by spelling passes THIS row. Do not merge the two, and do not rename the modules to match -- the sort order of the module ids is the variable",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "3\n",
+    codes = [Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry = "b4bii-xmod-foreign-empty-context-discharged/main.mdk",
+    label =
+      "§8 I4 + §6 C2 -- THE SOUNDNESS HOLE B-4b-ii CLOSES, and the ONLY row in this corpus asserting the FALSE-ACCEPT direction of the same-spelled collision (the bites other rows all assert the false-REJECT direction, so without this one the win is unclaimed and ungraded). `viaA` is AMODs constrained standalone, so its `Same a` is `amod.Same` and the impl that must witness it at `Box Opaque` is AMODs `impl Same (Box a) requires Eq a`; that context grounds to `Eq Opaque`, which has NO instance anywhere in the program. SPEC ANSWER hand-derived before any binary was run: REJECT. 🚨 MEASURED AS A SILENT FALSE ACCEPT ON A BASE BINARY cold-built from origin/main @ 2c549fef with its own stdlib/runtime: check exit 0, run exit 0 PRINTING 1, build exit 0, executed binary 1 -- the checker reached ZMODs row by SPELLING and discharged ITS empty context in amods place, so a program whose selected impl declares an unsatisfiable constraint ran to completion with no diagnostic. ⚠️ THE VALUE 1 IS WHAT MAKES THIS SOUNDNESS RATHER THAN MERE ACCEPTANCE: 1 is ZMODs body, so the base binary did not just accept the program, it ran the OTHER classs method for it. The `T-NO-IMPL` assertion is what makes the row FAIL-CAPABLE: re-mint `findMatchingImplReqsU`s concrete query through `ifaceRefBare` and this row goes green-at-exit-0 and reds here",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "b4bii-xmod-req-route-leg-still-spelling/main.mdk",
+    label =
+      "§6 C2 -- WHERE B-4b-iis DELIBERATE ASYMMETRY IS OBSERVED RATHER THAN ARGUED. The supply landed at ONE of the `*ByIface` familys three entry points (`findMatchingImplReqsU`, the CHECKER leg); the two ROUTE-WORD entry points (`entailInst`s `EKNestedTop` arm and `argImplRequiresRoutes`) still mint a bare query, because their upstream (`shadowStandaloneDictSlots` / `pushDictApp`) projects `csIface.irName` on purpose and that projection is the route-word design question, not an identity-supply omission. This program puts BOTH legs on the same goal: a CONSTRAINED STANDALONE `useIt : Same a => a -> Int` in `zmod` is called at `Box Opaque`, so the checker selects `zmod.Same` by IDENTITY while the router selects over the same two candidate rows by SPELLING. SPEC ANSWER hand-derived first: `useIt (Box Opaque)` = 11 via `zmod`s context-free impl, `bar (Box 1)` = 22 via `amod`s `requires Eq a` at `Eq Int`; total 33, ACCEPT. ⚠️ THE DICT IS THE ASSERTION, NOT THE NUMBER -- a router that reached `amod`s row would hand `useIt` a witness for the OTHER class, whose only slot is `bar`, and `foo x` would read that slot: a wrong value or a fault AT EXIT 0. Section 3s IR row is what a value-only assertion cannot see. ⚠️ MEASURED: this program was REJECTED at exit 1 on the B-4b-i base binary (the same false reject the `-decl-order` pair isolates), so the route leg had never been asked this question and this is a NEW cell, not a re-pin",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "33\n",
+    codes = [Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s8-xmod-reexport-alias-unconstrained/main.mdk",
+    label =
+      "#1337 SCHEME-ENVIRONMENT IDENTITY -- THE ISSUE 1472 DRAIN. Promoted from the drained must_fail pin `1472-alias-reexport-null-dict-segfault`: a pin asserts a bug STILL REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row replaces it. `export import` re-export + an ALIAS importer spelling: the key in the re-exporter`s public schemes is mangled for the DEFINER (`lib_plain__g`), so the alias arm`s spelled-mid-only prefix test answered False and re-bound it as `R.lib_plain__g` while private_mangle (which chases re-exports to the definer) had already rewritten the body`s reference to the bare `lib_plain__g`. SPEC ANSWER hand-derived from the declarations before any binary was run: `g : Int -> Int`, `g x = x + 1`, re-exported BY IDENTITY, so `R.g 1` = 2. 🚨 MEASURED PRE-FIX ON THIS WORKTREE`S OWN COLD-BUILT BASE BINARY: check 0, `run` printed the CORRECT `2`, build 0 -- EVERY BEHAVIOURAL SIGNAL GREEN -- and the EXECUTED BINARY died at 139 with EMPTY stdout (E-FATAL-SIGNAL, 3 runs of 3). ⚠️ THE VALUE ROW IS THEREFORE INERT ON ITS OWN: `run` printed `2` before and after the fix, and this gate`s ALL_EXACT compares run against build, both of which now agree. Section 3 carries this fixture -- it pins that `println`s LEADING DICT OPERAND is a real dict constant and NOT the null `i64 0` the emitter wrote pre-fix",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-selective-unconstrained-control/main.mdk",
+    label =
+      "CONTROL for the row above, and the canary that keeps it honest: BYTE-IDENTICAL program but for the importer SPELLING (SELECTIVE `lib.rplain.{g}` / bare `g 1` instead of `as R` / `R.g 1`). Same definer, same re-exporter, same unconstrained `g`. SPEC ANSWER hand-derived identically: 2. ⚠️ THIS SPELLING WAS ALWAYS GREEN -- it resolves through `resolveMemberSchemes`, whose fallback is a `__<name>` SUFFIX test that is definer-agnostic BY CONSTRUCTION, so `\"__g\"` matches `lib_plain__g` no matter which module mangled it. That is what makes the PAIR the assertion rather than either file: sibling red + control green localises a regression to the alias arm; both red says the re-export hop itself broke. ⚠️ THE VALUE IS THE SAME ON BOTH ON PURPOSE (the answer must not depend on the spelling), which is exactly why the values cannot discriminate and section 3 carries both",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-alias-constrained/main.mdk",
+    label =
+      "#1337 SCHEME-ENVIRONMENT IDENTITY + #2840 -- THE ISSUE 1427 DRAIN, AND THE POSITIVE ROW THAT REPLACES THE `must_fail` PIN `1427-alias-reexport-constrained-build-fails` (a pin asserts a bug still reproduces, so a fix deletes it and the defect has NO guard unless a positive row replaces it). Same conjunction as the unconstrained sibling (`export import` re-export + an ALIAS importer spelling) with ONE dimension flipped: the callee is CONSTRAINED (`Num a => a -> a`), so the call site needs a dictionary and the failure is value-observable. SPEC ANSWER hand-derived: `f x = x + 1` at `Int`, so `R.f 1` = 2 on every verb. THE ROW TOOK TWO REPAIRS ON TWO CHANNELS and only the pair makes it green. BUILD: repaired by the scheme-environment fix (#1671), definer-keyed rather than spelling-keyed; before it `medaka build` exited 1 with `E-PANIC: unbound constrained fn: lib_decl__f` and produced NO binary. RUN: repaired by #2840; before it `medaka run` exited 1 with `E-PANIC: intToString: not an Int` and ZERO bytes of stdout, because `aliasDictNamesOfPath` asked `declTopFnNames` what the SPELLED module DEFINES and a pure re-exporter defines nothing -- so `R.f` never joined the dict-name set, the call site was never marked as a dict application, and the callee ran with the dictionary sitting where its `Int` argument belonged. That arm now resolves through `graphPubDefiners` too. The earlier attribution recorded on this row -- `aliasEntriesFor` keying copied qual entries on the SPELLED module -- was INSTRUMENTED AND REFUTED: on the pre-fix binary `graphPubDefiners lib.rsel` already answered `f <- lib.decl.f` and the dict-ARITY table was correctly re-keyed; `aliasDictNames` was the seam that came back empty. Two independent witnesses live beside this row (`-depth3`, `-depth3-float`), so a repair suiting depth 1 at `Int` cannot pass for a general one",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-alias-wildcard-twoimpl/main.mdk",
+    label =
+      "RUN-XMOD-070 F1: the WILDCARD re-export spelling of the row above, with a discriminating TWO-IMPL cell -- DRAINED BY #2840 together with its sibling, exactly as both headers said they would flip. `lib/rwild.mdk` is `export import lib.decl.*`, so the alias local reaches the dict-name set only through a resolution that reads the graph rather than the spelled module`s own decls. `lib.decl`s `Sz` carries TWO impls (`Int`, `String`), so the two `R.f` call sites must route to DIFFERENT dicts for the value to come out right -- which is what a single-impl program cannot rule out. SPEC ANSWER hand-derived: `sz 1` = 1 so `R.f 1` = 101; `sz \"abc\"` = 1000 so `R.f \"abc\"` = 1100. MEASURED PRE-#2840 on a base-built binary: check exit 0, build exit 0 and the binary printed both correct values, while `run` exited 1 with `E-PANIC: intToString: not an Int` and ZERO bytes of stdout -- dying on the very first call. Section 3 below still asserts the two distinct dict constants reaching the one definer symbol",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "101\n1100\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-selective-constrained-control/main.mdk",
+    label =
+      "CONTROL for the row above, doing TWO jobs. (1) It localises an alias-arm regression, as the unconstrained pair`s control does. (2) IT IS THE ATTRIBUTION FOR THE SIBLING`S REJECTING `run` CELL -- this spelling was ALWAYS green on `build` (it never had the scheme-env defect) yet its `run` panics identically. One spelling broken and one green on BUILD, BOTH broken identically on RUN, is what shows the run panic rides a different channel from the build failure. Without this row the sibling`s REJECT could be misread as \"the alias fix was incomplete\". SPEC ANSWER hand-derived identically: 2 on the build arm. ⚠️ ITS CELLS ARE IDENTICAL TO THE SIBLING`S BY CONSTRUCTION -- that identity IS the assertion, so if this row ever diverges from the sibling on `run`, the two channels have been conflated RE-POINTED TWICE, AND THE SECOND RE-POINT RETRACTS THE FIRST. At RUN-XMOD-062 this row`s `run` cell drained on its own: the seam repair derives a re-exported name`s definer through the one admission predicate, so `f`s qual entry is found under its TRUE definer `lib.decl` instead of being missed under the spelled `lib.rsel`. The paragraph then written here concluded that the alias sibling still rejected because `aliasEntriesFor` keys its copied entries on the SPELLED module; #2840 instrumented that claim and REFUTED it -- `aliasEntriesFor` had already been resolving through `graphPubDefiners`, and the surviving alias-only miss was `aliasDictNamesOfPath`, one seam further on. Both rows are now ACCEPT on all four cells, so this row is once again IDENTICAL TO ITS SIBLING BY CONSTRUCTION and that identity is again the assertion: a divergence between the two on `run` means the two spellings have stopped sharing a route",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-direct-import-constrained-control/main.mdk",
+    label =
+      "NO-HOP CONTROL for the `export import` re-export family, RE-POINTED here from `test/must_fail_fixtures/1369-export-import-constrained-callee-no-dict/` when RUN-XMOD-062 drained that pin (#1369: a constrained callee reached through a re-export hop received NO dictionary; `check` 0, `run` panicked `E-PANIC: intToString: not an Int`, `build`+execute correct). The pin graded ONE verb on its main arm and carried this control UNGRADED beside it; the main arm is now the `s8-xmod-reexport-selective-constrained-control/` row four rows up, which grades all four cells, and this is the dimension that would otherwise have been lost. It is what isolates the defect to the RE-EXPORT HOP rather than to the constrained binding: byte-identical to that sibling but importing `lib.decl.{f}` DIRECTLY. Hand-derived from the declaration: `f x = x + 1` at `Int`, so `f 1` = 2. MEASURED CORRECT ON BOTH ARMS -- an unchanged cell on purpose; if it moves, the regression is in ordinary named-import dict routing, not in re-exports",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-alias-constrained-depth3/main.mdk",
+    label =
+      "#2840 WITNESS 1 of 2 -- THE ALIAS SPELLING OVER A DEPTH-3 RE-EXPORT CHAIN. Independent of the depth-1 row above in the one dimension that could have made that row an accident: `R` names `lib.hop3`, three hops from the definer `lib.decl`, and every hop is a pure re-exporter that declares no top-level function at all -- so the alias local `R.f` can only reach the dict-name set through a resolution that CHASES the chain (`graphPubDefiners`), never through one that looks a single module back. SPEC ANSWER hand-derived from the declarations: `f : Num a => a -> a`, `f x = x + 1`, `R.f 1` at `Int` = 2. MEASURED PRE-#2840 on a base-built binary: check exit 0, build exit 0 with the binary printing the correct `2`, and `run` exit 1 with `E-PANIC: intToString: not an Int` on empty stdout",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-alias-constrained-depth3-float/main.mdk",
+    label =
+      "#2840 WITNESS 2 of 2 -- THE SAME DEPTH-3 ALIAS CHAIN INSTANTIATED AT `Float`, and the cell that proves the dictionary is the RIGHT one rather than merely present. `f x = x + x` admits no `Int`-shaped literal into the answer, so at `Float` a wrongly-routed `Num` dict cannot land on a plausible number the way a defaulted `Int` can. SPEC ANSWER hand-derived: `R.f 2.5` = 5.0. MEASURED PRE-#2840 on a base-built binary: check exit 0, build exit 0 with the binary printing the correct `5.0`, and `run` exit 1 with `E-PANIC: floatToString: not a Float` -- the dict read where the value belonged, the same failure the `Int` cells report through `intToString`",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "5.0\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-alias-perm-ab/main.mdk",
+    label =
+      "#1337 THE PERMUTATION ROW, ORDERING 1 of 2 (packet Amendment A condition 2): ONE import spelling (ALIAS), ALL orderings of the re-export declarations, asserting ONE signature. Section 4 permutes `impl` blocks and auto-derives its pair set from single-FILE fixtures, so it cannot reach a multi-file re-export hub -- this explicit `-ab`/`-ba` pair is how order-invariance-within-a-spelling stays graded for this shape (two declarations, so 2! = 2 orderings and the pair IS all of them). A re-export HUB over TWO DIFFERENT definers, so the hub`s public schemes carry keys mangled for two different modules (`lib_pa__ga`, `lib_pb__gb`). THIS IS THE ROW THAT TESTS THE WIDENING ITSELF: the fix replaced a single-module prefix test with a LOADED MODULE-ID SET membership test, and a set test must not care which member matched or in what order the set was built -- an order-sensitive widening would make the two orderings disagree. SPEC ANSWER hand-derived from the declarations: `ga x = x + 1`, `gb x = x * 10`, both `Int -> Int`, both re-exported by identity, so `combine x = H.ga x + H.gb x` is `Int -> Int` and `combine 3` = (3+1) + (3*10) = 34. ⚠️ THE TWO DEFINERS` ARITHMETIC DIFFERS ON PURPOSE -- had both used `+ 1`, swapping which definer a key resolved to would leave the value UNCHANGED and this pair would be inert",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "34\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-reexport-alias-perm-ba/main.mdk",
+    label =
+      "THE PERMUTATION ROW, ORDERING 2 of 2: `lib/hub.mdk`s two `export import` lines EXCHANGED and nothing else varied (definers, spellings, arithmetic and call shape byte-identical to the `-ab` sibling). ⚠️ READ THE PAIR, NOT THE ROW: the value being the SAME as the sibling`s is the entire assertion -- an identical value here is order-invariance, and either fixture ALONE passes an order-decided compiler. Same hand-derived ground truth: 34",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "34\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-alias-name-collides-core-mangle/main.mdk",
+    label =
+      "RUN-XMOD-039 F1 REGRESSION PIN, and one half of the FEATURE-LANDED-PLUS-UNRELATED-CODE-STILL-BEHAVES pair this corpus was missing. ⚠️ NOTHING HERE EXERCISES THE #1337 FEATURE: no `export import` anywhere, no re-export hop, one dependency, one alias import -- which is exactly the point, because AGENTS.md names this the single most expensive defect shape in the tree (\"your feature works perfectly and something unrelated breaks\") and every fixture that DOES exercise the feature passes straight through it. SPEC ANSWER hand-derived from the declarations: `core__foo : Int` = 7 in lib/other.mdk, bound as `O.core__foo` by the alias import, so 7. 🚨 MEASURED AS A REGRESSION INTRODUCED BY THIS SLICE`S FIRST VERSION, on this worktree`s own build: check AND run AND build all exit 1 with ``Unbound variable: O.core__foo`` (plus a cascaded `Ambiguous instance for Display`), no binary -- because the widened test seeded its module-id set with `\"core\"` and `mangledName \"core\" \"\" == \"core__\"`, so an ordinary user binding was misread as already-mangled. The base binary printed 7. ⚠️ THE IDENTIFIER IS THE FIXTURE -- rename `core__foo` to a normal name and this row still passes while testing nothing",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n",
+    codes = [],
+  },
+  Row {
+    entry = "s8-xmod-alias-name-collides-sibling-mangle/main.mdk",
+    label =
+      "RUN-XMOD-039 F2 REGRESSION PIN -- THE ROW THAT BOUNDS THE COLLISION SURFACE, and strictly the more important of the pair. F1`s trigger was one hardcoded constant and deleting it sufficed; THIS one is not a bad constant but a bad KIND OF TEST: with a spelling-keyed decision every module named `a.b` makes `a_b__x` a landmine, so the false-positive surface is UNBOUNDED AND GROWS WITH THE MODULE GRAPH. `lib.other` exports an ordinary binding literally spelled `lib_plain__g` while a DIFFERENT module `lib.plain` (sanitizing to `lib_plain`) is also loaded. SPEC ANSWER hand-derived: `lib_plain__g` = 42, `g x = x + 1` so `g 1` = 2, total 44. 🚨 MEASURED AS A REGRESSION on this worktree`s own build of the slice`s first version: check/run/build all exit 1, ``Unbound variable: O.lib_plain__g`` -- and the diagnostic gave NO hint of the real cause, naming a binding as unbound while it was declared and exported two lines away. Base printed 44. ⚠️ THE REMEDY WAS A CHANGE OF KIND, NOT A NARROWER PATTERN: the test now asks whether the key is a name some loaded module ACTUALLY EXPORTS under its own mangled form, so the golden-path `lib.plain` (which exports the bare `g`) does not match while an emit-path re-exported `lib_plain__g` does. A future agent who repairs a regression here by TIGHTENING THE PREFIX MATCH has reintroduced the class with a smaller surface, not removed it. ⚠️ BOTH IMPORTS ARE LOAD-BEARING -- `import lib.plain.{g}` is what puts `lib.plain` in the loaded set; drop it and the row is inert",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "44\n",
+    codes = [],
+  },
+  Row {
+    entry = "1386-alias-qualified-obligation-checked/main.mdk",
+    label =
+      "§8 I4-adjacent -- THE ISSUE 1386 DRAIN, RE-POINTED from the drained must_fail pin test/must_fail_fixtures/1386-alias-qualified-method-no-obligation-check: a pin asserts a bug STILL REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row replaces it. `A.mth` unambiguously names ifaceas `IA.mth` -- `A` is an alias of `ifacea`, which exports no standalone `mth`, only `IA.mth`; `Blob` implements only `IB` (method `mthb`, deliberately NOT `mth`, so there is no bare-name collision to fall through to). SPEC ANSWER hand-derived, matching the drained pins own claim.txt: reject, `No impl of IA for Blob`. 🚨 MEASURED PRE-FIX (recorded in the drained pins claim.txt): `medaka check` exited 0, `main : Unit`, no diagnostic at all -- the impl obligation for an alias-qualified method occurrence was never checked (`renameAliasedMethods` and `checkImplObligations` were gated on mutually exclusive settings of one flag). Fix: `compiler/types/typecheck.mdk` supplies an `A.<method>` -> declaring-Ident entry for every method the aliased module exports, so `recordImplObligation` now sees this occurrence",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "1386-alias-qualified-obligation-checked/control.mdk",
+    label =
+      "CONTROL for the row above, carried over from the drained pins own control.mdk. Same alias-qualified call shape, same two-interface program, `Blob` genuinely implements `IA` this time -- the interface the occurrence actually names. A valid program that must ACCEPT and print 1. If it breaks, alias-qualified method resolution broke outright, not #1386s narrower obligation-never-checked defect",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "1276-alias-run-arm-obligation-checked/main.mdk",
+    label =
+      "§8 I4-adjacent -- THE ISSUE 1276 DRAIN, RE-POINTED from the drained must_fail pin test/must_fail_fixtures/1276-alias-method-provenance-erased: a pin asserts a bug STILL REPRODUCES, so a fix deletes it and the S0 has NO guard unless a positive row replaces it. Same fix as #1386 above; DIFFERENT symptom -- `A.mth` unambiguously names ifaceas `IA.mth`, `Blob` has no `IA` impl, only an `IB` one, and `IB` ALSO declares a method spelled `mth` (a bare-name collision, unlike #1386s fixture). SPEC ANSWER hand-derived, matching the drained pins own claim.txt: reject, `No impl of IA for Blob`. 🚨 MEASURED PRE-FIX (recorded in the drained pins claim.txt): `check` AND `run` were BOTH clean at exit 0 and `run` printed `2` -- IB`s impl body, selected by the pre-fix bare-name last-write-wins floor once the alias had been erased to a bare `mth` occurrence -- SILENT WRONGNESS at a wrong VALUE, not merely a missed reject. Fix supplies the same alias-provenance entry as #1386s row, closing the same root cause from its OTHER symptom",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "1276-alias-run-arm-obligation-checked/control.mdk",
+    label =
+      "CONTROL for the row above, carried over from the drained pins own control.mdk. Same alias-qualified call shape, same two-module bare-name `mth` collision, `Blob` genuinely implements `IA`. A valid program that must print 1. If it breaks, alias imports or alias-qualified method calls broke outright, not #1276",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "1386-alias-reproB-standalone-collision-rejected/main.mdk",
+    label =
+      "#1386 REPRO B -- constructed fresh per S-alias-supplys report §6.3 (this shape had no committed must_fail fixture; it was only a scratch probe verifying the fix took the SUPPLY shape rather than a de-alias REWRITE, per #1386s own claim.txt why-note (1)). `A.mth` unambiguously names ifaceas `IA.mth`; `fmod` exports an UNRELATED standalone ALSO spelled `mth : Blob -> Int`, returning 42; `Blob` has no `IA` impl at all. SPEC ANSWER hand-derived: reject, `No impl of IA for Blob`. 🚨 DISCRIMINATES THE TWO CANDIDATE FIX SHAPES #1386s claim.txt considered: a de-alias REWRITE of the occurrence (which would leave this cell silently printing 42, fmods standalone body, because the rewritten bare `mth` would resolve to the co-imported standalone) versus the SUPPLY shape actually landed (an additive `A.mth` -> IA keying, which rejects here exactly like the bare-collision siblings above). MEASURED on this worktree`s own build: check/run/build all reject with `No impl of IA for Blob`, confirming the SUPPLY shape",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "1386-alias-reproB-standalone-collision-rejected/control.mdk",
+    label =
+      "CONTROL for the row above: same alias-qualified call shape and the same standalone-name collision, `Blob` genuinely implements `IA`. A valid program that must ACCEPT and print 1 (IAs own impl, not fmods standalone 42). If it breaks, alias-qualified method resolution broke outright, not #1386s narrower defect",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n",
+    codes = [],
+  },
+  Row {
+    entry = "1182-alias-dispatch-half-known-bad/main.mdk",
+    label =
+      "The DISPATCH half of an alias-qualified method occurrence -- which impl body actually RUNS, as opposed to whether an obligation exists for it at all (the CHECKED half, the #1276/#1386 rows above). `Blob` implements BOTH `IA` and `IB`; `A.mth Blob` and `B.mth Blob` name TWO DIFFERENT interfaces. Hand-derived answer 1 then 2, each call dispatching to the impl its own alias names -- and that is now what check, run and build all produce. This was a KNOWN-BAD row (pinned 1,1, re-pinned 2,2 at `cdca5045`) while `renameAliasedMethods` erased `A.mth` to a bare `mth` before dispatch was decided: both occurrences then asked `admittedIfaceFor` under the SAME bare name, one last-write-wins row, and collapsed onto ONE impl. #1386 supply fix keeps the spelling through inference, so `admittedIfaceFor` answers per spelling and the row method-set membership is resolved under the ORIGIN name (`ieSelectRowByMethod`). NOT a closure of #1182/#1265, whose subject is a BARE occurrence with two admitted declarations and no spelling to tell them apart. A value change here is a regression in the alias-spelling channel, and a silent one -- the program is accepted on every verb whichever impl runs",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "1\n2\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-cardinality-same-iface2.mdk",
+    label =
+      "S-cardinality-conformance (closes out #1871): the #1866 shape, RESTORED from the drained must_fail pin. ONE interface, TWO predicates sharing the SAME lead tyvar but DISTINCT argument vectors (`Ix a Char, Ix a Bool`) must dispatch BOTH obligations correctly: 222 (Ix Int Char) + 111 (Ix Int Bool) = 333. Section 3 (IRS) pins the arity this value alone cannot see -- 2 dict slots, not the pre-fix 1. Section 4 auto-permutes the two `impl Ix` blocks (order-independence)",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "333\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-cardinality-inferred.mdk",
+    label =
+      "S-cardinality-conformance (closes out #1871): the #1869 shape, RESTORED from the drained must_fail pin. TWO unsignatured (inferred) bindings, each a single bare-tyvar 2-ary predicate, impls declared in mirrored-opposite orders across the two interfaces. Spec answer 2442 = 222 + 2220, order-independent -- see s-cardinality-inferred-swapped.mdk for the other declaration order and s-cardinality-signatured.mdk for the signatured oracle both must match",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2442\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-cardinality-inferred-swapped.mdk",
+    label =
+      "S-cardinality-conformance (closes out #1871): sibling to s-cardinality-inferred.mdk with BOTH interfaces` impl orders flipped -- the other half of the #1869 order-independence claim, spelled out as its own file rather than relying on section 4`s single-interface block permuter. Same spec answer, 2442",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2442\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-cardinality-signatured.mdk",
+    label =
+      "S-cardinality-conformance (closes out #1871): the SIGNATURED oracle for the inferred pair above -- #1869`s own `control.mdk`, RESTORED. Same impls, bodies and value (2442) as s-cardinality-inferred.mdk, with explicit `=>` signatures. Section 3 (IRS) pins that its slot count MATCHES the inferred twin`s, not merely its value",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "2442\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-cardinality-xmod-reject/main.mdk",
+    label =
+      "S-cardinality-conformance (closes out #1871): the #1868 shape, RESTORED from the drained must_fail pin (S-xmod-vector-supply`s own fixture). The importer instantiates `Ix a Bool` at `Int`, but the definer`s ONLY impl is `Ix Int Char` -- no impl satisfies the goal, so `match(IE, Ix Int Bool)` is empty and the program must be REJECTED (was: silent exit 0, printing 222, pre-fix). Paired with s-cardinality-xmod-accept/ as the reject/accept half of the cross-module cardinality row",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-cardinality-xmod-accept/main.mdk",
+    label =
+      "S-cardinality-conformance (closes out #1871): the ACCEPT half of the cross-module cardinality row, paired with s-cardinality-xmod-reject/. ONE exported bare-tyvar predicate `Ix a b`, ONE impl (no ambiguity), the importer supplying the vector `Int, Bool` across the module boundary. ⚠️ NOT a same-interface TWO-vector cross-module row (the #1866 shape) -- that shape is UNREACHABLE cross-module only when >= 2 IMPLS of an interface SHARE ARGUMENT 0 (the still-open #1867 residual, pinned at test/must_fail_fixtures/1867-xmod-run-build-still-reject/); NOT \"any concrete-argument declared constraint\" -- a single-impl cross-module constrained call accepts fine, called or uncalled (measured; see that fixture). Value 111; section 3 (IRS) pins the arity (1 dict + 2 values = 3 params) the widened cross-module vector table now recovers end to end",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "111\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-shadow-standalone-vector-arity.mdk",
+    label =
+      "FIX-shadow-arity-skew REGRESSION GUARD (review finding F8): the #1866 shape reached through the STANDALONE-SHADOW route instead of the ordinary constrained-call route -- `size` collides with `Sizeable`s method name, so its dicts come from `shadowStandaloneDictSlots`, which expanded through the vector-FREE `expandSupersPairs` and collapsed `(Ix a Char, Ix a Bool)` back to ONE slot against a TWO-slot definition. 🚨 MEASURED at sprint head `e19298f5`: check exit 0, `run` exit 1 E-PANIC `intToString: not an Int`, `build` exit 0 printing a DIFFERENT heap pointer every execution, wasm `instantiate failed: illegal cast` -- three engines, three answers, and s-cardinality-same-iface2.mdk (the same program WITHOUT the shadow) green throughout. Spec answer hand-derived: `size 5` = 222 + 111 = 333, `plain 5` = 222. ⚠️ `plain` is the FEATURE-PRESENT-PLUS-UNRELATED-CODE-STILL-BEHAVES half -- a non-shadow single-predicate standalone beside the widened one, asserting the scalar arm did not move. Section 3 (IRS) carries the two ARITIES, which neither value can see",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "333\n222\n",
+    codes = [],
+  },
+  Row {
+    entry = "s4-2-mixed-vector-no-impl-rejected.mdk",
+    label =
+      "§3/§4.2 THE #1578 REGRESSION ROW (S0, fixed by sprint/entailment-verdict; its must_fail pin was DELETED by the fix per [G-PIN-DRAIN] and this row is the replacement guard). An inferred binding raises the goal `Conv (Wrap a) b` -- a MIXED argument vector, one STRUCTURED argument and one open tyvar -- against a program declaring only `impl Conv Int Bool`. §3 matching is ONE phi against the WHOLE vector and `Wrap a = Int` has no solution, so the matching set is EMPTY on argument 0 alone, and `main` forces the ground goal `Conv (Wrap Int) Bool`, which is equally unsatisfiable. REJECT, T-NO-IMPL, on all three verbs. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0 with an EMPTY --json diagnostics list, run 0 PRINTING `int-bool` (the body of an impl the goal matches on NEITHER argument), build 1 at the emitter -- silent wrongness on two of three verbs. ⚠️ VERDICT AND CODE ONLY, NO LOCATION, deliberately: on this binary the reject lands at the DEFINITION, which is the site #1939 (OPEN, this sprint`s own regression) falsely rejects a LEGAL binding at, and a located pin would enshrine that. #1939`s fix may move the reject to the call site; it must not be able to green this program. ⚠️ ONE impl block, so Section 4 derives no permutation pair -- correct, the defect was ACCEPTANCE, not order",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s4-2-inferred-ground-arg-predicate-checked.mdk",
+    label =
+      "§4 `gen` + §4.2 THE #1905 REGRESSION ROW (S0, fixed by sprint/entailment-verdict; NO must_fail pin ever existed for it, so before this row the S0 had no guard anywhere in the tree). The inferred `useIx x = ix x <Char literal>` generalises over the residual predicate `Ix a Char` whose SECOND argument is GROUND, forced by that literal; `main` instantiates at `a := Char`, giving the goal `Ix Char Char`, and the program declares only `impl Ix Int Char`, so §3 matching set is EMPTY. REJECT, T-NO-IMPL, `No impl of Ix for Char Char`, on all three verbs. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0, run 0, build 0 AND THE SHIPPED BINARY RAN TO COMPLETION PRINTING 222 -- every verb green, every verb wrong, because the ground `Char` was dropped on the way into the deferred obligation and a one-argument goal matched a two-argument impl. ⚠️ ALL_EXACT is unavailable to a REJECT row, so the CODE cell is what separates rejected-for-the-spec-reason from rejected-because-the-fixture-has-a-typo. ⚠️ ONE impl block, so Section 4 derives no permutation pair",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s4-2-dedup-collision-check-not-skipped.mdk",
+    label =
+      "§4.2 OD5/OD6 THE #1330 REGRESSION ROW, AND THE FIRST §4.2 FIXTURE THIS CORPUS HAS EVER HAD (S0, fixed by sprint/entailment-verdict; its must_fail pin was DELETED by the fix per [G-PIN-DRAIN] and this row is the replacement guard). Deduplicating two call obligations must suppress the REPORT of a duplicate, never the CHECK. Body is the drained pin`s main.mdk VERBATIM: two `println` calls of a 2-tuple both dispatch `Display` at the same tuple head, so their call-channel obligations share a dedup key, and `data Color = Red` has no Display impl. Spec answer: the `Display Color` matching set is EMPTY, so REJECT, T-NO-IMPL, with the located deriving-Display help. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0 with an EMPTY --json diagnostics list, build 0, AND THE SHIPPED BINARY DIED AT SIGNAL 139 with empty stdout; only `run` was loud (exit 1, E-PANIC `intToString: not an Int`), and `run` is the verb that does not ship. ⚠️ BOTH `println` LINES ARE LOAD-BEARING -- delete either, or reshape either tuple, and the collision is gone and the file is an ordinary missing-instance program the pre-sprint arm ALSO rejected. ⚠️ NO impl blocks, so Section 4 derives no permutation pair. The pin`s ACCEPT-direction control.mdk is deliberately not carried (green at both arms, so not a regression test); the fixture header says where to find it",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s3-ground-requires-chain-depth-34.mdk",
+    label =
+      "§3 nested `requires` + W1/W2 decidability -- THE #1576 REGRESSION ROW (S0, fixed by sprint/entailment-verdict; its must_fail pin was DELETED by the fix per [G-PIN-DRAIN] and this row is the replacement guard). A GROUND instance-context chain must be discharged to its base case however long it is. `tagOf` at 34 nested `Wrap`s around `5 : Int` selects `impl Tag (Wrap a)` at each layer, discharges `requires Tag a` against the layer below, and bottoms out at `impl Tag Int`: the spec answer, hand-derived, is the sentinel `ALIVE` then 34 `w`s and `int`, ACCEPT on all three verbs with run`s stdout, the SHIPPED BINARY`s stdout and the pinned value byte-identical. MEASURED at the pre-sprint arm `264eb95d` on this tree: check 0 with an EMPTY --json diagnostics list, build 0, and the SHIPPED BINARY printed `ALIVE` then DIED AT SIGNAL 139; `run` reached the same point loudly with a nonsense diagnosis (E-PANIC naming `++ requires Semigroup`, an operator this goal never mentions). 🚨 34 IS LOAD-BEARING: per the drained pin`s claim.txt the cliff sat between 33 and 34 on two arms, so any depth <= 33 grades green on a compiler that still has this bug. ⚠️ THE ROW DOES NOT PROVE THE CLIFF WAS REMOVED RATHER THAN MOVED -- measured first-hand at depth 100 on this base binary (correct, exit 0), but no committed fixture grades above 34. ⚠️ TWO `impl Tag` blocks of one interface in a FLAT .mdk, so Section 4 DOES derive a permutation pair -- deliberately: reversing them puts the recursive impl first and the base case last",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "ALIVE\nwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwwint\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-structured-carry-declared-context-rejected.mdk",
+    label =
+      "§1/§4 THE #1937 REGRESSION ROW (S0, fixed by sprint/structured-predicate-carry; #1937 had NO must_fail pin, so before this row the S0 had no guard anywhere in the tree). A DECLARED context whose predicate argument is STRUCTURED -- `Conv (Wrap a) b`, not a bare `Conv a b` -- must reach the call site as the WHOLE instantiated predicate. The Char call instantiates a := Char, b := Bool, so the goal is `Conv (Wrap Char) Bool` while the only impl in scope is `Conv (Wrap Int) Bool`: §3 matching is ONE phi against the whole vector and `Wrap Char = Wrap Int` has no solution, so the matching set is EMPTY on argument 0 alone. REJECT, T-NO-IMPL, on all three verbs. MEASURED at the pre-slice base `4b45e035` on this tree: check 0, run 0 AND build 0 with the SHIPPED BINARY PRINTING `wrap-int-bool` -- the body of an impl for a DIFFERENT type, on every verb, because the structured argument was inadmissible on all three obligation channels and the declared context was ERASED before the call site was ever consulted. ⚠️ Paired with s-structured-carry-declared-context-kept.mdk, the ACCEPT direction: a fix that rejected here by dropping structured declared contexts entirely would FALSE-REJECT that one, so neither file is meaningful alone. ⚠️ VERDICT AND CODE, NO LOCATION: the span is asserted nowhere so the reject may move between definition and call site without a false red. ⚠️ ONE impl block, so Section 4 derives no permutation pair -- correct, the defect was ACCEPTANCE, not order",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-structured-carry-declared-context-kept.mdk",
+    label =
+      "§1/§4 the ACCEPT direction of #1937`s widening -- THE FALSE-REJECT CANARY for the row above. The same structured declared context, called where the goal IS satisfiable (a := Int, b := Bool, giving `Conv (Wrap Int) Bool`, exactly the impl in scope), so all three verbs ACCEPT and both engines print `wrap-int-bool`. 🚨 THE VALUE CANNOT SEE THE FIX: base `4b45e035` printed `wrap-int-bool` at exit 0 here too, so this row alone grades green on both sides. What moved is the SCHEME, and Section 2 carries it -- base displayed `f : Wrap Int -> Bool -> String` with the context ERASED. That is #607`s and #610`s discriminating shape one scope over: the right value printed with the constraint silently dropped from the type. ⚠️ ONE impl block, so Section 4 derives no permutation pair",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wrap-int-bool\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-open-world-declared-context-uncalled-accepted.mdk",
+    label =
+      "§4.2 OD2 THE #1939 REGRESSION ROW (S1, knowingly landed at #1907`s close-out, fixed by sprint/structured-predicate-carry; #1939 had NO must_fail pin, so before this row it had no guard anywhere in the tree). A goal is refutable only when NO instantiation of it can be satisfied, and `match(IE, pi)` is read against the LOADED module graph -- which never contains the module`s dependents. So a goal still carrying a type VARIABLE must DEFER (OD2), never refute, however empty the current graph looks. Neither `f1` nor `f2` is ever called, so no use site exists and nothing is adjudicated: ACCEPT on all three verbs printing `open-world`. 🚨 BOTH BINDINGS ARE LOAD-BEARING AND THEY TAKE DIFFERENT CHANNELS: `f1`s single-parameter `Tag (Wrap a)` is discharged by the CALL-obligation checker (`checkOneCallObligation`, whose `allConcreteHeads` gate reads `Wrap a` as concrete because it asks for a head TYCON and not for groundness), while `f2`s two-parameter `Conv (Wrap a) b` leaves the body as a RESIDUAL and is adjudicated by `residualRefutableNow`. MEASURED at the pre-slice base `7941e5fe` on this tree: exit 1 with TWO diagnostics, `No impl of Tag for Wrap a` at 44:7 AND `No impl of Conv for Wrap a b` at 47:9; and on an intermediate binary with `residualRefutableNow` alone fixed, `f1`s diagnostic SURVIVED alone. Either binding on its own grades green against half the fix. ⚠️ PAIRED WITH s-open-world-unsatisfiable-use-site-rejected.mdk -- [W-QUIETER] makes the ACCEPT direction half an assertion, because deleting the obligation check outright would also grade green here. ⚠️ NO impl blocks, so Section 4 derives no permutation pair",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "open-world\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-open-world-unsatisfiable-use-site-rejected.mdk",
+    label =
+      "§3 `inst` -- THE ILLEGAL TWIN of the row above and the NARROW half of #1939`s fix: deferral MOVES a verdict, it does not remove one. The same legal `f1 : Tag (Wrap a) => …` declaration, CALLED at `a := Int`, poses the GROUND goal `Tag (Wrap Int)`; a ground goal cannot instantiate further so the open-world argument does not reach it, and `match(IE, …)` is EMPTY and stays empty because the only `Tag` impl heads at `Int`. REJECT, T-NO-IMPL, on all three verbs. 🚨 `impl Tag Int` MUST NOT BE DELETED: it makes the interface non-empty so the reject cannot be reached by the trivial nothing-implements-Tag route the sibling exercises -- the goal has to be refuted for its ARGUMENT, at the site that grounds it. ⚠️ MEASURED REJECT ON ALL THREE VERBS AT BASE `7941e5fe` TOO -- the VERDICT is UNCHANGED across the slice BY DESIGN. What moved is the COUNT: base emitted TWO diagnostics, one at `f1`s DEFINITION and one at `main`s CALL, where head emits only the second. The false reject went, the true one stayed. This is a tripwire, not a demonstration: a fix that bought the sibling`s acceptance by DROPPING the obligation rather than deferring it turns this file green, and green here is the S0. ⚠️ VERDICT AND CODE, NO LOCATION -- which site owns a deferred goal`s verdict is exactly what this slice moves, so a span assertion would enshrine one arm`s answer as the spec. ⚠️ ONE impl block, so Section 4 derives no permutation pair",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-open-world-library-dependent-impl/lib.mdk",
+    label =
+      "§4.2 OD2 THE #1938 REGRESSION ROW (`medaka check <library module>` reading its import closure as a CLOSED world; #1938 had no pin either), AND THE ONLY ENTRY IN THIS CORPUS THAT IS NOT A PROJECT ROOT -- checking the library ALONE is the whole assertion and the main.mdk row below does not make it. `describe x = tag (Wrap x)` infers the residual `Tag (Wrap a)`: concrete head, open argument. The impl that satisfies it is in impls.mdk, which IMPORTS lib, so it is a DEPENDENT and is absent from lib`s own load graph. Refuting here decides a legal library module`s fate by what its consumers happened to be compiled alongside. ACCEPT on check. MEASURED at the pre-slice base `7941e5fe` on this tree: check exit 1, `No impl of Tag for Wrap a` at lib.mdk:18:20. ⚠️ THE CODE CELL IS THE NEGATIVE FORM `!T-NO-IMPL` AND THAT IS THE ASSERTION: an exit code alone cannot tell a fixed checker from one that stopped raising the goal at all, and the absent-code form pins the exact diagnostic that must not come back. ⚠️ run and build REJECT for a reason this row is not about -- lib.mdk has no `main` (E-NO-MAIN / the emitter`s no-main panic), identically at both arms. They are pinned so the row cannot go quietly green on a verb it never exercised",
+    expCheck = "ACCEPT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Absent "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-open-world-library-dependent-impl/main.mdk",
+    label =
+      "§4.2 the PROJECT half of #1938, and NOT merely lib.mdk`s control: the whole graph loaded, `Tag (Wrap Int)` satisfied, ACCEPT on all three verbs printing `wrap-int`. 🚨 IT IS A REGRESSION ROW IN ITS OWN RIGHT AND IT REFUTES THE READING THAT #1938 COSTS ONLY A SPURIOUS DIAGNOSTIC ON AN UNUSUAL CLI INVOCATION. MEASURED at base `7941e5fe` on this tree: check, run AND build ALL exit 1 with `lib.mdk:18:20: No impl of Tag for Wrap a` -- the whole project failed to compile with the satisfying impl in a loaded sibling module, because the refutation is decided per-module against `buildImplUniverse` over that module`s OWN decls and loading the dependent does not rescue it. `main` retains the direct `tag` call so the row stays an open-world control; the historical `describe 5` failure belonged to the now-drained #1560/#1937 structured-residual route and is pinned in dedicated joint-residual fixtures. ⚠️ ONE impl block, so Section 4 derives no permutation pair",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wrap-int\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-instantiated-reselect-declared.mdk",
+    label =
+      "§3 THE #1909 REGRESSION ROW (S0, fixed by sprint/structured-predicate-carry; #1909 had NO must_fail pin, so before this row the S0 had no guard anywhere in the tree). A DECLARED context whose predicate argument is STRUCTURED -- `Tag (Wrap a)`, not the bare `Tag a` that every `=>` constraint in compiler + stdlib + sqlite happens to be -- must be RE-SELECTED PER INSTANTIATION, from the dict the CALLER supplied. `nest True` poses `Tag (Wrap Bool)` and `nest 1` poses `Tag (Wrap Int)`, each a SINGLETON matching set, so the two calls must select DIFFERENTLY: boolW/intW. MEASURED at the pre-slice base `bffced42` on this tree: `boolW/boolW` at exit 0 on check, run AND build alike -- ONE abstraction-time pick applied to both instantiations. 🚨 THE GENERAL IMPL IS DELIBERATELY ABSENT, so a mis-selection has no plausible impl to hide behind: any answer but `boolW/intW` names ONE ground impl twice for two calls at two different types. 🚨 THE DEFECT HAD TWO HALVES AND EITHER ONE ALONE REDS THIS ROW -- the CALL side (`vectorGoal` declined a 1-ary argument vector, so the site keyed its dict on the slot mono `Bool` instead of the predicate argument `Wrap Bool`) and the CONSUMPTION side (no `registerPredGiven` on the signature channel, so `entailAssum` could not answer a structured goal and `entail` fell to `entailInst`). ⚠️ CONSUMPTION-SIDE WITHOUT CALL-SIDE IS MEASURABLY WORSE THAN BASE: the body then reads a dict matching no dispatcher arm and falls into LLVM `unreachable` (#1958). If this row is ever re-derived, that is the order it must not be re-derived into. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair, and that is load-bearing rather than incidental: at base the two declaration orders printed `boolW/boolW` and `intW/intW`, i.e. FIRST-DECLARED-WINS, which DICT §3 forbids outright and which no value pin at a single declaration order can see",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "boolW/intW\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-instantiated-reselect-inferred.mdk",
+    label =
+      "§3/OD6(a) the INFERRED twin of the row above -- byte-for-byte that fixture with the SIGNATURE LINE DELETED, so OD6(a) (a declared context and the identical inferred one adjudicate the same way) forces the same answer: boolW/intW. 🚨 A SEPARATE ROW BECAUSE IT IS A SEPARATE WRITER: the declared context is registered by `registerMember`, the inferred one by `registerInferredFor`, and BOTH were ids-only -- patching one leaves the other statically committed at exit 0 with the pair silently disagreeing, the shape #1869 and #1161 both landed in. MEASURED at base `bffced42`: `boolW/boolW` on check, run and build, identical to its declared twin. ⚠️ THE OBVIOUS INFERRED PROBE IS MIS-SCOPED AND MUST NOT REPLACE THIS ONE: add a general `impl Tag (Wrap a)` (what #1909`s own inferred repro does) and the residual `Tag (Wrap t)` is DISCHARGED by residual reduction at generalization time -- the binding retains no predicate, gets no dict slot under ANY #1909 fix, and `check --types` prints `nest : a -> String` on the unmodified base binary. The general impl has to be ABSENT for the inferred binding to keep a predicate at all. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair; at base the two orders printed `boolW/boolW` and `intW/intW` here too",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "boolW/intW\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-instantiated-reselect-general-sibling.mdk",
+    label =
+      "§3 #1909`s OWN FILED REPRO, and the OVER-NARROWING guard its two-ground-impl siblings cannot be. A general `impl Tag (Wrap a)` beside a specific `impl Tag (Wrap Bool)` gives each call a TWO-member matching set, and §3 takes the min⊑: `nest True` selects the SPECIFIC impl, `nest 1` poses `Tag (Wrap Int)`, which the specific impl does not match at all, and selects the GENERAL one. specificW/genericW. MEASURED at base `bffced42`: `genericW/genericW` at exit 0 on check, run and build -- the abstraction-time pick against the rigid goal `Wrap a` IS the general impl, so base got the first call wrong and the second right by accident. 🚨 THIS IS THE ROW THAT REDS IF THE FIX OVER-NARROWS: its siblings assert a per-instantiation goal is REACHED, this one asserts that reaching it does not lose the general instance. ⚠️ ONE CALL IS NOT ENOUGH, which is why the fixture does not stop at `nest True`: a lone `genericW` -> `specificW` move is equally consistent with the wrong rule always pick the most specific impl in the program, and the `nest 1` arm is what discriminates them. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair -- DICT §3 forbids declaration order deciding a winner even when both candidates match",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "specificW/genericW\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-instantiated-reselect-unsatisfiable-rejected.mdk",
+    label =
+      "§3 `inst` -- the ADMISSION TRIPWIRE for the three rows above. Same declared structured context, same two ground impls, called at a THIRD type: `nest ‘c’` poses the GROUND goal `Tag (Wrap Char)`, whose matching set is EMPTY on argument 0 alone, and a ground goal cannot instantiate further so the open-world argument (OD2, #1939) does not reach it. REJECT, T-NO-IMPL, on all three verbs. ⚠️ MEASURED REJECT AT BASE `bffced42` TOO, with the same message and span (`No impl of Tag for Wrap Char` at 41:16) -- THE VERDICT IS UNCHANGED ACROSS THIS SLICE BY DESIGN and this row cannot go red-to-green across the fix. It is a TRIPWIRE, not a demonstration: #1909 WIDENS the goal the call site is keyed on, from the slot`s bare mono to the predicate`s own structured argument, and a widening that admitted the new goal by UNIFYING it against a non-matching impl head would turn this file green. Green here is the S0. ⚠️ VERDICT AND CODE, NO LOCATION -- which site owns a refuted structured goal`s diagnostic is adjacent to what the neighbouring open-world rows move, so a span assertion would enshrine one arm`s answer as the spec. ⚠️ TWO `impl Tag` blocks, so Section 4 derives a permutation pair, which is wanted: a reject must not depend on declaration order either",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-multiparam-structured-declared-rejected.mdk",
+    label =
+      "§3/§5/§14 OD6 THE S0-1 REGRESSION ROW (S0, introduced by this sprint`s slice 2, fixed by its fix round; the shape had NO row in either direction, which is the hole the end-of-sprint review named). A MULTI-PARAMETER interface with a STRUCTURED predicate argument (`Conv (Wrap a) Int =>`) is admitted and deferred by the declared channel, but the CONSUMPTION side cannot answer it: `registerPredGiven` matches a single-subject `[subject]` vector and returns `()` for anything longer, so `entailAssum` is unreachable by construction, `entail` falls to `entailInst`, and the body is statically committed to the ABSTRACTION-time pick while the caller`s dict goes unread. MEASURED at the pre-fix sprint head `aa36d555` on this tree, cold built: check 0, run 1 (E-PANIC `if condition is not a Bool`), build 0, SHIPPED BINARY PRINTING `T/T` where §3 requires `T/n=42` -- a silent wrong answer, a type-confused dict and an eval-vs-native divergence at once. STABLE at -O0/-O1/-O2 hand-linked from `--keep-ir`, so not #1958 UB. 🚨 AND ORDER-DECIDED: swapping the two `impl Conv` blocks changed the pre-fix answer to `intInt/intInt`, which §3 forbids outright -- Section 4`s permutation pair now grades that half automatically, since BOTH orders must reject. ⚠️ THE ACCEPT SIBLING IS s-open-world-declared-context-uncalled-accepted.mdk`s `f2`, a multi-parameter structured context that legitimately ACCEPTS (its second argument is a bare tyvar, so the goal stays a residual and never reaches the defer gate) -- a fix that refused multi-parameter structured contexts wholesale would false-reject it. ⚠️ VERDICT AND CODE, NO LOCATION. 🚨 DRAINED AND RE-PINNED by #1956 (sprint/nary-predicate-slots slice 2): `registerPredGiven` is now keyed on the WHOLE argument vector, so this program HAS a consumption-side answer -- (assum) applies at the body, each call site discharges its own instantiated goal by (inst), and the row is re-pinned to the ACCEPT and to the value `T/n=42` its own header hand-derived from §3 as correct. The reject this row used to pin was fail-closed conservatism, not the spec`s answer, and it is RED at the sprint base `e4587a04` in this direction",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "T/n=42\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-multiparam-structured-inferred-rejected.mdk",
+    label =
+      "§14 OD6(a) THE INFERRED TWIN of the row above, and NOT its control -- it takes a DIFFERENT channel and is refused by a DIFFERENT conjunct. The declared row is caught because the signature`s context is already REGISTERED when the body goal is checked, so the goal is CLAIMED and must match a given; here `inferredConstraintIds` rejects the compound `Wrap t`, `ids` is empty, `registerInferredFor` returns on its empty-ids guard, and the goal is UNCLAIMED. What refuses it is the ARITY half of `goalSlotStillOpen`: a 2-ary vector can never acquire a given on any channel. MEASURED during the fix round with the claimed-test alone in place: this file printed `boolInt/boolInt` at exit 0 while its declared sibling already rejected -- OD6(a)`s declared/inferred agreement holding only by disagreeing. At the pre-fix head `aa36d555`: check 0, run 0, build 0, all printing `boolInt/boolInt` where §3 requires `boolInt/intInt`. ⚠️ VERDICT AND CODE, NO LOCATION. 🚨 DRAINED AND RE-PINNED by #1956 (sprint/nary-predicate-slots slice 2), and the INFERRED channel drained WITH the declared one rather than needing its own fix: with the registry keyed on the whole vector, `h`s generalized context registers a given that answers its own body goal, so this row is re-pinned to the ACCEPT and to `boolInt/intInt` -- the value its own header hand-derived from §3. VERIFIED SWAP-INVARIANT by hand as well as by Section 4, and `run` and `build` agree. RED at the sprint base `e4587a04` in this direction",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "boolInt/intInt\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-unentailed-structured-body-goal-rejected.mdk",
+    label =
+      "§4.2/§5 THE S0-2 REGRESSION ROW (S0, introduced by this sprint`s slice 2, filed mid-sprint as #1959 with the disposition \"pre-existing\" -- true against slice 3`s base, FALSE against the sprint merge-base `0944ca9d`, where it is a located double reject). DEFER means forward the predicate outward to the binder that quantifies its variables; `g`s binder is a SIGNATURE and a signature is FIXED, so a body goal the declared context does not carry (`Tag (Box a)` where only `Tag (Wrap a)` is declared) can be forwarded nowhere and \"defer\" degrades to DROP. MEASURED at the pre-fix head `aa36d555`: check 0 with ZERO diagnostics, run 1 (E-PANIC `unknown op +`), build 0, SHIPPED BINARY PRINTING `wrapChar` then `boxInt=123` -- `impl Tag (Box Int)`s body evaluating `n + 1` over the Char `z` (ASCII 122). Stable at -O0/-O1/-O2, so not #1958 UB. 🚨 THE FIRST COMPONENT IS LOAD-BEARING: `tagOf (Wrap x)` IS the declared context and must keep deferring, so a gate that rejected both halves would false-reject s-structured-carry-declared-context-kept.mdk and s-instantiated-reselect-declared.mdk. Both goals are at the SAME interface on the SAME variable and only the structural shape tells them apart, which is why the discrimination is `monoSameGiven` on tyvar-cell IDENTITY and not an interface-name compare. ⚠️ VERDICT AND CODE, NO LOCATION",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-nested-rigid-structured-goal-rejected.mdk",
+    label =
+      "§8 I6.1 THE S2-5 REGRESSION ROW (S2, introduced by this sprint`s slice 2, fixed by its fix round). The STRUCTURED sibling of test/typecheck_error_fixtures/rigid_mono_head_key.mdk, whose golden is exactly this reject one level up. `zzz` in `data Bad = Bad zzz` is quantified by NOTHING, and §8 I6.1 calls handing such a variable out as a dispatch key a forgery; `monoHeadIsDecl` catches it at the TOP LEVEL of a goal, but nested one constructor down (`Q (Wrap zzz)`) the head is a real TCon and the conjunct is True either way, so the forgery leaked. A rigid that can never ground has nowhere to defer TO. 🚨 THE DISCRIMINATOR IS THE SECOND DIAGNOSTIC, NOT THE EXIT CODE: at the pre-fix head `aa36d555` this file emitted ONE error (T-TYPE-MISMATCH at the call); at the sprint merge-base `0944ca9d` it emitted TWO, that one AND `No impl of Q for Wrap zzz`. Both arms exit 1, so an exit-only row could not have seen the loss -- which is why BOTH codes are asserted here, and why the bare-rigid control (`qq v`, no `Wrap`, still rejecting on both arms) could not have caught it either. ⚠️ ONE impl block, so Section 4 derives no permutation pair -- correct, the defect was a LOST DIAGNOSTIC, not order",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-TYPE-MISMATCH", Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-nary-given-declared-vector-selects.mdk",
+    label =
+      "§3/§5 THE #1956 REGRESSION ROW (S0, live at the sprint base; #1956/#1937 carried NO must_fail pin, so before this row the shape had no guard anywhere in the tree). A MULTI-ARGUMENT structured declared context must select PER CALL SITE from the dict the caller built: `f`s context IS its body goal, so (assum) applies and §3`s precedence clause forbids the body committing to an impl of its own, while each call site discharges its own instantiated goal by (inst). Both positions differ between the two calls (`Conv (Wrap Int) Bool` vs `Conv (Wrap Char) Int`), which is what makes the VECTOR rather than the LEAD the thing that has to select -- the two `s-multiparam-structured-*` rows both fix the second argument to `Int` and cannot see that difference. MEASURED at the sprint base `e4587a04` on this tree, cold built: run 0 printing `wrap-int-bool/wrap-int-bool`, the FIRST impl`s body for both calls, because `registerPredGiven` matched a single-subject `[subject]` vector and returned `()` for anything longer, so `entailAssum` could never see the predicate and `entail` fell to `entailInst`s abstraction-time commitment. 🚨 AND ORDER-DECIDED: with the two `impl Conv` blocks swapped the base printed `wrap-char-int/wrap-char-int`, which §3 forbids outright -- Section 4`s permutation pair grades that half automatically now. ⚠️ THE REJECT SIBLING IS s-nary-given-nonlead-mismatch-rejected.mdk: a matcher keyed on the lead argument alone would answer this goal AND that one, so neither file is meaningful alone",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "wrap-int-bool/wrap-char-int\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-nary-encl-nonlead-slot-routes.mdk",
+    label =
+      "§3/§5 THE #1904 REGRESSION ROW (S0, live at the merge-base with main). An enclosing function`s own declared context names ONE interface TWICE at two argument vectors that differ only at NON-LEAD TYVAR positions (`(Ix a b c, Ix a c b)`), and its two body occurrences `ix n x y` / `ix n y x` must read TWO DIFFERENT dict slots: (assum) applies twice, to two DIFFERENT assumptions, so at `size 5 x y` at a=Int,b=Char,c=Bool slot 0 is `Ix Int Char Bool` (333) and slot 1 is `Ix Int Bool Char` (111) and the answer is 444. MEASURED at `44257622` on this tree, cold built: check 0, run 0 and build 0 all printing `666` -- 333 twice, the FIRST slot`s dict for both occurrences, a silent wrong answer at exit 0 on BOTH engines. 🚨 TWO independent head-tycon-only encodings had to move for this row, and either alone leaves it red: the KEY (`oblArgKey` -> `cslotVecKey`) rendered every tyvar position as the constant \"*\", so both predicates keyed alike and `dedupSlotVecs` collapsed them into ONE slot -- there was no slot 1 to route to; and the ROUTING (`predArgsAgree`/`monoHeadAgrees`, reached from `enclDictVarOf` -> `enclSlotIndex` -> `indexOfPredGo` pass 1) treated a tyvar position as agreeing with EVERYTHING, so once slot 1 existed it was allocated and never read. Fixing only the key moves `size`s emitted dict arity 4 -> 5 and changes no answer. ⚠️ NOT ORDER-DECIDED IN THE USUAL WAY: swapping the two `impl Ix` blocks also printed `666` at the base, because the collapse is to the first CONTEXT SLOT, not the first IMPL -- Section 4 grades the permutation for free but the value cell is what sees this defect. ⚠️ THE GROUND-POSITION CONTROL is the `(Ix a Char, Ix a Bool)` shape, which routed correctly even at the base because `monoHeadAgrees` can see a ground head",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "444\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-nary-truncated-goal-not-ambiguous/main.mdk",
+    label =
+      "§3 THE #1867 REGRESSION ROW (S1, live at the merge-base with main). `recordCallObligations` records ONE obligation per SHATTERED per-tyvar dict slot, so a call to a two-parameter predicate also records the 1-ary goal `Ix Int` with the second argument DROPPED. That truncation is deliberate (#1161: widening it moves emitted dict arity) and harmless -- until the truncated goal is allowed to DECIDE. It was: `checkOneCallObligation` at arity 1 is `implMatchesReceiverU`, receiver-only, so `Ix Int` matched BOTH `impl Ix Int Char` and `impl Ix Int Bool`, and `checkNestedReqs` posed that 1-ary goal to the min-specific selector, which found two incomparable candidates and reported `T-AMBIGUOUS-INSTANCE` for a program with no ambiguity in it -- the JOINT obligations `Ix Int Char` / `Ix Int Bool` each match exactly one impl by (inst). MEASURED at `44257622` cold built: `check` exit 0 printing `main : Unit` and `check --json` with ZERO diagnostics, while `run` and `build` BOTH exit 1 with the unlocated \"detected during elaboration ... see issue #1812\" surface -- the three verbs DISAGREED, which is why all three columns are asserted. 🚨 IT MUST BE A DIRECTORY FIXTURE: the identical source as ONE module prints 333 at exit 0 even at the base (the diagnostic is recorded there too, but the single-module `run` path never surfaces it), so a flat `.mdk` sibling would have been green at the base and pinned nothing. ⚠️ THE FAIL-CAPABLE HALF is s-nary-truncated-goal-joint-rejects/, without which a fix that deferred the truncated goal and lost the joint one would be green here",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "333\n",
+    codes = [],
+  },
+  Row {
+    entry = "s-nary-truncated-goal-joint-rejects/main.mdk",
+    label =
+      "§3/§5 THE FALSE-ACCEPT CANARY for the row above. EXACTLY ONE dimension flipped: the second impl is `Ix Bool Bool`, so the predicate `useIx 5` actually needs -- `Ix Int Bool` -- has no impl, while `impl Ix Int Char` is still present precisely so the TRUNCATED goal `Ix Int` stays satisfiable by receiver-only matching. Deferring a truncated goal is sound ONLY because the JOINT obligation decides in its place; this row is what fails if that stops being true, since a fix that deferred the truncation WITHOUT the joint obligation behind it would turn this into a silent accept -- a `run` invoking a Char-keyed dict at `Bool`, a type-confused dict at exit 0 (§5) -- and the ACCEPT sibling is green under that broken fix too. ⚠️ NOT RED AT THE MERGE-BASE, DELIBERATELY: #1867s fix is a pure REJECTION-NARROWING, so no verdict moves from reject to accept and this program rejects with `T-NO-IMPL` at `44257622` and at head alike; its value is forward-facing, the standing the s-nary-given-nonlead-mismatch-rejected canary has. ⚠️ VERDICT AND CODE, NO LOCATION",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "s-nary-given-nonlead-mismatch-rejected.mdk",
+    label =
+      "§3 THE FALSE-ACCEPT CANARY for the row above. A declared context answers a body goal only when it IS that goal -- equal length and structural identity at EVERY position, in order -- so `Conv (Wrap a) Int` does NOT answer `Conv (Wrap a) Bool`: (assum) is inapplicable because the predicate is not in P, and (inst) is inapplicable because `phi` must solve `Wrap a = Wrap Int` against the whole vector. `impl Conv (Wrap Int) Int` is present precisely so the CALLER-side obligation at `f 1 True` is satisfiable and the only thing wrong with the program is the body goal`s NON-LEAD position. A matcher keyed on the lead alone, or one reaching for unification instead of structural identity, would accept this and hand the body a `Conv (Wrap Int) Int` dictionary to invoke at `Bool` -- a type-confused dict (§5) at exit 0. ⚠️ NOT RED AT THE SPRINT BASE, DELIBERATELY: #1956`s fix is a pure ACCEPTANCE WIDENING, so no verdict moves from accept to reject and this row rejects at `e4587a04` and at head alike; its value is forward-facing. ⚠️ VERDICT AND CODE, NO LOCATION",
+    expCheck = "REJECT",
+    expRun = "REJECT",
+    expBuild = "REJECT",
+    mode = NoValue,
+    pinned = "",
+    codes = [Present "T-NO-IMPL"],
+  },
+  Row {
+    entry = "ev-global-table-bystander-unaffected/main.mdk",
+    label =
+      "[T-GLOBAL-TABLE] FOR THE PUBLISHED EVIDENCE TABLE (#2549 M2) -- the only row in this file whose printed values are chosen to be INDEPENDENT of dispatch. `evidenceRef` (compiler/types/route_key.mdk) is a new program-global table keyed by `EvId`, and every other fixture in this corpus asserts a dispatch answer, so all of them READ it: a table that answered the wrong goal to the RIGHT question would keep every one of them green. Here the graph is deliberately full of the construct -- wmod applies the constrained `cmod.tally` at two types (two `EDictAt` sites publishing real slot-ordered `Sz Int` / `Sz Bool` routes under distinct ordinals), and umods unconstrained same-named `pick`, reached through an EXPLICIT import, is the #739 empty-routes arm (an `EDictAt` with NO entry in the table, the miss that must stay silent) -- while `main` prints ONLY bystander.mdks values. bystander imports nothing, declares no interface, impls nothing and is monomorphic throughout, so no route lookup stands between its source and its answer. SPEC ANSWER hand-derived from the sources before any engine was run: bump (Tally 5) = Tally 6, bump of that = Tally 7, so bystanderValue = 7 and bystanderTotal = 7 * 3 = 21. The dict-bearing bindings are forced but not printed (208 and 3, derived in wmod.mdk, asserted nowhere) so the run genuinely executes the dictionary path it elaborates. The #739 site is carried by the VERDICT, not by a value: its symptom is a phantom obligation recorded off the bare-name collision, which makes run and build OVER-REJECT a valid program, so ACCEPT on all three verbs is what pins it",
+    expCheck = "ACCEPT",
+    expRun = "ACCEPT",
+    expBuild = "ACCEPT",
+    mode = AllExact,
+    pinned = "7\n21\n",
+    codes = [],
+  },
+]
+
+{- | How many rows `table` owes.
+
+   Written down rather than discovered, so that a table which silently
+   SHRANK is red rather than green over whatever is left. An emptied table
+   would otherwise sweep zero rows and report success, which is the
+   self-no-op the shell gate this replaced guarded against per section with
+   an `n == 0` check. Growing the corpus is expected: add the row and raise
+   the number in the same commit. -}
+tableRows : Int
+tableRows = 197
+
+{- | One row's graded outcome. `note` carries a structural failure — a row
+   naming a fixture that is not there, a spawn that could not start —
+   which has no verdict columns of its own to report. -}
+data Graded = Graded {
+  entry : String,
+  checkV : String,
+  runV : String,
+  buildV : String,
+  grade : String,
+  ok : Bool,
+  note : String,
+}
+
+gradeValue : Mode -> String -> Agreement -> String
+gradeValue NoValue _ _ = "-"
+gradeValue AllExact pinned a =
+  if a.runCode /= 0 || a.buildCode /= 0 then
+    "n/a"
+  else if a.runOut == a.binOut && a.runOut == pinned then
+    "ok"
+  else
+    "DIFF"
+
+structuralRow : String -> String -> Graded
+structuralRow entry note = Graded {
+  entry = entry,
+  checkV = "-",
+  runV = "-",
+  buildV = "-",
+  grade = "-",
+  ok = False,
+  note = " \{note}",
+}
+
+-- The scratch binary's name has to be unique per row, and an entry path can
+-- name a file inside a fixture directory, so the separator becomes part of
+-- the name rather than a directory the build would have to create.
+binName : String -> String
+binName entry = replaceAll "/" "_" entry
+
+{- | The grades that mean "graded, and fine". An ALLOWLIST, deliberately: a
+   `Mode` arm added later (which this module's header invites) must be RED
+   until it is named here, not green by omission. -}
+gradePasses : String -> Bool
+gradePasses grade = grade == "-" || grade == "ok" || grade == "n/a"
+
+-- Why `json` does not satisfy one code assertion, or `None` when it does.
+-- The needle is the `"code":"…"` field `medaka check --json` emits, matched
+-- as a substring of the whole envelope: a diagnostic's code is the one part
+-- of that envelope a row is entitled to depend on.
+codeProblem : String -> CodeAssert -> Option String
+codeProblem json (Present c) =
+  if contains "\"code\":\"\{c}\"" json then None else Some "MISSING:\{c}"
+codeProblem json (Absent c) =
+  if contains "\"code\":\"\{c}\"" json then Some "PRESENT:\{c}" else None
+
+{- | Every code assertion `entry` misses, or an `Err` when `check --json`
+   could not be spawned at all.
+
+   A row with no code assertion spawns nothing: the fourth process per row
+   is paid for only where a row asks for it. The exit code is deliberately
+   not graded here — `checkRunBuild` already pins `check`'s verdict for
+   every row, and grading it twice would make a row that pins a code
+   stricter than the identical row that does not. -}
+codeFailures : List CodeAssert ->
+  String ->
+  <Exec "_", IO> Result String (List String)
+codeFailures [] _ = Ok []
+codeFailures cs entrypath = match runMedaka ["check", "--json", entrypath]
+  Err e => Err "could not run `medaka check --json`: \{e}"
+  Ok (_, json) => Ok (somes (map (codeProblem json) cs))
+
+gradeOne : String -> Row -> <Exec "_", FileRead "_", IO> Graded
+gradeOne scratch r =
+  let entrypath = "\{corpus}/\{r.entry}"
+  let binPath = "\{scratch}/\{binName r.entry}.bin"
+  match readFile entrypath
+    Err e => structuralRow r.entry "missing fixture file: \{e}"
+    Ok _ => match checkRunBuild entrypath binPath
+      Err e => structuralRow r.entry e
+      Ok a => match codeFailures r.codes entrypath
+        Err e => structuralRow r.entry e
+        Ok codeNotes =>
+          let checkV = verdictOf a.checkCode
+          let runV = verdictOf a.runCode
+          -- A `build` ACCEPT must have produced a binary: exit 0 alone
+          -- would let a `NoValue` row pin ACCEPT over a build that
+          -- emitted nothing.
+          let buildV =
+            if a.buildCode == 0 && fileExists binPath then
+              "ACCEPT"
+            else
+              "REJECT"
+          let grade = gradeValue r.mode r.pinned a
+          Graded {
+            entry = r.entry,
+            checkV = checkV,
+            runV = runV,
+            buildV = buildV,
+            grade = grade,
+            ok =
+              checkV == r.expCheck
+                && runV == r.expRun
+                && buildV == r.expBuild
+                && gradePasses grade
+                && codeNotes == [],
+            note = match codeNotes
+              [] => ""
+              _ => " codes=\{unwords codeNotes}",
+          }
+
+rowFailure : Graded -> Option String
+rowFailure g =
+  if g.ok then
+    None
+  else
+    Some
+      "  \{padRight 60 ' ' g.entry} check=\{padRight 7 ' ' g.checkV} run=\{padRight 7 ' ' g.runV} build=\{padRight 7 ' ' g.buildV} value=\{g.grade}\{g.note}"
+
+-- The sweep grades exactly the rows `table` holds, so a graded count that
+-- disagrees with `tableRows` means the sweep itself stopped visiting rows —
+-- a different failure from a row that missed its pin, and one a per-row
+-- failure list cannot report.
+summarize : Int -> List String -> Expectation
+summarize graded failures =
+  if graded /= tableRows then
+    fail
+      "swept \{intToString graded} rows, want exactly \{intToString tableRows}"
+  else
+    summarizeSweep graded failures
+
+sweep : <Exec "_", FileRead "_", IO> Expectation
+sweep = sweepUnits table gradeOne rowFailure summarize
+
+-- A row may name a secondary entry point inside a fixture directory
+-- (`<dir>/control.mdk`), which grades that directory a second way; only
+-- `<dir>/main.mdk` names the unit itself.
+unitOf : String -> String
+unitOf e = match stripSuffix "/main.mdk" e
+  Some d => d
+  None => e
+
+rowEntry : Row -> String
+rowEntry r = r.entry
+
+roster : List String
+roster = map unitOf (map rowEntry table)
+
+{- | Every top-level unit of the corpus: a fixture is either one `.mdk` file
+   or a whole directory. `fixtureDirs` carries the anti-vacuity floor, so a
+   corpus that reads cleanly but holds nothing is an `Err` rather than a
+   green run over zero units. -}
+corpusUnits : <FileRead "_", IO> Result String (List String)
+corpusUnits = match fixtureDirs corpus
+  Err e => Err e
+  Ok dirs =>
+    map
+      (names => sort (map basename dirs ++ filter (endsWith ".mdk") names))
+      (listDir corpus)
+
+test "the table still holds every row it is supposed to" =
+  match expectUnitCount tableRows table
+    Err e => fail "the verdict table \{e}"
+    Ok _ => pass
+
+test "every fixture in the corpus is wired into the table" = match corpusUnits
+  Err e => fail "\{corpus}: \{e}"
+  Ok units => match unrosteredUnits (n => Some n) roster units
+    [] => pass
+    orphans =>
+      fail
+        "present in \{corpus} but not wired into this gate's table: \{debug orphans}"
+
+{- | The `s6-d1-test-body-num-default` row above type-checks that fixture's
+   test bodies but never executes them. Native execution is what observes
+   the literal representation each defaulted body settles on and the
+   generalized local's `Float` use, so the fixture's own `cases.mdk` is run
+   as well. -}
+test "the closed test-body defaulting fixture's own cases run natively" =
+  let cases = "\{corpus}/s6-d1-test-body-num-default/cases.mdk"
+  match testAssertionCount cases ["--native"]
+    Err e => fail e
+    Ok n =>
+      if n == 3 then
+        pass
+      else
+        fail "\{cases}: expected 3 passing assertions, got \{intToString n}"
+
+test "check, run and build agree with every row's verdict, value and codes" =
+  sweep
