@@ -517,12 +517,9 @@ storeBlobCidTextsFrom start limit (Store (BlobHalf _ index _ _) _ _ _) =
 {- | The blob half's declared-type index: every CID text that has a declared
    MIME type, paired with it, in CID-text order and carrying no bytes.
 
-   It exists so a caller can tell two blob halves apart without copying every
-   blob: `storeBlobEntries` answers the same question but hands back a copy of
-   every byte to do it, which is a whole-account walk on a path that only needs
-   to know whether anything moved. Paired with `storeSize` it is an exact
-   identity for the blob half, since a blob's name is its content and this
-   module exposes no way to remove one. -}
+   Whole-index cost, `O(blob count)` — `storeBlobVersion` is the fixed-cost way
+   to tell two blob halves apart; use this only when the pairs themselves are
+   needed, not just whether anything moved. -}
 export
 storeBlobMimeIndex : Store -> List (String, String)
 storeBlobMimeIndex (Store (BlobHalf _ index _ _) _ _ _) =
