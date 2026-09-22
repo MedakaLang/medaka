@@ -687,12 +687,39 @@ Two units do it, and they are not redundant — they fail in opposite directions
 
 | Unit | Catches | Blind to |
 |---|---|---|
-| `pds-alert@.service`, via `OnFailure=` on `pds.service` | a crash loop that exhausts `StartLimitBurst`, within seconds | a single crash that restarted cleanly (journal only); anything that stops the whole box |
+| `pds-alert@.service`, via `OnFailure=` on `pds.service` | the first failed-state transition after arming (including a crash loop), within seconds | further failed-state transitions until re-armed; a single crash that restarted cleanly (journal only); anything that stops the whole box |
 | `pds-healthping.service` + `.timer` | a dead box, a severed network, a wedged-but-running process — the external service alerts when pings stop | nothing, but it is as slow as its grace period |
+
+The push unit has `RemainAfterExit=yes`: after the first successful push it
+stays active (exited), making later `OnFailure=` starts of that instance
+no-ops. `StartLimitIntervalSec=infinity` and `StartLimitBurst=1` also limit
+attempts if the first `curl` fails. Here **one incident** means all repeated
+failed-state transitions of the same unit since its alert instance was armed,
+*not* every transition or a rolling N-minute window. An inactive oneshot
+alone would be garbage-collected, flushing its start-limit counter and
+allowing repeated notifications. The backup alert uses a different template
+instance with its own state. Neither recovery nor `daemon-reload` automatically
+re-arms an alert. After confirming the affected service is healthy and
+acknowledging the incident, run:
+
+```sh
+systemctl reset-failed pds-alert@pds.service
+systemctl stop pds-alert@pds.service
+```
+
+Use `pds-alert@pds-backup.service` for a backup incident. **Do not re-arm
+while the source unit is still flapping**: another failed transition can
+send another push from the same outage. The active state and start counter
+are manager memory, not durable incident storage: a manager restart/reboot
+clears them. This bounds a crash loop within a running manager; it does not
+promise one push across reboots. A failed first delivery must be investigated
+in the journal; it is not automatically retried.
 
 The ping is gated on `/xrpc/_health` answering, so it means "this server
 answered a request end to end" rather than "a timer fired". `curl -f` is what
-makes that true; without it a 500 is still an exit-0 fetch.
+makes that true; without it a 500 is still an exit-0 fetch. It has no
+`OnFailure=`: a continuing outage withholds every ping, leaving the external
+dead-man's switch eligible to alert even after the push unit is saturated.
 
 `Persistent=` is set on the backup timer and deliberately absent from the
 healthping timer. A missed backup should run late — the point is to have an
@@ -717,13 +744,15 @@ interval — fifteen minutes is a reasonable pairing.
 **Test it before trusting it**, which is what E5 actually asks for:
 
 ```sh
-systemctl start pds-alert@pds.service     # the push path alone
+systemctl start pds-alert@pds.service     # the push path alone; consumes its one-start allowance
 kill -9 $(systemctl show -p MainPID --value pds); sleep 40
 systemctl status pds                      # restarted, or failed after the burst
 ```
 
 Paste the notification you received on #1697 — that, not the unit existing, is
-what closes the criterion.
+what closes the criterion. Once service health and delivery are verified,
+acknowledge and reset/stop the instance as described above; otherwise the
+manual test push would suppress the next real failure.
 
 ## Upgrade note: pre-existing secrets at a wider mode
 

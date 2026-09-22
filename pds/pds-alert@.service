@@ -19,6 +19,14 @@
 # the design is two mechanisms rather than one: they fail in opposite
 # directions. Do not delete either on the grounds that the other covers it.
 #
+# A successful push stays active (exited), so subsequent OnFailure starts
+# are no-ops until the operator confirms recovery, stops this instance and
+# resets its start counter. The start limit also caps retries if curl fails.
+# Without RemainAfterExit the inactive unit can be garbage-collected, which
+# clears its rate counter and admits another push during the same crash loop.
+# Manager restart/reboot still clears this in-memory incident boundary;
+# see docs/ops/PDS-DEPLOY.md § "Down-detection".
+#
 # The notification body is deliberately thin — the unit name and an instruction
 # to read the journal. Piping journal text into a third-party push service
 # would put whatever a diagnostic happens to contain into someone else's logs,
@@ -29,9 +37,12 @@
 Description=Push a failure notification for %I
 After=network-online.target
 Wants=network-online.target
+StartLimitIntervalSec=infinity
+StartLimitBurst=1
 
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 EnvironmentFile=/etc/pds/alert.env
 ExecStart=/usr/bin/curl -fsS --max-time 20 \
 	-H "Title: PDS alert: %I failed" \

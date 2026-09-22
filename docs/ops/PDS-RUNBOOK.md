@@ -222,6 +222,25 @@ asleep or otherwise unavailable:
 - If the cause is a regression from the most recent deploy, roll back (step
   5) before investigating further — restoring service takes priority over
   root-causing it live.
+- The first failed-state transition after arming the alert instance attempts
+  one push; later transitions of that same unit are the same incident and
+  are no-ops while the alert instance remains active (exited). Its one-start
+  limit also suppresses retries if the first delivery fails. Check the journal
+  for a failed delivery — there is no automatic retry. A missing push is not
+  proof the service recovered: the separate health-gated dead-man's switch
+  stops receiving pings while the PDS is unhealthy and can still report an
+  ongoing outage. See [Down-detection](PDS-DEPLOY.md#down-detection-two-mechanisms-deliberately).
+- **After** the service is healthy and this incident has been acknowledged,
+  re-arm its push path with `systemctl reset-failed pds-alert@pds.service`
+  **then** `systemctl stop pds-alert@pds.service` (for a backup failure,
+  substitute `pds-alert@pds-backup.service`). Resetting clears a failed-
+  delivery start limit; stopping clears the successful active (exited) state.
+  Do this in that order: after stopping, an inactive instance may unload and
+  `reset-failed` would report "Unit not loaded". Both states must be cleared
+  before a later incident can alert again. Do not re-arm
+  while the source service is flapping; that permits another push for the
+  same outage. A manager reboot also clears this in-memory boundary, so it
+  is not a persistent incident ledger.
 - Any S0/S1 found during recovery restarts the soak clock (step 4) once the
   fix is deployed, not once the service is merely back up.
 

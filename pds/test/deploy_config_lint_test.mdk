@@ -195,11 +195,17 @@ healthpingServiceDirectives = [
   ("curl-fail-on-http-error", "curl -fsS"),
 ]
 
+healthpingServiceForbidden : List (String, String)
+healthpingServiceForbidden = [("per-interval-push", "^OnFailure=")]
+
 -- The alert unit must not carry OnFailure= — it IS the OnFailure target,
 -- and a self-referential one would loop.
 alertServiceDirectives : List (String, String)
 alertServiceDirectives = [
   ("Type-oneshot", "^Type=oneshot"),
+  ("retain-successful-incident", "^RemainAfterExit=yes$"),
+  ("unbounded-interval", "^StartLimitIntervalSec=infinity$"),
+  ("one-start", "^StartLimitBurst=1$"),
   ("EnvironmentFile", "^EnvironmentFile=/etc/pds/alert\\.env$"),
   ("curl-fail-on-http-error", "curl -fsS"),
 ]
@@ -598,6 +604,11 @@ test "pds-healthping.service probes the health route and fails on HTTP errors" =
     "pds/pds-healthping.service is missing a required directive"
     (missingDirectives healthpingService healthpingServiceDirectives)
 
+test "pds-healthping.service does not dispatch a push every interval" =
+  expectNoFindings
+    "a failed healthping must only withhold the dead-man's-switch ping"
+    (presentForbidden healthpingService healthpingServiceForbidden)
+
 test "pds-healthping.timer carries its own schedule directives" =
   expectNoFindings
     "pds/pds-healthping.timer is missing a required directive"
@@ -612,6 +623,41 @@ test "pds-alert@.service carries its own oneshot and curl directives" =
   expectNoFindings
     "pds/pds-alert@.service is missing a required directive"
     (missingDirectives alertService alertServiceDirectives)
+
+-- A later assignment can undo the in-memory incident hold or the retry
+-- limit even if the roster still matches an earlier assignment.
+alertLimitFindings : String -> <FileRead "_"> Result String (List String)
+alertLimitFindings path = match readFile path
+  Err e => Err e
+  Ok text =>
+    let rows =
+      filter
+        (l =>
+          startsWith "StartLimitIntervalSec=" l
+            || startsWith "StartLimitBurst=" l
+            || startsWith "RemainAfterExit=" l)
+        (lines text)
+    if rows
+      == [
+        "StartLimitIntervalSec=infinity",
+        "StartLimitBurst=1",
+        "RemainAfterExit=yes",
+      ] then
+      Ok []
+    else
+      Ok [
+        "\{path}: expected only StartLimitIntervalSec=infinity, StartLimitBurst=1 and RemainAfterExit=yes",
+      ]
+
+alertLimitIn : Result String String ->
+  <FileRead "_"> Result String (List String)
+alertLimitIn (Err e) = Err e
+alertLimitIn (Ok path) = alertLimitFindings path
+
+test "pds-alert@.service retains one incident and one failed attempt" =
+  expectNoFindings
+    "pds-alert@.service must allow only one push until operator re-arms it"
+    (alertLimitFindings alertService)
 
 test "pds-alert@.service has no self-referential OnFailure" =
   expectNoFindings
@@ -673,6 +719,62 @@ test "mutation control: a stripped OnFailure= on pds.service is caught" =
         "pds.service.no-onfailure"
         (without (startsWith "OnFailure=")))
       serviceDirectives)
+
+test "mutation control: an alert unit that forgets its successful incident is caught" =
+  expectFindings
+    "a stripped RemainAfterExit=yes"
+    (missingIn
+      (mutantOf
+        alertService
+        "pds-alert.service.no-retention"
+        (without (startsWith "RemainAfterExit=")))
+      alertServiceDirectives)
+
+test "mutation control: a later RemainAfterExit=no is caught" =
+  expectFindings
+    "a later RemainAfterExit=no overriding incident retention"
+    (alertLimitIn
+      (mutantOf
+        alertService
+        "pds-alert.service.retention-overridden"
+        (appending "RemainAfterExit=no")))
+
+test "mutation control: a removed alert limit is caught" =
+  expectFindings
+    "a stripped StartLimitIntervalSec=infinity"
+    (missingIn
+      (mutantOf
+        alertService
+        "pds-alert.service.no-interval"
+        (without (startsWith "StartLimitIntervalSec=")))
+      alertServiceDirectives)
+
+test "mutation control: a removed alert burst limit is caught" =
+  expectFindings
+    "a stripped StartLimitBurst=1"
+    (missingIn
+      (mutantOf
+        alertService
+        "pds-alert.service.no-burst"
+        (without (startsWith "StartLimitBurst=")))
+      alertServiceDirectives)
+
+alertLimitOverridden : <Exec "_", FileRead "_", FileWrite "_", IO> Result String String
+alertLimitOverridden =
+  mutantOf
+    alertService
+    "pds-alert.service.limit-overridden"
+    (appending "StartLimitBurst=10")
+
+test "mutation control: a later alert burst override is caught" =
+  expectFindings
+    "a later StartLimitBurst=10 overriding the one-start limit"
+    (alertLimitIn alertLimitOverridden)
+
+test "mutation control: the overridden alert copy still passes its roster" =
+  expectNoFindings
+    "the overridden alert copy was expected to pass the directive roster"
+    (missingIn alertLimitOverridden alertServiceDirectives)
 
 test "mutation control: a stripped Caddy HSTS header is caught" =
   expectFindings
@@ -891,6 +993,16 @@ test "mutation control: the Persistent=true copy still passes the timer roster" 
     "the Persistent=true copy was expected to pass the directive roster"
     (missingIn replayingHealthpingTimer healthpingTimerDirectives)
 
+test "mutation control: a healthping with per-interval OnFailure is caught" =
+  expectFindings
+    "a healthping that pages for every failed probe"
+    (presentIn
+      (mutantOf
+        healthpingService
+        "pds-healthping.service.push-every-interval"
+        (appending "OnFailure=pds-alert@%n.service"))
+      healthpingServiceForbidden)
+
 -- Dropping `-f` leaves the unit running and still pinging; it just starts
 -- feeding the dead-man's switch from a server answering every request with
 -- an error.
@@ -929,15 +1041,16 @@ gradedPatterns =
     + length backupServiceDirectives
     + length backupTimerDirectives
     + length healthpingServiceDirectives
+    + length healthpingServiceForbidden
     + length healthpingTimerDirectives
     + length healthpingTimerForbidden
     + length alertServiceDirectives
     + length alertServiceForbidden
 
 patternFloor : Int
-patternFloor = 101
+patternFloor = 105
 
-test "deploy_config_lint grades at least PATTERN_FLOOR=101 patterns" =
+test "deploy_config_lint grades at least PATTERN_FLOOR=105 patterns" =
   if gradedPatterns >= patternFloor then
     Pass
       ">= \{intToString patternFloor} patterns"
@@ -964,9 +1077,9 @@ declaredAssertions =
     (readFile (underRoot "pds/test/deploy_config_lint_test.mdk"))
 
 assertionFloor : Int
-assertionFloor = 46
+assertionFloor = 55
 
-test "deploy_config_lint declares at least ASSERTION_FLOOR=46 `test` blocks" =
+test "deploy_config_lint declares at least ASSERTION_FLOOR=55 `test` blocks" =
   let want = ">= \{intToString assertionFloor} `test` blocks"
   match declaredAssertions
     Err e =>
