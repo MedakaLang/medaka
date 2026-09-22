@@ -356,9 +356,9 @@ test "ref set and read" = expectEqual 42 refResult
 -- ── Block-let recursive ──────────────────────────────────────────────────────
 -- Ported from: t_block_let_recursive
 
-countdownFn n =
-  let go = i => if i == 0 then n else go (i - 1)
-  go 3
+countdownFn n = go 3
+  where
+    go i = if i == 0 then n else go (i - 1)
 test "block-let recursive fn" = expectEqual 42 (countdownFn (42 : Int))
 
 -- ── Where clauses ────────────────────────────────────────────────────────────
