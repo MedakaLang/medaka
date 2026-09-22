@@ -2749,7 +2749,7 @@ verbTable = [
     ventry = "s6-2-t4-open-goal-deferred.mdk",
     vlabel = "...and human means human: `run` must NOT emit the JSON envelope",
     verb = "run",
-    assertion = ANot "^\\{\"files\"",
+    assertion = ANot "(?m)^\\{\"files\"",
   },
   VerbRow {
     ventry = "s6-2-t4-open-goal-deferred.mdk",
@@ -2986,7 +2986,9 @@ gradeScheme _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
 
 summarizeSchemes : Int -> List String -> Expectation
 summarizeSchemes graded failures =
-  if graded /= schemeRows then
+  if schemeRows == 0 then
+    fail "schemeTable lists ZERO rows -- the corpus is unswept"
+  else if graded /= schemeRows then
     fail
       "swept \{intToString graded} rows, want exactly \{intToString schemeRows}"
   else
@@ -3114,7 +3116,9 @@ gradeVerbRow scratch r =
 
 summarizeVerbs : Int -> List String -> Expectation
 summarizeVerbs graded failures =
-  if graded /= verbRows then
+  if verbRows == 0 then
+    fail "verbTable lists ZERO rows -- the corpus is unswept"
+  else if graded /= verbRows then
     fail
       "swept \{intToString graded} rows, want exactly \{intToString verbRows}"
   else
@@ -3163,7 +3167,9 @@ gradeSpan _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
 
 summarizeSpans : Int -> List String -> Expectation
 summarizeSpans graded failures =
-  if graded /= spanRows then
+  if spanRows == 0 then
+    fail "spanTable lists ZERO rows -- the corpus is unswept"
+  else if graded /= spanRows then
     fail
       "swept \{intToString graded} rows, want exactly \{intToString spanRows}"
   else
