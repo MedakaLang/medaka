@@ -121,6 +121,18 @@ A wait for `fd` to become writable, as a wait for `awaitAny`.
 
 Polls the descriptor, so `<Net>` joins `e`.
 
+## `waitFlag`
+
+```
+waitFlag : Ref Bool -> Wait e
+```
+
+A wait for `flag` to be set, as a wait for `awaitAny`.
+
+Satisfying the wait is another task writing the flag, not an extern this
+wait performs, so it adds nothing to `e` — unlike the descriptor and
+deadline waits, one of these fits any row.
+
 ## `deadlineAfter`
 
 ```

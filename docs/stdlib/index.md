@@ -84,6 +84,7 @@ Operations on `Array a`.
 - [`awaitAny`](async.md#awaitany)
 - [`waitRead`](async.md#waitread)
 - [`waitWrite`](async.md#waitwrite)
+- [`waitFlag`](async.md#waitflag)
 - [`deadlineAfter`](async.md#deadlineafter)
 - [`expired`](async.md#expired)
 - [`await`](async.md#await)

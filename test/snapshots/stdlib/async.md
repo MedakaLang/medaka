@@ -1,5 +1,5 @@
 # META
-source_lines=526
+source_lines=538
 stages=DESUGAR,MARK
 # SOURCE
 -- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
@@ -184,6 +184,15 @@ waitWrite fd = WaitWrite fd systemPoller
 
 systemPoller : Poller <Net "_" | e>
 systemPoller = Poller (fds interests timeout => ioPoll fds interests timeout)
+
+{- | A wait for `flag` to be set, as a wait for `awaitAny`.
+
+   Satisfying the wait is another task writing the flag, not an extern this
+   wait performs, so it adds nothing to `e` — unlike the descriptor and
+   deadline waits, one of these fits any row. -}
+export
+waitFlag : Ref Bool -> Wait e
+waitFlag flag = WaitFlag flag
 
 {- | A deadline `d` from now, as a wait for `awaitAny`.
 
@@ -449,8 +458,11 @@ minDeadline a None = a
 minDeadline (Some (x, cx)) (Some (y, cy)) =
   if x <= y then Some (x, cx) else Some (y, cy)
 
--- Every descriptor wait across the park table, one poll entry each, with the
--- poller they carry; `None` when nothing is waiting on a descriptor at all.
+-- Every descriptor wait across the park table, one poll entry each, under a
+-- single poller; `None` when nothing is waiting on a descriptor at all. One
+-- poller serves the whole set because `waitRead` and `waitWrite` are the only
+-- builders of a descriptor wait and both carry `systemPoller`, so the first
+-- one's poller is every one's.
 fdWaitsOf : List (List (Wait e), Unit -> <e> Async e Unit) ->
   Option (Poller e, List (Wait e))
 fdWaitsOf ps =
@@ -564,6 +576,8 @@ isWriteOf _ _ = False
 (DFunDef false "waitWrite" ((PVar "fd")) (EApp (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "systemPoller")))
 (DTypeSig false "systemPoller" (TyApp (TyCon "Poller") (TyRow ((hole "Net")) (Some "e"))))
 (DFunDef false "systemPoller" () (EApp (EVar "Poller") (ELam ((PVar "fds") (PVar "interests") (PVar "timeout")) (EApp (EApp (EApp (EVar "ioPoll") (EVar "fds")) (EVar "interests")) (EVar "timeout")))))
+(DTypeSig true "waitFlag" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyApp (TyCon "Wait") (TyVar "e"))))
+(DFunDef false "waitFlag" ((PVar "flag")) (EApp (EVar "WaitFlag") (EVar "flag")))
 (DTypeSig true "deadlineAfter" (TyFun (TyCon "Duration") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock") (Some "e"))) (TyApp (TyCon "Wait") (TyRow ("Clock") (Some "e"))))))
 (DFunDef false "deadlineAfter" ((PVar "d")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "systemDeadline") (EBinOp "+" (EApp (EVar "monotonicSec") (ELit LUnit)) (EBinOp "/" (EApp (EVar "intToFloat") (EApp (EVar "toMillis") (EVar "d"))) (ELit (LFloat 1000.0)))))))))
 (DTypeSig false "systemDeadline" (TyFun (TyCon "Float") (TyApp (TyCon "Wait") (TyRow ("Clock") (Some "e")))))
@@ -716,6 +730,8 @@ isWriteOf _ _ = False
 (DFunDef false "waitWrite" ((PVar "fd")) (EApp (EApp (EVar "WaitWrite") (EVar "fd")) (EVar "systemPoller")))
 (DTypeSig false "systemPoller" (TyApp (TyCon "Poller") (TyRow ((hole "Net")) (Some "e"))))
 (DFunDef false "systemPoller" () (EApp (EVar "Poller") (ELam ((PVar "fds") (PVar "interests") (PVar "timeout")) (EApp (EApp (EApp (EVar "ioPoll") (EVar "fds")) (EVar "interests")) (EVar "timeout")))))
+(DTypeSig true "waitFlag" (TyFun (TyApp (TyCon "Ref") (TyCon "Bool")) (TyApp (TyCon "Wait") (TyVar "e"))))
+(DFunDef false "waitFlag" ((PVar "flag")) (EApp (EVar "WaitFlag") (EVar "flag")))
 (DTypeSig true "deadlineAfter" (TyFun (TyCon "Duration") (TyApp (TyApp (TyCon "Async") (TyRow ("Clock") (Some "e"))) (TyApp (TyCon "Wait") (TyRow ("Clock") (Some "e"))))))
 (DFunDef false "deadlineAfter" ((PVar "d")) (EApp (EVar "Suspend") (ELam ((PVar "u")) (EApp (EVar "Done") (EApp (EVar "systemDeadline") (EBinOp "+" (EApp (EVar "monotonicSec") (ELit LUnit)) (EBinOp "/" (EApp (EVar "intToFloat") (EApp (EVar "toMillis") (EVar "d"))) (ELit (LFloat 1000.0)))))))))
 (DTypeSig false "systemDeadline" (TyFun (TyCon "Float") (TyApp (TyCon "Wait") (TyRow ("Clock") (Some "e")))))

@@ -181,6 +181,15 @@ waitWrite fd = WaitWrite fd systemPoller
 systemPoller : Poller <Net "_" | e>
 systemPoller = Poller (fds interests timeout => ioPoll fds interests timeout)
 
+{- | A wait for `flag` to be set, as a wait for `awaitAny`.
+
+   Satisfying the wait is another task writing the flag, not an extern this
+   wait performs, so it adds nothing to `e` — unlike the descriptor and
+   deadline waits, one of these fits any row. -}
+export
+waitFlag : Ref Bool -> Wait e
+waitFlag flag = WaitFlag flag
+
 {- | A deadline `d` from now, as a wait for `awaitAny`.
 
    Reads the clock, so `<Clock>` joins `e`. -}
@@ -445,8 +454,11 @@ minDeadline a None = a
 minDeadline (Some (x, cx)) (Some (y, cy)) =
   if x <= y then Some (x, cx) else Some (y, cy)
 
--- Every descriptor wait across the park table, one poll entry each, with the
--- poller they carry; `None` when nothing is waiting on a descriptor at all.
+-- Every descriptor wait across the park table, one poll entry each, under a
+-- single poller; `None` when nothing is waiting on a descriptor at all. One
+-- poller serves the whole set because `waitRead` and `waitWrite` are the only
+-- builders of a descriptor wait and both carry `systemPoller`, so the first
+-- one's poller is every one's.
 fdWaitsOf : List (List (Wait e), Unit -> <e> Async e Unit) ->
   Option (Poller e, List (Wait e))
 fdWaitsOf ps =
