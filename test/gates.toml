@@ -902,6 +902,15 @@ sources = ["pds/*"]
 corpus = []
 toolchain = []
 
+# `split-first` is still accurate (#2595, PR #3028 slice S-the-ledger-is-a-
+# library): `pds/test/vector_ledger.mdk` now reimplements the ledger lookup
+# natively for the vector_runner-driven rows, but this script's own
+# self-test, `check_corpus`, and `--files-for` CLI entry point stay
+# load-bearing — three sibling shell gates (car_vectors, repo_vectors,
+# mst_vectors) still shell out to `--files-for` rather than calling the
+# native module. The script holds a check AND a shared helper for those
+# siblings until each one migrates off it. 764 lines (not 834, #2595's
+# stated count).
 [[gate]]
 name = "pds/test/vector_provenance"
 area = "engines"
@@ -2161,6 +2170,14 @@ sources = ["test/diff_compiler_perf_stage_census.sh"]
 corpus = []
 toolchain = []
 
+# `inverted-polarity` here is deliberate and current, not a stale carry-over
+# (#2595 asked "its tests are already native; derived discovery may retire
+# it?" — a DIFFERENT claim from this row's actual shape). This gate is a
+# KNOWN-FAILURES pin: test/diff_compiler_ported.sh's KNOWN_FAIL ledger asserts
+# the current, wrong interpreter behavior on purpose, so an accidental fix
+# flips it RED (promote-on-fix), same model as diff_compiler_must_fail.sh. Do
+# not reopen the "retire this row" question without first discharging its
+# pins through the inverted-polarity drain protocol.
 [[gate]]
 name = "diff_compiler_ported"
 area = "infra"
