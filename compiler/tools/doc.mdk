@@ -414,7 +414,11 @@ renderSig _ (DData { dataVis = vis, dataName = name, dataParams = params, dataPa
     let head = joinWith " " (name :: tyParamSources params kinds)
     let body = match variants
       [] => ""
-      _ => "\n  = " ++ joinWith "\n  | " (map ppDataVariant variants)
+      _ =>
+        if dataVisAbstract vis then
+          "  -- abstract: the constructors are not exported"
+        else
+          "\n  = " ++ joinWith "\n  | " (map ppDataVariant variants)
     Some (name, "data \{head}\{body}")
 renderSig _ (DInterface { pub = True, name, typarams, typaramKinds, methods }) _ =
   let head = joinWith " " (name :: tyParamSources typarams typaramKinds)
@@ -439,6 +443,13 @@ renderSig _ _ _ = None
 dataVisPrivate : DataVis -> Bool
 dataVisPrivate VisPrivate = True
 dataVisPrivate _ = False
+
+-- An abstract export (`export data`, not `public export data`) publishes the
+-- type and keeps its constructors private, so the reference shows the head
+-- alone: a constructor no importer can name is not part of the surface.
+dataVisAbstract : DataVis -> Bool
+dataVisAbstract VisAbstract = True
+dataVisAbstract _ = False
 
 -- The one module whose unexported `extern`s are documented anyway (hole (c)).
 -- Keyed on the DERIVED module name (post `baseOf`/`chopExt`, the same value
@@ -1130,9 +1141,10 @@ renderInstancesSection entries =
       (map
         (renderEntry True entries)
         (filterDoc (e => entryDoc e /= "") listed))
-  match listed
-    [] => ""
-    _ => "## Instances\n\n\{bullets}\{documented}"
+  if bullets == "" && documented == "" then
+    ""
+  else
+    "## Instances\n\n\{bullets}\{documented}"
 
 orphanLine : List DocEntry -> String -> String
 orphanLine orphans key =

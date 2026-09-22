@@ -379,7 +379,7 @@ The `Set { x, ... }` literal builds its set through this instance.
 impl Monoid (Set a) requires Ord a
 ```
 
-`empty` is the set with no elements.
+The set with no elements.
 
 ```medaka
 > isEmpty (empty : Set Int)

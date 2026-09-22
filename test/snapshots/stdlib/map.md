@@ -606,9 +606,9 @@ export impl Filterable (Map k) where
       Some w => link k w l2 r2
       None => link2 l2 r2
 
-{- | The `Foldable` methods visit values in ascending order of their keys, so
-   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
-   over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+{- | The `Foldable` methods visit the values in ascending key order, so
+   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` fold over
+   the values, not the `(k, v)` pairs. `entries` gives the pairs.
 
    > toList (fromList [(2, 20), (1, 10)])
    [10, 20]
@@ -679,7 +679,7 @@ export impl FromEntries (Map k v) (k, v) requires Ord k where
 -- `empty` is nullary and so dispatches on its result type; the impl's
 -- `requires Ord k` carries no dict here because `Tip` needs none, so a
 -- return-position `empty : Map k v` grounds cleanly.
-{- | `empty` is the map with no entries.
+{- | The map with no entries.
 
    > isEmpty (empty : Map Int Int)
    True -}

@@ -124,10 +124,12 @@ documentation"** — what renders (marked blocks only), what a doc comment
 contains, and what stays out (history, issue numbers, implementation notes).
 
 Import forms: `import map.{Map, get}` (selective), `import map.*` (all exported), `import
-map as M` → `M.get`, and `M.Map` in *type* position too (#2412 — the alias-qualified type is
-the SAME type the by-name import gives; constructors are still not reachable through an
-alias, so `import map.{Map(..)}` for those). `import
-m.{f} as A` / `import m.* as A` rejected, diagnostic names the fix.
+map as M` → `M.get`, `M.Map` in *type* position (#2412 — the alias-qualified type is the
+SAME type the by-name import gives), `M.Tip` for a constructor (expression and pattern
+position) and an interface the same way (#3294) — an alias qualifies the module's whole
+export namespace. A constructor is reachable, bare or aliased, only when its module writes
+`public export data` ([P-PUBLIC-EXPORT]). `import m.{f} as A` / `import m.* as A` rejected,
+diagnostic names the fix.
 
 ⚠️ **[P-IMPORT-BINDS]** Bare `import map` binds NO names but is **not** a no-op — any import
 brings that module's `impl`s into dispatch scope. Example → dossier.

@@ -1,5 +1,5 @@
 # META
-source_lines=529
+source_lines=524
 stages=DESUGAR,MARK
 # SOURCE
 {- | A growable, mutable array.
@@ -394,12 +394,10 @@ growTo cap needed =
 
 {- | Appends every element of `xs`, in order, in one bulk copy.
 
-   Amortized `O(1)` per element: the backing store grows at most once, to
-   the smallest doubling that holds the result, so appending an `n`-element
-   array costs one `blit` of the live prefix (on grow) plus one `blit` of
-   `xs` — never `n` separate single-element grows. `pds/test/read_buffer_test.mdk`
-   covers the growth boundary directly; no doctest here, since asserting a
-   capacity rather than a returned value doesn't fit a doctest's shape. -}
+   Amortized `O(1)` per element. The backing store grows at most once, to
+   the smallest doubling that holds the result, so appending `n` elements
+   costs one copy of the live prefix (when it grows) and one copy of `xs`,
+   not `n` single-element grows. -}
 export
 pushArray : Array a -> Vector a -> Unit
 pushArray xs (Vector backing len) =
@@ -416,13 +414,10 @@ pushArray xs (Vector backing len) =
 
 {- | The live backing array and its length, with no copy.
 
-   For a caller that scans elements in place (an HTTP framer reading
-   buffered bytes, say) and would rather not pay `toArray`'s allocation. The
-   returned array is the vector's own backing store: mutating through it is
-   visible in the vector, and slots at or past the returned length are spare
-   capacity, not live elements. `pds/test/read_buffer_test.mdk` proves the
-   identity directly (a write through the returned array is visible back in
-   the vector); a doctest can show the length but not the aliasing. -}
+   For a caller that scans elements in place and would rather not pay
+   `toArray`'s allocation. The array is the vector's own backing store: a
+   write through it is visible in the vector, and slots at or past the
+   returned length are spare capacity, not live elements. -}
 export
 rawParts : Vector a -> (Array a, Int)
 rawParts (Vector backing len) = (!backing, !len)

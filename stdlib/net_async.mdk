@@ -34,17 +34,12 @@ import time.{Duration}
    Networking works only in a program built for the native target. -}
 
 {- | Connects to `host` on `port`, parking until the handshake finishes
-   instead of blocking the thread in `connect(2)`.
+   instead of blocking the thread.
 
-   The returned socket is already non-blocking, so the `recv`/`send` below
-   park on it without switching it first. Resolving `host` still blocks —
-   `netConnectStart` does that part before there is any descriptor to park
-   on — so this parks for the handshake, which is the wait an unreachable or
-   overloaded peer makes unbounded, and not for a name lookup.
-
-   A descriptor is never handed back except inside `Ok`: every other path
-   closes the socket this opened, because the caller has nothing to close
-   it with. -}
+   The returned socket is already non-blocking. Resolving `host` still
+   blocks; only the handshake parks, which is the wait an unreachable or
+   overloaded peer makes unbounded. On every failure the socket is closed
+   before the `Err` is returned, so the caller has nothing to release. -}
 export
 connect : String -> Int -> Async <Net "_" | e> (Result String Connection)
 connect host port =
@@ -195,11 +190,11 @@ recvUntilStep dl (Connection fd) n (Ok None) = deferThen (expired dl) (late =>
 recvUntilStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
 recvUntilStep _ _ _ (Err e) = deferPure (Err e)
 
-{- | `recv` delivering the chunk as a `Bytes`: a received byte costs the
-   caller one byte, where `recv` pays a boxed machine word per byte. The
-   read still needs somewhere `n` bytes wide to receive into, but that
-   buffer is transient — what the caller retains is sized to what actually
-   arrived, not to `n`. An empty result is end of stream. -}
+{- | `recv` delivering the chunk as a `Bytes`.
+
+   A received byte costs the caller one byte, where `recv` holds a boxed
+   word per byte. The result is sized to what arrived, not to `n`. An empty
+   result is end of stream. -}
 export
 recvBytes : Connection -> Int -> Async <Net "_" | e> (Result String Bytes)
 recvBytes conn n =

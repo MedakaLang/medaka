@@ -672,7 +672,7 @@ export impl Semigroup (Array a) where
     else
       arrayGetUnsafe (i - arrayLength a) b)
 
-{- | `empty` is the empty array.
+{- | The empty array.
 
    > length (empty : Array Int)
    0 -}

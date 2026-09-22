@@ -454,5 +454,3 @@ The values of every occurrence of the flag, in order.
 Ok ["a", "b"]
 ```
 
-## Instances
-

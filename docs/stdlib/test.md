@@ -2,15 +2,12 @@
 
 Assertions for unit tests.
 
-An assertion produces an `Expectation`: `Pass` or `Fail`, each carrying
-the rendered operands the assertion compared, so a reader (or a driver
-reading a compiled probe's output) sees the values and not just a
-verdict. Write a test as `test "name" = expectEqual expected actual`,
-and run the file with `medaka test`, which also runs the doctests and
-`prop` declarations it finds. `runTests` runs a list of tests from an
-ordinary program instead.
-
-Import what you need: `import test.{expectEqual, expectTrue}`.
+An assertion produces an `Expectation`, `Pass` or `Fail`, carrying the
+rendered operands it compared, so a report shows the values and not only
+a verdict. Write a test as `test "name" = expectEqual expected actual`
+and run the file with `medaka test`, which also runs the file's doctests
+and `prop` declarations. `runTests` runs a list of tests from an ordinary
+program instead.
 
 ### `Expectation`
 
@@ -23,10 +20,9 @@ data Expectation
 The result of one assertion.
 
 Both outcomes carry the two operands as rendered text, so a caller can
-report or re-compare them without the `Eq` or `Debug` instance the
-assertion itself used. `Fail` carries a message ahead of them. An
-assertion with nothing to show (`pass`, `fail`) renders both operands
-as the empty string.
+report them without the `Eq` or `Debug` instance the assertion used.
+`Fail` carries a message ahead of them. An assertion with no operands to
+show (`pass`, `fail`) renders both as the empty string.
 
 Instances: `Eq`, `Debug`
 
@@ -96,11 +92,9 @@ expectSatisfies : Debug a => String -> (a -> Bool) -> a -> Expectation
 
 Passes when `x` satisfies `p`, naming the property as `what`.
 
-The escape hatch for a one-off predicate that no other assertion here
-says. `what` completes the sentence "expected …", so it names the
-property rather than restating the call: `"a positive number"`, not
-`"p x"`. The value is rendered either way, so a failure shows what was
-actually tested.
+`what` completes the sentence "expected …", so it names the property
+rather than the call: `"a positive number"`, not `"p x"`. The value is
+rendered in either outcome.
 
 ```medaka
 > expectSatisfies "a positive number" (n => n > 0) 3
@@ -117,7 +111,7 @@ expectEqual : (Eq a, Debug a) => a -> a -> Expectation
 
 Passes when the two values are equal.
 
-The operands, and the message, name both values in their `debug` form.
+The operands and the message render both values in their `debug` form.
 
 ```medaka
 > expectEqual 42 42
@@ -179,9 +173,9 @@ expectAtLeast : (Ord a, Debug a) => a -> a -> Expectation
 
 Passes when `actual` is at least `floor`.
 
-The inclusive peer of `expectGreaterThan`, for a count whose exact value
-is not the point: a census that must find SOMETHING pins a floor, and
-pinning the current count instead would fail on every legitimate growth.
+Inclusive: `actual` equal to `floor` passes. Use it for a count that is
+allowed to grow, where pinning the exact value would fail on every
+addition.
 
 ```medaka
 > expectAtLeast 3 5
@@ -241,13 +235,10 @@ Fail "expected Err but got Ok 1" "Err _" "Ok 1"
 expectErrContains : (Debug e, Debug a, Display e) => String -> Result e a -> Expectation
 ```
 
-Passes when the result is `Err` whose message contains `needle`.
+Passes when the result is an `Err` whose message contains `needle`.
 
-Both halves are required, and for the same reason `expectSpawnFails`
-needs both: a rejection graded on the `Err` constructor alone still
-passes once the error it was written for has been replaced by a
-different one. The needle is matched against `display e`, the sentence a
-caller would print, not against `debug e`'s constructor spelling.
+`needle` is matched against `display e`, the text a caller would print,
+not against the `debug` rendering. An `Ok` fails regardless of `needle`.
 
 ```medaka
 > expectErrContains "no such column" (Err "no such column: age" : Result String Int)
@@ -264,16 +255,11 @@ Fail "expected Err but got Ok 1" "Err containing \"no such column\"" "Ok 1"
 expectOkThen : (Debug e, Display e) => (a -> Expectation) -> Result e a -> Expectation
 ```
 
-Runs `k` on the `Ok` payload, and fails naming the error otherwise.
+Runs `k` on the `Ok` payload, or fails naming the error.
 
-The unwrap-or-fail guard, as a verb. A hand-written `match` whose `Err`
-arm is `expectTrue False` (or any bare `fail`) throws the error away and
-reports only that the step did not reach its assertion; this keeps the
-error in the message, which is the only thing that says WHY.
-
-The payload needs no `Debug`, so this reaches a `Result` whose success
-type is a program type that derives nothing, the case the plain
-`expectOk` cannot take.
+The failure message carries `display e`, so a test whose setup step
+fails says why. The payload needs no `Debug` instance, so this accepts a
+`Result` whose success type derives nothing, which `expectOk` cannot.
 
 ```medaka
 > expectOkThen (n => expectEqual 1 n) (Ok 1 : Result String Int)
@@ -335,8 +321,8 @@ expectTextContainsAll : List String -> String -> Expectation
 
 Passes when `actual` contains every string in `needles`.
 
-An empty `needles` list passes. On failure, the message names the first
-missing string while the operands retain the full requirement and text.
+An empty `needles` list passes. On failure the message names the first
+missing string, and the operands are the full requirement and the text.
 
 ```medaka
 > expectationTag (expectTextContainsAll ["alpha", "gamma"] "alpha beta gamma")
@@ -353,9 +339,9 @@ expectLineContainsAll : List String -> String -> Expectation
 
 Passes when one line of `actual` contains every string in `needles`.
 
-The strings must occur on the same line, in any order. This is useful for
-binding a source location to its diagnostic instead of finding each in a
-different part of a multi-error report.
+The strings must occur on the same line, in any order, so a source
+location and its diagnostic can be required together rather than found
+in different parts of a report.
 
 ```medaka
 > expectationTag (expectLineContainsAll ["file.mdk:3:", "bad type"] "error: file.mdk:3: bad type\nhelp")
@@ -386,15 +372,15 @@ Passes when `actual` begins with `prefix` and contains every string in
 expectEqualText : String -> String -> Expectation
 ```
 
-Passes when two texts are equal after normalizing one trailing
-auto-printed Unit shape: a trailing `()` suffix, or a last line that is
-exactly `0`. Ordinary text ending in the digit `0` is NOT touched — only
-a `0` occupying the whole last line normalizes.
+Passes when two texts are equal after removing one trailing
+auto-printed Unit from each: a trailing `()`, or a last line that is
+exactly `0`.
 
-A mismatch names the first differing line, 1-indexed, rather than
-dumping both texts whole. `expectEqualLines` is the sibling that
-normalizes nothing, for text where a trailing `()` or a whole-line `0`
-is data rather than a driver's artefact.
+Only a `0` occupying the whole last line is removed; text that ends in
+the digit `0` is compared as written. A mismatch names the first
+differing line, 1-indexed. `expectEqualLines` compares without removing
+anything, for text where a trailing `()` or a whole-line `0` is part of
+the answer.
 
 ```medaka
 > expectEqualText "same" "same"
@@ -414,14 +400,9 @@ expectEqualLines : String -> String -> Expectation
 Passes when two texts are equal, naming the first line at which they
 diverge.
 
-`expectEqualText` without the normalizer: nothing is stripped, so a text
-whose last line is exactly `0` compares as itself. Use this whenever a
-trailing `()` or whole-line `0` is part of the real answer rather than a
-driver artifact. `expectEqualText`'s normalizer exists only to absorb that
-artifact, not to disambiguate two genuinely different answers.
-
-Whole texts rather than line lists, so a caller holding captured output
-compares it directly; a caller holding lines joins them with `"\n"`.
+Nothing is removed before comparing, so a text whose last line is
+exactly `0` compares as itself. Both arguments are whole texts; a caller
+holding a list of lines joins them with `"\n"`.
 
 ```medaka
 > expectEqualLines "a\nb" "a\nb"
@@ -455,12 +436,11 @@ Fail "oops" "" ""
 labelFail : String -> Expectation -> Expectation
 ```
 
-`e`, with `label` prefixed onto its message when it is a `Fail`.
+The expectation with `label` prefixed onto its message when it is a
+`Fail`, and unchanged when it is a `Pass`.
 
-For a comparison run under a label (which row, which table, which file)
-the label has to travel WITH the message: `expectAll` forwards the first
-`Fail` out of many and drops everything beside it, so a label kept
-anywhere else is the thing nobody prints.
+`expectAll` reports only the first `Fail`, so a label that says which
+row or file failed has to be on the message to survive aggregation.
 
 ```medaka
 > labelFail "t1" pass
@@ -478,9 +458,8 @@ expectEach : List (String, Expectation) -> Expectation
 Passes when every labelled expectation passes, naming the first that
 does not.
 
-`expectAll` over rows that each need saying which one they were: one
-`test` block sweeping a corpus reports `"users.sql: line 3: …"` instead
-of a bare line number that fits every row equally.
+The failure message is the row's label followed by its own message, as
+in `"users.sql: line 3: …"`.
 
 ```medaka
 > expectEach [("a", pass), ("b", pass)]
@@ -497,16 +476,12 @@ Fail "b: oops" "" ""
 expectNoFindings : String -> Result String (List String) -> Expectation
 ```
 
-Passes when `check` ran and reported nothing.
+Passes when a check ran and reported nothing.
 
-The shape a scan-shaped test wants: a check returns either the reason it
-could not run or the lines it found, and those are three outcomes, not
-two. A plain `expectOk` would pass on a check that ran and found
-violations, and a plain `expectEqual []` would report "could not run" as
-though it were a finding.
-
-`what` names the check, and heads the failure so a suite of scans says
-which one fired.
+A check returns `Err` when it could not run and `Ok` with the lines it
+found when it did. Both a check that could not run and a check that
+found something fail, with different messages and operands. `what`
+names the check and heads the failure message.
 
 ```medaka
 > expectNoFindings "hardening" (Ok [])
@@ -523,11 +498,11 @@ Fail "hardening: could not read pds.service" "no findings" "the check could not 
 expectFindings : String -> Result String (List String) -> Expectation
 ```
 
-Passes when `check` ran and reported at least one finding.
+Passes when a check ran and reported at least one finding.
 
-`expectNoFindings`'s mutation control, where a clean report is the
-failure. The count, not the text: a control proves the check can fire at
-all, and pinning which line fired would restate the check beside it.
+The inverse of `expectNoFindings`, for showing that a check can fire.
+A check that could not run fails, as does one that reported nothing.
+Only the count of findings is reported, not their text.
 
 ```medaka
 > expectFindings "injected secret" (Ok ["shell.mdk:12: literal token"])
@@ -617,18 +592,14 @@ Returns `True` when every test passes.
 expectGolden : String -> String -> <FileRead _> Expectation
 ```
 
-Compares `actual` against the golden file at `path`, via
-`expectEqualText`.
+Compares `actual` against the contents of the golden file at `path`,
+via `expectEqualText`.
 
-Read-only: never writes or blesses a golden. A read failure (most often
-a golden that does not exist yet) surfaces as a `Fail` naming it, so a
-caller doesn't need a separate branch for "no golden" versus "golden
-didn't match."
+Never writes the golden. A file that cannot be read, most often a golden
+that does not exist yet, is a `Fail` naming the path.
 
 ```medaka
 > expectGolden "stdlib/no-such-golden-doctest-fixture.golden" "hello"
 Fail "expected golden stdlib/no-such-golden-doctest-fixture.golden: No such file or directory" "" "hello"
 ```
-
-## Instances
 

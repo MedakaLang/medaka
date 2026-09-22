@@ -327,7 +327,7 @@ export impl Display DateTime where
 export impl Semigroup Duration where
   append a b = addDuration a b
 
--- | `empty` is the zero duration.
+-- | The zero duration.
 export impl Monoid Duration where
   empty = Duration 0
 
