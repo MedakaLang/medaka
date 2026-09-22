@@ -1,5 +1,7 @@
 #!/bin/sh
-# Fixed-control regression for #1724's field/scalar reduction contract.
+# Fixed-control regression for #1724's field/scalar reduction contract, and a
+# source census that pds credential, JWT and session comparisons on secret
+# bytes go only through hmac.ctEq (#2953).
 # POSIX sh; runs on Linux and macOS. Value correctness remains owned by the
 # 944-row field and 1028-row scalar corpus gates.
 set -eu
@@ -373,6 +375,112 @@ source_helpers_ok() {
   return 0
 }
 
+# Occurrences of identifier $1 in $2 as a whole word, comment lines excluded.
+count_word() {
+  awk -v w="$1" '
+    /^[[:space:]]*--/ { next }
+    {
+      line = " " $0 " "
+      while (match(line, "[^A-Za-z0-9_\047]" w "[^A-Za-z0-9_\047]")) {
+        n++
+        line = substr(line, RSTART + RLENGTH - 1)
+      }
+    }
+    END { print n + 0 }
+  ' "$2"
+}
+
+# One top-level declaration: its signature, its clauses, and their indented
+# continuation lines, up to the next column-0 line that belongs to another name.
+extract_source_decl() {
+  name=$1
+  input=$2
+  output=$3
+  awk -v name="$name" '
+    $0 ~ ("^" name " ") { inside = 1; print; next }
+    inside && /^[^[:space:]]/ { exit }
+    inside && $0 !~ /^[[:space:]]*--/ { print }
+  ' "$input" > "$output"
+  [ -s "$output" ]
+}
+
+# The password-digest, JWT-signature and session-fingerprint comparisons reach
+# secret bytes only through hmac.ctEq. Per file: ctEq is the imported one (no
+# local definition shadows it), its occurrence count is the call-site roster,
+# and no `==`, `/=` or `compare` line names a secret-bearing identifier except
+# through `arrayLength`, whose value is public. Per comparing function: its
+# stated number of ctEq calls and no other comparison, XOR accumulation or
+# indexing beside them. The per-function roster is complete: each file's
+# ctEq count is its import plus the roster's calls in that file, so a new
+# comparing function the roster does not name fails the census.
+# A `||` across session records stays legal -- it reveals which record matched,
+# never a byte of one.
+secret_comparisons_ok() {
+  credential=$1
+  jwt=$2
+  store=$3
+  dir=$4
+  mkdir -p "$dir"
+  for spec in \
+    "$credential:2:digest password" \
+    "$jwt:2:secret expected sigSeg" \
+    "$store:9:secret wanted access refresh token fingerprint family consumed previous"
+  do
+    file=${spec%%:*}
+    rest=${spec#*:}
+    expected_calls=${rest%%:*}
+    secrets=${rest#*:}
+    [ "$(grep -F -x -c 'import hmac.{ctEq}' "$file" || true)" -eq 1 ] || return 1
+    [ "$(grep -c '^ctEq[[:space:]]' "$file" || true)" -eq 0 ] || return 1
+    [ "$(count_word ctEq "$file")" -eq "$expected_calls" ] || return 1
+    leaks=$(awk -v secrets="$secrets" '
+      /^[[:space:]]*--/ { next }
+      /==|\/=|compare/ {
+        line = " " $0 " "
+        gsub(/arrayLength [A-Za-z0-9_\047]+/, "", line)
+        k = split(secrets, ids, " ")
+        for (j = 1; j <= k; j++) {
+          if (match(line, "[^A-Za-z0-9_\047.]" ids[j] "[^A-Za-z0-9_\047]")) { n++ }
+        }
+      }
+      END { print n + 0 }
+    ' "$file")
+    [ "$leaks" -eq 0 ] || return 1
+  done
+  roster_credential=0
+  roster_jwt=0
+  roster_store=0
+  for spec in \
+    "credentialVerify:credential:1" \
+    "verifySegments:jwt:1" \
+    "liveRefresh:store:1" \
+    "consumedRefresh:store:1" \
+    "withoutConsumed:store:1" \
+    "hasAccess:store:1" \
+    "withoutRefresh:store:1" \
+    "withoutFamily:store:2" \
+    "storeSessionClose:store:1"
+  do
+    name=${spec%%:*}
+    rest=${spec#*:}
+    which=${rest%%:*}
+    calls=${rest#*:}
+    case $which in
+      credential) file=$credential; roster_credential=$((roster_credential + calls)) ;;
+      jwt) file=$jwt; roster_jwt=$((roster_jwt + calls)) ;;
+      store) file=$store; roster_store=$((roster_store + calls)) ;;
+    esac
+    body="$dir/$name.mdk"
+    extract_source_decl "$name" "$file" "$body" || return 1
+    [ "$(count_word ctEq "$body")" -eq "$calls" ] || return 1
+    if grep -E -q '==|/=|compare|bitXor|[A-Za-z0-9_)]\[' "$body"; then return 1; fi
+  done
+  [ "$(count_word ctEq "$credential")" -eq $((roster_credential + 1)) ] || return 1
+  [ "$(count_word ctEq "$jwt")" -eq $((roster_jwt + 1)) ] || return 1
+  [ "$(count_word ctEq "$store")" -eq $((roster_store + 1)) ] || return 1
+  return 0
+}
+
 find_exact_symbol() {
   binary=$1
   wanted=$2
@@ -681,6 +789,49 @@ if source_helpers_ok "$WORK/field_helper_select_mutant.mdk" "$SCALAR" "$WORK/sou
   fail 'field helper conditional-select mutation is rejected by source structure'
 fi
 pass 'field helper conditional-select mutation is rejected by source structure'
+
+CREDENTIAL="$ROOT/pds/lib/credential.mdk"
+JWT="$ROOT/pds/lib/jwt.mdk"
+STORE="$ROOT/pds/lib/store.mdk"
+secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fail 'credential, JWT and session secret comparisons go only through hmac.ctEq'
+pass 'credential, JWT and session secret comparisons go only through hmac.ctEq'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 / {
+    sub(/ctEq digest \(pbkdf2HmacSha256 /, "digest == (pbkdf2HmacSha256 ")
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_eq_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_eq_mutant.mdk"; then
+  fail 'credential early-exit mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_eq_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-mutant"; then
+  fail 'credential early-exit == mutation is rejected by the secret-comparison census'
+fi
+pass 'credential early-exit == mutation is rejected by the secret-comparison census'
+
+awk '
+  /^hasAccess :/ {
+    print "sameBytes : Array Int -> Array Int -> Int -> Bool"
+    print "sameBytes a b i ="
+    print "  if i >= arrayLength a then True"
+    print "  else if a[i] /= b[i] then False"
+    print "  else sameBytes a b (i + 1)"
+    print ""
+  }
+  /^  now < expires && ctEq wanted access \|\| hasAccess now wanted rest/ {
+    print "  now < expires && (arrayLength wanted == arrayLength access && sameBytes wanted access 0) || hasAccess now wanted rest"
+    next
+  }
+  { print }
+' "$STORE" > "$WORK/store_loop_mutant.mdk"
+if cmp -s "$STORE" "$WORK/store_loop_mutant.mdk"; then
+  fail 'session hand-rolled loop mutation was constructed'
+fi
+if secret_comparisons_ok "$CREDENTIAL" "$JWT" "$WORK/store_loop_mutant.mdk" "$WORK/secret-store-mutant"; then
+  fail 'session hand-rolled early-exit loop mutation is rejected by the secret-comparison census'
+fi
+pass 'session hand-rolled early-exit loop mutation is rejected by the secret-comparison census'
 
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"

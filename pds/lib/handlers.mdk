@@ -142,6 +142,7 @@ import lib.server_core.{
   serviceAuthUnavailableResponse,
 }
 import lib.store.{
+  SessionRotation(..),
   Store,
   sessionFingerprint,
   storeBlobBytes,
@@ -1826,6 +1827,21 @@ accessTokenSeconds = 7200
 refreshTokenSeconds : Int
 refreshTokenSeconds = 7776000
 
+{- | How long a session family lasts, counted from the login that opened it.
+   A family is that login and every session it leads to by rotation, and no
+   rotation carries it past this: ninety days after a password was last
+   presented, the client presents it again. -}
+sessionFamilyLifetimeSeconds : Int
+sessionFamilyLifetimeSeconds = 7776000
+
+{- | How long after a rotation its consumed refresh token may be presented
+   again and still be answered with a working pair. A client that fires
+   several refreshes in a burst presents one token several times, and each
+   presentation after the first is the client's own; past this window a
+   repeat can only be a copy, and it revokes the family. -}
+refreshGraceSeconds : Int
+refreshGraceSeconds = 7200
+
 {- | The access and refresh token this request issues, in that order.
 
    Both are identified by the request's own nonce (`jti`, `lib.jwt`), which is
@@ -1866,9 +1882,15 @@ sessionOutput account access refresh = jObject [
 
 -- Sessions whose refresh token has expired are dropped whenever the session
 -- list is written, so a server nobody logs out of does not accumulate records
--- that can no longer verify anything.
+-- that can no longer verify anything. A rotated session asks for this and is
+-- given no more than what remains of its family (`lib.store`'s
+-- `storeSessionRotate`).
 sessionExpiry : RequestContext -> Int
 sessionExpiry context = context.nowSeconds + refreshTokenSeconds
+
+-- The instant a family opened by a login at this request's instant ends.
+familyEnd : RequestContext -> Int
+familyEnd context = context.nowSeconds + sessionFamilyLifetimeSeconds
 
 {- | Whether the identifier a login presented names this account.
 
@@ -1927,7 +1949,7 @@ applyCreateSession account context store body = do
     storeSessionOpen
       (sessionFingerprint access)
       (sessionFingerprint refresh)
-      (sessionExpiry context)
+      (familyEnd context)
       (storeSessionsPrune
         context.nowSeconds
         (rehashed context password credential store)),
@@ -1956,41 +1978,50 @@ rehashed context password credential store =
 
 {- | `com.atproto.server.refreshSession`: rotate the presented refresh token.
 
-   The seam has already verified the refresh token and named its session
-   (`AuthOutcome`'s fingerprint), so this rotates and nothing else. The
-   consumed token is removed rather than marked, so presenting it a second
-   time finds no session and is refused by the seam — reuse of a rotated
-   refresh token buys an attacker nothing, and costs the legitimate client
-   nothing either, since it already holds the replacement. -}
+   The seam has already verified the refresh token's signature and admitted
+   it (`AuthOutcome`'s fingerprint), which it does for a token a rotation
+   already consumed as well as for a current one: what presenting a consumed
+   token means is `storeSessionRotate`'s to decide. Within
+   `refreshGraceSeconds` of its consumption it is a client racing its own
+   refresh and is answered with a fresh pair in the same family; past that it
+   is a copy, the family is revoked, and the refusal carries the revoked
+   store so the revocation is kept. -}
 applyRefreshSession : Account ->
   RequestContext ->
   Array Int ->
   Store ->
-  Result Response (Store, Json)
-applyRefreshSession account context presented store = do
-  secret <- match storeServerSecret store
-    None =>
-      Err
-        (internalError
-          "This server has no session secret configured and can issue no session")
-    Some value => Ok value
-  let (access, refresh) = mintSessionTokens account secret context
-  let rotation =
-    storeSessionRotate
-      presented
-      (sessionFingerprint access)
-      (sessionFingerprint refresh)
-      (sessionExpiry context)
-      (storeSessionsPrune context.nowSeconds store)
-  rotated <- toResult (invalidToken "Token could not be verified") rotation
-  Ok (rotated, sessionOutput account access refresh)
+  (Store, Response)
+applyRefreshSession account context presented store =
+  match storeServerSecret store
+    None => (
+      store,
+      internalError
+        "This server has no session secret configured and can issue no session",
+    )
+    Some secret =>
+      let (access, refresh) = mintSessionTokens account secret context
+      let rotation =
+        storeSessionRotate
+          presented
+          (sessionFingerprint access)
+          (sessionFingerprint refresh)
+          (sessionExpiry context)
+          context.nowSeconds
+          refreshGraceSeconds
+          (storeSessionsPrune context.nowSeconds store)
+      match rotation
+        Rotated next =>
+          (next, jsonOkResponse (sessionOutput account access refresh))
+        Revoked next => (next, invalidToken "Token could not be verified")
+        NotRotated => (store, invalidToken "Token could not be verified")
 
 {- | `com.atproto.server.deleteSession`: close the presented session.
 
    Closing it revokes BOTH of its tokens: the access token the caller may
    still be holding no longer names an open session, so the seam refuses it
    from the next request on even though its signature is good and its window
-   has not closed. -}
+   has not closed. The whole family is closed, so neither a sibling opened by
+   a replay inside the grace window nor the replay itself outlives it. -}
 applyDeleteSession : RequestContext ->
   Array Int ->
   Store ->
@@ -2046,10 +2077,7 @@ sessionHandled account context outcome store (ProcedureNoInputCall nsid _)
     Unauthenticated =>
       Some (store, authenticationRequired "Authentication Required")
     Authenticated _ presented =>
-      Some
-        (finishSession
-          store
-          (applyRefreshSession account context presented store))
+      Some (applyRefreshSession account context presented store)
   | nsid == deleteSessionNsid = match outcome
     Unauthenticated =>
       Some (store, authenticationRequired "Authentication Required")

@@ -940,13 +940,27 @@ runRefresh port refreshToken =
   let () = println out
   ignoreResult (close conn)
 
--- | A refresh that must be REFUSED — a token already consumed by a rotation,
--- or one belonging to a session that has been closed.
-runRefreshRefused : Int -> String -> <IO, Net "_"> Unit
-runRefreshRefused port refreshToken =
+{- | Presents a refresh token a rotation already consumed, inside the grace
+   window of that rotation, and prints the pair it is answered with. The
+   replay must be answered 200 with a pair of its own: its access token is
+   neither empty nor `previousAccess`, the one the first rotation issued. -}
+runRefreshGraceReplay : Int -> String -> String -> <IO, Net "_"> Unit
+runRefreshGraceReplay port refreshToken previousAccess =
   let conn = mustConnect port
   let () = mustSend conn (postNoInputRequest refreshToken refreshSessionPath)
-  let () = expectStatus "REFRESHREFUSED" 401 (readResponse conn [||])
+  let () = match readResponse conn [||]
+    Err message => report "REFRESHGRACE" False message
+    Ok (200, body, _) =>
+      let access = stringField "accessJwt" body
+      if access == "" || access == previousAccess then
+        report
+          "REFRESHGRACE"
+          False
+          "the replay was not answered with a pair of its own"
+      else
+        println "\{access} \{stringField "refreshJwt" body}"
+    Ok (status, _, _) =>
+      report "REFRESHGRACE" False "status \{intToString status} (wanted 200)"
   ignoreResult (close conn)
 
 -- | Closes the session the presented refresh token belongs to.
@@ -1982,7 +1996,7 @@ runProxyFlood port xff token service path count want =
 
 usage : String
 usage =
-  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-refused|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -2003,7 +2017,8 @@ main = match args ()
   ["login-refused", port, identifier, password] =>
     runLoginRefused (mustPort port) identifier password
   ["refresh", port, token] => runRefresh (mustPort port) token
-  ["refresh-refused", port, token] => runRefreshRefused (mustPort port) token
+  ["refresh-grace-replay", port, token, previous] =>
+    runRefreshGraceReplay (mustPort port) token previous
   ["logout", port, token] => runLogout (mustPort port) token
   ["get-session", port, token, did] => runGetSession (mustPort port) token did
   ["put-preferences", port, token, want] =>

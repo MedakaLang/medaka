@@ -451,13 +451,13 @@ test "the rotated access token reaches a gated route" =
       (getQuery rotatedAccess getSessionNsid)
   expectEqual (outcome response) "200 OK"
 
-{- | The rotation invalidates the token it consumed. Presenting it again finds
-   no session and is refused — the reuse an attacker who stole a refresh token
-   would attempt costs them nothing to try and buys them nothing. -}
-test "the consumed refresh token is refused after the rotation" =
+{- | The rotation invalidates the token it consumed once the grace window has
+   passed. Presenting it after that is refused — the reuse an attacker who
+   stole a refresh token would attempt buys them nothing. -}
+test "the consumed refresh token is refused once the grace window has passed" =
   let (_, response) =
     send
-      (contextAt (testInstant + 120) 6)
+      (contextAt (testInstant + 60 + 7201) 6)
       rotatedStore
       (postNoInput refreshToken refreshSessionNsid)
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
@@ -495,6 +495,227 @@ test "a refresh with no Authorization header is refused" =
       sessionStore
       (postNoInput "" refreshSessionNsid)
   expectEqual (outcome response) "401 Unauthorized AuthenticationRequired"
+
+-- # Session families
+
+daySeconds : Int
+daySeconds = 86400
+
+-- | Refresh with `refresh` at `instant`, giving the store left behind and the
+-- pair the response carried.
+rotateAt : Int -> Int -> Store -> String -> (Store, String, String)
+rotateAt instant seed store refresh =
+  let (next, response) =
+    send (contextAt instant seed) store (postNoInput refresh refreshSessionNsid)
+  (next, field "accessJwt" response, field "refreshJwt" response)
+
+{- | A family rotated three times, the last only ten minutes before the ninety
+   days since its login run out: every token in it is freshly minted, and the
+   refresh token's own signed window runs for another ninety days. -}
+lateChain : (Store, String, String)
+lateChain =
+  let (first, _, firstRefresh) =
+    rotateAt (testInstant + 30 * daySeconds) 20 sessionStore refreshToken
+  let (second, _, secondRefresh) =
+    rotateAt (testInstant + 60 * daySeconds) 21 first firstRefresh
+  rotateAt (testInstant + 90 * daySeconds - 600) 22 second secondRefresh
+
+test "a family is refused past ninety days however recently it rotated" =
+  let (store, access, refresh) = lateChain
+  let before = testInstant + 90 * daySeconds - 300
+  let after = testInstant + 90 * daySeconds + 60
+  let (_, liveResponse) =
+    send (contextAt before 23) store (getQuery access getSessionNsid)
+  let (_, accessResponse) =
+    send (contextAt after 24) store (getQuery access getSessionNsid)
+  let (_, refreshResponse) =
+    send (contextAt after 25) store (postNoInput refresh refreshSessionNsid)
+  expectEach [
+    (
+      "the last rotation's access token works before the family ends",
+      expectEqual "200 OK" (outcome liveResponse),
+    ),
+    (
+      "the same access token is refused once the family has ended",
+      expectEqual "401 Unauthorized InvalidToken" (outcome accessResponse),
+    ),
+    (
+      "the last rotation's refresh token is refused once the family has ended",
+      expectEqual "401 Unauthorized InvalidToken" (outcome refreshResponse),
+    ),
+  ]
+
+{- | A client that refreshes twice in a burst presents one refresh token twice.
+   The second presentation, inside the grace window, is answered with a pair
+   that works, and the first answer's pair keeps working beside it. -}
+test "a consumed refresh token replayed within the grace window still works" =
+  let (store, access, refresh) =
+    rotateAt (testInstant + 120) 26 rotatedStore refreshToken
+  let (_, replayed) =
+    send
+      (contextAt (testInstant + 121) 27)
+      store
+      (getQuery access getSessionNsid)
+  let (_, earlier) =
+    send
+      (contextAt (testInstant + 121) 28)
+      store
+      (getQuery rotatedAccess getSessionNsid)
+  expectEach [
+    ("the replay issued a refresh token", expectNotEqual "" refresh),
+    (
+      "the replay issued a pair unlike the first rotation's",
+      expectNotEqual rotatedAccess access,
+    ),
+    (
+      "the replay's access token reaches a gated route",
+      expectEqual "200 OK" (outcome replayed),
+    ),
+    (
+      "the first rotation's access token still reaches it",
+      expectEqual "200 OK" (outcome earlier),
+    ),
+  ]
+
+-- | The original refresh token, consumed at +60, presented `count - step`
+-- more times a second apart from +120, each against the store the last left.
+replayBurst : Int -> Int -> Store -> (Store, List (Array Int))
+replayBurst step count store =
+  if step >= count then
+    (store, [])
+  else
+    let (next, response) =
+      send
+        (contextAt (testInstant + 120 + step) (40 + step))
+        store
+        (postNoInput refreshToken refreshSessionNsid)
+    let (final, rest) = replayBurst (step + 1) count next
+    (final, response :: rest)
+
+-- | The outcome of one request, the store it left behind discarded.
+answerTo : RequestContext -> Store -> Array Int -> String
+answerTo context store bytes = match send context store bytes
+  (_, response) => outcome response
+
+{- | A client retrying one refresh in a burst presents the consumed token many
+   times inside the grace window. Every presentation is answered with a pair,
+   and each replay's pair supersedes the one before it: however long the
+   burst, one replay-issued session is left open, beside the one the rotation
+   itself issued, rather than one per presentation. -}
+test "a burst of replays inside the grace window leaves one of its pairs open" =
+  let (store, responses) = replayBurst 0 6 rotatedStore
+  let at = contextAt (testInstant + 130) 50
+  let (_, rotation) = send at store (getQuery rotatedAccess getSessionNsid)
+  let served = "200 OK"
+  let refused = "401 Unauthorized InvalidToken"
+  expectEach [
+    (
+      "every replay is answered with a pair",
+      expectEqual (map (_ => served) responses) (map outcome responses),
+    ),
+    (
+      "only the last replay's access token still reaches a gated route",
+      expectEqual
+        [refused, refused, refused, refused, refused, served]
+        (map
+          (response =>
+            answerTo
+              at
+              store
+              (getQuery (field "accessJwt" response) getSessionNsid))
+          responses),
+    ),
+    (
+      "only the last replay's refresh token still rotates",
+      expectEqual
+        [refused, refused, refused, refused, refused, served]
+        (map
+          (response =>
+            answerTo
+              at
+              store
+              (postNoInput (field "refreshJwt" response) refreshSessionNsid))
+          responses),
+    ),
+    (
+      "the first rotation's access token still reaches a gated route",
+      expectEqual served (outcome rotation),
+    ),
+  ]
+
+{- | Family A: the logged-in session, rotated at +60 (`refreshed`) and again
+   at +7000, so its current access token is still inside its own two hours
+   when the original refresh token is replayed at +7261, past the grace window
+   of its consumption at +60. Family B: a second login at +7000, which that
+   replay must not touch. -}
+revocation : (Store, Store, String, String, String, String, Array Int)
+revocation =
+  let (familyA, currentAccess, currentRefresh) =
+    rotateAt (testInstant + 7000) 31 rotatedStore rotatedRefresh
+  let (twoFamilies, siblingResponse) = login (testInstant + 7000) 32 familyA
+  let (revoked, replay) =
+    send
+      (contextAt (testInstant + 7261) 33)
+      twoFamilies
+      (postNoInput refreshToken refreshSessionNsid)
+  (
+    twoFamilies,
+    revoked,
+    currentAccess,
+    currentRefresh,
+    field "accessJwt" siblingResponse,
+    field "refreshJwt" siblingResponse,
+    replay,
+  )
+
+test "a replay past the grace window revokes its whole family at once" =
+  let (before, revoked, access, refresh, _, _, replay) = revocation
+  let at = contextAt (testInstant + 7262) 34
+  let (_, beforeResponse) = send at before (getQuery access getSessionNsid)
+  let (_, accessResponse) = send at revoked (getQuery access getSessionNsid)
+  let (_, refreshResponse) =
+    send at revoked (postNoInput refresh refreshSessionNsid)
+  expectEach [
+    (
+      "the replay itself is refused",
+      expectEqual "401 Unauthorized InvalidToken" (outcome replay),
+    ),
+    (
+      "the family's current access token worked before the replay",
+      expectEqual "200 OK" (outcome beforeResponse),
+    ),
+    (
+      "the family's current access token is refused after it",
+      expectEqual "401 Unauthorized InvalidToken" (outcome accessResponse),
+    ),
+    (
+      "the family's current refresh token is refused after it",
+      expectEqual "401 Unauthorized InvalidToken" (outcome refreshResponse),
+    ),
+  ]
+
+test "a revocation leaves a sibling family on the same account open" =
+  let (_, revoked, _, _, siblingAccess, siblingRefresh, _) = revocation
+  let (_, accessResponse) =
+    send
+      (contextAt (testInstant + 7262) 35)
+      revoked
+      (getQuery siblingAccess getSessionNsid)
+  let (_, refreshResponse) =
+    send
+      (contextAt (testInstant + 7262) 36)
+      revoked
+      (postNoInput siblingRefresh refreshSessionNsid)
+  expectEach [
+    (
+      "the sibling's access token still reaches a gated route",
+      expectEqual "200 OK" (outcome accessResponse),
+    ),
+    (
+      "the sibling's refresh token still rotates",
+      expectEqual "200 OK" (outcome refreshResponse),
+    ),
+  ]
 
 -- # deleteSession
 

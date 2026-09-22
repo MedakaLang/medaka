@@ -49,6 +49,7 @@ import lib.credential.{
   credentialIterations,
   credentialSalt,
 }
+import lib.store.{SessionRow(..)}
 import shell.blockfile.{blockFileRead, blockFileSweepStaging, blockFileWrite}
 
 blocksDir : String -> String
@@ -198,36 +199,75 @@ export
 sessionsPath : String -> String
 sessionsPath dir = "\{dir}/sessions"
 
--- One session per line: access fingerprint, refresh fingerprint, and the
--- instant the refresh token expires, space-separated, the two fingerprints in
--- hex. Neither field is a bearer token -- both are SHA-256 digests of one
--- (`lib.store`'s `sessionFingerprint`) -- so what this file holds cannot be
--- presented to the server it was read from.
-sessionRowText : (Array Int, Array Int, Int) -> String
-sessionRowText (access, refresh, expires) =
-  "\{encode access} \{encode refresh} \{intToString expires}"
+{- One row per line, space-separated, every fingerprint in hex. An open
+   session is its access fingerprint, refresh fingerprint, expiry, and family;
+   a consumed refresh token is the word `consumed`, its fingerprint, its
+   family, the instant it was consumed, the instant the family ends, and, once
+   a replay inside the grace window has opened a session from it, that
+   session's refresh fingerprint. A five-field consumed row is one no replay
+   has opened a session from. No
+   field is a bearer token -- each fingerprint is a SHA-256 digest of one
+   (`lib.store`'s `sessionFingerprint`), and a family is named by one -- so
+   what this file holds cannot be presented to the server it was read from.
 
-sessionsText : List (Array Int, Array Int, Int) -> String
+   A three-field row is an open session written before families existed. It
+   is read as a family of its own, named by its refresh fingerprint and ending
+   at its own expiry: that expiry was a login's or a rotation's instant plus
+   the ninety-day refresh window, so the family ends no later than a family
+   opened at that instant would. -}
+sessionRowText : SessionRow -> String
+sessionRowText (OpenSessionRow access refresh expires family) =
+  "\{encode access} \{encode refresh} \{intToString expires} \{encode family}"
+sessionRowText (ConsumedRefreshRow refresh family at ends replayed) =
+  let fields =
+    "consumed \{encode refresh} \{encode family} \{intToString at} \{intToString ends}"
+  match replayed
+    None => fields
+    Some session => "\{fields} \{encode session}"
+
+sessionsText : List SessionRow -> String
 sessionsText rows = join "\n" (map sessionRowText rows)
 
-parseSessionRow : String -> Result String (Array Int, Array Int, Int)
+rowFingerprint : String -> Result String (Array Int)
+rowFingerprint text =
+  mapErr
+    (message => "persist: sessions file has an invalid fingerprint: \{message}")
+    (decode text)
+
+rowInstant : String -> Result String Int
+rowInstant text = match toInt text
+  None => Err "persist: sessions file has a non-numeric instant"
+  Some instant => Ok instant
+
+parseSessionRow : String -> Result String SessionRow
 parseSessionRow line = match split " " (trim line)
   [accessHex, refreshHex, expiresText] => do
-    access <- mapErr
-      (message =>
-        "persist: sessions file has an invalid fingerprint: \{message}")
-      (decode accessHex)
-    refresh <- mapErr
-      (message =>
-        "persist: sessions file has an invalid fingerprint: \{message}")
-      (decode refreshHex)
-    match toInt expiresText
-      None => Err "persist: sessions file has a non-numeric expiry"
-      Some expires => Ok (access, refresh, expires)
+    access <- rowFingerprint accessHex
+    refresh <- rowFingerprint refreshHex
+    expires <- rowInstant expiresText
+    Ok (OpenSessionRow access refresh expires refresh)
+  [accessHex, refreshHex, expiresText, familyHex] => do
+    access <- rowFingerprint accessHex
+    refresh <- rowFingerprint refreshHex
+    expires <- rowInstant expiresText
+    family <- rowFingerprint familyHex
+    Ok (OpenSessionRow access refresh expires family)
+  ["consumed", refreshHex, familyHex, atText, endsText] => do
+    refresh <- rowFingerprint refreshHex
+    family <- rowFingerprint familyHex
+    at <- rowInstant atText
+    ends <- rowInstant endsText
+    Ok (ConsumedRefreshRow refresh family at ends None)
+  ["consumed", refreshHex, familyHex, atText, endsText, replayedHex] => do
+    refresh <- rowFingerprint refreshHex
+    family <- rowFingerprint familyHex
+    at <- rowInstant atText
+    ends <- rowInstant endsText
+    replayed <- rowFingerprint replayedHex
+    Ok (ConsumedRefreshRow refresh family at ends (Some replayed))
   _ => Err "persist: sessions file has a malformed row"
 
-parseSessionRows : List String ->
-  Result String (List (Array Int, Array Int, Int))
+parseSessionRows : List String -> Result String (List SessionRow)
 parseSessionRows [] = Ok []
 parseSessionRows (line :: rest) =
   if trim line == "" then
@@ -246,7 +286,7 @@ parseSessionRows (line :: rest) =
    backup window or a version bump does not log every client out. -}
 export
 persistSessions : String ->
-  List (Array Int, Array Int, Int) ->
+  List SessionRow ->
   <FileRead "_", FileWrite "_"> Result String Unit
 persistSessions dir rows = do
   () <- ensureRoot dir
@@ -265,8 +305,7 @@ persistSessions dir rows = do
    an expired row is returned as readily as a current one, and the caller
    prunes against the instant it is starting at. -}
 export
-persistLoadSessions : String ->
-  <FileRead "_"> Result String (List (Array Int, Array Int, Int))
+persistLoadSessions : String -> <FileRead "_"> Result String (List SessionRow)
 persistLoadSessions dir =
   if not (fileExists (sessionsPath dir)) then
     Ok []

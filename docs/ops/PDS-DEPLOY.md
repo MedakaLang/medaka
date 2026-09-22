@@ -206,6 +206,17 @@ One command repoints the symlink; the restart is what makes systemd re-exec
 against it. Nothing under `/opt/pds/releases/` needs deleting to roll back —
 old stamps stay on disk as the rollback targets until an operator prunes them.
 
+**Rolling back past the session-family format needs one more step.** Sprint
+`the-security-claim-is-proven` (#3342, starting at commit `53e688404`)
+changed `<data>/sessions` to write each session's family and a row per
+consumed refresh token. A newer build still reads the older three-field
+file, but an older build cannot read the newer one: it refuses to start
+with `serve: persist: sessions file has a malformed row` and exits 1,
+restarting into the same refusal. It fails closed, which is right, but the
+rollback does not come up. Before restarting onto a stamp built from before
+that change, delete the file (`rm <data>/sessions`); every client is logged
+out and signs in again with the password, and nothing else is lost.
+
 🚨 **`systemctl is-active` is NOT a readiness signal, and checking too early
 will tell you a working rollback failed.** The unit is `Type=simple`, so
 systemd reports `active` the instant it forks. This server needs **~4–5

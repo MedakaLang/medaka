@@ -233,10 +233,10 @@ audienceFor account _ = accessAudience account
 
 -- Whether the session the token belongs to is still open. A refresh route
 -- asks after the refresh half, every other route after the access half.
-sessionOpen : AuthPolicy -> Array Int -> Store -> Bool
-sessionOpen RefreshRoute fingerprint store =
-  storeRefreshActive fingerprint store
-sessionOpen _ fingerprint store = storeAccessActive fingerprint store
+sessionOpen : AuthPolicy -> Int -> Array Int -> Store -> Bool
+sessionOpen RefreshRoute now fingerprint store =
+  storeRefreshActive now fingerprint store
+sessionOpen _ now fingerprint store = storeAccessActive now fingerprint store
 
 {- | Verify a presented bearer token against this server's own session secret,
    configured account, and open sessions. The token's subject must be the
@@ -277,7 +277,7 @@ verifiedCredential account policy context store token =
         Err jwtError => refusedCredential jwtError
         Ok claims =>
           let fingerprint = sessionFingerprint token
-          if sessionOpen policy fingerprint store then
+          if sessionOpen policy context.nowSeconds fingerprint store then
             GoodCredential claims.sub fingerprint
           else
             InvalidCredential
