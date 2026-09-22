@@ -56,6 +56,7 @@ import types.repr.{
   effrowLabels,
   atomLabel,
   atomParam,
+  normHole,
   drender,
 }
 import types.typecheck.{
@@ -597,7 +598,7 @@ listIsEmpty _ = False
 atomToToml : Atom -> String
 atomToToml a =
   let label = atomLabel a
-  match atomParam a
+  match normHole (atomParam a)
     PPrefix (Some s) => "\{label} = \"\{s}\""
     PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
     PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table

@@ -165,6 +165,26 @@ Clock = true'
   fi
 fi
 
+# ── case 6: surviving inferred-hole marker renders as ⊤ (#3322) ───────────────
+# `entry`'s WRITTEN signature carries the inferred-hole marker `_` directly
+# (`<Net "_">`), so the atom `atomToToml` sees is `PPrefix (Some "_")`
+# unchanged — it must fold to the bare ⊤ grant `Net = true`, not print the
+# literal hole string `Net = "_"`.
+HOLE_FIX="$ROOT/test/check_policy_fixtures/manifest_hole_plugin.mdk"
+[ -f "$HOLE_FIX" ] || { fail_case "hole-golden" "missing $HOLE_FIX"; }
+
+if [ -f "$HOLE_FIX" ]; then
+  got="$(perl -e 'alarm 90; exec @ARGV' "$NATIVE" manifest "$HOLE_FIX" --fn entry 2>&1)"
+  expected='[package.capabilities]
+FFI = true
+Net = true'
+  if [ "$got" = "$expected" ]; then
+    ok_case "hole-golden (surviving inferred-hole atom renders as ⊤)"
+  else
+    fail_case "hole-golden" "expected: $expected; got: $got"
+  fi
+fi
+
 echo ""
 printf '%d ok, %d failing\n' "$pass" "$fail"
 [ "$fail" -eq 0 ] || exit 1
