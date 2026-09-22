@@ -1033,6 +1033,28 @@ is #2816's own open scope — the remaining work there is a ceiling that
 distinguishes sources (e.g. a per-source cap on un-framed connections) so that
 one source cannot spend the whole census.
 
+**Accepted for the proxied deploy shape, 2026-09-22.** The measurement above
+was taken directly against `pdsd`, no proxy — the shipped deployment always
+puts Caddy (`pds/Caddyfile`) in front. Measured behind a throwaway instance of
+that same reverse-proxy shape: the identical reconnecting 70-socket flood that
+pins the direct measurement's gate at the cap for the whole window
+(`unframed=64` throughout, 96/100 legitimate probes denied) never moves
+`pdsd`'s own un-framed census past 0 when run through the proxy instead
+(144/144 stats samples read `unframed=0`, 100/100 probes answered in
+milliseconds). The mechanism: Caddy's `reverse_proxy` only dials the upstream
+once it has a complete request to forward, and a caller stalling its own
+headers AT CADDY never produces one, so it never causes Caddy to open (or
+hold open) a corresponding upstream connection — the flood is absorbed
+entirely at Caddy's own connection layer, which this admission gate never
+sees. This is an ACCEPTANCE of the residual, not a fix: `maxUnframedConnections`
+still does not distinguish sources, and the gap above is still #2816's open
+scope. The acceptance is voided the moment the deployment serves a
+direct bind (no proxy) — already the case per `docs/ops/PDS-DEPLOY.md`'s
+loopback-only default — or a proxy configuration that dials the upstream
+before the client's headers are complete (unlike `pds/Caddyfile`'s plain
+`reverse_proxy` directive). `docs/ops/PDS-LAUNCH-PLAN.md` row B13 carries the
+same dated acceptance and voiding condition.
+
 The body-phase half of this IS fixed: a connection that terminates its headers
 and then stalls over a body that never arrives is closed by
 `bodyProgressTimeout`, so a mixed or pure body-stall flood does not hold

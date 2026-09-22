@@ -292,7 +292,10 @@ maxConcurrentConnections = 256
 
    The charge is global rather than per-caller because no peer identity
    exists before headers: `accept` yields a `Connection` and the runtime has
-   no `getpeername`, and `X-Forwarded-For` needs a parsed request. -}
+   no `getpeername`, and `X-Forwarded-For` needs a parsed request.
+
+   This gap is accepted, dated, and conditioned on the shipped proxy shape —
+   `docs/design/ATPROTO-PDS-DESIGN.md`'s `maxUnframedConnections` passage. -}
 maxUnframedConnections : Int
 maxUnframedConnections = 64
 
