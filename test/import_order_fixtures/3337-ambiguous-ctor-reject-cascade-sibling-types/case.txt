@@ -1,0 +1,47 @@
+entry: main.mdk
+what: #3337 an ambiguous ctor collision between two full-type `(..)` imports
+cascades an extra diagnostic in ONE import order only
+
+History: this fixture was originally `1284-overlay-sibling-ctor-beats-named-import`,
+proving `Sib` imported BY NAME from `zmod` in the first clause was not out-ranked by
+a `Sib` ride-along dragged in when `cmod`'s import of the unrelated `CtorOnly`
+overlaid the whole of `data Wrap` (#1284, drained 2026-08-05 by #1319 unit 1 — see
+test/IMPORT-ORDER-LEDGER.txt's drain block). Original shape:
+
+    import zmod.{ZZ, Sib, unz}
+    import cmod.{CtorOnly, unw}
+
+2026-09-22 (#3314's landing, sprint one-table-every-form): naming a bare ctor
+member directly (`Sib`, `CtorOnly`) is now a hard reject (R-BARE-CTOR-IMPORT), so
+the tree-wide migration rewrote both clauses to the type's full `(..)` form:
+
+    import zmod.{ZZ(..), unz}
+    import cmod.{Wrap(..), unw}
+
+But `zmod.ZZ` and `cmod.Wrap` both declare a `Sib` constructor
+(`data ZZ = Sib String | Zed`, `data Wrap = CtorOnly Int | Sib Int`). Under the new
+import model there is no legal way left to bring in "just Sib from zmod" without
+importing the whole of `ZZ`, so `(..)`-importing both types makes `Sib` genuinely,
+unavoidably ambiguous — a scenario the OLD by-name-import form could never
+construct at all. #1284's original invariant ("exit 0, prints `s`, every ordering")
+no longer holds and cannot be restored without changing what this fixture tests.
+
+Measured via `medaka check --json` on both import orderings (both exit 1):
+
+    zmod clause first -> R-AMBIGUOUS-CTOR alone
+    cmod clause first -> R-AMBIGUOUS-CTOR + 2x T-TYPE-MISMATCH ("Int vs String",
+                          "ZZ vs Wrap")
+
+Same shape as the still-open #733 cascade (bare ctor name falls through to a
+flat/ambiguous resolution whose extra diagnostics depend on clause order), though
+reached via a different route (whole-type `(..)` collision rather than a bare
+member import) — filed separately as #3337 rather than folded into #733, since the
+two have not been traced to a common source-level cause, only inferred to share a
+shape. There is also an emitter-verdict disagreement on this fixture, same
+mechanism as #733's own row: test/EMITTER-VERDICT-LEDGER.txt.
+
+Directory renamed from `1284-...` to `3337-...` per test/IMPORT-ORDER-LEDGER.txt's
+own rule that a ledgered row's directory must be named `<issue-number>-...`.
+
+Ledgered in test/IMPORT-ORDER-LEDGER.txt and test/EMITTER-VERDICT-LEDGER.txt
+against #3337.
