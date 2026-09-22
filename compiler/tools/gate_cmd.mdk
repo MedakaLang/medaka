@@ -1525,7 +1525,7 @@ gateTiersErrors g
   ]
   | otherwise = tierTokensErrors g.name g.tiers
 
--- Check 10 (#2591): every entry's `migration` is one of the eight destinations
+-- Check 10 (#2591): every entry's `migration` is one of the destinations
 -- the schema comment in `compiler/tools/gate_registry.mdk` defines.  `migration` is a required TOML string with
 -- no enum check at parse time, exactly like `cost` before check 8 — and a
 -- migration value nothing recognizes is worse than a typo'd cost, because the
@@ -1538,13 +1538,16 @@ migrationClassOk m =
     || m == "shell:trust-anchor"
     || m == "shell:instrumentation"
     || m == "shell:external-harness"
+    || m == "blocked:interactive-handle"
+    || m == "blocked:concurrent-spawn"
+    || m == "blocked:detached-process"
     || m == "split-first"
     || m == "inverted-polarity"
     || m == "done"
 
 migrationClassNames : String
 migrationClassNames =
-  "native-wrap/native-rewrite/shell:trust-anchor/shell:instrumentation/shell:external-harness/split-first/inverted-polarity/done"
+  "native-wrap/native-rewrite/shell:trust-anchor/shell:instrumentation/shell:external-harness/blocked:interactive-handle/blocked:concurrent-spawn/blocked:detached-process/split-first/inverted-polarity/done"
 
 invalidMigrationViolations : List Gate -> List String
 invalidMigrationViolations [] = []
@@ -1554,23 +1557,50 @@ invalidMigrationViolations (g :: gs)
     "\{g.name}: migration '\{g.migration}' is not one of \{migrationClassNames}"
       :: invalidMigrationViolations gs
 
--- Check 11 (#2591): the `shell-because:` pairing.  A `shell:*` migration is an
--- EXEMPTION — this gate is never going native — and an exemption one side
--- grants itself is not reviewable.  So the reason has to be stated where the
--- reader of the exempted thing will see it: the `run` script carries a
--- `shell-because: <class> …` header line, and it must name the SAME class the
--- registry does.  A mismatch is the interesting failure — a script that stops
--- being a trust anchor and becomes ordinary would otherwise keep its exemption
--- with nothing anywhere disagreeing.
-shellBecauseTag : String
-shellBecauseTag = "shell-because:"
+-- Checks 11 and 12 (#2591, #2595): the two PAIRED migration families.  Both are
+-- claims about the script rather than about the epic's schedule, and a claim one
+-- side grants itself is not reviewable — so the reason is stated where the
+-- reader of the script will see it, on a header line naming the SAME class the
+-- registry names.  A mismatch is the interesting failure: a script that stops
+-- being a trust anchor, or that gains the capability it was waiting for, would
+-- otherwise keep its old label with nothing anywhere disagreeing.
+data HeaderPairing = HeaderPairing {
+  prefix : String,
+  tag : String,
+  claim : String,
+  classes : String,
+}
 
--- The class a `shell:*` value names (`trust-anchor`), or `""` for every other
--- migration value — the "this entry needs no header" answer.
-shellClassOf : String -> String
-shellClassOf m =
-  if startsWith "shell:" m then
-    stringSlice (stringLength "shell:") (stringLength m) m
+-- Check 11: a `shell:*` migration is an EXEMPTION — this gate is never going
+-- native.
+shellPairing : HeaderPairing
+shellPairing = HeaderPairing {
+  prefix = "shell:",
+  tag = "shell-because:",
+  claim = "stays-shell exemption",
+  classes = "reason classes",
+}
+
+-- Check 12: a `blocked:*` migration says a runner capability the native vehicle
+-- does not have yet is what holds this row in shell.  That is a different claim
+-- from `native-wrap`'s "needs nothing built first", and unlike an exemption it
+-- EXPIRES: the day the capability lands the row is portable.  Pairing it with
+-- the script is what makes the expiry findable — the registry and the script
+-- have to name the same missing capability.
+blockedPairing : HeaderPairing
+blockedPairing = HeaderPairing {
+  prefix = "blocked:",
+  tag = "blocked-because:",
+  claim = "capability blocker",
+  classes = "capabilities",
+}
+
+-- The class a prefixed value names (`trust-anchor`, `detached-process`), or `""`
+-- for every other migration value — the "this entry needs no header" answer.
+classAfterPrefix : String -> String -> String
+classAfterPrefix prefix m =
+  if startsWith prefix m then
+    stringSlice (stringLength prefix) (stringLength m) m
   else
     ""
 
@@ -1581,51 +1611,53 @@ stripHash s =
   let t = stringTrim s
   if startsWith "#" t then stripHash (stringSlice 1 (stringLength t) t) else t
 
--- The class token of a `shell-because:` line, or `None` if the line is not one.
+-- The class token of a header line, or `None` if the line is not one.
 -- `firstToken` (check 1's helper) takes the first whitespace-separated word, so
 -- the rest of the line is free prose.
-becauseClassOf : String -> Option String
-becauseClassOf line =
+becauseClassOf : String -> String -> Option String
+becauseClassOf tag line =
   let t = stripHash line
-  if startsWith shellBecauseTag t then
+  if startsWith tag t then
     Some
       (firstToken
-        (stringTrim
-          (stringSlice (stringLength shellBecauseTag) (stringLength t) t)))
+        (stringTrim (stringSlice (stringLength tag) (stringLength t) t)))
   else
     None
 
-becauseClasses : List String -> List String
-becauseClasses [] = []
-becauseClasses (l :: ls) = match becauseClassOf l
-  Some c => c :: becauseClasses ls
-  None => becauseClasses ls
+becauseClasses : String -> List String -> List String
+becauseClasses _ [] = []
+becauseClasses tag (l :: ls) = match becauseClassOf tag l
+  Some c => c :: becauseClasses tag ls
+  None => becauseClasses tag ls
 
-shellBecauseErrors : String -> Gate -> <IO> List String
-shellBecauseErrors root g =
-  let want = shellClassOf g.migration
+pairedHeaderErrors : HeaderPairing -> String -> Gate -> <IO> List String
+pairedHeaderErrors p root g =
+  let want = classAfterPrefix p.prefix g.migration
   if want == "" then
     []
   else match readFile (joinPath root g.run)
     Err m => [
       "\{g.name}: migration '\{g.migration}' but its run script cannot be read to confirm the reason: \{g.run}: \{m}",
     ]
-    Ok src => match becauseClasses (splitNl src)
+    Ok src => match becauseClasses p.tag (splitNl src)
       [] => [
-        "\{g.name}: migration '\{g.migration}' but \{g.run} carries no 'shell-because: \{want}' header line — a stays-shell exemption the script itself never states",
+        "\{g.name}: migration '\{g.migration}' but \{g.run} carries no '\{p.tag} \{want}' header line — a \{p.claim} the script itself never states",
       ]
       c :: _ =>
         if c == want then
           []
         else
           [
-            "\{g.name}: migration '\{g.migration}' but \{g.run} states 'shell-because: \{c}' — registry and script name different reason classes",
+            "\{g.name}: migration '\{g.migration}' but \{g.run} states '\{p.tag} \{c}' — registry and script name different \{p.classes}",
           ]
 
-shellBecauseViolations : String -> List Gate -> <IO> List String
-shellBecauseViolations _ [] = []
-shellBecauseViolations root (g :: gs) =
-  shellBecauseErrors root g ++ shellBecauseViolations root gs
+pairedHeaderViolations : HeaderPairing ->
+  String ->
+  List Gate ->
+  <IO> List String
+pairedHeaderViolations _ _ [] = []
+pairedHeaderViolations p root (g :: gs) =
+  pairedHeaderErrors p root g ++ pairedHeaderViolations p root gs
 
 -- ── a native gate must grade the whole process it spawns (#2823, #2890) ─────
 
@@ -2407,7 +2439,14 @@ verifyClasses root gates shs = match gateCandidates root
       ("invalid cost class", invalidCostViolations gates),
       ("invalid tiers", invalidTiersViolations gates),
       ("invalid migration class", invalidMigrationViolations gates),
-      ("unpaired shell-because", shellBecauseViolations root gates),
+      (
+        "unpaired shell-because",
+        pairedHeaderViolations shellPairing root gates,
+      ),
+      (
+        "unpaired blocked-because",
+        pairedHeaderViolations blockedPairing root gates,
+      ),
       ("native gate stdout-only grading", nativeGradeViolations root gates),
     ]
 
