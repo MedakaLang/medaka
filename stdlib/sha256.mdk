@@ -1,22 +1,21 @@
+-- An element outside the byte domain is refused rather than reduced modulo
+-- 256: reducing it would map two different messages onto one digest, which a
+-- content-addressing caller cannot detect.
 {- | SHA-256 hashing of a byte array (FIPS 180-4).
 
    A message is an `Array Int` with each element from `0` to `255`, the same
    form `readFileBytes` and `hex.decode` use. The digest is 32 bytes, most
    significant byte of each word first.
 
-   `sha256` panics when any element is outside `0` to `255`. Reducing such an
-   element modulo 256 would map two different messages onto one digest, which
-   a content-addressing caller has no way to detect. `sha256FixedBytes` is
-   the same hash without that scan, for a caller whose bytes are already
+   `sha256` panics when any element is outside `0` to `255`. `sha256FixedBytes`
+   is the same hash without that check, for a caller whose bytes are already
    known to be in range.
 
    There is no incremental form. A message is hashed in one call.
 
-   `sha256` (the checked entry) is tail-recursive over the whole message and
-   relies on native's `musttail` lowering; the tree-walking interpreter has
-   no TCO, so under `medaka run`/`test` it overflows its stack around tens
-   of kilobytes even though `sha256FixedBytes` and native builds handle a
-   megabyte and more. -}
+   Under the interpreter (`medaka run`, `medaka test`), `sha256` overflows the
+   stack on a message longer than about 25 kilobytes. `sha256FixedBytes` and
+   native builds hash messages of a megabyte and more. -}
 
 -- Arithmetic contract. Every word is an `Int` in [0, 2^32). `mask32 x =
 -- bitAnd x 4294967295`, and every `+`, `shiftLeft` and `bitNot` result is
@@ -272,12 +271,11 @@ sha256AssumeByteDomain msg =
 -- pad, a SHA-256 digest or caller-canonical scalar bytes. Running the
 -- byte-domain scan over those would put a secret-derived early exit inside
 -- the signing closure.
-{- | The 32-byte SHA-256 digest of `msg`, skipping the byte-domain check.
+{- | The 32-byte SHA-256 digest of `msg`, without checking the byte domain.
 
-   Every element of `msg` must still be in `0` to `255`. Nothing here checks
-   that, and an element outside the range silently digests as some other
-   message. Prefer `sha256` unless the bytes come from a source that already
-   guarantees the range. -}
+   Every element of `msg` must be in `0` to `255`. An element outside that
+   range is not detected and yields the digest of some other message. Use
+   `sha256` unless the bytes are already known to be in range. -}
 export
 sha256FixedBytes : Array Int -> Array Int
 sha256FixedBytes msg = sha256AssumeByteDomain msg

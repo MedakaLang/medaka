@@ -512,9 +512,9 @@ key.
 impl Foldable (Map k)
 ```
 
-The `Foldable` methods visit values in ascending order of their keys, so
-`toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
-over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+The `Foldable` methods visit the values in ascending key order, so
+`toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` fold over
+the values, not the `(k, v)` pairs. `entries` gives the pairs.
 
 ```medaka
 > toList (fromList [(2, 20), (1, 10)])
@@ -606,7 +606,7 @@ The `Map { k => v, ... }` literal builds its map through this instance.
 impl Monoid (Map k v) requires Ord k
 ```
 
-`empty` is the map with no entries.
+The map with no entries.
 
 ```medaka
 > isEmpty (empty : Map Int Int)

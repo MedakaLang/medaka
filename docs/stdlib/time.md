@@ -345,5 +345,5 @@ impl Semigroup Duration
 impl Monoid Duration
 ```
 
-`empty` is the zero duration.
+The zero duration.
 

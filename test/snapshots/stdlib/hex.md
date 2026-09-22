@@ -65,7 +65,7 @@ encodeAs : Bytes -> Bool -> String
 encodeAs bs upper =
   stringFromChars (arrayFromList (encodeGo bs (B.length bs - 1) upper []))
 
-{- | `b` as lowercase hex, two digits per byte.
+{- | The byte string as lowercase hex, two digits per byte.
 
    > encodeBytes (fromArrayAssumeByteDomain [|255, 0, 16|])
    "ff0010" -}
@@ -118,7 +118,7 @@ decodeGo chars i n acc
       None => Err "hex.decode: invalid hex digit"
       Some lo => decodeGo chars (i + 2) n (hi * 16 + lo :: acc)
 
-{- | The bytes written in a hex string.
+{- | The bytes written in a hex string, as a `Bytes`.
 
    `Err` when the string has an odd length or any character that is not a
    hex digit. Whitespace is not skipped.

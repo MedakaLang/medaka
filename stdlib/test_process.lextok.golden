@@ -28,17 +28,24 @@ IDENT "string"
 DOT_LBRACE
 IDENT "contains"
 COMMA
+IDENT "drop"
+COMMA
 IDENT "endsWith"
+COMMA
+IDENT "indexOf"
 COMMA
 IDENT "lines"
 COMMA
 IDENT "startsWith"
+COMMA
+IDENT "stripPrefix"
 COMMA
 IDENT "stripSuffix"
 COMMA
 IDENT "trim"
 COMMA
 IDENT "unwords"
+COMMA
 RBRACE
 NEWLINE
 IMPORT
@@ -833,6 +840,72 @@ UPPER "None"
 NEWLINE
 DEDENT
 NEWLINE
+IDENT "failureOutputTailChars"
+COLON
+UPPER "Int"
+NEWLINE
+IDENT "failureOutputTailChars"
+EQUAL
+INT 2000
+NEWLINE
+IDENT "outputTailOf"
+COLON
+UPPER "Int"
+ARROW
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "outputTailOf"
+IDENT "limit"
+IDENT "text"
+EQUAL
+INDENT
+LET
+IDENT "extra"
+EQUAL
+IDENT "stringLength"
+IDENT "text"
+MINUS
+IDENT "limit"
+NEWLINE
+IF
+IDENT "extra"
+LEQ
+INT 0
+THEN
+INDENT
+IDENT "text"
+NEWLINE
+DEDENT
+ELSE
+INDENT
+INTERP_OPEN "["
+IDENT "intToString"
+IDENT "extra"
+INTERP_MID " earlier characters omitted] "
+IDENT "drop"
+IDENT "extra"
+IDENT "text"
+INTERP_END ""
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "outputTail"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "outputTail"
+IDENT "text"
+EQUAL
+IDENT "outputTailOf"
+IDENT "failureOutputTailChars"
+IDENT "text"
+NEWLINE
 EXPORT
 NEWLINE
 IDENT "testAssertionCount"
@@ -922,9 +995,12 @@ IDENT "code"
 INTERP_MID " — an assertion failed, or the file did not run: "
 IDENT "debug"
 LPAREN
+IDENT "outputTail"
+LPAREN
 IDENT "out"
 PLUSPLUS
 IDENT "err"
+RPAREN
 RPAREN
 INTERP_END ""
 NEWLINE
@@ -1221,6 +1297,468 @@ IDENT "missingUnits"
 IDENT "testFileStem"
 IDENT "wanted"
 IDENT "names"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floorTitleOpen"
+COLON
+UPPER "String"
+NEWLINE
+IDENT "floorTitleOpen"
+EQUAL
+STRING "test \""
+NEWLINE
+IDENT "floorTitleMid"
+COLON
+UPPER "String"
+NEWLINE
+IDENT "floorTitleMid"
+EQUAL
+STRING ".mdk executed >="
+NEWLINE
+IDENT "titledFloorName"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "titledFloorName"
+IDENT "titlePrefix"
+IDENT "line"
+EQUAL
+INDENT
+MATCH
+IDENT "stripPrefix"
+LPAREN
+IDENT "floorTitleOpen"
+PLUSPLUS
+IDENT "titlePrefix"
+RPAREN
+IDENT "line"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Some"
+IDENT "rest"
+FAT_ARROW
+IDENT "map"
+LPAREN
+IDENT "i"
+FAT_ARROW
+IDENT "stringSlice"
+INT 0
+IDENT "i"
+IDENT "rest"
+RPAREN
+LPAREN
+IDENT "indexOf"
+IDENT "floorTitleMid"
+IDENT "rest"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "gradedFloorName"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "gradedFloorName"
+IDENT "callOpen"
+IDENT "line"
+EQUAL
+MATCH
+IDENT "indexOf"
+IDENT "callOpen"
+IDENT "line"
+INDENT
+UPPER "None"
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "Some"
+IDENT "i"
+FAT_ARROW
+INDENT
+LET
+IDENT "rest"
+EQUAL
+IDENT "stringSlice"
+LPAREN
+IDENT "i"
+PLUS
+IDENT "stringLength"
+IDENT "callOpen"
+RPAREN
+LPAREN
+IDENT "stringLength"
+IDENT "line"
+RPAREN
+IDENT "line"
+NEWLINE
+IDENT "map"
+LPAREN
+IDENT "j"
+FAT_ARROW
+IDENT "stringSlice"
+INT 0
+IDENT "j"
+IDENT "rest"
+RPAREN
+LPAREN
+IDENT "indexOf"
+STRING "\""
+IDENT "rest"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "gradedFloorAfter"
+COLON
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "Option"
+UPPER "String"
+NEWLINE
+IDENT "gradedFloorAfter"
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+UPPER "None"
+NEWLINE
+IDENT "gradedFloorAfter"
+IDENT "callOpen"
+LPAREN
+IDENT "line"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+MATCH
+IDENT "stripPrefix"
+IDENT "floorTitleOpen"
+IDENT "line"
+INDENT
+UPPER "Some"
+UNDERSCORE
+FAT_ARROW
+UPPER "None"
+NEWLINE
+UPPER "None"
+FAT_ARROW
+MATCH
+IDENT "gradedFloorName"
+IDENT "callOpen"
+IDENT "line"
+INDENT
+UPPER "Some"
+IDENT "graded"
+FAT_ARROW
+UPPER "Some"
+IDENT "graded"
+NEWLINE
+UPPER "None"
+FAT_ARROW
+IDENT "gradedFloorAfter"
+IDENT "callOpen"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floorBlockPairs"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Option"
+UPPER "String"
+RPAREN
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floorBlockPairs"
+UNDERSCORE
+UNDERSCORE
+LBRACKET
+RBRACKET
+EQUAL
+LBRACKET
+RBRACKET
+NEWLINE
+IDENT "floorBlockPairs"
+IDENT "titlePrefix"
+IDENT "callOpen"
+LPAREN
+IDENT "line"
+CONS
+IDENT "rest"
+RPAREN
+EQUAL
+INDENT
+MATCH
+IDENT "titledFloorName"
+IDENT "titlePrefix"
+IDENT "line"
+INDENT
+UPPER "None"
+FAT_ARROW
+IDENT "floorBlockPairs"
+IDENT "titlePrefix"
+IDENT "callOpen"
+IDENT "rest"
+NEWLINE
+UPPER "Some"
+IDENT "titled"
+FAT_ARROW
+MATCH
+IDENT "gradedFloorName"
+IDENT "callOpen"
+IDENT "line"
+INDENT
+UPPER "Some"
+IDENT "graded"
+FAT_ARROW
+INDENT
+LPAREN
+IDENT "titled"
+COMMA
+UPPER "Some"
+IDENT "graded"
+RPAREN
+CONS
+IDENT "floorBlockPairs"
+IDENT "titlePrefix"
+IDENT "callOpen"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+UPPER "None"
+FAT_ARROW
+INDENT
+LPAREN
+IDENT "titled"
+COMMA
+IDENT "gradedFloorAfter"
+IDENT "callOpen"
+IDENT "rest"
+RPAREN
+CONS
+IDENT "floorBlockPairs"
+IDENT "titlePrefix"
+IDENT "callOpen"
+IDENT "rest"
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "floorPairAgrees"
+COLON
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Option"
+UPPER "String"
+RPAREN
+ARROW
+UPPER "Bool"
+NEWLINE
+IDENT "floorPairAgrees"
+LPAREN
+IDENT "titled"
+COMMA
+UPPER "Some"
+IDENT "graded"
+RPAREN
+EQUAL
+IDENT "titled"
+EQ_EQ
+IDENT "graded"
+NEWLINE
+IDENT "floorPairAgrees"
+LPAREN
+UNDERSCORE
+COMMA
+UPPER "None"
+RPAREN
+EQUAL
+UPPER "False"
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "ungradedRosterRows"
+COLON
+UPPER "String"
+ARROW
+INDENT
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+ARROW
+NEWLINE
+UPPER "List"
+UPPER "String"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "ungradedRosterRows"
+IDENT "titlePrefix"
+IDENT "callOpen"
+IDENT "roster"
+IDENT "sourceLines"
+EQUAL
+INDENT
+LET
+IDENT "pairs"
+EQUAL
+IDENT "floorBlockPairs"
+IDENT "titlePrefix"
+IDENT "callOpen"
+IDENT "sourceLines"
+NEWLINE
+LET
+IDENT "graded"
+EQUAL
+IDENT "map"
+IDENT "fst"
+LPAREN
+IDENT "filter"
+IDENT "floorPairAgrees"
+IDENT "pairs"
+RPAREN
+NEWLINE
+IDENT "filter"
+LPAREN
+IDENT "n"
+FAT_ARROW
+IDENT "not"
+LPAREN
+IDENT "elem"
+IDENT "n"
+IDENT "graded"
+RPAREN
+RPAREN
+IDENT "roster"
+NEWLINE
+DEDENT
+NEWLINE
+IDENT "renderFloorDisagreement"
+COLON
+LPAREN
+UPPER "String"
+COMMA
+UPPER "Option"
+UPPER "String"
+RPAREN
+ARROW
+UPPER "String"
+NEWLINE
+IDENT "renderFloorDisagreement"
+LPAREN
+IDENT "titled"
+COMMA
+UPPER "None"
+RPAREN
+EQUAL
+INTERP_OPEN ""
+IDENT "titled"
+INTERP_END " -> grades nothing"
+NEWLINE
+IDENT "renderFloorDisagreement"
+LPAREN
+IDENT "titled"
+COMMA
+UPPER "Some"
+IDENT "graded"
+RPAREN
+EQUAL
+INTERP_OPEN ""
+IDENT "titled"
+INTERP_MID " -> "
+IDENT "graded"
+INTERP_END ""
+NEWLINE
+EXPORT
+NEWLINE
+IDENT "disagreeingFloorBlocks"
+COLON
+UPPER "String"
+ARROW
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+ARROW
+UPPER "List"
+UPPER "String"
+NEWLINE
+IDENT "disagreeingFloorBlocks"
+IDENT "titlePrefix"
+IDENT "callOpen"
+IDENT "sourceLines"
+EQUAL
+INDENT
+IDENT "map"
+IDENT "renderFloorDisagreement"
+LPAREN
+IDENT "filter"
+LPAREN
+IDENT "pair"
+FAT_ARROW
+IDENT "not"
+LPAREN
+IDENT "floorPairAgrees"
+IDENT "pair"
+RPAREN
+RPAREN
+LPAREN
+IDENT "floorBlockPairs"
+IDENT "titlePrefix"
+IDENT "callOpen"
+IDENT "sourceLines"
+RPAREN
 RPAREN
 NEWLINE
 DEDENT

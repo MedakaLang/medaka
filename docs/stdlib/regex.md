@@ -2,28 +2,25 @@
 
 Regular expressions, matched in linear time.
 
-Patterns use Perl syntax restricted to the regular subset, the dialect Go
-`regexp` and RE2 accept. There are no backreferences and no lookaround, and
-in exchange a match costs `O(n * m)` in subject length and pattern size
-with no subject that makes it blow up. When more than one match is
-possible the leftmost one wins, and among the matches starting there the
-one the pattern prefers: alternation order first, greedy before lazy. So
-`a|ab` matches `"a"` in `"ab"`, which is what Perl and Go give and not
-POSIX leftmost-longest.
+Patterns use the RE2 dialect: Perl syntax without backreferences or
+lookaround. A match costs `O(n * m)` in subject length and pattern size,
+whatever the subject. When more than one match is possible the leftmost
+one wins, and among the matches starting there the pattern's preference
+decides: alternation order first, greedy before lazy. So `a|ab` matches
+`"a"` in `"ab"`, not the longest alternative.
 
 Positions are codepoint offsets, as in `string.indexOf`. `.` matches any
 codepoint but `\n`, and `\d`, `\w`, `\s`, `\b` and `(?i)` folding are
 ASCII only, matching `string.isDigit` and `string.toUpper`.
 
 A subject may also be a UTF-8 byte buffer rather than a `String`:
-`isFullMatchBytes` and `findBytes` match over a window of an `Array Int`
-with each byte a code 0..255, which is what a protocol grammar whose limits
-are stated in bytes wants.
+`isFullMatchBytes` and `findBytes` match a window of an `Array Int`, with
+each byte a code from `0` to `255`.
 
-`compile` reports a bad pattern as an `Err`, and `mustCompile` panics,
-which suits a pattern written as a literal. A top-level binding is
-evaluated once, so `wordRe = mustCompile "\\w+"` compiles one time
-however often it is used.
+`compile` reports a bad pattern as an `Err`; `mustCompile` panics, which
+suits a pattern written as a literal. A top-level binding is evaluated
+once, so `wordRe = mustCompile "\\w+"` compiles one time however often
+it is used.
 
 Every escape in a pattern needs its backslash doubled in Medaka source,
 because a plain string literal accepts only `\n`, `\t`, `\r`, `\0`, `\\`,
@@ -49,15 +46,14 @@ only.
 
 A `{` that does not open a valid bound is a literal `{`. Named groups,
 POSIX classes, Unicode classes and inline flag scoping are rejected with
-a message naming what is missing.
+a message naming the unsupported feature.
 
 ## Types
 
 ### `Regex`
 
 ```
-data Regex
-  = Regex { src : String, prog : Array Inst, ngroups : Int, multiline : Bool }
+data Regex  -- abstract: the constructors are not exported
 ```
 
 A compiled pattern.
@@ -109,16 +105,6 @@ that did not take part in the match.
 
 Instances: `Eq`, `Debug`
 
-## Character sets
-
-## Pattern tree
-
-## Parser
-
-## Program
-
-## Pike VM
-
 ## Compiling a pattern
 
 ### `compile`
@@ -144,10 +130,9 @@ mustCompile : String -> Regex
 
 The pattern compiled, panicking when it does not compile.
 
-For a pattern written as a literal, where a failure is a mistake in the
-program rather than in the data. A top-level binding is evaluated once, so
-the compilation happens one time. Use `compile` for a pattern that comes
-from input.
+Use it for a pattern written as a literal in the program, and `compile`
+for a pattern that comes from input. A top-level binding is evaluated
+once, so the pattern compiles one time.
 
 ```medaka
 > source (mustCompile "[0-9]+")
@@ -173,11 +158,11 @@ The pattern the regex was compiled from.
 escape : String -> String
 ```
 
-The text as a pattern matching exactly itself, every metacharacter
-quoted.
+The text as a pattern matching exactly itself, with every
+metacharacter quoted.
 
-This is how a literal, a glob, or a SQL `LIKE` pattern becomes a regex:
-translate the wildcards and send everything else through `escape`.
+Use it to embed input, such as a search string or the literal parts of a
+glob, in a larger pattern.
 
 ```medaka
 > escape "a.b*c"
@@ -211,10 +196,8 @@ isFullMatch : Regex -> String -> Bool
 
 Whether the pattern matches the whole subject.
 
-The validator shape: anchored at both ends, so a pattern that would match
-a prefix does not pass. Among the whole-subject matches the pattern still
-picks its preferred one, so `isFullMatch` is not `isMatch` of an anchored
-pattern with a shorter alternative first.
+The pattern is anchored at both ends, so a pattern that matches only a
+prefix or a suffix does not pass.
 
 ```medaka
 > isFullMatch (mustCompile "[a-z]+") "abc"
@@ -271,60 +254,6 @@ Some "ab"
 None
 ```
 
-## Byte subjects
-
-### `isFullMatchBytes`
-
-```
-isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
-```
-
-Whether the pattern matches the whole of `bytes[start..end)`, each byte
-taken as a code 0..255.
-
-The validator shape for a byte buffer, and the reason a protocol grammar
-wants this door: a bound written into the pattern counts BYTES, which is
-what a DNS label, a DID or an RFC 7230 token means by its limits, and the
-window grades a slice of a larger buffer without copying it. `start` and
-`end` are clamped to the buffer, and `^`, `$` and `\b` mean the ends of the
-window.
-
-A pattern reaching this door should name only ASCII: `[a-z]` matches the
-byte 97, and a non-ASCII codepoint arrives as its two or more UTF-8 bytes,
-each of them outside every ASCII class. `toUtf8 "abc"` is `[|97, 98, 99|]`.
-
-```medaka
-> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
-True
-> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
-True
-> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
-False
-```
-
-### `findBytes`
-
-```
-findBytes : Regex -> Array Int -> Int -> Int -> Option Match
-```
-
-The leftmost match in `bytes[start..end)`, or `None`.
-
-The peer of `find` over a byte buffer. `start`, `end` and the reported
-offsets are byte offsets into the whole buffer, and the match's text and
-each group's text are the matched bytes decoded as UTF-8, so a span that
-cuts a codepoint decodes the way `fromUtf8` decodes any malformed input.
-Keeping byte patterns ASCII is what keeps that from arising.
-
-```medaka
-> map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
-Some "12"
-> map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
-Some 1
-> findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
-None
-```
-
 ### `findAll`
 
 ```
@@ -344,7 +273,56 @@ empty match at the end.
 ["", "1", ""]
 ```
 
-## Groups
+## Byte subjects
+
+### `isFullMatchBytes`
+
+```
+isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
+```
+
+Whether the pattern matches the whole of `bytes[start..end)`, each byte
+taken as a code from 0 to 255.
+
+The window is matched in place, without copying, and a bound in the
+pattern counts bytes rather than codepoints. `start` and `end` are clamped
+to the buffer, and `^`, `$` and `\b` refer to the ends of the window.
+
+A pattern applied to bytes should name only ASCII: `[a-z]` matches the
+byte 97, and a non-ASCII codepoint arrives as two or more UTF-8 bytes, none
+of which any ASCII class matches. `toUtf8 "abc"` is `[|97, 98, 99|]`.
+
+```medaka
+> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
+True
+> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
+True
+> isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
+False
+```
+
+### `findBytes`
+
+```
+findBytes : Regex -> Array Int -> Int -> Int -> Option Match
+```
+
+The leftmost match in `bytes[start..end)`, or `None`.
+
+`find` over a byte buffer. `start`, `end` and the reported offsets are
+byte offsets into the whole buffer. The match's text and each group's
+text are the matched bytes decoded as UTF-8, so a span that cuts a
+codepoint decodes as `string.fromUtf8` decodes malformed input. An
+ASCII-only pattern never produces such a span.
+
+```medaka
+> map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+Some "12"
+> map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+Some 1
+> findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
+None
+```
 
 ## Replacing and splitting
 
@@ -418,12 +396,4 @@ subject. A subject with no match is returned whole.
 > split (mustCompile ",") ",a,"
 ["", "a", ""]
 ```
-
-## Anchors, classes, and flags
-
-## Linear time
-
-## Properties
-
-## Instances
 
