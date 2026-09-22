@@ -32,7 +32,7 @@
 -- lint-disable-file rule-duplicate-body
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
   Debug,
   Display,
@@ -40,7 +40,6 @@ import core.{
   Filterable,
   Semigroup,
   Monoid,
-  Ordering,
   Option,
   FromEntries,
   Index,

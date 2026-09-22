@@ -1,0 +1,4 @@
+-- Imported module for the #3313 alias-qualified-abstract-constructor
+-- agreement fixture. `Account` is exported abstractly (`export data`, no
+-- `public`): the type is importable, its constructor is not.
+export data Account = Account Int

@@ -38,10 +38,10 @@
 -- left-child of cell[n-1], rightmost-child.
 
 import array.{make, blit}
-import byteparser.{BOk, BErr, BResult, runBP}
+import byteparser.{BResult(..), runBP}
 import lib.varint.{sqVarint}
 import lib.overflow.{localPayloadSize, localPayloadSizeIndex, overflowCapacity}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, parseRecord}
+import lib.recordfmt.{Cell(..), parseRecord}
 import list.{reverse, init, last}
 import string.{join}
 

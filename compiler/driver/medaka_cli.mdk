@@ -32,10 +32,8 @@ import tools.gate_cmd.{gateHelpText, runGateCmd}
 import tools.new_cmd.{newProject}
 import driver.build_cmd.{
   BuildReport,
-  BuildTarget,
+  BuildTarget(..),
   ppBuildReport,
-  TNative,
-  TWasm,
   runBuild,
   emitRtObj,
   emitPreludeObj,
@@ -107,9 +105,7 @@ import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import frontend.desugar.{desugar}
 import frontend.resolve.{resolveModulesErrorsByFile, internalGuardFor, ResError}
 import driver.loader.{
-  LoadError,
-  LoadMsg,
-  LoadParseFailed,
+  LoadError(..),
   loadProgramFilesLocatedE,
   dropPathTriple,
   modIdToPath,
@@ -143,7 +139,7 @@ import driver.diagnostics.{
   srcLinesArr,
   Diag(..),
   Severity(..),
-  SevError,
+  Severity(..),
   cjPosition,
   cjRange,
   cjRangeOfLoc,
@@ -187,13 +183,7 @@ import driver.diagnostics.{
   mainShapeWarnings,
 }
 import json.{
-  Json,
-  JInt,
-  JString,
-  JBool,
-  JArray,
-  JObject,
-  JNull,
+  Json(..),
   jObject,
   jArray,
   stringify,

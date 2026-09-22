@@ -88,15 +88,30 @@
 #   1253-record-form-ctor-head-decided-by-import-order  -> #1253, now
 #       check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: in EVERY ordering
 #       (resolve's ctor-ambiguity peer now fires at record heads).
-#   1284-overlay-sibling-ctor-beats-named-import        -> #1284, now
+#   1284-overlay-sibling-ctor-beats-named-import        -> #1284, was
 #       check=0;…;run=0:s\n;build=0/0:s\n in every ordering.
 #   733-wildcard-import-ctor-falls-to-universe          -> #733 item 1c, now
 #       check=0;…;run=0:1\n;build=0/0:1\n in every ordering.
 #
 # ⚠️ #733 IS NOT FULLY DRAINED — the row below is still live, so the issue stays
 # open. Item 1c was one of its symptoms, not the whole of it.
+#
+# ⚠️ 2026-09-22 (#3314's landing, sprint one-table-every-form): the
+# `1284-overlay-sibling-ctor-beats-named-import` fixture's INVARIANT property
+# above no longer holds. #3314 makes naming a bare ctor member illegal, so the
+# tree-wide migration rewrote this fixture's `zmod.{ZZ, Sib, unz}` into
+# `zmod.{ZZ(..), unz}` — but `zmod.ZZ` and `cmod.Wrap` both declare a `Sib`
+# ctor, so the migrated form is genuinely, unavoidably ambiguous under the new
+# import model (there is no legal way left to import "just Sib from zmod").
+# The resulting reject is correct but, like #733, order-dependent. Filed as
+# #3337 rather than reopening #1284 (the OLD scenario is not reachable at all
+# any more; this is a new one). Directory renamed to
+# `3337-ambiguous-ctor-reject-cascade-sibling-types` per the ledger's own
+# dir-must-match-issue-number rule; see its case.txt for the full history.
 
 733-ambiguous-ctor-reject-cascade-order-dependent | #733 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
+
+3337-ambiguous-ctor-reject-cascade-sibling-types | #3337 | check=1;codes=R-AMBIGUOUS-CTOR;schemes=;run=1:;build=1/-: | check=1;codes=R-AMBIGUOUS-CTOR,T-TYPE-MISMATCH,T-TYPE-MISMATCH;schemes=;run=1:;build=1/-:
 
 # ── #1351 — order-DEPENDENCE row DRAINED 2026-08-21 (RUN-METHID-106) ──────────
 # This row licensed an EXPECTED divergence: import-line order alone decided

@@ -26,7 +26,7 @@
 -- `Type mismatch: Json vs Tok`.  That leg is pinned separately, WITH the prelude,
 -- as `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk` — this
 -- corpus is prelude-free and cannot import `json`.
-import emod.{Ext, Other, unExt}
+import emod.{Ext(..), unExt}
 
 data Loc = Tag Int
 

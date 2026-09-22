@@ -52,7 +52,7 @@ import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl, contains}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
-import json.{Json, JString, jObject, jArray}
+import json.{Json(..), jObject, jArray}
 import string.{toLower}
 import regex.{
   Regex, Match, mustCompile, isMatch, replaceAll, escape, find, findAll

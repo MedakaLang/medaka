@@ -1,0 +1,6 @@
+-- CONTROL — `T(..)` still brings the constructor in, unchanged by the
+-- ruling. Contributes ZERO rows.
+import decl.{Color(..)}
+
+x : Color
+x = Red

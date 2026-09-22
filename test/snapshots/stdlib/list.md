@@ -14,7 +14,7 @@ stages=DESUGAR,MARK
    `Traversable` interfaces) are defined in the prelude and work on lists
    without an import. This module holds what is specific to lists. -}
 
-import core.{Eq, Ord, Debug, Foldable, Mappable, Ordering, Option, Result}
+import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option, Result}
 
 -- # Re-exports
 
@@ -1208,7 +1208,7 @@ prop "break equals span of the negated predicate" (xs : List Int) =
 prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
   length (range lo hi) == max 0 (hi - lo)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Ordering" false) (mem "Option" false) (mem "Result" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Result" false))))
 (DUse true (UseGroup ("core") ((mem "Filterable" false) (mem "filter" false) (mem "filterMap" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "a")) (EListLit (EVar "a")))
@@ -1450,7 +1450,7 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DProp false "break equals span of the negated predicate" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PTuple (PVar "a1") (PVar "b1")) (EApp (EApp (EVar "break") (ELam ((PVar "x")) (EBinOp ">" (EVar "x") (ELit (LInt 5))))) (EVar "xs"))) (DoLet false false (PTuple (PVar "a2") (PVar "b2")) (EApp (EApp (EVar "span") (ELam ((PVar "x")) (EApp (EVar "not") (EBinOp ">" (EVar "x") (ELit (LInt 5)))))) (EVar "xs"))) (DoExpr (EBinOp "&&" (EApp (EApp (EVar "eq") (EVar "a1")) (EVar "a2")) (EApp (EApp (EVar "eq") (EVar "b1")) (EVar "b2"))))))
 (DProp false "range length is max 0 (hi - lo)" ((pp "lo" (TyCon "Int")) (pp "hi" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "length") (EApp (EApp (EVar "range") (EVar "lo")) (EVar "hi"))) (EApp (EApp (EVar "max") (ELit (LInt 0))) (EBinOp "-" (EVar "hi") (EVar "lo")))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Ordering" false) (mem "Option" false) (mem "Result" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Result" false))))
 (DUse true (UseGroup ("core") ((mem "Filterable" false) (mem "filter" false) (mem "filterMap" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "a")) (EListLit (EVar "a")))

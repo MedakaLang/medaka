@@ -11,7 +11,7 @@
    in `Err`. File operations run only in a built program, not under the
    interpreter. -}
 
-import core.{Result, Ok, Err}
+import core.{Result(..)}
 import path.{dirname, joinPath}
 import string.{contains}
 

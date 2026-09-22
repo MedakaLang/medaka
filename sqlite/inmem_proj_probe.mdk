@@ -14,7 +14,7 @@
 
 import lib.dbwriter.{buildDatabase}
 import lib.sqlite.{Db, fromBytes}
-import lib.recordfmt.{Cell, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 import lib.select.{
   Select,
   selectFrom,

@@ -55,12 +55,7 @@ import byteparser.{runByteParser}
 import bytebuilder.{newBuilder, emitBeSint, buildArray}
 import lib.varint.{sqVarintBytes, sqVarintSize}
 import lib.recordfmt.{
-  Cell,
-  CNull,
-  CInt,
-  CText,
-  CBlob,
-  CFloat,
+  Cell(..),
   parseRecord,
   showCells,
 }

@@ -3,7 +3,7 @@
 -- forms have to agree by BOTH accepting: narrowing the selective form down to a
 -- lossy wildcard would also make them agree, and this module is what reds when
 -- that is how the agreement is reached.
-import decl.{Col, Node, Leaf, Speak, speak, plain}
+import decl.{Col(..), Speak, speak, plain}
 
 shoutSel : Speak a => a -> Int
 shoutSel x = speak x

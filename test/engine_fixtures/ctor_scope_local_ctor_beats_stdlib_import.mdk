@@ -24,7 +24,7 @@
 -- renamed, re-point the import — do not delete the fixture; the property is that a
 -- LOCAL constructor outranks an imported sibling, and the stdlib is only the
 -- sharpest available witness that the defect was not confined to test modules.
-import json.{Json, JNull}
+import json.{Json(..)}
 
 data Tok = JString String
 

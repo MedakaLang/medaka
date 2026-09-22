@@ -18,7 +18,7 @@ import http.{
 import string.{repeat, toUtf8}
 import lib.cid.{cidForRaw}
 import lib.httpclient as HC
-import lib.httpclient.{HttpClientMalformed, HttpClientResourceExcess}
+import lib.httpclient.{HttpClientParseFailure(..)}
 import lib.resource_limits.{
   maxHttpClientBodyBytes,
   maxHttpClientChunkBytes,

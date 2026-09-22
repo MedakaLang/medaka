@@ -19,11 +19,12 @@
 import test.{expectEqual}
 import labeliface.{Label, label}
 import amodl.{TA, mkA}
-import bmodl.{TB, Box}
+import bmodl.{TB(..)}
 import verdict.{Verdict(..), verdictLabel}
 
 test "amod's own Box tags TA" = expectEqual (label (mkA 7)) "amod"
 
 test "the imported bmod Box tags TB" = expectEqual (label (Box 5)) "bmod"
 
-test "a Pass/Fail collision does not break the test runner" = expectEqual (verdictLabel (Fail "x")) "fail:x"
+test "a Pass/Fail collision does not break the test runner" =
+  expectEqual (verdictLabel (Fail "x")) "fail:x"

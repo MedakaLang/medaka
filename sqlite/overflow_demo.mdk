@@ -30,7 +30,7 @@
 
 import lib.dbwriter.{writeDatabase}
 import lib.mutate.{delete, update, assign}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, nthCell}
+import lib.recordfmt.{Cell(..), nthCell}
 import lib.select.{eColInt, eEq, eLitI, eLitT}
 import lib.sqlite.{Db, openDb, scanTableRowsIpk, rowCellsWithIpk}
 import lib.btree.{Row}

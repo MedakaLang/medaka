@@ -40,4 +40,16 @@ sibling control-ambiguous-ctor-reject-invariant/ is the same collision with the
 type-forcing use site removed; it is graded GREEN, which is what shows the exclusion
 is a deliberate criterion choice rather than a hole.
 
+⚠️ 2026-09-22 (#3314's landing, sprint one-table-every-form): a bare ctor member is
+now refused outright (R-BARE-CTOR-IMPORT), so the original
+`import amodd.{A1, Dup, unA1}` / `import zmod.{Z1, Dup, zf}` shape is no longer
+legal Medaka. The tree-wide rewrite that migrated every bare-ctor-import site
+mis-migrated THIS one — it wrote `amodd.{A1, Z1(..), unA1}` (importing the WRONG
+type's ctor set: `Z1` belongs to `zmod`, not `amodd`) instead of
+`amodd.{A1(..), unA1}`. Corrected back to `A1(..)`/`Z1(..)` (each module expanding
+its OWN type), which reproduces the identical pinned cascade this fixture always
+existed to pin — confirmed byte-for-byte against the ledger row below. The bare
+ctor member is gone from the source, but the underlying resolve mechanism the row
+describes is unchanged, so the row stays.
+
 Ledgered in test/IMPORT-ORDER-LEDGER.txt against #733.

@@ -1,5 +1,5 @@
 # META
-source_lines=1792
+source_lines=1787
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/mcp.mdk — the `medaka mcp` MCP (Model Context Protocol) server.
@@ -29,12 +29,7 @@ stages=DESUGAR,MARK
 -- emits a JSON-RPC error object over its transport, so there is nothing to copy.
 
 import json.{
-  Json,
-  JNull,
-  JInt,
-  JString,
-  JBool,
-  JObject,
+  Json(..),
   jObject,
   jArray,
   stringify,
@@ -1795,7 +1790,7 @@ runMcpServer runtimeSrc coreSrc stdlibDir stalenessCheck serverVersion =
 unit : Unit
 unit = ()
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "diagIsError" false) (mem "Diag" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false))))
@@ -2035,7 +2030,7 @@ unit = ()
 (DTypeSig false "unit" (TyCon "Unit"))
 (DFunDef false "unit" () (ELit LUnit))
 # MARK
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false) (mem "asArray" false))))
 (DUse false (UseGroup ("string") ((mem "stripCR" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "checkJsonSingle" false) (mem "checkJsonFile" false) (mem "cjAllToJson" false) (mem "diagIsError" false) (mem "Diag" false))))
 (DUse false (UseGroup ("tools" "lsp") ((mem "typeAtPoint" false) (mem "documentSymbols" false) (mem "definitionResult" false) (mem "referencesResult" false) (mem "emptyDocs" false) (mem "docsPut" false) (mem "uriOfPath" false))))

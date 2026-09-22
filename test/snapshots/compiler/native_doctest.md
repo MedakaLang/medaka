@@ -58,7 +58,7 @@ stages=DESUGAR,MARK
 -- covers `compiler/entries/*` but NOT a `compiler/tools/` module that nothing
 -- imports.
 
-import frontend.ast.{Decl, DFunDef, DData, DInterface}
+import frontend.ast.{Decl(..)}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
@@ -432,7 +432,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
   Some (Chunk _ _ False) => Err note
   None => Err note
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DFunDef" false) (mem "DData" false) (mem "DInterface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
@@ -504,7 +504,7 @@ renderOne chunks note i (Ok _) = match lookupChunk (intToString i) chunks
 (DFunDef false "renderOne" (PWild PWild PWild (PCon "Err" PWild)) (EApp (EVar "Err") (ELit (LString "example did not parse"))))
 (DFunDef false "renderOne" ((PVar "chunks") (PVar "note") (PVar "i") (PCon "Ok" PWild)) (EMatch (EApp (EApp (EVar "lookupChunk") (EApp (EVar "intToString") (EVar "i"))) (EVar "chunks")) (arm (PCon "Some" (PCon "Chunk" PWild (PVar "ls") (PCon "True"))) () (EMatch (EApp (EVar "decodeValue") (EVar "ls")) (arm (PCon "Some" (PVar "v")) () (EApp (EVar "Ok") (EVar "v"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note"))))) (arm (PCon "Some" (PCon "Chunk" PWild PWild (PCon "False"))) () (EApp (EVar "Err") (EVar "note"))) (arm (PCon "None") () (EApp (EVar "Err") (EVar "note")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DFunDef" false) (mem "DData" false) (mem "DInterface" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))

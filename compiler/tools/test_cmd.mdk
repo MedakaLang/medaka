@@ -50,7 +50,7 @@
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at every
 -- single-file call site below.
 
-import frontend.ast.{Decl, DData, DInterface, DProp, Expr}
+import frontend.ast.{Decl(..), Expr}
 import frontend.parser.{parse, parseLocated, parseResult}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
@@ -152,7 +152,7 @@ import support.path.{dirOf, baseOf, joinPath}
 import args.{
   ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
 }
-import json.{Json, JInt, JString, JBool, jObject, jArray}
+import json.{Json(..), jObject, jArray}
 import tools.lint.{splitLintNames}
 import string.{toInt}
 

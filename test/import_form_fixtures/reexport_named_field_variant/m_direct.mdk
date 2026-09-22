@@ -2,7 +2,7 @@
 -- straight from its declaring module, no hop.  This was always green, so a row
 -- here means record construction or named-field variants broke in general rather
 -- than that the hop was fixed.
-import bmod.{RA, Dup, unRA}
+import bmod.{RA(..), unRA}
 
 sevenDirect : Int
-sevenDirect = unRA (Dup { dx = 7 })
+sevenDirect = unRA Dup { dx = 7 }

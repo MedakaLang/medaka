@@ -1,5 +1,5 @@
 # META
-source_lines=525
+source_lines=524
 stages=DESUGAR,MARK
 # SOURCE
 {- | A growable, mutable array.
@@ -23,9 +23,8 @@ stages=DESUGAR,MARK
 -- fill, so no dummy value is needed to construct one.
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
-  Ordering,
   Debug,
   Display,
   Foldable,
@@ -528,7 +527,7 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
     && eq (display a) (display b)
     && eq (display a) "fromList \{display xs}"
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
 (DUse false (UseAlias ("list") "L"))
 (DData Public "Vector" ("a") ((variant "Vector" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyVar "a"))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "count" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Int")))
@@ -622,7 +621,7 @@ prop "Display Vector shows only the live range and agrees with Eq" (xs : List In
 (DProp false "removeAtInPlace out of range is a no-op" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "ma") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EApp (EVar "length") (EVar "ma"))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "removeAtInPlace") (EBinOp "-" (ELit (LInt 0)) (ELit (LInt 1)))) (EVar "ma"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EVar "toList") (EVar "ma"))) (EVar "xs")))))
 (DProp false "Display Vector shows only the live range and agrees with Eq" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int"))) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "push") (EVar "y")) (EVar "b"))) (DoLet false false (PVar "differs") (EApp (EVar "not") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b"))))) (DoLet false false PWild (EApp (EVar "pop") (EVar "b"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EVar "differs") (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EApp (EVar "display") (EVar "b")))) (EApp (EApp (EVar "eq") (EApp (EVar "display") (EVar "a"))) (EBinOp "++" (EBinOp "++" (ELit (LString "fromList ")) (EApp (EVar "display") (EApp (EVar "display") (EVar "xs")))) (ELit (LString ""))))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Option" false) (mem "Index" false) (mem "IndexMut" false))))
 (DUse false (UseAlias ("list") "L"))
 (DData Public "Vector" ("a") ((variant "Vector" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyVar "a"))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "count" (TyFun (TyApp (TyCon "Vector") (TyVar "a")) (TyCon "Int")))

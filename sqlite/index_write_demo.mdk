@@ -26,12 +26,10 @@
 import lib.writer.{
   TableSchema,
   Column,
-  ColType,
-  TInteger,
-  TText,
+  ColType(..),
   writeTableWithIndexes,
 }
-import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 
 peopleSchema : TableSchema
 peopleSchema = TableSchema {

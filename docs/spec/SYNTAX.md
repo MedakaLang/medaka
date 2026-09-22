@@ -716,13 +716,40 @@ export import list.{reverse, take}  -- re-export
 main = println (reverse (take 2 [1, 2, 3]))
 ```
 
-The wildcard form (`import m.*`) brings in every namespace `m` exports, on equal
-footing with a selective import naming everything by hand: values, types and
-constructors, INTERFACES (so a `=>` predicate, an `impl` head or a `requires`
-naming one is accepted), and effect labels. A selective import can likewise
-name an exported effect label directly (`import eff.{Logging, doLog}`) —
-`(..)` on a label is rejected, since a label has no members for `(..)` to bring
-in (`import eff.{Logging(..), doLog}` fails with a diagnostic saying so).
+A module's exports fall into nine namespaces
+(`compiler/frontend/resolve.mdk`'s `ExpNs` block): values, types,
+constructors, type→constructor sets (what `T(..)` expands), field owners,
+interfaces, interface methods, effect labels, and newtype constructors
+(always module-private — never importable or re-exportable). The block
+carries one further descriptor that binds no names and so has no row below:
+which exported types withhold their constructors (`export data` without
+`public`), a subset of the types namespace that only sharpens a diagnostic.
+The table states, for each form, whether it brings a namespace's names into
+scope (`import`) or forwards them across a re-export hop (`export import`):
+
+| Namespace | `import m.name` / `.{a, b}` | `import m.{T(..)}` | `import m.*` | `import m as A` | `export import m.{...}` | `export import m.*` |
+|---|---|---|---|---|---|---|
+| Values | yes | — | yes | yes, as `A.name` | yes | yes |
+| Types | yes | yes (the type itself) | yes | yes, as `A.Name` | yes | yes |
+| Constructors | no (rejected, #3314) | yes | yes | yes, as `A.Ctor` | yes | yes |
+| Type→ctor sets | — | yes (what `(..)` expands through) | — | — | yes | yes |
+| Field owners | travels with the owning type | travels with the owning type | travels with the owning type | travels with the owning type | yes | yes |
+| Interfaces | yes | — | yes | yes, as `A.Iface` | yes | yes |
+| Interface methods | travels with the interface | — | travels with the interface | travels with the interface, re-keyed under `A.name` | yes | yes |
+| Effect labels | yes, ALL of `m`'s labels — any import installs the whole set, not just the named ones | — (rejected on a label, see below) | yes | yes, bare — never `A.`-qualified | no | yes |
+| Newtype constructors | no | no | no | no | no | no |
+
+The wildcard form (`import m.*`) brings in every namespace `m` exports, on
+equal footing with a selective import naming everything by hand — see the
+table above. A selective import can likewise name an exported effect label
+directly (`import eff.{Logging, doLog}`) — `(..)` on a label is rejected,
+since a label has no members for `(..)` to bring in (`import
+eff.{Logging(..), doLog}` fails with a diagnostic saying so).
+
+A selective member list may **not** name a `data` constructor directly
+(`import colors.{Red}` is rejected — `Red` is a constructor of `Color`, not a
+type). Bring its constructors in as a set with `Color(..)`, or alias the
+module and write `C.Red` (#3314).
 
 Export forms:
 
@@ -747,7 +774,11 @@ main =
 **`public` only applies to `data`.** `public export data` (`VisPublic`) exports the type
 **and** its constructors; plain `export data` (`VisAbstract`) exports the type only —
 its constructors stay private, so callers can pattern-match nothing and construct nothing
-directly. Every other exportable declaration — `interface`, `impl`, `type` (alias),
+directly. Referencing a self-named abstract constructor through a module alias
+(`import m as A`, then `A.Hidden` where `data Hidden = Hidden`) names the abstract
+export directly (`'Hidden' exports no constructors from module 'm' (exported
+abstractly)`) rather than the generic `Unbound variable` a plain missing name gets
+(#3313). Every other exportable declaration — `interface`, `impl`, `type` (alias),
 `newtype`, `extern`, a plain binding/function, `import` (as `export import`) — takes only
 bare `export`; there is no public/abstract distinction for them, so writing `public` in
 front of one is a mistake, not an alternate spelling. `export interface Foo a where …`
@@ -779,7 +810,7 @@ main = println (EA.emit ++ emitB)
 
 | form | meaning |
 |---|---|
-| `import m as A` | binds every non-method VALUE `m` exports as `A.name`, every TYPE it exports as `A.Name` (#2412), every CONSTRUCTOR as `A.Ctor` (expression and pattern position), and every INTERFACE as `A.Iface` (predicate, `impl` head, `requires`) — an alias qualifies the module's whole namespace, matching Haskell's `import qualified` and Rust's paths, not a per-entity-kind list. Does **not** bind any of these bare. `A.Ctor` also reaches a constructor `m` only carries through an `export import` re-export hop. If `A.Ctor`'s bare name ALSO names a constructor declared locally in the importing module, the reference is rejected (`Ambiguous constructor`) rather than silently resolving to either one — the alias prefix is dropped before the constructor table is consulted, and that table has no way to tell the two apart. |
+| `import m as A` | qualifies the module's whole namespace, not a per-entity-kind list — see the namespace-carriage table above (`A.name`/`A.Name`/`A.Ctor`/`A.Iface`), matching Haskell's `import qualified` and Rust's paths. Does **not** bind any of these bare. `A.Ctor` also reaches a constructor `m` only carries through an `export import` re-export hop. If `A.Ctor`'s bare name ALSO names a constructor declared locally in the importing module, the reference is rejected (`Ambiguous constructor`) rather than silently resolving to either one — the alias prefix is dropped before the constructor table is consulted, and that table has no way to tell the two apart. |
 | `import m.sub as A` | same, for a nested module path |
 | `import m.{a as b, c}` | binds `m`'s `a` as `b`, plus `c`. Does **not** bind bare `a`. |
 | `import core as C` / `import core.{a as b}` | the implicit prelude takes both forms like any other module (#95). The bare prelude names stay in scope either way — an explicit `core` import adds spellings, it never replaces them. The alias surface is core's EXPORTS, so a private core helper is not reachable as `C.name`. |

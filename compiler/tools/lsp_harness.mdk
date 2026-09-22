@@ -17,13 +17,7 @@
 -- (the bug that crashed Cursor) shows up as a non-byteValid frame or a desync.
 
 import json.{
-  Json,
-  JNull,
-  JBool,
-  JInt,
-  JString,
-  JArray,
-  JObject,
+  Json(..),
   jObject,
   jArray,
   stringify,

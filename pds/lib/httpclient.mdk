@@ -8,8 +8,7 @@ import bytebuilder.{Builder, buildArray, emitU8, newBuilder}
 import http as H
 import http.{
   Header,
-  HttpMalformed,
-  HttpResourceExcess,
+  HttpParseFailure(..),
   ParsedResponse,
   headerName,
   headerValue,

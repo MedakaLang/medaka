@@ -1363,8 +1363,8 @@ ctorCollisionReport = join "\n" [
   "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:25: amod's own Box tags TA",
   "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB",
   "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:27: the imported bmod Box tags TB",
-  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:29: a Pass/Fail collision does not break the test runner",
-  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:29: a Pass/Fail collision does not break the test runner",
+  "  running test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:30: a Pass/Fail collision does not break the test runner",
+  "  ok   test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk:30: a Pass/Fail collision does not break the test runner",
   "",
   "test/compiler_test_fixtures/ctor_collision_test_seam/main.mdk: 3/3 passed",
 ]

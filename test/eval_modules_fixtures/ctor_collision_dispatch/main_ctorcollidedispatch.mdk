@@ -14,7 +14,7 @@
 -- the buggy base would have enshrined `amod\namod` as "correct" forever.
 import labeliface.{Label, label}
 import amodl.{TA, mkA}
-import bmodl.{TB, Box}
+import bmodl.{TB(..)}
 
 main =
   println (label (mkA 7))

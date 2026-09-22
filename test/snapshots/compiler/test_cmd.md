@@ -54,7 +54,7 @@ stages=DESUGAR,MARK
 -- Previously this was the synthetic literal `"__user__"`, hardcoded at every
 -- single-file call site below.
 
-import frontend.ast.{Decl, DData, DInterface, DProp, Expr}
+import frontend.ast.{Decl(..), Expr}
 import frontend.parser.{parse, parseLocated, parseResult}
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
@@ -156,7 +156,7 @@ import support.path.{dirOf, baseOf, joinPath}
 import args.{
   ArgSpec, Args, spec, switch, value, flag, flagValue, withStrictDash
 }
-import json.{Json, JInt, JString, JBool, jObject, jArray}
+import json.{Json(..), jObject, jArray}
 import tools.lint.{splitLintNames}
 import string.{toInt}
 
@@ -2375,7 +2375,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
     rest
     (acc || not ok)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -2396,7 +2396,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))
@@ -2723,7 +2723,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DFunDef false "testFilesGo" (PWild PWild PWild PWild PWild PWild (PList) (PVar "acc")) (EVar "acc"))
 (DFunDef false "testFilesGo" ((PVar "engines") (PVar "rtPath") (PVar "corePath") (PVar "stdlibDir") (PVar "cases") (PVar "filterOpt") (PCons (PVar "f") (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "medaka") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA"))) (EApp (EVar "executablePath") (ELit LUnit)))) (DoLet false false (PVar "args") (EApp (EApp (EApp (EApp (EVar "testChildArgs") (EVar "engines")) (EVar "cases")) (EVar "filterOpt")) (EVar "f"))) (DoLet false false (PVar "ok") (EMatch (EApp (EApp (EVar "runCommand") (EVar "medaka")) (EVar "args")) (arm (PCon "Err" (PVar "e")) () (EBlock (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": failed to start test runner: "))) (EApp (EVar "display") (EVar "e"))) (ELit (LString ""))))) (DoExpr (EVar "False")))) (arm (PCon "Ok" (PTuple (PVar "code") (PVar "out") (PVar "err"))) () (EBlock (DoLet false false PWild (EApp (EVar "putStr") (EVar "out"))) (DoLet false false PWild (EApp (EVar "flushStdout") (ELit LUnit))) (DoExpr (EIf (EBinOp "==" (EVar "code") (ELit (LInt 0))) (EVar "True") (EBlock (DoLet false false PWild (EApp (EVar "ePutStr") (EVar "err"))) (DoLet false false PWild (EApp (EVar "ePutStrLn") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka test: ")) (EApp (EVar "display") (EVar "f"))) (ELit (LString ": DEAD (child exited "))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "code")))) (ELit (LString ")"))))) (DoExpr (EVar "False"))))))))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "testFilesGo") (EVar "engines")) (EVar "rtPath")) (EVar "corePath")) (EVar "stdlibDir")) (EVar "cases")) (EVar "filterOpt")) (EVar "rest")) (EBinOp "||" (EVar "acc") (EApp (EVar "not") (EVar "ok")))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DData" false) (mem "DInterface" false) (mem "DProp" false) (mem "Expr" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parse" false) (mem "parseLocated" false) (mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false))))
 (DUse false (UseGroup ("frontend" "desugar_cache") ((mem "desugaredPrelude" false) (mem "desugaredPreludeKey" false))))
@@ -2744,7 +2744,7 @@ testFilesGo engines rtPath corePath stdlibDir cases filterOpt (f :: rest) acc =
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "joinNl" false) (mem "isNonEmptyL" false) (mem "filterList" false) (mem "endsWith" false) (mem "splitOnChar" false) (mem "contains" false) (mem "joinWith" false) (mem "splitNl" false) (mem "startsWith" false) (mem "stringTrim" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "baseOf" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("args") ((mem "ArgSpec" false) (mem "Args" false) (mem "spec" false) (mem "switch" false) (mem "value" false) (mem "flag" false) (mem "flagValue" false) (mem "withStrictDash" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JInt" false) (mem "JString" false) (mem "JBool" false) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("tools" "lint") ((mem "splitLintNames" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DTypeSig false "substringMatch" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "Bool"))))

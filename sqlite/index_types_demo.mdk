@@ -21,13 +21,10 @@
 import lib.writer.{
   TableSchema,
   Column,
-  ColType,
-  TInteger,
-  TReal,
-  TBlob,
+  ColType(..),
   writeTableWithIndexes,
 }
-import lib.recordfmt.{Cell, CInt, CFloat, CBlob}
+import lib.recordfmt.{Cell(..)}
 
 mixedSchema : TableSchema
 mixedSchema = TableSchema {

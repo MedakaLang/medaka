@@ -11,7 +11,7 @@
 
 import test.{expectEqual, expectAll}
 import test.dbfix.{q}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat}
+import lib.recordfmt.{Cell(..)}
 
 -- ── (1) TEXT → numeric coercion in arithmetic ──────────────────────────────
 -- Longest leading numeric prefix; 0 when there is none.  Result is INTEGER

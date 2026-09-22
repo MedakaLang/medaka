@@ -40,7 +40,7 @@
 -- never dropped, never counted as passing.  "This didn't run" must never look
 -- like "this passed".
 
-import frontend.ast.{Decl, DFunDef, Expr, PWild}
+import frontend.ast.{Decl(..), Expr, Pat(..)}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,

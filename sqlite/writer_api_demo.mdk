@@ -11,16 +11,12 @@
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
 
 import lib.writer.{
-  ColType,
-  TInteger,
-  TText,
-  TBlob,
-  TReal,
+  ColType(..),
   Column,
   TableSchema,
   writeTable,
 }
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat}
+import lib.recordfmt.{Cell(..)}
 
 -- ---------------------------------------------------------------------------
 -- Schema 1: users — WITH INTEGER PRIMARY KEY + NULL

@@ -1,5 +1,5 @@
 # META
-source_lines=469
+source_lines=463
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/lsp_harness.mdk — a Medaka-native test harness that drives the
@@ -21,13 +21,7 @@ stages=DESUGAR,MARK
 -- (the bug that crashed Cursor) shows up as a non-byteValid frame or a desync.
 
 import json.{
-  Json,
-  JNull,
-  JBool,
-  JInt,
-  JString,
-  JArray,
-  JObject,
+  Json(..),
   jObject,
   jArray,
   stringify,
@@ -472,7 +466,7 @@ summary total =
       " failed",
     ])
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "utf8CharWidth" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false))))
@@ -583,7 +577,7 @@ summary total =
 (DTypeSig true "summary" (TyFun (TyCon "Int") (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "summary" ((PVar "total")) (EBlock (DoLet false false (PVar "failed") (EUnOp "!" (EVar "failCount"))) (DoExpr (EApp (EVar "println") (EApp (EVar "stringConcat") (EListLit (ELit (LString "HARNESS: ")) (EApp (EVar "intToString") (EBinOp "-" (EVar "total") (EVar "failed"))) (ELit (LString " passed, ")) (EApp (EVar "intToString") (EVar "failed")) (ELit (LString " failed"))))))))
 # MARK
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JNull" false) (mem "JBool" false) (mem "JInt" false) (mem "JString" false) (mem "JArray" false) (mem "JObject" false) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false) (mem "stringify" false) (mem "parse" false) (mem "get" false) (mem "asString" false) (mem "asInt" false))))
 (DUse false (UseGroup ("support" "util") ((mem "utf8Len" false) (mem "utf8CharWidth" false))))
 (DUse false (UseGroup ("string") ((mem "toInt" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "find" false))))

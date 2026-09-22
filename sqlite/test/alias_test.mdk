@@ -12,7 +12,7 @@
 
 import test.{expectEqual}
 import test.dbfix.{q}
-import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 import lib.sqlstmt.{parseSelect, renderSelect}
 
 -- ── Column output alias (`AS` and the bare form) ────────────────────────────

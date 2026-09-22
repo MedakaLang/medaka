@@ -12,13 +12,7 @@
 import lib.sqlite.{Db, openDb}
 import lib.select.{eEq, eGt, eColText, eLitT, eLitI}
 import lib.aggregate.{
-  Agg,
-  AggCountStar,
-  AggCount,
-  AggSum,
-  AggAvg,
-  AggMin,
-  AggMax,
+  Agg(..),
   AggQuery,
   aggFrom,
   withAggWhere,

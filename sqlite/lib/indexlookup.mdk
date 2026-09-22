@@ -30,7 +30,7 @@
 
 import lib.btree.{Row}
 import lib.dbwriter.{compareCellsSqlite}
-import lib.recordfmt.{Cell, CNull}
+import lib.recordfmt.{Cell(..)}
 import lib.schemadef.{parseCreateIndex, ixTable, ixColumn}
 import lib.sqlite.{
   Db,

@@ -1,0 +1,7 @@
+-- #3313: the alias and `Account`'s TYPE both resolve — only the constructor
+-- is hidden, since `decl` exports `Account` abstractly.  Must name the
+-- abstract export (`NoExportedConstructors`), not a bare unbound variable.
+import decl as A
+
+v : A.Account
+v = A.Account 1

@@ -33,7 +33,7 @@
 -- mirroring `frontend/resolve.expandMemberNames`), so this half is green both before
 -- and after — it guards the next edit, not this one.
 import qmodw.{Jjw(..), unQW}
-import pmodw.{PW, Kkw, unPW}
+import pmodw.{PW(..), unPW}
 
 main : <IO> Unit
 main =

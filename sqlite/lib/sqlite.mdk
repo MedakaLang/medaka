@@ -33,7 +33,7 @@ import lib.btree.{
   seekTablePage,
   scanIndexPage,
 }
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, cellToString}
+import lib.recordfmt.{Cell(..), cellToString}
 import list.{reverse}
 
 -- | An open database: the parsed header plus the whole-file bytes.

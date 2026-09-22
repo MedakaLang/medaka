@@ -54,7 +54,7 @@
 -- test/llvm_fixtures_modules/` returned nothing, so no native gate in the tree
 -- exercised newtype constructor mangling across a module boundary.
 import nmodw.{NTW, mkNTW, unNTW}
-import bmodw.{BW, Wrapw, unBW}
+import bmodw.{BW(..), unBW}
 
 main : <IO> Unit
 main =

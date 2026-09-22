@@ -27,11 +27,7 @@
    See the `gate run` section below. -}
 
 import json.{
-  Json,
-  JString,
-  JInt,
-  JFloat,
-  JBool,
+  Json(..),
   jArray,
   jObject,
   stringify,

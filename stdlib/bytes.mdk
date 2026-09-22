@@ -62,7 +62,15 @@
 -- this module's.  It is why every doctest subject here stays small.
 
 import core.{
-  Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Monoid, Hashable
+  Ordering(..),
+  Ord,
+  Debug,
+  Option,
+  Index,
+  Slice,
+  Semigroup,
+  Monoid,
+  Hashable,
 }
 import array.{findIndex, fromList}
 import string.{toDigit}

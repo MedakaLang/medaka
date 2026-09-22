@@ -1,5 +1,5 @@
 # META
-source_lines=139
+source_lines=137
 stages=DESUGAR,MARK
 # SOURCE
 {- | A list with at least one element.
@@ -13,7 +13,7 @@ stages=DESUGAR,MARK
    and the rest qualified, since the names overlap with `list`'s. -}
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
   Debug,
   Display,
@@ -23,9 +23,7 @@ import core.{
   Semigroup,
   Applicative,
   Thenable,
-  Option,
-  Some,
-  None,
+  Option(..),
 }
 
 -- | A first element and the rest of the list.
@@ -142,7 +140,7 @@ prop "head is the first element" (x : Int) (xs : List Int) =
 prop "fromList . toList round-trips" (x : Int) (xs : List Int) =
   eq (fromList (toList (NonEmpty x xs))) (Some (NonEmpty x xs))
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Foldable" false) (mem "Traversable" false) (mem "Semigroup" false) (mem "Applicative" false) (mem "Thenable" false) (mem "Option" false) (mem "Some" false) (mem "None" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Foldable" false) (mem "Traversable" false) (mem "Semigroup" false) (mem "Applicative" false) (mem "Thenable" false) (mem "Option" true))))
 (DData Public "NonEmpty" ("a") ((variant "NonEmpty" (ConPos (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))) ())
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "NonEmpty") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EListLit)))
@@ -166,7 +164,7 @@ prop "fromList . toList round-trips" (x : Int) (xs : List Int) =
 (DProp false "head is the first element" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBinOp "==" (EApp (EVar "head") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs"))) (EVar "x")))
 (DProp false "fromList . toList round-trips" ((pp "x" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EApp (EApp (EVar "eq") (EApp (EVar "fromList") (EApp (EVar "toList") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs"))))) (EApp (EVar "Some") (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EVar "xs")))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Foldable" false) (mem "Traversable" false) (mem "Semigroup" false) (mem "Applicative" false) (mem "Thenable" false) (mem "Option" false) (mem "Some" false) (mem "None" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Foldable" false) (mem "Traversable" false) (mem "Semigroup" false) (mem "Applicative" false) (mem "Thenable" false) (mem "Option" true))))
 (DData Public "NonEmpty" ("a") ((variant "NonEmpty" (ConPos (TyVar "a") (TyApp (TyCon "List") (TyVar "a"))))) ())
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "NonEmpty") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EApp (EApp (EVar "NonEmpty") (EVar "x")) (EListLit)))

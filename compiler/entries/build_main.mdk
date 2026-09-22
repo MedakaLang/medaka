@@ -14,7 +14,7 @@
 -- input's basename sans .mdk.
 
 import driver.build_cmd.{
-  TNative,
+  BuildTarget(..),
   runBuild,
   ppBuildReport,
   envOr,

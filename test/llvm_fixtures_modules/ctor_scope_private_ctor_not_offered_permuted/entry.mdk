@@ -21,7 +21,7 @@
 -- So: a value golden CANNOT catch an over-widening (this cell's golden is satisfied
 -- by the broken compiler), and neither cell alone is evidence of anything.  Cite the
 -- PAIR or cite neither, and if either is ever deleted, delete both.
-import pubmod.{Zt, unQ}
+import pubmod.{TQ(..), unQ}
 import pvmod.{Zt(..), unP}
 
 main : <IO> Unit

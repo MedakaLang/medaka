@@ -1,5 +1,5 @@
 # META
-source_lines=1371
+source_lines=1365
 stages=DESUGAR,MARK
 # SOURCE
 -- Parse a root .mdk file's transitive imports and return
@@ -15,14 +15,8 @@ stages=DESUGAR,MARK
 --   * Cycles ARE detected (an in-progress stack) and reported as an Err.
 
 import frontend.ast.{
-  Decl,
-  DUse,
-  DAttrib,
-  UsePath,
-  UseName,
-  UseGroup,
-  UseWild,
-  UseAlias,
+  Decl(..),
+  UsePath(..),
   Loc,
 }
 import frontend.parser.{
@@ -1374,7 +1368,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
       []
       (moduleIdOfPath roots entry))
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false) (mem "DAttrib" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "Loc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dropAssoc" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))
@@ -1583,7 +1577,7 @@ loadProgramFilesLocatedCachedE parseCacheRef read entry roots =
 (DTypeSig true "loadProgramFilesLocatedCachedE" (TyFun (TyApp (TyCon "Ref") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))))) (TyFun (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))) (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyApp (TyApp (TyCon "Result") (TyCon "LoadError")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))))))))
 (DFunDef false "loadProgramFilesLocatedCachedE" ((PVar "parseCacheRef") (PVar "read") (PVar "entry") (PVar "roots")) (EBlock (DoLet false false (PVar "deps") (EApp (EVar "readDeps") (EApp (EVar "findProjectRootOrSelf") (EApp (EVar "parentDir") (EVar "entry"))))) (DoExpr (EApp (EApp (EVar "map") (ELam ((PTuple PWild (PVar "acc"))) (EVar "acc"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "visitModF") (ELam ((PVar "s")) (EApp (EApp (EVar "parseCachedLocated") (EVar "parseCacheRef")) (EVar "s")))) (EVar "read")) (EVar "deps")) (EVar "roots")) (EListLit)) (EListLit)) (EListLit)) (EApp (EApp (EVar "moduleIdOfPath") (EVar "roots")) (EVar "entry")))))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false) (mem "DAttrib" false) (mem "UsePath" false) (mem "UseName" false) (mem "UseGroup" false) (mem "UseWild" false) (mem "UseAlias" false) (mem "Loc" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "UsePath" true) (mem "Loc" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "ParseError" false) (mem "parseResult" false) (mem "parseLocatedResult" false) (mem "parseErrorLine" false) (mem "parseErrorCol" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "dropAssoc" false) (mem "listLen" false) (mem "reverseL" false) (mem "initList" false) (mem "startsWith" false) (mem "endsWith" false) (mem "joinDot" false) (mem "joinWith" false) (mem "lookupAssoc" false) (mem "splitNl" false) (mem "stringTrim" false) (mem "sortUniqS" false))))
 (DTypeSig false "lastOr" (TyFun (TyVar "a") (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyVar "a"))))

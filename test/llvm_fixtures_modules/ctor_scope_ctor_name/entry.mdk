@@ -18,7 +18,7 @@
 -- STILL be rejected are pinned as
 -- `test/analyze_project_fixtures/1111_a26_genuine_ctor_rejects/` (no collision) and
 -- `.../1111_a26_collision_rejects/` (collision present).
-import amodd.{A1, Dup, unA1}
+import amodd.{A1(..), unA1}
 import zmodd.{zdf}
 
 v : A1

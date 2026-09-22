@@ -1,7 +1,12 @@
+abstractlyExportedTypes : ModuleExports -> List String
 addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
 addStrippedCtorProv : Map String (List String) -> UsePath -> List String -> Map String (List String)
+aliasAbstractCtorErrs : Env -> String -> Option Loc -> List ResError
+aliasAbstractCtorMod : Env -> String -> Option String
+aliasAbstractCtors : Map String ModuleExports -> List Decl -> List (String, String)
+aliasAbstractCtorsFrom : Map String ModuleExports -> UsePath -> List (String, String)
 aliasCtx : List String -> Map String TyConOrigin -> AliasCtx
 aliasIfaceMethods : UsePath -> List (String, List String) -> List (String, List String)
 aliasOfUsePath : UsePath -> List String
@@ -25,6 +30,7 @@ bestOfNames : SugQuery -> List String -> Option String
 bestOfPool : SugQuery -> List SugCand -> Option String
 bindOneOrigin : Map String String -> String -> String -> List (String, String)
 bindTypeOrigin : Map String String -> (String, String) -> List (String, String)
+bindsNonCtorExport : ModuleExports -> String -> Bool
 bitsAtMost : Int -> Int -> Bool
 buildEnv : List Decl -> List Decl -> List Decl -> List String -> Env
 buildEnvMM : PreludeScope -> Map String ModuleExports -> List Decl -> List String -> (Env, List ResError)
@@ -35,7 +41,10 @@ builtInEffects : List String
 builtinTyOrigin : String -> (String, TyConOrigin)
 builtinTyOrigins : List (String, TyConOrigin)
 carriedCtorOwners : List (String, String) -> List UseMember -> List (String, String)
+carriedIn : ExpNs a -> ModuleExports -> Map String ModuleExports -> List Decl -> List a
 carriedTypeCtors : List String -> List String -> List (String, List String) -> List (String, List String)
+carriedTypeCtorsFrom : ModuleExports -> List String -> List (String, List String)
+carriedValuesFrom : ModuleExports -> List (String, String) -> List String
 charMask : Int -> String -> Int
 charMaskGo : Int -> Array Char -> Int -> Int -> Int
 checkArm : Option Loc -> Env -> Scope -> Arm -> List ResError
@@ -95,13 +104,16 @@ ctorOccurrenceContested : Env -> String -> Bool
 ctorOwnedBy : (String, List String) -> List (String, String)
 ctorOwnerKey : String -> String
 ctorProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
+ctorTypeLookup : String -> List (String, List String) -> Option String
 dataRecordNames : List Decl -> List String
 dbName : ResError -> String
 declBindNames : Decl -> List String
 declLoc : Decl -> Option Loc
 dedupResErrors : List ResError -> List ResError
 deleteAllStr : List String -> Map String Unit -> Map String Unit
+directIn : ExpNs a -> List Decl -> List a
 dotDotMemberNames : List UseMember -> List String
+dottedBare : String -> String
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dupClauseTail : Option Loc -> String -> Bool -> List FunClause -> List ResError
 dupErr : String -> String -> ResError
@@ -117,19 +129,9 @@ dvbName : ResError -> String
 effectNames : List Decl -> List String
 emptyAdds : ImportAdds
 emptyScope : Scope
-expCtorsDirect : List Decl -> List String
-expEffectsDirect : List Decl -> List String
-expFieldOwnersDirect : List Decl -> List (String, String)
-expIfaceMethodsDirect : List Decl -> List (String, List String)
-expInterfacesDirect : List Decl -> List String
-expInterfacesOf : ModuleExports -> List String
-expNewtypeCtorsDirect : List Decl -> List (String, String)
-expTypeCtorsDirect : List Decl -> List (String, List String)
-expTypesDirect : List Decl -> List String
-expTypesOf : ModuleExports -> List String
-expValuesDirect : List Decl -> List String
 expandMemberErrs : ModuleExports -> UseMember -> List ResError
 expandMemberNames : ModuleExports -> UseMember -> List (String, String, Loc)
+exportsIn : ExpNs a -> ModuleExports -> List a
 externNames : List Decl -> List String
 externTyOriginScope : List Decl -> Map String TyConOrigin
 externWithBodyErrors : List String -> List Decl -> List ResError
@@ -180,10 +182,7 @@ ifaceMethodPairs : ModuleExports -> List String -> List (String, List String)
 ifaceMethodsOf : String -> List (String, List String) -> List String
 ifaceValsOf : ModuleExports -> String -> List String
 implMethodNm : ImplMethod -> String
-importCtorNames : Map String ModuleExports -> UsePath -> List String
-importIfaceNames : Map String ModuleExports -> UsePath -> List String
-importNamesIn : (ModuleExports -> List String) -> Map String ModuleExports -> UsePath -> List String
-importTypeNames : Map String ModuleExports -> UsePath -> List String
+importNamesIn : ExpNs String -> Map String ModuleExports -> UsePath -> List String
 importValueNames : Map String ModuleExports -> UsePath -> List String
 importedEffects : Map String ModuleExports -> List Decl -> List String
 importedIfaceMethods : Map String ModuleExports -> List Decl -> List (String, List String)
@@ -241,7 +240,18 @@ moduleAliasNames : List Decl -> List String
 modulesExportingName : Env -> String -> List String
 newlyDuplicated : Option Loc -> Map String Unit -> List String -> List ResError
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
+noCarry : UsePath -> ModuleExports -> List a
 noteOriginTrace : String -> List Decl -> Unit
+nsAbstractData : ExpNs String
+nsCtors : ExpNs String
+nsEffects : ExpNs String
+nsFieldOwners : ExpNs (String, String)
+nsIfaceMethods : ExpNs (String, List String)
+nsInterfaces : ExpNs String
+nsNewtypeCtors : ExpNs (String, String)
+nsTypeCtors : ExpNs (String, List String)
+nsTypes : ExpNs String
+nsValues : ExpNs String
 numberFrom : Int -> List String -> List (String, Int)
 oneImport : Map String ModuleExports -> UsePath -> Loc -> ImportAdds
 oneImportEffects : Map String ModuleExports -> UsePath -> List String
@@ -280,22 +290,6 @@ pubErrLoc : ModuleExports -> (String, Loc) -> List ResError
 pubIfaceMethodSets : List Decl -> List (List String)
 pubUsePaths : List Decl -> List UsePath
 publicIfaceMethodVals : List Decl -> Env -> List String
-reExpCtors : ModuleExports -> Map String ModuleExports -> List Decl -> List String
-reExpCtorsFrom : UsePath -> ModuleExports -> List String
-reExpEffects : ModuleExports -> Map String ModuleExports -> List Decl -> List String
-reExpEffectsFrom : UsePath -> ModuleExports -> List String
-reExpFieldOwners : ModuleExports -> Map String ModuleExports -> List Decl -> List (String, String)
-reExpFieldOwnersFrom : UsePath -> ModuleExports -> List (String, String)
-reExpIfaceMethods : ModuleExports -> Map String ModuleExports -> List Decl -> List (String, List String)
-reExpIfaceMethodsFrom : UsePath -> ModuleExports -> List (String, List String)
-reExpInterfaces : ModuleExports -> Map String ModuleExports -> List Decl -> List String
-reExpInterfacesFrom : UsePath -> ModuleExports -> List String
-reExpTypeCtors : ModuleExports -> Map String ModuleExports -> List Decl -> List (String, List String)
-reExpTypeCtorsFrom : UsePath -> ModuleExports -> List (String, List String)
-reExpTypes : ModuleExports -> Map String ModuleExports -> List Decl -> List String
-reExpTypesFrom : UsePath -> ModuleExports -> List String
-reExpValues : ModuleExports -> Map String ModuleExports -> List Decl -> List String
-reExpValuesFrom : UsePath -> ModuleExports -> List String
 realImport : ModuleExports -> UsePath -> Loc -> ImportAdds
 recCreateField : Option Loc -> Env -> String -> FieldAssign -> List ResError
 recCreateHead : Option Loc -> Env -> String -> List FieldAssign -> List ResError
@@ -324,6 +318,7 @@ resolveProgramG2 : List String -> List Decl -> List Decl -> List Decl -> List Re
 resolveToLines : List Decl -> List Decl -> List Decl -> String
 rewriteNonRec : List String -> ResError -> ResError
 sameCase : Bool -> Bool -> Bool
+scanDecls : (Decl -> List a) -> List Decl -> List a
 scopeAdd : String -> Scope -> Scope
 scopeExtend : List String -> Scope -> Scope
 scopeMem : String -> Scope -> Bool
@@ -393,6 +388,7 @@ typeAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List S
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeDeclaredIn : String -> String -> (String, String)
+typeOfCtor : String -> ModuleExports -> Option String
 typeOriginExports : Map String (List (String, String)) -> String -> List Decl -> List (String, String)
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String

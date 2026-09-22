@@ -50,7 +50,7 @@
 -- reports `non-exhaustive match of 'Cfg'. Missing case: 'CA'` — a warning about a
 -- constructor this file cannot name.
 import aacfg.{aaf}
-import zzcfg.{Cfg, CZ}
+import zzcfg.{Cfg(..)}
 
 v : Cfg
 v = CZ

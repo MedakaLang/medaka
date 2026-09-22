@@ -6,31 +6,37 @@
 --   * same name / 2 mods  : defs.shared and other.shared are DISTINCT keys
 --   * namespace clash     : `Color` (type) vs `Red` (ctor) are DISTINCT keys
 --   * interface method    : `sizeOf` CALL resolves to defs' method key (not extKey)
-import defs.{g, Color, Red, sizeOf, helper as hh}
+import defs.{g, Color(..), sizeOf, helper as hh}
 import defs as D
 import other
 import reexport.{helper}
 
 -- `g` here binds a LOCAL; the two `g` uses in the body resolve to it, NOT to the
 -- imported defs.g (which `usesTopG` below still reaches).
-export topG : Int -> Int
+export
+topG : Int -> Int
 topG x =
   let g = x + 1
   g + hh g
 
-export usesTopG : Int
+export
+usesTopG : Int
 usesTopG = g
 
-export usesReexport : Int
+export
+usesReexport : Int
 usesReexport = helper 5
 
-export usesAlias : Int
+export
+usesAlias : Int
 usesAlias = D.helper 7
 
-export mkColor : Color
+export
+mkColor : Color
 mkColor = Red
 
 -- cross-module method call — `sizeOf` imported from defs; must resolve to defs'
 -- method key, the SAME key defs.usesMethodHere's call resolves to.
-export usesMethodThere : Int
+export
+usesMethodThere : Int
 usesMethodThere = sizeOf Red

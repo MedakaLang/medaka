@@ -1,0 +1,3 @@
+-- The single declarer, with two constructors so a bare member request could
+-- plausibly be mistaken for a type import (it can't: `Red` is never `Color`).
+public export data Color = Red | Green

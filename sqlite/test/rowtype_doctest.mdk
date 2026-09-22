@@ -21,7 +21,7 @@ import lib.rowtype.{
   t4,
   tCustom,
 }
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat}
+import lib.recordfmt.{Cell(..)}
 
 data User = User { id : Int, name : String, age : Option Int }
 

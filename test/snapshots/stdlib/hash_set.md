@@ -25,7 +25,7 @@ stages=DESUGAR,MARK
 -- hash_set/hash_map share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
 
-import core.{Eq, Ord, Debug, Display, Foldable, Hashable}
+import core.{Ordering(..), Ord, Debug, Display, Foldable, Hashable}
 import list as L
 
 {- | The hash set type. Its fields are the bucket array and the element
@@ -294,7 +294,7 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
   let b = fromList (L.reverse xs)
   ascendingL (L.sort (elemList a)) && eq a b == (display a == display b)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
 (DUse false (UseAlias ("list") "L"))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
@@ -365,7 +365,7 @@ prop "Display HashSet agrees with Eq and lists elements ascending" (xs : List In
 (DProp false "Display HashSet is layout-independent" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "s") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "display") (EVar "s")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "toList") (EVar "s"))))) (EBinOp "==" (EApp (EVar "display") (EVar "s")) (EApp (EVar "display") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EApp (EVar "toList") (EVar "s"))))))))))
 (DProp false "Display HashSet agrees with Eq and lists elements ascending" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "a") (EApp (EVar "fromList") (EVar "xs"))) (DoLet false false (PVar "b") (EApp (EVar "fromList") (EApp (EVar "L.reverse") (EVar "xs")))) (DoExpr (EBinOp "&&" (EApp (EVar "ascendingL") (EApp (EVar "L.sort") (EApp (EVar "elemList") (EVar "a")))) (EBinOp "==" (EApp (EApp (EVar "eq") (EVar "a")) (EVar "b")) (EBinOp "==" (EApp (EVar "display") (EVar "a")) (EApp (EVar "display") (EVar "b"))))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Hashable" false))))
 (DUse false (UseAlias ("list") "L"))
 (DData Public "HashSet" ("a") ((variant "HashSet" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyVar "a")))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))

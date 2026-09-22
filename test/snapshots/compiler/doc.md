@@ -56,7 +56,7 @@ import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl, contains}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
-import json.{Json, JString, jObject, jArray}
+import json.{Json(..), jObject, jArray}
 import string.{toLower}
 import regex.{
   Regex, Match, mustCompile, isMatch, replaceAll, escape, find, findAll
@@ -1647,7 +1647,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
@@ -2045,7 +2045,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "jObject" false) (mem "jArray" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
 (DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())

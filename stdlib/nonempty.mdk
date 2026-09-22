@@ -9,7 +9,7 @@
    and the rest qualified, since the names overlap with `list`'s. -}
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
   Debug,
   Display,
@@ -19,9 +19,7 @@ import core.{
   Semigroup,
   Applicative,
   Thenable,
-  Option,
-  Some,
-  None,
+  Option(..),
 }
 
 -- | A first element and the rest of the list.

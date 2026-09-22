@@ -8,7 +8,7 @@
 -- Demos are intentionally self-contained; row-type/helper bodies duplicate by design.
 
 import lib.dbwriter.{writeDatabase}
-import lib.recordfmt.{Cell, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 import list.{reverse}
 import demo_support.{parseN}
 

@@ -29,7 +29,7 @@
    non-`other-job` entries' `run` fields is a bijection onto the baseline's 202
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
-import json.{JNull, Json, asArray, asBool, asInt, asString, get, parse}
+import json.{Json(..), asArray, asBool, asInt, asString, get, parse}
 import support.util.{contains, joinWith, listLen, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —

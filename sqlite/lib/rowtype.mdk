@@ -31,7 +31,7 @@
 -- constructor added to `Cell` in recordfmt.mdk.  Use `tCustom` for affinity-
 -- flexible reads (e.g. accepting both `CInt` and `CFloat` for a NUMERIC column).
 
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, cellToString}
+import lib.recordfmt.{Cell(..), cellToString}
 import list.{take, drop}
 
 -- | A row decoder: how wide a slice of columns it consumes, and the closure

@@ -17,7 +17,7 @@
 -- — NOT `1111_a26_bystander_ctor_collision/`, which this note mis-cited: that is a
 -- third cell again (collision present, program VALID).  Together the three cover
 -- collision×validity.  ⚠️ This file's oracle pins LINE numbers — keep edits neutral.
-import onecfg.{Cfg, A1, Dup}
+import onecfg.{Cfg, A1(..)}
 
 bad1 : Cfg
 bad1 = Cfg { fld = "s" }

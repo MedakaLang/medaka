@@ -36,8 +36,7 @@ import test.{
   pass,
   fail,
   runTests,
-  Pass,
-  Fail,
+  Expectation(..),
 }
 
 -- ── Helpers ─────────────────────────────────────────────────────────────────
@@ -50,7 +49,7 @@ import test.{
 -- sized.mdk + shape.mdk: interface Sized declared in sized, impl+fn in shape
 
 import sized.{Sized, sizeOf}
-import shape.{Shape, Circle, Square, describe}
+import shape.{Shape(..), describe}
 
 test "cross-module user interface describe circle" =
   expectEqual 6 (describe (Circle 5))
@@ -102,7 +101,7 @@ test "cross-module super dict dispatch bag" =
 -- Ported from: test_eval_method_dict_cross_module
 -- summod.mdk: Sum with Semigroup/Monoid impls, unwrap
 
-import summod.{Sum, MkSum, unwrap}
+import summod.{Sum(..), unwrap}
 
 test "cross-module method-level dict foldMap" =
   expectEqual 10 (unwrap (foldMap MkSum [1, 2, 3, 4]))
@@ -173,7 +172,7 @@ test "method toList option via Foldable" = match olResult
 -- Apple == Zebra = False
 -- Apple /= Zebra = True
 
-import level.{Level, Apple, Zebra}
+import level.{Level(..)}
 
 test "gap G operator < dispatches to user Ord (apple < zebra = false)" =
   expectFalse (Apple < Zebra)

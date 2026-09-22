@@ -24,7 +24,7 @@ import lib.sqlite.{
   seekTableRow,
 }
 import lib.btree.{Row, rowRowid, rowCells, pageType, pageTableInterior}
-import lib.recordfmt.{Cell, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 
 tableName : String
 tableName = "t"

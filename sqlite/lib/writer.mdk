@@ -31,7 +31,7 @@ import lib.dbwriter.{
   buildDatabaseMultiExplicit,
   buildDatabaseMultiWithIndexes,
 }
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob}
+import lib.recordfmt.{Cell(..)}
 import string.{join, toUpper}
 import list.{findIndex, reverse, get}
 

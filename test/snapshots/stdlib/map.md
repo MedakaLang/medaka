@@ -1,5 +1,5 @@
 # META
-source_lines=952
+source_lines=951
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -36,7 +36,7 @@ stages=DESUGAR,MARK
 -- lint-disable-file rule-duplicate-body
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
   Debug,
   Display,
@@ -44,7 +44,6 @@ import core.{
   Filterable,
   Semigroup,
   Monoid,
-  Ordering,
   Option,
   FromEntries,
   Index,
@@ -955,7 +954,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
       (entriesFrom (Some k) None m)
       (filter ((key, _) => gte key k) (entries m))
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
@@ -1168,7 +1167,7 @@ prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) 
 (DProp false "entriesFrom is the limited run of entries from the start key" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 (DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))

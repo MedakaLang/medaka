@@ -9,7 +9,7 @@
 
 import test.{expectEqual, expectAll}
 import test.dbfix.{q, qd}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat}
+import lib.recordfmt.{Cell(..)}
 
 -- ── Aggregates with NULL-skipping ──────────────────────────────────────────
 test "count(*) counts every row" =

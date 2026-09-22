@@ -35,9 +35,7 @@
 
 import byteparser.{
   ByteParser,
-  BResult,
-  BOk,
-  BErr,
+  BResult(..),
   runBP,
   byte,
   anyByte,

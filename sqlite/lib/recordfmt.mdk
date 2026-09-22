@@ -15,9 +15,7 @@
 import byteparser.{
   ByteParser,
   ByteParserE,
-  BResult,
-  BOk,
-  BErr,
+  BResult(..),
   onOk,
   runBP,
   runByteParser,

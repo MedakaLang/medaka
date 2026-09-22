@@ -16,7 +16,7 @@
 -- Names are deliberately OFF the prelude (`eGt`/`eEq`/`eAnd`/...) so they never
 -- collide with `Ord`/`Eq`/`Bool` methods (`gt`/`eq`/`and`/...).
 
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, nthCell}
+import lib.recordfmt.{Cell(..), nthCell}
 import lib.sqlite.{
   Db,
   scanTableRowsIpk,

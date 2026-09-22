@@ -35,9 +35,9 @@
 --     `appFallback` miss path deliberately (miss-policy case 1).  They are here
 --     to answer `AGENTS.md`'s "what happens to a program that never touches the
 --     table" directly.
-import plain.{Widget, Pair, MkPair, Gauge2, Boxed}
-import dupa.{da} -- ONLY the function; never dupa's Dup or Shared
-import dupz.{dz} -- ONLY the function; never dupz's Dup or Shared
+import plain.{Widget, Pair(..), Gauge2, Boxed}
+import dupa.{da}  -- ONLY the function; never dupa's Dup or Shared
+import dupz.{dz}  -- ONLY the function; never dupz's Dup or Shared
 
 w : Widget <Stdout> Int
 w = w

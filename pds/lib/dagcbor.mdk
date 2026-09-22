@@ -21,9 +21,7 @@ import bytebuilder.{
 }
 import bytes.{fromArrayAssumeByteDomain}
 import byteparser.{
-  BErr,
-  BOk,
-  BResult,
+  BResult(..),
   ByteParser,
   ByteParserE,
   runBP,

@@ -15,7 +15,7 @@ stages=DESUGAR,MARK
    in `Err`. File operations run only in a built program, not under the
    interpreter. -}
 
-import core.{Result, Ok, Err}
+import core.{Result(..)}
 import path.{dirname, joinPath}
 import string.{contains}
 
@@ -221,7 +221,7 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
       }
     && debug x == debug y == False
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Result" false) (mem "Ok" false) (mem "Err" false))))
+(DUse false (UseGroup ("core") ((mem "Result" true))))
 (DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())
@@ -259,7 +259,7 @@ prop "Debug FileStat separates records that Eq separates" (n : Int) (b : Bool) =
 (DProp false "Eq FileStat is reflexive and field-discriminating" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "base") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EBinOp "==" (EVar "base") (EVar "base")) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isDir" (EApp (EVar "not") (EVar "b")))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "isFile" (EVar "b"))))) (EVar "False"))) (EBinOp "==" (EBinOp "==" (EVar "base") (EVariantUpdate "FileStat" (EVar "base") ((fa "mtime" (EBinOp "+" (EApp (EVar "intToFloat") (EVar "n")) (ELit (LFloat 1.0))))))) (EVar "False"))))))
 (DProp false "Debug FileStat separates records that Eq separates" ((pp "n" (TyCon "Int")) (pp "b" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "x") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n")))))) (DoLet false false (PVar "y") (EVariantUpdate "FileStat" (EVar "x") ((fa "size" (EBinOp "+" (EVar "n") (ELit (LInt 1))))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (ERecordCreate "FileStat" ((fa "size" (EVar "n")) (fa "isDir" (EVar "b")) (fa "isFile" (EApp (EVar "not") (EVar "b"))) (fa "mtime" (EApp (EVar "intToFloat") (EVar "n"))))))) (EBinOp "==" (EBinOp "==" (EApp (EVar "debug") (EVar "x")) (EApp (EVar "debug") (EVar "y"))) (EVar "False"))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Result" false) (mem "Ok" false) (mem "Err" false))))
+(DUse false (UseGroup ("core") ((mem "Result" true))))
 (DUse false (UseGroup ("path") ((mem "dirname" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("string") ((mem "contains" false))))
 (DData Public "FileStat" () ((variant "FileStat" (ConNamed (field "size" (TyCon "Int")) (field "isDir" (TyCon "Bool")) (field "isFile" (TyCon "Bool")) (field "mtime" (TyCon "Float"))))) ())

@@ -44,7 +44,7 @@ stages=DESUGAR,MARK
 -- never dropped, never counted as passing.  "This didn't run" must never look
 -- like "this passed".
 
-import frontend.ast.{Decl, DFunDef, Expr, PWild}
+import frontend.ast.{Decl(..), Expr, Pat(..)}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,
@@ -419,7 +419,7 @@ fromFields note _ _ _ _ =
   Errored
     "native test runner: the probe's output for this test was incomplete (\{note})"
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DFunDef" false) (mem "Expr" false) (mem "PWild" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))
@@ -505,7 +505,7 @@ fromFields note _ _ _ _ =
 (DFunDef false "fromFields" (PWild (PCon "Some" (PLit (LString "Fail"))) (PCon "Some" (PVar "msg")) (PCon "Some" (PVar "expected")) (PVar "actual")) (EApp (EApp (EApp (EVar "Fail") (EVar "msg")) (EVar "expected")) (EVar "actual")))
 (DFunDef false "fromFields" ((PVar "note") PWild PWild PWild PWild) (EApp (EVar "Errored") (EBinOp "++" (EBinOp "++" (ELit (LString "native test runner: the probe's output for this test was incomplete (")) (EApp (EVar "display") (EVar "note"))) (ELit (LString ")")))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DFunDef" false) (mem "Expr" false) (mem "PWild" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" false) (mem "Pat" true))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "ppBuildReport" false) (mem "makeTempDir" false) (mem "scratchProjectManifest" false) (mem "cleanupTempDir" false) (mem "runBuildNativeRoots" false) (mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false))))
 (DUse false (UseGroup ("support" "path") ((mem "joinPath" false) (mem "baseOf" false) (mem "dirOf" false))))

@@ -19,11 +19,10 @@
 import lib.writer.{
   TableSchema,
   Column,
-  ColType,
-  TInteger,
+  ColType(..),
   writeTableWithIndexes,
 }
-import lib.recordfmt.{Cell, CInt}
+import lib.recordfmt.{Cell(..)}
 import list.{reverse}
 import demo_support.{parseN}
 

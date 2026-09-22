@@ -26,13 +26,7 @@
 -- resolve+typecheck pipeline per document.
 
 import json.{
-  Json,
-  JNull,
-  JBool,
-  JInt,
-  JString,
-  JArray,
-  JObject,
+  Json(..),
   jObject,
   jArray,
   stringify,
@@ -43,9 +37,7 @@ import json.{
 }
 import driver.diagnostics.{
   Diag,
-  Severity,
-  SevError,
-  SevWarning,
+  Severity(..),
   analyzeLocated,
   analyzeProject,
   projectEntrySchemes,
@@ -83,23 +75,8 @@ import tools.fmt.{formatSource}
 import tools.refindex.{RefIndex, buildRefIndexProject, binderAt, usesOf, defsOf}
 import list.{sortBy}
 import frontend.ast.{
-  Decl,
-  DTypeSig,
-  DExtern,
-  DFunDef,
-  DData,
-  DUse,
-  DEffect,
-  DProp,
-  DTest,
-  DInterface,
-  DImpl,
-  DTypeAlias,
-  DNewtype,
-  DLetGroup,
-  DAttrib,
-  Ty,
-  TyEffect,
+  Decl(..),
+  Ty(..),
   Loc(..),
   Variant,
   ConPayload(..),
@@ -107,11 +84,7 @@ import frontend.ast.{
   IfaceMethod,
   ImplMethod,
   LetBind,
-  UsePath,
-  UseName,
-  UseGroup,
-  UseWild,
-  UseAlias,
+  UsePath(..),
 }
 
 -- ── open-document store ─────────────────────────────────────────────────────

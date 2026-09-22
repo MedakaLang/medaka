@@ -65,7 +65,7 @@
 -- and `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk`.  Each of
 -- those goes RED on the broken binary; this one does not, and that is the honest
 -- division of labour: a bystander pins "unrelated code still behaves", nothing more.
-import bysa.{Tagged, Mark, unMark}
+import bysa.{Tagged(..), unMark}
 import bysz.{zid}
 import bysc.{Color(..), shade, widen}
 

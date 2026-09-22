@@ -1,0 +1,3 @@
+-- THE ROW — a selective member list naming a constructor directly, rather
+-- than its type. Ruled a reject, not a warning (#3314).
+import decl.{Red}

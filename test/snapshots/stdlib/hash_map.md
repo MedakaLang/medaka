@@ -1,5 +1,5 @@
 # META
-source_lines=387
+source_lines=389
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable hash table from keys to values.
@@ -30,7 +30,9 @@ stages=DESUGAR,MARK
 -- hash_map/hash_set share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
 
-import core.{Eq, Ord, Debug, Display, Option, Mappable, Hashable, Index}
+import core.{
+  Ordering(..), Ord, Debug, Display, Option, Mappable, Hashable, Index
+}
 import list as L
 
 {- | The hash table type. Its fields are the bucket array and the entry
@@ -390,7 +392,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
   let m = fromList xs
   all (k => eq (Some m[k]) (get k m)) (keys m)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
 (DUse false (UseAlias ("list") "L"))
 (DData Public "HashMap" ("k" "v") ((variant "HashMap" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))
@@ -470,7 +472,7 @@ prop "Index HashMap agrees with get on present keys" (xs : List (Int, Int)) =
 (DFunDef false "ascendingKeys" ((PCons (PTuple (PVar "k1") PWild) (PCons (PTuple (PVar "k2") (PVar "v2")) (PVar "rest")))) (EBinOp "&&" (EApp (EApp (EVar "lte") (EVar "k1")) (EVar "k2")) (EApp (EVar "ascendingKeys") (EBinOp "::" (ETuple (EVar "k2") (EVar "v2")) (EVar "rest")))))
 (DProp false "Index HashMap agrees with get on present keys" ((pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "all") (ELam ((PVar "k")) (EApp (EApp (EVar "eq") (EApp (EVar "Some") (EApp (EApp (EVar "index") (EVar "m")) (EVar "k")))) (EApp (EApp (EVar "get") (EVar "k")) (EVar "m"))))) (EApp (EVar "keys") (EVar "m"))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Mappable" false) (mem "Hashable" false) (mem "Index" false))))
 (DUse false (UseAlias ("list") "L"))
 (DData Public "HashMap" ("k" "v") ((variant "HashMap" (ConPos (TyApp (TyCon "Ref") (TyApp (TyCon "Array") (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))) (TyApp (TyCon "Ref") (TyCon "Int"))))) ())
 (DTypeSig false "initialCapacity" (TyCon "Int"))

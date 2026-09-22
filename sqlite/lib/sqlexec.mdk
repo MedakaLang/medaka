@@ -37,16 +37,11 @@ import lib.rowtype.{tCells}
 import lib.recordfmt.{Cell}
 import lib.sqlparse.{renderSqlExpr}
 import lib.sqlstmt.{
-  Stmt,
-  SSelect,
-  SInsert,
-  SUpdate,
-  SDelete,
-  SCreate,
+  Stmt(..),
   parseStmt,
   runSelect,
 }
-import lib.select.{SqlExpr, ELit, Literal, LInt, Expr, mkE, compileValue}
+import lib.select.{SqlExpr(..), Literal(..), Expr, mkE, compileValue}
 import lib.mutate.{Assign, insert, update, delete, createTableIn}
 import list.{reverse}
 

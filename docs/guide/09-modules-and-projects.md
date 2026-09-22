@@ -42,6 +42,11 @@ module and worth dropping once the module grows: a later addition to `greet.mdk`
 can collide with a name from another import, which is an error at the use site, or
 be silently hidden by a local definition with the same name.
 
+A selective member list may not name a `data` constructor directly —
+`import colors.{Red}` is rejected, since `Red` is a constructor of `Color`,
+not a type of its own. Write `import colors.{Color(..)}` to bring in all of
+`Color`'s constructors, or alias the module and write `C.Red`.
+
 ### Aliases
 
 Two modules that export the same name collide if both are imported unqualified. An

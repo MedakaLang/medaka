@@ -32,7 +32,7 @@
 -- host runtime.
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
   Debug,
   Display,
@@ -41,7 +41,6 @@ import core.{
   Filterable,
   Semigroup,
   Monoid,
-  Ordering,
   Option,
 }
 

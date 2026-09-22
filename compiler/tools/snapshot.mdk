@@ -136,7 +136,7 @@
 -- render (a diagnostic that just *disappeared*) is equally unblessable.  That direction
 -- matters — it is the one where a stage silently stops reporting an error.
 
-import frontend.ast.{Decl, DExtern}
+import frontend.ast.{Decl(..)}
 import frontend.lexer.{
   tokenize,
   tokenToString,

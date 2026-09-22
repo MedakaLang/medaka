@@ -11,14 +11,8 @@
 --   * Cycles ARE detected (an in-progress stack) and reported as an Err.
 
 import frontend.ast.{
-  Decl,
-  DUse,
-  DAttrib,
-  UsePath,
-  UseName,
-  UseGroup,
-  UseWild,
-  UseAlias,
+  Decl(..),
+  UsePath(..),
   Loc,
 }
 import frontend.parser.{

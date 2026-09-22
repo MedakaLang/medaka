@@ -14,7 +14,7 @@
 import test.{expectEqual}
 import lib.dbwriter.{buildDatabaseMultiWithIndexes}
 import lib.sqlite.{Db, fromBytes, scanIndexRows}
-import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 
 peopleSql : String
 peopleSql =

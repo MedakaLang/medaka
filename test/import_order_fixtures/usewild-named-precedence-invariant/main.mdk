@@ -3,7 +3,7 @@
 -- two import clauses.  `Green`/`Purple` belong to a different type that merely shares the
 -- spelling `Col`, and a wildcard clause cannot change which declaration an explicitly
 -- named constructor means.  Prints 6, exit 0.
-import aacol.{Red, Blue, aval}
+import aacol.{Col(..), aval}
 import zzcol.*
 
 f x = match x

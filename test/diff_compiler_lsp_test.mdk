@@ -82,12 +82,7 @@ import compiler_cli_test_support.{
 }
 import fs.{mkdirAll}
 import json.{
-  JArray,
-  JBool,
-  JInt,
-  JNull,
-  JString,
-  Json,
+  Json(..),
   asInt,
   asString,
   get,

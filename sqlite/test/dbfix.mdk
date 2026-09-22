@@ -6,7 +6,7 @@
 -- specs by design (a table list is a table list); not worth a shared module.
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
-import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 import lib.rowtype.{tCells}
 import lib.sqlstmt.{queryString, queryStringDistinct}
 

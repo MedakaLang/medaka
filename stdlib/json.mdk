@@ -23,7 +23,7 @@
 -- pair decodes to its astral scalar value, and a lone surrogate is a parse
 -- error, not silent corruption.
 
-import core.{Eq, Debug, Display, Option, Result, Thenable, map}
+import core.{Ordering(..), Debug, Display, Option, Result, Thenable, map}
 import list.{reverse}
 import array
 import string.{join, fromChars, isDigit, toInt}

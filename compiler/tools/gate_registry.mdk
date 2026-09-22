@@ -18,7 +18,7 @@
    shard certifies coverage of a gate that never ran. -}
 
 import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
-import json.{Json, JString, JBool, jArray, jObject, stringify}
+import json.{Json(..), jArray, jObject, stringify}
 import tools.gate_cost.{baselineKey}
 import support.util.{splitOnChar}
 import regex.{mustCompile, isFullMatch, escape}

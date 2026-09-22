@@ -1,5 +1,5 @@
 # META
-source_lines=178
+source_lines=176
 stages=DESUGAR,MARK
 # SOURCE
 {- | A result type that collects every error instead of stopping at the
@@ -20,13 +20,11 @@ stages=DESUGAR,MARK
    write `V.toResult`. -}
 
 import core.{
-  Result,
-  Ok,
-  Err,
+  Result(..),
   Mappable,
   Applicative,
   Semigroup,
-  Eq,
+  Ordering(..),
   Debug,
   Display,
   Foldable,
@@ -181,7 +179,7 @@ prop "Semigroup Validation never discards a failure" (n : Int) (p : Bool) =
   append (Failure [n]) ok == Failure [n]
     && append ok (Failure [n]) == Failure [n]
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Result" false) (mem "Ok" false) (mem "Err" false) (mem "Mappable" false) (mem "Applicative" false) (mem "Semigroup" false) (mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Traversable" false))))
+(DUse false (UseGroup ("core") ((mem "Result" true) (mem "Mappable" false) (mem "Applicative" false) (mem "Semigroup" false) (mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Traversable" false))))
 (DData Public "Validation" ("e" "a") ((variant "Failure" (ConPos (TyVar "e"))) (variant "Success" (ConPos (TyVar "a")))) ())
 (DImpl true "Mappable" ((TyApp (TyCon "Validation") (TyVar "e"))) () ((im "map" ((PVar "f") (PCon "Success" (PVar "a"))) (EApp (EVar "Success") (EApp (EVar "f") (EVar "a")))) (im "map" (PWild (PCon "Failure" (PVar "e"))) (EApp (EVar "Failure") (EVar "e")))))
 (DImpl true "Applicative" ((TyApp (TyCon "Validation") (TyVar "e"))) ((req "Semigroup" ((TyVar "e")))) ((im "pure" ((PVar "a")) (EApp (EVar "Success") (EVar "a"))) (im "ap" ((PCon "Failure" (PVar "e1")) (PCon "Failure" (PVar "e2"))) (EApp (EVar "Failure") (EBinOp "++" (EVar "e1") (EVar "e2")))) (im "ap" ((PCon "Failure" (PVar "e")) PWild) (EApp (EVar "Failure") (EVar "e"))) (im "ap" ((PCon "Success" (PVar "f")) (PVar "v")) (EApp (EApp (EVar "map") (EVar "f")) (EVar "v")))))
@@ -208,7 +206,7 @@ prop "Semigroup Validation never discards a failure" (n : Int) (p : Bool) =
 (DProp false "Semigroup Validation accumulates both failures" ((pp "x" (TyCon "Int")) (pp "y" (TyCon "Int"))) (EBlock (DoLet false false (PVar "got") (EApp (EApp (EVar "append") (EAnnot (EApp (EVar "Failure") (EListLit (EVar "x"))) (TyApp (TyApp (TyCon "Validation") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))) (EApp (EVar "Failure") (EListLit (EVar "y"))))) (DoExpr (EBinOp "==" (EVar "got") (EApp (EVar "Failure") (EListLit (EVar "x") (EVar "y")))))))
 (DProp false "Semigroup Validation never discards a failure" ((pp "n" (TyCon "Int")) (pp "p" (TyCon "Bool"))) (EBlock (DoLet false false (PVar "ok") (EAnnot (EApp (EVar "Success") (EListLit (EVar "n"))) (TyApp (TyApp (TyCon "Validation") (TyApp (TyCon "List") (TyCon "Int"))) (TyApp (TyCon "List") (TyCon "Int"))))) (DoExpr (EBinOp "&&" (EBinOp "==" (EApp (EApp (EVar "append") (EApp (EVar "Failure") (EListLit (EVar "n")))) (EVar "ok")) (EApp (EVar "Failure") (EListLit (EVar "n")))) (EBinOp "==" (EApp (EApp (EVar "append") (EVar "ok")) (EApp (EVar "Failure") (EListLit (EVar "n")))) (EApp (EVar "Failure") (EListLit (EVar "n"))))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Result" false) (mem "Ok" false) (mem "Err" false) (mem "Mappable" false) (mem "Applicative" false) (mem "Semigroup" false) (mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Traversable" false))))
+(DUse false (UseGroup ("core") ((mem "Result" true) (mem "Mappable" false) (mem "Applicative" false) (mem "Semigroup" false) (mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Traversable" false))))
 (DData Public "Validation" ("e" "a") ((variant "Failure" (ConPos (TyVar "e"))) (variant "Success" (ConPos (TyVar "a")))) ())
 (DImpl true "Mappable" ((TyApp (TyCon "Validation") (TyVar "e"))) () ((im "map" ((PVar "f") (PCon "Success" (PVar "a"))) (EApp (EVar "Success") (EApp (EVar "f") (EVar "a")))) (im "map" (PWild (PCon "Failure" (PVar "e"))) (EApp (EVar "Failure") (EVar "e")))))
 (DImpl true "Applicative" ((TyApp (TyCon "Validation") (TyVar "e"))) ((req "Semigroup" ((TyVar "e")))) ((im "pure" ((PVar "a")) (EApp (EVar "Success") (EVar "a"))) (im "ap" ((PCon "Failure" (PVar "e1")) (PCon "Failure" (PVar "e2"))) (EApp (EVar "Failure") (EBinOp "++" (EVar "e1") (EVar "e2")))) (im "ap" ((PCon "Failure" (PVar "e")) PWild) (EApp (EVar "Failure") (EVar "e"))) (im "ap" ((PCon "Success" (PVar "f")) (PVar "v")) (EApp (EApp (EMethodRef "map") (EVar "f")) (EVar "v")))))
