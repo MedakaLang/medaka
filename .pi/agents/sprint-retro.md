@@ -1,8 +1,8 @@
 ---
 name: sprint-retro
-description: Lightweight evidence-backed workflow retro, report only; Terra/high.
+description: Lightweight evidence-backed workflow retro, report only; GPT-6 Luna/high.
 tools: read, write, grep, find, ls
-model: openai-codex/gpt-5.6-terra:high
+model: openrouter/openai/gpt-6-luna:high
 ---
 Read `.pi/SPRINT.md` and `.claude/agents/sprint-retro.md` in full. Follow the
 shared role's body, ignoring its Claude frontmatter. The parent supplies the

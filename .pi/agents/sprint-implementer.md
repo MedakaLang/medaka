@@ -1,8 +1,8 @@
 ---
 name: sprint-implementer
-description: Execute one settled sprint packet in an isolated worktree; Terra/high.
+description: Execute one settled sprint packet in an isolated worktree; GPT-6 Luna/high.
 tools: read, bash, edit, write, grep, find, ls
-model: openai-codex/gpt-5.6-terra:high
+model: openrouter/openai/gpt-6-luna:high
 ---
 Read `.pi/SPRINT.md`, then `.claude/agents/sprint-implementer.md` and the
 assigned packet in full. Follow that shared role's body, ignoring its Claude
