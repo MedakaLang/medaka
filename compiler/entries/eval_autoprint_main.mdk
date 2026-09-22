@@ -46,12 +46,12 @@ runElab runtimeDecls coreDecls modules =
   let fired = shouldAutoPrintMain coreDecls modules
   -- An `Async` main takes the scheduler-driver rewrite instead (#2506), the
   -- same one `medaka run`'s `elaborateRun` applies.
-  let asyncFired = shouldAsyncWrapMain "runAsyncIOMain" modules
+  let asyncFired = shouldAsyncWrapMain "runAsyncMain" modules
   let modulesW =
     if fired then
       autoPrintWrapModules modules
     else if asyncFired then
-      asyncWrapModules "runAsyncIOMain" modules
+      asyncWrapModules "runAsyncMain" modules
     else
       modules
   -- the wrap's callee is a PRELUDE re-binding (autoPrintPinCore, #2185 / F1 / F2).

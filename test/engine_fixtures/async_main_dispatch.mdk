@@ -1,7 +1,7 @@
--- A `main : Async _` is driven by every engine (#2506): the interpreter and the
--- native build apply the scheduler (`runAsyncIO`), the wasm build applies the
--- sequential driver (`runAsync`).  Spawned tasks and `concurrent` collect in
--- input order under both, so all three engines must print the same three lines.
+-- A `main : Async _` is driven by every engine (#2506): all three apply the one
+-- driver, `runAsyncMain`, which is the scheduler.  The scheduler names no clock
+-- and no poll extern of its own, so it runs on wasm too.  Spawned tasks and
+-- `concurrent` collect in input order, so all three must print the same lines.
 import async.{Async, liftIO, spawnTask, await, concurrent}
 
 main : Async <Stdout> Unit

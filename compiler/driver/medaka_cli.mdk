@@ -3064,10 +3064,10 @@ elaborateRun rtD coreD modsD =
       let _ = runAbort msg
       plain
     None =>
-      if shouldAsyncWrapMain "runAsyncIOMain" modsD then
+      if shouldAsyncWrapMain "runAsyncMain" modsD then
         plainPerModuleOf
           plain
-          (elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD))
+          (elaborateModules rtD coreD (asyncWrapModules "runAsyncMain" modsD))
       else
         plain
 

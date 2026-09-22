@@ -9021,8 +9021,8 @@ mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
     _ => False
   None => False
 
--- Stage 2 query: is the `Async` main's payload `Unit`?  The entry drivers
--- (`runAsyncIOMain`/`runAsyncMain`) take `Async e Unit`, so any other payload
+-- Stage 2 query: is the `Async` main's payload `Unit`?  The entry driver
+-- (`runAsyncMain`) takes `Async e Unit`, so any other payload
 -- is rejected with a diagnostic before the rewrite rather than by the driver's
 -- unification failure.
 export

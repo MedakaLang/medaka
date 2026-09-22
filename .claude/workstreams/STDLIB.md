@@ -99,18 +99,26 @@ in `toList` for stable output.
 
 ---
 
-## `stdlib/async.mdk` has TWO drivers on purpose — do not "fix" the panic arm
+## `stdlib/async.mdk` has ONE driver, and the wait carries the capability
 
-`runAsync : Async e a -> <e> a` is the sequential driver: it runs a spawned child inline and
-**panics** on a timer or descriptor wait, naming `runAsyncIO`. `runAsyncIO : Async e a ->
-<Clock, Net "_" | e> a` is the scheduler. Folding the scheduler into `runAsync` would widen
-every pure async program's manifest with `Clock`/`Net` it never exercises, so the panic is the
-design (`docs/design/ASYNC-RUNTIME-DESIGN.md` R6), not a gap. A `main : Async e Unit` is
-rewritten by the driver (`main_autoprint.asyncWrapModules`) to apply `runAsyncIOMain` on the
-native target and under `medaka run`, and `runAsyncMain` on wasm (no clock host-imports) —
-four sites apply the rewrite (`entry_support.runEmitWith`, `playground_main.doEmit`,
-`medaka_cli.elaborateRun`, `entries/eval_autoprint_main`); the engines gate's eval leg runs the
-last one, not `medaka_cli`.
+`runAsync : Async e a -> <e> a` is the scheduler and the only driver (#3320, 2026-09-21).
+It performs the program's own row and nothing wider because it names no clock and no poll
+extern itself: a `Wait e` carries the capability whoever built it already performs —
+`sleep`/`deadlineAfter` embed a `Timer e` (read "now", sleep N ms) and `waitRead`/`waitWrite`
+embed a `Poller e` (`ioPoll`) — and the scheduler reads "now" from the nearest parked
+deadline and polls through a parked descriptor wait. A park table with nothing but task flags
+in it costs no clock read and no poll at all. `Wait` is exported ABSTRACTLY: build one with
+`waitRead`/`waitWrite`/`deadlineAfter`, never a constructor. A `main : Async e Unit` is
+rewritten by the driver (`main_autoprint.asyncWrapModules`) to apply `runAsyncMain`, the same
+name on every target, wasm included — four sites apply the rewrite
+(`entry_support.runEmitWith`, `playground_main.doEmit`, `medaka_cli.elaborateRun`,
+`entries/eval_autoprint_main`); the engines gate's eval leg runs the last one, not
+`medaka_cli`.
+
+⚠️ Declaration ORDER inside `async.mdk` is load-bearing: a `data` whose parameter is
+declared `(e : Effect)` must appear BEFORE any type that mentions it, or the parameter
+mis-kinds and every use site reports `Type mismatch: e vs a`. `Timer`/`Poller`, then `Wait`,
+then `Async`.
 
 Two typing facts every async-touching change trips over: an effect row in a type ARGUMENT is
 invariant (#1094), so the statements of one `defer` block share ONE index — write helpers

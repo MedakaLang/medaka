@@ -5,11 +5,21 @@
 -- level-triggered, so a retry after any wake is correct.  The socket is
 -- switched to non-blocking mode by `accept` and by `connect`; a `Connection`
 -- from the blocking `net.connect` is switched on first use.  Deadlines are a
--- wait set of the descriptor plus a `WaitUntil`; the task itself decides to
--- give up, so no task is ever dropped
+-- wait set of the descriptor plus a `deadlineAfter`; the task itself decides
+-- to give up, so no task is ever dropped
 -- (docs/design/ASYNC-RUNTIME-DESIGN.md §0a).
 
-import async.{Async, Wait(..), liftIO, spawn, awaitAny, deadlineAfter, expired}
+import async.{
+  Async,
+  Wait,
+  liftIO,
+  spawn,
+  awaitAny,
+  waitRead,
+  waitWrite,
+  deadlineAfter,
+  expired,
+}
 import bytes.{Bytes, adoptByteBlockUnsafe}
 import net.{Connection(..), Listener(..)}
 import net as N
@@ -30,7 +40,7 @@ import time.{Duration}
    so on.
 
    Every operation performs `<Net "_">`, and the deadline forms also read
-   the clock. Drive the program with `runAsyncIO` or a `main : Async e Unit`.
+   the clock. Drive the program with `runAsync` or a `main : Async e Unit`.
    Networking works only in a program built for the native target. -}
 
 {- | Connects to `host` on `port`, parking until the handshake finishes
@@ -65,7 +75,7 @@ connectStep : Int ->
   Result String (Option Unit) ->
   Async <Net "_" | e> (Result String Connection)
 connectStep fd (Ok None) =
-  deferThen (awaitAny [WaitWrite fd]) (_ => connectPending fd)
+  deferThen (awaitAny [waitWrite fd]) (_ => connectPending fd)
 connectStep fd (Ok (Some _)) = deferPure (Ok (Connection fd))
 connectStep fd (Err e) = abandonConnect fd e
 
@@ -78,26 +88,26 @@ connectWithin : Duration ->
 connectWithin d host port =
   deferThen (deadlineAfter d) (dl => connectFrom dl host port)
 
-connectFrom : Wait ->
+connectFrom : Wait <Clock, Net "_" | e> ->
   String ->
   Int ->
   Async <Clock, Net "_" | e> (Result String Connection)
 connectFrom dl host port =
   deferThen (startConnect host port) (started => connectUntilStarted dl started)
 
-connectUntilStarted : Wait ->
+connectUntilStarted : Wait <Clock, Net "_" | e> ->
   Result String Int ->
   Async <Clock, Net "_" | e> (Result String Connection)
 connectUntilStarted _ (Err e) = deferPure (Err e)
 connectUntilStarted dl (Ok fd) = connectUntil dl fd
 
-connectUntil : Wait ->
+connectUntil : Wait <Clock, Net "_" | e> ->
   Int ->
   Async <Clock, Net "_" | e> (Result String Connection)
 connectUntil dl fd = deferThen (liftIO (u => netConnectCheck fd)) (step =>
   connectUntilStep dl fd step)
 
-connectUntilStep : Wait ->
+connectUntilStep : Wait <Clock, Net "_" | e> ->
   Int ->
   Result String (Option Unit) ->
   Async <Clock, Net "_" | e> (Result String Connection)
@@ -105,7 +115,7 @@ connectUntilStep dl fd (Ok None) = deferThen (expired dl) (late =>
   if late then
     abandonConnect fd "timed out"
   else
-    deferThen (awaitAny [WaitWrite fd, dl]) (_ => connectUntil dl fd))
+    deferThen (awaitAny [waitWrite fd, dl]) (_ => connectUntil dl fd))
 connectUntilStep _ fd (Ok (Some _)) = deferPure (Ok (Connection fd))
 connectUntilStep _ fd (Err e) = abandonConnect fd e
 
@@ -136,7 +146,7 @@ acceptStep : Listener ->
   Result String (Option Connection) ->
   Async <Net "_" | e> (Result String Connection)
 acceptStep (Listener fd) (Ok None) =
-  deferThen (awaitAny [WaitRead fd]) (_ => accept (Listener fd))
+  deferThen (awaitAny [waitRead fd]) (_ => accept (Listener fd))
 acceptStep _ (Ok (Some c)) = deferPure (Ok c)
 acceptStep _ (Err e) = deferPure (Err e)
 
@@ -157,7 +167,7 @@ recvStep : Connection ->
   Result String (Option (Array Int)) ->
   Async <Net "_" | e> (Result String (Array Int))
 recvStep (Connection fd) n (Ok None) =
-  deferThen (awaitAny [WaitRead fd]) (_ => recv (Connection fd) n)
+  deferThen (awaitAny [waitRead fd]) (_ => recv (Connection fd) n)
 recvStep _ _ (Ok (Some bs)) = deferPure (Ok bs)
 recvStep _ _ (Err e) = deferPure (Err e)
 
@@ -169,14 +179,14 @@ recvWithin : Duration ->
   Async <Clock, Net "_" | e> (Result String (Array Int))
 recvWithin d conn n = deferThen (deadlineAfter d) (dl => recvUntil dl conn n)
 
-recvUntil : Wait ->
+recvUntil : Wait <Clock, Net "_" | e> ->
   Connection ->
   Int ->
   Async <Clock, Net "_" | e> (Result String (Array Int))
 recvUntil dl conn n = deferThen (liftIO (u => tryRecv conn n)) (step =>
   recvUntilStep dl conn n step)
 
-recvUntilStep : Wait ->
+recvUntilStep : Wait <Clock, Net "_" | e> ->
   Connection ->
   Int ->
   Result String (Option (Array Int)) ->
@@ -185,7 +195,7 @@ recvUntilStep dl (Connection fd) n (Ok None) = deferThen (expired dl) (late =>
   if late then
     deferPure (Err "timed out")
   else
-    deferThen (awaitAny [WaitRead fd, dl]) (_ =>
+    deferThen (awaitAny [waitRead fd, dl]) (_ =>
       recvUntil dl (Connection fd) n))
 recvUntilStep _ _ _ (Ok (Some bs)) = deferPure (Ok bs)
 recvUntilStep _ _ _ (Err e) = deferPure (Err e)
@@ -224,7 +234,7 @@ recvBytesStep : Connection ->
   Result String (Option Bytes) ->
   Async <Net "_" | e> (Result String Bytes)
 recvBytesStep (Connection fd) n (Ok None) =
-  deferThen (awaitAny [WaitRead fd]) (_ => recvBytes (Connection fd) n)
+  deferThen (awaitAny [waitRead fd]) (_ => recvBytes (Connection fd) n)
 recvBytesStep _ _ (Ok (Some bs)) = deferPure (Ok bs)
 recvBytesStep _ _ (Err e) = deferPure (Err e)
 
@@ -237,14 +247,14 @@ recvBytesWithin : Duration ->
 recvBytesWithin d conn n =
   deferThen (deadlineAfter d) (dl => recvUntilBytes dl conn n)
 
-recvUntilBytes : Wait ->
+recvUntilBytes : Wait <Clock, Net "_" | e> ->
   Connection ->
   Int ->
   Async <Clock, Net "_" | e> (Result String Bytes)
 recvUntilBytes dl conn n = deferThen (pendingRecvBytes conn n) (step =>
   recvUntilBytesStep dl conn n step)
 
-recvUntilBytesStep : Wait ->
+recvUntilBytesStep : Wait <Clock, Net "_" | e> ->
   Connection ->
   Int ->
   Result String (Option Bytes) ->
@@ -256,13 +266,13 @@ recvUntilBytesStep _ _ _ (Err e) = deferPure (Err e)
 
 -- What the deadline-bearing loop does once `expired` has answered: give up,
 -- or park on the descriptor and ask again after any wake.
-recvBytesWake : Wait ->
+recvBytesWake : Wait <Clock, Net "_" | e> ->
   Int ->
   Int ->
   Bool ->
   Async <Clock, Net "_" | e> (Result String Bytes)
 recvBytesWake _ _ _ True = deferPure (Err "timed out")
-recvBytesWake dl fd n False = deferThen (awaitAny [WaitRead fd, dl]) (_ =>
+recvBytesWake dl fd n False = deferThen (awaitAny [waitRead fd, dl]) (_ =>
   recvUntilBytes dl (Connection fd) n)
 
 -- | Sends what the socket will take now, parking until it takes some.
@@ -282,7 +292,7 @@ sendStep : Connection ->
   Result String (Option Int) ->
   Async <Net "_" | e> (Result String Int)
 sendStep (Connection fd) bytes (Ok None) =
-  deferThen (awaitAny [WaitWrite fd]) (_ => send (Connection fd) bytes)
+  deferThen (awaitAny [waitWrite fd]) (_ => send (Connection fd) bytes)
 sendStep _ _ (Ok (Some n)) = deferPure (Ok n)
 sendStep _ _ (Err e) = deferPure (Err e)
 
@@ -319,7 +329,7 @@ sendFromStep : Connection ->
   Result String (Option Int) ->
   Async <Net "_" | e> (Result String Unit)
 sendFromStep (Connection fd) bytes off (Ok None) =
-  deferThen (awaitAny [WaitWrite fd]) (_ => sendFrom (Connection fd) bytes off)
+  deferThen (awaitAny [waitWrite fd]) (_ => sendFrom (Connection fd) bytes off)
 sendFromStep conn bytes off (Ok (Some n)) = sendFrom conn bytes (off + n)
 sendFromStep _ _ _ (Err e) = deferPure (Err e)
 
@@ -334,7 +344,7 @@ sendAllWithin d conn bytes =
 
 -- The deadline is checked before every attempt, so no round of work runs
 -- past it unobserved.
-sendUntil : Wait ->
+sendUntil : Wait <Clock, Net "_" | e> ->
   Connection ->
   Array Int ->
   Int ->
@@ -349,7 +359,7 @@ sendUntil dl conn bytes off =
       else
         sendUntilTry dl conn bytes off)
 
-sendUntilTry : Wait ->
+sendUntilTry : Wait <Clock, Net "_" | e> ->
   Connection ->
   Array Int ->
   Int ->
@@ -358,14 +368,14 @@ sendUntilTry dl conn bytes off = deferThen (liftIO (u =>
   trySendFrom conn bytes off)) (step =>
   sendUntilStep dl conn bytes off step)
 
-sendUntilStep : Wait ->
+sendUntilStep : Wait <Clock, Net "_" | e> ->
   Connection ->
   Array Int ->
   Int ->
   Result String (Option Int) ->
   Async <Clock, Net "_" | e> (Result String Unit)
 sendUntilStep dl (Connection fd) bytes off (Ok None) = deferThen (awaitAny [
-  WaitWrite fd,
+  waitWrite fd,
   dl,
 ]) (_ =>
   sendUntil dl (Connection fd) bytes off)

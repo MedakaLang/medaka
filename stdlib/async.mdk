@@ -1,5 +1,5 @@
 -- async.mdk — Medaka's cooperative-concurrency layer: the `Async` type, its
--- deferred instances, and the two drivers.
+-- deferred instances, and the scheduler that drives them.
 --
 -- ASYNC-DESIGN.md (archive/design) locked the type and the contract:
 -- `Async e a` is a value-level description of deferred work; tasks interleave
@@ -7,38 +7,64 @@
 -- Errors ride `Result` inside `Async`; there is no rejected-promise channel and
 -- `panic` still aborts the process.  docs/design/ASYNC-RUNTIME-DESIGN.md adds
 -- the runtime behind that contract: a single-threaded scheduler with a run
--- queue and a park table, driven by `runAsyncIO`.
+-- queue and a park table, driven by `runAsync`.
 --
 -- EFFECT POLYMORPHISM.  `Async` is parametric in an effect ROW `e` as well as
 -- its value `a`: every stored continuation performs `<e>`, so the type carries
--- exactly the capabilities the deferred work needs, and a driver performs
--- exactly that row.  `runAsync` runs the pure trampoline (`Async e a -> <e> a`);
--- `runAsyncIO` also performs the scheduler's own `<Clock>` (timers) and
--- `<Net "_">` (readiness polling, once the network stage lands).
+-- exactly the capabilities the deferred work needs, and the one driver performs
+-- exactly that row — `runAsync : Async e a -> <e> a`.  The scheduler calls no
+-- clock and no poll extern of its own: a `Wait` carries the capability the code
+-- that built it already performs, and the scheduler calls that.  A program that
+-- never sleeps and never waits on a descriptor therefore drives at its own row,
+-- down to `<>`.
 --
 -- Every scheduler queue is ordinary GC-visible Medaka data held in `Ref`s local
--- to one `runAsyncIO` call; the runtime owns no descriptors and no C-side state.
+-- to one `runAsync` call; the runtime owns no descriptors and no C-side state.
 
 import array.{fromList}
 import list.{partition, reverse}
 import time.{Duration, millis, toMillis}
 
 {- | Cooperative concurrency: build a description of deferred work with
-   `defer` blocks, then run it with `runAsync` or `runAsyncIO`.
+   `defer` blocks, then run it with `runAsync`.
 
-   `Async e a` is a value: nothing in it runs until a driver forces it. The
+   `Async e a` is a value: nothing in it runs until the driver forces it. The
    row `e` records the effects the stored work performs. `sleep` parks a
    task until a deadline, `spawn` and `spawnTask` hand a child task to the
    scheduler, `await` waits for a spawned task's value, and `concurrent`
    runs a list of tasks and collects their results in input order.
 
-   `runAsync` runs one task sequentially and cannot wait on a timer; it is
-   the driver for pure, deterministic programs and for doctests.
-   `runAsyncIO` is the scheduler: it interleaves tasks round-robin at every
+   `runAsync` is the scheduler: it interleaves tasks round-robin at every
    yield, sleeps until the earliest deadline when every task is parked, and
-   returns once the program and every task it spawned have finished.
-   A `main : Async e Unit` is driven by `runAsyncIO` on the native target
-   and by `runAsync` under the WebAssembly target, which has no clock. -}
+   returns once the program and every task it spawned have finished. It
+   performs the program's own row `e` and nothing wider, because a timer or
+   descriptor wait carries the capability whoever built it already performs.
+   A `main : Async e Unit` is driven through `runAsyncMain`, on every
+   target. -}
+
+-- Reading "now" and sleeping for a number of milliseconds, both performed in
+-- the row of the code that built the deadline.
+data Timer (e : Effect) = Timer (Unit -> <e> Float) (Int -> <e> Unit)
+
+-- Waiting for readiness over a set of descriptors, performed in the row of the
+-- code that built the descriptor wait.
+data Poller (e : Effect) =
+  | Poller (Array Int -> Array Int -> Int -> <e> Result String (Array Int))
+
+-- | What a parked task is waiting on.  A task woken by any one of its waits
+-- simply retries, so a spurious wake is harmless.  `waitRead` and `waitWrite`
+-- name a file descriptor, `deadlineAfter` gives a monotonic deadline, and a
+-- task flag is set when a spawned task finishes.
+--
+-- A descriptor or deadline wait carries the capability its builder already
+-- performs.  That is what keeps the driver's row down to the program's own:
+-- the clock read, the sleep and the poll all happen through a parked wait,
+-- never through an extern the scheduler names itself.
+export data Wait (e : Effect) =
+  | WaitRead Int (Poller e)
+  | WaitWrite Int (Poller e)
+  | WaitUntil Float (Timer e)
+  | WaitFlag (Ref Bool)
 
 -- | A deferred computation.  `Done` holds a finished value; the other arms
 -- hold the next step under a thunk that performs `<e>`.  `Suspend` is a plain
@@ -47,18 +73,8 @@ import time.{Duration, millis, toMillis}
 export data Async (e : Effect) a =
   | Done a
   | Suspend (Unit -> <e> Async e a)
-  | Await (List Wait) (Unit -> <e> Async e a)
+  | Await (List (Wait e)) (Unit -> <e> Async e a)
   | Spawn (Async e Unit) (Unit -> <e> Async e a)
-
--- | What a parked task is waiting on.  A task woken by any one of its waits
--- simply retries, so a spurious wake is harmless.  `WaitRead` and `WaitWrite`
--- name a file descriptor; `WaitUntil` is a monotonic deadline in seconds;
--- `WaitFlag` is set when a spawned task finishes.
-public export data Wait =
-  | WaitRead Int
-  | WaitWrite Int
-  | WaitUntil Float
-  | WaitFlag (Ref Bool)
 
 -- | A handle to a task started with `spawnTask`.  `await` reads its value.
 export data Task a = Task (Ref Bool) (Ref (Option a))
@@ -103,15 +119,16 @@ yield = Suspend (_ => Done ())
 
 {- | Parks the task for `d`, letting other tasks run meanwhile.
 
-   Reads the clock, so `<Clock>` joins `e`. Needs `runAsyncIO`. -}
+   Reads the clock, so `<Clock>` joins `e`; the deadline it parks on carries
+   that clock on to the scheduler. -}
 export
-sleep : Duration -> Async e Unit
+sleep : Duration -> Async <Clock | e> Unit
 sleep d = Suspend (u => sleepFrom (monotonicSec ()) d)
 
-sleepFrom : Float -> Duration -> Async e Unit
+sleepFrom : Float -> Duration -> Async <Clock | e> Unit
 sleepFrom now d =
   let deadline = now + intToFloat (toMillis d) / 1000.0
-  Await [WaitUntil deadline] (u => Done ())
+  Await [systemDeadline deadline] (u => Done ())
 
 {- | Starts `child` as a task of its own and continues at once.
 
@@ -141,31 +158,50 @@ finish done cell a =
 {- | Parks the task until any one of `waits` is satisfied.
 
    The building block for descriptor waits and deadlines: `net_async` parks
-   on `[WaitRead fd]`, or on `[WaitRead fd, deadline]` to give up after a
-   `Duration`. A woken task retries, so a spurious wake is harmless. Needs
-   `runAsyncIO`. -}
+   on `[waitRead fd]`, or on `[waitRead fd, deadline]` to give up after a
+   `Duration`. A woken task retries, so a spurious wake is harmless. -}
 export
-awaitAny : List Wait -> Async e Unit
+awaitAny : List (Wait e) -> Async e Unit
 awaitAny waits = Await waits (u => Done ())
+
+{- | A wait for `fd` to become readable, as a wait for `awaitAny`.
+
+   Polls the descriptor, so `<Net>` joins `e`. -}
+export
+waitRead : Int -> Wait <Net "_" | e>
+waitRead fd = WaitRead fd systemPoller
+
+{- | A wait for `fd` to become writable, as a wait for `awaitAny`.
+
+   Polls the descriptor, so `<Net>` joins `e`. -}
+export
+waitWrite : Int -> Wait <Net "_" | e>
+waitWrite fd = WaitWrite fd systemPoller
+
+systemPoller : Poller <Net "_" | e>
+systemPoller = Poller (fds interests timeout => ioPoll fds interests timeout)
 
 {- | A deadline `d` from now, as a wait for `awaitAny`.
 
    Reads the clock, so `<Clock>` joins `e`. -}
 export
-deadlineAfter : Duration -> Async e Wait
+deadlineAfter : Duration -> Async <Clock | e> (Wait <Clock | e>)
 deadlineAfter d = Suspend (u =>
-  Done (WaitUntil (monotonicSec () + intToFloat (toMillis d) / 1000.0)))
+  Done (systemDeadline (monotonicSec () + intToFloat (toMillis d) / 1000.0)))
+
+systemDeadline : Float -> Wait <Clock | e>
+systemDeadline t = WaitUntil t (Timer (u => monotonicSec ()) (ms => sleepMs ms))
 
 {- | Whether a deadline from `deadlineAfter` has passed.
 
-   Any other wait is never expired. Reads the clock. -}
+   Any other wait is never expired. Reads the clock the wait carries. -}
 export
-expired : Wait -> Async e Bool
-expired w = Suspend (u => Done (expiredAt (monotonicSec ()) w))
+expired : Wait e -> Async e Bool
+expired w = Suspend (u => Done (expiredNow w))
 
-expiredAt : Float -> Wait -> Bool
-expiredAt now (WaitUntil t) = t <= now
-expiredAt _ _ = False
+expiredNow : Wait e -> <e> Bool
+expiredNow (WaitUntil t (Timer now _)) = t <= now ()
+expiredNow _ = False
 
 {- | Waits for a spawned task and yields its value.
 
@@ -184,7 +220,7 @@ awaitResume (Task done cell) = match !cell
 
 {- | Runs every task in the list and collects their values in input order.
 
-   Each task is spawned, so they interleave under `runAsyncIO`; the result
+   Each task is spawned, so they interleave under `runAsync`; the result
    arrives once all of them have finished. -}
 export
 concurrent : List (Async e a) -> Async e (List a)
@@ -202,73 +238,21 @@ awaitAll : List a -> List (Task a) -> Async e (List a)
 awaitAll acc [] = Done (reverse acc)
 awaitAll acc (t :: rest) = deferThen (await t) (a => awaitAll (a :: acc) rest)
 
-{- | Runs a task to its value sequentially, performing exactly its row `e`.
+{- | Runs a task to its value under the scheduler, performing exactly its
+   row `e`.
 
-   Spawned tasks take turns at every yield, so `concurrent` interleaves its
-   children round-robin and the order is deterministic. A task that waits on
-   a timer or a descriptor panics: use `runAsyncIO` for those. -}
+   Runnable tasks take turns at every yield, so `concurrent` interleaves its
+   children round-robin and the order is deterministic. After every round
+   over the run queue the scheduler gives parked tasks whose timer has
+   expired, whose descriptor is ready, or whose awaited task has finished
+   their turn, so a task that never parks cannot starve the others. When
+   every task is parked it sleeps until the earliest deadline or the next
+   descriptor event. It returns the program's value once the program and
+   every spawned task have finished, and panics if the remaining tasks can
+   never be woken. -}
 export
 runAsync : Async e a -> <e> a
 runAsync prog =
-  let cell = Ref None
-  let front = Ref [deferThen prog (a => Suspend (u => storeResult cell a))]
-  let back = Ref []
-  let parked = Ref []
-  let _ = scheduleSeq front back parked
-  match !cell
-    Some a => a
-    None => panic "async: the program finished without producing a value"
-
--- The sequential scheduler: the same run queue as `runAsyncIO`, but the only
--- wait it can satisfy is a finished task's flag.
-scheduleSeq : Ref (List (Async e Unit)) ->
-  Ref (List (Async e Unit)) ->
-  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
-  <e> Unit
-scheduleSeq front back parked = match popTask front back
-  Some t =>
-    let _ = dispatch back parked (stepTask t)
-    scheduleSeq front back parked
-  None => match !parked
-    [] => ()
-    waiting =>
-      let (ready, still) = partition (p => any flagSet (fst p)) waiting
-      match ready
-        _ :: _ =>
-          parked := still
-          let _ = requeue back ready
-          scheduleSeq front back parked
-        [] =>
-          if any
-            (p => any isFdWait (fst p) || any isTimerWait (fst p))
-            still then
-            panic
-              "async: runAsync cannot wait on a timer or a file descriptor; drive this program with runAsyncIO"
-          else
-            panic
-              "async: every remaining task is waiting on a task that can never finish (deadlock)"
-
-flagSet : Wait -> Bool
-flagSet (WaitFlag r) = !r
-flagSet _ = False
-
-isTimerWait : Wait -> Bool
-isTimerWait (WaitUntil _) = True
-isTimerWait _ = False
-
-{- | Runs a task under the scheduler, performing its row `e` plus the
-   scheduler's own `<Clock>` and `<Net "_">`.
-
-   Runnable tasks take turns at every yield. After every round over the run
-   queue the scheduler gives parked tasks whose timer has expired, whose
-   descriptor is ready, or whose awaited task has finished their turn, so a
-   task that never parks cannot starve the others. When every task is parked
-   it sleeps until the earliest deadline or the next descriptor event. It
-   returns the program's value once the program and every spawned task have
-   finished, and panics if the remaining tasks can never be woken. -}
-export
-runAsyncIO : Async e a -> <Clock, Net "_" | e> a
-runAsyncIO prog =
   let cell = Ref None
   let front = Ref [deferThen prog (a => Suspend (u => storeResult cell a))]
   let back = Ref []
@@ -278,18 +262,9 @@ runAsyncIO prog =
     Some a => a
     None => panic "async: the program finished without producing a value"
 
-{- | `runAsyncIO` for a program whose value is `Unit`.
-
-   A `main : Async e Unit` is driven through this on the native target and
-   under `medaka run`. -}
-export
-runAsyncIOMain : Async e Unit -> <Clock, Net "_" | e> Unit
-runAsyncIOMain prog = runAsyncIO prog
-
 {- | `runAsync` for a program whose value is `Unit`.
 
-   A `main : Async e Unit` is driven through this on the WebAssembly target,
-   which has no clock. -}
+   A `main : Async e Unit` is driven through this, on every target. -}
 export
 runAsyncMain : Async e Unit -> <e> Unit
 runAsyncMain prog = runAsync prog
@@ -327,9 +302,9 @@ queueLength front back = length !front + length !back
 -- what keeps a task that never parks from starving the rest.
 schedule : Ref (List (Async e Unit)) ->
   Ref (List (Async e Unit)) ->
-  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Ref (List (List (Wait e), Unit -> <e> Async e Unit)) ->
   Int ->
-  <Clock, Net "_" | e> Unit
+  <e> Unit
 schedule front back parked budget =
   if budget <= 0 then
     let _ = wakeParked back parked False
@@ -349,7 +324,7 @@ stepTask (Suspend k) = k ()
 stepTask other = other
 
 dispatch : Ref (List (Async e Unit)) ->
-  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Ref (List (List (Wait e), Unit -> <e> Async e Unit)) ->
   Async e Unit ->
   Unit
 dispatch _ _ (Done _) = ()
@@ -360,40 +335,33 @@ dispatch back _ (Spawn child k) =
   pushBack back (Suspend k)
 
 -- Move every parked task whose wait is satisfied back to the queue, oldest
--- first.  When `block` is set nothing is runnable: sleep until the earliest
--- deadline or wait in `ioPoll`, and report a deadlock if neither can wake
+-- first.  When `block` is set nothing is runnable: sleep through the earliest
+-- deadline or wait in the poller, and report a deadlock if neither can wake
 -- anything.  When it is clear, only a zero-timeout poll is made.
+--
+-- "Now" is read, and the poller called, only through a wait that is parked
+-- right now: a park table holding nothing but task flags — or nothing at all —
+-- costs no clock read and no poll, which is why driving a program that never
+-- sleeps performs nothing the program does not perform itself.
 wakeParked : Ref (List (Async e Unit)) ->
-  Ref (List (List Wait, Unit -> <e> Async e Unit)) ->
+  Ref (List (List (Wait e), Unit -> <e> Async e Unit)) ->
   Bool ->
-  <Clock, Net "_"> Unit
+  <e> Unit
 wakeParked back parked block =
-  let now = monotonicSec ()
+  let soonest = earliestDeadline !parked
+  let now = readNow soonest
   let (ready, waiting) = partition (p => isReady now p) !parked
   match ready
     _ :: _ =>
       parked := waiting
       requeue back ready
     [] => match fdWaitsOf waiting
-      [] =>
-        if not block then
-          ()
-        else match earliestDeadline waiting
-          Some t => sleepMs (millisUntil now t)
-          None =>
-            panic
-              "async: every remaining task is waiting on a task that can never finish (deadlock)"
-      fdWaits =>
-        let timeout =
-          if not block then
-            0
-          else match earliestDeadline waiting
-            Some t => millisUntil now t
-            None => -1
-        match (ioPoll
+      None => if not block then () else sleepThrough now soonest
+      Some (Poller poll, fdWaits) =>
+        match (poll
           (fromList (map pollFd fdWaits))
           (fromList (map pollInterest fdWaits))
-          timeout)
+          (pollTimeout block now soonest))
           Err e => panic ("async: poll failed: " ++ e)
           Ok readiness =>
             let satisfied = satisfiedWaits fdWaits (toList readiness)
@@ -404,83 +372,124 @@ wakeParked back parked block =
             parked := still
             requeue back woke
 
+-- The clock a parked deadline carries is the scheduler's only source of "now".
+readNow : Option (Float, Timer e) -> <e> Option Float
+readNow None = None
+readNow (Some (_, Timer now _)) = Some (now ())
+
+-- Nothing is runnable and no descriptor is being watched: sleep through the
+-- nearest deadline, or report the deadlock when there is no deadline either.
+sleepThrough : Option Float -> Option (Float, Timer e) -> <e> Unit
+sleepThrough (Some now) (Some (t, Timer _ sleepFor)) =
+  sleepFor (millisUntil now t)
+sleepThrough _ _ =
+  panic
+    "async: every remaining task is waiting on a task that can never finish (deadlock)"
+
+-- A zero timeout while something is still runnable; otherwise wait for the
+-- nearest deadline, or indefinitely when nothing parked is waiting on time.
+pollTimeout : Bool -> Option Float -> Option (Float, Timer e) -> Int
+pollTimeout False _ _ = 0
+pollTimeout True (Some now) (Some (t, _)) = millisUntil now t
+pollTimeout True _ _ = -1
+
 millisUntil : Float -> Float -> Int
 millisUntil now t = max 0 (floatToInt ((t - now) * 1000.0) + 1)
 
 -- `parked` holds newest first; requeue oldest first so waking is FIFO.
 requeue : Ref (List (Async e Unit)) ->
-  List (List Wait, Unit -> <e> Async e Unit) ->
+  List (List (Wait e), Unit -> <e> Async e Unit) ->
   Unit
 requeue back ready = requeueOldestFirst back (reverse ready)
 
 requeueOldestFirst : Ref (List (Async e Unit)) ->
-  List (List Wait, Unit -> <e> Async e Unit) ->
+  List (List (Wait e), Unit -> <e> Async e Unit) ->
   Unit
 requeueOldestFirst _ [] = ()
 requeueOldestFirst back ((_, k) :: rest) =
   let _ = pushBack back (Suspend k)
   requeueOldestFirst back rest
 
-isReady : Float -> (List Wait, Unit -> <e> Async e Unit) -> Bool
+isReady : Option Float -> (List (Wait e), Unit -> <e> Async e Unit) -> Bool
 isReady now (ws, _) = any (w => waitReady now w) ws
 
-waitReady : Float -> Wait -> Bool
-waitReady now (WaitUntil t) = t <= now
+waitReady : Option Float -> Wait e -> Bool
+waitReady (Some now) (WaitUntil t _) = t <= now
 waitReady _ (WaitFlag r) = !r
 waitReady _ _ = False
 
-isFdWait : Wait -> Bool
-isFdWait (WaitRead _) = True
-isFdWait (WaitWrite _) = True
+isFdWait : Wait e -> Bool
+isFdWait (WaitRead _ _) = True
+isFdWait (WaitWrite _ _) = True
 isFdWait _ = False
 
-earliestDeadline : List (List Wait, Unit -> <e> Async e Unit) -> Option Float
+-- The nearest deadline across the park table, with the clock that very wait
+-- carries — so the reader of "now" is a capability the program already has.
+earliestDeadline : List (List (Wait e), Unit -> <e> Async e Unit) ->
+  Option (Float, Timer e)
 earliestDeadline [] = None
 earliestDeadline ((ws, _) :: rest) =
   minDeadline (deadlinesOf ws) (earliestDeadline rest)
 
-deadlinesOf : List Wait -> Option Float
+deadlinesOf : List (Wait e) -> Option (Float, Timer e)
 deadlinesOf [] = None
-deadlinesOf ((WaitUntil t) :: rest) = minDeadline (Some t) (deadlinesOf rest)
+deadlinesOf ((WaitUntil t c) :: rest) =
+  minDeadline (Some (t, c)) (deadlinesOf rest)
 deadlinesOf (_ :: rest) = deadlinesOf rest
 
-minDeadline : Option Float -> Option Float -> Option Float
+minDeadline : Option (Float, Timer e) ->
+  Option (Float, Timer e) ->
+  Option (Float, Timer e)
 minDeadline None b = b
 minDeadline a None = a
-minDeadline (Some x) (Some y) = Some (min x y)
+minDeadline (Some (x, cx)) (Some (y, cy)) =
+  if x <= y then Some (x, cx) else Some (y, cy)
 
--- Every descriptor wait across the park table, one poll entry each.
-fdWaitsOf : List (List Wait, Unit -> <e> Async e Unit) -> List Wait
-fdWaitsOf [] = []
-fdWaitsOf ((ws, _) :: rest) = filter isFdWait ws ++ fdWaitsOf rest
+-- Every descriptor wait across the park table, one poll entry each, with the
+-- poller they carry; `None` when nothing is waiting on a descriptor at all.
+fdWaitsOf : List (List (Wait e), Unit -> <e> Async e Unit) ->
+  Option (Poller e, List (Wait e))
+fdWaitsOf ps =
+  let ws = fdWaitsIn ps
+  map (p => (p, ws)) (pollerOf ws)
 
-pollFd : Wait -> Int
-pollFd (WaitRead fd) = fd
-pollFd (WaitWrite fd) = fd
+fdWaitsIn : List (List (Wait e), Unit -> <e> Async e Unit) -> List (Wait e)
+fdWaitsIn [] = []
+fdWaitsIn ((ws, _) :: rest) = filter isFdWait ws ++ fdWaitsIn rest
+
+pollerOf : List (Wait e) -> Option (Poller e)
+pollerOf [] = None
+pollerOf ((WaitRead _ p) :: _) = Some p
+pollerOf ((WaitWrite _ p) :: _) = Some p
+pollerOf (_ :: rest) = pollerOf rest
+
+pollFd : Wait e -> Int
+pollFd (WaitRead fd _) = fd
+pollFd (WaitWrite fd _) = fd
 pollFd _ = -1
 
-pollInterest : Wait -> Int
-pollInterest (WaitRead _) = 1
-pollInterest (WaitWrite _) = 2
+pollInterest : Wait e -> Int
+pollInterest (WaitRead _ _) = 1
+pollInterest (WaitWrite _ _) = 2
 pollInterest _ = 0
 
 -- The waits whose parallel readiness word is non-zero.
-satisfiedWaits : List Wait -> List Int -> List Wait
+satisfiedWaits : List (Wait e) -> List Int -> List (Wait e)
 satisfiedWaits (w :: ws) (r :: rs) =
   if r == 0 then satisfiedWaits ws rs else w :: satisfiedWaits ws rs
 satisfiedWaits _ _ = []
 
-waitSatisfied : List Wait -> Wait -> Bool
-waitSatisfied sat (WaitRead fd) = any (w => isReadOf fd w) sat
-waitSatisfied sat (WaitWrite fd) = any (w => isWriteOf fd w) sat
+waitSatisfied : List (Wait e) -> Wait e -> Bool
+waitSatisfied sat (WaitRead fd _) = any (w => isReadOf fd w) sat
+waitSatisfied sat (WaitWrite fd _) = any (w => isWriteOf fd w) sat
 waitSatisfied _ _ = False
 
-isReadOf : Int -> Wait -> Bool
-isReadOf fd (WaitRead x) = x == fd
+isReadOf : Int -> Wait e -> Bool
+isReadOf fd (WaitRead x _) = x == fd
 isReadOf _ _ = False
 
-isWriteOf : Int -> Wait -> Bool
-isWriteOf fd (WaitWrite x) = x == fd
+isWriteOf : Int -> Wait e -> Bool
+isWriteOf fd (WaitWrite x _) = x == fd
 isWriteOf _ _ = False
 
 {- Doctests.
@@ -509,12 +518,9 @@ isWriteOf _ _ = False
    > runAsync (deferThen (spawnTask (Done 7)) await)
    7
 
-   > runAsyncIO (concurrent [Done 1, Done 2, Done 3])
-   [1, 2, 3]
-
-   > runAsyncIO (deferThen (spawnTask (deferThen (sleep (millis 5)) (_ => Done 8))) await)
+   > runAsync (deferThen (spawnTask (deferThen (sleep (millis 5)) (_ => Done 8))) await)
    8
 
-   > runAsyncIO (deferMap length (concurrent [sleep (millis 5), sleep (millis 5), sleep (millis 5)]))
+   > runAsync (deferMap length (concurrent [sleep (millis 5), sleep (millis 5), sleep (millis 5)]))
    3
 -}

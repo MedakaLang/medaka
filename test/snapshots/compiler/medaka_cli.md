@@ -3068,10 +3068,10 @@ elaborateRun rtD coreD modsD =
       let _ = runAbort msg
       plain
     None =>
-      if shouldAsyncWrapMain "runAsyncIOMain" modsD then
+      if shouldAsyncWrapMain "runAsyncMain" modsD then
         plainPerModuleOf
           plain
-          (elaborateModules rtD coreD (asyncWrapModules "runAsyncIOMain" modsD))
+          (elaborateModules rtD coreD (asyncWrapModules "runAsyncMain" modsD))
       else
         plain
 
@@ -4587,7 +4587,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "desugarPair" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugarPair" ((PTuple (PVar "mid") (PVar "p"))) (ETuple (EVar "mid") (EApp (EVar "desugar") (EVar "p"))))
 (DTypeSig false "elaborateRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "ElabResult"))))))
-(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")) (EApp (EApp (EVar "plainPerModuleOf") (EVar "plain")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")))) (EVar "plain")))))))
+(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncMain"))) (EVar "modsD")) (EApp (EApp (EVar "plainPerModuleOf") (EVar "plain")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncMain"))) (EVar "modsD")))) (EVar "plain")))))))
 (DTypeSig false "plainPerModuleOf" (TyFun (TyCon "ElabResult") (TyFun (TyCon "ElabResult") (TyCon "ElabResult"))))
 (DFunDef false "plainPerModuleOf" ((PTuple PWild PWild (PVar "perMod") PWild PWild) (PTuple (PVar "coreW") (PVar "modsW") PWild (PVar "residualW") (PVar "evW"))) (ETuple (EVar "coreW") (EVar "modsW") (EVar "perMod") (EVar "residualW") (EVar "evW")))
 (DTypeSig false "runProgramOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))
@@ -5024,7 +5024,7 @@ runMcpServerFromEnv _ =
 (DTypeSig false "desugarPair" (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl"))) (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))))
 (DFunDef false "desugarPair" ((PTuple (PVar "mid") (PVar "p"))) (ETuple (EVar "mid") (EApp (EVar "desugar") (EVar "p"))))
 (DTypeSig false "elaborateRun" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "ElabResult"))))))
-(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")) (EApp (EApp (EVar "plainPerModuleOf") (EVar "plain")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncIOMain"))) (EVar "modsD")))) (EVar "plain")))))))
+(DFunDef false "elaborateRun" ((PVar "rtD") (PVar "coreD") (PVar "modsD")) (EBlock (DoLet false false (PVar "plain") (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EVar "modsD"))) (DoExpr (EMatch (EApp (EVar "asyncMainShapeError") (EVar "modsD")) (arm (PCon "Some" (PVar "msg")) () (EBlock (DoLet false false PWild (EApp (EVar "runAbort") (EVar "msg"))) (DoExpr (EVar "plain")))) (arm (PCon "None") () (EIf (EApp (EApp (EVar "shouldAsyncWrapMain") (ELit (LString "runAsyncMain"))) (EVar "modsD")) (EApp (EApp (EVar "plainPerModuleOf") (EVar "plain")) (EApp (EApp (EApp (EVar "elaborateModules") (EVar "rtD")) (EVar "coreD")) (EApp (EApp (EVar "asyncWrapModules") (ELit (LString "runAsyncMain"))) (EVar "modsD")))) (EVar "plain")))))))
 (DTypeSig false "plainPerModuleOf" (TyFun (TyCon "ElabResult") (TyFun (TyCon "ElabResult") (TyCon "ElabResult"))))
 (DFunDef false "plainPerModuleOf" ((PTuple PWild PWild (PVar "perMod") PWild PWild) (PTuple (PVar "coreW") (PVar "modsW") PWild (PVar "residualW") (PVar "evW"))) (ETuple (EVar "coreW") (EVar "modsW") (EVar "perMod") (EVar "residualW") (EVar "evW")))
 (DTypeSig false "runProgramOutput" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyEffect ("IO") None (TyCon "String")))))

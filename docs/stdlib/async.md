@@ -1,5 +1,21 @@
 # async
 
+## `Wait`
+
+```
+data Wait (e : Effect)  -- abstract: the constructors are not exported
+```
+
+What a parked task is waiting on.  A task woken by any one of its waits
+simply retries, so a spurious wake is harmless.  `waitRead` and `waitWrite`
+name a file descriptor, `deadlineAfter` gives a monotonic deadline, and a
+task flag is set when a spawned task finishes.
+
+A descriptor or deadline wait carries the capability its builder already
+performs.  That is what keeps the driver's row down to the program's own:
+the clock read, the sleep and the poll all happen through a parked wait,
+never through an extern the scheduler names itself.
+
 ## `Async`
 
 ```
@@ -12,21 +28,6 @@ yield point, `Await` parks the task until any of its waits is satisfied, and
 `Spawn` hands a child task to the scheduler before continuing.
 
 Instances: `DeferredMappable`, `DeferredApplicative`, `DeferredThenable`
-
-## `Wait`
-
-```
-data Wait
-  = WaitRead Int
-  | WaitWrite Int
-  | WaitUntil Float
-  | WaitFlag (Ref Bool)
-```
-
-What a parked task is waiting on.  A task woken by any one of its waits
-simply retries, so a spurious wake is harmless.  `WaitRead` and `WaitWrite`
-name a file descriptor; `WaitUntil` is a monotonic deadline in seconds;
-`WaitFlag` is set when a spawned task finishes.
 
 ## `Task`
 
@@ -60,12 +61,13 @@ Inert for a single task; observable once other tasks are runnable.
 ## `sleep`
 
 ```
-sleep : Duration -> Async e Unit
+sleep : Duration -> Async <Clock | e> Unit
 ```
 
 Parks the task for `d`, letting other tasks run meanwhile.
 
-Reads the clock, so `<Clock>` joins `e`. Needs `runAsyncIO`.
+Reads the clock, so `<Clock>` joins `e`; the deadline it parks on carries
+that clock on to the scheduler.
 
 ## `spawn`
 
@@ -90,20 +92,39 @@ Starts `act` as a task of its own and returns a handle to its value.
 ## `awaitAny`
 
 ```
-awaitAny : List Wait -> Async e Unit
+awaitAny : List (Wait e) -> Async e Unit
 ```
 
 Parks the task until any one of `waits` is satisfied.
 
 The building block for descriptor waits and deadlines: `net_async` parks
-on `[WaitRead fd]`, or on `[WaitRead fd, deadline]` to give up after a
-`Duration`. A woken task retries, so a spurious wake is harmless. Needs
-`runAsyncIO`.
+on `[waitRead fd]`, or on `[waitRead fd, deadline]` to give up after a
+`Duration`. A woken task retries, so a spurious wake is harmless.
+
+## `waitRead`
+
+```
+waitRead : Int -> Wait <Net _ | e>
+```
+
+A wait for `fd` to become readable, as a wait for `awaitAny`.
+
+Polls the descriptor, so `<Net>` joins `e`.
+
+## `waitWrite`
+
+```
+waitWrite : Int -> Wait <Net _ | e>
+```
+
+A wait for `fd` to become writable, as a wait for `awaitAny`.
+
+Polls the descriptor, so `<Net>` joins `e`.
 
 ## `deadlineAfter`
 
 ```
-deadlineAfter : Duration -> Async e Wait
+deadlineAfter : Duration -> Async <Clock | e> (Wait <Clock | e>)
 ```
 
 A deadline `d` from now, as a wait for `awaitAny`.
@@ -113,12 +134,12 @@ Reads the clock, so `<Clock>` joins `e`.
 ## `expired`
 
 ```
-expired : Wait -> Async e Bool
+expired : Wait e -> Async e Bool
 ```
 
 Whether a deadline from `deadlineAfter` has passed.
 
-Any other wait is never expired. Reads the clock.
+Any other wait is never expired. Reads the clock the wait carries.
 
 ## `await`
 
@@ -138,7 +159,7 @@ concurrent : List (Async e a) -> Async e (List a)
 
 Runs every task in the list and collects their values in input order.
 
-Each task is spawned, so they interleave under `runAsyncIO`; the result
+Each task is spawned, so they interleave under `runAsync`; the result
 arrives once all of them have finished.
 
 ## `runAsync`
@@ -147,39 +168,18 @@ arrives once all of them have finished.
 runAsync : Async e a -> <e> a
 ```
 
-Runs a task to its value sequentially, performing exactly its row `e`.
+Runs a task to its value under the scheduler, performing exactly its
+row `e`.
 
-Spawned tasks take turns at every yield, so `concurrent` interleaves its
-children round-robin and the order is deterministic. A task that waits on
-a timer or a descriptor panics: use `runAsyncIO` for those.
-
-## `runAsyncIO`
-
-```
-runAsyncIO : Async e a -> <Clock, Net _ | e> a
-```
-
-Runs a task under the scheduler, performing its row `e` plus the
-scheduler's own `<Clock>` and `<Net "_">`.
-
-Runnable tasks take turns at every yield. After every round over the run
-queue the scheduler gives parked tasks whose timer has expired, whose
-descriptor is ready, or whose awaited task has finished their turn, so a
-task that never parks cannot starve the others. When every task is parked
-it sleeps until the earliest deadline or the next descriptor event. It
-returns the program's value once the program and every spawned task have
-finished, and panics if the remaining tasks can never be woken.
-
-## `runAsyncIOMain`
-
-```
-runAsyncIOMain : Async e Unit -> <Clock, Net _ | e> Unit
-```
-
-`runAsyncIO` for a program whose value is `Unit`.
-
-A `main : Async e Unit` is driven through this on the native target and
-under `medaka run`.
+Runnable tasks take turns at every yield, so `concurrent` interleaves its
+children round-robin and the order is deterministic. After every round
+over the run queue the scheduler gives parked tasks whose timer has
+expired, whose descriptor is ready, or whose awaited task has finished
+their turn, so a task that never parks cannot starve the others. When
+every task is parked it sleeps until the earliest deadline or the next
+descriptor event. It returns the program's value once the program and
+every spawned task have finished, and panics if the remaining tasks can
+never be woken.
 
 ## `runAsyncMain`
 
@@ -189,6 +189,5 @@ runAsyncMain : Async e Unit -> <e> Unit
 
 `runAsync` for a program whose value is `Unit`.
 
-A `main : Async e Unit` is driven through this on the WebAssembly target,
-which has no clock.
+A `main : Async e Unit` is driven through this, on every target.
 
