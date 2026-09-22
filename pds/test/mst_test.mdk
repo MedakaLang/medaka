@@ -2,11 +2,13 @@
    and node bytes remain exclusively in the provenance-ledgered corpus. -}
 
 import array as A
-import string.{toUtf8}
-import test.{expectEach, expectEqual, expectTrue}
+import list.{filter, reverse}
+import string.{fromUtf8, toUtf8}
+import test.{Expectation, expectEach, expectEqual, expectTrue}
 import lib.cid.{Cid, cidEqual, cidForDagCbor}
 import lib.mst.{
   Mst,
+  MstRangeQuery(..),
   mstDelete,
   mstEmpty,
   mstEntries,
@@ -15,6 +17,7 @@ import lib.mst.{
   mstKeyDepth,
   mstLookup,
   mstNodeBlocks,
+  mstRange,
   mstReplace,
   mstRootBytes,
   mstRootCid,
@@ -218,4 +221,223 @@ test "every single-key mutation matches a from-scratch build" =
       "deleting every key returns to the empty root",
       expectTrue (cidEqual (mstRootCid final) (mstRootCid mstEmpty)),
     ),
+  ]
+
+-- ── bounded range reads ─────────────────────────────────────────────────────
+
+treeOf : List String -> Mst
+treeOf names =
+  mustTree (mstFromEntries (map (name => (toUtf8 name, value0)) names))
+
+entryKey : (Array Int, Cid) -> String
+entryKey (key, _) = fromUtf8 key
+
+rangeKeys : MstRangeQuery -> Mst -> List String
+rangeKeys query tree = map entryKey (mstRange query tree)
+
+likePrefix : Array Int
+likePrefix = toUtf8 "app.bsky.feed.like/"
+
+postPrefix : Array Int
+postPrefix = toUtf8 "app.bsky.feed.post/"
+
+mixedNames : List String
+mixedNames = [
+  "app.bsky.feed.like/a1",
+  "app.bsky.feed.like/a2",
+  "app.bsky.feed.post/b1",
+  "app.bsky.feed.post/b2",
+  "app.bsky.feed.post/b3",
+  "app.bsky.graph.follow/c1",
+]
+
+mixedTree : Mst
+mixedTree = treeOf mixedNames
+
+soleTree : Mst
+soleTree = treeOf ["app.bsky.feed.post/b2"]
+
+forwardFrom : Option (Array Int) -> Option (Array Int) -> MstRangeQuery
+forwardFrom start prefix =
+  MstRangeQuery { start = start, prefix = prefix, reverse = False }
+
+backwardFrom : Option (Array Int) -> Option (Array Int) -> MstRangeQuery
+backwardFrom start prefix =
+  MstRangeQuery { start = start, prefix = prefix, reverse = True }
+
+rangeIs : List String -> MstRangeQuery -> Mst -> Expectation
+rangeIs want query tree = expectEqual want (rangeKeys query tree)
+
+test "a forward range starts at its key and runs to the end" =
+  rangeIs
+    [
+      "app.bsky.feed.post/b2", "app.bsky.feed.post/b3",
+      "app.bsky.graph.follow/c1"
+    ]
+    (forwardFrom (Some (toUtf8 "app.bsky.feed.post/b2")) None)
+    mixedTree
+
+test "a reverse range starts at its key and runs back to the start" =
+  rangeIs
+    [
+      "app.bsky.feed.post/b2",
+      "app.bsky.feed.post/b1",
+      "app.bsky.feed.like/a2",
+      "app.bsky.feed.like/a1",
+    ]
+    (backwardFrom (Some (toUtf8 "app.bsky.feed.post/b2")) None)
+    mixedTree
+
+test "a start key absent from the tree bounds the range without joining it" = expectEach
+  [
+    (
+      "forward from a gap takes the keys above it",
+      rangeIs
+        [
+          "app.bsky.feed.post/b2",
+          "app.bsky.feed.post/b3",
+          "app.bsky.graph.follow/c1",
+        ]
+        (forwardFrom (Some (toUtf8 "app.bsky.feed.post/b1x")) None)
+        mixedTree,
+    ),
+    (
+      "backward from a gap takes the keys below it",
+      rangeIs
+        ["app.bsky.feed.like/a1"]
+        (backwardFrom (Some (toUtf8 "app.bsky.feed.like/a1x")) None)
+        mixedTree,
+    ),
+  ]
+
+test "a collection prefix restricts a range to that collection" = expectEach [
+  (
+    "forward over one collection",
+    rangeIs
+      [
+        "app.bsky.feed.post/b1",
+        "app.bsky.feed.post/b2",
+        "app.bsky.feed.post/b3",
+      ]
+      (forwardFrom None (Some postPrefix))
+      mixedTree,
+  ),
+  (
+    "backward over one collection",
+    rangeIs
+      [
+        "app.bsky.feed.post/b3",
+        "app.bsky.feed.post/b2",
+        "app.bsky.feed.post/b1",
+      ]
+      (backwardFrom None (Some postPrefix))
+      mixedTree,
+  ),
+  (
+    "a start key inside the collection narrows it further",
+    rangeIs
+      ["app.bsky.feed.post/b2", "app.bsky.feed.post/b3"]
+      (forwardFrom (Some (toUtf8 "app.bsky.feed.post/b2")) (Some postPrefix))
+      mixedTree,
+  ),
+  (
+    "the first collection stops before the next one",
+    rangeIs
+      ["app.bsky.feed.like/a1", "app.bsky.feed.like/a2"]
+      (forwardFrom None (Some likePrefix))
+      mixedTree,
+  ),
+]
+
+test "degenerate trees range without special-casing" = expectEach [
+  (
+    "the empty tree ranges to nothing",
+    rangeIs [] (forwardFrom None None) mstEmpty,
+  ),
+  (
+    "the empty tree ranges to nothing in reverse too",
+    rangeIs [] (backwardFrom None None) mstEmpty,
+  ),
+  (
+    "a one-node tree yields its single key",
+    rangeIs ["app.bsky.feed.post/b2"] (forwardFrom None None) soleTree,
+  ),
+  (
+    "a one-node tree yields its single key in reverse",
+    rangeIs ["app.bsky.feed.post/b2"] (backwardFrom None None) soleTree,
+  ),
+  (
+    "a start key above every key yields nothing",
+    rangeIs [] (forwardFrom (Some (toUtf8 "zzz")) None) mixedTree,
+  ),
+  (
+    "a prefix no key carries yields nothing",
+    rangeIs [] (forwardFrom None (Some (toUtf8 "chat.bsky/"))) mixedTree,
+  ),
+]
+
+{- | The range read against the baseline it exists to avoid: filtering the
+   fully materialised entry list by the same bounds. Descending the node tree
+   skips whole subtrees the flat list walks, so the two agreeing over every
+   start key of every corpus tree, in both directions and under every prefix,
+   is what says the skipping drops nothing. -}
+
+carriesPrefix : Option (Array Int) -> Array Int -> Bool
+carriesPrefix None _ = True
+carriesPrefix (Some prefix) key = A.take (arrayLength prefix) key == prefix
+
+pastStart : Bool -> Option (Array Int) -> Array Int -> Bool
+pastStart _ None _ = True
+pastStart True (Some start) key = key <= start
+pastStart False (Some start) key = key >= start
+
+selects : MstRangeQuery -> (Array Int, Cid) -> Bool
+selects query (key, _) =
+  carriesPrefix query.prefix key && pastStart query.reverse query.start key
+
+filteredRange : MstRangeQuery -> Mst -> List String
+filteredRange query tree =
+  let kept = map entryKey (filter (selects query) (mstEntries tree))
+  if query.reverse then reverse kept else kept
+
+queryLabel : MstRangeQuery -> String
+queryLabel query =
+  let direction = if query.reverse then "reverse" else "forward"
+  "\{direction} start=\{describeBound query.start} prefix=\{describeBound query.prefix}"
+
+describeBound : Option (Array Int) -> String
+describeBound None = "-"
+describeBound (Some bytes) = fromUtf8 bytes
+
+queriesOver : List (Option (Array Int)) ->
+  List (Option (Array Int)) ->
+  List MstRangeQuery
+queriesOver starts prefixes =
+  flatMap
+    (start =>
+      flatMap
+        (prefix => [forwardFrom start prefix, backwardFrom start prefix])
+        prefixes)
+    starts
+
+disagreements : Mst -> List String
+disagreements tree =
+  let starts = None :: map ((key, _) => Some key) (mstEntries tree)
+  let prefixes = [None, Some likePrefix, Some postPrefix]
+  map
+    queryLabel
+    (filter
+      (query => rangeKeys query tree /= filteredRange query tree)
+      (queriesOver starts prefixes))
+
+probeTree : Mst
+probeTree =
+  treeOf (map (i => "app.bsky.feed.post/probe-\{intToString i}") [0..=63])
+
+test "a range selects exactly what filtering the full entry list selects" = expectEach
+  [
+    ("the empty tree", expectEqual [] (disagreements mstEmpty)),
+    ("a one-node tree", expectEqual [] (disagreements soleTree)),
+    ("three collections", expectEqual [] (disagreements mixedTree)),
+    ("a 64-key layered tree", expectEqual [] (disagreements probeTree)),
   ]
