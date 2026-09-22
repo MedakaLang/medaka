@@ -1,0 +1,19 @@
+# test/STDLIB-DOC-NAME-EXCEPTIONS.txt — names the stdlib reference may
+# backtick in prose although they are not visible on the page.
+#
+# Read by test/diff_compiler_doc_stdlib_reference.sh's name-visibility check.
+# One row per (module, name), tab-separated, then the reason. A row is for a
+# backticked token that is NOT an identifier claim — a literal of some other
+# language the prose is quoting (a regex atom, a TOML keyword, an HTTP field
+# name) — never for a parameter, local or private name the prose should stop
+# naming or the head line should show.
+#
+# module	name	reason
+regex	x	regex syntax table: a literal codepoint atom
+regex	ab	regex syntax table: concatenation of two atoms
+toml	true	TOML boolean literal
+toml	false	TOML boolean literal
+http	Trailer	HTTP header field name
+http	Host	HTTP header field name
+http	Connection	HTTP header field name
+validation	V.toResult	alias example: the sentence introduces `import validation as V`

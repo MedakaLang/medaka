@@ -16,6 +16,7 @@ limit.
 
 ```
 base32Encode : Array Int -> String
+base32Encode bytes
 ```
 
 The bytes as lowercase, unpadded base32.
@@ -31,6 +32,7 @@ Panics when an element of `bytes` is outside `0` to `255`.
 
 ```
 base32Decode : String -> Result String (Array Int)
+base32Decode text
 ```
 
 The bytes written in canonical (lowercase, unpadded) base32.

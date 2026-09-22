@@ -4,5 +4,6 @@
 
 ```
 classify : Int -> String
+classify n
 ```
 

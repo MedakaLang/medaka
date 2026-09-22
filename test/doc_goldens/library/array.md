@@ -4,6 +4,7 @@
 
 ```
 firstOrZero : Array Int -> Int
+firstOrZero xs
 ```
 
 First element, or 0 for an empty array.

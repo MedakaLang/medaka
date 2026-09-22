@@ -44,6 +44,7 @@ The value `1`.
 
 ```
 fromIntBits : Int -> U64
+fromIntBits n
 ```
 
 The low 64 bits of an `Int`.
@@ -180,6 +181,7 @@ U64 6 0 0 0
 
 ```
 limbAt : Int -> U64 -> Int
+limbAt i _
 ```
 
 Limb `i` of a value: bits `16i` to `16i + 15`, as an `Int` below
@@ -196,6 +198,7 @@ Limb `i` of a value: bits `16i` to `16i + 15`, as an `Int` below
 
 ```
 shr : Int -> U64 -> U64
+shr n u
 ```
 
 The value shifted right by `n` bits, from `0` to `63`, filling with
@@ -212,6 +215,7 @@ U64 1 0 0 0
 
 ```
 shl : Int -> U64 -> U64
+shl n u
 ```
 
 The value shifted left by `n` bits, from `0` to `63`. Bits shifted
@@ -230,6 +234,7 @@ U64 0 0 0 32768
 
 ```
 mod : U64 -> U64 -> U64
+mod dividend divisor
 ```
 
 The remainder of `dividend` divided by `divisor`.

@@ -15,7 +15,7 @@ stages=DESUGAR,MARK
    `orElse p q` runs `q` from the position where `p` started. The integer
    readers name their byte order and width, as in `beUint 4` for a four-byte
    big-endian unsigned integer and `leSint 2` for a two-byte little-endian
-   signed one. `bytebuilder`'s `emit` functions write the same encodings. -}
+   signed one. `bytebuilder`'s emit functions write the same encodings. -}
 
 import array.{reverse as arrayReverse}
 import bytes.{Bytes, fromArray, toArray}

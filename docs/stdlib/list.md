@@ -47,6 +47,7 @@ resolve when the module is imported qualified.
 
 ```
 singleton : a -> List a
+singleton a
 ```
 
 A list holding one element.
@@ -60,6 +61,7 @@ A list holding one element.
 
 ```
 range : Int -> Int -> List Int
+range lo hi
 ```
 
 The integers from `lo` up to, but not including, `hi`.
@@ -75,6 +77,7 @@ Empty when `lo >= hi`. `[lo..hi]` is the literal form.
 
 ```
 rangeStep : Int -> Int -> Int -> List Int
+rangeStep lo hi step
 ```
 
 The integers from `lo` towards `hi` in steps of `step`, stopping before
@@ -94,6 +97,7 @@ from `hi`.
 
 ```
 replicate : Int -> a -> List a
+replicate n x
 ```
 
 A list of `n` copies of `x`.
@@ -110,6 +114,7 @@ Empty when `n <= 0`. Safe for large `n`: the call depth grows with
 
 ```
 iterate : Int -> (a -> <e> a) -> a -> <e> List a
+iterate n f x
 ```
 
 The first `n` results of applying `f` repeatedly, starting from `x`:
@@ -126,12 +131,13 @@ Empty when `n <= 0`.
 
 ```
 unfold : (b -> <e> Option (a, b)) -> b -> <e> List a
+unfold gen seed
 ```
 
 Builds a list from a seed.
 
-`gen` is called with the current seed. It returns `Some (element, next)` to
-emit `element` and continue from `next`, or `None` to stop.
+`gen` is called with the current seed. It returns `Some` of the element to
+emit and the seed to continue from, or `None` to stop.
 
 ```medaka
 > unfold (n => if n > 5 then None else Some (n, n + 1)) 1
@@ -215,6 +221,7 @@ Some []
 
 ```
 get : Int -> List a -> Option a
+get i _
 ```
 
 The element at index `i`, counting from `0`, or `None` when `i` is out
@@ -235,6 +242,7 @@ None
 
 ```
 reverse : List a -> List a
+reverse xs
 ```
 
 The list in reverse order.
@@ -250,6 +258,7 @@ Safe on long lists.
 
 ```
 intersperse : a -> List a -> List a
+intersperse sep _
 ```
 
 The list with `sep` placed between each pair of adjacent elements.
@@ -263,6 +272,7 @@ The list with `sep` placed between each pair of adjacent elements.
 
 ```
 intercalate : List a -> List (List a) -> List a
+intercalate sep xss
 ```
 
 The inner lists joined into one, with `sep` between each pair.
@@ -310,6 +320,7 @@ A list of `n` elements has `2^n` subsequences.
 
 ```
 permutations : List a -> List (List a)
+permutations xs
 ```
 
 Every ordering of the list's elements.
@@ -328,6 +339,7 @@ lexicographic order of the original positions.
 
 ```
 scanLeft : (b -> a -> <e> b) -> b -> List a -> <e> List b
+scanLeft f z _
 ```
 
 Every intermediate value of a left fold, starting with the seed.
@@ -343,6 +355,7 @@ The result is one element longer than the input.
 
 ```
 scanRight : (a -> b -> <e> b) -> b -> List a -> <e> List b
+scanRight f z _
 ```
 
 Every intermediate value of a right fold, ending with the seed.
@@ -356,6 +369,7 @@ Every intermediate value of a right fold, ending with the seed.
 
 ```
 reduce : (a -> a -> <e> a) -> List a -> <e> Option a
+reduce f _
 ```
 
 A left fold that uses the first element as the seed.
@@ -371,6 +385,7 @@ Some 10
 
 ```
 maximumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+maximumBy cmp xs
 ```
 
 The largest element according to `cmp`, or `None` when the list is
@@ -388,6 +403,7 @@ Some 47
 
 ```
 minimumBy : (a -> a -> <e> Ordering) -> List a -> <e> Option a
+minimumBy cmp xs
 ```
 
 The smallest element according to `cmp`, or `None` when the list is
@@ -407,6 +423,7 @@ Some 23
 
 ```
 findIndex : (a -> <e> Bool) -> List a -> <e> Option Int
+findIndex p xs
 ```
 
 The index of the first element satisfying `p`, or `None`.
@@ -420,6 +437,7 @@ Some 2
 
 ```
 findIndices : (a -> <e> Bool) -> List a -> <e> List Int
+findIndices p xs
 ```
 
 The indices of every element satisfying `p`.
@@ -433,6 +451,7 @@ The indices of every element satisfying `p`.
 
 ```
 elemIndex : Eq a => a -> List a -> Option Int
+elemIndex x xs
 ```
 
 The index of the first element equal to `x`, or `None`.
@@ -446,6 +465,7 @@ Some 2
 
 ```
 elemIndices : Eq a => a -> List a -> List Int
+elemIndices x xs
 ```
 
 The indices of every element equal to `x`.
@@ -459,6 +479,7 @@ The indices of every element equal to `x`.
 
 ```
 lookup : Eq k => k -> List (k, v) -> Option v
+lookup key _
 ```
 
 The value paired with `key` in an association list, or `None`.
@@ -477,6 +498,7 @@ None
 
 ```
 findMap : (a -> <e> Option b) -> List a -> <e> Option b
+findMap f _
 ```
 
 The first `Some` produced by applying `f` to the elements in order, or
@@ -495,6 +517,7 @@ Some 30
 
 ```
 mapWithIndex : (Int -> a -> <e> b) -> List a -> <e> List b
+mapWithIndex f xs
 ```
 
 Like `map`, with `f` also receiving each element's index, counting
@@ -509,6 +532,7 @@ from `0`.
 
 ```
 indexed : List a -> List (Int, a)
+indexed xs
 ```
 
 Each element paired with its index, counting from `0`.
@@ -522,6 +546,7 @@ Each element paired with its index, counting from `0`.
 
 ```
 mapAccumL : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
+mapAccumL f s _
 ```
 
 A `map` that threads a state value from left to right.
@@ -538,6 +563,7 @@ mapped element. The result is the final state and the mapped list.
 
 ```
 mapAccumR : (s -> a -> <e> (s, b)) -> s -> List a -> <e> (s, List b)
+mapAccumR f s _
 ```
 
 Like `mapAccumL`, but threads the state from right to left.
@@ -555,6 +581,7 @@ The mapped list keeps the input's order.
 
 ```
 insertAt : Int -> a -> List a -> List a
+insertAt i x _
 ```
 
 The list with `x` inserted at index `i`, shifting the following elements
@@ -572,6 +599,7 @@ appends.
 
 ```
 updateAt : Int -> a -> List a -> List a
+updateAt i x _
 ```
 
 The list with the element at index `i` replaced by `x`.
@@ -587,6 +615,7 @@ Unchanged when `i` is out of range.
 
 ```
 removeAt : Int -> List a -> List a
+removeAt i _
 ```
 
 The list without the element at index `i`.
@@ -604,6 +633,7 @@ Unchanged when `i` is out of range.
 
 ```
 take : Int -> List a -> List a
+take n _
 ```
 
 The first `n` elements, or the whole list when it has fewer.
@@ -617,6 +647,7 @@ The first `n` elements, or the whole list when it has fewer.
 
 ```
 drop : Int -> List a -> List a
+drop n xs
 ```
 
 Everything after the first `n` elements.
@@ -630,6 +661,7 @@ Everything after the first `n` elements.
 
 ```
 takeWhile : (a -> <e> Bool) -> List a -> <e> List a
+takeWhile p _
 ```
 
 The longest prefix whose elements all satisfy `p`.
@@ -643,6 +675,7 @@ The longest prefix whose elements all satisfy `p`.
 
 ```
 dropWhile : (a -> <e> Bool) -> List a -> <e> List a
+dropWhile p xs
 ```
 
 The list without its longest prefix of elements satisfying `p`.
@@ -656,6 +689,7 @@ The list without its longest prefix of elements satisfying `p`.
 
 ```
 span : (a -> <e> Bool) -> List a -> <e> (List a, List a)
+span p xs
 ```
 
 The longest prefix satisfying `p`, and the rest of the list.
@@ -671,6 +705,7 @@ Equivalent to `(takeWhile p xs, dropWhile p xs)` in one pass.
 
 ```
 break : (a -> <e> Bool) -> List a -> <e> (List a, List a)
+break p xs
 ```
 
 The prefix before the first element satisfying `p`, and the rest of the
@@ -687,6 +722,7 @@ The same as `span` with the predicate negated.
 
 ```
 splitAt : Int -> List a -> (List a, List a)
+splitAt n xs
 ```
 
 The first `n` elements, and the rest of the list.
@@ -702,6 +738,7 @@ Equivalent to `(take n xs, drop n xs)` in one pass.
 
 ```
 sliceClamped : Int -> Int -> List a -> List a
+sliceClamped lo hi xs
 ```
 
 The elements at indices `[lo, hi)`.
@@ -718,6 +755,7 @@ rather than a panic. `xs.[lo..hi]` is the panicking form.
 
 ```
 chunks : Int -> List a -> List (List a)
+chunks n xs
 ```
 
 The list split into consecutive groups of `n` elements.
@@ -734,6 +772,7 @@ The last group holds whatever remains, so it may be shorter. Empty when
 
 ```
 dropWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
+dropWhileEnd p xs
 ```
 
 The list without its longest suffix of elements satisfying `p`.
@@ -747,6 +786,7 @@ The list without its longest suffix of elements satisfying `p`.
 
 ```
 takeWhileEnd : (a -> <e> Bool) -> List a -> <e> List a
+takeWhileEnd p xs
 ```
 
 The longest suffix whose elements all satisfy `p`.
@@ -760,6 +800,7 @@ The longest suffix whose elements all satisfy `p`.
 
 ```
 split : Eq a => List a -> List a -> List (List a)
+split sep xs
 ```
 
 The list split at every occurrence of the separator `sep`, with the
@@ -781,6 +822,7 @@ list form of `string.split`; `splitAt` is the positional split.
 
 ```
 startsWith : Eq a => List a -> List a -> Bool
+startsWith prefix _
 ```
 
 Whether the list begins with `prefix`.
@@ -799,6 +841,7 @@ False
 
 ```
 endsWith : Eq a => List a -> List a -> Bool
+endsWith suffix xs
 ```
 
 Whether the list ends with `suffix`.
@@ -814,6 +857,7 @@ False
 
 ```
 containsSub : Eq a => List a -> List a -> Bool
+containsSub sub xs
 ```
 
 Whether `sub` occurs as a contiguous run anywhere in the list.
@@ -833,6 +877,7 @@ False
 
 ```
 sortBy : (a -> a -> <e> Ordering) -> List a -> <e> List a
+sortBy cmp xs
 ```
 
 The list sorted by `cmp`.
@@ -849,6 +894,7 @@ order. It costs `O(n log n)`.
 
 ```
 sort : Ord a => List a -> List a
+sort xs
 ```
 
 The list sorted in ascending order.
@@ -864,6 +910,7 @@ The sort is stable.
 
 ```
 sortOn : Ord b => (a -> <e> b) -> List a -> <e> List a
+sortOn key xs
 ```
 
 The list sorted in ascending order of `key`.
@@ -880,6 +927,7 @@ stable.
 
 ```
 nubBy : (a -> a -> <e> Bool) -> List a -> <e> List a
+nubBy same xs
 ```
 
 The list with duplicates removed, where `same` decides which elements
@@ -896,6 +944,7 @@ The first occurrence is kept. Costs `O(n^2)`.
 
 ```
 nub : Eq a => List a -> List a
+nub xs
 ```
 
 The list with duplicate elements removed.
@@ -912,6 +961,7 @@ The first occurrence is kept. Costs `O(n^2)`; for large lists, build a
 
 ```
 deleteBy : (a -> a -> <e> Bool) -> a -> List a -> <e> List a
+deleteBy same x _
 ```
 
 The list without the first element that `same` matches against `x`.
@@ -927,6 +977,7 @@ Unchanged when nothing matches.
 
 ```
 delete : Eq a => a -> List a -> List a
+delete x xs
 ```
 
 The list without the first occurrence of `x`.
@@ -944,6 +995,7 @@ Unchanged when `x` is absent. `filter (/= x)` removes every occurrence.
 
 ```
 groupBy : (a -> a -> <e> Bool) -> List a -> <e> List (List a)
+groupBy same _
 ```
 
 The list split into runs of adjacent elements that `same` considers
@@ -958,6 +1010,7 @@ equivalent.
 
 ```
 group : Eq a => List a -> List (List a)
+group xs
 ```
 
 The list split into runs of adjacent equal elements.
@@ -971,6 +1024,7 @@ The list split into runs of adjacent equal elements.
 
 ```
 partition : (a -> <e> Bool) -> List a -> <e> (List a, List a)
+partition p _
 ```
 
 The elements satisfying `p`, and the elements that do not.
@@ -1038,6 +1092,7 @@ The `Err` values and the `Ok` values, as two lists.
 
 ```
 tally : Eq a => List a -> List (a, Int)
+tally xs
 ```
 
 Each distinct element paired with the number of times it occurs.
@@ -1086,6 +1141,7 @@ The result is as long as the shortest input.
 
 ```
 zipWith : (a -> b -> <e> c) -> List a -> List b -> <e> List c
+zipWith f _ _
 ```
 
 The elements of two lists combined by position with `f`.
@@ -1117,6 +1173,7 @@ The result is as long as the shortest input.
 
 ```
 zipWith3 : (a -> b -> c -> <e> d) -> List a -> List b -> List c -> <e> List d
+zipWith3 f _ _ _
 ```
 
 The elements of three lists combined by position with `f`.

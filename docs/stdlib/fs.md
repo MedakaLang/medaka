@@ -32,6 +32,7 @@ Instances: `Eq`, `Debug`
 
 ```
 stat : String -> <FileRead _> Result String FileStat
+stat p
 ```
 
 The metadata of a path as a `FileStat`, or `Err` when the path cannot
@@ -41,6 +42,7 @@ be examined, for instance because it does not exist.
 
 ```
 isDir : String -> <FileRead _> Result String Bool
+isDir p
 ```
 
 Whether a path exists and is a directory.
@@ -49,6 +51,7 @@ Whether a path exists and is a directory.
 
 ```
 isFile : String -> <FileRead _> Result String Bool
+isFile p
 ```
 
 Whether a path exists and is a regular file.
@@ -57,6 +60,7 @@ Whether a path exists and is a regular file.
 
 ```
 fileSize : String -> <FileRead _> Result String Int
+fileSize p
 ```
 
 The size of a file in bytes.
@@ -67,6 +71,7 @@ The size of a file in bytes.
 
 ```
 copyFile : String -> String -> <FileRead _, FileWrite _> Result String Unit
+copyFile src dst
 ```
 
 Copies the bytes of `src` to `dst`, replacing any existing `dst`.
@@ -77,6 +82,7 @@ A read failure is reported before anything is written.
 
 ```
 mkdirAll : String -> <FileWrite _> Result String Unit
+mkdirAll path
 ```
 
 Creates a directory and every missing parent, like `mkdir -p`.
@@ -87,6 +93,7 @@ A directory that already exists is not an error.
 
 ```
 walkDir : String -> <FileRead _> Result String (List String)
+walkDir root
 ```
 
 Every path under a directory, files and subdirectories both, depth
@@ -99,6 +106,7 @@ directory that cannot be read or entry that cannot be examined.
 
 ```
 fixtureFiles : String -> <FileRead _> Result String (List String)
+fixtureFiles root
 ```
 
 Every regular file under `root`, depth first, or `Err` when there are
@@ -120,6 +128,7 @@ Ok True
 
 ```
 fixtureDirs : String -> <FileRead _> Result String (List String)
+fixtureDirs root
 ```
 
 Every top-level subdirectory of `root`, or `Err` when there are none.
@@ -140,6 +149,7 @@ Ok True
 
 ```
 expectUnitCount : Int -> List a -> Result String Unit
+expectUnitCount want units
 ```
 
 `Ok` when `units` has exactly `want` elements, otherwise an `Err`

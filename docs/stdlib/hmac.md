@@ -15,6 +15,7 @@ for a caller whose bytes are already known to be in range.
 
 ```
 ctEq : Array Int -> Array Int -> Bool
+ctEq a b
 ```
 
 Whether two byte arrays contain the same values.
@@ -31,6 +32,7 @@ True
 
 ```
 hmacSha256 : Array Int -> Array Int -> Array Int
+hmacSha256 key message
 ```
 
 The 32-byte HMAC-SHA-256 tag of `message` under `key`.
@@ -42,6 +44,7 @@ either argument is outside `0` to `255`.
 
 ```
 hmacSha256FixedBytes : Array Int -> Array Int -> Array Int
+hmacSha256FixedBytes key message
 ```
 
 The 32-byte HMAC-SHA-256 tag of `message` under `key`, without checking

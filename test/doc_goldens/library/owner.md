@@ -13,6 +13,7 @@ Anything with a count.
 
 ```
 mkGadget : Int -> Int
+mkGadget n
 ```
 
 Make a `Gadget`.  Private return type, so the entry renders the name.

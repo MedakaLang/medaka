@@ -1,0 +1,78 @@
+# params
+
+## `take`
+
+```
+take : Int -> List a -> List a
+take n _
+```
+
+The first `n` elements of the list.  The base case comes first and binds
+nothing, so the name at each position comes from the second clause; the
+list position is a pattern in every clause, so it renders as `_`.
+
+## `clampTo`
+
+```
+clampTo : Int -> Int -> Int
+clampTo hi v
+```
+
+Guards on the head, no `=` on the head line.
+
+## `Box`
+
+```
+data Box
+  = Box Int
+```
+
+## `unbox`
+
+```
+unbox : Box -> Int
+```
+
+A constructor pattern binds no name for its position.
+
+## `boxed`
+
+```
+boxed : Box -> Int
+boxed b
+```
+
+An as-pattern names the whole argument.
+
+## `unboxTwo`
+
+```
+unboxTwo : Box -> Box -> Int
+```
+
+Every position destructured: no head line at all.
+
+## `origin`
+
+```
+origin : Int
+```
+
+A zero-argument value has no head line.
+
+## `inc`
+
+```
+inc : Int -> Int
+```
+
+A point-free definition has no head line either.
+
+## `ext`
+
+```
+ext : Int -> Int
+```
+
+An extern has no clauses, so no head line.
+

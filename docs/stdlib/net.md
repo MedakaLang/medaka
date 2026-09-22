@@ -52,6 +52,7 @@ Which direction of a connection `shutdown` closes.
 
 ```
 resolve : String -> <Net _> Result String (List String)
+resolve host
 ```
 
 The numeric addresses a host name resolves to.
@@ -62,6 +63,7 @@ The numeric addresses a host name resolves to.
 
 ```
 connect : String -> Int -> <Net _> Result String Connection
+connect host port
 ```
 
 A connection to `host` on `port`.
@@ -75,6 +77,7 @@ closes the connection for you.
 
 ```
 listen : String -> Int -> <Net _> Result String Listener
+listen addr port
 ```
 
 A listener bound to `addr` on `port`.
@@ -103,6 +106,7 @@ Waits for the next connection to a listener.
 
 ```
 send : Connection -> Array Int -> <Net _> Result String Int
+send _ bs
 ```
 
 Sends bytes in one call. The result is the number of bytes written,
@@ -114,6 +118,7 @@ which may be fewer than given.
 
 ```
 recv : Connection -> Int -> <Net _> Result String (Array Int)
+recv _ n
 ```
 
 Receives up to `n` bytes in one call.
@@ -125,6 +130,7 @@ form that reads to the end.
 
 ```
 sendAll : Connection -> Array Int -> <Net _> Result String Unit
+sendAll _ bs
 ```
 
 Sends every byte, looping over `send` as needed.
@@ -136,6 +142,7 @@ treated as a stalled connection.
 
 ```
 recvAll : Connection -> <Net _> Result String (Array Int)
+recvAll conn
 ```
 
 Receives everything until the peer closes the connection.
@@ -149,6 +156,7 @@ discarded.
 
 ```
 sendString : Connection -> String -> <Net _> Result String Unit
+sendString conn s
 ```
 
 Sends a string as UTF-8, every byte of it.
@@ -157,6 +165,7 @@ Sends a string as UTF-8, every byte of it.
 
 ```
 recvString : Connection -> <Net _> Result String String
+recvString conn
 ```
 
 Receives everything until the peer closes the connection, decoded as
@@ -169,6 +178,7 @@ or a bounded amount with `recv`.
 
 ```
 sendLine : Connection -> String -> <Net _> Result String Unit
+sendLine conn s
 ```
 
 Sends a string as UTF-8 followed by a newline.
@@ -177,6 +187,7 @@ Sends a string as UTF-8 followed by a newline.
 
 ```
 recvLine : Connection -> <Net _> Result String (Option String)
+recvLine conn
 ```
 
 Receives one line, without its newline.
@@ -191,6 +202,7 @@ so it suits small line-based messages, not bulk transfer.
 
 ```
 shutdown : Connection -> Shutdown -> <Net _> Result String Unit
+shutdown _ how
 ```
 
 Shuts down one or both directions of a connection without closing it.
@@ -217,6 +229,7 @@ Closes a listener.
 
 ```
 setTimeout : Connection -> Duration -> <Net _> Result String Unit
+setTimeout _ d
 ```
 
 Sets a connection's send and receive timeout.
@@ -228,6 +241,7 @@ so a stalled peer cannot block forever.
 
 ```
 withConnection : String -> Int -> (Connection -> <Net _> Result String a) -> <Net _> Result String a
+withConnection host port body
 ```
 
 Connects to `host` on `port`, runs `body` on the connection, and closes
@@ -242,6 +256,7 @@ fails, in which case `body` does not run.
 
 ```
 withListener : String -> Int -> (Listener -> <Net _> Result String a) -> <Net _> Result String a
+withListener addr port body
 ```
 
 Listens on `addr` and `port`, runs `body` on the listener, and closes
@@ -253,6 +268,7 @@ The result is `body`'s result, or the error when listening fails.
 
 ```
 serveLoop : Listener -> (Connection -> <Net _> Result String Unit) -> <Net _> Result String Unit
+serveLoop lis handle
 ```
 
 Accepts connections forever, running `handle` on each and closing it

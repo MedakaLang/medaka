@@ -66,10 +66,10 @@ export data Wait (e : Effect) =
   | WaitUntil Float (Timer e)
   | WaitFlag (Ref Bool)
 
--- | A deferred computation.  `Done` holds a finished value; the other arms
--- hold the next step under a thunk that performs `<e>`.  `Suspend` is a plain
--- yield point, `Await` parks the task until any of its waits is satisfied, and
--- `Spawn` hands a child task to the scheduler before continuing.
+-- | A deferred computation: a finished value, or the next step held under a
+-- thunk that performs `<e>`.  A step is a plain yield point, a park until any
+-- of the task's waits is satisfied, or a child task handed to the scheduler
+-- before continuing.
 export data Async (e : Effect) a =
   | Done a
   | Suspend (Unit -> <e> Async e a)

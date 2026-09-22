@@ -1,5 +1,5 @@
 # META
-source_lines=1635
+source_lines=1704
 stages=DESUGAR,MARK
 # SOURCE
 -- compiler/tools/doc.mdk — the native `medaka doc` documentation extractor.
@@ -43,6 +43,7 @@ import frontend.ast.{
   IfaceMethod(..),
   Require(..),
   LetBind(..),
+  Pat(..),
   UsePath(..),
   UseMember,
   useMemberOrigin,
@@ -52,7 +53,9 @@ import frontend.ast.{
 }
 import types.repr.{Scheme(..), ppScheme}
 import frontend.resolve.{internalExterns}
-import support.util.{joinWith, reverseL, escStr, stringTrim, splitNl, contains}
+import support.util.{
+  joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc
+}
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
@@ -63,13 +66,16 @@ import regex.{
 }
 
 -- ── doc_entry ──────────────────────────────────────────────────────────────
--- de_name / de_sig (never empty) / de_doc (stripped doc prose, may be "") /
+-- de_name / de_sig (never empty) / de_head (the call shape `name a b _` of a
+-- value entry, naming its parameters from the defining clauses — see
+-- `clauseHeads`; "" when the entry has no parameter to name) /
+-- de_doc (stripped doc prose, may be "") /
 -- de_kind (S-doc-surface-truth: the ATTRIBUTION facts about the declaration
 -- this entry came from, threaded at extraction time rather than re-derived by
 -- parsing `de_sig` back — the sig is a rendering, not a data structure) /
 -- de_line (the declaration's source line, which is what places a `-- # Title`
 -- section heading relative to the entries around it).
-data DocEntry = DocEntry String String String DocKind Int
+data DocEntry = DocEntry String String String String DocKind Int
 
 -- What kind of declaration produced an entry, for the library-mode impl
 -- rebucketing pass (`rebucketLibraryImpls`).  `KTypeDecl` marks a `data`/
@@ -448,6 +454,64 @@ dataVisPrivate : DataVis -> Bool
 dataVisPrivate VisPrivate = True
 dataVisPrivate _ = False
 
+-- ── parameter names ──────────────────────────────────────────────────────
+-- A value entry's signature is `name : type`, which names no parameter, yet
+-- its prose refers to parameters by name (`n`, `sep`, `xs` — the register in
+-- stdlib/README.md § Writing documentation).  The head line makes those names
+-- visible on the page: one call shape per value entry, `name a b _`, derived
+-- from the defining clauses.  Each argument position takes the variable the
+-- FIRST clause binding a plain variable there uses (so `take _ []` then
+-- `take n (x :: xs)` yields `take n _`); a position no clause binds to a
+-- variable renders `_`.  A head with nothing named is omitted, so a
+-- point-free or zero-argument value and a wholly destructuring one show the
+-- signature alone.  An `extern` and an interface method have no clauses and
+-- no head.
+clauseHeads : List Decl -> List (String, String)
+clauseHeads decls = clauseHeadsGo decls []
+
+clauseHeadsGo : List Decl -> List (String, List String) -> List (String, String)
+clauseHeadsGo [] acc =
+  map (p => (fst p, renderHead (fst p) (snd p))) (reverseL acc)
+clauseHeadsGo ((DFunDef _ name pats _) :: rest) acc =
+  let names = map headArgName pats
+  clauseHeadsGo rest (mergeHead name names acc)
+clauseHeadsGo (_ :: rest) acc = clauseHeadsGo rest acc
+
+-- Merge one clause's argument names into the accumulator, position by
+-- position, keeping the first named binding at each position.
+mergeHead : String ->
+  List String ->
+  List (String, List String) ->
+  List (String, List String)
+mergeHead name names [] = [(name, names)]
+mergeHead name names ((n, have) :: rest) =
+  if n == name then
+    (n, mergeArgs have names) :: rest
+  else
+    (n, have) :: mergeHead name names rest
+
+mergeArgs : List String -> List String -> List String
+mergeArgs [] ys = ys
+mergeArgs xs [] = xs
+mergeArgs (x :: xs) (y :: ys) = (if x == "_" then y else x) :: mergeArgs xs ys
+
+-- The variable a clause argument binds, or `_` when the pattern binds none
+-- at its top: an as-pattern names the whole argument; a constructor, tuple,
+-- list, literal or record pattern does not.
+headArgName : Pat -> String
+headArgName (PVar v _) = v
+headArgName (PAs v _ _) = v
+headArgName _ = "_"
+
+renderHead : String -> List String -> String
+renderHead name args =
+  if all (== "_") args then "" else joinWith " " (name :: args)
+
+headFor : String -> List (String, String) -> String
+headFor name heads = match lookupAssoc name heads
+  Some h => h
+  None => ""
+
 -- An abstract export (`export data`, not `public export data`) publishes the
 -- type and keeps its constructors private, so the reference shows the head
 -- alone: a constructor no importer can name is not part of the surface.
@@ -522,7 +586,7 @@ letgroupEntriesGo : List LetBind ->
 letgroupEntriesGo [] _ _ _ = []
 letgroupEntriesGo ((LetBind name _) :: rest) schemes doc line =
   let sigStr = valueSig name schemes None
-  (name, DocEntry name sigStr doc KPlain line)
+  (name, DocEntry name sigStr "" doc KPlain line)
     :: letgroupEntriesGo rest schemes doc line
 
 -- ── derived instances (`deriving (…)`) ─────────────────────────────────────
@@ -576,7 +640,7 @@ derivedEntries tyName params shape line (d :: ds) =
     let args = derivedHead tyName params
     let name = "\{iface} \{args}"
     let sigStr = "impl \{iface} \{args}\{derivedRequires iface params}"
-    (name, DocEntry name sigStr "" (KImplOn (Some tyName)) line) :: rest
+    (name, DocEntry name sigStr "" "" (KImplOn (Some tyName)) line) :: rest
 
 -- `T` with no params, `(T a b)` with them — `ppTyP 2`'s rendering of the head
 -- `appliedHead` builds.
@@ -619,7 +683,7 @@ derivingEntries bare decl line schemes tbl (tyName, params, derives, shape) =
   let own = match renderSig bare decl schemes
     None => []
     Some (name, sigStr) =>
-      [(name, DocEntry name sigStr doc (declKind decl) line)]
+      [(name, DocEntry name sigStr "" doc (declKind decl) line)]
   own ++ derivedEntries tyName params shape line derives
 
 -- ── re-exports (hole (a)) ───────────────────────────────────────────────────
@@ -684,7 +748,7 @@ reexportEntriesGo originMod (m :: rest) schemes originSchemes doc line =
     None => match lookupScheme origin originSchemes
       Some s => "\{local} : \{ppScheme s}"
       None => "\{local} : re-export of \{originMod}.\{origin}"
-  (local, DocEntry local sigStr doc KPlain line)
+  (local, DocEntry local sigStr "" doc KPlain line)
     :: reexportEntriesGo originMod rest schemes originSchemes doc line
 
 -- The origin-module scheme table: dotted module id -> that module's own
@@ -776,11 +840,13 @@ extractEntries : Bool ->
 extractEntries bare decls positions schemes origins comments =
   let tbl = buildCommentTbl comments
   let pairs = zipDoc decls positions
-  let result = extractFold bare pairs schemes origins tbl [] []
+  let heads = clauseHeads decls
+  let result = extractFold bare heads pairs schemes origins tbl [] []
   reverseL (fst result)
 
 -- Fold over (decl, pos) pairs.  State: (revEntries, seenNames).  Returns it.
 extractFold : Bool ->
+  List (String, String) ->
   List (Decl, DeclPos) ->
   List (String, Scheme) ->
   List (String, List (String, Scheme)) ->
@@ -788,27 +854,29 @@ extractFold : Bool ->
   List DocEntry ->
   List String ->
   (List DocEntry, List String)
-extractFold _ [] _ _ _ revEntries seen = (revEntries, seen)
-extractFold bare ((decl, dp) :: rest) schemes origins tbl revEntries seen =
+extractFold _ _ [] _ _ _ revEntries seen = (revEntries, seen)
+extractFold bare heads ((decl, dp) :: rest) schemes origins tbl revEntries seen =
   let line = declPosLine dp
   match multiEntriesFor bare decl line schemes origins tbl
     Some extras =>
       let acc = foldExtras extras revEntries seen
-      extractFold bare rest schemes origins tbl (fst acc) (snd acc)
+      extractFold bare heads rest schemes origins tbl (fst acc) (snd acc)
     None => match renderSig bare decl schemes
-      None => extractFold bare rest schemes origins tbl revEntries seen
+      None => extractFold bare heads rest schemes origins tbl revEntries seen
       Some (name, sigStr) =>
         if contains name seen then
-          extractFold bare rest schemes origins tbl revEntries seen
+          extractFold bare heads rest schemes origins tbl revEntries seen
         else
           let doc = findDocForLine tbl line
           extractFold
             bare
+            heads
             rest
             schemes
             origins
             tbl
-            (DocEntry name sigStr doc (declKind decl) line :: revEntries)
+            (DocEntry name sigStr (headFor name heads) doc (declKind decl) line
+              :: revEntries)
             (name :: seen)
 
 -- Interleave `-- # Title` sections with the entries by source line: a section
@@ -825,10 +893,10 @@ insertSections ((l, title) :: secs) (e :: es) =
     e :: insertSections ((l, title) :: secs) es
 
 sectionEntry : Int -> String -> DocEntry
-sectionEntry line title = DocEntry title "" "" KSection line
+sectionEntry line title = DocEntry title "" "" "" KSection line
 
 entryLine : DocEntry -> Int
-entryLine (DocEntry _ _ _ _ line) = line
+entryLine (DocEntry _ _ _ _ _ line) = line
 
 -- The three decl shapes that expand to MANY entries (a `let` group, a
 -- re-exporting `export import`, a `data`/`newtype` with a `deriving (…)`
@@ -1058,18 +1126,18 @@ primitiveLayerBanner moduleName
   | otherwise = ""
 
 isSection : DocEntry -> Bool
-isSection (DocEntry _ _ _ KSection _) = True
+isSection (DocEntry _ _ _ _ KSection _) = True
 isSection _ = False
 
 isImpl : DocEntry -> Bool
-isImpl (DocEntry _ _ _ (KImplOn _) _) = True
+isImpl (DocEntry _ _ _ _ (KImplOn _) _) = True
 isImpl _ = False
 
 -- An impl entry whose name carries at least one type argument (`Eq Int`,
 -- `Debug (a, b)`) — the shape the instance listings absorb.  `impl Foo` with
 -- no arguments has no type to be listed under and stays an ordinary entry.
 isListedImpl : DocEntry -> Bool
-isListedImpl (DocEntry name _ _ (KImplOn _) _) = instanceHead name /= ""
+isListedImpl (DocEntry name _ _ _ (KImplOn _) _) = instanceHead name /= ""
 isListedImpl _ = False
 
 anyDoc : (a -> Bool) -> List a -> Bool
@@ -1093,15 +1161,16 @@ instanceHead name = match stringIndexOf " " name
 -- (`Eq (List a)` and `Mappable List` both file under `List`), else the
 -- literal type part of its name (`(a, b)` for a tuple instance).
 instanceKey : DocEntry -> String
-instanceKey (DocEntry _ _ _ (KImplOn (Some hd)) _) = hd
-instanceKey (DocEntry name _ _ _ _) = instanceHead name
+instanceKey (DocEntry _ _ _ _ (KImplOn (Some hd)) _) = hd
+instanceKey (DocEntry name _ _ _ _ _) = instanceHead name
 
 renderEntry : Bool -> List DocEntry -> DocEntry -> String
-renderEntry _ _ (DocEntry title _ _ KSection _) = "## " ++ title ++ "\n\n"
-renderEntry sectioned entries (DocEntry name sig doc kind _) =
+renderEntry _ _ (DocEntry title _ _ _ KSection _) = "## " ++ title ++ "\n\n"
+renderEntry sectioned entries (DocEntry name sig head doc kind _) =
   let level = if sectioned then "### " else "## "
   let header = "\{level}`\{name}`\n\n"
-  let sigBlock = "```\n" ++ sig ++ "\n```\n"
+  let headLine = if head == "" then "" else "\n" ++ head
+  let sigBlock = "```\n\{sig}\{headLine}\n```\n"
   let instances = match kind
     KTypeDecl => instanceLine (instancesOf name entries)
     _ => ""
@@ -1114,7 +1183,7 @@ instancesOf : String -> List DocEntry -> List DocEntry
 instancesOf tyName entries = filterDoc (e => implHeadIs tyName e) entries
 
 implHeadIs : String -> DocEntry -> Bool
-implHeadIs tyName (DocEntry _ _ _ (KImplOn (Some hd)) _) = hd == tyName
+implHeadIs tyName (DocEntry _ _ _ _ (KImplOn (Some hd)) _) = hd == tyName
 implHeadIs _ _ = False
 
 -- `Instances: \`Eq\`, \`Ord\`, [\`Debug\`](#debug-list-a)` — a documented
@@ -1125,7 +1194,7 @@ instanceLine impls =
   "\nInstances: " ++ joinWith ", " (map instanceRef impls) ++ "\n"
 
 instanceRef : DocEntry -> String
-instanceRef (DocEntry name _ doc _ _) =
+instanceRef (DocEntry name _ _ doc _ _) =
   let iface = "`" ++ instanceIface name ++ "`"
   if doc == "" then iface else "[\{iface}](#\{slugifyAnchor name})"
 
@@ -1156,16 +1225,16 @@ orphanLine orphans key =
   "- `\{key}`: \{joinWith ", " (map instanceRef mine)}"
 
 hasTypeEntry : List DocEntry -> DocEntry -> Bool
-hasTypeEntry entries (DocEntry _ _ _ (KImplOn (Some hd)) _) =
+hasTypeEntry entries (DocEntry _ _ _ _ (KImplOn (Some hd)) _) =
   anyDoc (e => isTypeNamed hd e) entries
 hasTypeEntry _ _ = False
 
 isTypeNamed : String -> DocEntry -> Bool
-isTypeNamed n (DocEntry name _ _ KTypeDecl _) = name == n
+isTypeNamed n (DocEntry name _ _ _ KTypeDecl _) = name == n
 isTypeNamed _ _ = False
 
 entryDoc : DocEntry -> String
-entryDoc (DocEntry _ _ doc _ _) = doc
+entryDoc (DocEntry _ _ _ doc _ _) = doc
 
 uniqueDoc : List String -> List String
 uniqueDoc [] = []
@@ -1251,7 +1320,7 @@ dropInternalExterns True entries =
   filter (e => not (isInternalExtern e)) entries
 
 isInternalExtern : DocEntry -> Bool
-isInternalExtern (DocEntry name _ _ _ _) =
+isInternalExtern (DocEntry name _ _ _ _ _) =
   elem name internalExterns || elem name docOnlyExcluded
 
 export
@@ -1301,7 +1370,7 @@ dedupHeader header entries =
 
 firstEntryDoc : List DocEntry -> String
 firstEntryDoc [] = ""
-firstEntryDoc ((DocEntry _ _ doc _ _) :: _) = doc
+firstEntryDoc ((DocEntry _ _ _ doc _ _) :: _) = doc
 
 export
 renderModulePage : ModuleDoc -> String
@@ -1384,7 +1453,7 @@ moduleMentionIndex : ModuleDoc -> (String, List String)
 moduleMentionIndex (ModuleDoc n _ es _) = (n, map entrySigOf es)
 
 entrySigOf : DocEntry -> String
-entrySigOf (DocEntry _ sig _ _ _) = sig
+entrySigOf (DocEntry _ sig _ _ _ _) = sig
 
 ownerOfType : List (String, String) ->
   List (String, List String) ->
@@ -1434,7 +1503,7 @@ entryTarget : List (String, String) ->
   String ->
   DocEntry ->
   Option String
-entryTarget owners mentions here (DocEntry _ _ _ (KImplOn (Some hd)) _) =
+entryTarget owners mentions here (DocEntry _ _ _ _ (KImplOn (Some hd)) _) =
   match ownerOfType owners mentions hd
     Some m => if m == here then None else Some m
     None => None
@@ -1531,7 +1600,7 @@ inventoryEntriesFor (ModuleDoc moduleName _ entries _) =
     (filterDoc (e => not (isSection e)) entries)
 
 inventoryEntryJson : String -> DocEntry -> Json
-inventoryEntryJson moduleName (DocEntry name sig _ _ _) = jObject [
+inventoryEntryJson moduleName (DocEntry name sig _ _ _ _) = jObject [
   ("module", JString moduleName),
   ("name", JString name),
   ("signature", JString sig),
@@ -1555,7 +1624,7 @@ renderIndexModule (ModuleDoc name header entries _) =
   "\{head}\{summaryBlock}\{links}\n\n"
 
 renderIndexLink : String -> DocEntry -> String
-renderIndexLink moduleName (DocEntry name _ _ _ _) =
+renderIndexLink moduleName (DocEntry name _ _ _ _ _) =
   "- [`\{name}`](\{moduleName}.md#\{slugifyAnchor name})"
 
 -- The first sentence of a prose block: up to and including the first `.`
@@ -1640,17 +1709,17 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
-(DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
+(DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
 (DData Private "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
 (DTypeAlias false "CommentRow" () (TyTuple (TyCon "Int") (TyCon "String") (TyCon "Int")))
 (DTypeSig false "dlen" (TyFun (TyCon "String") (TyCon "Int")))
@@ -1751,6 +1820,27 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "dataVisPrivate" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisPrivate" ((PCon "VisPrivate")) (EVar "True"))
 (DFunDef false "dataVisPrivate" (PWild) (EVar "False"))
+(DTypeSig false "clauseHeads" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "clauseHeads" ((PVar "decls")) (EApp (EApp (EVar "clauseHeadsGo") (EVar "decls")) (EListLit)))
+(DTypeSig false "clauseHeadsGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "clauseHeadsGo" ((PList) (PVar "acc")) (EApp (EApp (EVar "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "fst") (EVar "p")) (EApp (EApp (EVar "renderHead") (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p")))))) (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "clauseHeadsGo" ((PCons (PCon "DFunDef" PWild (PVar "name") (PVar "pats") PWild) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EVar "map") (EVar "headArgName")) (EVar "pats"))) (DoExpr (EApp (EApp (EVar "clauseHeadsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "mergeHead") (EVar "name")) (EVar "names")) (EVar "acc"))))))
+(DFunDef false "clauseHeadsGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "clauseHeadsGo") (EVar "rest")) (EVar "acc")))
+(DTypeSig false "mergeHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "mergeHead" ((PVar "name") (PVar "names") (PList)) (EListLit (ETuple (EVar "name") (EVar "names"))))
+(DFunDef false "mergeHead" ((PVar "name") (PVar "names") (PCons (PTuple (PVar "n") (PVar "have")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "mergeArgs") (EVar "have")) (EVar "names"))) (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EVar "have")) (EApp (EApp (EApp (EVar "mergeHead") (EVar "name")) (EVar "names")) (EVar "rest")))))
+(DTypeSig false "mergeArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "mergeArgs" ((PList) (PVar "ys")) (EVar "ys"))
+(DFunDef false "mergeArgs" ((PVar "xs") (PList)) (EVar "xs"))
+(DFunDef false "mergeArgs" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "::" (EIf (EBinOp "==" (EVar "x") (ELit (LString "_"))) (EVar "y") (EVar "x")) (EApp (EApp (EVar "mergeArgs") (EVar "xs")) (EVar "ys"))))
+(DTypeSig false "headArgName" (TyFun (TyCon "Pat") (TyCon "String")))
+(DFunDef false "headArgName" ((PCon "PVar" (PVar "v") PWild)) (EVar "v"))
+(DFunDef false "headArgName" ((PCon "PAs" (PVar "v") PWild PWild)) (EVar "v"))
+(DFunDef false "headArgName" (PWild) (ELit (LString "_")))
+(DTypeSig false "renderHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderHead" ((PVar "name") (PVar "args")) (EIf (EApp (EApp (EVar "all") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "_"))))) (EVar "args")) (ELit (LString "")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "name") (EVar "args")))))
+(DTypeSig false "headFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
+(DFunDef false "headFor" ((PVar "name") (PVar "heads")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "heads")) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "dataVisAbstract" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisAbstract" ((PCon "VisAbstract")) (EVar "True"))
 (DFunDef false "dataVisAbstract" (PWild) (EVar "False"))
@@ -1780,14 +1870,14 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "allLetgroupEntries" ((PCon "True") (PVar "bindings") (PVar "line") (PVar "schemes") (PVar "tbl")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "letgroupEntriesGo") (EVar "bindings")) (EVar "schemes")) (EVar "doc")) (EVar "line")))))
 (DTypeSig false "letgroupEntriesGo" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))
 (DFunDef false "letgroupEntriesGo" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "letgroupEntriesGo" ((PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest")) (PVar "schemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "sigStr") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EVar "letgroupEntriesGo") (EVar "rest")) (EVar "schemes")) (EVar "doc")) (EVar "line"))))))
+(DFunDef false "letgroupEntriesGo" ((PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest")) (PVar "schemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "sigStr") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EVar "letgroupEntriesGo") (EVar "rest")) (EVar "schemes")) (EVar "doc")) (EVar "line"))))))
 (DData Private "DeriveShape" () ((variant "ShapeData" (ConPos (TyApp (TyCon "List") (TyCon "Variant")))) (variant "ShapeNewtype" (ConPos (TyCon "String") (TyCon "Ty")))) ())
 (DTypeSig false "hasDeriver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveShape") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "hasDeriver" ((PVar "tyName") (PVar "params") (PCon "ShapeData" (PVar "variants")) (PVar "iface")) (EApp (EApp (EVar "elem") (EVar "iface")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "tyName")) (EVar "params")) (EVar "variants")))))
 (DFunDef false "hasDeriver" ((PVar "tyName") (PVar "params") (PCon "ShapeNewtype" (PVar "con") (PVar "fty")) (PVar "iface")) (EApp (EApp (EVar "elem") (EVar "iface")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "tyName")) (EVar "params")) (EVar "con")) (EVar "fty")))))
 (DTypeSig false "derivedEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveShape") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))))
 (DFunDef false "derivedEntries" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "derivedEntries" ((PVar "tyName") (PVar "params") (PVar "shape") (PVar "line") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "deriveRefName") (EVar "d"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "ds"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "hasDeriver") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "iface"))) (EVar "rest") (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "derivedHead") (EVar "tyName")) (EVar "params"))) (DoLet false false (PVar "name") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "args"))) (ELit (LString "")))) (DoLet false false (PVar "sigStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "args"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "derivedRequires") (EVar "iface")) (EVar "params")))) (ELit (LString "")))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (EApp (EVar "KImplOn") (EApp (EVar "Some") (EVar "tyName")))) (EVar "line"))) (EVar "rest"))))))))
+(DFunDef false "derivedEntries" ((PVar "tyName") (PVar "params") (PVar "shape") (PVar "line") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "deriveRefName") (EVar "d"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "ds"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "hasDeriver") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "iface"))) (EVar "rest") (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "derivedHead") (EVar "tyName")) (EVar "params"))) (DoLet false false (PVar "name") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "args"))) (ELit (LString "")))) (DoLet false false (PVar "sigStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EVar "display") (EVar "args"))) (ELit (LString ""))) (EApp (EVar "display") (EApp (EApp (EVar "derivedRequires") (EVar "iface")) (EVar "params")))) (ELit (LString "")))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "KImplOn") (EApp (EVar "Some") (EVar "tyName")))) (EVar "line"))) (EVar "rest"))))))))
 (DTypeSig false "derivedHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "derivedHead" ((PVar "tyName") (PList)) (EVar "tyName"))
 (DFunDef false "derivedHead" ((PVar "tyName") (PVar "params")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "tyName") (EVar "params"))))) (ELit (LString ")"))))
@@ -1802,12 +1892,12 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "derivesOf" ((PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "ds"))) false)) (EIf (EApp (EVar "not") (EApp (EVar "noDerives") (EVar "ds"))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "ps") (EVar "ds") (EApp (EApp (EVar "ShapeNewtype") (EVar "con")) (EVar "fty")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "derivesOf" (PWild) (EVar "None"))
 (DTypeSig false "derivingEntries" (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "DeriveShape")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))))
-(DFunDef false "derivingEntries" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "tbl") (PTuple (PVar "tyName") (PVar "params") (PVar "derives") (PVar "shape"))) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoLet false false (PVar "own") (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line"))))))) (DoExpr (EBinOp "++" (EVar "own") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "derives"))))))
+(DFunDef false "derivingEntries" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "tbl") (PTuple (PVar "tyName") (PVar "params") (PVar "derives") (PVar "shape"))) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoLet false false (PVar "own") (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line"))))))) (DoExpr (EBinOp "++" (EVar "own") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "derives"))))))
 (DTypeSig false "reexportEntries" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))))
 (DFunDef false "reexportEntries" ((PVar "line") (PVar "schemes") (PVar "tbl") (PVar "origins") (PTuple (PVar "path") (PVar "members"))) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoLet false false (PVar "originMod") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntriesGo") (EVar "originMod")) (EVar "members")) (EVar "schemes")) (EApp (EApp (EVar "originSchemesOf") (EVar "originMod")) (EVar "origins"))) (EVar "doc")) (EVar "line")))))
 (DTypeSig false "reexportEntriesGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "UseMember")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))))
 (DFunDef false "reexportEntriesGo" (PWild (PList) PWild PWild PWild PWild) (EListLit))
-(DFunDef false "reexportEntriesGo" ((PVar "originMod") (PCons (PVar "m") (PVar "rest")) (PVar "schemes") (PVar "originSchemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "local") (EApp (EVar "useMemberLocal") (EVar "m"))) (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoLet false false (PVar "sigStr") (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "local")) (EVar "schemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "origin")) (EVar "originSchemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "local"))) (ELit (LString " : re-export of "))) (EApp (EVar "display") (EVar "originMod"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "origin"))) (ELit (LString "")))))))) (DoExpr (EBinOp "::" (ETuple (EVar "local") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "local")) (EVar "sigStr")) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntriesGo") (EVar "originMod")) (EVar "rest")) (EVar "schemes")) (EVar "originSchemes")) (EVar "doc")) (EVar "line"))))))
+(DFunDef false "reexportEntriesGo" ((PVar "originMod") (PCons (PVar "m") (PVar "rest")) (PVar "schemes") (PVar "originSchemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "local") (EApp (EVar "useMemberLocal") (EVar "m"))) (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoLet false false (PVar "sigStr") (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "local")) (EVar "schemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "origin")) (EVar "originSchemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EVar "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "local"))) (ELit (LString " : re-export of "))) (EApp (EVar "display") (EVar "originMod"))) (ELit (LString "."))) (EApp (EVar "display") (EVar "origin"))) (ELit (LString "")))))))) (DoExpr (EBinOp "::" (ETuple (EVar "local") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "local")) (EVar "sigStr")) (ELit (LString ""))) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntriesGo") (EVar "originMod")) (EVar "rest")) (EVar "schemes")) (EVar "originSchemes")) (EVar "doc")) (EVar "line"))))))
 (DTypeSig false "originSchemesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "originSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "originSchemesOf" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "ss")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (EVar "m")) (EVar "ss") (EIf (EVar "otherwise") (EApp (EApp (EVar "originSchemesOf") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -1826,18 +1916,18 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "useGroupOf" ((PCon "DUse" (PCon "True") (PCon "UseGroup" (PVar "path") (PVar "members")) PWild)) (EApp (EVar "Some") (ETuple (EVar "path") (EVar "members"))))
 (DFunDef false "useGroupOf" (PWild) (EVar "None"))
 (DTypeSig false "extractEntries" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "DocEntry")))))))))
-(DFunDef false "extractEntries" ((PVar "bare") (PVar "decls") (PVar "positions") (PVar "schemes") (PVar "origins") (PVar "comments")) (EBlock (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipDoc") (EVar "decls")) (EVar "positions"))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "pairs")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EListLit)) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EApp (EVar "fst") (EVar "result"))))))
-(DTypeSig false "extractFold" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "extractFold" (PWild (PList) PWild PWild PWild (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
-(DFunDef false "extractFold" ((PVar "bare") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
+(DFunDef false "extractEntries" ((PVar "bare") (PVar "decls") (PVar "positions") (PVar "schemes") (PVar "origins") (PVar "comments")) (EBlock (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipDoc") (EVar "decls")) (EVar "positions"))) (DoLet false false (PVar "heads") (EApp (EVar "clauseHeads") (EVar "decls"))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "pairs")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EListLit)) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EApp (EVar "fst") (EVar "result"))))))
+(DTypeSig false "extractFold" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
+(DFunDef false "extractFold" (PWild PWild (PList) PWild PWild PWild (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
+(DFunDef false "extractFold" ((PVar "bare") (PVar "heads") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EApp (EApp (EVar "headFor") (EVar "name")) (EVar "heads"))) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
 (DTypeSig false "insertSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "insertSections" ((PList) (PVar "entries")) (EVar "entries"))
 (DFunDef false "insertSections" ((PCons (PTuple (PVar "l") (PVar "title")) (PVar "secs")) (PList)) (EBinOp "::" (EApp (EApp (EVar "sectionEntry") (EVar "l")) (EVar "title")) (EApp (EApp (EVar "insertSections") (EVar "secs")) (EListLit))))
 (DFunDef false "insertSections" ((PCons (PTuple (PVar "l") (PVar "title")) (PVar "secs")) (PCons (PVar "e") (PVar "es"))) (EIf (EBinOp "<" (EVar "l") (EApp (EVar "entryLine") (EVar "e"))) (EBinOp "::" (EApp (EApp (EVar "sectionEntry") (EVar "l")) (EVar "title")) (EApp (EApp (EVar "insertSections") (EVar "secs")) (EBinOp "::" (EVar "e") (EVar "es")))) (EBinOp "::" (EVar "e") (EApp (EApp (EVar "insertSections") (EBinOp "::" (ETuple (EVar "l") (EVar "title")) (EVar "secs"))) (EVar "es")))))
 (DTypeSig false "sectionEntry" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "DocEntry"))))
-(DFunDef false "sectionEntry" ((PVar "line") (PVar "title")) (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "title")) (ELit (LString ""))) (ELit (LString ""))) (EVar "KSection")) (EVar "line")))
+(DFunDef false "sectionEntry" ((PVar "line") (PVar "title")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "title")) (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))) (EVar "KSection")) (EVar "line")))
 (DTypeSig false "entryLine" (TyFun (TyCon "DocEntry") (TyCon "Int")))
-(DFunDef false "entryLine" ((PCon "DocEntry" PWild PWild PWild PWild (PVar "line"))) (EVar "line"))
+(DFunDef false "entryLine" ((PCon "DocEntry" PWild PWild PWild PWild PWild (PVar "line"))) (EVar "line"))
 (DTypeSig false "multiEntriesFor" (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))))))
 (DFunDef false "multiEntriesFor" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "origins") (PVar "tbl")) (EMatch (EApp (EVar "letgroupOf") (EVar "decl")) (arm (PCon "Some" (PTuple (PVar "isPub") (PVar "bindings"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "allLetgroupEntries") (EVar "isPub")) (EVar "bindings")) (EVar "line")) (EVar "schemes")) (EVar "tbl")))) (arm (PCon "None") () (EMatch (EApp (EVar "useGroupOf") (EVar "decl")) (arm (PCon "Some" (PVar "pm")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntries") (EVar "line")) (EVar "schemes")) (EVar "tbl")) (EVar "origins")) (EVar "pm")))) (arm (PCon "None") () (EApp (EApp (EVar "map") (EApp (EApp (EApp (EApp (EApp (EVar "derivingEntries") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "tbl"))) (EApp (EVar "derivesOf") (EVar "decl"))))))))
 (DTypeSig false "foldExtras" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -1895,13 +1985,13 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "primitiveLayerBanner" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "primitiveLayerBanner" ((PVar "moduleName")) (EIf (EApp (EVar "preludeOnlyModule") (EVar "moduleName")) (ELit (LString "> These are the host primitives. They are in scope everywhere without an\n> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)\n> mark them as the primitive layer. Prefer the library name where one\n> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this\n> page only when no library module covers it.\n\n")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isSection" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isSection" ((PCon "DocEntry" PWild PWild PWild (PCon "KSection") PWild)) (EVar "True"))
+(DFunDef false "isSection" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KSection") PWild)) (EVar "True"))
 (DFunDef false "isSection" (PWild) (EVar "False"))
 (DTypeSig false "isImpl" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isImpl" ((PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" PWild) PWild)) (EVar "True"))
+(DFunDef false "isImpl" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" PWild) PWild)) (EVar "True"))
 (DFunDef false "isImpl" (PWild) (EVar "False"))
 (DTypeSig false "isListedImpl" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isListedImpl" ((PCon "DocEntry" (PVar "name") PWild PWild (PCon "KImplOn" PWild) PWild)) (EBinOp "/=" (EApp (EVar "instanceHead") (EVar "name")) (ELit (LString ""))))
+(DFunDef false "isListedImpl" ((PCon "DocEntry" (PVar "name") PWild PWild PWild (PCon "KImplOn" PWild) PWild)) (EBinOp "/=" (EApp (EVar "instanceHead") (EVar "name")) (ELit (LString ""))))
 (DFunDef false "isListedImpl" (PWild) (EVar "False"))
 (DTypeSig false "anyDoc" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyDoc" (PWild (PList)) (EVar "False"))
@@ -1911,33 +2001,33 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "instanceHead" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "instanceHead" ((PVar "name")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString " "))) (EVar "name")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "dsub") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "dlen") (EVar "name"))) (EVar "name")))))
 (DTypeSig false "instanceKey" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "instanceKey" ((PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EVar "hd"))
-(DFunDef false "instanceKey" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EApp (EVar "instanceHead") (EVar "name")))
+(DFunDef false "instanceKey" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EVar "hd"))
+(DFunDef false "instanceKey" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EApp (EVar "instanceHead") (EVar "name")))
 (DTypeSig false "renderEntry" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "String")))))
-(DFunDef false "renderEntry" (PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
-(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EVar "instanceLine") (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "instances"))) (ELit (LString "\n"))))))
+(DFunDef false "renderEntry" (PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
+(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "head") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "headLine") (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString "\n")) (EVar "head")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EApp (EVar "display") (EVar "sig"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "headLine"))) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EVar "instanceLine") (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "header"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "instances"))) (ELit (LString "\n"))))))
 (DTypeSig false "instancesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "instancesOf" ((PVar "tyName") (PVar "entries")) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "implHeadIs") (EVar "tyName")) (EVar "e")))) (EVar "entries")))
 (DTypeSig false "implHeadIs" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
-(DFunDef false "implHeadIs" ((PVar "tyName") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EBinOp "==" (EVar "hd") (EVar "tyName")))
+(DFunDef false "implHeadIs" ((PVar "tyName") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EBinOp "==" (EVar "hd") (EVar "tyName")))
 (DFunDef false "implHeadIs" (PWild PWild) (EVar "False"))
 (DTypeSig false "instanceLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "instanceLine" ((PList)) (ELit (LString "")))
 (DFunDef false "instanceLine" ((PVar "impls")) (EBinOp "++" (EBinOp "++" (ELit (LString "\nInstances: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "instanceRef")) (EVar "impls")))) (ELit (LString "\n"))))
 (DTypeSig false "instanceRef" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "instanceRef" ((PCon "DocEntry" (PVar "name") PWild (PVar "doc") PWild PWild)) (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")")))))))
+(DFunDef false "instanceRef" ((PCon "DocEntry" (PVar "name") PWild PWild (PVar "doc") PWild PWild)) (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EVar "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")")))))))
 (DTypeSig false "renderInstancesSection" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "renderInstancesSection" ((PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "keys") (EApp (EVar "uniqueDoc") (EApp (EApp (EVar "map") (EVar "instanceKey")) (EVar "orphans")))) (DoLet false false (PVar "bullets") (EMatch (EVar "keys") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "orphanLine") (EVar "orphans"))) (EVar "keys"))))) (ELit (LString "\n\n")))))) (DoLet false false (PVar "documented") (EApp (EVar "stringConcat") (EApp (EApp (EVar "map") (EApp (EApp (EVar "renderEntry") (EVar "True")) (EVar "entries"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "bullets") (ELit (LString ""))) (EBinOp "==" (EVar "documented") (ELit (LString "")))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## Instances\n\n")) (EApp (EVar "display") (EVar "bullets"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "documented"))) (ELit (LString "")))))))
 (DTypeSig false "orphanLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "orphanLine" ((PVar "orphans") (PVar "key")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "instanceKey") (EVar "e")) (EVar "key")))) (EVar "orphans"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- `")) (EApp (EVar "display") (EVar "key"))) (ELit (LString "`: "))) (EApp (EVar "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EVar "map") (EVar "instanceRef")) (EVar "mine"))))) (ELit (LString ""))))))
 (DTypeSig false "hasTypeEntry" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
-(DFunDef false "hasTypeEntry" ((PVar "entries") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EApp (EApp (EVar "anyDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "isTypeNamed") (EVar "hd")) (EVar "e")))) (EVar "entries")))
+(DFunDef false "hasTypeEntry" ((PVar "entries") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EApp (EApp (EVar "anyDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "isTypeNamed") (EVar "hd")) (EVar "e")))) (EVar "entries")))
 (DFunDef false "hasTypeEntry" (PWild PWild) (EVar "False"))
 (DTypeSig false "isTypeNamed" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
-(DFunDef false "isTypeNamed" ((PVar "n") (PCon "DocEntry" (PVar "name") PWild PWild (PCon "KTypeDecl") PWild)) (EBinOp "==" (EVar "name") (EVar "n")))
+(DFunDef false "isTypeNamed" ((PVar "n") (PCon "DocEntry" (PVar "name") PWild PWild PWild (PCon "KTypeDecl") PWild)) (EBinOp "==" (EVar "name") (EVar "n")))
 (DFunDef false "isTypeNamed" (PWild PWild) (EVar "False"))
 (DTypeSig false "entryDoc" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "entryDoc" ((PCon "DocEntry" PWild PWild (PVar "doc") PWild PWild)) (EVar "doc"))
+(DFunDef false "entryDoc" ((PCon "DocEntry" PWild PWild PWild (PVar "doc") PWild PWild)) (EVar "doc"))
 (DTypeSig false "uniqueDoc" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "uniqueDoc" ((PList)) (EListLit))
 (DFunDef false "uniqueDoc" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EVar "uniqueDoc") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "x")))) (EVar "xs")))))
@@ -1952,14 +2042,14 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
 (DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EVar "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))
 (DTypeSig false "isInternalExtern" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EVar "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
+(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EVar "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EVar "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
 (DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EApp (EVar "originSchemeTable") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "origins")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EApp (EApp (EVar "insertSections") (EApp (EVar "sectionsFrom") (EVar "tbl"))) (EVar "entries"))) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
 (DFunDef false "dedupHeader" ((PVar "header") (PVar "entries")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "header") (ELit (LString ""))) (EBinOp "==" (EVar "header") (EApp (EVar "firstEntryDoc") (EVar "entries")))) (ELit (LString "")) (EVar "header")))
 (DTypeSig false "firstEntryDoc" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "firstEntryDoc" ((PList)) (ELit (LString "")))
-(DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild (PVar "doc") PWild PWild) PWild)) (EVar "doc"))
+(DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild PWild (PVar "doc") PWild PWild) PWild)) (EVar "doc"))
 (DTypeSig true "renderModulePage" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
 (DTypeSig true "rebucketLibraryImpls" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyApp (TyCon "List") (TyCon "ModuleDoc"))))
@@ -1969,7 +2059,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "moduleMentionIndex" (TyFun (TyCon "ModuleDoc") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "moduleMentionIndex" ((PCon "ModuleDoc" (PVar "n") PWild (PVar "es") PWild)) (ETuple (EVar "n") (EApp (EApp (EVar "map") (EVar "entrySigOf")) (EVar "es"))))
 (DTypeSig false "entrySigOf" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "entrySigOf" ((PCon "DocEntry" PWild (PVar "sig") PWild PWild PWild)) (EVar "sig"))
+(DFunDef false "entrySigOf" ((PCon "DocEntry" PWild (PVar "sig") PWild PWild PWild PWild)) (EVar "sig"))
 (DTypeSig false "ownerOfType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "ownerOfType" ((PVar "owners") (PVar "mentions") (PVar "tyName")) (EMatch (EApp (EApp (EVar "lookupStrDoc") (EVar "tyName")) (EVar "owners")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "tyName"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupSigsDoc") (EVar "lowered")) (EVar "mentions")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "sigs")) () (EIf (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "sigs")) (EApp (EVar "Some") (EVar "lowered")) (EVar "None")))))))))
 (DTypeSig false "lookupSigsDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -1984,7 +2074,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "lookupStrDoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupStrDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupStrDoc") (EVar "k")) (EVar "rest"))))
 (DTypeSig false "entryTarget" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "entryTarget" ((PVar "owners") (PVar "mentions") (PVar "here") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "mentions")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "entryTarget" ((PVar "owners") (PVar "mentions") (PVar "here") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "mentions")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "entryTarget" (PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "movedFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))
 (DFunDef false "movedFrom" ((PVar "owners") (PVar "mentions") (PCon "ModuleDoc" (PVar "here") PWild (PVar "es") PWild)) (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EApp (EVar "movedEntry") (EVar "owners")) (EVar "mentions")) (EVar "here"))) (EVar "es")))
@@ -2015,13 +2105,13 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "inventoryEntriesFor" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyCon "Json"))))
 (DFunDef false "inventoryEntriesFor" ((PCon "ModuleDoc" (PVar "moduleName") PWild (PVar "entries") PWild)) (EApp (EApp (EVar "map") (EApp (EVar "inventoryEntryJson") (EVar "moduleName"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e"))))) (EVar "entries"))))
 (DTypeSig false "inventoryEntryJson" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Json"))))
-(DFunDef false "inventoryEntryJson" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") (PVar "sig") PWild PWild PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "module")) (EApp (EVar "JString") (EVar "moduleName"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "signature")) (EApp (EVar "JString") (EVar "sig"))))))
+(DFunDef false "inventoryEntryJson" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") (PVar "sig") PWild PWild PWild PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "module")) (EApp (EVar "JString") (EVar "moduleName"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "signature")) (EApp (EVar "JString") (EVar "sig"))))))
 (DTypeSig true "renderIndex" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "String")))
 (DFunDef false "renderIndex" ((PVar "mds")) (EApp (EVar "stringConcat") (EBinOp "::" (ELit (LString "# Library Index\n\n")) (EApp (EApp (EVar "map") (EVar "renderIndexModule")) (EVar "mds")))))
 (DTypeSig false "renderIndexModule" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EVar "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EVar "display") (EVar "head"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EVar "display") (EVar "links"))) (ELit (LString "\n\n"))))))
 (DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
-(DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
+(DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EVar "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EVar "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
 (DTypeSig false "periodRe" (TyCon "Regex"))
 (DFunDef false "periodRe" () (EApp (EVar "mustCompile") (ELit (LString "\\."))))
 (DTypeSig false "newlineRe" (TyCon "Regex"))
@@ -2038,17 +2128,17 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseWithPositions" false) (mem "Positions" false) (mem "DeclPos" false) (mem "positionsDecls" false) (mem "declPosLine" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Ty" true) (mem "tyParamSources" false) (mem "Constraint" true) (mem "DataVis" true) (mem "Variant" true) (mem "ConPayload" true) (mem "Field" true) (mem "IfaceMethod" true) (mem "Require" true) (mem "LetBind" true) (mem "Pat" true) (mem "UsePath" true) (mem "UseMember" false) (mem "useMemberOrigin" false) (mem "useMemberLocal" false) (mem "DeriveRef" false) (mem "deriveRefName" false))))
 (DUse false (UseGroup ("types" "repr") ((mem "Scheme" true) (mem "ppScheme" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "internalExterns" false))))
-(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false))))
+(DUse false (UseGroup ("support" "util") ((mem "joinWith" false) (mem "reverseL" false) (mem "escStr" false) (mem "stringTrim" false) (mem "splitNl" false) (mem "contains" false) (mem "lookupAssoc" false))))
 (DUse false (UseGroup ("support" "path") ((mem "baseOf" false) (mem "chopExt" false))))
 (DUse false (UseGroup ("driver" "diagnostics") ((mem "projectEntrySchemes" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "dataDerivers" false) (mem "newtypeDerivers" false))))
 (DUse false (UseGroup ("json") ((mem "Json" true) (mem "jObject" false) (mem "jArray" false))))
 (DUse false (UseGroup ("string") ((mem "toLower" false))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "Match" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "replaceAll" false) (mem "escape" false) (mem "find" false) (mem "findAll" false))))
-(DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
+(DData Private "DocEntry" () ((variant "DocEntry" (ConPos (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "String") (TyCon "DocKind") (TyCon "Int")))) ())
 (DData Private "DocKind" () ((variant "KPlain" (ConPos)) (variant "KTypeDecl" (ConPos)) (variant "KImplOn" (ConPos (TyApp (TyCon "Option") (TyCon "String")))) (variant "KSection" (ConPos))) ())
 (DTypeAlias false "CommentRow" () (TyTuple (TyCon "Int") (TyCon "String") (TyCon "Int")))
 (DTypeSig false "dlen" (TyFun (TyCon "String") (TyCon "Int")))
@@ -2149,6 +2239,27 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "dataVisPrivate" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisPrivate" ((PCon "VisPrivate")) (EVar "True"))
 (DFunDef false "dataVisPrivate" (PWild) (EVar "False"))
+(DTypeSig false "clauseHeads" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String")))))
+(DFunDef false "clauseHeads" ((PVar "decls")) (EApp (EApp (EVar "clauseHeadsGo") (EVar "decls")) (EListLit)))
+(DTypeSig false "clauseHeadsGo" (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))))))
+(DFunDef false "clauseHeadsGo" ((PList) (PVar "acc")) (EApp (EApp (EMethodRef "map") (ELam ((PVar "p")) (ETuple (EApp (EVar "fst") (EVar "p")) (EApp (EApp (EVar "renderHead") (EApp (EVar "fst") (EVar "p"))) (EApp (EVar "snd") (EVar "p")))))) (EApp (EVar "reverseL") (EVar "acc"))))
+(DFunDef false "clauseHeadsGo" ((PCons (PCon "DFunDef" PWild (PVar "name") (PVar "pats") PWild) (PVar "rest")) (PVar "acc")) (EBlock (DoLet false false (PVar "names") (EApp (EApp (EMethodRef "map") (EVar "headArgName")) (EVar "pats"))) (DoExpr (EApp (EApp (EVar "clauseHeadsGo") (EVar "rest")) (EApp (EApp (EApp (EVar "mergeHead") (EVar "name")) (EVar "names")) (EVar "acc"))))))
+(DFunDef false "clauseHeadsGo" ((PCons PWild (PVar "rest")) (PVar "acc")) (EApp (EApp (EVar "clauseHeadsGo") (EVar "rest")) (EVar "acc")))
+(DTypeSig false "mergeHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String"))))))))
+(DFunDef false "mergeHead" ((PVar "name") (PVar "names") (PList)) (EListLit (ETuple (EVar "name") (EVar "names"))))
+(DFunDef false "mergeHead" ((PVar "name") (PVar "names") (PCons (PTuple (PVar "n") (PVar "have")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "n") (EVar "name")) (EBinOp "::" (ETuple (EVar "n") (EApp (EApp (EVar "mergeArgs") (EVar "have")) (EVar "names"))) (EVar "rest")) (EBinOp "::" (ETuple (EVar "n") (EVar "have")) (EApp (EApp (EApp (EVar "mergeHead") (EVar "name")) (EVar "names")) (EVar "rest")))))
+(DTypeSig false "mergeArgs" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String")))))
+(DFunDef false "mergeArgs" ((PList) (PVar "ys")) (EVar "ys"))
+(DFunDef false "mergeArgs" ((PVar "xs") (PList)) (EVar "xs"))
+(DFunDef false "mergeArgs" ((PCons (PVar "x") (PVar "xs")) (PCons (PVar "y") (PVar "ys"))) (EBinOp "::" (EIf (EBinOp "==" (EVar "x") (ELit (LString "_"))) (EVar "y") (EVar "x")) (EApp (EApp (EVar "mergeArgs") (EVar "xs")) (EVar "ys"))))
+(DTypeSig false "headArgName" (TyFun (TyCon "Pat") (TyCon "String")))
+(DFunDef false "headArgName" ((PCon "PVar" (PVar "v") PWild)) (EVar "v"))
+(DFunDef false "headArgName" ((PCon "PAs" (PVar "v") PWild PWild)) (EVar "v"))
+(DFunDef false "headArgName" (PWild) (ELit (LString "_")))
+(DTypeSig false "renderHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
+(DFunDef false "renderHead" ((PVar "name") (PVar "args")) (EIf (EApp (EApp (EDictApp "all") (ELam ((PVar "_s")) (EBinOp "==" (EVar "_s") (ELit (LString "_"))))) (EVar "args")) (ELit (LString "")) (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "name") (EVar "args")))))
+(DTypeSig false "headFor" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyCon "String"))))
+(DFunDef false "headFor" ((PVar "name") (PVar "heads")) (EMatch (EApp (EApp (EVar "lookupAssoc") (EVar "name")) (EVar "heads")) (arm (PCon "Some" (PVar "h")) () (EVar "h")) (arm (PCon "None") () (ELit (LString "")))))
 (DTypeSig false "dataVisAbstract" (TyFun (TyCon "DataVis") (TyCon "Bool")))
 (DFunDef false "dataVisAbstract" ((PCon "VisAbstract")) (EVar "True"))
 (DFunDef false "dataVisAbstract" (PWild) (EVar "False"))
@@ -2178,14 +2289,14 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "allLetgroupEntries" ((PCon "True") (PVar "bindings") (PVar "line") (PVar "schemes") (PVar "tbl")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EVar "letgroupEntriesGo") (EVar "bindings")) (EVar "schemes")) (EVar "doc")) (EVar "line")))))
 (DTypeSig false "letgroupEntriesGo" (TyFun (TyApp (TyCon "List") (TyCon "LetBind")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))
 (DFunDef false "letgroupEntriesGo" ((PList) PWild PWild PWild) (EListLit))
-(DFunDef false "letgroupEntriesGo" ((PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest")) (PVar "schemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "sigStr") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EVar "letgroupEntriesGo") (EVar "rest")) (EVar "schemes")) (EVar "doc")) (EVar "line"))))))
+(DFunDef false "letgroupEntriesGo" ((PCons (PCon "LetBind" (PVar "name") PWild) (PVar "rest")) (PVar "schemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "sigStr") (EApp (EApp (EApp (EVar "valueSig") (EVar "name")) (EVar "schemes")) (EVar "None"))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EVar "letgroupEntriesGo") (EVar "rest")) (EVar "schemes")) (EVar "doc")) (EVar "line"))))))
 (DData Private "DeriveShape" () ((variant "ShapeData" (ConPos (TyApp (TyCon "List") (TyCon "Variant")))) (variant "ShapeNewtype" (ConPos (TyCon "String") (TyCon "Ty")))) ())
 (DTypeSig false "hasDeriver" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveShape") (TyFun (TyCon "String") (TyCon "Bool"))))))
 (DFunDef false "hasDeriver" ((PVar "tyName") (PVar "params") (PCon "ShapeData" (PVar "variants")) (PVar "iface")) (EApp (EApp (EDictApp "elem") (EVar "iface")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EVar "dataDerivers") (EVar "tyName")) (EVar "params")) (EVar "variants")))))
 (DFunDef false "hasDeriver" ((PVar "tyName") (PVar "params") (PCon "ShapeNewtype" (PVar "con") (PVar "fty")) (PVar "iface")) (EApp (EApp (EDictApp "elem") (EVar "iface")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EApp (EApp (EVar "newtypeDerivers") (EVar "tyName")) (EVar "params")) (EVar "con")) (EVar "fty")))))
 (DTypeSig false "derivedEntries" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "DeriveShape") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))))
 (DFunDef false "derivedEntries" (PWild PWild PWild PWild (PList)) (EListLit))
-(DFunDef false "derivedEntries" ((PVar "tyName") (PVar "params") (PVar "shape") (PVar "line") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "deriveRefName") (EVar "d"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "ds"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "hasDeriver") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "iface"))) (EVar "rest") (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "derivedHead") (EVar "tyName")) (EVar "params"))) (DoLet false false (PVar "name") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "args"))) (ELit (LString "")))) (DoLet false false (PVar "sigStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "args"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "derivedRequires") (EVar "iface")) (EVar "params")))) (ELit (LString "")))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (EApp (EVar "KImplOn") (EApp (EVar "Some") (EVar "tyName")))) (EVar "line"))) (EVar "rest"))))))))
+(DFunDef false "derivedEntries" ((PVar "tyName") (PVar "params") (PVar "shape") (PVar "line") (PCons (PVar "d") (PVar "ds"))) (EBlock (DoLet false false (PVar "iface") (EApp (EVar "deriveRefName") (EVar "d"))) (DoLet false false (PVar "rest") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "ds"))) (DoExpr (EIf (EApp (EVar "not") (EApp (EApp (EApp (EApp (EVar "hasDeriver") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "iface"))) (EVar "rest") (EBlock (DoLet false false (PVar "args") (EApp (EApp (EVar "derivedHead") (EVar "tyName")) (EVar "params"))) (DoLet false false (PVar "name") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "args"))) (ELit (LString "")))) (DoLet false false (PVar "sigStr") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "impl ")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString " "))) (EApp (EMethodRef "display") (EVar "args"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EApp (EApp (EVar "derivedRequires") (EVar "iface")) (EVar "params")))) (ELit (LString "")))) (DoExpr (EBinOp "::" (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (ELit (LString ""))) (EApp (EVar "KImplOn") (EApp (EVar "Some") (EVar "tyName")))) (EVar "line"))) (EVar "rest"))))))))
 (DTypeSig false "derivedHead" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyCon "String"))))
 (DFunDef false "derivedHead" ((PVar "tyName") (PList)) (EVar "tyName"))
 (DFunDef false "derivedHead" ((PVar "tyName") (PVar "params")) (EBinOp "++" (EBinOp "++" (ELit (LString "(")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString " "))) (EBinOp "::" (EVar "tyName") (EVar "params"))))) (ELit (LString ")"))))
@@ -2200,12 +2311,12 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "derivesOf" ((PRec "DNewtype" ((rf "newtypePub" (PCon "True")) (rf "newtypeName" (PVar "n")) (rf "newtypeParams" (PVar "ps")) (rf "newtypeCtor" (PVar "con")) (rf "newtypeFieldTy" (PVar "fty")) (rf "newtypeDerives" (PVar "ds"))) false)) (EIf (EApp (EVar "not") (EApp (EVar "noDerives") (EVar "ds"))) (EApp (EVar "Some") (ETuple (EVar "n") (EVar "ps") (EVar "ds") (EApp (EApp (EVar "ShapeNewtype") (EVar "con")) (EVar "fty")))) (EApp (EVar "__fallthrough__") (ELit LUnit))))
 (DFunDef false "derivesOf" (PWild) (EVar "None"))
 (DTypeSig false "derivingEntries" (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "DeriveRef")) (TyCon "DeriveShape")) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))))
-(DFunDef false "derivingEntries" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "tbl") (PTuple (PVar "tyName") (PVar "params") (PVar "derives") (PVar "shape"))) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoLet false false (PVar "own") (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line"))))))) (DoExpr (EBinOp "++" (EVar "own") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "derives"))))))
+(DFunDef false "derivingEntries" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "tbl") (PTuple (PVar "tyName") (PVar "params") (PVar "derives") (PVar "shape"))) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoLet false false (PVar "own") (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EListLit)) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EListLit (ETuple (EVar "name") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (ELit (LString ""))) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line"))))))) (DoExpr (EBinOp "++" (EVar "own") (EApp (EApp (EApp (EApp (EApp (EVar "derivedEntries") (EVar "tyName")) (EVar "params")) (EVar "shape")) (EVar "line")) (EVar "derives"))))))
 (DTypeSig false "reexportEntries" (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyTuple (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "UseMember"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))))
 (DFunDef false "reexportEntries" ((PVar "line") (PVar "schemes") (PVar "tbl") (PVar "origins") (PTuple (PVar "path") (PVar "members"))) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoLet false false (PVar "originMod") (EApp (EApp (EVar "joinWith") (ELit (LString "."))) (EVar "path"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntriesGo") (EVar "originMod")) (EVar "members")) (EVar "schemes")) (EApp (EApp (EVar "originSchemesOf") (EVar "originMod")) (EVar "origins"))) (EVar "doc")) (EVar "line")))))
 (DTypeSig false "reexportEntriesGo" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "UseMember")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))))))))))
 (DFunDef false "reexportEntriesGo" (PWild (PList) PWild PWild PWild PWild) (EListLit))
-(DFunDef false "reexportEntriesGo" ((PVar "originMod") (PCons (PVar "m") (PVar "rest")) (PVar "schemes") (PVar "originSchemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "local") (EApp (EVar "useMemberLocal") (EVar "m"))) (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoLet false false (PVar "sigStr") (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "local")) (EVar "schemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "origin")) (EVar "originSchemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "local"))) (ELit (LString " : re-export of "))) (EApp (EMethodRef "display") (EVar "originMod"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString "")))))))) (DoExpr (EBinOp "::" (ETuple (EVar "local") (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "local")) (EVar "sigStr")) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntriesGo") (EVar "originMod")) (EVar "rest")) (EVar "schemes")) (EVar "originSchemes")) (EVar "doc")) (EVar "line"))))))
+(DFunDef false "reexportEntriesGo" ((PVar "originMod") (PCons (PVar "m") (PVar "rest")) (PVar "schemes") (PVar "originSchemes") (PVar "doc") (PVar "line")) (EBlock (DoLet false false (PVar "local") (EApp (EVar "useMemberLocal") (EVar "m"))) (DoLet false false (PVar "origin") (EApp (EVar "useMemberOrigin") (EVar "m"))) (DoLet false false (PVar "sigStr") (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "local")) (EVar "schemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EMatch (EApp (EApp (EVar "lookupScheme") (EVar "origin")) (EVar "originSchemes")) (arm (PCon "Some" (PVar "s")) () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "local"))) (ELit (LString " : "))) (EApp (EMethodRef "display") (EApp (EVar "ppScheme") (EVar "s")))) (ELit (LString "")))) (arm (PCon "None") () (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "local"))) (ELit (LString " : re-export of "))) (EApp (EMethodRef "display") (EVar "originMod"))) (ELit (LString "."))) (EApp (EMethodRef "display") (EVar "origin"))) (ELit (LString "")))))))) (DoExpr (EBinOp "::" (ETuple (EVar "local") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "local")) (EVar "sigStr")) (ELit (LString ""))) (EVar "doc")) (EVar "KPlain")) (EVar "line"))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntriesGo") (EVar "originMod")) (EVar "rest")) (EVar "schemes")) (EVar "originSchemes")) (EVar "doc")) (EVar "line"))))))
 (DTypeSig false "originSchemesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))))
 (DFunDef false "originSchemesOf" (PWild (PList)) (EListLit))
 (DFunDef false "originSchemesOf" ((PVar "mid") (PCons (PTuple (PVar "m") (PVar "ss")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "mid") (EVar "m")) (EVar "ss") (EIf (EVar "otherwise") (EApp (EApp (EVar "originSchemesOf") (EVar "mid")) (EVar "rest")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
@@ -2224,18 +2335,18 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "useGroupOf" ((PCon "DUse" (PCon "True") (PCon "UseGroup" (PVar "path") (PVar "members")) PWild)) (EApp (EVar "Some") (ETuple (EVar "path") (EVar "members"))))
 (DFunDef false "useGroupOf" (PWild) (EVar "None"))
 (DTypeSig false "extractEntries" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "DeclPos")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "Comment")) (TyApp (TyCon "List") (TyCon "DocEntry")))))))))
-(DFunDef false "extractEntries" ((PVar "bare") (PVar "decls") (PVar "positions") (PVar "schemes") (PVar "origins") (PVar "comments")) (EBlock (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipDoc") (EVar "decls")) (EVar "positions"))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "pairs")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EListLit)) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EApp (EVar "fst") (EVar "result"))))))
-(DTypeSig false "extractFold" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))))))
-(DFunDef false "extractFold" (PWild (PList) PWild PWild PWild (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
-(DFunDef false "extractFold" ((PVar "bare") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
+(DFunDef false "extractEntries" ((PVar "bare") (PVar "decls") (PVar "positions") (PVar "schemes") (PVar "origins") (PVar "comments")) (EBlock (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "pairs") (EApp (EApp (EVar "zipDoc") (EVar "decls")) (EVar "positions"))) (DoLet false false (PVar "heads") (EApp (EVar "clauseHeads") (EVar "decls"))) (DoLet false false (PVar "result") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "pairs")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EListLit)) (EListLit))) (DoExpr (EApp (EVar "reverseL") (EApp (EVar "fst") (EVar "result"))))))
+(DTypeSig false "extractFold" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Decl") (TyCon "DeclPos"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
+(DFunDef false "extractFold" (PWild PWild (PList) PWild PWild PWild (PVar "revEntries") (PVar "seen")) (ETuple (EVar "revEntries") (EVar "seen")))
+(DFunDef false "extractFold" ((PVar "bare") (PVar "heads") (PCons (PTuple (PVar "decl") (PVar "dp")) (PVar "rest")) (PVar "schemes") (PVar "origins") (PVar "tbl") (PVar "revEntries") (PVar "seen")) (EBlock (DoLet false false (PVar "line") (EApp (EVar "declPosLine") (EVar "dp"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "multiEntriesFor") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (arm (PCon "Some" (PVar "extras")) () (EBlock (DoLet false false (PVar "acc") (EApp (EApp (EApp (EVar "foldExtras") (EVar "extras")) (EVar "revEntries")) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EApp (EVar "fst") (EVar "acc"))) (EApp (EVar "snd") (EVar "acc")))))) (arm (PCon "None") () (EMatch (EApp (EApp (EApp (EVar "renderSig") (EVar "bare")) (EVar "decl")) (EVar "schemes")) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen"))) (arm (PCon "Some" (PTuple (PVar "name") (PVar "sigStr"))) () (EIf (EApp (EApp (EVar "contains") (EVar "name")) (EVar "seen")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EVar "revEntries")) (EVar "seen")) (EBlock (DoLet false false (PVar "doc") (EApp (EApp (EVar "findDocForLine") (EVar "tbl")) (EVar "line"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractFold") (EVar "bare")) (EVar "heads")) (EVar "rest")) (EVar "schemes")) (EVar "origins")) (EVar "tbl")) (EBinOp "::" (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "name")) (EVar "sigStr")) (EApp (EApp (EVar "headFor") (EVar "name")) (EVar "heads"))) (EVar "doc")) (EApp (EVar "declKind") (EVar "decl"))) (EVar "line")) (EVar "revEntries"))) (EBinOp "::" (EVar "name") (EVar "seen")))))))))))))
 (DTypeSig false "insertSections" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "insertSections" ((PList) (PVar "entries")) (EVar "entries"))
 (DFunDef false "insertSections" ((PCons (PTuple (PVar "l") (PVar "title")) (PVar "secs")) (PList)) (EBinOp "::" (EApp (EApp (EVar "sectionEntry") (EVar "l")) (EVar "title")) (EApp (EApp (EVar "insertSections") (EVar "secs")) (EListLit))))
 (DFunDef false "insertSections" ((PCons (PTuple (PVar "l") (PVar "title")) (PVar "secs")) (PCons (PVar "e") (PVar "es"))) (EIf (EBinOp "<" (EVar "l") (EApp (EVar "entryLine") (EVar "e"))) (EBinOp "::" (EApp (EApp (EVar "sectionEntry") (EVar "l")) (EVar "title")) (EApp (EApp (EVar "insertSections") (EVar "secs")) (EBinOp "::" (EVar "e") (EVar "es")))) (EBinOp "::" (EVar "e") (EApp (EApp (EVar "insertSections") (EBinOp "::" (ETuple (EVar "l") (EVar "title")) (EVar "secs"))) (EVar "es")))))
 (DTypeSig false "sectionEntry" (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyCon "DocEntry"))))
-(DFunDef false "sectionEntry" ((PVar "line") (PVar "title")) (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "title")) (ELit (LString ""))) (ELit (LString ""))) (EVar "KSection")) (EVar "line")))
+(DFunDef false "sectionEntry" ((PVar "line") (PVar "title")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "DocEntry") (EVar "title")) (ELit (LString ""))) (ELit (LString ""))) (ELit (LString ""))) (EVar "KSection")) (EVar "line")))
 (DTypeSig false "entryLine" (TyFun (TyCon "DocEntry") (TyCon "Int")))
-(DFunDef false "entryLine" ((PCon "DocEntry" PWild PWild PWild PWild (PVar "line"))) (EVar "line"))
+(DFunDef false "entryLine" ((PCon "DocEntry" PWild PWild PWild PWild PWild (PVar "line"))) (EVar "line"))
 (DTypeSig false "multiEntriesFor" (TyFun (TyCon "Bool") (TyFun (TyCon "Decl") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))))) (TyFun (TyApp (TyCon "List") (TyCon "CommentRow")) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))))))
 (DFunDef false "multiEntriesFor" ((PVar "bare") (PVar "decl") (PVar "line") (PVar "schemes") (PVar "origins") (PVar "tbl")) (EMatch (EApp (EVar "letgroupOf") (EVar "decl")) (arm (PCon "Some" (PTuple (PVar "isPub") (PVar "bindings"))) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "allLetgroupEntries") (EVar "isPub")) (EVar "bindings")) (EVar "line")) (EVar "schemes")) (EVar "tbl")))) (arm (PCon "None") () (EMatch (EApp (EVar "useGroupOf") (EVar "decl")) (arm (PCon "Some" (PVar "pm")) () (EApp (EVar "Some") (EApp (EApp (EApp (EApp (EApp (EVar "reexportEntries") (EVar "line")) (EVar "schemes")) (EVar "tbl")) (EVar "origins")) (EVar "pm")))) (arm (PCon "None") () (EApp (EApp (EMethodRef "map") (EApp (EApp (EApp (EApp (EApp (EVar "derivingEntries") (EVar "bare")) (EVar "decl")) (EVar "line")) (EVar "schemes")) (EVar "tbl"))) (EApp (EVar "derivesOf") (EVar "decl"))))))))
 (DTypeSig false "foldExtras" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry"))) (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyTuple (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "String")))))))
@@ -2293,13 +2404,13 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "primitiveLayerBanner" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "primitiveLayerBanner" ((PVar "moduleName")) (EIf (EApp (EVar "preludeOnlyModule") (EVar "moduleName")) (ELit (LString "> These are the host primitives. They are in scope everywhere without an\n> import, and their `<type><Op>` names (`stringToUpper`, `intToString`)\n> mark them as the primitive layer. Prefer the library name where one\n> exists (`string.toUpper`, `string.toFloat`), and reach for a name on this\n> page only when no library module covers it.\n\n")) (EIf (EVar "otherwise") (ELit (LString "")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "isSection" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isSection" ((PCon "DocEntry" PWild PWild PWild (PCon "KSection") PWild)) (EVar "True"))
+(DFunDef false "isSection" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KSection") PWild)) (EVar "True"))
 (DFunDef false "isSection" (PWild) (EVar "False"))
 (DTypeSig false "isImpl" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isImpl" ((PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" PWild) PWild)) (EVar "True"))
+(DFunDef false "isImpl" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" PWild) PWild)) (EVar "True"))
 (DFunDef false "isImpl" (PWild) (EVar "False"))
 (DTypeSig false "isListedImpl" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isListedImpl" ((PCon "DocEntry" (PVar "name") PWild PWild (PCon "KImplOn" PWild) PWild)) (EBinOp "/=" (EApp (EVar "instanceHead") (EVar "name")) (ELit (LString ""))))
+(DFunDef false "isListedImpl" ((PCon "DocEntry" (PVar "name") PWild PWild PWild (PCon "KImplOn" PWild) PWild)) (EBinOp "/=" (EApp (EVar "instanceHead") (EVar "name")) (ELit (LString ""))))
 (DFunDef false "isListedImpl" (PWild) (EVar "False"))
 (DTypeSig false "anyDoc" (TyFun (TyFun (TyVar "a") (TyCon "Bool")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool"))))
 (DFunDef false "anyDoc" (PWild (PList)) (EVar "False"))
@@ -2309,33 +2420,33 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "instanceHead" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "instanceHead" ((PVar "name")) (EMatch (EApp (EApp (EVar "stringIndexOf") (ELit (LString " "))) (EVar "name")) (arm (PCon "None") () (ELit (LString ""))) (arm (PCon "Some" (PVar "i")) () (EApp (EApp (EApp (EVar "dsub") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EApp (EVar "dlen") (EVar "name"))) (EVar "name")))))
 (DTypeSig false "instanceKey" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "instanceKey" ((PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EVar "hd"))
-(DFunDef false "instanceKey" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EApp (EVar "instanceHead") (EVar "name")))
+(DFunDef false "instanceKey" ((PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EVar "hd"))
+(DFunDef false "instanceKey" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EApp (EVar "instanceHead") (EVar "name")))
 (DTypeSig false "renderEntry" (TyFun (TyCon "Bool") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "String")))))
-(DFunDef false "renderEntry" (PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
-(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EVar "sig")) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EVar "instanceLine") (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "instances"))) (ELit (LString "\n"))))))
+(DFunDef false "renderEntry" (PWild PWild (PCon "DocEntry" (PVar "title") PWild PWild PWild (PCon "KSection") PWild)) (EBinOp "++" (EBinOp "++" (ELit (LString "## ")) (EVar "title")) (ELit (LString "\n\n"))))
+(DFunDef false "renderEntry" ((PVar "sectioned") (PVar "entries") (PCon "DocEntry" (PVar "name") (PVar "sig") (PVar "head") (PVar "doc") (PVar "kind") PWild)) (EBlock (DoLet false false (PVar "level") (EIf (EVar "sectioned") (ELit (LString "### ")) (ELit (LString "## ")))) (DoLet false false (PVar "header") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "level"))) (ELit (LString "`"))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`\n\n")))) (DoLet false false (PVar "headLine") (EIf (EBinOp "==" (EVar "head") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (ELit (LString "\n")) (EVar "head")))) (DoLet false false (PVar "sigBlock") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "```\n")) (EApp (EMethodRef "display") (EVar "sig"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "headLine"))) (ELit (LString "\n```\n")))) (DoLet false false (PVar "instances") (EMatch (EVar "kind") (arm (PCon "KTypeDecl") () (EApp (EVar "instanceLine") (EApp (EApp (EVar "instancesOf") (EVar "name")) (EVar "entries")))) (arm PWild () (ELit (LString ""))))) (DoLet false false (PVar "rendered") (EApp (EVar "renderDocProse") (EVar "doc"))) (DoLet false false (PVar "docBlock") (EIf (EBinOp "==" (EVar "rendered") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (ELit (LString "\n")) (EVar "rendered")) (ELit (LString "\n"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "header"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "sigBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "docBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "instances"))) (ELit (LString "\n"))))))
 (DTypeSig false "instancesOf" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyApp (TyCon "List") (TyCon "DocEntry")))))
 (DFunDef false "instancesOf" ((PVar "tyName") (PVar "entries")) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "implHeadIs") (EVar "tyName")) (EVar "e")))) (EVar "entries")))
 (DTypeSig false "implHeadIs" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
-(DFunDef false "implHeadIs" ((PVar "tyName") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EBinOp "==" (EVar "hd") (EVar "tyName")))
+(DFunDef false "implHeadIs" ((PVar "tyName") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EBinOp "==" (EVar "hd") (EVar "tyName")))
 (DFunDef false "implHeadIs" (PWild PWild) (EVar "False"))
 (DTypeSig false "instanceLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "instanceLine" ((PList)) (ELit (LString "")))
 (DFunDef false "instanceLine" ((PVar "impls")) (EBinOp "++" (EBinOp "++" (ELit (LString "\nInstances: ")) (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "instanceRef")) (EVar "impls")))) (ELit (LString "\n"))))
 (DTypeSig false "instanceRef" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "instanceRef" ((PCon "DocEntry" (PVar "name") PWild (PVar "doc") PWild PWild)) (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")")))))))
+(DFunDef false "instanceRef" ((PCon "DocEntry" (PVar "name") PWild PWild (PVar "doc") PWild PWild)) (EBlock (DoLet false false (PVar "iface") (EBinOp "++" (EBinOp "++" (ELit (LString "`")) (EApp (EVar "instanceIface") (EVar "name"))) (ELit (LString "`")))) (DoExpr (EIf (EBinOp "==" (EVar "doc") (ELit (LString ""))) (EVar "iface") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "[")) (EApp (EMethodRef "display") (EVar "iface"))) (ELit (LString "](#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")")))))))
 (DTypeSig false "renderInstancesSection" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "renderInstancesSection" ((PVar "entries")) (EBlock (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (EVar "isListedImpl")) (EVar "entries"))) (DoLet false false (PVar "orphans") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EApp (EVar "hasTypeEntry") (EVar "entries")) (EVar "e"))))) (EVar "listed"))) (DoLet false false (PVar "keys") (EApp (EVar "uniqueDoc") (EApp (EApp (EMethodRef "map") (EVar "instanceKey")) (EVar "orphans")))) (DoLet false false (PVar "bullets") (EMatch (EVar "keys") (arm (PList) () (ELit (LString ""))) (arm PWild () (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "orphanLine") (EVar "orphans"))) (EVar "keys"))))) (ELit (LString "\n\n")))))) (DoLet false false (PVar "documented") (EApp (EVar "stringConcat") (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "renderEntry") (EVar "True")) (EVar "entries"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "/=" (EApp (EVar "entryDoc") (EVar "e")) (ELit (LString ""))))) (EVar "listed"))))) (DoExpr (EIf (EBinOp "&&" (EBinOp "==" (EVar "bullets") (ELit (LString ""))) (EBinOp "==" (EVar "documented") (ELit (LString "")))) (ELit (LString "")) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## Instances\n\n")) (EApp (EMethodRef "display") (EVar "bullets"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "documented"))) (ELit (LString "")))))))
 (DTypeSig false "orphanLine" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "String") (TyCon "String"))))
 (DFunDef false "orphanLine" ((PVar "orphans") (PVar "key")) (EBlock (DoLet false false (PVar "mine") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "==" (EApp (EVar "instanceKey") (EVar "e")) (EVar "key")))) (EVar "orphans"))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- `")) (EApp (EMethodRef "display") (EVar "key"))) (ELit (LString "`: "))) (EApp (EMethodRef "display") (EApp (EApp (EVar "joinWith") (ELit (LString ", "))) (EApp (EApp (EMethodRef "map") (EVar "instanceRef")) (EVar "mine"))))) (ELit (LString ""))))))
 (DTypeSig false "hasTypeEntry" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
-(DFunDef false "hasTypeEntry" ((PVar "entries") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EApp (EApp (EVar "anyDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "isTypeNamed") (EVar "hd")) (EVar "e")))) (EVar "entries")))
+(DFunDef false "hasTypeEntry" ((PVar "entries") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EApp (EApp (EVar "anyDoc") (ELam ((PVar "e")) (EApp (EApp (EVar "isTypeNamed") (EVar "hd")) (EVar "e")))) (EVar "entries")))
 (DFunDef false "hasTypeEntry" (PWild PWild) (EVar "False"))
 (DTypeSig false "isTypeNamed" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Bool"))))
-(DFunDef false "isTypeNamed" ((PVar "n") (PCon "DocEntry" (PVar "name") PWild PWild (PCon "KTypeDecl") PWild)) (EBinOp "==" (EVar "name") (EVar "n")))
+(DFunDef false "isTypeNamed" ((PVar "n") (PCon "DocEntry" (PVar "name") PWild PWild PWild (PCon "KTypeDecl") PWild)) (EBinOp "==" (EVar "name") (EVar "n")))
 (DFunDef false "isTypeNamed" (PWild PWild) (EVar "False"))
 (DTypeSig false "entryDoc" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "entryDoc" ((PCon "DocEntry" PWild PWild (PVar "doc") PWild PWild)) (EVar "doc"))
+(DFunDef false "entryDoc" ((PCon "DocEntry" PWild PWild PWild (PVar "doc") PWild PWild)) (EVar "doc"))
 (DTypeSig false "uniqueDoc" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyApp (TyCon "List") (TyCon "String"))))
 (DFunDef false "uniqueDoc" ((PList)) (EListLit))
 (DFunDef false "uniqueDoc" ((PCons (PVar "x") (PVar "xs"))) (EBinOp "::" (EVar "x") (EApp (EVar "uniqueDoc") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "_s")) (EBinOp "/=" (EVar "_s") (EVar "x")))) (EVar "xs")))))
@@ -2350,14 +2461,14 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "dropInternalExterns" ((PCon "False") (PVar "entries")) (EVar "entries"))
 (DFunDef false "dropInternalExterns" ((PCon "True") (PVar "entries")) (EApp (EApp (EMethodRef "filter") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isInternalExtern") (EVar "e"))))) (EVar "entries")))
 (DTypeSig false "isInternalExtern" (TyFun (TyCon "DocEntry") (TyCon "Bool")))
-(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
+(DFunDef false "isInternalExtern" ((PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "||" (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "internalExterns")) (EApp (EApp (EDictApp "elem") (EVar "name")) (EVar "docOnlyExcluded"))))
 (DTypeSig true "computeModuleDoc" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "ModuleDoc"))))))))
 (DFunDef false "computeModuleDoc" ((PVar "runtimeSrc") (PVar "coreSrc") (PVar "src") (PVar "filename") (PVar "roots")) (EBlock (DoLet false false (PVar "parsed") (EApp (EVar "parseWithPositions") (EVar "src"))) (DoLet false false (PVar "rawDecls") (EApp (EVar "fst") (EVar "parsed"))) (DoLet false false (PVar "positions") (EApp (EVar "positionsDecls") (EApp (EVar "snd") (EVar "parsed")))) (DoLet false false (PVar "comments") (EApp (EVar "collectComments") (EVar "src"))) (DoLet false false (PVar "schemes") (EApp (EApp (EApp (EApp (EApp (EVar "docSchemesFor") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "filename")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "origins") (EApp (EApp (EApp (EApp (EVar "originSchemeTable") (EVar "runtimeSrc")) (EVar "coreSrc")) (EVar "roots")) (EVar "rawDecls"))) (DoLet false false (PVar "moduleName") (EApp (EVar "chopExt") (EApp (EVar "baseOf") (EVar "filename")))) (DoLet false false (PVar "tbl") (EApp (EVar "buildCommentTbl") (EVar "comments"))) (DoLet false false (PVar "header") (EApp (EVar "moduleHeaderFrom") (EVar "tbl"))) (DoLet false false (PVar "primitiveLayer") (EApp (EVar "preludeOnlyModule") (EVar "moduleName"))) (DoLet false false (PVar "entries") (EApp (EApp (EVar "dropInternalExterns") (EVar "primitiveLayer")) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "extractEntries") (EVar "primitiveLayer")) (EVar "rawDecls")) (EVar "positions")) (EVar "schemes")) (EVar "origins")) (EVar "comments")))) (DoExpr (EApp (EApp (EApp (EApp (EVar "ModuleDoc") (EVar "moduleName")) (EApp (EApp (EVar "dedupHeader") (EVar "header")) (EVar "entries"))) (EApp (EApp (EVar "insertSections") (EApp (EVar "sectionsFrom") (EVar "tbl"))) (EVar "entries"))) (EApp (EVar "declaredTypeNames") (EVar "rawDecls"))))))
 (DTypeSig false "dedupHeader" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String"))))
 (DFunDef false "dedupHeader" ((PVar "header") (PVar "entries")) (EIf (EBinOp "&&" (EBinOp "/=" (EVar "header") (ELit (LString ""))) (EBinOp "==" (EVar "header") (EApp (EVar "firstEntryDoc") (EVar "entries")))) (ELit (LString "")) (EVar "header")))
 (DTypeSig false "firstEntryDoc" (TyFun (TyApp (TyCon "List") (TyCon "DocEntry")) (TyCon "String")))
 (DFunDef false "firstEntryDoc" ((PList)) (ELit (LString "")))
-(DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild (PVar "doc") PWild PWild) PWild)) (EVar "doc"))
+(DFunDef false "firstEntryDoc" ((PCons (PCon "DocEntry" PWild PWild PWild (PVar "doc") PWild PWild) PWild)) (EVar "doc"))
 (DTypeSig true "renderModulePage" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "renderModulePage" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EApp (EApp (EApp (EVar "renderMarkdown") (EVar "name")) (EVar "header")) (EVar "entries")))
 (DTypeSig true "rebucketLibraryImpls" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyApp (TyCon "List") (TyCon "ModuleDoc"))))
@@ -2367,7 +2478,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "moduleMentionIndex" (TyFun (TyCon "ModuleDoc") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))))
 (DFunDef false "moduleMentionIndex" ((PCon "ModuleDoc" (PVar "n") PWild (PVar "es") PWild)) (ETuple (EVar "n") (EApp (EApp (EMethodRef "map") (EVar "entrySigOf")) (EVar "es"))))
 (DTypeSig false "entrySigOf" (TyFun (TyCon "DocEntry") (TyCon "String")))
-(DFunDef false "entrySigOf" ((PCon "DocEntry" PWild (PVar "sig") PWild PWild PWild)) (EVar "sig"))
+(DFunDef false "entrySigOf" ((PCon "DocEntry" PWild (PVar "sig") PWild PWild PWild PWild)) (EVar "sig"))
 (DTypeSig false "ownerOfType" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "String"))))))
 (DFunDef false "ownerOfType" ((PVar "owners") (PVar "mentions") (PVar "tyName")) (EMatch (EApp (EApp (EVar "lookupStrDoc") (EVar "tyName")) (EVar "owners")) (arm (PCon "Some" (PVar "m")) () (EApp (EVar "Some") (EVar "m"))) (arm (PCon "None") () (EBlock (DoLet false false (PVar "lowered") (EApp (EVar "toLower") (EVar "tyName"))) (DoExpr (EMatch (EApp (EApp (EVar "lookupSigsDoc") (EVar "lowered")) (EVar "mentions")) (arm (PCon "None") () (EVar "None")) (arm (PCon "Some" (PVar "sigs")) () (EIf (EApp (EApp (EVar "anyMentions") (EVar "tyName")) (EVar "sigs")) (EApp (EVar "Some") (EVar "lowered")) (EVar "None")))))))))
 (DTypeSig false "lookupSigsDoc" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyApp (TyCon "Option") (TyApp (TyCon "List") (TyCon "String"))))))
@@ -2382,7 +2493,7 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DFunDef false "lookupStrDoc" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupStrDoc" ((PVar "k") (PCons (PTuple (PVar "n") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "k") (EVar "n")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupStrDoc") (EVar "k")) (EVar "rest"))))
 (DTypeSig false "entryTarget" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyApp (TyCon "Option") (TyCon "String")))))))
-(DFunDef false "entryTarget" ((PVar "owners") (PVar "mentions") (PVar "here") (PCon "DocEntry" PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "mentions")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
+(DFunDef false "entryTarget" ((PVar "owners") (PVar "mentions") (PVar "here") (PCon "DocEntry" PWild PWild PWild PWild (PCon "KImplOn" (PCon "Some" (PVar "hd"))) PWild)) (EMatch (EApp (EApp (EApp (EVar "ownerOfType") (EVar "owners")) (EVar "mentions")) (EVar "hd")) (arm (PCon "Some" (PVar "m")) () (EIf (EBinOp "==" (EVar "m") (EVar "here")) (EVar "None") (EApp (EVar "Some") (EVar "m")))) (arm (PCon "None") () (EVar "None"))))
 (DFunDef false "entryTarget" (PWild PWild PWild PWild) (EVar "None"))
 (DTypeSig false "movedFrom" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "String")))) (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "DocEntry")))))))
 (DFunDef false "movedFrom" ((PVar "owners") (PVar "mentions") (PCon "ModuleDoc" (PVar "here") PWild (PVar "es") PWild)) (EApp (EApp (EVar "concatMapDoc") (EApp (EApp (EApp (EVar "movedEntry") (EVar "owners")) (EVar "mentions")) (EVar "here"))) (EVar "es")))
@@ -2413,13 +2524,13 @@ docSchemesFor runtimeSrc coreSrc filename roots rawUser =
 (DTypeSig false "inventoryEntriesFor" (TyFun (TyCon "ModuleDoc") (TyApp (TyCon "List") (TyCon "Json"))))
 (DFunDef false "inventoryEntriesFor" ((PCon "ModuleDoc" (PVar "moduleName") PWild (PVar "entries") PWild)) (EApp (EApp (EMethodRef "map") (EApp (EVar "inventoryEntryJson") (EVar "moduleName"))) (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e"))))) (EVar "entries"))))
 (DTypeSig false "inventoryEntryJson" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "Json"))))
-(DFunDef false "inventoryEntryJson" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") (PVar "sig") PWild PWild PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "module")) (EApp (EVar "JString") (EVar "moduleName"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "signature")) (EApp (EVar "JString") (EVar "sig"))))))
+(DFunDef false "inventoryEntryJson" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") (PVar "sig") PWild PWild PWild PWild)) (EApp (EVar "jObject") (EListLit (ETuple (ELit (LString "module")) (EApp (EVar "JString") (EVar "moduleName"))) (ETuple (ELit (LString "name")) (EApp (EVar "JString") (EVar "name"))) (ETuple (ELit (LString "signature")) (EApp (EVar "JString") (EVar "sig"))))))
 (DTypeSig true "renderIndex" (TyFun (TyApp (TyCon "List") (TyCon "ModuleDoc")) (TyCon "String")))
 (DFunDef false "renderIndex" ((PVar "mds")) (EApp (EVar "stringConcat") (EBinOp "::" (ELit (LString "# Library Index\n\n")) (EApp (EApp (EMethodRef "map") (EVar "renderIndexModule")) (EVar "mds")))))
 (DTypeSig false "renderIndexModule" (TyFun (TyCon "ModuleDoc") (TyCon "String")))
 (DFunDef false "renderIndexModule" ((PCon "ModuleDoc" (PVar "name") (PVar "header") (PVar "entries") PWild)) (EBlock (DoLet false false (PVar "head") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "## [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString ".md)\n\n")))) (DoLet false false (PVar "summary") (EApp (EVar "firstSentence") (EApp (EVar "renderDocProse") (EVar "header")))) (DoLet false false (PVar "summaryBlock") (EIf (EBinOp "==" (EVar "summary") (ELit (LString ""))) (ELit (LString "")) (EBinOp "++" (EVar "summary") (ELit (LString "\n\n"))))) (DoLet false false (PVar "listed") (EApp (EApp (EVar "filterDoc") (ELam ((PVar "e")) (EBinOp "&&" (EApp (EVar "not") (EApp (EVar "isImpl") (EVar "e"))) (EApp (EVar "not") (EApp (EVar "isSection") (EVar "e")))))) (EVar "entries"))) (DoLet false false (PVar "links") (EApp (EApp (EVar "joinWith") (ELit (LString "\n"))) (EApp (EApp (EMethodRef "map") (EApp (EVar "renderIndexLink") (EVar "name"))) (EVar "listed")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "")) (EApp (EMethodRef "display") (EVar "head"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "summaryBlock"))) (ELit (LString ""))) (EApp (EMethodRef "display") (EVar "links"))) (ELit (LString "\n\n"))))))
 (DTypeSig false "renderIndexLink" (TyFun (TyCon "String") (TyFun (TyCon "DocEntry") (TyCon "String"))))
-(DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
+(DFunDef false "renderIndexLink" ((PVar "moduleName") (PCon "DocEntry" (PVar "name") PWild PWild PWild PWild PWild)) (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "- [`")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "`]("))) (EApp (EMethodRef "display") (EVar "moduleName"))) (ELit (LString ".md#"))) (EApp (EMethodRef "display") (EApp (EVar "slugifyAnchor") (EVar "name")))) (ELit (LString ")"))))
 (DTypeSig false "periodRe" (TyCon "Regex"))
 (DFunDef false "periodRe" () (EApp (EVar "mustCompile") (ELit (LString "\\."))))
 (DTypeSig false "newlineRe" (TyCon "Regex"))

@@ -222,7 +222,7 @@ compareNaN a b
 
    `compare` agrees with `==` on every non-NaN value, so `-0.0` and `0.0`
    compare `Eq`. Two NaNs of the same sign also compare `Eq`, even though
-   `nan == nan` is `False`. This makes `sort`, `min`, and `max` deterministic
+   `nan == nan` is `False`. This makes `list.sort`, `min`, and `max` deterministic
    on data that contains NaN.
 
    `lt`, `gt`, `lte`, and `gte` are the IEEE comparisons, and are all `False`
@@ -707,7 +707,7 @@ export impl Hashable (a, b, c, d, e) requires Hashable a, Hashable b, Hashable c
 {- | Writes a value to standard output, followed by a newline.
 
    The value is rendered with `display`, so strings print without quotes
-   and a `Map` prints as `Map { 1 => 10 }`. For the `debug` rendering, use
+   and a `map.Map` prints as `Map { 1 => 10 }`. For the `debug` rendering, use
    `io.inspect`. -}
 -- Ordinary Medaka functions over the string-only `putStr`/`putStrLn`
 -- externs: the `Display` constraint has to live in Medaka, where dict-passing
@@ -946,10 +946,10 @@ unless b m = if b then pure () else m
 {- | Containers that record an effect to perform later.
 
    `Mappable`, `Applicative`, and `Thenable` perform a callback's effects at
-   the call. The `Deferred` family instead records them in the container's
+   the call. The `DeferredMappable` family instead records them in the container's
    `Effect` index: `deferMap` and `deferThen` perform nothing, and the
-   recorded effects run when the container is eliminated (`runAsync` for
-   `Async`). An `Async <IO> Int` can therefore be built inside a function
+   recorded effects run when the container is eliminated (`async.runAsync` for
+   `async.Async`). An `Async <IO> Int` can therefore be built inside a function
    typed `<>`.
 
    The method names differ from `map` and `andThen` so that each block form
@@ -1245,10 +1245,10 @@ indexGo : List a -> Int -> Int -> a
 indexGo [] i0 _ = indexError "index \{intToString i0} out of bounds"
 indexGo (h :: t) i0 i = if i <= 0 then h else indexGo t i0 (i - 1)
 
-{- | `s[i]` is the character at codepoint position `i`.
+{- | The character at a codepoint position: `s[i]`.
 
-   Panics with an index error when `i` is out of range. Positions count
-   codepoints, matching `string.toChars`. -}
+   Panics with an index error when the position is out of range. Positions
+   count codepoints, matching `string.toChars`. -}
 export impl Index String Int Char where
   index s i =
     let cs = stringToChars s

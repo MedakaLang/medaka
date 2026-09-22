@@ -235,6 +235,41 @@ else
     "$dupout"
 fi
 
+# S2-5: the head line. A value entry's signature block carries a second line
+# `name a b _` naming the parameters its defining clauses bind — position by
+# position, first named binding wins, `_` where every clause destructures —
+# and nothing else gets one: a wholly destructuring definition, a zero-arg
+# value, a point-free definition and an extern show the type line alone.
+# Stated as properties because the golden above can be re-blessed.
+PMFIX="$FIXDIR/params.mdk"
+if [ -f "$PMFIX" ]; then
+  pm="$("$MEDAKA" doc "$PMFIX" 2>/dev/null)"
+  if printf '%s\n' "$pm" | grep -q '^take n _$' \
+    && printf '%s\n' "$pm" | grep -q '^clampTo hi v$' \
+    && printf '%s\n' "$pm" | grep -q '^boxed b$'; then
+    pass=$((pass + 1))
+    printf 'ok   head line names clause parameters (second clause, guards, as-pattern)\n'
+  else
+    fail=$((fail + 1))
+    printf 'FAIL head line missing or wrong (expected `take n _`, `clampTo hi v`, `boxed b`)\n'
+  fi
+  # `unbox (Box n)` / `unboxTwo` / `origin` / `inc` / `ext` render the type
+  # line alone: no line of the form `<name> <args>` follows any of them (the
+  # type line is `<name> : ...`, so a head line is `<name> ` followed by
+  # anything but `:`).
+  if printf '%s\n' "$pm" | grep -q '^\(unbox\|unboxTwo\|origin\|inc\|ext\) [^:]'; then
+    fail=$((fail + 1))
+    printf 'FAIL a head line appeared on an entry that binds no name:\n%s\n' \
+      "$(printf '%s\n' "$pm" | grep '^\(unbox\|unboxTwo\|origin\|inc\|ext\) [^:]')"
+  else
+    pass=$((pass + 1))
+    printf 'ok   no head line on a destructuring, zero-arg, point-free or extern entry\n'
+  fi
+else
+  fail=$((fail + 1))
+  printf 'FAIL head line check (missing fixture %s)\n' "$PMFIX"
+fi
+
 # 0-checked must fail: a gate that iterated no fixtures proves nothing and must
 # never report green (the snapshot gate,
 # test/diff_compiler_snapshot_frontend_test.mdk, states the same house rule as

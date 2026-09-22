@@ -87,6 +87,7 @@ the instances here are what let generic `Eq a =>` code work.
 
 ```
 neq : Eq a => a -> a -> Bool
+neq x y
 ```
 
 The negation of `eq`.
@@ -144,6 +145,7 @@ in terms of `compare`, and an instance may override them.
 
 ```
 clamp : Ord a => a -> a -> a -> a
+clamp lo hi
 ```
 
 `x` limited to the inclusive range `[lo, hi]`.
@@ -212,18 +214,20 @@ elements.
 
 ```
 println : Display a => a -> <IO> Unit
+println x
 ```
 
 Writes a value to standard output, followed by a newline.
 
 The value is rendered with `display`, so strings print without quotes
-and a `Map` prints as `Map { 1 => 10 }`. For the `debug` rendering, use
+and a `map.Map` prints as `Map { 1 => 10 }`. For the `debug` rendering, use
 `io.inspect`.
 
 ### `print`
 
 ```
 print : Display a => a -> <IO> Unit
+print x
 ```
 
 Writes a value to standard output with no trailing newline. See `println`.
@@ -263,6 +267,7 @@ and `rem`. `div` truncates for `Int` and is true division for `Float`.
 
 ```
 isEven : Int -> Bool
+isEven n
 ```
 
 Whether `n` is divisible by two. Negative numbers included.
@@ -278,6 +283,7 @@ False
 
 ```
 isOdd : Int -> Bool
+isOdd n
 ```
 
 Whether `n` is not divisible by two.
@@ -315,6 +321,7 @@ and `map (g << f)` equals `map g << map f`.
 
 ```
 mapConst : Mappable f => b -> f a -> f b
+mapConst b fa
 ```
 
 The container with every element replaced by `b`.
@@ -344,6 +351,7 @@ value inside another. The instances follow the usual applicative laws.
 
 ```
 map2 : Applicative f => (a -> b -> c) -> f a -> f b -> f c
+map2 f fa fb
 ```
 
 Combines two wrapped values with a two-argument function.
@@ -362,6 +370,7 @@ Some 7
 
 ```
 map3 : Applicative f => (a -> b -> c -> d) -> f a -> f b -> f c -> f d
+map3 f fa fb fc
 ```
 
 Combines three wrapped values with a three-argument function. See
@@ -390,6 +399,7 @@ the sequence.
 
 ```
 flatMap : Thenable m => (a -> <e> m b) -> m a -> <e> m b
+flatMap f ma
 ```
 
 `andThen` with its arguments swapped.
@@ -398,6 +408,7 @@ flatMap : Thenable m => (a -> <e> m b) -> m a -> <e> m b
 
 ```
 flat : Thenable m => m (m a) -> m a
+flat x
 ```
 
 Removes one level of nesting: `Some (Some 1)` becomes `Some 1`.
@@ -406,6 +417,7 @@ Removes one level of nesting: `Some (Some 1)` becomes `Some 1`.
 
 ```
 when : Thenable m => Bool -> m Unit -> m Unit
+when b m
 ```
 
 Runs an action only when the condition holds.
@@ -414,6 +426,7 @@ Runs an action only when the condition holds.
 
 ```
 unless : Thenable m => Bool -> m Unit -> m Unit
+unless b m
 ```
 
 Runs an action only when the condition does not hold.
@@ -428,10 +441,10 @@ interface DeferredMappable (f : Effect -> Type -> Type)
 Containers that record an effect to perform later.
 
 `Mappable`, `Applicative`, and `Thenable` perform a callback's effects at
-the call. The `Deferred` family instead records them in the container's
+the call. The `DeferredMappable` family instead records them in the container's
 `Effect` index: `deferMap` and `deferThen` perform nothing, and the
-recorded effects run when the container is eliminated (`runAsync` for
-`Async`). An `Async <IO> Int` can therefore be built inside a function
+recorded effects run when the container is eliminated (`async.runAsync` for
+`async.Async`). An `Async <IO> Int` can therefore be built inside a function
 typed `<>`.
 
 The method names differ from `map` and `andThen` so that each block form
@@ -467,6 +480,7 @@ desugars to it.
 
 ```
 deferFlatMap : DeferredThenable m => (a -> <e> m e b) -> m e a -> m e b
+deferFlatMap f ma
 ```
 
 `deferThen` with arguments flipped.
@@ -475,6 +489,7 @@ deferFlatMap : DeferredThenable m => (a -> <e> m e b) -> m e a -> m e b
 
 ```
 deferWhen : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferWhen b m
 ```
 
 `when` for the deferred family: run the action only when the condition
@@ -485,6 +500,7 @@ describe an `Effect`-indexed container.
 
 ```
 deferUnless : DeferredApplicative m => Bool -> m e Unit -> m e Unit
+deferUnless b m
 ```
 
 `unless` for the deferred family.  Dual of `deferWhen`.
@@ -493,6 +509,7 @@ deferUnless : DeferredApplicative m => Bool -> m e Unit -> m e Unit
 
 ```
 foldThen : Thenable m => (b -> a -> <e> m b) -> b -> List a -> <e> m b
+foldThen f z _
 ```
 
 A left fold whose step is an action, run in order over the list.
@@ -506,6 +523,7 @@ Some 6
 
 ```
 repeatThen : Thenable m => Int -> m a -> m (List a)
+repeatThen n action
 ```
 
 Runs an action `n` times and collects the results in order.
@@ -521,6 +539,7 @@ Some [7, 7, 7]
 
 ```
 filterThen : Thenable m => (a -> <e> m Bool) -> List a -> <e> m (List a)
+filterThen f _
 ```
 
 Keeps the elements for which an action returns `True`, in order.
@@ -534,6 +553,7 @@ Some [2, 3]
 
 ```
 forEach : Thenable m => (a -> <e> m Unit) -> List a -> <e> m Unit
+forEach f _
 ```
 
 Runs an action for each element in order, discarding the results.
@@ -750,6 +770,7 @@ Err 99
 
 ```
 any : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
+any f
 ```
 
 Whether at least one element satisfies `f`.
@@ -763,6 +784,7 @@ True
 
 ```
 all : Foldable t => (a -> <e> Bool) -> t a -> <e> Bool
+all f
 ```
 
 Whether every element satisfies `f`.
@@ -780,6 +802,7 @@ True
 
 ```
 find : Foldable t => (a -> <e> Bool) -> t a -> <e> Option a
+find f
 ```
 
 The first element satisfying `f`, or `None`.
@@ -793,6 +816,7 @@ Some 2
 
 ```
 count : Foldable t => (a -> <e> Bool) -> t a -> <e> Int
+count f
 ```
 
 The number of elements satisfying `f`.
@@ -806,6 +830,7 @@ The number of elements satisfying `f`.
 
 ```
 sum : (Foldable t, Num a) => t a -> a
+sum xs
 ```
 
 The sum of the elements. `0` for an empty container.
@@ -819,6 +844,7 @@ The sum of the elements. `0` for an empty container.
 
 ```
 product : (Foldable t, Num a) => t a -> a
+product xs
 ```
 
 The product of the elements. `1` for an empty container.
@@ -832,6 +858,7 @@ The product of the elements. `1` for an empty container.
 
 ```
 elem : (Foldable t, Eq a) => a -> t a -> Bool
+elem a
 ```
 
 Whether the value occurs in the container.
@@ -845,6 +872,7 @@ True
 
 ```
 notElem : (Foldable t, Eq a) => a -> t a -> Bool
+notElem a xs
 ```
 
 Whether the value does not occur in the container.
@@ -853,6 +881,7 @@ Whether the value does not occur in the container.
 
 ```
 maximum : (Foldable t, Ord a) => t a -> Option a
+maximum xs
 ```
 
 The largest element, or `None` when the container is empty.
@@ -866,6 +895,7 @@ Some 3
 
 ```
 minimum : (Foldable t, Ord a) => t a -> Option a
+minimum xs
 ```
 
 The smallest element, or `None` when the container is empty.
@@ -919,6 +949,7 @@ The `||` operator evaluates its right operand only when the left is
 
 ```
 xor : Bool -> Bool -> Bool
+xor a b
 ```
 
 Exclusive or.
@@ -945,6 +976,7 @@ Whether the value is `None`.
 
 ```
 optionOr : a -> Option a -> a
+optionOr d _
 ```
 
 The value inside a `Some`, or the default for `None`.
@@ -960,6 +992,7 @@ The value inside a `Some`, or the default for `None`.
 
 ```
 optionOrPanic : String -> Option a -> a
+optionOrPanic context _
 ```
 
 The value inside a `Some`, or a panic with `context` as its message
@@ -977,6 +1010,7 @@ is no form without `context`. `optionOr` recovers with a default instead.
 
 ```
 option : b -> (a -> <e> b) -> Option a -> <e> b
+option dflt f _
 ```
 
 Applies `f` to the value inside a `Some`, or returns the default for
@@ -993,6 +1027,7 @@ Applies `f` to the value inside a `Some`, or returns the default for
 
 ```
 toResult : e -> Option a -> Result e a
+toResult e _
 ```
 
 The option as a result, with `e` as the error for `None`.
@@ -1041,6 +1076,7 @@ Whether the result is `Err`.
 
 ```
 resultOr : a -> Result e a -> a
+resultOr d _
 ```
 
 The value inside an `Ok`, or the default for `Err`.
@@ -1056,6 +1092,7 @@ The value inside an `Ok`, or the default for `Err`.
 
 ```
 resultOrPanic : Display e => String -> Result e a -> a
+resultOrPanic context _
 ```
 
 The value inside an `Ok`, or a panic for `Err` whose message is
@@ -1074,6 +1111,7 @@ recovers with a default instead.
 
 ```
 result : (e -> <eff> c) -> (a -> <eff> c) -> Result e a -> <eff> c
+result onErr onOk _
 ```
 
 Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
@@ -1090,6 +1128,7 @@ Applies `onErr` to the error of an `Err`, or `onOk` to the value of an
 
 ```
 mapErr : (e -> f) -> Result e a -> Result f a
+mapErr f _
 ```
 
 Applies `f` to the error of an `Err`, leaving an `Ok` unchanged.
@@ -1107,6 +1146,7 @@ Err "failed: boom"
 
 ```
 identity : a -> a
+identity x
 ```
 
 Its argument, unchanged.
@@ -1141,6 +1181,7 @@ True
 
 ```
 const : a -> b -> a
+const x _
 ```
 
 A function that ignores its argument and returns `x`.
@@ -1154,6 +1195,7 @@ A function that ignores its argument and returns `x`.
 
 ```
 flip : (a -> b -> <e> c) -> b -> a -> <e> c
+flip f b a
 ```
 
 `f` with its two arguments swapped.
@@ -1167,6 +1209,7 @@ flip : (a -> b -> <e> c) -> b -> a -> <e> c
 
 ```
 on : (b -> b -> <e> c) -> (a -> b) -> a -> a -> <e> c
+on f g x y
 ```
 
 Applies `f` to the results of `g` on each argument.
@@ -1182,6 +1225,7 @@ Lt
 
 ```
 curry : ((a, b) -> <e> c) -> a -> b -> <e> c
+curry f a b
 ```
 
 A function on a pair as a function of two arguments. The inverse of
@@ -1196,6 +1240,7 @@ A function on a pair as a function of two arguments. The inverse of
 
 ```
 uncurry : (a -> b -> <e> c) -> (a, b) -> <e> c
+uncurry f _
 ```
 
 A function of two arguments as a function on a pair. The inverse of
@@ -1210,6 +1255,7 @@ A function of two arguments as a function on a pair. The inverse of
 
 ```
 discard : Mappable f => f a -> f Unit
+discard fa
 ```
 
 The container with its contents replaced by `()`.
@@ -1225,6 +1271,7 @@ Some ()
 
 ```
 compose : (b -> <e> c) -> (a -> <e> b) -> a -> <e> c
+compose g f a
 ```
 
 Right-to-left composition: `compose g f` applies `f`, then `g`. The
@@ -1234,6 +1281,7 @@ Right-to-left composition: `compose g f` applies `f`, then `g`. The
 
 ```
 pipe : (a -> <e> b) -> (b -> <e> c) -> a -> <e> c
+pipe f g a
 ```
 
 Left-to-right composition: `pipe f g` applies `f`, then `g`. The `>>`
@@ -1243,6 +1291,7 @@ operator.
 
 ```
 apply : (a -> <e> b) -> a -> <e> b
+apply f a
 ```
 
 Function application as a function: `apply f x` is `f x`.
@@ -1290,6 +1339,7 @@ A random string of up to ten printable ASCII characters.
 
 ```
 arbitraryList : (Unit -> <Rand> a) -> Int -> <Rand> List a
+arbitraryList gen maxLen
 ```
 
 A random list of up to `maxLen` elements, each drawn with `gen`.
@@ -1371,7 +1421,7 @@ Floats are totally ordered, NaN included:
 
 `compare` agrees with `==` on every non-NaN value, so `-0.0` and `0.0`
 compare `Eq`. Two NaNs of the same sign also compare `Eq`, even though
-`nan == nan` is `False`. This makes `sort`, `min`, and `max` deterministic
+`nan == nan` is `False`. This makes `list.sort`, `min`, and `max` deterministic
 on data that contains NaN.
 
 `lt`, `gt`, `lte`, and `gte` are the IEEE comparisons, and are all `False`

@@ -1,0 +1,54 @@
+-- params.mdk — the head line: a value entry's parameter names, derived from
+-- its defining clauses, rendered under the signature so that prose naming a
+-- parameter (`n`, `xs`) names something visible on the page.
+
+-- | The first `n` elements of the list.  The base case comes first and binds
+-- nothing, so the name at each position comes from the second clause; the
+-- list position is a pattern in every clause, so it renders as `_`.
+export
+take : Int -> List a -> List a
+take _ [] = []
+take n (x :: xs)
+  | n <= 0 = []
+  | otherwise = x :: take (n - 1) xs
+
+-- | Guards on the head, no `=` on the head line.
+export
+clampTo : Int -> Int -> Int
+clampTo hi v
+  | v > hi = hi
+  | otherwise = v
+
+public export data Box = Box Int
+
+-- | A constructor pattern binds no name for its position.
+export
+unbox : Box -> Int
+unbox (Box n) = n
+
+-- | An as-pattern names the whole argument.
+export
+boxed : Box -> Int
+boxed (b@(Box n)) = n + unbox b
+
+-- | Every position destructured: no head line at all.
+export
+unboxTwo : Box -> Box -> Int
+unboxTwo (Box a) (Box b) = a + b
+
+-- | A zero-argument value has no head line.
+export
+origin : Int
+origin = 0
+
+-- | A point-free definition has no head line either.
+export
+inc : Int -> Int
+inc = addTo 1
+
+addTo : Int -> Int -> Int
+addTo a b = a + b
+
+-- | An extern has no clauses, so no head line.
+export
+extern ext : Int -> Int

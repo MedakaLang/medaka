@@ -35,6 +35,7 @@ Instances: [`Foldable`](#foldable-set), [`Eq`](#eq-set-a), [`Ord`](#ord-set-a), 
 
 ```
 singleton : a -> Set a
+singleton x
 ```
 
 A set with one element.
@@ -48,6 +49,7 @@ A set with one element.
 
 ```
 fromList : Ord a => List a -> Set a
+fromList xs
 ```
 
 A set holding the elements of a list, without duplicates.
@@ -78,6 +80,7 @@ The number of elements, in `O(1)`.
 
 ```
 has : Ord a => a -> Set a -> Bool
+has x _
 ```
 
 Whether `x` is a member.
@@ -95,6 +98,7 @@ False
 
 ```
 insert : Ord a => a -> Set a -> Set a
+insert x _
 ```
 
 The set with `x` added.
@@ -110,6 +114,7 @@ Unchanged when `x` is already a member.
 
 ```
 delete : Ord a => a -> Set a -> Set a
+delete x _
 ```
 
 The set without `x`.
@@ -155,6 +160,7 @@ Some (3, fromList [1, 2])
 
 ```
 getMin : Set a -> Option a
+getMin s
 ```
 
 The smallest element, or `None` when the set is empty.
@@ -168,6 +174,7 @@ Some 1
 
 ```
 getMax : Set a -> Option a
+getMax s
 ```
 
 The largest element, or `None` when the set is empty.
@@ -181,6 +188,7 @@ Some 3
 
 ```
 deleteMin : Set a -> Set a
+deleteMin s
 ```
 
 The set without its smallest element.
@@ -196,6 +204,7 @@ Unchanged when the set is empty.
 
 ```
 deleteMax : Set a -> Set a
+deleteMax s
 ```
 
 The set without its largest element.
@@ -213,6 +222,7 @@ Unchanged when the set is empty.
 
 ```
 union : Ord a => Set a -> Set a -> Set a
+union a b
 ```
 
 The elements in either set.
@@ -228,6 +238,7 @@ The elements in either set.
 
 ```
 intersection : Ord a => Set a -> Set a -> Set a
+intersection a b
 ```
 
 The elements in both sets.
@@ -241,6 +252,7 @@ The elements in both sets.
 
 ```
 difference : Ord a => Set a -> Set a -> Set a
+difference a b
 ```
 
 The elements of the first set that are not in the second.
@@ -254,6 +266,7 @@ The elements of the first set that are not in the second.
 
 ```
 isSubsetOf : Ord a => Set a -> Set a -> Bool
+isSubsetOf a b
 ```
 
 Whether every element of the first set is in the second.

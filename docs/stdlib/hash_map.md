@@ -45,6 +45,7 @@ Each call allocates its own table, which is why it takes `Unit`.
 
 ```
 fromList : (Eq k, Hashable k) => List (k, v) -> HashMap k v
+fromList pairs
 ```
 
 A table holding the pairs of an association list.
@@ -75,6 +76,7 @@ The number of entries, in `O(1)`.
 
 ```
 isEmpty : HashMap k v -> Bool
+isEmpty m
 ```
 
 Whether the table has no entries.
@@ -88,6 +90,7 @@ True
 
 ```
 get : (Eq k, Hashable k) => k -> HashMap k v -> Option v
+get key _
 ```
 
 The value at `key`, or `None` when the key is absent.
@@ -103,6 +106,7 @@ None
 
 ```
 has : (Eq k, Hashable k) => k -> HashMap k v -> Bool
+has key m
 ```
 
 Whether `key` is present.
@@ -116,6 +120,7 @@ True
 
 ```
 findWithDefault : (Eq k, Hashable k) => v -> k -> HashMap k v -> v
+findWithDefault d key m
 ```
 
 The value at `key`, or `d` when the key is absent.
@@ -131,6 +136,7 @@ The value at `key`, or `d` when the key is absent.
 
 ```
 setInPlace : (Eq k, Hashable k) => k -> v -> HashMap k v -> Unit
+setInPlace key val _
 ```
 
 Stores `val` at `key`, replacing any existing value.
@@ -143,6 +149,7 @@ The table is changed in place and grows as needed.
 
 ```
 deleteInPlace : (Eq k, Hashable k) => k -> HashMap k v -> Unit
+deleteInPlace key _
 ```
 
 Removes the entry at `key` from the table, in place.
@@ -168,6 +175,7 @@ The entries as pairs, in unspecified order.
 
 ```
 keys : HashMap k v -> List k
+keys m
 ```
 
 The keys, in unspecified order.
@@ -181,6 +189,7 @@ The keys, in unspecified order.
 
 ```
 values : HashMap k v -> List v
+values m
 ```
 
 The values, in unspecified order.

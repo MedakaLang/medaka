@@ -1346,7 +1346,7 @@ fullMatch re s = matchOnce re s 0 True True
 {- | Every match, left to right, none of them overlapping.
 
    An empty match is kept, except directly at the end of the previous match:
-   `\d*` over `"a1b"` reports the empty match before `a`, `"1"`, and the
+   `\d*` over `"a1b"` reports the empty match before `"a"`, `"1"`, and the
    empty match at the end.
 
    > map (m => (m : Match).text) (findAll (mustCompile "\\d+") "a1b22c")

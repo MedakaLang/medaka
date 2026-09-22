@@ -7,7 +7,7 @@
    decoding accepts either case.
 
    An element outside `0` to `255` is masked to its low eight bits on the way
-   in rather than refused, so `-1` and `511` both encode as `ff`. -}
+   in rather than refused, so `-1` and `511` both encode as `"ff"`. -}
 
 -- hex/base64 codec wrappers over a module-local decode share identical wrapper bodies by design.
 -- lint-disable-file rule-duplicate-body

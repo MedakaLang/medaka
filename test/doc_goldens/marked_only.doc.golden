@@ -10,6 +10,7 @@ A second paragraph of the header.
 
 ```
 build : Int -> Int
+build x
 ```
 
 Builds a thing.
@@ -23,6 +24,7 @@ Builds a thing.
 
 ```
 unmarked : Int -> Int
+unmarked x
 ```
 
 ## Types

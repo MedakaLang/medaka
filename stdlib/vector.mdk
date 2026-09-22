@@ -391,9 +391,9 @@ growTo cap needed =
 {- | Appends every element of `xs`, in order, in one bulk copy.
 
    Amortized `O(1)` per element. The backing store grows at most once, to
-   the smallest doubling that holds the result, so appending `n` elements
+   the smallest doubling that holds the result, so appending many elements
    costs one copy of the live prefix (when it grows) and one copy of `xs`,
-   not `n` single-element grows. -}
+   not one grow per element. -}
 export
 pushArray : Array a -> Vector a -> Unit
 pushArray xs (Vector backing len) =

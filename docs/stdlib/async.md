@@ -22,10 +22,10 @@ never through an extern the scheduler names itself.
 data Async (e : Effect) a  -- abstract: the constructors are not exported
 ```
 
-A deferred computation.  `Done` holds a finished value; the other arms
-hold the next step under a thunk that performs `<e>`.  `Suspend` is a plain
-yield point, `Await` parks the task until any of its waits is satisfied, and
-`Spawn` hands a child task to the scheduler before continuing.
+A deferred computation: a finished value, or the next step held under a
+thunk that performs `<e>`.  A step is a plain yield point, a park until any
+of the task's waits is satisfied, or a child task handed to the scheduler
+before continuing.
 
 Instances: `DeferredMappable`, `DeferredApplicative`, `DeferredThenable`
 
@@ -41,6 +41,7 @@ A handle to a task started with `spawnTask`.  `await` reads its value.
 
 ```
 liftIO : (Unit -> <e> a) -> Async e a
+liftIO act
 ```
 
 Lifts a thunk into `Async`, deferring it behind one yield boundary.
@@ -62,6 +63,7 @@ Inert for a single task; observable once other tasks are runnable.
 
 ```
 sleep : Duration -> Async <Clock | e> Unit
+sleep d
 ```
 
 Parks the task for `d`, letting other tasks run meanwhile.
@@ -73,6 +75,7 @@ that clock on to the scheduler.
 
 ```
 spawn : Async e Unit -> Async e Unit
+spawn child
 ```
 
 Starts `child` as a task of its own and continues at once.
@@ -83,6 +86,7 @@ The driver returns only after every spawned task has finished.
 
 ```
 spawnTask : Async e a -> Async e (Task a)
+spawnTask act
 ```
 
 Starts `act` as a task of its own and returns a handle to its value.
@@ -93,6 +97,7 @@ Starts `act` as a task of its own and returns a handle to its value.
 
 ```
 awaitAny : List (Wait e) -> Async e Unit
+awaitAny waits
 ```
 
 Parks the task until any one of `waits` is satisfied.
@@ -105,6 +110,7 @@ on `[waitRead fd]`, or on `[waitRead fd, deadline]` to give up after a
 
 ```
 waitRead : Int -> Wait <Net _ | e>
+waitRead fd
 ```
 
 A wait for `fd` to become readable, as a wait for `awaitAny`.
@@ -115,6 +121,7 @@ Polls the descriptor, so `<Net>` joins `e`.
 
 ```
 waitWrite : Int -> Wait <Net _ | e>
+waitWrite fd
 ```
 
 A wait for `fd` to become writable, as a wait for `awaitAny`.
@@ -125,6 +132,7 @@ Polls the descriptor, so `<Net>` joins `e`.
 
 ```
 waitFlag : Ref Bool -> Wait e
+waitFlag flag
 ```
 
 A wait for `flag` to be set, as a wait for `awaitAny`.
@@ -137,6 +145,7 @@ deadline waits, one of these fits any row.
 
 ```
 deadlineAfter : Duration -> Async <Clock | e> (Wait <Clock | e>)
+deadlineAfter d
 ```
 
 A deadline `d` from now, as a wait for `awaitAny`.
@@ -147,6 +156,7 @@ Reads the clock, so `<Clock>` joins `e`.
 
 ```
 expired : Wait e -> Async e Bool
+expired w
 ```
 
 Whether a deadline from `deadlineAfter` has passed.
@@ -157,6 +167,7 @@ Any other wait is never expired. Reads the clock the wait carries.
 
 ```
 await : Task a -> Async e a
+await t
 ```
 
 Waits for a spawned task and yields its value.
@@ -167,6 +178,7 @@ Parks until the task finishes; awaiting a finished task yields at once.
 
 ```
 concurrent : List (Async e a) -> Async e (List a)
+concurrent asyncs
 ```
 
 Runs every task in the list and collects their values in input order.
@@ -178,6 +190,7 @@ arrives once all of them have finished.
 
 ```
 runAsync : Async e a -> <e> a
+runAsync prog
 ```
 
 Runs a task to its value under the scheduler, performing exactly its
@@ -197,6 +210,7 @@ never be woken.
 
 ```
 runAsyncMain : Async e Unit -> <e> Unit
+runAsyncMain prog
 ```
 
 `runAsync` for a program whose value is `Unit`.

@@ -19,6 +19,7 @@ in `Err`. There is no IO monad: an action runs when it is evaluated, so
 
 ```
 eprint : Display a => a -> <IO> Unit
+eprint x
 ```
 
 Writes a value to standard error with no trailing newline.
@@ -29,6 +30,7 @@ The value is rendered with `display`, like `print`.
 
 ```
 eprintln : Display a => a -> <IO> Unit
+eprintln x
 ```
 
 Writes a value to standard error, followed by a newline.
@@ -42,6 +44,7 @@ diagnostics and errors so they do not mix with standard output.
 
 ```
 inspect : Debug a => a -> <IO> Unit
+inspect x
 ```
 
 Writes a value to standard output in its `debug` rendering, followed by
@@ -57,6 +60,7 @@ values without writing a `Display` instance.
 
 ```
 readLines : String -> <IO> Result String (List String)
+readLines path
 ```
 
 The lines of a file, or `Err` with the host's message when the file
@@ -72,7 +76,7 @@ ownerOnlyMode : Int
 ```
 
 The permission bits of a file only its owner may read or write:
-`rw-------`, `0600` as `chmod` spells it.
+`rw-------`, `0600` as the chmod command spells it.
 
 `writeFilePrivate` writes at this mode, and `isPrivateMode` accepts it.
 
@@ -80,6 +84,7 @@ The permission bits of a file only its owner may read or write:
 
 ```
 isPrivateMode : Int -> Bool
+isPrivateMode mode
 ```
 
 Whether permission bits keep a file to its owner, with no group or
@@ -102,6 +107,7 @@ True
 
 ```
 writeFilePrivate : String -> String -> <FileWrite _> Result String Unit
+writeFilePrivate path content
 ```
 
 Writes a string to a file that only its owner may read or write, at
@@ -116,6 +122,7 @@ is narrowed before they are written. Use it for a secret.
 
 ```
 runCommandOk : String -> List String -> <Exec _> Result String (String, String)
+runCommandOk cmd args
 ```
 
 Runs a program with arguments and waits for it, folding a spawn
@@ -134,6 +141,7 @@ Ok ("", "")
 
 ```
 runVerb : String -> List String -> <Exec _> Result String (Int, String, String)
+runVerb cmd args
 ```
 
 Runs a program with arguments and waits for it, returning the exit
@@ -157,6 +165,7 @@ Ok (3, "", "err")
 
 ```
 getEnvOr : String -> String -> <IO> String
+getEnvOr name fallback
 ```
 
 The value of the environment variable `name`, or `fallback` when it is

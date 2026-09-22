@@ -121,8 +121,8 @@ iterate n f x
 
 {- | Builds a list from a seed.
 
-   `gen` is called with the current seed. It returns `Some (element, next)` to
-   emit `element` and continue from `next`, or `None` to stop.
+   `gen` is called with the current seed. It returns `Some` of the element to
+   emit and the seed to continue from, or `None` to stop.
 
    > unfold (n => if n > 5 then None else Some (n, n + 1)) 1
    [1, 2, 3, 4, 5] -}
@@ -795,7 +795,7 @@ split sep xs = go xs
 export
 startsWith : Eq a => List a -> List a -> Bool
 startsWith [] _ = True
-startsWith _ [] = False
+startsWith prefix [] = False
 startsWith (p :: ps) (x :: xs) = p == x && startsWith ps xs
 
 -- > startsWith ([] : List Int) [1]
@@ -1346,7 +1346,7 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "split" ((PVar "sep") (PVar "xs")) (ELetGroup ((lgb "sepLen" (clause () (EApp (EVar "length") (EVar "sep")))) (lgb "go" (clause ((PVar "ys")) (EMatch (EApp (EApp (EVar "findSub") (ELit (LInt 0))) (EVar "ys")) (arm (PCon "None") () (EListLit (EVar "ys"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EVar "take") (EVar "i")) (EVar "ys")) (EApp (EVar "go") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EVar "ys")))))))) (lgb "findSub" (clause ((PVar "i") (PVar "ys")) (EIf (EApp (EApp (EVar "startsWith") (EVar "sep")) (EVar "ys")) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findSubTail") (EVar "i")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))) (lgb "findSubTail" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findSub") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "startsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "startsWith" ((PList) PWild) (EVar "True"))
-(DFunDef false "startsWith" (PWild (PList)) (EVar "False"))
+(DFunDef false "startsWith" ((PVar "prefix") (PList)) (EVar "False"))
 (DFunDef false "startsWith" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "==" (EVar "p") (EVar "x")) (EApp (EApp (EVar "startsWith") (EVar "ps")) (EVar "xs"))))
 (DTypeSig true "endsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "endsWith" ((PVar "suffix") (PVar "xs")) (EApp (EApp (EVar "startsWith") (EApp (EVar "reverse") (EVar "suffix"))) (EApp (EVar "reverse") (EVar "xs"))))
@@ -1588,7 +1588,7 @@ prop "range length is max 0 (hi - lo)" (lo : Int) (hi : Int) =
 (DFunDef false "split" ((PVar "sep") (PVar "xs")) (ELetGroup ((lgb "sepLen" (clause () (EApp (EMethodRef "length") (EVar "sep")))) (lgb "go" (clause ((PVar "ys")) (EMatch (EApp (EApp (EVar "findSub") (ELit (LInt 0))) (EVar "ys")) (arm (PCon "None") () (EListLit (EVar "ys"))) (arm (PCon "Some" (PVar "i")) () (EBinOp "::" (EApp (EApp (EVar "take") (EVar "i")) (EVar "ys")) (EApp (EVar "go") (EApp (EApp (EVar "drop") (EBinOp "+" (EVar "i") (EVar "sepLen"))) (EVar "ys")))))))) (lgb "findSub" (clause ((PVar "i") (PVar "ys")) (EIf (EApp (EApp (EDictApp "startsWith") (EVar "sep")) (EVar "ys")) (EApp (EVar "Some") (EVar "i")) (EIf (EVar "otherwise") (EApp (EApp (EVar "findSubTail") (EVar "i")) (EVar "ys")) (EApp (EVar "__fallthrough__") (ELit LUnit)))))) (lgb "findSubTail" (clause (PWild (PList)) (EVar "None")) (clause ((PVar "i") (PCons PWild (PVar "rest"))) (EApp (EApp (EVar "findSub") (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "rest"))))) (EApp (EVar "go") (EVar "xs"))))
 (DTypeSig true "startsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "startsWith" ((PList) PWild) (EVar "True"))
-(DFunDef false "startsWith" (PWild (PList)) (EVar "False"))
+(DFunDef false "startsWith" ((PVar "prefix") (PList)) (EVar "False"))
 (DFunDef false "startsWith" ((PCons (PVar "p") (PVar "ps")) (PCons (PVar "x") (PVar "xs"))) (EBinOp "&&" (EBinOp "==" (EVar "p") (EVar "x")) (EApp (EApp (EDictApp "startsWith") (EVar "ps")) (EVar "xs"))))
 (DTypeSig true "endsWith" (TyConstrained ((cstr "Eq" (TyVar "a"))) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyFun (TyApp (TyCon "List") (TyVar "a")) (TyCon "Bool")))))
 (DFunDef false "endsWith" ((PVar "suffix") (PVar "xs")) (EApp (EApp (EDictApp "startsWith") (EApp (EVar "reverse") (EVar "suffix"))) (EApp (EVar "reverse") (EVar "xs"))))

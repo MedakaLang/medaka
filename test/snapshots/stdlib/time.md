@@ -276,7 +276,7 @@ isoRe = mustCompile "^(\\d{4})-(\\d{2})-(\\d{2})T(\\d{2}):(\\d{2}):(\\d{2})Z$"
    `None`.
 
    Exactly the form `formatIso` produces is accepted, and nothing else: no
-   other time zone, no missing zero padding, no lowercase `t` or `z`, and no
+   other time zone, no missing zero padding, no lowercase `'t'` or `'z'`, and no
    extra trailing characters.
 
    > map toEpochSeconds (parseIso "1970-01-01T00:00:00Z")
@@ -318,7 +318,7 @@ parseIso s = match reFind isoRe s
 -- (year, month, day, hour, minute, second), so for civil-range values it
 -- agrees with `toEpochSeconds`.  Both laws are property-tested below.
 
--- | `display` renders a duration as its millisecond count with an `ms`
+-- | `display` renders a duration as its millisecond count with an `"ms"`
 -- suffix.
 export impl Display Duration where
   display (Duration ms) = "\{intToString ms}ms"

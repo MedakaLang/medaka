@@ -53,8 +53,8 @@ extern readLineOpt : Unit -> <Stdin> Option String
 -- | Reads all of standard input.
 extern readAll : Unit -> <Stdin> String
 
--- | Reads exactly `n` bytes from standard input, or `None` at end of input
--- or on a short read.
+-- | Reads exactly the given number of bytes from standard input, or `None`
+-- at end of input or on a short read.
 extern readExactly : Int -> <Stdin> Option String
 
 -- # Mutable references
@@ -86,7 +86,7 @@ extern writeFileBytes : String ->
   <FileWrite "_"> Result String Unit
 
 -- | Writes a string to a file, replacing any existing contents, and leaves
--- the file at exactly the permission bits `mode` names (`384` is
+-- the file at exactly the permission bits the given mode names (`384` is
 -- `rw-------`, `420` is `rw-r--r--`).
 --
 -- The contents never exist at a wider mode: the mode is set on the open
@@ -204,8 +204,8 @@ extern indexErrorAt : Int -> a
 -- bounds`, byte-identical to the interpreter's `sliceArray` abort.  Reuses
 -- the E-SLICE-OOB abort machinery every backend already has.
 
--- | Aborts the program with a slice error for the range `lo` to `hi`
--- inclusive. For a container's own `Slice` instance.
+-- | Aborts the program with a slice error for the inclusive range between
+-- its two arguments. For a container's own `Slice` instance.
 extern sliceError : Int -> Int -> a
 
 -- Internal `medaka run` plumbing ("run drops stdout on panic" fix). `run`'s
@@ -262,12 +262,12 @@ extern netTcpAccept : Int -> <Net "_"> Result String Int
 -- written, which may be fewer than given.
 extern netSend : Int -> Array Int -> <Net "_"> Result String Int
 
--- | Sends bytes starting at `offset` into the array. The result is the number
+-- | Sends bytes starting at the given offset into the array. The result is the number
 -- of bytes written, which may be fewer than given and is limited to 64 KiB per
 -- call so a loop can retain one array while advancing through it.
 extern netSendFrom : Int -> Array Int -> Int -> <Net "_"> Result String Int
 
--- | Receives up to `n` bytes from a connection. An empty array means the
+-- | Receives up to the given number of bytes from a connection. An empty array means the
 -- other side has closed.
 extern netRecv : Int -> Int -> <Net "_"> Result String (Array Int)
 
@@ -288,9 +288,9 @@ extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
 -- Would-block is `Ok None`; `Ok (Some x)` carries what the blocking sibling
 -- returns; `Err` is the host's error message.
 
--- | Waits until any of `fds` is ready, or `timeoutMs` passes (`-1` waits
--- forever). `interests` is parallel to `fds`: bit 1 asks for readable, bit 2
--- for writable. The result is parallel too: bit 1 readable, bit 2 writable,
+-- | Waits until any of the descriptors is ready, or the timeout in
+-- milliseconds passes (`-1` waits forever). The interests are parallel to the
+-- descriptors: bit 1 asks for readable, bit 2 for writable. The result is parallel too: bit 1 readable, bit 2 writable,
 -- both bits on an error or hangup so a retry surfaces the error.
 extern ioPoll : Array Int ->
   Array Int ->
@@ -331,7 +331,7 @@ extern netTryRecvBytes : Int ->
 -- written, which may be short.
 extern netTrySend : Int -> Array Int -> <Net "_"> Result String (Option Int)
 
--- | `netTrySend` starting at `offset` into the array, sending at most 64 KiB
+-- | `netTrySend` starting at the given offset into the array, sending at most 64 KiB
 -- per call, so a loop over a large payload pays only for the bytes it sends.
 extern netTrySendFrom : Int ->
   Array Int ->
@@ -354,7 +354,7 @@ extern allocBytes : Unit -> <IO> Float
 
 -- # Random numbers
 
--- | A random integer between `lo` and `hi`, inclusive.
+-- | A random integer between its two arguments, inclusive.
 extern randomInt : Int -> Int -> <Rand> Int
 
 -- | A random boolean.
@@ -370,7 +370,8 @@ extern randomChar : Unit -> <Rand> Char
 -- repeatable.
 extern setSeed : Int -> <Rand> Unit
 
--- | Exactly `n` bytes from the operating system's entropy source.
+-- | Exactly the given number of bytes from the operating system's entropy
+-- source.
 -- Independent of `setSeed`. Panics for a negative length or when the source
 -- fails.
 extern osEntropyBytes : Int -> <Rand> Array Int
@@ -440,10 +441,11 @@ extern bitOr : Int -> Int -> Int
 -- | Bitwise exclusive or.
 extern bitXor : Int -> Int -> Int
 
--- | `a` shifted left by `n` bits.
+-- | The first argument shifted left by the second, in bits.
 extern shiftLeft : Int -> Int -> Int
 
--- | `a` shifted right by `n` bits, filling with zeros.
+-- | The first argument shifted right by the second, in bits, filling with
+-- zeros.
 extern shiftRight : Int -> Int -> Int
 
 -- | Bitwise complement.
@@ -462,7 +464,7 @@ extern sqrt : Float -> Float
 -- | The cube root.
 extern cbrt : Float -> Float
 
--- | e raised to the power `x`.
+-- | e raised to the given power.
 extern exp : Float -> Float
 
 -- | The natural logarithm.
@@ -501,19 +503,19 @@ extern cosh : Float -> Float
 -- | The hyperbolic tangent.
 extern tanh : Float -> Float
 
--- | The largest integral value not greater than `x`.
+-- | The largest integral value not greater than the argument.
 extern floor : Float -> Float
 
--- | The smallest integral value not less than `x`.
+-- | The smallest integral value not less than the argument.
 extern ceil : Float -> Float
 
 -- | The nearest integral value, with halves rounded away from zero.
 extern round : Float -> Float
 
--- | The integral part of `x`, rounding towards zero.
+-- | The integral part of the argument, rounding towards zero.
 extern trunc : Float -> Float
 
--- | `x` raised to the power `y`.
+-- | The first argument raised to the power of the second.
 extern pow : Float -> Float -> Float
 
 -- | The angle in radians of the point `(x, y)`, given as `atan2 y x`.
@@ -535,8 +537,7 @@ extern intBitsToFloat : Int -> Float
 -- an offset. Bytes are `0` to `255`.
 extern bytesToFloat64 : Array Int -> Int -> Float
 
--- | A float as its eight big-endian IEEE 754 bytes, `0` to `255` each. The
--- inverse of `bytesToFloat64`.
+-- | A float as its eight big-endian IEEE 754 bytes, `0` to `255` each.
 extern floatToBytes64 : Float -> Array Int
 
 -- # Rendering
@@ -566,10 +567,11 @@ extern debugCharLit : Char -> String
 -- | The number of elements.
 extern arrayLength : Array a -> Int
 
--- | A new array of `n` copies of a value.
+-- | A new array of the given length, every element a copy of the value.
 extern arrayMake : Int -> a -> Array a
 
--- | A new array of length `n` whose element at each index `i` is `f i`.
+-- | A new array of the given length whose element at each index is the
+-- function applied to that index.
 extern arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 
 -- | The element at an index, with no bounds check. For library internals
@@ -605,7 +607,7 @@ extern arrayFromList : List a -> Array a
 -- restricted to the standard library and to modules compiled with
 -- `--allow-internal`.
 
--- | A new block of `n` zero bytes.
+-- | A new block of the given number of zero bytes.
 extern byteBlockMake : Int -> ByteBlock
 
 -- | The number of bytes.
@@ -619,7 +621,8 @@ extern byteBlockGetUnsafe : Int -> ByteBlock -> Int
 -- bounds check. For library internals that have already checked the index.
 extern byteBlockSetUnsafe : Int -> Int -> ByteBlock -> Unit
 
--- | A new block holding the first `n` bytes, with no bounds check. This is
+-- | A new block holding the given number of leading bytes, with no bounds
+-- check. This is
 -- how a finished builder is frozen: the result shares nothing with its
 -- source, so later writes to the source do not reach it.
 extern byteBlockCopyUnsafe : Int -> ByteBlock -> ByteBlock
@@ -695,8 +698,8 @@ extern stringSlice : Int -> Int -> String -> String
 -- | The strings joined end to end.
 extern stringConcat : List String -> String
 
--- | The position of the first occurrence of `needle` in `haystack`, or
--- `None`.
+-- | The position of the first occurrence of the first string in the second,
+-- or `None`.
 extern stringIndexOf : String -> String -> Option Int
 
 -- | The ordering of two strings, by codepoint.

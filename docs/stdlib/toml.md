@@ -10,8 +10,9 @@ an error, never silently dropped.
 
 The parsed `Toml` is a flat list of keys and values, with every key
 qualified by its section: `name` under `[package]` is `"package.name"`,
-and a key under the `i`-th `[[gate]]` header is `"gate.i.name"`. The
-`get` functions look a value up by that qualified key; `tableCount` and
+and a key under the `i`-th `[[gate]]` header is `"gate.i.name"`.
+`getString`, `getInt`, `getBool` and `getArray` look a value up by that
+qualified key; `tableCount` and
 `tableEntry` work with array-of-table entries. There is no writer.
 
 ## The document
@@ -47,6 +48,7 @@ Instances: `Eq`, `Debug`, [`Display`](#display-toml)
 
 ```
 parse : String -> Result String Toml
+parse s
 ```
 
 The document written in a TOML string, or `Err` with a message for
@@ -68,6 +70,7 @@ Ok Toml [("gate.0.name", TString "a"), ("gate.1.name", TString "b")]
 
 ```
 getString : String -> Toml -> Option String
+getString key _
 ```
 
 The string at a qualified key, or `None` when the key is absent or
@@ -84,6 +87,7 @@ None
 
 ```
 getArray : String -> Toml -> Option (List String)
+getArray key _
 ```
 
 The array of strings at a qualified key, or `None` when the key is
@@ -100,6 +104,7 @@ Some []
 
 ```
 getInt : String -> Toml -> Option Int
+getInt key _
 ```
 
 The integer at a qualified key, or `None` when the key is absent or
@@ -116,6 +121,7 @@ None
 
 ```
 getBool : String -> Toml -> Option Bool
+getBool key _
 ```
 
 The boolean at a qualified key, or `None` when the key is absent or
@@ -134,6 +140,7 @@ None
 
 ```
 tableCount : String -> Toml -> Int
+tableCount name _
 ```
 
 The number of `[[name]]` entries in the document.
@@ -149,13 +156,14 @@ The number of `[[name]]` entries in the document.
 
 ```
 tableEntry : String -> Int -> Toml -> Option Toml
+tableEntry name i _
 ```
 
 The `i`-th `[[name]]` entry, counting from `0`, as a document of its
 own, or `None` when `i` is out of range.
 
-The entry's keys are unqualified, so the `get` functions apply to it
-directly.
+The entry's keys are unqualified, so `getString` and its siblings apply
+to it directly.
 
 ```medaka
 > parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""

@@ -4,6 +4,7 @@
 
 ```
 triple : Int -> Int
+triple x
 ```
 
 Triple an Int.

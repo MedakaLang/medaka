@@ -38,7 +38,12 @@ read.
 ### What a doc comment contains
 
 The signature is printed above the prose, so the prose never restates the
-type. It says what the signature cannot.
+type. It says what the signature cannot. Under a function's signature the
+page also prints its head, `take n _`: the parameter names the defining
+clauses bind, position by position, with `_` for a position every clause
+destructures. An as-pattern (`blit (src@(MutBytes sb)) …`) names a
+destructured argument. A zero-argument value, a point-free definition, an
+`extern` and an interface method have no head.
 
 1. **A first sentence that stands alone.** It is the summary a reader skims,
    and it must make sense with nothing after it. Write it as a statement
@@ -78,8 +83,14 @@ Everything else stays out. In particular:
 - No emphasis for warning: no capitals, no bold, no emoji. If a fact matters,
   say it in a sentence.
 - Name arguments in backticks when the prose refers to them (`n`, `sep`,
-  `xs`). Name other functions the same way, and qualify them with the module
-  when they live elsewhere (`string.split`, `map.Map`).
+  `xs`), by the name the head line shows. Name other functions the same way,
+  and qualify them with the module when they live elsewhere (`string.split`,
+  `map.Map`). Every backticked name must be visible on the rendered page: a
+  local, a private helper, an abstract type's constructor, or an `extern`'s
+  argument is not, so the prose describes it instead of naming it
+  (`test/diff_compiler_doc_stdlib_reference.sh` checks this; a literal of
+  another language, such as a regex atom, goes in
+  `test/STDLIB-DOC-NAME-EXCEPTIONS.txt`).
 - Prefer "when" to "if" for conditions on values: "empty when `n <= 0`".
 - Say `None`, `Some`, `Ok`, `Err` for results; say "panics" only for
   operations that actually panic, and say what panics.

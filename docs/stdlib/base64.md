@@ -18,6 +18,7 @@ skipped.
 
 ```
 encode : Array Int -> String
+encode bytes
 ```
 
 The bytes as standard base64, padded with `=`.
@@ -33,6 +34,7 @@ The bytes as standard base64, padded with `=`.
 
 ```
 encodeUrlSafe : Array Int -> String
+encodeUrlSafe bytes
 ```
 
 The bytes as URL and filename safe base64, padded with `=`.
@@ -46,6 +48,7 @@ The bytes as URL and filename safe base64, padded with `=`.
 
 ```
 encodeString : String -> String
+encodeString s
 ```
 
 The UTF-8 bytes of a string as standard base64.
@@ -61,6 +64,7 @@ The UTF-8 bytes of a string as standard base64.
 
 ```
 decode : String -> Result String (Array Int)
+decode s
 ```
 
 The bytes written in standard base64.
@@ -79,6 +83,7 @@ Err "base64.decode: length not a multiple of 4"
 
 ```
 decodeUrlSafe : String -> Result String (Array Int)
+decodeUrlSafe s
 ```
 
 The bytes written in URL and filename safe base64.
@@ -92,6 +97,7 @@ Ok [|255, 239, 191|]
 
 ```
 decodeString : String -> Result String String
+decodeString s
 ```
 
 The string whose UTF-8 bytes are written in standard base64.

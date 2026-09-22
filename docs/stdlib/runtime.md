@@ -92,8 +92,8 @@ Reads all of standard input.
 readExactly : Int -> <Stdin> Option String
 ```
 
-Reads exactly `n` bytes from standard input, or `None` at end of input
-or on a short read.
+Reads exactly the given number of bytes from standard input, or `None`
+at end of input or on a short read.
 
 ## Mutable references
 
@@ -149,7 +149,7 @@ writeFileMode : String -> Int -> String -> <FileWrite _> Result String Unit
 ```
 
 Writes a string to a file, replacing any existing contents, and leaves
-the file at exactly the permission bits `mode` names (`384` is
+the file at exactly the permission bits the given mode names (`384` is
 `rw-------`, `420` is `rw-r--r--`).
 
 The contents never exist at a wider mode: the mode is set on the open
@@ -363,7 +363,7 @@ written, which may be fewer than given.
 netSendFrom : Int -> Array Int -> Int -> <Net _> Result String Int
 ```
 
-Sends bytes starting at `offset` into the array. The result is the number
+Sends bytes starting at the given offset into the array. The result is the number
 of bytes written, which may be fewer than given and is limited to 64 KiB per
 call so a loop can retain one array while advancing through it.
 
@@ -373,7 +373,7 @@ call so a loop can retain one array while advancing through it.
 netRecv : Int -> Int -> <Net _> Result String (Array Int)
 ```
 
-Receives up to `n` bytes from a connection. An empty array means the
+Receives up to the given number of bytes from a connection. An empty array means the
 other side has closed.
 
 ### `netShutdown`
@@ -408,9 +408,9 @@ means no timeout.
 ioPoll : Array Int -> Array Int -> Int -> <Net _> Result String (Array Int)
 ```
 
-Waits until any of `fds` is ready, or `timeoutMs` passes (`-1` waits
-forever). `interests` is parallel to `fds`: bit 1 asks for readable, bit 2
-for writable. The result is parallel too: bit 1 readable, bit 2 writable,
+Waits until any of the descriptors is ready, or the timeout in
+milliseconds passes (`-1` waits forever). The interests are parallel to the
+descriptors: bit 1 asks for readable, bit 2 for writable. The result is parallel too: bit 1 readable, bit 2 writable,
 both bits on an error or hangup so a retry surfaces the error.
 
 ### `netSetNonblock`
@@ -486,7 +486,7 @@ written, which may be short.
 netTrySendFrom : Int -> Array Int -> Int -> <Net _> Result String (Option Int)
 ```
 
-`netTrySend` starting at `offset` into the array, sending at most 64 KiB
+`netTrySend` starting at the given offset into the array, sending at most 64 KiB
 per call, so a loop over a large payload pays only for the bytes it sends.
 
 ## Time
@@ -531,7 +531,7 @@ The total number of bytes the program has allocated.
 randomInt : Int -> Int -> <Rand> Int
 ```
 
-A random integer between `lo` and `hi`, inclusive.
+A random integer between its two arguments, inclusive.
 
 ### `randomBool`
 
@@ -572,7 +572,8 @@ repeatable.
 osEntropyBytes : Int -> <Rand> Array Int
 ```
 
-Exactly `n` bytes from the operating system's entropy source.
+Exactly the given number of bytes from the operating system's entropy
+source.
 Independent of `setSeed`. Panics for a negative length or when the source
 fails.
 
@@ -723,7 +724,7 @@ Bitwise exclusive or.
 shiftLeft : Int -> Int -> Int
 ```
 
-`a` shifted left by `n` bits.
+The first argument shifted left by the second, in bits.
 
 ### `shiftRight`
 
@@ -731,7 +732,8 @@ shiftLeft : Int -> Int -> Int
 shiftRight : Int -> Int -> Int
 ```
 
-`a` shifted right by `n` bits, filling with zeros.
+The first argument shifted right by the second, in bits, filling with
+zeros.
 
 ### `bitNot`
 
@@ -765,7 +767,7 @@ The cube root.
 exp : Float -> Float
 ```
 
-e raised to the power `x`.
+e raised to the given power.
 
 ### `log`
 
@@ -869,7 +871,7 @@ The hyperbolic tangent.
 floor : Float -> Float
 ```
 
-The largest integral value not greater than `x`.
+The largest integral value not greater than the argument.
 
 ### `ceil`
 
@@ -877,7 +879,7 @@ The largest integral value not greater than `x`.
 ceil : Float -> Float
 ```
 
-The smallest integral value not less than `x`.
+The smallest integral value not less than the argument.
 
 ### `round`
 
@@ -893,7 +895,7 @@ The nearest integral value, with halves rounded away from zero.
 trunc : Float -> Float
 ```
 
-The integral part of `x`, rounding towards zero.
+The integral part of the argument, rounding towards zero.
 
 ### `pow`
 
@@ -901,7 +903,7 @@ The integral part of `x`, rounding towards zero.
 pow : Float -> Float -> Float
 ```
 
-`x` raised to the power `y`.
+The first argument raised to the power of the second.
 
 ### `atan2`
 
@@ -934,8 +936,7 @@ The float whose IEEE 754 bit pattern is the given integer.
 floatToBytes64 : Float -> Array Int
 ```
 
-A float as its eight big-endian IEEE 754 bytes, `0` to `255` each. The
-inverse of `bytesToFloat64`.
+A float as its eight big-endian IEEE 754 bytes, `0` to `255` each.
 
 ## Rendering
 
@@ -971,7 +972,7 @@ The number of elements.
 arrayMake : Int -> a -> Array a
 ```
 
-A new array of `n` copies of a value.
+A new array of the given length, every element a copy of the value.
 
 ### `arrayMakeWith`
 
@@ -979,7 +980,8 @@ A new array of `n` copies of a value.
 arrayMakeWith : Int -> (Int -> <e> a) -> <e> Array a
 ```
 
-A new array of length `n` whose element at each index `i` is `f i`.
+A new array of the given length whose element at each index is the
+function applied to that index.
 
 ### `arrayCopy`
 
@@ -1113,8 +1115,8 @@ The strings joined end to end.
 stringIndexOf : String -> String -> Option Int
 ```
 
-The position of the first occurrence of `needle` in `haystack`, or
-`None`.
+The position of the first occurrence of the first string in the second,
+or `None`.
 
 ### `stringCompare`
 

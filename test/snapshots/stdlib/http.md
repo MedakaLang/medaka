@@ -334,7 +334,7 @@ requestBodyLength : Request -> Int
 requestBodyLength (Request _ _ _ _ body _) = B.length body
 
 -- | Whether the connection stays open after this request. `False` when a
--- `Connection` field lists `close`, otherwise `True`.
+-- `Connection` field lists `"close"`, otherwise `True`.
 export
 requestKeepAlive : Request -> Bool
 requestKeepAlive (Request _ _ _ _ _ keepAlive) = keepAlive
@@ -1445,7 +1445,7 @@ parseRequestClassified input = settle (parseWholeBuffer input)
 
 -- | The verdict of a scan. `HttpNeedMore` means more bytes could still
 -- complete the request. `HttpFramedAt n` means a complete request ends at
--- `n`, where the next one begins. `HttpFrameFailed` means no further byte
+-- that offset, where the next one begins. `HttpFrameFailed` means no further byte
 -- can help.
 public export data HttpFrame =
   | HttpNeedMore
