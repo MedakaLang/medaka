@@ -755,19 +755,11 @@ and `export impl Foo Int where …` are the valid forms (both used already, in
 `stdlib/core.mdk`, above); `public export interface Foo a where …` is rejected with
 `` `public` only applies to `data` declarations ``, caret on the `public` token.
 
-⚠️ **`export import <mod>.{name}` does NOT re-export a name that `<mod>` itself
-only has via its own `export import core.{name}`** (re-exporting something
-that originates in the implicit prelude module `core`) — it type-checks with
-**zero diagnostic** at the `export import` site, then a downstream
-`import <mod>.{name}` fails with `R-PRIVATE-NAME: Module '<mod>' has no
-exported name 'name'`. This reproduces on current `main` (verified against a
-freshly-built binary, not a stale one) and is a **real compiler bug**, not a
-doc error — filed as a finding by this pass, not fixed here. Concretely:
-`stdlib/list.mdk` re-exports `core`'s `filter` "for discoverability" (its own
-comment says so) but `import list.{filter}` from a third module fails. This is
-why the re-export example above uses `reverse`/`take` (defined directly in
-`list.mdk`) rather than `map`/`filter` (the latter live in `core`, so they
-need no import at all — see stdlib docs).
+`export import` carries a name along a chain of re-exports, including a name that
+originates in the implicit prelude module `core`: a module that writes
+`export import core.{filter}` makes `import <mod>.{filter}` resolve in a third module,
+at every hop. (`filter` itself needs no import, since `core` is the prelude; the form
+matters to a module publishing a curated surface.)
 
 ### Import aliasing (`as`)
 
@@ -796,21 +788,15 @@ main = println (EA.emit ++ emitB)
 Haskell's `qualified`). That is what makes a collision resolvable: `import emit_a as A`
 and `import emit_b as B` puts both modules' `emit` in scope, as `A.emit` and `B.emit`.
 
-**Interface methods are the one exception, and it is not a special case of aliasing — it
-falls out of how methods are bound at all.** A method is not a per-module binding the way
-an ordinary value is: every impl of a method shares exactly one dispatch-table cell keyed
-by the method's bare name (`compiler/types/typecheck.mdk`'s `renameAliasedMethods`), so an
-alias cannot create "a new binding under `A.name`" for a method the way it does for a
-value — there is no second binding to make. Importing a module — aliased, selective, or
-bare — brings its impls into dispatch scope regardless of the import form, the same rule
-that makes a bare `import map` (binding no names at all) still change dispatch behavior
-(see stdlib import forms, above). `import m as A` therefore binds `m`'s methods under
-their bare origin name too, alongside `A.name`; only `m`'s non-method values are
-alias-qualified-only. Fixed 2026-09-16 (#1812): `check`, `run`, `build`, the LSP, and the
-MCP tools all now agree on this.
+**Interface methods follow the same rule.** `import m as A` binds `m`'s methods as
+`A.method` only; the bare `method` stays unbound until a selective import
+(`import m.{method}`) or a wildcard brings it in. What every import form shares, aliased
+or not, is dispatch: importing a module in any form brings its `impl`s into scope, the
+same rule that makes a bare `import map` (binding no names at all) still change dispatch
+behavior (see stdlib import forms, above).
 
-**The consequence, for every module: a member RENAME of a method does not out-scope a
-local binding of the origin name; a module ALIAS does.** `import m.{size as sz}` is
+**A member RENAME of a method does not out-scope a local binding of the origin name; a
+module ALIAS does.** `import m.{size as sz}` is
 rewritten to the origin name before resolution — it is a second spelling of one cell, not
 a second binding — so a module that also declares its own `size` gets *that* one when it
 writes `sz`. `import m as M` keeps the dotted spelling all the way through inference, so

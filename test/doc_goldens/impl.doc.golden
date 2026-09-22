@@ -16,5 +16,3 @@ data Pair a
 
 Instances: `Box`
 
-## Instances
-

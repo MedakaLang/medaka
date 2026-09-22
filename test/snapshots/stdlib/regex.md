@@ -1,31 +1,28 @@
 # META
-source_lines=1683
+source_lines=1674
 stages=DESUGAR,MARK
 # SOURCE
 {- | Regular expressions, matched in linear time.
 
-   Patterns use Perl syntax restricted to the regular subset, the dialect Go
-   `regexp` and RE2 accept. There are no backreferences and no lookaround, and
-   in exchange a match costs `O(n * m)` in subject length and pattern size
-   with no subject that makes it blow up. When more than one match is
-   possible the leftmost one wins, and among the matches starting there the
-   one the pattern prefers: alternation order first, greedy before lazy. So
-   `a|ab` matches `"a"` in `"ab"`, which is what Perl and Go give and not
-   POSIX leftmost-longest.
+   Patterns use the RE2 dialect: Perl syntax without backreferences or
+   lookaround. A match costs `O(n * m)` in subject length and pattern size,
+   whatever the subject. When more than one match is possible the leftmost
+   one wins, and among the matches starting there the pattern's preference
+   decides: alternation order first, greedy before lazy. So `a|ab` matches
+   `"a"` in `"ab"`, not the longest alternative.
 
    Positions are codepoint offsets, as in `string.indexOf`. `.` matches any
    codepoint but `\n`, and `\d`, `\w`, `\s`, `\b` and `(?i)` folding are
    ASCII only, matching `string.isDigit` and `string.toUpper`.
 
    A subject may also be a UTF-8 byte buffer rather than a `String`:
-   `isFullMatchBytes` and `findBytes` match over a window of an `Array Int`
-   with each byte a code 0..255, which is what a protocol grammar whose limits
-   are stated in bytes wants.
+   `isFullMatchBytes` and `findBytes` match a window of an `Array Int`, with
+   each byte a code from `0` to `255`.
 
-   `compile` reports a bad pattern as an `Err`, and `mustCompile` panics,
-   which suits a pattern written as a literal. A top-level binding is
-   evaluated once, so `wordRe = mustCompile "\\w+"` compiles one time
-   however often it is used.
+   `compile` reports a bad pattern as an `Err`; `mustCompile` panics, which
+   suits a pattern written as a literal. A top-level binding is evaluated
+   once, so `wordRe = mustCompile "\\w+"` compiles one time however often
+   it is used.
 
    Every escape in a pattern needs its backslash doubled in Medaka source,
    because a plain string literal accepts only `\n`, `\t`, `\r`, `\0`, `\\`,
@@ -51,7 +48,7 @@ stages=DESUGAR,MARK
 
    A `{` that does not open a valid bound is a literal `{`. Named groups,
    POSIX classes, Unicode classes and inline flag scoping are rejected with
-   a message naming what is missing. -}
+   a message naming the unsupported feature. -}
 
 -- The engine is a Thompson NFA run as a Pike VM: the pattern parses to a
 -- tree, the tree compiles to a flat instruction array, and the VM walks the
@@ -117,7 +114,7 @@ public export data Match = Match {
 export impl Debug Regex where
   debug re = "regex " ++ debugStringLit re.src
 
--- # Character sets
+-- Character sets
 --
 -- A set is a flat Array Int of lo,hi pairs plus a negation flag.  Matching
 -- scans the pairs, which is short enough that an ordered structure would
@@ -195,7 +192,7 @@ clipShift lo hi blo bhi shift =
   let h = min hi bhi
   if l <= h then [(l + shift, h + shift)] else []
 
--- # Pattern tree
+-- Pattern tree
 
 -- Assertion kinds, the payload of NAssert and IAssert.
 asStart : Int
@@ -238,7 +235,7 @@ nodeSize (NPlus _ b) = 1 + nodeSize b
 nodeSize (NOpt _ b) = 1 + nodeSize b
 nodeSize (NGroup _ b) = 2 + nodeSize b
 
--- # Parser
+-- Parser
 
 repeatCap : Int
 repeatCap = 1000
@@ -807,7 +804,7 @@ setSingle st =
     advance st
     Some (charCode c)
 
--- # Program
+-- Program
 
 data Inst =
   | IChar Int
@@ -856,7 +853,7 @@ compileNode (NOpt greedy body) pc =
 compileNode (NGroup idx body) pc =
   ISave (2 * idx) :: compileNode body (pc + 1) ++ [ISave (2 * idx + 1)]
 
--- # Pike VM
+-- Pike VM
 
 -- Slot 0 and 1 hold the whole match and are written by the VM itself; group
 -- k owns slots 2k and 2k+1, written by ISave.
@@ -1207,10 +1204,9 @@ finishCompile st node pattern multi = match !st.perr
 
 {- | The pattern compiled, panicking when it does not compile.
 
-   For a pattern written as a literal, where a failure is a mistake in the
-   program rather than in the data. A top-level binding is evaluated once, so
-   the compilation happens one time. Use `compile` for a pattern that comes
-   from input.
+   Use it for a pattern written as a literal in the program, and `compile`
+   for a pattern that comes from input. A top-level binding is evaluated
+   once, so the pattern compiles one time.
 
    > source (mustCompile "[0-9]+")
    "[0-9]+" -}
@@ -1230,11 +1226,11 @@ export
 source : Regex -> String
 source re = re.src
 
-{- | The text as a pattern matching exactly itself, every metacharacter
-   quoted.
+{- | The text as a pattern matching exactly itself, with every
+   metacharacter quoted.
 
-   This is how a literal, a glob, or a SQL `LIKE` pattern becomes a regex:
-   translate the wildcards and send everything else through `escape`.
+   Use it to embed input, such as a search string or the literal parts of a
+   glob, in a larger pattern.
 
    > escape "a.b*c"
    "a\\.b\\*c"
@@ -1288,10 +1284,8 @@ isMatch re s = match searchFrom re (codesOf s) 0 False False (Ref 0)
 
 {- | Whether the pattern matches the whole subject.
 
-   The validator shape: anchored at both ends, so a pattern that would match
-   a prefix does not pass. Among the whole-subject matches the pattern still
-   picks its preferred one, so `isFullMatch` is not `isMatch` of an anchored
-   pattern with a shorter alternative first.
+   The pattern is anchored at both ends, so a pattern that matches only a
+   prefix or a suffix does not pass.
 
    > isFullMatch (mustCompile "[a-z]+") "abc"
    True
@@ -1353,76 +1347,6 @@ export
 fullMatch : Regex -> String -> Option Match
 fullMatch re s = matchOnce re s 0 True True
 
--- # Byte subjects
---
--- One engine, two front doors.  A site holding a UTF-8 byte buffer grades a
--- window of it directly, with each byte taken as a code 0..255, rather than
--- decoding back to a String to be re-encoded as codepoints.
-
-{- | Whether the pattern matches the whole of `bytes[start..end)`, each byte
-   taken as a code 0..255.
-
-   The validator shape for a byte buffer, and the reason a protocol grammar
-   wants this door: a bound written into the pattern counts BYTES, which is
-   what a DNS label, a DID or an RFC 7230 token means by its limits, and the
-   window grades a slice of a larger buffer without copying it. `start` and
-   `end` are clamped to the buffer, and `^`, `$` and `\b` mean the ends of the
-   window.
-
-   A pattern reaching this door should name only ASCII: `[a-z]` matches the
-   byte 97, and a non-ASCII codepoint arrives as its two or more UTF-8 bytes,
-   each of them outside every ASCII class. `toUtf8 "abc"` is `[|97, 98, 99|]`.
-
-   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
-   True
-   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
-   True
-   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
-   False -}
-export
-isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
-isFullMatchBytes re bytes start end =
-  let (lo, hi) = clampWindow bytes start end
-  match searchWindow re bytes (lo, hi) lo True True (Ref 0)
-    Some _ => True
-    None => False
-
--- An out-of-range window is shorter, never a panic, and an empty one matches
--- only a pattern that can match nothing.
--- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 0 99
--- True
--- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 5 1
--- True
--- > isFullMatchBytes (mustCompile "[a-z]+") [|97|] 5 1
--- False
-
--- `^` and `$` are the ends of the WINDOW, so a slice grades as that slice
--- standing alone.
--- > isFullMatchBytes (mustCompile "^b$") [|97, 98, 99|] 1 2
--- True
-
-{- | The leftmost match in `bytes[start..end)`, or `None`.
-
-   The peer of `find` over a byte buffer. `start`, `end` and the reported
-   offsets are byte offsets into the whole buffer, and the match's text and
-   each group's text are the matched bytes decoded as UTF-8, so a span that
-   cuts a codepoint decodes the way `fromUtf8` decodes any malformed input.
-   Keeping byte patterns ASCII is what keeps that from arising.
-
-   > map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
-   Some "12"
-   > map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
-   Some 1
-   > findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
-   None -}
-export
-findBytes : Regex -> Array Int -> Int -> Int -> Option Match
-findBytes re bytes start end =
-  let (lo, hi) = clampWindow bytes start end
-  map
-    (mkMatchWith (from to => fromUtf8 (sliceBytes from to bytes)) re)
-    (searchWindow re bytes (lo, hi) lo False False (Ref 0))
-
 {- | Every match, left to right, none of them overlapping.
 
    An empty match is kept, except directly at the end of the previous match:
@@ -1467,7 +1391,74 @@ findAllGo re s codes pos prevEnd acc =
 -- > map (m => (m : Match).text) (findAll (mustCompile "") "abc")
 -- ["", "", "", ""]
 
--- # Groups
+-- # Byte subjects
+--
+-- One engine, two front doors.  A site holding a UTF-8 byte buffer grades a
+-- window of it directly, with each byte taken as a code 0..255, rather than
+-- decoding back to a String to be re-encoded as codepoints.
+
+{- | Whether the pattern matches the whole of `bytes[start..end)`, each byte
+   taken as a code from 0 to 255.
+
+   The window is matched in place, without copying, and a bound in the
+   pattern counts bytes rather than codepoints. `start` and `end` are clamped
+   to the buffer, and `^`, `$` and `\b` refer to the ends of the window.
+
+   A pattern applied to bytes should name only ASCII: `[a-z]` matches the
+   byte 97, and a non-ASCII codepoint arrives as two or more UTF-8 bytes, none
+   of which any ASCII class matches. `toUtf8 "abc"` is `[|97, 98, 99|]`.
+
+   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99|] 0 3
+   True
+   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 3
+   True
+   > isFullMatchBytes (mustCompile "[a-z]+") [|97, 98, 99, 46|] 0 4
+   False -}
+export
+isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
+isFullMatchBytes re bytes start end =
+  let (lo, hi) = clampWindow bytes start end
+  match searchWindow re bytes (lo, hi) lo True True (Ref 0)
+    Some _ => True
+    None => False
+
+-- An out-of-range window is shorter, never a panic, and an empty one matches
+-- only a pattern that can match nothing.
+-- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 0 99
+-- True
+-- > isFullMatchBytes (mustCompile "[a-z]*") [|97|] 5 1
+-- True
+-- > isFullMatchBytes (mustCompile "[a-z]+") [|97|] 5 1
+-- False
+
+-- `^` and `$` are the ends of the WINDOW, so a slice grades as that slice
+-- standing alone.
+-- > isFullMatchBytes (mustCompile "^b$") [|97, 98, 99|] 1 2
+-- True
+
+{- | The leftmost match in `bytes[start..end)`, or `None`.
+
+   `find` over a byte buffer. `start`, `end` and the reported offsets are
+   byte offsets into the whole buffer. The match's text and each group's
+   text are the matched bytes decoded as UTF-8, so a span that cuts a
+   codepoint decodes as `string.fromUtf8` decodes malformed input. An
+   ASCII-only pattern never produces such a span.
+
+   > map (m => (m : Match).text) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   Some "12"
+   > map (m => (m : Match).start) (findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 4)
+   Some 1
+   > findBytes (mustCompile "[0-9]+") [|97, 49, 50, 98|] 0 1
+   None -}
+export
+findBytes : Regex -> Array Int -> Int -> Int -> Option Match
+findBytes re bytes start end =
+  let (lo, hi) = clampWindow bytes start end
+  map
+    (mkMatchWith (from to => fromUtf8 (sliceBytes from to bytes)) re)
+    (searchWindow re bytes (lo, hi) lo False False (Ref 0))
+
+-- Groups
 
 -- > map (m => m.groups) (find (mustCompile "(a)(b)") "ab")
 -- Some [Some Group { start = 0, end = 1, text = "a" }, Some Group { start = 1, end = 2, text = "b" }]
@@ -1597,7 +1588,7 @@ splitGo s (m :: rest) beg _ acc =
 -- > split (mustCompile "") "abc"
 -- ["a", "b", "c"]
 
--- # Anchors, classes, and flags
+-- Anchors, classes, and flags
 
 -- > map (m => ((m : Match).start, (m : Match).end)) (find (mustCompile "^a*") "aab")
 -- Some (0, 2)
@@ -1638,7 +1629,7 @@ splitGo s (m :: rest) beg _ acc =
 -- > map (m => (m : Match).text) (find (mustCompile "\\x41\\u{42}") "xABy")
 -- Some "AB"
 
--- # Linear time
+-- Linear time
 
 -- `(a*)*b` and `(a|a)*b` are the two patterns a backtracking engine dies
 -- on: either takes exponential time against a run of `a` with no `b` after
@@ -1662,7 +1653,7 @@ splitGo s (m :: rest) beg _ acc =
 -- > (arrayLength (mustCompile "(a|a)*b").prog, findSteps (mustCompile "(a|a)*b") (repeat 5000 "a"))
 -- (10, 55006)
 
--- # Properties
+-- Properties
 
 prop "escape s full-matches exactly s" (s : String) =
   isFullMatch (mustCompile (escape s)) s
@@ -1943,14 +1934,14 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "findFrom" ((PVar "from") (PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "at") (EApp (EApp (EVar "max") (ELit (LInt 0))) (EApp (EApp (EVar "min") (EVar "from")) (EVar "n")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "matchOnce") (EVar "re")) (EVar "s")) (EVar "at")) (EVar "False")) (EVar "False")))))
 (DTypeSig true "fullMatch" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Match")))))
 (DFunDef false "fullMatch" ((PVar "re") (PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "matchOnce") (EVar "re")) (EVar "s")) (ELit (LInt 0))) (EVar "True")) (EVar "True")))
-(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
-(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
-(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EVar "from")) (EVar "to")) (EVar "bytes"))))) (EVar "re"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "findAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Match")))))
 (DFunDef false "findAll" ((PVar "re") (PVar "s")) (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EListLit))))
 (DTypeSig false "findAllGo" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "List") (TyCon "Match")))))))))
 (DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EVar "codes")) (EVar "next")) (EVar "hi")) (EVar "acc2"))))))))
+(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
+(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
+(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EVar "map") (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EVar "from")) (EVar "to")) (EVar "bytes"))))) (EVar "re"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "replace" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replace" ((PVar "re") (PVar "repl") (PVar "s")) (EMatch (EApp (EApp (EVar "find") (EVar "re")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (EFieldAccess (EVar "m") "start")) (EVar "s")) (EApp (EApp (EVar "expandRepl") (EVar "repl")) (EVar "m"))) (EApp (EApp (EApp (EVar "sliceClamped") (EFieldAccess (EVar "m") "end")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
@@ -2242,14 +2233,14 @@ spansOrdered (m :: rest) floor =
 (DFunDef false "findFrom" ((PVar "from") (PVar "re") (PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoLet false false (PVar "at") (EApp (EApp (EMethodRef "max") (ELit (LInt 0))) (EApp (EApp (EMethodRef "min") (EVar "from")) (EVar "n")))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EVar "matchOnce") (EVar "re")) (EVar "s")) (EVar "at")) (EVar "False")) (EVar "False")))))
 (DTypeSig true "fullMatch" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "Option") (TyCon "Match")))))
 (DFunDef false "fullMatch" ((PVar "re") (PVar "s")) (EApp (EApp (EApp (EApp (EApp (EVar "matchOnce") (EVar "re")) (EVar "s")) (ELit (LInt 0))) (EVar "True")) (EVar "True")))
-(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
-(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
-(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
-(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EVar "from")) (EVar "to")) (EVar "bytes"))))) (EVar "re"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "findAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyApp (TyCon "List") (TyCon "Match")))))
 (DFunDef false "findAll" ((PVar "re") (PVar "s")) (EApp (EVar "reverse") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EApp (EVar "codesOf") (EVar "s"))) (ELit (LInt 0))) (EUnOp "-" (ELit (LInt 1)))) (EListLit))))
 (DTypeSig false "findAllGo" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "List") (TyCon "Match")) (TyApp (TyCon "List") (TyCon "Match")))))))))
 (DFunDef false "findAllGo" ((PVar "re") (PVar "s") (PVar "codes") (PVar "pos") (PVar "prevEnd") (PVar "acc")) (EIf (EBinOp ">" (EVar "pos") (EApp (EVar "arrayLength") (EVar "codes"))) (EVar "acc") (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchFrom") (EVar "re")) (EVar "codes")) (EVar "pos")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "None") () (EVar "acc")) (arm (PCon "Some" (PVar "slots")) () (EBlock (DoLet false false (PVar "lo") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 0))) (EVar "slots"))) (DoLet false false (PVar "hi") (EApp (EApp (EVar "arrayGetUnsafe") (ELit (LInt 1))) (EVar "slots"))) (DoLet false false (PVar "keep") (EApp (EVar "not") (EBinOp "&&" (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "==" (EVar "lo") (EVar "prevEnd"))))) (DoLet false false (PVar "next") (EIf (EBinOp "==" (EVar "hi") (EVar "lo")) (EBinOp "+" (EVar "lo") (ELit (LInt 1))) (EVar "hi"))) (DoLet false false (PVar "acc2") (EIf (EVar "keep") (EBinOp "::" (EApp (EApp (EApp (EVar "mkMatch") (EVar "re")) (EVar "s")) (EVar "slots")) (EVar "acc")) (EVar "acc"))) (DoExpr (EApp (EApp (EApp (EApp (EApp (EApp (EVar "findAllGo") (EVar "re")) (EVar "s")) (EVar "codes")) (EVar "next")) (EVar "hi")) (EVar "acc2"))))))))
+(DTypeSig true "isFullMatchBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyCon "Bool"))))))
+(DFunDef false "isFullMatchBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "True")) (EVar "True")) (EApp (EVar "Ref") (ELit (LInt 0)))) (arm (PCon "Some" PWild) () (EVar "True")) (arm (PCon "None") () (EVar "False"))))))
+(DTypeSig true "findBytes" (TyFun (TyCon "Regex") (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "Option") (TyCon "Match")))))))
+(DFunDef false "findBytes" ((PVar "re") (PVar "bytes") (PVar "start") (PVar "end")) (EBlock (DoLet false false (PTuple (PVar "lo") (PVar "hi")) (EApp (EApp (EApp (EVar "clampWindow") (EVar "bytes")) (EVar "start")) (EVar "end"))) (DoExpr (EApp (EApp (EMethodRef "map") (EApp (EApp (EVar "mkMatchWith") (ELam ((PVar "from") (PVar "to")) (EApp (EVar "fromUtf8") (EApp (EApp (EApp (EVar "sliceBytes") (EVar "from")) (EVar "to")) (EVar "bytes"))))) (EVar "re"))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "searchWindow") (EVar "re")) (EVar "bytes")) (ETuple (EVar "lo") (EVar "hi"))) (EVar "lo")) (EVar "False")) (EVar "False")) (EApp (EVar "Ref") (ELit (LInt 0))))))))
 (DTypeSig true "replace" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))
 (DFunDef false "replace" ((PVar "re") (PVar "repl") (PVar "s")) (EMatch (EApp (EApp (EVar "find") (EVar "re")) (EVar "s")) (arm (PCon "None") () (EVar "s")) (arm (PCon "Some" (PVar "m")) () (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EVar "sliceClamped") (ELit (LInt 0))) (EFieldAccess (EVar "m") "start")) (EVar "s")) (EApp (EApp (EVar "expandRepl") (EVar "repl")) (EVar "m"))) (EApp (EApp (EApp (EVar "sliceClamped") (EFieldAccess (EVar "m") "end")) (EApp (EVar "stringLength") (EVar "s"))) (EVar "s"))))))
 (DTypeSig true "replaceAll" (TyFun (TyCon "Regex") (TyFun (TyCon "String") (TyFun (TyCon "String") (TyCon "String")))))

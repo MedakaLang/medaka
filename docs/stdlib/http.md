@@ -1,17 +1,21 @@
 # http
 
-Pure, bounded HTTP/1.1 request framing and response building.
+HTTP/1.1 message framing: request parsing, response building, and
+response parsing, over bytes the caller supplies.
 
-The parser accepts exactly one complete origin-form HTTP/1.1 request. It
-preserves field order and duplicates until framing has been validated,
-keeps bodies as raw bytes, and exposes connection lifetime as plain data.
-No socket, filesystem, or other effect is involved, so a caller supplies
-the bytes and decides what to do with the frame. `net` is the socket
-layer.
+Nothing here touches a socket or a file. `net` is the socket layer; this
+module turns the bytes it read into a `Request`, and a `Response` into
+the bytes to write. There is no client: the module opens no connection
+and speaks no TLS.
 
-Every ceiling the framer enforces is an exported `max*` value paired with
-a `check*` predicate, so a caller can test either side of a boundary
-without building a maximum-sized request.
+A request must be a complete HTTP/1.1 message with an origin-form
+target. Header fields keep their received order and duplicates, bodies
+stay raw bytes with any chunked coding removed, and whether the
+connection stays open is reported as a `Bool`.
+
+Every size and count the framer bounds is an exported `max*` value with
+a matching `check*` predicate, so a caller can test a limit without
+building a request that reaches it.
 
 ## Resource limits
 
@@ -164,7 +168,8 @@ diagnostic the framer reports otherwise.
 checkHttpResponseStatusLineBytes : Int -> Result String Unit
 ```
 
-`Ok` when `size` is within `maxHttpResponseStatusLineBytes`.
+`Ok` when `size` is within `maxHttpResponseStatusLineBytes`, `Err` with
+the diagnostic the framer reports otherwise.
 
 ### `checkHttpResponseChunkBytes`
 
@@ -172,7 +177,8 @@ checkHttpResponseStatusLineBytes : Int -> Result String Unit
 checkHttpResponseChunkBytes : Int -> Result String Unit
 ```
 
-`Ok` when `size` is within `maxHttpResponseChunkBytes`.
+`Ok` when `size` is within `maxHttpResponseChunkBytes`, `Err` with the
+diagnostic the framer reports otherwise.
 
 ### `checkHttpHeaderFields`
 
@@ -238,22 +244,20 @@ checkRawBodyBytes : Int -> Result String Unit
 ### `Header`
 
 ```
-data Header
-  = Header String (Array Int)
+data Header  -- abstract: the constructors are not exported
 ```
 
-An ordered HTTP field. Names are canonical lowercase ASCII; values are
-raw bytes with surrounding optional whitespace removed.
+One header or trailer field: a name and a value. The name is lowercase
+ASCII; the value is raw bytes with surrounding whitespace removed.
 
 ### `Request`
 
 ```
-data Request
-  = Request String String (List Header) (List Header) Bytes Bool
+data Request  -- abstract: the constructors are not exported
 ```
 
-A fully framed HTTP/1.1 request. Constructors stay private so callers
-cannot manufacture a request that bypassed framing checks.
+A framed HTTP/1.1 request. Values come only from the parsers in this
+module; the `request*` accessors read its parts.
 
 ### `HttpParseFailure`
 
@@ -263,9 +267,9 @@ data HttpParseFailure
   | HttpResourceExcess String
 ```
 
-Structural classification for request-framing failures. The diagnostic is
-retained for direct parser callers, while the server can select 400 versus
-413 without inspecting diagnostic text.
+Why framing failed. `HttpMalformed` is a message the grammar rejects;
+`HttpResourceExcess` is one that exceeds a `max*` ceiling. A server answers
+the first with 400 and the second with 413. Both carry the diagnostic.
 
 ### `httpParseFailureMessage`
 
@@ -281,7 +285,7 @@ The diagnostic a framing failure carries, whichever class it is.
 headerName : Header -> String
 ```
 
-The field's canonical lowercase ASCII name.
+The field's name, in lowercase ASCII.
 
 ### `headerValue`
 
@@ -289,9 +293,8 @@ The field's canonical lowercase ASCII name.
 headerValue : Header -> Array Int
 ```
 
-The field's raw value bytes, with surrounding optional whitespace
-already removed. The result is a copy, so mutating it cannot reach the
-header.
+The field's value bytes, with surrounding whitespace removed. The result
+is a copy.
 
 ### `requestMethod`
 
@@ -307,8 +310,8 @@ The request method token, exactly as it was received.
 requestTarget : Request -> String
 ```
 
-The origin-form request target, still percent-encoded. `parseTargetQuery`
-splits and decodes it.
+The request target, still percent-encoded. `parseTargetQuery` splits and
+decodes it.
 
 ### `requestHeaders`
 
@@ -324,8 +327,8 @@ The header fields in received order, duplicates retained.
 requestTrailers : Request -> List Header
 ```
 
-The trailer fields in received order, empty for a request that was not
-chunked.
+The trailer fields in received order, empty for a request whose body was
+not chunked.
 
 ### `requestBody`
 
@@ -333,11 +336,8 @@ chunked.
 requestBody : Request -> Bytes
 ```
 
-The decoded body bytes, with any chunked transfer coding removed. The
-stored body is already a private copy that framing cut out of the input
-(`bytes.slice` copies), and nothing else holds it, so this hands it out
-rather than copying again; a caller wanting an `Array Int` writes
-`toArray` and pays for the unpacking where it asked for it.
+The body, with any chunked transfer coding removed. Empty for a request
+without a body.
 
 ### `requestBodyLength`
 
@@ -345,7 +345,7 @@ rather than copying again; a caller wanting an `Array Int` writes
 requestBodyLength : Request -> Int
 ```
 
-Length of the framed body without copying its attacker-controlled bytes.
+The byte length of the decoded body.
 
 ### `requestKeepAlive`
 
@@ -353,8 +353,8 @@ Length of the framed body without copying its attacker-controlled bytes.
 requestKeepAlive : Request -> Bool
 ```
 
-Whether the connection stays open after this request, as its Connection
-field settled it.
+Whether the connection stays open after this request. `False` when a
+`Connection` field lists `close`, otherwise `True`.
 
 ### `isTokenByte`
 
@@ -362,7 +362,8 @@ field settled it.
 isTokenByte : Int -> Bool
 ```
 
-Whether `byte` is one of HTTP's ASCII token bytes.
+Whether `byte` is one of the ASCII bytes HTTP allows in a token, such as
+a method or a field name.
 
 ### `findByte`
 
@@ -370,8 +371,8 @@ Whether `byte` is one of HTTP's ASCII token bytes.
 findByte : Array Int -> Int -> Int -> Int -> Option Int
 ```
 
-Find `wanted` in the half-open range `value[pos, end)`. No element at or
-beyond `end` is inspected.
+The index of the first `wanted` in `value[pos, end)`, or `None`. No
+element at or past `end` is read.
 
 ### `trimLeftOws`
 
@@ -379,7 +380,8 @@ beyond `end` is inspected.
 trimLeftOws : Array Int -> Int -> Int -> Int
 ```
 
-Skip optional whitespace in the half-open range `value[pos, end)`.
+The index of the first byte in `value[pos, end)` that is not a space or
+a tab, or `end` when they all are.
 
 ### `trimRightOws`
 
@@ -387,7 +389,8 @@ Skip optional whitespace in the half-open range `value[pos, end)`.
 trimRightOws : Array Int -> Int -> Int -> Int
 ```
 
-Trim optional whitespace from the right edge of `value[start, end)`.
+The index one past the last byte in `value[start, end)` that is not a
+space or a tab, or `start` when they all are.
 
 ### `parseFields`
 
@@ -395,11 +398,13 @@ Trim optional whitespace from the right edge of `value[start, end)`.
 parseFields : Bytes -> Int -> Bool -> Result HttpParseFailure (List Header, Int)
 ```
 
-Parse a complete header or trailer section beginning at `pos`. Fields
-retain their received order and duplicates, names are lowercased, and
-surrounding optional whitespace is removed from values. When `trailer` is
-`True`, framing and routing fields forbidden in trailers are rejected.
-The returned offset is just past the section's empty-line CRLF.
+The fields of the header or trailer section starting at `pos`, and the
+offset just past the blank line that ends it.
+
+Names are lowercased, values lose their surrounding whitespace, and order
+and duplicates are kept. When `trailer` is `True`, the fields that may
+not appear in a trailer (`Content-Length`, `Transfer-Encoding`,
+`Trailer`, `Host`, `Connection`) are rejected.
 
 ### `hexDigit`
 
@@ -407,7 +412,8 @@ The returned offset is just past the section's empty-line CRLF.
 hexDigit : Int -> Option Int
 ```
 
-Decode one ASCII hexadecimal digit.
+The value of one ASCII hexadecimal digit, or `None` when `byte` is not
+one. Both letter cases are accepted.
 
 ### `skipOws`
 
@@ -415,7 +421,8 @@ Decode one ASCII hexadecimal digit.
 skipOws : Array Int -> Int -> Int -> Int
 ```
 
-Skip optional whitespace in the half-open range `value[pos, end)`.
+The index of the first byte in `value[pos, end)` that is not a space or
+a tab, or `end` when they all are. The same as `trimLeftOws`.
 
 ### `parseChunked`
 
@@ -423,10 +430,11 @@ Skip optional whitespace in the half-open range `value[pos, end)`.
 parseChunked : Bytes -> Int -> Result HttpParseFailure (Bytes, List Header, Int)
 ```
 
-Decode one complete chunked body beginning at `pos`. The result contains
-the decoded bytes, retained trailer fields, and the offset just past the
-terminating trailer section. Per-chunk, decoded-body, chunk-count, trailer,
-and framing ceilings are enforced before the result is returned.
+The decoded bytes of the chunked body starting at `pos`, its trailer
+fields, and the offset just past the trailer section.
+
+Chunk size, chunk count, decoded body size, trailer count, and trailer
+section size are each checked against their `max*` ceiling.
 
 ### `parseRequestClassified`
 
@@ -434,7 +442,8 @@ and framing ceilings are enforced before the result is returned.
 parseRequestClassified : Bytes -> Result HttpParseFailure Request
 ```
 
-Parse one complete request while preserving structural failure class.
+The request framed by a buffer that holds exactly one complete request,
+or the failure with its class. Bytes after the request are an error.
 
 ## Incremental framing
 
@@ -447,27 +456,25 @@ data HttpFrame
   | HttpFrameFailed HttpParseFailure
 ```
 
-Where a scan over a byte buffer stopped. `HttpNeedMore` is the one verdict
-more bytes can change; `HttpFramedAt` reports the index one past the last
-byte of the framed request, which is where the next one begins.
+The verdict of a scan. `HttpNeedMore` means more bytes could still
+complete the request. `HttpFramedAt n` means a complete request ends at
+`n`, where the next one begins. `HttpFrameFailed` means no further byte
+can help.
 
 ### `HttpScan`
 
 ```
-data HttpScan
-  = HttpScan ScanPhase
+data HttpScan  -- abstract: the constructors are not exported
 ```
 
-How far a scan of a growing buffer has already got. The type is opaque:
-a caller obtains one from `httpScanStart`, hands it back to
-`scanRequestBoundaryFrom` with the same request `start` and a buffer that has
-only grown at its end, and gets a fresh one to carry to the next read.
+The progress of a scan over a buffer that is still growing.
 
-A state is only meaningful for the buffer prefix it was produced from. Any
-other buffer, or a different `start`, needs `httpScanStart` again, which is
-what a caller does at a request boundary, since the next request is a new
-scan. Nothing is lost by starting over: a fresh state reaches exactly the
-verdict a resumed one does.
+Begin with `httpScanStart`, pass the state to `scanRequestBoundaryFrom`
+or `scanRequestBoundaryWithin` with the same `start` and a buffer that
+has only grown at its end, and keep the returned state for the next read.
+A state describes one buffer prefix: for a different buffer, a different
+`start`, or the next request, begin again from `httpScanStart`. Starting
+over reaches the same verdict as resuming; it only rescans.
 
 ### `httpScanStart`
 
@@ -483,12 +490,10 @@ A scan that has read nothing.
 httpScanInHeaders : HttpScan -> Bool
 ```
 
-Whether a scan that has not yet framed a request is still inside the
-request line or the header fields, meaning the request's header section has
-not been terminated. Only this module can answer it, the scan's phase being
-private, so a caller that budgets the header phase apart from the body has
-no other way to tell the two apart. A scan that already framed a request
-reports False: its header section ended.
+Whether the scan is still inside the request line or the header fields.
+
+`False` once the blank line ending the header section has been read,
+including for a scan that has framed a whole request.
 
 ### `httpScanBodyRemaining`
 
@@ -496,22 +501,13 @@ reports False: its header section ended.
 httpScanBodyRemaining : HttpScan -> Int -> Option Int
 ```
 
-How many further bytes this scan needs before the request it is framing is
-complete, given the `avail` the scan was produced from, or `None` when that
-is not settled yet.
+How many bytes beyond the first `avail` the request still needs, or
+`None` when that is not yet known.
 
-Settled for exactly one shape: a body whose end position the header section
-already fixed, which is a `Content-Length` body and a bodyless request. A
-scan still inside the header section has not selected a body mode, and a
-chunked body declares its length one chunk at a time, so neither can say
-what is still owed and both report `None`.
-
-Only this module can answer it, the scan's phase being private. A caller
-that must reserve a resource for a whole request before accepting any of it
-— `pds/shell/server.mdk`'s in-flight buffer budget — has no other route to
-the number: the declared length is a header this module has already graded
-into a body mode, and reading it again outside would be a second framer
-able to disagree with this one.
+It is known once the header section has fixed where the body ends: a
+`Content-Length` body or no body at all. While the scan is still in the
+header section, and for a chunked body, which declares its length one
+chunk at a time, the answer is `None`.
 
 ### `scanRequestBoundaryWithin`
 
@@ -519,17 +515,17 @@ able to disagree with this one.
 scanRequestBoundaryWithin : Bytes -> Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
 ```
 
-Find the end of the first complete request at or after `start` in the first
-`avail` bytes of `input`, resuming the scan `state` left off at. Bytes of
-`input` at or past `avail` are not input: they are whatever a caller's
-backing array holds beyond what it has received, so no framing decision may
-read them. A buffer whose pending bytes already exceed the per-request
-ceiling is rejected rather than left pending, so a caller can bound what it
-buffers.
+The end of the first complete request at or after `start` within the
+first `avail` bytes of `input`, resumed from a prior scan state, together
+with the state to resume from next time.
 
-The cost of a resumed scan is proportional to the bytes that arrived since
-the state was produced, not to the bytes already buffered, because every
-suspension point is one only later bytes can move past.
+Bytes at or past `avail` are never read, so a caller can scan a buffer
+that is only partly filled. A pending request already larger than
+`maxHttpRequestBytes` is reported as `HttpFrameFailed` rather than
+`HttpNeedMore`. An `avail` outside the buffer, or a `start` outside
+`[0, avail]`, fails as `HttpMalformed` and leaves the state unchanged.
+A resumed scan costs time proportional to the bytes that arrived since the
+state was produced.
 
 ### `scanRequestBoundaryFrom`
 
@@ -537,9 +533,7 @@ suspension point is one only later bytes can move past.
 scanRequestBoundaryFrom : Bytes -> Int -> HttpScan -> (HttpFrame, HttpScan)
 ```
 
-Scan a buffer whose every byte is received input. This is
-`scanRequestBoundaryWithin` at the buffer's full length, so a caller that
-keeps no spare capacity needs to know nothing about the distinction.
+`scanRequestBoundaryWithin` over every byte of `input`.
 
 ### `scanRequestBoundary`
 
@@ -547,9 +541,8 @@ keeps no spare capacity needs to know nothing about the distinction.
 scanRequestBoundary : Bytes -> Int -> HttpFrame
 ```
 
-Find the end of the first complete request at or after `start` without a
-prior scan. This is `scanRequestBoundaryFrom` from `httpScanStart`, so a
-whole-buffer scan and a resumed one cannot be two different framers.
+The verdict of `scanRequestBoundaryFrom` started from `httpScanStart`,
+without the state.
 
 ### `parseRequestAt`
 
@@ -557,8 +550,9 @@ whole-buffer scan and a resumed one cannot be two different framers.
 parseRequestAt : Bytes -> Int -> Int -> Result HttpParseFailure Request
 ```
 
-Parse the frame `[start, end)` exactly as `parseRequestClassified` parses
-that region on its own, so a scanned boundary and a parse cannot disagree.
+The request framed by `input[start, end)`, parsed as
+`parseRequestClassified` parses that slice on its own. Bounds outside the
+buffer fail as `HttpMalformed`.
 
 ### `parseRequest`
 
@@ -566,23 +560,22 @@ that region on its own, so a scanned boundary and a parse cannot disagree.
 parseRequest : Bytes -> Result String Request
 ```
 
-Parse one complete request, reporting a failure as its diagnostic alone.
-`parseRequestClassified` keeps the structural class a caller needs to
-choose 400 against 413.
+`parseRequestClassified` with the failure reduced to its diagnostic.
+Use the classified form to tell a 400 from a 413.
 
 ## Response parsing
 
 ### `ParsedResponse`
 
 ```
-data ParsedResponse
-  = ParsedResponse Int String (List Header) (List Header) (Array Int)
+data ParsedResponse  -- abstract: the constructors are not exported
 ```
 
-A parsed HTTP/1.0 or HTTP/1.1 response. Fields and trailers retain their
-received order and duplicates; the body has any chunked transfer coding
-removed. The constructor is private so every value has passed the framing
-and resource checks below.
+A parsed HTTP/1.0 or HTTP/1.1 response.
+
+Fields and trailers keep their received order and duplicates; the body
+has any chunked transfer coding removed. Values come only from
+`parseResponseClassified` and `parseResponse`.
 
 ### `parsedResponseStatus`
 
@@ -590,7 +583,7 @@ and resource checks below.
 parsedResponseStatus : ParsedResponse -> Int
 ```
 
-The parsed response's status code.
+The status code.
 
 ### `parsedResponseReason`
 
@@ -598,7 +591,7 @@ The parsed response's status code.
 parsedResponseReason : ParsedResponse -> String
 ```
 
-The parsed response's reason phrase, exactly as received.
+The reason phrase, exactly as received.
 
 ### `parsedResponseHeaders`
 
@@ -606,7 +599,7 @@ The parsed response's reason phrase, exactly as received.
 parsedResponseHeaders : ParsedResponse -> List Header
 ```
 
-The parsed response fields in received order, duplicates retained.
+The header fields in received order, duplicates retained.
 
 ### `parsedResponseTrailers`
 
@@ -614,8 +607,8 @@ The parsed response fields in received order, duplicates retained.
 parsedResponseTrailers : ParsedResponse -> List Header
 ```
 
-Parsed trailer fields in received order, or an empty list for a body
-without chunked transfer coding.
+The trailer fields in received order, empty for a body that was not
+chunked.
 
 ### `parsedResponseBody`
 
@@ -623,7 +616,8 @@ without chunked transfer coding.
 parsedResponseBody : ParsedResponse -> Array Int
 ```
 
-The decoded response body, with chunk framing removed.
+The body, with any chunked transfer coding removed. The result is a
+copy.
 
 ### `parsedResponseBodyLength`
 
@@ -631,7 +625,7 @@ The decoded response body, with chunk framing removed.
 parsedResponseBodyLength : ParsedResponse -> Int
 ```
 
-The decoded response body's length without copying it.
+The byte length of the decoded body.
 
 ### `parseResponseClassified`
 
@@ -639,11 +633,13 @@ The decoded response body's length without copying it.
 parseResponseClassified : Array Int -> Result HttpParseFailure ParsedResponse
 ```
 
-Parse one complete HTTP response with structural failure classification.
-Status lines, fields, chunks, decoded bodies, and trailers are bounded.
-Transfer-coding tokens are compared as ASCII case-insensitively. A response
-without a declared length is close-delimited unless its status forbids a
-body.
+The response framed by a buffer that holds exactly one complete
+response, or the failure with its class.
+
+The status line, fields, chunks, decoded body, and trailers are each
+bounded by their `max*` ceiling. A response with neither a
+`Content-Length` nor a chunked `Transfer-Encoding` runs to the end of the
+buffer, unless its status code (1xx, 204, or 304) forbids a body.
 
 ### `parseResponse`
 
@@ -651,8 +647,7 @@ body.
 parseResponse : Array Int -> Result String ParsedResponse
 ```
 
-`parseResponseClassified` with its structural class collapsed to the
-diagnostic string.
+`parseResponseClassified` with the failure reduced to its diagnostic.
 
 ```medaka
 > isErr (parseResponse [||])
@@ -665,10 +660,12 @@ True
 responseBoundaryWithin : Array Int -> Int -> Option Int
 ```
 
-The offset just past the first response framed by `input[0, avail)`, or
-`None` when that prefix is incomplete, malformed, or close-delimited.
-Bytes at or beyond `avail` are never inspected. A returned boundary may be
-less than `avail` when another message follows it.
+The offset just past the first complete response in `input[0, avail)`,
+or `None` when that prefix is incomplete, malformed, or a response that
+ends only when the connection closes.
+
+Bytes at or past `avail` are never read. The offset is less than `avail`
+when another message follows the response.
 
 ### `responseBoundary`
 
@@ -683,13 +680,11 @@ responseBoundary : Array Int -> Option Int
 ### `Response`
 
 ```
-data Response
-  = Response Int String (List Header) (Array Int)
+data Response  -- abstract: the constructors are not exported
 ```
 
-A buffered HTTP response. The constructor is private: responses can only
-be obtained through `makeResponse`, after their status line and fields have
-been checked for response splitting and reserved framing fields.
+A response ready to serialize. Values come only from `makeResponse`,
+which checks the status, the reason phrase, and the fields.
 
 ### `makeHeader`
 
@@ -697,9 +692,9 @@ been checked for response splitting and reserved framing fields.
 makeHeader : String -> Array Int -> Result String Header
 ```
 
-Construct a safe response field. Names are canonicalized to lowercase;
-values must be printable ASCII and therefore cannot contain CR, LF, or any
-other control byte.
+A response field with `name` lowercased, or `Err` when `name` is not a
+token or `value` is not printable ASCII. Control bytes, CR and LF among
+them, are rejected, so a field cannot split the response.
 
 ### `makeResponse`
 
@@ -707,8 +702,13 @@ other control byte.
 makeResponse : Int -> String -> List Header -> Array Int -> Result String Response
 ```
 
-Construct a deterministic buffered response. The serializer owns all
-framing, so callers cannot supply Content-Length or Transfer-Encoding.
+A response with the given status, reason phrase, fields, and body, or
+`Err` when one of them is invalid.
+
+`status` must be from 100 to 599, `reason` printable ASCII, and every
+element of `body` from 0 to 255. `headers` may not include
+`Content-Length` or `Transfer-Encoding`; `serializeResponse` writes the
+framing itself.
 
 ### `responseStatus`
 
@@ -716,7 +716,7 @@ framing, so callers cannot supply Content-Length or Transfer-Encoding.
 responseStatus : Response -> Int
 ```
 
-The response status code.
+The status code.
 
 ### `responseHeaders`
 
@@ -724,9 +724,8 @@ The response status code.
 responseHeaders : Response -> List Header
 ```
 
-The caller's response fields in the order they were supplied. The
-computed Content-Length is added by `serializeResponse` and is not among
-them.
+The fields given to `makeResponse`, in that order. The `Content-Length`
+that `serializeResponse` adds is not among them.
 
 ### `responseBody`
 
@@ -734,7 +733,7 @@ them.
 responseBody : Response -> Array Int
 ```
 
-The response body bytes.
+The body bytes. The result is a copy.
 
 ### `responseReason`
 
@@ -742,7 +741,7 @@ The response body bytes.
 responseReason : Response -> String
 ```
 
-The response reason phrase, exactly as constructed.
+The reason phrase, as given to `makeResponse`.
 
 ### `serializeResponse`
 
@@ -750,21 +749,20 @@ The response reason phrase, exactly as constructed.
 serializeResponse : Response -> Array Int
 ```
 
-Serialize a complete HTTP/1.1 response. Caller fields remain in their
-original order and exactly one computed Content-Length follows them.
+The bytes of the response as an HTTP/1.1 message: the status line, the
+fields in their given order, one `content-length` field, a blank line,
+and the body.
 
 ## Targets, media types, and bodies
 
 ### `MediaType`
 
 ```
-data MediaType
-  = MediaType String String
+data MediaType  -- abstract: the constructors are not exported
 ```
 
-A parsed, canonical media type, holding only the lowercased type and
-subtype. `parseMediaType` validates any parameters but does not retain
-them.
+A media type reduced to its type and subtype, both lowercased.
+Parameters are checked by `parseMediaType` and then dropped.
 
 ### `DecodedBody`
 
@@ -775,8 +773,9 @@ data DecodedBody
   | RawBody MediaType (Array Int)
 ```
 
-A request body decoded according to its media type. JSON and text are
-strictly UTF-8; every other media type keeps its raw bytes.
+A request body decoded by its media type. An `application/json` body is
+parsed as JSON, a `text/*` body is decoded as UTF-8 text, and every other
+type keeps its bytes.
 
 ### `QueryParam`
 
@@ -785,7 +784,7 @@ data QueryParam
   = QueryParam String String
 ```
 
-One decoded query parameter: its name and its value, empty when the
+One query parameter: its name and its decoded value, `""` when the
 query gave it none.
 
 ### `parseTargetQuery`
@@ -794,8 +793,13 @@ query gave it none.
 parseTargetQuery : Request -> Result String (String, List QueryParam)
 ```
 
-Split and decode the validated origin target. Ordered duplicates and
-empty values are retained; `+` is ordinary URI data and remains literal.
+The path and the query parameters of the request target, with percent
+escapes decoded.
+
+Parameters keep their order and duplicates, and a parameter without `=`
+has the value `""`. A `+` stays a literal `+`. `Err` on a malformed
+percent escape, an empty parameter name, or a component that is not
+UTF-8 text.
 
 ### `mediaTypeType`
 
@@ -819,8 +823,9 @@ The lowercased subtype, such as `"plain"` for `text/plain`.
 parseMediaType : Array Int -> Result String MediaType
 ```
 
-Parse a bounded ASCII media type. Type and subtype matching is
-case-insensitive and returned in canonical lowercase form.
+The media type in `value`, with type and subtype lowercased, or `Err`
+when it is not one. Parameters are checked for form and then dropped.
+`value` must be ASCII and at most 4096 bytes.
 
 ### `decodeRequestBody`
 
@@ -828,7 +833,10 @@ case-insensitive and returned in canonical lowercase form.
 decodeRequestBody : Request -> Result String DecodedBody
 ```
 
-Decode a framed request body according to its supplied media type. JSON
-and text are strictly UTF-8 and have narrower endpoint limits; all other
-valid media types retain their raw bytes.
+The request body decoded by its `Content-Type`.
+
+`Err` when the field is missing or repeated, when the media type is
+invalid, when the body exceeds the ceiling for its kind
+(`maxJsonBodyBytes`, `maxTextBodyBytes`, or `maxRawBodyBytes`), or when a
+JSON or text body is not valid UTF-8.
 

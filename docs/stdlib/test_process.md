@@ -2,30 +2,20 @@
 
 Assertions for a test that runs a program.
 
-A test whose subject is a whole toolchain (a compiler verb, a script, any
-binary) cannot compute its answer; it has to spawn the thing and grade
-what came back. `expectSpawnOk`, `expectSpawnFails` and
-`expectSpawnOkLine` grade a spawn, and `medakaRoot`, `underRoot` and
-`medakaBin` say which files and which binary a test addresses.
+A test whose subject is a whole program (a compiler verb, a script, any
+binary) spawns it and grades what came back. `expectSpawnOk`,
+`expectSpawnFails` and `expectSpawnOkLine` grade a spawn. `medakaRoot`,
+`underRoot` and `medakaBin` locate the tree and the binary under test.
+`boundedVerb` puts a time limit on one spawn, and `scratchDir` hands out
+a directory to write in.
 
-The two jobs are deliberately separate: a grader that also resolved the
-binary would have to name a verb, and callers need `check`, `run` and
-`test`.
-
-A test that spawns many subjects in one sweep reaches for `boundedVerb`,
-so one hanging subject fails its own row instead of the job, and
-`scratchDir`, so concurrent gate runs do not write over each other.
-
-A test that grades a whole directory of `medaka test` suites reads their
-executed-assertion counts with `testAssertionCount`, and keeps its roster
-closed over the directory with `testFileStem`, `unrosteredTestFiles` and
+A test that grades a directory of `medaka test` suites reads their
+assertion counts with `testAssertionCount` and checks its roster against
+the directory with `testFileStem`, `unrosteredTestFiles` and
 `missingTestFiles`.
 
-These assertions reach a subprocess extern, which `medaka test` does not
-bind under the interpreter, so a file using them runs under `medaka test
---native`.
-
-Import what you need: `import test_process.{expectSpawnOk, medakaBin}`.
+These assertions spawn a subprocess, which the interpreter does not
+support, so a file using them runs under `medaka test --native`.
 
 ## Locating the tree
 
@@ -35,12 +25,11 @@ Import what you need: `import test_process.{expectSpawnOk, medakaBin}`.
 medakaRoot : <IO> String
 ```
 
-The root of the Medaka tree under test, from `MEDAKA_ROOT`, or `"."`
-when that is unset.
+The root of the Medaka tree under test: `MEDAKA_ROOT`, or `"."` when
+it is unset.
 
 Files are located through this rather than through the working
-directory: a test runner exports the root and inherits whatever
-directory its own caller happened to be in.
+directory, which a test does not control.
 
 ### `underRoot`
 
@@ -48,8 +37,7 @@ directory its own caller happened to be in.
 underRoot : String -> <IO> String
 ```
 
-The path `rel`, which is relative to the tree root, resolved under
-`medakaRoot`.
+The path `rel`, relative to the tree root, resolved under `medakaRoot`.
 
 ### `medakaBin`
 
@@ -57,13 +45,11 @@ The path `rel`, which is relative to the tree root, resolved under
 medakaBin : <IO> String
 ```
 
-The Medaka binary to spawn, from `MEDAKA`, defaulting to the one in
-`medakaRoot`.
+The Medaka binary to spawn: `MEDAKA`, or `medaka` in `medakaRoot`
+when it is unset.
 
-The default is a path, never the bare name `medaka`, so an unset
-`MEDAKA` cannot resolve to some other build on `PATH`, or to nothing at
-all — which runs no verb and exits 127, an outcome an assertion phrased
-over stdout alone would accept.
+The default is a path, so an unset `MEDAKA` never resolves to another
+build on `PATH`.
 
 ## Spawning
 
@@ -73,12 +59,10 @@ over stdout alone would accept.
 spawnTimeoutSeconds : Int
 ```
 
-The wall-clock ceiling `boundedVerb` puts on one spawn, in seconds.
+The time limit `boundedVerb` puts on one spawn, in seconds.
 
-A sweep that spawns a compiler once per fixture has to distinguish "this
-fixture hangs" from "the whole job hung": without a per-spawn ceiling the
-first hanging fixture consumes the job's own timeout and the sweep names
-nothing.
+With a limit on each spawn, a subject that hangs fails its own row
+instead of the whole job.
 
 ### `boundedVerb`
 
@@ -86,12 +70,10 @@ nothing.
 boundedVerb : String -> List String -> <Exec _> Result String (Int, String, String)
 ```
 
-`runVerb`, with `cmd` killed after `spawnTimeoutSeconds`.
+Runs `cmd` with `args` as `io.runVerb` does, killing it after
+`spawnTimeoutSeconds`.
 
-A killed spawn is an ordinary nonzero exit, not an `Err`, so a caller
-grading exit codes sees a failure on the row that hung rather than losing
-the whole run. `perl` carries the alarm because it is the one interval
-timer present on both Linux and macOS without a coreutils dependency.
+A killed spawn is an ordinary nonzero exit, not an `Err`.
 
 ```medaka
 > boundedVerb "sh" ["-c", "printf hi; exit 3"]
@@ -104,20 +86,13 @@ Ok (3, "hi", "")
 boundedVerbSeconds : Int -> String -> List String -> <Exec _> Result String (Int, String, String)
 ```
 
-`boundedVerb` with the ceiling named at the call site, for a sweep whose
-one spawn is genuinely slower than `spawnTimeoutSeconds` allows.
+`boundedVerb` with the time limit given as `secs`, for a spawn that
+needs longer than `spawnTimeoutSeconds`.
 
-A sweep that spawns a whole compile-and-link pipeline per row needs a
-ceiling sized to that pipeline, and one sized to it would be far too loose
-for the sweeps that spawn a single verb, so the ceiling is a parameter
-rather than one constant stretched to cover both.
-
-`cmd` is resolved through `env` rather than execed directly, so a `cmd`
-that does not exist reports `env`'s own nonzero exit and stderr instead
-of `perl`'s `exec` failing silently and this returning `Ok (0, "", "")`
-for a command that never ran. The example below asserts the code and that
-stderr is non-empty, never the wording: that sentence is `env`'s, and it
-is neither the same across implementations nor stable under `LC_ALL`.
+`cmd` is looked up on `PATH` through `env`, so a command that does not
+exist reports exit 127 with `env`'s message on stderr rather than a
+spawn that never ran. The wording of that message varies between
+systems.
 
 ```medaka
 > boundedVerbSeconds 5 "sh" ["-c", "printf hi; exit 3"]
@@ -132,13 +107,11 @@ Ok (127, "", True)
 scratchDir : <Exec _> Result String String
 ```
 
-A fresh, empty directory of the host's choosing, for a test that has to
-write files.
+A fresh, empty directory for a test that has to write files.
 
-Gates run concurrently over one tree, so a scratch path spelled as a
-constant collides between two runs of the same test; only the host can
-hand out a name nothing else holds. The caller owns the directory and is
-responsible for removing it.
+Each call returns a directory nothing else holds, so concurrent runs of
+the same test do not collide. The caller owns the directory and removes
+it.
 
 ```medaka
 > map (startsWith "/") scratchDir
@@ -155,10 +128,8 @@ expectSpawnOk : String -> List String -> <Exec _> Expectation
 
 Passes when running `cmd` with `args` exits 0.
 
-The exit code is the whole assertion: a program that produced no output
-at all still has to have exited 0. The failure message carries stdout
-and stderr concatenated, since which stream a diagnostic lands on is not
-what this asserts on.
+Output is not graded. The failure message carries stdout and stderr
+concatenated.
 
 ```medaka
 > expectSpawnOk "true" []
@@ -176,10 +147,9 @@ expectSpawnFails : String -> List String -> String -> <Exec _> Expectation
 Passes when running `cmd` with `args` exits nonzero and its output
 contains `needle`.
 
-Both halves are required. A rejection graded on the exit code alone
-stays green once the diagnostic it was written for has been deleted, and
-one graded on the text alone accepts a program that never ran. `needle`
-is matched against stdout and stderr concatenated.
+Both conditions are required: exit 0 fails whatever was printed, and a
+nonzero exit whose output lacks `needle` fails naming what was printed.
+`needle` is matched against stdout and stderr concatenated.
 
 ```medaka
 > expectSpawnFails "sh" ["-c", "exit 3"] ""
@@ -195,18 +165,12 @@ expectSpawnFailsAll : String -> List String -> List String -> <Exec _> Expectati
 ```
 
 Passes when running `cmd` with `args` exits nonzero and its output
-contains EVERY string in `needles`.
+contains every string in `needles`.
 
-`expectSpawnFails` for a rejection whose diagnostic has to say more than
-one thing: which rule fired, which file, and what to do instead. A single
-needle grades only the part it names, so a diagnostic that keeps its
-headline and drops its location still passes. The needles are matched in
-any order, against stdout and stderr concatenated, and need not share a
-line; `test.expectLineContainsAll` is the one that binds them
-together.
-
-An empty `needles` list grades the exit code alone, which is
-`expectSpawnFails` with an empty needle.
+The strings may occur in any order and on different lines, and are
+matched against stdout and stderr concatenated. An empty `needles` list
+grades the exit code alone. To require the strings on one line, grade
+the captured output with `test.expectLineContainsAll`.
 
 ```medaka
 > expectSpawnFailsAll "sh" ["-c", "printf alpha-beta; exit 3"] ["alpha", "beta"]
@@ -226,11 +190,9 @@ expectSpawnOkLine : String -> List String -> String -> <Exec _> Expectation
 Passes when running `cmd` with `args` exits 0 and one whole line of its
 output equals `wantLine`.
 
-The control-case peer of `expectSpawnFails`: exit 0 alone accepts a
-program that ran and printed the wrong answer, and a substring accepts a
-line that merely contains the expected one, so a longer or differently
-prefixed line still passes. `wantLine` is matched against a whole line of
-stdout and stderr concatenated, with a trailing carriage return removed.
+A line that merely contains `wantLine` does not match. Lines are taken
+from stdout and stderr concatenated, with a trailing carriage return
+removed.
 
 ```medaka
 > expectSpawnOkLine "echo" ["hi"] "hi"
@@ -262,17 +224,13 @@ None
 testAssertionCount : String -> List String -> <Exec _, IO> Result String Int
 ```
 
-The executed-assertion count of `path`, from the `summary.passed` field
-of `medaka test --json`, or `Err` naming what went wrong.
+The number of assertions `medaka test --json` reports as passed for the
+suite at `path`, or `Err` naming what went wrong.
 
 `extraArgs` are passed to `medaka test` before the path, so a suite that
-needs the compiled engine is spawned with `["--native"]`. The count comes
-from `--json` rather than the human transcript, so a change to the
-transcript's shape cannot silently zero it. A suite that exits nonzero is
-an `Err`, never a count, because a failed assertion is not a smaller
-number of passing ones. A failing run's captured output is carried as its
-tail (`outputTail`) rather than whole, since the message is read in a
-test transcript beside dozens of others.
+needs the compiled engine is spawned with `["--native"]`. A suite that
+exits nonzero is an `Err`, never a smaller count. The `Err` for a
+failing run carries the tail of its output.
 
 ### `unrosteredUnits`
 
@@ -282,11 +240,8 @@ unrosteredUnits : (String -> Option String) -> List String -> List String -> Lis
 
 The units `namer` finds among `entries` that are absent from `known`.
 
-The general form behind `unrosteredTestFiles`: `namer` turns one
-directory entry into the unit name a roster spells, or `None` when the
-entry names no unit at all, so an entry that is not a unit (an unrelated
-file, a fixture directory's own helper file) is silently skipped rather
-than counted as a stray one.
+`namer` turns a directory entry into the name a roster spells, or `None`
+for an entry that is not a unit, which is skipped.
 
 ```medaka
 > unrosteredUnits testFileStem ["a_test"] ["a_test.mdk", "b_test.mdk", "readme.md"]
@@ -299,15 +254,11 @@ than counted as a stray one.
 missingUnits : (String -> Option String) -> List String -> List String -> List String
 ```
 
-The names in `wanted` that `namer` finds in none of `entries`.
+The names in `wanted` for which `namer` finds no entry in `entries`.
 
-The other half of `unrosteredUnits`: a roster or exemption row naming a
-unit that was renamed or deleted still reads as coverage, and only this
-reports it.
-
-The roster is argument 2 in both, matching `unrosteredUnits`. The two
-share a type, so an argument order that differed between them would make
-a swapped call a silent `[]` — "no orphans", green — rather than an error.
+The complement of `unrosteredUnits`: it reports a roster row naming a
+unit that is no longer present. Both functions take the roster before
+the entries.
 
 ```medaka
 > missingUnits testFileStem ["a_test", "b_test"] ["a_test.mdk"]
@@ -322,10 +273,8 @@ unrosteredTestFiles : String -> List String -> <FileRead _> Result String (List 
 
 The `*_test.mdk` stems in `dir` that are absent from `known`.
 
-`known` is the caller's roster plus whatever it deliberately exempts, so
-an empty result means the roster is closed over the directory and a new
-test file cannot be added without either joining the roster or taking an
-exemption.
+`known` is the roster plus any exemptions, so an empty result means every
+test file in `dir` is accounted for.
 
 ### `missingTestFiles`
 
@@ -335,9 +284,7 @@ missingTestFiles : String -> List String -> <FileRead _> Result String (List Str
 
 The stems in `wanted` that name no `*_test.mdk` file in `dir`.
 
-The other half of a closed roster: a roster or exemption row naming a file
-that was renamed or deleted still reads as coverage, and only this
-reports it.
+Reports a roster row whose file is no longer present.
 
 ## Grading a floor roster against its own `test` blocks
 
@@ -347,23 +294,16 @@ reports it.
 ungradedRosterRows : String -> String -> List String -> List String -> List String
 ```
 
-The names in `roster` that no block in `sourceLines` both names in its
-title and grades in its body.
+The names in `roster` that no `test` block in `sourceLines` both names
+in its title and grades in its body.
 
-`titlePrefix` is the path prefix the titles are spelled with (`"stdlib/"`,
-`"pds/test/"`, `"sqlite/lib/"`), and `callOpen` is the grading call's
-opening text up to its name argument's quote (`"floorExpectation \""`).
-`sourceLines` is the roster module's own source, read with `io.readLines`
-— never a `medaka test --json` self-spawn, which would recurse into
-re-spawning every unit the module already spawns.
-
-A block whose title and argument disagree counts for neither name: the
-titled row is not graded by it, and the graded row is covered by its own
-block or not at all. `disagreeingFloorBlocks` is what names that case.
-
-The roster is argument 3 and the scanned lines argument 4, matching
-`unrosteredUnits`' `known`/`entries` order; the two share a type, so an
-order that differed would make a swapped call a silent `[]`.
+`titlePrefix` is the path prefix the titles are spelled with, such as
+`"stdlib/"`, and `callOpen` is the grading call's opening text up to the
+quote of its name argument, such as `"floorExpectation \""`.
+`sourceLines` is the roster module's own source, read with
+`io.readLines`. A block whose title and grading call name different
+units counts for neither; `disagreeingFloorBlocks` reports those. The
+roster comes before the scanned lines, as in `unrosteredUnits`.
 
 ```medaka
 > ungradedRosterRows "s/" "grade \"" ["a", "b"] ["test \"s/a.mdk executed >= 1 assertions\" = grade \"a\""]
@@ -379,9 +319,8 @@ disagreeingFloorBlocks : String -> String -> List String -> List String
 The blocks in `sourceLines` whose title and grading call name different
 units, each rendered as `<titled> -> <graded>`.
 
-The other half of `ungradedRosterRows`, which only reports a row nothing
-grades: a block that grades the wrong row leaves the titled row's floor
-unapplied while the row still reads as covered, and only this names it.
+A block that grades nothing renders as `<titled> -> grades nothing`.
+`ungradedRosterRows` reports the rows such a block leaves ungraded.
 
 ```medaka
 > disagreeingFloorBlocks "s/" "grade \"" ["test \"s/a.mdk executed >= 1 assertions\" = grade \"b\""]

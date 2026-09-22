@@ -1,15 +1,19 @@
-{- | Pure, bounded HTTP/1.1 request framing and response building.
+{- | HTTP/1.1 message framing: request parsing, response building, and
+   response parsing, over bytes the caller supplies.
 
-   The parser accepts exactly one complete origin-form HTTP/1.1 request. It
-   preserves field order and duplicates until framing has been validated,
-   keeps bodies as raw bytes, and exposes connection lifetime as plain data.
-   No socket, filesystem, or other effect is involved, so a caller supplies
-   the bytes and decides what to do with the frame. `net` is the socket
-   layer.
+   Nothing here touches a socket or a file. `net` is the socket layer; this
+   module turns the bytes it read into a `Request`, and a `Response` into
+   the bytes to write. There is no client: the module opens no connection
+   and speaks no TLS.
 
-   Every ceiling the framer enforces is an exported `max*` value paired with
-   a `check*` predicate, so a caller can test either side of a boundary
-   without building a maximum-sized request. -}
+   A request must be a complete HTTP/1.1 message with an origin-form
+   target. Header fields keep their received order and duplicates, bodies
+   stay raw bytes with any chunked coding removed, and whether the
+   connection stays open is reported as a `Bool`.
+
+   Every size and count the framer bounds is an exported `max*` value with
+   a matching `check*` predicate, so a caller can test a limit without
+   building a request that reaches it. -}
 
 import bytebuilder.{
   Builder,
@@ -143,7 +147,8 @@ checkHttpRequestLineBytes size =
   else
     Ok ()
 
--- | `Ok` when `size` is within `maxHttpResponseStatusLineBytes`.
+-- | `Ok` when `size` is within `maxHttpResponseStatusLineBytes`, `Err` with
+-- the diagnostic the framer reports otherwise.
 export
 checkHttpResponseStatusLineBytes : Int -> Result String Unit
 checkHttpResponseStatusLineBytes size =
@@ -152,7 +157,8 @@ checkHttpResponseStatusLineBytes size =
   else
     Ok ()
 
--- | `Ok` when `size` is within `maxHttpResponseChunkBytes`.
+-- | `Ok` when `size` is within `maxHttpResponseChunkBytes`, `Err` with the
+-- diagnostic the framer reports otherwise.
 export
 checkHttpResponseChunkBytes : Int -> Result String Unit
 checkHttpResponseChunkBytes size =
@@ -226,12 +232,12 @@ checkRawBodyBytes size =
 
 -- # Requests
 
--- | An ordered HTTP field. Names are canonical lowercase ASCII; values are
--- raw bytes with surrounding optional whitespace removed.
+-- | One header or trailer field: a name and a value. The name is lowercase
+-- ASCII; the value is raw bytes with surrounding whitespace removed.
 export data Header = Header String (Array Int)
 
--- | A fully framed HTTP/1.1 request. Constructors stay private so callers
--- cannot manufacture a request that bypassed framing checks.
+-- | A framed HTTP/1.1 request. Values come only from the parsers in this
+-- module; the `request*` accessors read its parts.
 export data Request =
   | Request String String (List Header) (List Header) Bytes Bool
 
@@ -240,14 +246,14 @@ data HeaderBlock = HeaderBlock (List Header) Int Int
 data BodyMode = NoBody | FixedBody Int | ChunkedBody | UntilCloseBody
 data ParsedBody = ParsedBody Bytes (List Header) Int
 
--- | Structural classification for request-framing failures. The diagnostic is
--- retained for direct parser callers, while the server can select 400 versus
--- 413 without inspecting diagnostic text.
+-- | Why framing failed. `HttpMalformed` is a message the grammar rejects;
+-- `HttpResourceExcess` is one that exceeds a `max*` ceiling. A server answers
+-- the first with 400 and the second with 413. Both carry the diagnostic.
 public export data HttpParseFailure =
   | HttpMalformed String
   | HttpResourceExcess String
 
--- | Outcome of framing a byte buffer that may still be growing. `Incomplete`
+-- Outcome of framing a byte buffer that may still be growing. `Incomplete`
 -- carries the diagnostic the one-shot parser reports for the same input, so a
 -- buffer that a stream could still complete stays distinguishable from one
 -- that no further byte can rescue without changing any existing message.
@@ -274,14 +280,13 @@ httpParseFailureMessage : HttpParseFailure -> String
 httpParseFailureMessage (HttpMalformed message) = message
 httpParseFailureMessage (HttpResourceExcess message) = message
 
--- | The field's canonical lowercase ASCII name.
+-- | The field's name, in lowercase ASCII.
 export
 headerName : Header -> String
 headerName (Header name _) = name
 
--- | The field's raw value bytes, with surrounding optional whitespace
--- already removed. The result is a copy, so mutating it cannot reach the
--- header.
+-- | The field's value bytes, with surrounding whitespace removed. The result
+-- is a copy.
 export
 headerValue : Header -> Array Int
 headerValue (Header _ value) = arrayCopy value
@@ -296,8 +301,8 @@ export
 requestMethod : Request -> String
 requestMethod (Request method _ _ _ _ _) = method
 
--- | The origin-form request target, still percent-encoded. `parseTargetQuery`
--- splits and decodes it.
+-- | The request target, still percent-encoded. `parseTargetQuery` splits and
+-- decodes it.
 export
 requestTarget : Request -> String
 requestTarget (Request _ target _ _ _ _) = target
@@ -307,33 +312,30 @@ export
 requestHeaders : Request -> List Header
 requestHeaders (Request _ _ headers _ _ _) = copyHeaders headers
 
--- | The trailer fields in received order, empty for a request that was not
--- chunked.
+-- | The trailer fields in received order, empty for a request whose body was
+-- not chunked.
 export
 requestTrailers : Request -> List Header
 requestTrailers (Request _ _ _ trailers _ _) = copyHeaders trailers
 
--- | The decoded body bytes, with any chunked transfer coding removed. The
--- stored body is already a private copy that framing cut out of the input
--- (`bytes.slice` copies), and nothing else holds it, so this hands it out
--- rather than copying again; a caller wanting an `Array Int` writes
--- `toArray` and pays for the unpacking where it asked for it.
+-- | The body, with any chunked transfer coding removed. Empty for a request
+-- without a body.
 export
 requestBody : Request -> Bytes
 requestBody (Request _ _ _ _ body _) = body
 
--- | Length of the framed body without copying its attacker-controlled bytes.
+-- | The byte length of the decoded body.
 export
 requestBodyLength : Request -> Int
 requestBodyLength (Request _ _ _ _ body _) = B.length body
 
--- | Whether the connection stays open after this request, as its Connection
--- field settled it.
+-- | Whether the connection stays open after this request. `False` when a
+-- `Connection` field lists `close`, otherwise `True`.
 export
 requestKeepAlive : Request -> Bool
 requestKeepAlive (Request _ _ _ _ _ keepAlive) = keepAlive
 
--- | Whether every element of `value[i, end)` is a legal 0..255 value. An
+-- Whether every element of `value[i, end)` is a legal 0..255 value. An
 -- `Array Int` a caller supplies carries no such guarantee, so a response
 -- field value and a media type are checked before they are believed. `end` is
 -- a parameter rather than `arrayLength value` because a caller may mean only a
@@ -365,7 +367,8 @@ lowerAsciiBytes : Bytes -> Int -> Int -> String
 lowerAsciiBytes input start end =
   fromUtf8 (arrayMakeWith (end - start) (i => lowerByte input[start + i]))
 
--- | Whether `byte` is one of HTTP's ASCII token bytes.
+-- | Whether `byte` is one of the ASCII bytes HTTP allows in a token, such as
+-- a method or a field name.
 export
 isTokenByte : Int -> Bool
 isTokenByte byte =
@@ -480,8 +483,8 @@ validFieldValueBytes input pos end =
     (byte == 9 || byte >= 32 && byte /= 127)
       && validFieldValueBytes input (pos + 1) end
 
-{- | Find `wanted` in the half-open range `value[pos, end)`. No element at or
-   beyond `end` is inspected. -}
+-- | The index of the first `wanted` in `value[pos, end)`, or `None`. No
+-- element at or past `end` is read.
 export
 findByte : Array Int -> Int -> Int -> Int -> Option Int
 findByte value pos end wanted =
@@ -492,7 +495,7 @@ findByte value pos end wanted =
   else
     findByte value (pos + 1) end wanted
 
--- | `avail` is how many bytes of `input` the caller has actually received; the
+-- `avail` is how many bytes of `input` the caller has actually received; the
 -- search runs out of input there, not at `B.length input`.
 findCrlfChecked : String ->
   Bytes ->
@@ -520,7 +523,7 @@ findCrlfChecked label input avail start pos limit =
   else
     findCrlfChecked label input avail start (pos + 1) limit
 
--- | `cursor` is where the CRLF search resumes; it is `start` for a fresh scan
+-- `cursor` is where the CRLF search resumes; it is `start` for a fresh scan
 -- and a later, already-searched offset when a suspended scan continues.
 parseRequestLine : Bytes -> Int -> Int -> Int -> Result FrameError RequestLine
 parseRequestLine input avail start cursor = do
@@ -564,7 +567,8 @@ parseRequestLine input avail start cursor = do
           (decodeUtf8 (slice input (firstSpace + 1) secondSpace)))
         (end + 2))
 
--- | Skip optional whitespace in the half-open range `value[pos, end)`.
+-- | The index of the first byte in `value[pos, end)` that is not a space or
+-- a tab, or `end` when they all are.
 export
 trimLeftOws : Array Int -> Int -> Int -> Int
 trimLeftOws value pos end =
@@ -580,7 +584,8 @@ trimLeftOwsBytes input pos end =
   else
     pos
 
--- | Trim optional whitespace from the right edge of `value[start, end)`.
+-- | The index one past the last byte in `value[start, end)` that is not a
+-- space or a tab, or `start` when they all are.
 export
 trimRightOws : Array Int -> Int -> Int -> Int
 trimRightOws value start end =
@@ -630,11 +635,11 @@ checkFieldCount trailer count =
   else
     resourceExcess (checkHttpHeaderFields count)
 
--- | One field line of a header or trailer section. `FieldDone` reports the
+-- One field line of a header or trailer section. `FieldDone` reports the
 -- index past the section's blank line and the section's accumulated byte count.
 data FieldStep = FieldDone Int Int | FieldMore Header Int
 
--- | Frame exactly one field line. This is the single place a field line's
+-- Frame exactly one field line. This is the single place a field line's
 -- extent and legality are decided, so the one-shot fold below and the
 -- resumable scan further down cannot disagree about where a section ends.
 -- `cursor` resumes an interrupted CRLF search; it is `pos` for a fresh line.
@@ -698,11 +703,13 @@ parseFieldsChecked input pos sectionStart priorBytes count trailer acc = do
         trailer
         (field :: acc)
 
-{- | Parse a complete header or trailer section beginning at `pos`. Fields
-   retain their received order and duplicates, names are lowercased, and
-   surrounding optional whitespace is removed from values. When `trailer` is
-   `True`, framing and routing fields forbidden in trailers are rejected.
-   The returned offset is just past the section's empty-line CRLF. -}
+{- | The fields of the header or trailer section starting at `pos`, and the
+   offset just past the blank line that ends it.
+
+   Names are lowercased, values lose their surrounding whitespace, and order
+   and duplicates are kept. When `trailer` is `True`, the fields that may
+   not appear in a trailer (`Content-Length`, `Transfer-Encoding`,
+   `Trailer`, `Host`, `Connection`) are rejected. -}
 export
 parseFields : Bytes -> Int -> Bool -> Result HttpParseFailure (List Header, Int)
 parseFields input pos trailer =
@@ -979,7 +986,7 @@ validateHost headers =
         Ok ()
     None => malformed "http: missing Host field"
 
--- | The `size` bytes at `pos`, or the truncation the buffer ran out at. The
+-- The `size` bytes at `pos`, or the truncation the buffer ran out at. The
 -- diagnostic names the buffer's own end, which is the earliest byte a later
 -- read can supply.
 readSliceAt : Bytes -> Int -> Int -> Result FrameError (Bytes, Int)
@@ -998,7 +1005,8 @@ emitArray bytes i out =
     emitU8 bytes[i] out
     emitArray bytes (i + 1) out
 
--- | Decode one ASCII hexadecimal digit.
+-- | The value of one ASCII hexadecimal digit, or `None` when `byte` is not
+-- one. Both letter cases are accepted.
 export
 hexDigit : Int -> Option Int
 hexDigit byte =
@@ -1025,7 +1033,8 @@ parseHexSizeGo input pos end acc =
       else
         parseHexSizeGo input (pos + 1) end (acc * 16 + digit)
 
--- | Skip optional whitespace in the half-open range `value[pos, end)`.
+-- | The index of the first byte in `value[pos, end)` that is not a space or
+-- a tab, or `end` when they all are. The same as `trimLeftOws`.
 export
 skipOws : Array Int -> Int -> Int -> Int
 skipOws value pos end =
@@ -1139,10 +1148,11 @@ parseChunkedChecked input pos headerBytes out total count = do
       let () = emitBytes chunk out
       parseChunkedChecked input next headerBytes out (total + size) (count + 1)
 
-{- | Decode one complete chunked body beginning at `pos`. The result contains
-   the decoded bytes, retained trailer fields, and the offset just past the
-   terminating trailer section. Per-chunk, decoded-body, chunk-count, trailer,
-   and framing ceilings are enforced before the result is returned. -}
+{- | The decoded bytes of the chunked body starting at `pos`, its trailer
+   fields, and the offset just past the trailer section.
+
+   Chunk size, chunk count, decoded body size, trailer count, and trailer
+   section size are each checked against their `max*` ceiling. -}
 export
 parseChunked : Bytes -> Int -> Result HttpParseFailure (Bytes, List Header, Int)
 parseChunked input pos =
@@ -1150,11 +1160,11 @@ parseChunked input pos =
     ((ParsedBody body trailers next) => (body, trailers, next))
     (settle (parseChunkedChecked input pos 0 (newBuilder ()) 0 0))
 
--- | The head of one chunk: either the terminating zero-size chunk, whose data
+-- The head of one chunk: either the terminating zero-size chunk, whose data
 -- position starts the trailer section, or a data chunk of that size.
 data ChunkHead = ChunkEnd Int | ChunkBody Int Int
 
--- | Frame one chunk's size line and apply the chunk-count and decoded-size
+-- Frame one chunk's size line and apply the chunk-count and decoded-size
 -- ceilings. Shared by the decoding fold above and the resumable scan, so a
 -- chunk's extent has one definition. `cursor` resumes an interrupted search.
 chunkHeadStep : Bytes ->
@@ -1186,7 +1196,7 @@ chunkHeadStep input avail pos cursor total count = do
     else
       Ok (ChunkBody dataPos size)
 
--- | Where the chunk whose data starts at `dataPos` ends, CRLF included. The
+-- Where the chunk whose data starts at `dataPos` ends, CRLF included. The
 -- truncation diagnostic matches `readSliceAt`'s so that framing the chunk and
 -- decoding it report the same shortfall.
 chunkDataEnd : Bytes -> Int -> Int -> Int -> Result FrameError Int
@@ -1201,7 +1211,7 @@ chunkDataEnd input avail dataPos size =
   else
     Ok (afterChunk + 2)
 
--- | Frame the body and report the index one past its last byte. Bytes beyond
+-- Frame the body and report the index one past its last byte. Bytes beyond
 -- that index belong to whatever follows the request, so rejecting them is the
 -- one-shot parser's job rather than the body framer's.
 parseBody : BodyMode -> Bytes -> Int -> Int -> Result FrameError ParsedBody
@@ -1214,7 +1224,7 @@ parseBody ChunkedBody input pos headerBytes =
 parseBody UntilCloseBody input pos _ =
   Ok (ParsedBody (slice input pos (B.length input)) [] (B.length input))
 
--- | The diagnostic each body mode reports for bytes past its own frame.
+-- The diagnostic each body mode reports for bytes past its own frame.
 trailingMessage : BodyMode -> String
 trailingMessage NoBody = "http: unframed or trailing request bytes"
 trailingMessage (FixedBody _) = "http: bytes after framed fixed-length request"
@@ -1222,12 +1232,12 @@ trailingMessage ChunkedBody = "http: bytes after framed chunked request"
 
 data FramedRequest = FramedRequest Request BodyMode Int
 
--- | Everything the header section settled: the request line, its fields, the
+-- Everything the header section settled: the request line, its fields, the
 -- body framing they select, where the body starts and how many bytes the
 -- section spent. None of it can change once the blank line has arrived.
 data FrameHead = FrameHead RequestLine (List Header) BodyMode Bool Int Int
 
--- | A fully framed request span: its head plus the index one past its last
+-- A fully framed request span: its head plus the index one past its last
 -- byte. The body bytes are not part of it, so framing a span costs nothing
 -- proportional to the body.
 data FrameSpan = FrameSpan FrameHead Int
@@ -1238,14 +1248,14 @@ headHeaderBytes (FrameHead _ _ _ _ _ headerBytes) = headerBytes
 requestLineHeaderPos : RequestLine -> Int
 requestLineHeaderPos (RequestLine _ _ headerPos) = headerPos
 
--- | Where the body of a request whose head is framed can still be growing.
+-- Where the body of a request whose head is framed can still be growing.
 data BodyPhase =
   | BodyUntil Int
   | BodyChunkSize Int Int Int Int
   | BodyChunkData Int Int Int Int
   | BodyTrailers Int Int Int Int
 
--- | Where a scan of a still-growing buffer suspended. Each phase is a point at
+-- Where a scan of a still-growing buffer suspended. Each phase is a point at
 -- which only later bytes can change the verdict, so resuming there and
 -- scanning the whole buffer afresh reach the same answer.
 data ScanPhase =
@@ -1253,7 +1263,7 @@ data ScanPhase =
   | PhaseFields RequestLine (List Header) Int Int Int
   | PhaseBody FrameHead BodyPhase
 
--- | The three ways a scan ends. `ScanSuspend` carries the diagnostic the
+-- The three ways a scan ends. `ScanSuspend` carries the diagnostic the
 -- one-shot parser reports for the same buffer, so nothing about a message
 -- depends on whether the scan was resumed.
 data ScanOutcome =
@@ -1261,7 +1271,7 @@ data ScanOutcome =
   | ScanFatal HttpParseFailure
   | ScanFramed FrameSpan
 
--- | Where an interrupted CRLF search resumes. A search only ever runs out of
+-- Where an interrupted CRLF search resumes. A search only ever runs out of
 -- input at the buffer's end, and it stops one byte early on a trailing CR, so
 -- the last byte read is the earliest offset a later read must reconsider.
 crlfResume : Int -> Int -> Int
@@ -1346,7 +1356,7 @@ scanBody input avail head (BodyTrailers sectionStart pos count cursor) =
         (BodyTrailers sectionStart next (count + 1) next)
     Ok (FieldDone finalPos _) => ScanFramed (FrameSpan head finalPos)
 
--- | Advance a scan of the request starting at `start` from `phase`. Every
+-- Advance a scan of the request starting at `start` from `phase`. Every
 -- framing decision in this module is taken here or in a step this calls, so
 -- the resumable scanner and the one-shot parser are the same framer.
 scanFrom : Bytes -> Int -> Int -> ScanPhase -> ScanOutcome
@@ -1395,7 +1405,7 @@ frameSpanAt input start =
     ScanFatal failure => Err (Fatal failure)
     ScanFramed span => Ok span
 
--- | Collect the body of an already-framed span. The span fixed where the
+-- Collect the body of an already-framed span. The span fixed where the
 -- request ends, so this only has to produce the bytes and trailers inside it.
 frameFromSpan : Bytes -> FrameHead -> Int -> Result FrameError FramedRequest
 frameFromSpan input (FrameHead (RequestLine method target _) headers mode keepAlive bodyPos headerBytes) finalPos =
@@ -1421,16 +1431,18 @@ parseWholeBuffer input = do
   else
     Ok request
 
--- | Parse one complete request while preserving structural failure class.
+-- | The request framed by a buffer that holds exactly one complete request,
+-- or the failure with its class. Bytes after the request are an error.
 export
 parseRequestClassified : Bytes -> Result HttpParseFailure Request
 parseRequestClassified input = settle (parseWholeBuffer input)
 
 -- # Incremental framing
 
--- | Where a scan over a byte buffer stopped. `HttpNeedMore` is the one verdict
--- more bytes can change; `HttpFramedAt` reports the index one past the last
--- byte of the framed request, which is where the next one begins.
+-- | The verdict of a scan. `HttpNeedMore` means more bytes could still
+-- complete the request. `HttpFramedAt n` means a complete request ends at
+-- `n`, where the next one begins. `HttpFrameFailed` means no further byte
+-- can help.
 public export data HttpFrame =
   | HttpNeedMore
   | HttpFramedAt Int
@@ -1441,16 +1453,14 @@ requestBytesVerdict size framed = match checkHttpRequestBytes size
   Ok () => framed
   Err message => HttpFrameFailed (HttpResourceExcess message)
 
-{- | How far a scan of a growing buffer has already got. The type is opaque:
-   a caller obtains one from `httpScanStart`, hands it back to
-   `scanRequestBoundaryFrom` with the same request `start` and a buffer that has
-   only grown at its end, and gets a fresh one to carry to the next read.
+{- | The progress of a scan over a buffer that is still growing.
 
-   A state is only meaningful for the buffer prefix it was produced from. Any
-   other buffer, or a different `start`, needs `httpScanStart` again, which is
-   what a caller does at a request boundary, since the next request is a new
-   scan. Nothing is lost by starting over: a fresh state reaches exactly the
-   verdict a resumed one does. -}
+   Begin with `httpScanStart`, pass the state to `scanRequestBoundaryFrom`
+   or `scanRequestBoundaryWithin` with the same `start` and a buffer that
+   has only grown at its end, and keep the returned state for the next read.
+   A state describes one buffer prefix: for a different buffer, a different
+   `start`, or the next request, begin again from `httpScanStart`. Starting
+   over reaches the same verdict as resuming; it only rescans. -}
 export data HttpScan = HttpScan ScanPhase
 
 -- | A scan that has read nothing.
@@ -1458,34 +1468,23 @@ export
 httpScanStart : HttpScan
 httpScanStart = HttpScan (PhaseLine 0)
 
-{- | Whether a scan that has not yet framed a request is still inside the
-   request line or the header fields, meaning the request's header section has
-   not been terminated. Only this module can answer it, the scan's phase being
-   private, so a caller that budgets the header phase apart from the body has
-   no other way to tell the two apart. A scan that already framed a request
-   reports False: its header section ended. -}
+{- | Whether the scan is still inside the request line or the header fields.
+
+   `False` once the blank line ending the header section has been read,
+   including for a scan that has framed a whole request. -}
 export
 httpScanInHeaders : HttpScan -> Bool
 httpScanInHeaders (HttpScan (PhaseLine _)) = True
 httpScanInHeaders (HttpScan (PhaseFields _ _ _ _ _)) = True
 httpScanInHeaders (HttpScan (PhaseBody _ _)) = False
 
-{- | How many further bytes this scan needs before the request it is framing is
-   complete, given the `avail` the scan was produced from, or `None` when that
-   is not settled yet.
+{- | How many bytes beyond the first `avail` the request still needs, or
+   `None` when that is not yet known.
 
-   Settled for exactly one shape: a body whose end position the header section
-   already fixed, which is a `Content-Length` body and a bodyless request. A
-   scan still inside the header section has not selected a body mode, and a
-   chunked body declares its length one chunk at a time, so neither can say
-   what is still owed and both report `None`.
-
-   Only this module can answer it, the scan's phase being private. A caller
-   that must reserve a resource for a whole request before accepting any of it
-   — `pds/shell/server.mdk`'s in-flight buffer budget — has no other route to
-   the number: the declared length is a header this module has already graded
-   into a body mode, and reading it again outside would be a second framer
-   able to disagree with this one. -}
+   It is known once the header section has fixed where the body ends: a
+   `Content-Length` body or no body at all. While the scan is still in the
+   header section, and for a chunked body, which declares its length one
+   chunk at a time, the answer is `None`. -}
 export
 httpScanBodyRemaining : HttpScan -> Int -> Option Int
 httpScanBodyRemaining (HttpScan (PhaseBody _ (BodyUntil finalPos))) avail =
@@ -1501,17 +1500,17 @@ scanVerdict avail start _ (ScanSuspend _ phase) = (
   HttpScan phase,
 )
 
-{- | Find the end of the first complete request at or after `start` in the first
-   `avail` bytes of `input`, resuming the scan `state` left off at. Bytes of
-   `input` at or past `avail` are not input: they are whatever a caller's
-   backing array holds beyond what it has received, so no framing decision may
-   read them. A buffer whose pending bytes already exceed the per-request
-   ceiling is rejected rather than left pending, so a caller can bound what it
-   buffers.
+{- | The end of the first complete request at or after `start` within the
+   first `avail` bytes of `input`, resumed from a prior scan state, together
+   with the state to resume from next time.
 
-   The cost of a resumed scan is proportional to the bytes that arrived since
-   the state was produced, not to the bytes already buffered, because every
-   suspension point is one only later bytes can move past. -}
+   Bytes at or past `avail` are never read, so a caller can scan a buffer
+   that is only partly filled. A pending request already larger than
+   `maxHttpRequestBytes` is reported as `HttpFrameFailed` rather than
+   `HttpNeedMore`. An `avail` outside the buffer, or a `start` outside
+   `[0, avail]`, fails as `HttpMalformed` and leaves the state unchanged.
+   A resumed scan costs time proportional to the bytes that arrived since the
+   state was produced. -}
 export
 scanRequestBoundaryWithin : Bytes ->
   Int ->
@@ -1535,24 +1534,22 @@ scanRequestBoundaryWithin input avail start (HttpScan phase) =
   else
     scanVerdict avail start (HttpScan phase) (scanFrom input avail start phase)
 
--- | Scan a buffer whose every byte is received input. This is
--- `scanRequestBoundaryWithin` at the buffer's full length, so a caller that
--- keeps no spare capacity needs to know nothing about the distinction.
+-- | `scanRequestBoundaryWithin` over every byte of `input`.
 export
 scanRequestBoundaryFrom : Bytes -> Int -> HttpScan -> (HttpFrame, HttpScan)
 scanRequestBoundaryFrom input start scan =
   scanRequestBoundaryWithin input (B.length input) start scan
 
--- | Find the end of the first complete request at or after `start` without a
--- prior scan. This is `scanRequestBoundaryFrom` from `httpScanStart`, so a
--- whole-buffer scan and a resumed one cannot be two different framers.
+-- | The verdict of `scanRequestBoundaryFrom` started from `httpScanStart`,
+-- without the state.
 export
 scanRequestBoundary : Bytes -> Int -> HttpFrame
 scanRequestBoundary input start =
   fst (scanRequestBoundaryFrom input start httpScanStart)
 
--- | Parse the frame `[start, end)` exactly as `parseRequestClassified` parses
--- that region on its own, so a scanned boundary and a parse cannot disagree.
+-- | The request framed by `input[start, end)`, parsed as
+-- `parseRequestClassified` parses that slice on its own. Bounds outside the
+-- buffer fail as `HttpMalformed`.
 export
 parseRequestAt : Bytes -> Int -> Int -> Result HttpParseFailure Request
 parseRequestAt input start end =
@@ -1561,9 +1558,8 @@ parseRequestAt input start end =
   else
     parseRequestClassified (slice input start end)
 
--- | Parse one complete request, reporting a failure as its diagnostic alone.
--- `parseRequestClassified` keeps the structural class a caller needs to
--- choose 400 against 413.
+-- | `parseRequestClassified` with the failure reduced to its diagnostic.
+-- Use the classified form to tell a 400 from a 413.
 export
 parseRequest : Bytes -> Result String Request
 parseRequest input = match parseRequestClassified input
@@ -1572,40 +1568,42 @@ parseRequest input = match parseRequestClassified input
 
 -- # Response parsing
 
-{- | A parsed HTTP/1.0 or HTTP/1.1 response. Fields and trailers retain their
-   received order and duplicates; the body has any chunked transfer coding
-   removed. The constructor is private so every value has passed the framing
-   and resource checks below. -}
+{- | A parsed HTTP/1.0 or HTTP/1.1 response.
+
+   Fields and trailers keep their received order and duplicates; the body
+   has any chunked transfer coding removed. Values come only from
+   `parseResponseClassified` and `parseResponse`. -}
 export data ParsedResponse =
   | ParsedResponse Int String (List Header) (List Header) (Array Int)
 
--- | The parsed response's status code.
+-- | The status code.
 export
 parsedResponseStatus : ParsedResponse -> Int
 parsedResponseStatus (ParsedResponse status _ _ _ _) = status
 
--- | The parsed response's reason phrase, exactly as received.
+-- | The reason phrase, exactly as received.
 export
 parsedResponseReason : ParsedResponse -> String
 parsedResponseReason (ParsedResponse _ reason _ _ _) = reason
 
--- | The parsed response fields in received order, duplicates retained.
+-- | The header fields in received order, duplicates retained.
 export
 parsedResponseHeaders : ParsedResponse -> List Header
 parsedResponseHeaders (ParsedResponse _ _ headers _ _) = copyHeaders headers
 
--- | Parsed trailer fields in received order, or an empty list for a body
--- without chunked transfer coding.
+-- | The trailer fields in received order, empty for a body that was not
+-- chunked.
 export
 parsedResponseTrailers : ParsedResponse -> List Header
 parsedResponseTrailers (ParsedResponse _ _ _ trailers _) = copyHeaders trailers
 
--- | The decoded response body, with chunk framing removed.
+-- | The body, with any chunked transfer coding removed. The result is a
+-- copy.
 export
 parsedResponseBody : ParsedResponse -> Array Int
 parsedResponseBody (ParsedResponse _ _ _ _ body) = arrayCopy body
 
--- | The decoded response body's length without copying it.
+-- | The byte length of the decoded body.
 export
 parsedResponseBodyLength : ParsedResponse -> Int
 parsedResponseBodyLength (ParsedResponse _ _ _ _ body) = arrayLength body
@@ -2016,11 +2014,13 @@ responseParseBody ChunkedBody input avail pos =
 responseParseBody UntilCloseBody input avail pos =
   Ok (slice input pos avail, [], avail)
 
-{- | Parse one complete HTTP response with structural failure classification.
-   Status lines, fields, chunks, decoded bodies, and trailers are bounded.
-   Transfer-coding tokens are compared as ASCII case-insensitively. A response
-   without a declared length is close-delimited unless its status forbids a
-   body. -}
+{- | The response framed by a buffer that holds exactly one complete
+   response, or the failure with its class.
+
+   The status line, fields, chunks, decoded body, and trailers are each
+   bounded by their `max*` ceiling. A response with neither a
+   `Content-Length` nor a chunked `Transfer-Encoding` runs to the end of the
+   buffer, unless its status code (1xx, 204, or 304) forbids a body. -}
 export
 parseResponseClassified : Array Int -> Result HttpParseFailure ParsedResponse
 parseResponseClassified input = settle (parseResponseChecked input)
@@ -2046,8 +2046,7 @@ parseResponseChecked input = do
   else
     Ok (ParsedResponse status reason headers trailers body)
 
-{- | `parseResponseClassified` with its structural class collapsed to the
-   diagnostic string.
+{- | `parseResponseClassified` with the failure reduced to its diagnostic.
 
    > isErr (parseResponse [||])
    True -}
@@ -2112,10 +2111,12 @@ responseScanEnd input avail = do
   mode <- responseSelectBodyMode status headers
   responseScanBodyEnd mode input avail headerEnd
 
-{- | The offset just past the first response framed by `input[0, avail)`, or
-   `None` when that prefix is incomplete, malformed, or close-delimited.
-   Bytes at or beyond `avail` are never inspected. A returned boundary may be
-   less than `avail` when another message follows it. -}
+{- | The offset just past the first complete response in `input[0, avail)`,
+   or `None` when that prefix is incomplete, malformed, or a response that
+   ends only when the connection closes.
+
+   Bytes at or past `avail` are never read. The offset is less than `avail`
+   when another message follows the response. -}
 export
 responseBoundaryWithin : Array Int -> Int -> Option Int
 responseBoundaryWithin input avail =
@@ -2132,9 +2133,8 @@ responseBoundary input = responseBoundaryWithin input (arrayLength input)
 
 -- # Response building
 
--- | A buffered HTTP response. The constructor is private: responses can only
--- be obtained through `makeResponse`, after their status line and fields have
--- been checked for response splitting and reserved framing fields.
+-- | A response ready to serialize. Values come only from `makeResponse`,
+-- which checks the status, the reason phrase, and the fields.
 export data Response = Response Int String (List Header) (Array Int)
 
 validResponseValue : Array Int -> Int -> Bool
@@ -2145,9 +2145,9 @@ validResponseValue value i =
     let byte = value[i]
     byte >= 32 && byte <= 126 && validResponseValue value (i + 1)
 
--- | Construct a safe response field. Names are canonicalized to lowercase;
--- values must be printable ASCII and therefore cannot contain CR, LF, or any
--- other control byte.
+-- | A response field with `name` lowercased, or `Err` when `name` is not a
+-- token or `value` is not printable ASCII. Control bytes, CR and LF among
+-- them, are rejected, so a field cannot split the response.
 export
 makeHeader : String -> Array Int -> Result String Header
 makeHeader name value =
@@ -2174,8 +2174,13 @@ hasReservedResponseField ((Header name _) :: rest) =
     || name == "transfer-encoding"
     || hasReservedResponseField rest
 
--- | Construct a deterministic buffered response. The serializer owns all
--- framing, so callers cannot supply Content-Length or Transfer-Encoding.
+{- | A response with the given status, reason phrase, fields, and body, or
+   `Err` when one of them is invalid.
+
+   `status` must be from 100 to 599, `reason` printable ASCII, and every
+   element of `body` from 0 to 255. `headers` may not include
+   `Content-Length` or `Transfer-Encoding`; `serializeResponse` writes the
+   framing itself. -}
 export
 makeResponse : Int ->
   String ->
@@ -2194,24 +2199,23 @@ makeResponse status reason headers body =
   else
     Ok (Response status reason (copyHeaders headers) (arrayCopy body))
 
--- | The response status code.
+-- | The status code.
 export
 responseStatus : Response -> Int
 responseStatus (Response status _ _ _) = status
 
--- | The caller's response fields in the order they were supplied. The
--- computed Content-Length is added by `serializeResponse` and is not among
--- them.
+-- | The fields given to `makeResponse`, in that order. The `Content-Length`
+-- that `serializeResponse` adds is not among them.
 export
 responseHeaders : Response -> List Header
 responseHeaders (Response _ _ headers _) = copyHeaders headers
 
--- | The response body bytes.
+-- | The body bytes. The result is a copy.
 export
 responseBody : Response -> Array Int
 responseBody (Response _ _ _ body) = arrayCopy body
 
--- | The response reason phrase, exactly as constructed.
+-- | The reason phrase, as given to `makeResponse`.
 export
 responseReason : Response -> String
 responseReason (Response _ reason _ _) = reason
@@ -2228,8 +2232,9 @@ emitResponseHeaders ((Header name value) :: rest) out =
   emitAscii "\r\n" out
   emitResponseHeaders rest out
 
--- | Serialize a complete HTTP/1.1 response. Caller fields remain in their
--- original order and exactly one computed Content-Length follows them.
+-- | The bytes of the response as an HTTP/1.1 message: the status line, the
+-- fields in their given order, one `content-length` field, a blank line,
+-- and the body.
 export
 serializeResponse : Response -> Array Int
 serializeResponse (Response status reason headers body) =
@@ -2248,19 +2253,19 @@ serializeResponse (Response status reason headers body) =
 
 -- # Targets, media types, and bodies
 
--- | A parsed, canonical media type, holding only the lowercased type and
--- subtype. `parseMediaType` validates any parameters but does not retain
--- them.
+-- | A media type reduced to its type and subtype, both lowercased.
+-- Parameters are checked by `parseMediaType` and then dropped.
 export data MediaType = MediaType String String
 
--- | A request body decoded according to its media type. JSON and text are
--- strictly UTF-8; every other media type keeps its raw bytes.
+-- | A request body decoded by its media type. An `application/json` body is
+-- parsed as JSON, a `text/*` body is decoded as UTF-8 text, and every other
+-- type keeps its bytes.
 public export data DecodedBody =
   | JsonBody MediaType Json
   | TextBody MediaType String
   | RawBody MediaType (Array Int)
 
--- | One decoded query parameter: its name and its value, empty when the
+-- | One query parameter: its name and its decoded value, `""` when the
 -- query gave it none.
 public export data QueryParam = QueryParam String String
 
@@ -2438,8 +2443,13 @@ parseQueryFields input start acc =
         else
           parseQueryFields input next (QueryParam name value :: acc)
 
--- | Split and decode the validated origin target. Ordered duplicates and
--- empty values are retained; `+` is ordinary URI data and remains literal.
+{- | The path and the query parameters of the request target, with percent
+   escapes decoded.
+
+   Parameters keep their order and duplicates, and a parameter without `=`
+   has the value `""`. A `+` stays a literal `+`. `Err` on a malformed
+   percent escape, an empty parameter name, or a component that is not
+   UTF-8 text. -}
 export
 parseTargetQuery : Request -> Result String (String, List QueryParam)
 parseTargetQuery (Request _ target _ _ _ _) =
@@ -2523,8 +2533,9 @@ parseMediaParameters value pos end count =
               Ok tokenEnd
           parseMediaParameters value valueEnd end (count + 1)
 
--- | Parse a bounded ASCII media type. Type and subtype matching is
--- case-insensitive and returned in canonical lowercase form.
+-- | The media type in `value`, with type and subtype lowercased, or `Err`
+-- when it is not one. Parameters are checked for form and then dropped.
+-- `value` must be ASCII and at most 4096 bytes.
 export
 parseMediaType : Array Int -> Result String MediaType
 parseMediaType value =
@@ -2560,9 +2571,12 @@ contentType headers =
     None => Err "http: request body requires Content-Type"
     Some value => parseMediaType value
 
--- | Decode a framed request body according to its supplied media type. JSON
--- and text are strictly UTF-8 and have narrower endpoint limits; all other
--- valid media types retain their raw bytes.
+{- | The request body decoded by its `Content-Type`.
+
+   `Err` when the field is missing or repeated, when the media type is
+   invalid, when the body exceeds the ceiling for its kind
+   (`maxJsonBodyBytes`, `maxTextBodyBytes`, or `maxRawBodyBytes`), or when a
+   JSON or text body is not valid UTF-8. -}
 export
 decodeRequestBody : Request -> Result String DecodedBody
 decodeRequestBody (Request _ _ headers _ packed _) = do

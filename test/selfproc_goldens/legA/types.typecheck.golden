@@ -1812,6 +1812,8 @@ occursAdjust : Int -> Int -> Mono -> Unit
 occursAdjustUnbound : Int -> Int -> Ref Tyvar -> Int -> Int -> Unit
 occursAdjustVar : Int -> Int -> Ref Tyvar -> Unit
 opDictVarOf : Option PredicateRequest -> Bool -> String -> Mono -> Bool -> String -> ScopeId -> Option AssumAnswer
+opSiteIdPairs : PendingEntry -> List (Int, String)
+opSitePairs : Int -> List (Int, String)
 openGoalCommitHelp : String
 openGoalCommitMsg : String -> List Mono -> List KeyEntry -> String
 openGoalCommitWarnCode : String

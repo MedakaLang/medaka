@@ -3,11 +3,7 @@
 ## `Async`
 
 ```
-data Async (e : Effect) a
-  = Done a
-  | Suspend (Unit -> <e> Async e a)
-  | Await (List Wait) (Unit -> <e> Async e a)
-  | Spawn (Async e Unit) (Unit -> <e> Async e a)
+data Async (e : Effect) a  -- abstract: the constructors are not exported
 ```
 
 A deferred computation.  `Done` holds a finished value; the other arms
@@ -35,8 +31,7 @@ name a file descriptor; `WaitUntil` is a monotonic deadline in seconds;
 ## `Task`
 
 ```
-data Task a
-  = Task (Ref Bool) (Ref (Option a))
+data Task a  -- abstract: the constructors are not exported
 ```
 
 A handle to a task started with `spawnTask`.  `await` reads its value.
@@ -196,6 +191,4 @@ runAsyncMain : Async e Unit -> <e> Unit
 
 A `main : Async e Unit` is driven through this on the WebAssembly target,
 which has no clock.
-
-## Instances
 

@@ -8,9 +8,9 @@ accepts exactly that canonical form: uppercase, `=` padding, non-alphabet
 characters, non-zero residual bits, and non-canonical lengths are rejected
 rather than normalized.
 
-Both build a `List Char`/`List Int` through non-tail recursion, so under
-the tree-walking interpreter (`medaka run`/`test`) they overflow the
-stack at a few kilobytes of input; native builds have no such limit.
+Under the interpreter (`medaka run`, `medaka test`), both overflow the
+stack on inputs of more than a few kilobytes. Native builds have no such
+limit.
 
 ## `base32Encode`
 
@@ -20,7 +20,7 @@ base32Encode : Array Int -> String
 
 The bytes as lowercase, unpadded base32.
 
-Panics when an element of `bytes` is outside `0..255`.
+Panics when an element of `bytes` is outside `0` to `255`.
 
 ```medaka
 > base32Encode [|102, 111, 111|]
@@ -35,8 +35,9 @@ base32Decode : String -> Result String (Array Int)
 
 The bytes written in canonical (lowercase, unpadded) base32.
 
-`Err` when the input carries padding, uppercase, a non-alphabet
-character, non-zero trailing bits, or any other non-canonical length.
+`Err` when the input carries padding, an uppercase letter, a character
+outside the alphabet, non-zero trailing bits, or a length that no byte
+sequence encodes to.
 
 ```medaka
 > base32Decode "mzxw6"

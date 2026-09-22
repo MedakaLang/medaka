@@ -511,7 +511,7 @@ export impl FromEntries (Set a) a requires Ord a where
 
 -- `empty` is nullary and dispatches on its result type; `Tip` needs no dict,
 -- so it grounds cleanly.
-{- | `empty` is the set with no elements.
+{- | The set with no elements.
 
    > isEmpty (empty : Set Int)
    True -}

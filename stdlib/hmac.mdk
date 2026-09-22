@@ -2,8 +2,8 @@
 
    A key and a message are each an `Array Int` with every element from `0` to
    `255`, and the result is the 32-byte authentication tag. The key may be any
-   length: RFC 2104's schedule hashes a key longer than the 64-byte block down
-   to its digest first, and pads a shorter one with zero bytes on the right.
+   length. A key longer than the 64-byte block is hashed down to its digest
+   first, and a shorter one is padded with zero bytes on the right.
 
    `hmacSha256` panics when any element of the key or the message is outside
    `0` to `255`. `hmacSha256FixedBytes` is the same tag without that check,
@@ -100,13 +100,13 @@ hmacSha256 key message =
 -- > hmacSha256 (arrayMake 20 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] == hmacSha256FixedBytes (arrayMake 20 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
 -- True
 
-{- | The 32-byte HMAC-SHA-256 tag of `message` under `key`, skipping the
-   byte-domain check.
+{- | The 32-byte HMAC-SHA-256 tag of `message` under `key`, without checking
+   the byte domain.
 
-   Every element of `key` and `message` must still be in `0` to `255`.
-   Nothing here checks that, and an element outside the range silently
-   authenticates some other input. Prefer `hmacSha256` unless the bytes come
-   from a source that already guarantees the range. -}
+   Every element of `key` and `message` must be in `0` to `255`. An element
+   outside that range is not detected and yields the tag of some other
+   input. Use `hmacSha256` unless the bytes are already known to be in
+   range. -}
 export
 hmacSha256FixedBytes : Array Int -> Array Int -> Array Int
 hmacSha256FixedBytes key message =

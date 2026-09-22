@@ -229,8 +229,8 @@ fsync : String -> <FileWrite _> Result String Unit
 ```
 
 Flushes a path's contents to durable storage. Works on a regular file or
-a directory — the durability of a `rename` is a property of the
-containing directory, not either file.
+a directory; the durability of a `rename` is a property of the containing
+directory, not of either file.
 
 ### `removeDir`
 
@@ -447,8 +447,8 @@ netConnectCheck : Int -> <Net _> Result String (Option Unit)
 ```
 
 Whether a descriptor from `netConnectStart` has finished its handshake.
-`None` means not yet, so a woken task retries this rather than trusting the
-wake. `Err` is the handshake's own failure — a refused or unreachable peer —
+`None` means not yet, so a woken task asks again rather than trusting the
+wake. `Err` is the handshake's own failure (a refused or unreachable peer)
 and leaves the descriptor for the caller to close.
 
 ### `netTryRecv`

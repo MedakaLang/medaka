@@ -1,0 +1,91 @@
+-- An operator on the method seam -- `++`, the comparisons, unary `-` -- has to reach
+-- the same instance the infix spelling does when it is bound to a name first.  Each
+-- group below binds one operator three ways (the bare operator, the hand-written
+-- lambda the section desugars to, and where it exists the method spelling, which
+-- always worked) and applies it to a type whose instance is hand-written, so a site
+-- that misses the instance falls to an untyped builtin instead.
+--
+-- Every instance here is chosen so the untyped builtin gives a DIFFERENT answer, not
+-- an unavailable one: `Eq K` looks at the first field only, so the structural
+-- comparison says False where the instance says True; `Ord P` orders by the second
+-- field REVERSED, so the structural order is the opposite one; `Semigroup Acc` and
+-- `Num V` have no structural arm at all and crash or panic.  A row whose two answers
+-- coincide would pass with the instance never consulted.
+--
+-- The `Bytes` row is here because `stdlib/bytes.mdk` is the `Semigroup` instance a
+-- caller actually meets: its cell is a packed byte block, not Cons cells, so the same
+-- miss reads its payload as pointers.
+--
+-- Every printed value is a String (`debug` renders it), so no engine has to agree
+-- about a cell's layout, only about which method ran.
+
+import bytes as B
+
+data Acc = Acc Int deriving (Debug)
+
+export impl Semigroup Acc where
+  append (Acc a) (Acc b) = Acc (a + b)
+
+data K = K Int Int deriving (Debug)
+
+export impl Eq K where
+  eq (K a _) (K b _) = a == b
+
+data P = P Int Int deriving (Debug)
+
+export impl Eq P where
+  eq (P a x) (P b y) = a == b && x == y
+
+export impl Ord P where
+  compare (P _ x) (P _ y) = compare y x
+
+data V = V Int deriving (Debug)
+
+export impl Eq V where
+  eq (V a) (V b) = a == b
+
+export impl Num V where
+  add (V a) (V b) = V (a + b)
+  sub (V a) (V b) = V (a - b)
+  mul (V a) (V b) = V (a * b)
+  div (V a) (V b) = V (a / b)
+  rem (V a) (V b) = V (a % b)
+  negate (V a) = V (0 - a)
+  abs (V a) = V (if a < 0 then 0 - a else a)
+  signum (V a) = V (if a < 0 then -1 else 1)
+  fromInt n = V n
+
+main =
+  let a1 = Acc 1
+  let a2 = Acc 2
+  let semiOp = (++)
+  let semiLam = (x y => x ++ y)
+  let semiNamed = append
+  let bytesOp = (++)
+  let k1 = K 1 9
+  let k2 = K 1 8
+  let eqOp = (==)
+  let eqLam = (x y => x == y)
+  let eqNamed = eq
+  let p1 = P 0 5
+  let p2 = P 0 9
+  let ltOp = (<)
+  let ltLam = (x y => x < y)
+  let negLam = (x => -x)
+  [
+    debug (semiOp a1 a2),
+    debug (semiLam a1 a2),
+    debug (semiNamed a1 a2),
+    debug (a1 ++ a2),
+    debug (bytesOp (B.fromArrayAssumeByteDomain [|1|])
+      (B.fromArrayAssumeByteDomain [|2|])),
+    debug (eqOp k1 k2),
+    debug (eqLam k1 k2),
+    debug (eqNamed k1 k2),
+    debug (k1 == k2),
+    debug (ltOp p1 p2),
+    debug (ltLam p1 p2),
+    debug (p1 < p2),
+    debug (negLam (V 3)),
+    debug (-(V 3)),
+  ]

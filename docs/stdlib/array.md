@@ -494,7 +494,7 @@ survive.
 impl Monoid (Array a)
 ```
 
-`empty` is the empty array.
+The empty array.
 
 ```medaka
 > length (empty : Array Int)

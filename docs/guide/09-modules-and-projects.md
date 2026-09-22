@@ -65,13 +65,43 @@ red/blue
 
 An alias replaces the unqualified import: `import red as R` does not also bind a bare
 `paint`. A module alias has to be capitalized, since it is used as a qualifier. A
-member alias renames one imported value.
+member alias renames one imported value, and only a value: a type or a constructor
+is imported under its own name or not at all.
 
-An alias qualifies types as well as values, so `C.Color` works in a type signature. It
-does not reach a CONSTRUCTOR: `C.Red` is not a spelling the grammar has, so a pattern or
-an expression that names one still needs `import colors.{Color(..)}`. An alias also
-cannot be combined with a group or wildcard import, since those already bind their names
-unqualified.
+An alias qualifies everything the module exports, not only its values. A type works
+in a signature, a constructor in an expression or a pattern, and an interface in a
+constraint, all spelled with the same prefix:
+
+```medaka-project
+-- file: colors.mdk
+public export data Color = Red | Green
+
+export interface Named a where
+  nameOf : a -> String
+
+export impl Named Color where
+  nameOf c = match c
+    Red => "red"
+    Green => "green"
+-- file: main.mdk
+import colors as C
+
+describe : C.Named a => a -> String
+describe x = "the " ++ C.nameOf x
+
+first : C.Color
+first = C.Red
+
+main = println (describe first)
+```
+
+```medaka-expect
+the red
+```
+
+A constructor is reachable this way only when its module exports it, with
+`public export data` (see Exporting below). An alias cannot be combined with a group
+or wildcard import, since those already bind their names unqualified.
 
 ### A bare import binds nothing, but it is not a no-op
 
