@@ -1,5 +1,5 @@
 # META
-source_lines=990
+source_lines=980
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -64,15 +64,6 @@ stages=DESUGAR,MARK
 -- evaluator has no tail-call optimisation, so every loop here recurses, and
 -- 25,000 is `E-STACK-OVERFLOW`'s threshold.  Removing it is #2594's arc, not
 -- this module's.  It is why every doctest subject here stays small.
---
--- The `++` gap the module doc describes is issue #3204: a `let`-bound `++`
--- reaches the runtime's untyped concatenation instead of this module's
--- `Semigroup` instance.  It dispatches from infix position, an operator
--- section, an immediately applied lambda, a signature-carrying function body,
--- and a `Semigroup a =>` constrained body.  It does not from `let f = (++)`
--- or `let f = (x y => x ++ y)`, the latter even when a later annotated call
--- site pins the operand type.  `append` bound to a name dispatches, which is
--- why the doc points a caller at it.
 
 import core.{
   Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Monoid, Hashable
@@ -576,12 +567,11 @@ map f (Bytes bb) =
 
 {- | The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
 
-   `b1 ++ b2` reaches this instance when the operand type is known at the
-   call: written infix, in an operator section, or in a body constrained by
-   `Semigroup`. Bound to a name first, as `let f = (++)` or
-   `let f = (x y => x ++ y)`, `++` does not dispatch on `Bytes` and fails
-   at run time. Bind `append` instead, which dispatches from either
-   position.
+   `b1 ++ b2` reaches this instance from every position: infix, in an
+   operator section, in a body constrained by `Semigroup`, and bound to a
+   name first, as `let f = (++)` or `let f = (x y => x ++ y)`. A local
+   binding cannot carry the constraint, so a name bound to `++` serves one
+   type; used at two, it is rejected, as `let f = append` is.
 
    > toArray (append (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|3|]))
    [|1, 2, 3|]

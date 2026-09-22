@@ -1,0 +1,29 @@
+-- #3317 — THE PRICE OF ROUTING A LET-BOUND OPERATOR, PINNED ON ALL THREE VERBS.
+--
+-- An operator on the method seam (`==` here) is a method occurrence in surface
+-- syntax, so `let e = (==)` now carries the same constraint `let e = eq` does: a
+-- local binding cannot be dict-abstracted, so it cannot be polymorphic in the type
+-- the instance is chosen from. Used at ONE type it is legal and reaches the
+-- instance; used at two, as here (`Int` and `K`), typecheck owes a located
+-- T-LOCAL-CONSTRAINED-MONO naming the binding, both types, the interface and the
+-- hoist-to-top-level remedy.
+--
+-- The rejection has to be a DIAGNOSTIC on all three verbs, which is what this
+-- corpus adds over an ordinary typecheck fixture. Before #3317 this program was
+-- ACCEPTED by all three and then answered `False` for `e (K 1 9) (K 1 8)` from the
+-- shallow structural comparison, while the infix `K 1 9 == K 1 8` beside it answered
+-- `True` from the instance. A regression that restores the old acceptance would
+-- restore that silent disagreement, so this fixture is the acceptance half of the
+-- routing fix, not a diagnostics test.
+--
+-- Verdict: REJECT.
+data K = K Int Int
+
+impl Eq K where
+  eq (K a _) (K b _) = a == b
+
+main =
+  let e = (==)
+  let onInts = e 1 1
+  let onK = e (K 1 9) (K 1 8)
+  println (debug (onInts, onK))

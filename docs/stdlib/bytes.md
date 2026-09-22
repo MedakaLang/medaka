@@ -657,12 +657,11 @@ impl Semigroup Bytes
 
 The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
 
-`b1 ++ b2` reaches this instance when the operand type is known at the
-call: written infix, in an operator section, or in a body constrained by
-`Semigroup`. Bound to a name first, as `let f = (++)` or
-`let f = (x y => x ++ y)`, `++` does not dispatch on `Bytes` and fails
-at run time. Bind `append` instead, which dispatches from either
-position.
+`b1 ++ b2` reaches this instance from every position: infix, in an
+operator section, in a body constrained by `Semigroup`, and bound to a
+name first, as `let f = (++)` or `let f = (x y => x ++ y)`. A local
+binding cannot carry the constraint, so a name bound to `++` serves one
+type; used at two, it is rejected, as `let f = append` is.
 
 ```medaka
 > toArray (append (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|3|]))
