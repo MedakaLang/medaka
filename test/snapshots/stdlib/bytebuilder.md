@@ -1,5 +1,5 @@
 # META
-source_lines=439
+source_lines=434
 stages=DESUGAR,MARK
 # SOURCE
 {- | A buffer for building byte arrays.
@@ -50,12 +50,13 @@ buildArray (Builder backing len) =
    copy, so emitting more afterwards does not reach it.
 
    > let buf = newBuilder () in let _ = emitBytes (fromArrayAssumeByteDomain [|0, 128, 255|]) buf in debug (buildBytes buf)
-   "Bytes \"0080ff\""
-   > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)
-   True -}
+   "Bytes \"0080ff\"" -}
 export
 buildBytes : Builder -> Bytes
 buildBytes (Builder backing len) = fromByteBlockPrefix !len !backing
+
+-- > let buf = newBuilder () in let _ = emitU32BE 0x01020304 buf in debug (buildBytes buf) /= debug (buildArray buf)
+-- True
 
 -- # Emitting
 
@@ -93,12 +94,10 @@ growTo : Int -> Int -> Int
 growTo cap needed =
   if cap >= needed then cap else growTo (if cap == 0 then 1 else cap * 2) needed
 
-{- | Appends every byte of `src`, in order, in one bulk copy.
+{- | Appends every byte of `src`, in order.
 
-   Amortized `O(1)` per byte: the backing block grows at most once, to the
-   smallest doubling that holds the result, so appending `n` bytes costs one
-   blit of the live prefix (on grow) plus one blit of `src` -- never `n`
-   separate single-byte grows.
+   The backing block grows at most once per call, so appending `n` bytes
+   costs `O(n)` whatever the builder's current capacity.
 
    > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hi") buf in let _ = emitBytes (encodeUtf8 "!") buf in debug (buildBytes buf)
    "Bytes \"686921\""
@@ -118,17 +117,13 @@ emitBytes src (Builder backing len) =
   let () = byteBlockBlit srcBlock 0 !backing !len n
   len := needed
 
-{- | The live backing block as a `Bytes`, and how many of its bytes have been
-   emitted, with no copy.
+{- | The builder's backing block as a `Bytes`, and the number of bytes
+   emitted so far, without copying.
 
-   For a caller that scans the buffered bytes in place and would rather not
-   pay `buildBytes`'s allocation. The returned byte string is the builder's
-   own backing block, spare capacity and all, so it is longer than the
-   returned length whenever the block is not full, and bytes at or past that
-   length are scratch rather than emitted ones. A later `emit` either writes
-   past the returned length or, on a grow, moves the builder to a fresh
-   block: either way the returned byte string goes stale rather than wrong,
-   and a caller reading only `[0, len)` of it reads what it was handed.
+   The byte string is the builder's own block, so it may be longer than the
+   count, and bytes at or past the count are unwritten scratch. A later
+   `emit` writes into that block or replaces it, so read the first `len`
+   bytes before emitting again. `buildBytes` is the copying form.
 
    > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
    3 -}

@@ -1,30 +1,23 @@
 # META
-source_lines=223
+source_lines=211
 stages=DESUGAR,MARK
 # SOURCE
 {- | A mutable string of bytes, fixed at its allocated length.
 
-   `MutBytes` is `bytes`'s mutable sibling and the way to build a byte string
-   a byte at a time. `make` allocates `n` zero bytes, `setInPlace` writes one,
-   `fill` writes them all, `blit` copies a run from one into another, and
-   `freeze` hands back an immutable `Bytes`. `thaw` goes the other way. Both
-   `freeze` and `thaw` copy, so neither result shares storage with its
-   source.
-
-   The alternative -- filling an `Array Int` and handing it to
-   `bytes.fromArray` -- boxes a machine word per byte before packing them,
-   which is the cost `Bytes` exists to avoid.
+   `MutBytes` is the mutable sibling of `bytes.Bytes` and the way to build a
+   byte string a byte at a time. `make` allocates `n` zero bytes,
+   `setInPlace` writes one, `fill` writes them all, `blit` copies a run from
+   one into another, and `freeze` hands back an immutable `Bytes`. `thaw`
+   goes the other way. Both `freeze` and `thaw` copy, so neither result
+   shares storage with its source.
 
    `length` is the byte count, `get` reads one byte as an `Option`, and
-   `mb[i]` panics on an out-of-range index instead. Every write checks both
-   the index and the `0` to `255` domain.
+   `mb[i]` is the panicking form. Every write checks both the index and the
+   `0` to `255` range.
 
-   `length` is also the prelude's `Foldable` method, and `make`, `get`,
-   `setInPlace`, `fill` and `blit` are also `array`'s, so import this module
-   selectively rather than with `*`. `length` named in an import list shadows
-   the prelude's method for the whole importing module, so reach it through
-   an alias -- `import mut_bytes as MB`, then `MB.length` -- from a module
-   that uses both. -}
+   `length` is also a prelude name, and `make`, `get`, `setInPlace`, `fill`
+   and `blit` are also exported by `array`. Import the module qualified, as
+   `import mut_bytes as MB`, in a file that also imports `array`. -}
 
 -- `MutBytes` lives here rather than in a section of `bytes.mdk` so that both
 -- types can carry the bare `make`/`length`/`get` names: one module cannot
@@ -43,9 +36,8 @@ import bytes.{
 
 {- | The mutable byte-string type.
 
-   The constructor is module-private, so `make` and `thaw` are the ways in
-   and `freeze` the way out, and nothing observes the buffer except through
-   the functions below.
+   The constructor is private. Build a value with `make` or `thaw`, and read
+   it back as a `Bytes` with `freeze`.
 
    > length (make 3)
    3 -}
@@ -114,10 +106,8 @@ export impl Index MutBytes Int Int where
 
 {- | Replaces the byte at index `i` of `mb` with `v`.
 
-   Panics when `i` is out of range, as `array.setInPlace` does, and panics
-   when `v` falls outside `0` to `255` rather than keeping its low eight
-   bits. A masked write would put a byte into a `Bytes` that no caller asked
-   for, and this is the door every byte written here goes through.
+   Panics when `i` is out of range, and when `v` falls outside `0` to `255`.
+   The value is never masked to its low eight bits.
 
    > let mb = make 2 in let _ = setInPlace 0 65 mb in get 0 mb
    Some 65 -}
@@ -133,8 +123,7 @@ setInPlace i v (MutBytes bb) =
 
 {- | Replaces every byte of `mb` with `v`.
 
-   `array.fill`'s counterpart. Panics when `v` falls outside `0` to `255`,
-   for the reason `setInPlace` does.
+   Panics when `v` falls outside `0` to `255`.
 
    > let mb = make 3 in let _ = fill 7 mb in debug mb
    "MutBytes \"070707\"" -}
@@ -159,11 +148,11 @@ fillFrom v bb i n
 {- | Copies `len` bytes from `src`, starting at `srcOff`, into `dst`, starting
    at `dstOff`.
 
-   Panics when any argument is negative or the copy would run past either
-   byte string's end, as `array.blit` does.
+   Panics when any argument is negative or the copy would run past the end
+   of either byte string.
 
-   `src` and `dst` may be the same `MutBytes` and the two runs may overlap:
-   every source byte is read as it was before any of them was written.
+   `src` and `dst` may be the same `MutBytes` and the two runs may overlap.
+   Every source byte is read as it was before any byte was written.
 
    > let src = make 2 in let _ = fill 9 src in let dst = make 4 in let _ = blit src 0 dst 1 2 in debug dst
    "MutBytes \"00090900\""
@@ -202,8 +191,7 @@ freeze (MutBytes bb) =
 
 {- | A mutable copy of `b`.
 
-   `freeze`'s mirror, and a copy for the same reason: a write to the result
-   does not reach `b`, which hands out no way to change it.
+   A write to the result does not reach `b`.
 
    > let b = encodeUtf8 "hi" in let mb = thaw b in let _ = setInPlace 0 65 mb in (toArray b, toArray (freeze mb))
    ([|104, 105|], [|65, 105|]) -}
@@ -213,8 +201,8 @@ thaw b =
   let bb = lendByteBlockUnsafe b
   MutBytes (byteBlockCopyUnsafe (byteBlockLength bb) bb)
 
-{- | Renders as `MutBytes "<hex>"`, in the same lowercase hex shape
-   `Debug Bytes` uses -- read from the live buffer, not a `freeze`d copy.
+{- | Renders as `MutBytes "<hex>"`, in the lowercase hex form `Debug Bytes`
+   uses, from the buffer's current contents.
 
    > debug (make 0)
    "MutBytes \"\""
