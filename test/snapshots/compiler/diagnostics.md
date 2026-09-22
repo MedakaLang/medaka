@@ -1460,7 +1460,7 @@ foldStale ((path, d) :: rest) buckets =
 -- entry's source changed, so the unchanged prefix's verdicts are replayed instead
 -- of recomputed, and only the modules from the first changed one onward resolve.
 --
--- WHAT A STEP CARRIES: `ModuleExports` is ten fields of strings and string lists
+-- WHAT A STEP CARRIES: `ModuleExports` is fields of strings and string lists
 -- and `Diag` is a severity, two strings and three `Option`s -- no `Decl`, no
 -- `Ref`, no `Scheme`, no union-find cell.  So this memo is OUTSIDE the
 -- mint-after-restore law the module-chain memo lives under: it restores no
