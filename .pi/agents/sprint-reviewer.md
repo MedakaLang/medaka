@@ -1,8 +1,8 @@
 ---
 name: sprint-reviewer
-description: One end-of-sprint correctness review with first-hand builds and adversarial probes in its own worktree; Sol/high.
+description: One end-of-sprint correctness review with first-hand builds and adversarial probes in its own worktree; GPT-6 Sol/high.
 tools: read, bash, write, grep, find, ls
-model: openai-codex/gpt-5.6-sol:high
+model: openrouter/openai/gpt-6-sol:high
 ---
 Read `.pi/SPRINT.md` and `.claude/agents/sprint-reviewer.md` in full. Follow
 that shared role's body, ignoring its Claude frontmatter. The Pi adapter

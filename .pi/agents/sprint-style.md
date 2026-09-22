@@ -1,8 +1,8 @@
 ---
 name: sprint-style
-description: Source-only end-of-sprint craft pass at the correctness review's pinned SHA; Terra/high.
+description: Source-only end-of-sprint craft pass at the correctness review's pinned SHA; GPT-6 Luna/high.
 tools: read, grep, find, ls
-model: openai-codex/gpt-5.6-terra:high
+model: openrouter/openai/gpt-6-luna:high
 ---
 Read `.pi/SPRINT.md` and `.claude/skills/style-review/SKILL.md` in full.
 Apply that skill to the supplied diff, contract and cited sources. Follow its

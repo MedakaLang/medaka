@@ -18,10 +18,10 @@ skill/role reads are explicit; do not grant blanket trust to make them load.
 **Subagents are an extension, not a Pi built-in.** This adapter requires the
 installed `subagent` extension with the following contract: project-agent
 scope, fresh child context, tool allowlists, automatic retained git worktrees
-for any role with shell/write access, and a blocking completion result. The
-upstream example alone is not sufficient: verify the active tool description
-and smoke-test isolation before a sprint. Do not silently fall back to sharing
-a writable checkout. Local extension implementation on this installation:
+for any role with shell/write access, and non-blocking `subagent_start` plus
+`subagent_status`/`subagent_cancel`. The upstream example alone is not
+sufficient: verify the active tool descriptions and smoke-test isolation before
+a sprint. Do not silently fall back to sharing a writable checkout. Local extension implementation on this installation:
 `~/.pi/agent/extensions/subagent/` (not shipped by this repository).
 
 Pass `agentScope: "project"` on every sprint dispatch. The default `"user"`
@@ -32,15 +32,18 @@ is needed to refresh already-loaded project context/skills after edits.
 
 | Shared role | Pi agent | Configured model / reasoning |
 |---|---|---|
-| Routine implementer, including settled fixes | `sprint-implementer` | `openai-codex/gpt-5.6-terra:high` |
-| Implementer with a named unresolved semantic/algorithmic decision | `sprint-semantic-implementer` | `openai-codex/gpt-5.6-sol:high` |
-| End correctness reviewer, including builds and adversarial probes | `sprint-reviewer` | `openai-codex/gpt-5.6-sol:high` |
-| End style pass, source-only | `sprint-style` | `openai-codex/gpt-5.6-terra:high` |
-| Wrap-up retro | `sprint-retro` | `openai-codex/gpt-5.6-terra:high` |
+| Routine implementer, including settled fixes | `sprint-implementer` | `openrouter/openai/gpt-6-luna:high` |
+| Implementer with a named unresolved semantic/algorithmic decision | `sprint-semantic-implementer` | `openrouter/openai/gpt-6-sol:high` |
+| End correctness reviewer, including builds and adversarial probes | `sprint-reviewer` | `openrouter/openai/gpt-6-sol:high` |
+| End style pass, source-only | `sprint-style` | `openrouter/openai/gpt-6-luna:high` |
+| Wrap-up retro | `sprint-retro` | `openrouter/openai/gpt-6-luna:high` |
 
 Keep the user's chosen planner/orchestrator model. For implementation, start
-Terra/high. Severity, coupled files, compiler internals, and test volume alone
-do not justify Sol: name the decision the implementer still has to resolve.
+Luna/high. These GPT-6 roles use the OpenRouter API (billed separately from a
+ChatGPT subscription): the Codex/ChatGPT provider rejects `gpt-6-terra` and
+OpenRouter does not list that model. Verify live provider availability before
+changing defaults again. Severity, coupled files, compiler internals, and test
+volume alone do not justify Sol: name the decision the implementer still has to resolve.
 Reconsider Sol if planning settles it; a fix does not inherit its reviewer's
 tier. A permission/build failure is not a reason to upgrade the model.
 
@@ -123,18 +126,24 @@ commit before minting the next child's worktree. A chain does not integrate git.
 
 ## Completion, review, and recovery
 
-`subagent` waits for completion; there are no poll/resume/send-message handles.
-Prepare the next packet before dispatch or after return rather than pretending
-to edit it while a blocking single call runs. Every dispatch is fresh, including
-fixes: resuming a child is not exposed by this tool. For a refused slice, revise
-the packet and dispatch fresh; first recover any useful owned edits from the
-retained worktree instead of discarding them.
+Use `subagent_start` for each slice; it returns a job ID and worktree as soon
+as the isolated workspace is ready, **not** a completion verdict. Do useful
+independent packet/CI work while it runs. On the completion notification (or
+later), call `subagent_status` with that ID and read its final report; never
+spin on status or infer completion from a tool exit. `subagent_cancel` stops a
+job owned by this Pi process and retains its worktree. On session shutdown or
+`/reload`, in-flight jobs are cancelled rather than silently orphaned; inspect
+the saved job status, worktree and processes on resumption. These jobs do not
+survive a Pi process exit as running jobs. Every dispatch is fresh, including
+fixes; there is no child resume/send-message handle. For a refused slice,
+revise the packet and dispatch fresh after recovering useful owned edits.
 
-Use the tool's `tasks` mode for the one correctness review plus style pass at
-the same pinned SHA. Parallel writers still require the shared disjointness
-proof and serial integration. Children cannot delegate or ask interactive
-questions: they return BLOCKED and the parent resolves the question. Direct
-user stop/pause/correction instructions override the packet's refusal policy.
+For the one end correctness review and style pass, start two jobs against the
+same pinned SHA and collect both results; the style job has read-only tools.
+Parallel writers still require the shared disjointness proof and serial
+integration. Children cannot delegate or ask interactive questions: they
+return BLOCKED and the parent resolves the question. Direct user
+stop/pause/correction instructions override the packet's refusal policy.
 
 Run finite shell commands in the foreground with a suitable `timeout` in
 seconds. Pi's `bash` returns completion and exit status, not Codex process or
@@ -144,16 +153,17 @@ turns; use a bounded foreground command and wait for its actual exit. Redirect
 not pipe it into `tail`. If a command is denied, report the blocker, not a
 weaker source-only substitute. Never claim an unrun check passed.
 
-A successful tool exit is not a successful slice: read the report's verdict
-and evidence. Save the returned worktree/branch and child session-file path
-in the existing STATUS.md row, not a new ledger. Shell-capable roles report
+A successful start/status tool exit is not a successful slice: read the
+report's verdict and evidence. Save the job ID, returned worktree/branch and
+child session-file path in the existing STATUS.md row, not a new ledger. Shell-capable roles report
 `PI_SESSION_FILE`; source-only reports remain in the parent tool result.
 Child transcripts are retained under `~/.pi/agent/sessions/subagents/` on this
 installation; the tool does not return a resumable agent ID.
 
 **After compaction/resume:** read this adapter, CONTRACT.md, STATUS.md and
-NOTES.md, then inspect any interrupted child's transcript, worktree and active
-processes before retrying. A cancelled/failed call can leave work behind. Do
+NOTES.md, then query each recorded job ID and inspect any interrupted child's
+transcript, worktree and active processes before retrying. Cancellation or a
+failed job can leave work behind. Do
 not run two builds in one tree or redispatch while the old process still runs.
 The installed extension retains worktrees even on failure/cancellation; it
 does not promise process-tree cleanup. Stop/report if ownership is unclear.
@@ -176,7 +186,7 @@ Before the first sprint or after changing the extension:
    with `MEDAKA_STRICT=1`. Assert exit status and exact output from both engines.
 3. Dispatch the actual `sprint-reviewer`, not generic `reviewer`; verify Sol
    selection, shell/probe/report access and no tracked-source edits. Exercise
-   the parallel source-only style return as well.
+   the concurrent source-only style return and `subagent_status`/cancel as well.
 4. Verify GitHub read access with `gh api repos/MedakaLang/medaka` (select only
    repository name and permissions). This does not prove push, workflow
    dispatch, or merge rights; verify those by readback when genuinely needed.

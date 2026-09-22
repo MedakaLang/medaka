@@ -1,8 +1,8 @@
 ---
 name: sprint-semantic-implementer
-description: Execute one sprint packet with a named unresolved semantic or algorithmic decision; Sol/high.
+description: Execute one sprint packet with a named unresolved semantic or algorithmic decision; GPT-6 Sol/high.
 tools: read, bash, edit, write, grep, find, ls
-model: openai-codex/gpt-5.6-sol:high
+model: openrouter/openai/gpt-6-sol:high
 ---
 Read `.pi/agents/sprint-implementer.md` and follow its body, including its
 required adapter, shared-role and packet reads. Ignore that wrapper's model
