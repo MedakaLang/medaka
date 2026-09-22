@@ -408,8 +408,11 @@ extract_source_decl() {
 # secret bytes only through hmac.ctEq. Per file: ctEq is the imported one (no
 # local definition shadows it), its occurrence count is the call-site roster,
 # and no `==`, `/=` or `compare` line names a secret-bearing identifier except
-# through `arrayLength`, whose value is public. Per comparing function: exactly
-# one ctEq call and no other comparison, XOR accumulation or indexing beside it.
+# through `arrayLength`, whose value is public. Per comparing function: its
+# stated number of ctEq calls and no other comparison, XOR accumulation or
+# indexing beside them. The per-function roster is complete: each file's
+# ctEq count is its import plus the roster's calls in that file, so a new
+# comparing function the roster does not name fails the census.
 # A `||` across session records stays legal -- it reveals which record matched,
 # never a byte of one.
 secret_comparisons_ok() {
@@ -421,7 +424,7 @@ secret_comparisons_ok() {
   for spec in \
     "$credential:2:digest password" \
     "$jwt:2:secret expected sigSeg" \
-    "$store:4:secret wanted access refresh token"
+    "$store:9:secret wanted access refresh token fingerprint family consumed previous"
   do
     file=${spec%%:*}
     rest=${spec#*:}
@@ -444,20 +447,37 @@ secret_comparisons_ok() {
     ' "$file")
     [ "$leaks" -eq 0 ] || return 1
   done
+  roster_credential=0
+  roster_jwt=0
+  roster_store=0
   for spec in \
-    "credentialVerify:$credential" \
-    "verifySegments:$jwt" \
-    "hasAccess:$store" \
-    "hasRefresh:$store" \
-    "withoutRefresh:$store"
+    "credentialVerify:credential:1" \
+    "verifySegments:jwt:1" \
+    "liveRefresh:store:1" \
+    "consumedRefresh:store:1" \
+    "withoutConsumed:store:1" \
+    "hasAccess:store:1" \
+    "withoutRefresh:store:1" \
+    "withoutFamily:store:2" \
+    "storeSessionClose:store:1"
   do
     name=${spec%%:*}
-    file=${spec#*:}
+    rest=${spec#*:}
+    which=${rest%%:*}
+    calls=${rest#*:}
+    case $which in
+      credential) file=$credential; roster_credential=$((roster_credential + calls)) ;;
+      jwt) file=$jwt; roster_jwt=$((roster_jwt + calls)) ;;
+      store) file=$store; roster_store=$((roster_store + calls)) ;;
+    esac
     body="$dir/$name.mdk"
     extract_source_decl "$name" "$file" "$body" || return 1
-    [ "$(count_word ctEq "$body")" -eq 1 ] || return 1
+    [ "$(count_word ctEq "$body")" -eq "$calls" ] || return 1
     if grep -E -q '==|/=|compare|bitXor|[A-Za-z0-9_)]\[' "$body"; then return 1; fi
   done
+  [ "$(count_word ctEq "$credential")" -eq $((roster_credential + 1)) ] || return 1
+  [ "$(count_word ctEq "$jwt")" -eq $((roster_jwt + 1)) ] || return 1
+  [ "$(count_word ctEq "$store")" -eq $((roster_store + 1)) ] || return 1
   return 0
 }
 
@@ -799,8 +819,8 @@ awk '
     print "  else sameBytes a b (i + 1)"
     print ""
   }
-  /^  ctEq wanted access \|\| hasAccess wanted rest/ {
-    print "  (arrayLength wanted == arrayLength access && sameBytes wanted access 0) || hasAccess wanted rest"
+  /^  now < expires && ctEq wanted access \|\| hasAccess now wanted rest/ {
+    print "  now < expires && (arrayLength wanted == arrayLength access && sameBytes wanted access 0) || hasAccess now wanted rest"
     next
   }
   { print }

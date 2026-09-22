@@ -202,7 +202,10 @@ sessionsPath dir = "\{dir}/sessions"
 {- One row per line, space-separated, every fingerprint in hex. An open
    session is its access fingerprint, refresh fingerprint, expiry, and family;
    a consumed refresh token is the word `consumed`, its fingerprint, its
-   family, the instant it was consumed, and the instant the family ends. No
+   family, the instant it was consumed, the instant the family ends, and, once
+   a replay inside the grace window has opened a session from it, that
+   session's refresh fingerprint. A five-field consumed row is one no replay
+   has opened a session from. No
    field is a bearer token -- each fingerprint is a SHA-256 digest of one
    (`lib.store`'s `sessionFingerprint`), and a family is named by one -- so
    what this file holds cannot be presented to the server it was read from.
@@ -215,8 +218,12 @@ sessionsPath dir = "\{dir}/sessions"
 sessionRowText : SessionRow -> String
 sessionRowText (OpenSessionRow access refresh expires family) =
   "\{encode access} \{encode refresh} \{intToString expires} \{encode family}"
-sessionRowText (ConsumedRefreshRow refresh family at ends) =
-  "consumed \{encode refresh} \{encode family} \{intToString at} \{intToString ends}"
+sessionRowText (ConsumedRefreshRow refresh family at ends replayed) =
+  let fields =
+    "consumed \{encode refresh} \{encode family} \{intToString at} \{intToString ends}"
+  match replayed
+    None => fields
+    Some session => "\{fields} \{encode session}"
 
 sessionsText : List SessionRow -> String
 sessionsText rows = join "\n" (map sessionRowText rows)
@@ -250,7 +257,14 @@ parseSessionRow line = match split " " (trim line)
     family <- rowFingerprint familyHex
     at <- rowInstant atText
     ends <- rowInstant endsText
-    Ok (ConsumedRefreshRow refresh family at ends)
+    Ok (ConsumedRefreshRow refresh family at ends None)
+  ["consumed", refreshHex, familyHex, atText, endsText, replayedHex] => do
+    refresh <- rowFingerprint refreshHex
+    family <- rowFingerprint familyHex
+    at <- rowInstant atText
+    ends <- rowInstant endsText
+    replayed <- rowFingerprint replayedHex
+    Ok (ConsumedRefreshRow refresh family at ends (Some replayed))
   _ => Err "persist: sessions file has a malformed row"
 
 parseSessionRows : List String -> Result String (List SessionRow)

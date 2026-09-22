@@ -562,9 +562,9 @@ persistTransition dir did nowSeconds before after = do
   persistSessionsHalf dir before after
 
 {- | Persist the open session set when the transition moved it, which the
-   three session routes do: `createSession` opens one, `refreshSession`
-   rotates one, `deleteSession` closes one, and each of those also drops
-   whichever records had expired. Every other route leaves the set alone and
+   three session routes do: `createSession` opens a family, `refreshSession`
+   rotates within one or revokes one, `deleteSession` closes a whole family,
+   and each of those also drops whichever records had expired. Every other route leaves the set alone and
    writes nothing.
 
    Sessions are persisted so that a restart does not close them. A backup

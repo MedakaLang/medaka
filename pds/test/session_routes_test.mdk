@@ -577,6 +577,72 @@ test "a consumed refresh token replayed within the grace window still works" =
     ),
   ]
 
+-- | The original refresh token, consumed at +60, presented `count - step`
+-- more times a second apart from +120, each against the store the last left.
+replayBurst : Int -> Int -> Store -> (Store, List (Array Int))
+replayBurst step count store =
+  if step >= count then
+    (store, [])
+  else
+    let (next, response) =
+      send
+        (contextAt (testInstant + 120 + step) (40 + step))
+        store
+        (postNoInput refreshToken refreshSessionNsid)
+    let (final, rest) = replayBurst (step + 1) count next
+    (final, response :: rest)
+
+-- | The outcome of one request, the store it left behind discarded.
+answerTo : RequestContext -> Store -> Array Int -> String
+answerTo context store bytes = match send context store bytes
+  (_, response) => outcome response
+
+{- | A client retrying one refresh in a burst presents the consumed token many
+   times inside the grace window. Every presentation is answered with a pair,
+   and each replay's pair supersedes the one before it: however long the
+   burst, one replay-issued session is left open, beside the one the rotation
+   itself issued, rather than one per presentation. -}
+test "a burst of replays inside the grace window leaves one of its pairs open" =
+  let (store, responses) = replayBurst 0 6 rotatedStore
+  let at = contextAt (testInstant + 130) 50
+  let (_, rotation) = send at store (getQuery rotatedAccess getSessionNsid)
+  let served = "200 OK"
+  let refused = "401 Unauthorized InvalidToken"
+  expectEach [
+    (
+      "every replay is answered with a pair",
+      expectEqual (map (_ => served) responses) (map outcome responses),
+    ),
+    (
+      "only the last replay's access token still reaches a gated route",
+      expectEqual
+        [refused, refused, refused, refused, refused, served]
+        (map
+          (response =>
+            answerTo
+              at
+              store
+              (getQuery (field "accessJwt" response) getSessionNsid))
+          responses),
+    ),
+    (
+      "only the last replay's refresh token still rotates",
+      expectEqual
+        [refused, refused, refused, refused, refused, served]
+        (map
+          (response =>
+            answerTo
+              at
+              store
+              (postNoInput (field "refreshJwt" response) refreshSessionNsid))
+          responses),
+    ),
+    (
+      "the first rotation's access token still reaches a gated route",
+      expectEqual served (outcome rotation),
+    ),
+  ]
+
 {- | Family A: the logged-in session, rotated at +60 (`refreshed`) and again
    at +7000, so its current access token is still inside its own two hours
    when the original refresh token is replayed at +7261, past the grace window

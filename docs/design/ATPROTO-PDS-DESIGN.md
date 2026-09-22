@@ -508,9 +508,15 @@ a session that was logged out of.
 
 The pair a grace replay returns is newly minted rather than the successor the first
 presentation returned — sessions are keyed by token fingerprint, not by a `jti` the
-store could hand back — so a family can briefly hold more than one open session.
-Consumed tokens and ended families are pruned whenever the session set is written, so
-the set stays bounded by the families still inside their ninety days.
+store could hand back — so a family can briefly hold more than one open session. It
+holds at most one per replayed token, not one per replay: a consumed token's record
+names the session its latest replay opened, and the next replay of the same token
+closes that session as it opens its own. A client retrying a refresh in a burst is
+left holding the first rotation's pair and the last replay's pair, and every pair in
+between stops verifying; the family's rows grow with the rotations it has taken, never
+with how often one consumed token is presented. Consumed tokens and ended families are
+pruned whenever the session set is written, so the set stays bounded by the families
+still inside their ninety days.
 
 **Sessions are persisted, and a restart does not close them.** The open session set
 is written to `<data>/sessions` and read back at startup, so a token issued before a
@@ -532,7 +538,8 @@ current instant as it is read, so a row that expired while nothing was running i
 dropped at load rather than readmitted. What the file holds is also not a bearer
 token: a row is SHA-256 fingerprints (`sessionFingerprint`) and instants, so the file
 cannot be replayed against the server that wrote it. An open session's row carries its
-family, and each consumed refresh token has a row of its own. A row of three fields —
+family, and each consumed refresh token has a row of its own, carrying the refresh
+fingerprint of the session its latest grace replay opened once one has. A row of three fields —
 the format written before families existed — is still admitted, as a family of its own
 named by its refresh fingerprint and ending at its own expiry, so an upgrade does not
 refuse to start on the file its predecessor left.
@@ -1048,11 +1055,15 @@ hold open) a corresponding upstream connection — the flood is absorbed
 entirely at Caddy's own connection layer, which this admission gate never
 sees. This is an ACCEPTANCE of the residual, not a fix: `maxUnframedConnections`
 still does not distinguish sources, and the gap above is still #2816's open
-scope. The acceptance is voided the moment the deployment serves a
-direct bind (no proxy) — already the case per `docs/ops/PDS-DEPLOY.md`'s
-loopback-only default — or a proxy configuration that dials the upstream
-before the client's headers are complete (unlike `pds/Caddyfile`'s plain
-`reverse_proxy` directive). `docs/ops/PDS-LAUNCH-PLAN.md` row B13 carries the
+scope. The acceptance is voided the moment a public deployment binds
+`pdsd` directly with no proxy in front of it, or puts in front of it a
+proxy that dials the upstream before the client's headers are complete
+(unlike `pds/Caddyfile`'s plain `reverse_proxy` directive). Neither has
+happened, so the acceptance stands. What keeps it standing is
+`docs/ops/PDS-DEPLOY.md`'s documented shape: `pdsd` binds loopback by
+default behind `pds/Caddyfile`, and a direct non-loopback bind is refused
+unless a trusted proxy is named (#2757). That is the proxied shape the
+measurement ran against, not a sign the voiding condition has fired. `docs/ops/PDS-LAUNCH-PLAN.md` row B13 carries the
 same dated acceptance and voiding condition.
 
 The body-phase half of this IS fixed: a connection that terminates its headers

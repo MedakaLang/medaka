@@ -439,7 +439,8 @@ runPrefsLoad dir = match persistLoadPreferences dir
 -- ── the session half ─────────────────────────────────────────
 
 {- | Two open sessions of two families and one refresh token the second family
-   consumed, persisted into the same data directory as every other half so
+   consumed, replayed once inside the grace window into its open session,
+   persisted into the same data directory as every other half so
    the signing-key sweep in `store_persistence.sh` covers this file too. The
    fingerprints are fixed rather than derived from tokens: these routes grade
    the file's round trip, not `lib.store`'s `sessionFingerprint`, and a row is
@@ -462,7 +463,10 @@ fixtureSessions = [
     (mustHex "2f2e2d2c2b2a292827262524232221202f2e2d2c2b2a29282726252423222120")
     (mustHex "2f2e2d2c2b2a292827262524232221202f2e2d2c2b2a29282726252423222120")
     2090000000
-    2100000000,
+    2100000000
+    (Some
+      (mustHex
+        "1f1e1d1c1b1a191817161514131211101f1e1d1c1b1a19181716151413121110")),
 ]
 
 -- The access and refresh fingerprints of the row `store_persistence.sh` writes

@@ -35,12 +35,13 @@
    without a credential record can open no session at all, so `createSession`
    refuses.
 
-   Open sessions are held here and NOWHERE else, which is what makes a session
-   end at a restart: `pds/shell/server.mdk` persists the repository half and
-   the blob half of a `Store` transition and nothing else, so the session list
-   lives exactly as long as the process does. Every token minted before a
-   restart is refused after it — fail-closed, and deliberately: a revocation a
-   restart could undo would be no revocation at all.
+   The session set is grouped into families, one per login: each family's open
+   sessions and the refresh tokens it has consumed, all of it ending at an
+   instant fixed at the login. `pds/shell/server.mdk` persists the whole set
+   beside the other halves (`storeSessionRows`) whenever a transition moves
+   it, and a restart reads it back (`storeWithSessionRows`), so a session
+   survives a restart and so does a revocation: a closed or revoked family is
+   absent from the set that was written, and nothing read back can reopen it.
 
    The **preferences half** is the account's `app.bsky` preference set
    (`app.bsky.actor.getPreferences`/`putPreferences`): a list of preference
@@ -89,13 +90,20 @@ import string.{toUtf8}
 data SessionRecord = SessionRecord (Array Int) (Array Int) Int (Array Int)
 
 {- | A refresh token a rotation consumed: its fingerprint, its family, the
-   instant it was consumed, and the instant the family ends.
+   instant it was consumed, the instant the family ends, and the refresh
+   fingerprint of the session the latest replay of it opened, if any.
 
    It is kept until the family ends so that presenting it again can be told
    apart from presenting a token this server never issued. Soon after the
    rotation, a replay is a client racing its own refresh; long after it, the
-   token was copied, and the family it belongs to is revoked. -}
-data ConsumedRefresh = ConsumedRefresh (Array Int) (Array Int) Int Int
+   token was copied, and the family it belongs to is revoked.
+
+   The last field is what bounds a burst of replays: each one closes the
+   session the one before it opened, so however often the token is replayed
+   inside the window, at most one session a replay of it opened is open at a
+   time, beside the one the rotation itself opened. -}
+data ConsumedRefresh =
+  | ConsumedRefresh (Array Int) (Array Int) Int Int (Option (Array Int))
 
 -- The open sessions, and the refresh tokens their families have consumed.
 data Sessions = Sessions (List SessionRecord) (List ConsumedRefresh)
@@ -269,7 +277,7 @@ recordFamily : SessionRecord -> Array Int
 recordFamily (SessionRecord _ _ _ family) = family
 
 consumedFamily : ConsumedRefresh -> Array Int
-consumedFamily (ConsumedRefresh _ family _ _) = family
+consumedFamily (ConsumedRefresh _ family _ _ _) = family
 
 -- The open session whose refresh token this is, while it still verifies.
 liveRefresh : Int -> Array Int -> List SessionRecord -> Option SessionRecord
@@ -287,7 +295,15 @@ consumedRefresh : Int ->
 consumedRefresh now wanted consumed =
   find
     (entry => match entry
-      ConsumedRefresh refresh _ _ ends => now < ends && ctEq wanted refresh)
+      ConsumedRefresh refresh _ _ ends _ => now < ends && ctEq wanted refresh)
+    consumed
+
+-- The consumption record of this refresh token dropped.
+withoutConsumed : Array Int -> List ConsumedRefresh -> List ConsumedRefresh
+withoutConsumed wanted consumed =
+  filter
+    (entry => match entry
+      ConsumedRefresh refresh _ _ _ _ => not (ctEq wanted refresh))
     consumed
 
 hasAccess : Int -> Array Int -> List SessionRecord -> Bool
@@ -377,7 +393,11 @@ public export data SessionRotation = Rotated Store | Revoked Store | NotRotated
    A token already consumed is a replay. Within `graceSeconds` of its
    consumption it is answered like a first presentation, with a fresh pair in
    the same family, because a client that refreshed twice in a burst holds
-   both answers' predecessor. Past that window the token has been copied, so
+   both answers' predecessor. The session the rotation opened stays open, and
+   the session the previous replay of the same token opened, if one did, is
+   closed: a replay supersedes the replay before it, so a burst of any length
+   leaves one replay-opened session per consumed token rather than one per
+   presentation. Past that window the token has been copied, so
    the whole family is revoked: every open session in it stops verifying,
    including the access token its legitimate holder was using. Other families
    are untouched. -}
@@ -394,7 +414,7 @@ storeSessionRotate consumed access refresh expires now graceSeconds store =
   match storeSessions store
     Sessions open spent => match liveRefresh now consumed open
       Some (SessionRecord _ _ ends family) =>
-        let record = ConsumedRefresh (arrayCopy consumed) family now ends
+        let record = ConsumedRefresh (arrayCopy consumed) family now ends None
         Rotated
           (withSessions
             (openIn
@@ -405,8 +425,18 @@ storeSessionRotate consumed access refresh expires now graceSeconds store =
               (Sessions (withoutRefresh consumed open) (record :: spent)))
             store)
       None => match consumedRefresh now consumed spent
-        Some (ConsumedRefresh _ family at ends) =>
+        Some (ConsumedRefresh _ family at ends replayed) =>
           if now < at + graceSeconds then
+            let superseded = match replayed
+              Some previous => withoutRefresh previous open
+              None => open
+            let entry =
+              ConsumedRefresh
+                (arrayCopy consumed)
+                family
+                at
+                ends
+                (Some (arrayCopy refresh))
             Rotated
               (withSessions
                 (openIn
@@ -414,7 +444,9 @@ storeSessionRotate consumed access refresh expires now graceSeconds store =
                   refresh
                   (min expires ends)
                   family
-                  (storeSessions store))
+                  (Sessions
+                    superseded
+                    (entry :: withoutConsumed consumed spent)))
                 store)
           else
             Revoked
@@ -446,10 +478,11 @@ storeSessionClose fingerprint store = match storeSessions store
    `OpenSessionRow` is an open session: access fingerprint, refresh
    fingerprint, the instant it expires, and its family. `ConsumedRefreshRow`
    is a consumed refresh token: its fingerprint, its family, the instant it
-   was consumed, and the instant the family ends. -}
+   was consumed, the instant the family ends, and the refresh fingerprint of
+   the session its latest replay opened, if any. -}
 public export data SessionRow =
   | OpenSessionRow (Array Int) (Array Int) Int (Array Int)
-  | ConsumedRefreshRow (Array Int) (Array Int) Int Int
+  | ConsumedRefreshRow (Array Int) (Array Int) Int Int (Option (Array Int))
   deriving (Eq)
 
 openRow : SessionRecord -> SessionRow
@@ -461,8 +494,13 @@ openRow (SessionRecord access refresh expires family) =
     (arrayCopy family)
 
 consumedRow : ConsumedRefresh -> SessionRow
-consumedRow (ConsumedRefresh refresh family at ends) =
-  ConsumedRefreshRow (arrayCopy refresh) (arrayCopy family) at ends
+consumedRow (ConsumedRefresh refresh family at ends replayed) =
+  ConsumedRefreshRow
+    (arrayCopy refresh)
+    (arrayCopy family)
+    at
+    ends
+    (map arrayCopy replayed)
 
 rowSessions : List SessionRow -> Sessions
 rowSessions [] = Sessions [] []
@@ -476,10 +514,15 @@ rowSessions (row :: rest) = match (row, rowSessions rest)
           (arrayCopy family)
         :: open)
       consumed
-  (ConsumedRefreshRow refresh family at ends, Sessions open consumed) =>
+  (ConsumedRefreshRow refresh family at ends replayed, Sessions open consumed) =>
     Sessions
       open
-      (ConsumedRefresh (arrayCopy refresh) (arrayCopy family) at ends
+      (ConsumedRefresh
+          (arrayCopy refresh)
+          (arrayCopy family)
+          at
+          ends
+          (map arrayCopy replayed)
         :: consumed)
 
 {- | Every open session and every consumed refresh token as a flat row.
@@ -522,7 +565,7 @@ storeSessionsPrune now store = match storeSessions store
           open)
         (filter
           (entry => match entry
-            ConsumedRefresh _ _ _ ends => now < ends)
+            ConsumedRefresh _ _ _ ends _ => now < ends)
           consumed))
       store
 
