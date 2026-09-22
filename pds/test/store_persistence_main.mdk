@@ -660,6 +660,51 @@ runBlobChurnAdd dir =
     Err message => panic "store_persistence: churn add failed: \{message}"
     Ok () => reportChurnAdd row
 
+-- ── a re-declared type at an unchanged block count (#3263) ──────────────────
+
+-- The bytes both retype routes upload. One blob, uploaded twice, so that the
+-- second upload leaves the block count where it was and the declared type is
+-- the only thing about the blob half that moved.
+retypeBytes : Array Int
+retypeBytes = toUtf8 "store-persistence-retype-blob"
+
+retypeFirstType : String
+retypeFirstType = "text/plain"
+
+retypeSecondType : String
+retypeSecondType = "application/json"
+
+retypeRow : String -> (Cid, String, Array Int)
+retypeRow mimeType = (blobCid retypeBytes, mimeType, retypeBytes)
+
+runBlobRetypeSeed : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobRetypeSeed dir =
+  let before = storeFromRepo olderRepo
+  let after = putBlobs [retypeRow retypeFirstType] before
+  match persistTransition dir accountDid eventFixtureTime before after
+    Err message => panic "store_persistence: retype seed failed: \{message}"
+    Ok () =>
+      let () =
+        println "BLOB-RETYPE-SEED cid \{cidToString (blobCid retypeBytes)}"
+      let () = println "BLOB-RETYPE-SEED mime \{retypeFirstType}"
+      println "BLOB-RETYPE-SEED: PASS"
+
+{- | The second upload alone, against the store the seed route left on disk:
+   the same bytes under a different declared type.
+
+   The seed's upload is replayed into memory rather than read back, for
+   `blob-churn-add`'s reason — a `before` rebuilt by reading the blob area
+   would be the whole-account walk these routes exist to show is gone. -}
+runBlobRetypeAdd : String -> <IO, FileRead "_", FileWrite "_"> Unit
+runBlobRetypeAdd dir =
+  let before = putBlobs [retypeRow retypeFirstType] (storeFromRepo olderRepo)
+  let after = putBlobs [retypeRow retypeSecondType] before
+  match persistTransition dir accountDid eventFixtureTime before after
+    Err message => panic "store_persistence: retype add failed: \{message}"
+    Ok () =>
+      let () = println "BLOB-RETYPE-ADD mime \{retypeSecondType}"
+      println "BLOB-RETYPE-ADD: PASS"
+
 -- ── the crash-residue sweeps (#2572 part 2, #3052) ──────────────────────────
 
 presentLabel : Bool -> String
@@ -1112,6 +1157,8 @@ main = match args ()
   ["transition", dir] => runTransition dir
   ["blob-churn-seed", dir] => runBlobChurnSeed dir
   ["blob-churn-add", dir] => runBlobChurnAdd dir
+  ["blob-retype-seed", dir] => runBlobRetypeSeed dir
+  ["blob-retype-add", dir] => runBlobRetypeAdd dir
   ["sweep-staging", dir] => runSweepStaging dir
   ["stray-entries", dir] => runStrayEntries dir
   ["genesis-init", dir] => runGenesisInit dir
@@ -1119,4 +1166,4 @@ main = match args ()
   ["genesis-guard", dir] => runGenesisGuard dir
   _ =>
     panic
-      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|blob-churn-seed|blob-churn-add|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
+      "usage: store_persistence_main <save|crash-save-old|load|reject|blob-save|blob-load|blob-survey|blob-reject|blob-oversize|prefs-save|prefs-load|sessions-save|sessions-load|credential-save|event-recover-owed|event-recover-orphan|event-recover-unanchored|transition|blob-churn-seed|blob-churn-add|blob-retype-seed|blob-retype-add|sweep-staging|stray-entries|genesis-init|genesis-resume|genesis-guard> <dir>"
