@@ -11,8 +11,9 @@
 -- `Conv (Wrap Int) Bool` and `f (Wrap 'c') 7` to `Conv (Wrap Char) Int`, two
 -- singleton matching sets, two different impls.  So the two calls must print
 -- `wrap-int-bool` and `wrap-char-int` respectively, i.e. `wrap-int-bool/wrap-char-int`.
--- (The two calls are joined with `/` rather than `|` only because `|` is
--- diff_compiler_dict_semantics.sh's own TABLE field separator.)
+-- (The two calls are joined with `/` rather than `|` only because `|` was
+-- the retired shell TABLE's field separator; the pinned value in
+-- test/diff_compiler_dict_semantics_test.mdk kept the same `/`-joined shape.)
 --
 -- 🚨 WHAT THIS PINS, AND WHY IT IS NOT ITS SIBLINGS' DUPLICATE.  The two
 -- `s-multiparam-structured-*` rows both fix the predicate's SECOND argument to

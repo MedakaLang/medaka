@@ -1,4 +1,5 @@
 #!/bin/sh
+# blocked-because: detached-process — two `pdsd` servers plus N generators and a sampler all run at once, each outliving its own spawn; concurrent-spawn is the second capability it needs
 # The concurrency cost instrument for #2954: N client processes drive a real
 # `pdsd` over loopback while one sampling process reports p50/p90/p99 per
 # route. Slices that measure a structural stall (#2955, #2956) and the soak

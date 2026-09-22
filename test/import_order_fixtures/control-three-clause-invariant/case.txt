@@ -5,7 +5,7 @@ The 2-clause cases in this corpus have exactly one non-identity permutation, so 
 cannot tell a full-reversal permuter from an all-orderings one. This case has three
 import clauses and therefore six orderings; a defect that depended on an ADJACENT-pair
 position rather than on first/last would be invisible to a reversal-only differential
-(the limitation test/diff_compiler_dict_semantics.sh's Section 4 records for itself).
+(the limitation test/diff_compiler_dict_semantics_permute.sh records for itself).
 
 `mid` re-exports `base`, and `leaf` shadows nothing; every ordering must give the same
 answer. Nothing here is expected to be order-sensitive — it is the row that proves the

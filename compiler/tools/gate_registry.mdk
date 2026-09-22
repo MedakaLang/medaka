@@ -41,7 +41,7 @@ import regex.{mustCompile, isFullMatch, escape}
 -- `migration` is this gate's DESTINATION under the testing-architecture epic
 -- (#2600): where the check ends up, or the named prerequisite that has to be
 -- discharged before a destination can be picked.  It is a required string on
--- every entry, one of eight values (checked by `migrationClassOk` in
+-- every entry, one of the values below (checked by `migrationClassOk` in
 -- `compiler/tools/gate_cmd.mdk`):
 --
 --   native-wrap            a native gate module invokes the existing script and
@@ -58,20 +58,39 @@ import regex.{mustCompile, isFullMatch, escape}
 --                          adds a layer and proves nothing new.
 --   shell:external-harness stays shell.  Its SUBJECT is a shell/python/browser
 --                          harness or live `gh` state, not Medaka code.
+--   blocked:interactive-handle
+--                          a runner capability the native vehicle does not have
+--                          yet is what holds this row in shell — here, driving
+--                          one process through several request/response turns.
+--                          `runCommand` runs a command to completion with no
+--                          stdin handle.
+--   blocked:concurrent-spawn
+--                          same claim, different capability: several processes
+--                          in flight at once, so the check can observe what they
+--                          do to each other.
+--   blocked:detached-process
+--                          same claim again: a spawn that returns a handle to a
+--                          process the check then talks to and later kills — a
+--                          server, not a command that ends.
 --   split-first            one script holding two things — a check and a shared
 --                          helper, or several unrelated sections.  The
 --                          editorial split is the prerequisite, not the port.
 --   inverted-polarity      a pinning gate whose RED is the healthy state
 --                          (`test/diff_compiler_must_fail.sh` and kin).  Needs a
 --                          per-pin drain field before any destination is safe.
---   done                   already migrated.  Nothing carries it yet.
+--   done                   already migrated.
 --
--- The three `shell:*` values are claims about a SCRIPT, so they are checked
--- against that script rather than taken on the registry's word: the `run`
--- target must carry a `shell-because: <class> …` header line naming the same
--- class (verify check 11).  Without that pairing, "stays shell" is a value one
--- side asserts and nothing reads — and a script that later stops being a trust
--- anchor would keep its exemption silently.
+-- The `shell:*` and `blocked:*` values are claims about a SCRIPT, so they are
+-- checked against that script rather than taken on the registry's word: the
+-- `run` target must carry a `shell-because: <class> …` (verify check 11) or
+-- `blocked-because: <capability> …` (check 12) header line naming the same
+-- class.  Without that pairing, the label is a value one side asserts and
+-- nothing reads — and a script that later stops being a trust anchor, or that
+-- gains the capability it was waiting for, would keep its old label silently.
+--
+-- `blocked:*` and `native-wrap` are not the same claim and must not be blurred:
+-- `native-wrap` is the release valve — the port needs nothing built first — so a
+-- `blocked:*` row is NOT in the pool a migration wave can draw from.
 --
 -- ── `kind` (#2591, epic #2600) ──────────────────────────────────────────────
 --

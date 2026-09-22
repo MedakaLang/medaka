@@ -95,6 +95,18 @@ test/lsp_bless                 the WRITE half of the LSP suite: re-mints the ten
 test/error_quality_fixtures/capture   captures the error-quality baseline .out goldens (its
                                        CHECK=1 comparison mode is gated via the wrapper above).
 
+# ── wrapped by a gate (real exit code, exempt because a gate already owns it) ──
+# tmc_census.sh HAS a real verdict — check_pins (test/tmc_census.sh:113) appends
+# PINFAIL rows and the script `exit $fail`s (test/tmc_census.sh:209) — so this is
+# NOT a "no pass/fail verdict" tool. It stays exempt from its own registry row
+# because diff_compiler_tmc_parity.sh (enrolled, test/gates.toml) is a thin
+# wrapper: it `sh`s this script (test/diff_compiler_tmc_parity.sh:69) and fails
+# the gate on a nonzero exit, exactly the capture.sh/error_quality_baseline shape
+# above — the wrapper is the registry's `run` target, this script is not a
+# second one.
+test/tmc_census                 emits the TMC census that diff_compiler_tmc_parity
+                                 CONSUMES and fails on (real exit code; see above).
+
 # ── measurement (no pass/fail verdict) ──
 test/bench                     perf harness. Reports numbers; asserts nothing.
 test/perf_baseline             CLI-verb latency harness. Reports numbers; asserts nothing.
@@ -103,7 +115,6 @@ test/perf_baseline             CLI-verb latency harness. Reports numbers; assert
                                 test/diff_compiler_check_ir_floor.sh — S-5-floor-ratchet,
                                 epic #2036. This script itself still asserts nothing.)
 test/profile_compiler          per-stage time/allocation profiler.
-test/tmc_census                emits the TMC census that diff_compiler_tmc_parity CONSUMES.
 test/wasm/w1                   a scratch wasm probe.
 test/fmt_clean_census          derived fmt-clean report (#1794, `make fmt-clean-census`): lists
                                 which tracked .mdk files outside test/ fail `medaka fmt --check`,

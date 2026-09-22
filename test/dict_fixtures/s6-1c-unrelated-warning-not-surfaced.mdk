@@ -39,8 +39,8 @@
 --
 -- OBSERVED (current): check ACCEPTS and reports `W-NONEXHAUSTIVE`; run and build
 -- ACCEPT, print 1, and now ALSO report `W-NONEXHAUSTIVE` on stderr (F4's
--- intentional single-file widening -- see test/diff_compiler_dict_semantics.sh
--- section 5 for the pinned assertion).
+-- intentional single-file widening -- see section 5 of
+-- test/diff_compiler_dict_semantics_test.mdk for the pinned assertion).
 data Colour = Red | Green | Blue
 
 interface Sized a where

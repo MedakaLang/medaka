@@ -643,11 +643,11 @@ while IFS= read -r f; do
       # Same diff_compiler_check repoint as the lexer.mdk arm above.
       add 'diff_compiler_parse*'; add 'diff_compiler_check'
       add 'diff_compiler_snapshot*'; add 'diff_compiler_fmt'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census' ;;
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census' ;;
     # #1131: desugar.mdk is a cited DICT-SEMANTICS site.
     compiler/frontend/desugar.mdk)
       add 'diff_compiler_snapshot*'; add 'diff_compiler_eval*'
-      add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute' ;;
     # #1131: resolve.mdk is a cited DICT-SEMANTICS site (marker.mdk is cited in
     # neither table — derived via the same grep, not assumed from the issue's
     # "plausibly").
@@ -667,7 +667,7 @@ while IFS= read -r f; do
       # all, so it owns the one gate that grades route CONSUMPTION on the typed
       # multi-module path.
       add 'diff_compiler_core_ir_typed_modules'
-      add 'diff_compiler_dict_semantics' ;;
+      add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute' ;;
     compiler/frontend/exhaust.mdk)
       # diff_compiler_check_match's match-exhaustiveness corpus is a leg of
       # the diff_compiler_check sweep; the gate that now carries it is named
@@ -698,7 +698,7 @@ while IFS= read -r f; do
       add 'diff_compiler_check*'; add 'diff_compiler_fmt'
       add 'diff_compiler_fmt'; add 'diff_compiler_eval*'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # #2551: the catch-all clause ratchet reads typecheck.mdk's clause heads directly.
       add 'diff_compiler_catch_all_census'
       # #1319 unit 0: typecheck.mdk owns universeDataEnv, universeRecordByName and
@@ -814,7 +814,7 @@ while IFS= read -r f; do
       add 'diff_compiler_eval*'; add 'diff_compiler_snapshot*'; add 'diff_compiler_core_ir*'
       add 'diff_compiler_ported'; add 'diff_compiler_fmt'; add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # F-S3-6/F-2-mechanical-fixes: gates.toml now declares compiler/eval/eval.mdk
       # a source of diff_compiler_check_ir_floor (it grades the `run`/`test` verbs,
       # both driven by this file) — same reasoning as closure_alloc/ir_size above.
@@ -827,7 +827,7 @@ while IFS= read -r f; do
       add 'diff_compiler_fmt'
       add 'diff_compiler_anf_identity'
       add 'diff_compiler_engines'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # S-arity-census: derives call/define arity skew from emitted LLVM IR —
       # core_ir_lower.mdk's methodArgTys decides declared arity for the #1034 half,
       # so an ir/* change can move it without touching backend/*.
@@ -850,7 +850,7 @@ while IFS= read -r f; do
       add 'diff_compiler_llvm*'; add 'diff_compiler_build'; add 'diff_compiler_core_ir*'; add 'diff_compiler_eval*'
       add 'diff_compiler_capability_matrix'
       add 'diff_compiler_engines'; add 'diff_compiler_tmc_parity'
-      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_prelude_shadow_census'
+      add 'diff_compiler_shadow_semantics'; add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'; add 'diff_compiler_prelude_shadow_census'
       # #1319 unit 0: private_mangle.mdk keeps its OWN ctor-import index — a
       # separate order-observable structure from typecheck's, and #674's root cause
       # was the two disagreeing. The permutation gate grades the `build` arm, so it
@@ -884,7 +884,7 @@ while IFS= read -r f; do
       # G-0: same reason — the loader fixes the order every downstream table is
       # populated in, interface declarations included.
       add 'diff_compiler_iface_order'
-      add 'diff_compiler_dict_semantics'
+      add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'
       add 'diff_compiler_fmt_write_safety'
       # driver/diagnostics.mdk is where analyzeProject/analyzeProjectToLines are
       # DEFINED (not just called) — the driver diff_compiler_analyze_project diffs
@@ -921,7 +921,7 @@ while IFS= read -r f; do
       # i.e. invisible to every golden gate, and cell n, which pins that `medaka
       # test` and `medaka check` cannot reach different verdicts on one tree.
       add 'diff_compiler_test_typecheck'
-      add 'diff_compiler_dict_semantics'
+      add 'diff_compiler_dict_semantics'; add 'diff_compiler_dict_semantics_ir'; add 'diff_compiler_dict_semantics_permute'
       # #81 Stage 4: diff_compiler_test_native.sh is the CI gate protecting the
       # native-engine half of this arm (`medaka test --native` / `--engines`);
       # without this line a change to test_cmd.mdk derives a gate set that omits

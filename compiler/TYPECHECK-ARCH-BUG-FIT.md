@@ -1085,8 +1085,8 @@ The residue is a **different defect on the other side of the same slot**, filed 
 two slots with the **same id**, and `enclDictVarOf`'s `indexOfId` returns the **first**
 match — every use in the body reads slot 0. F-3a-ii's route is computed correctly and lands
 in the right slot; the body consumes the wrong one. Not a regression (main is 116 either
-way), and **no gate can see it**: `diff_compiler_dict_semantics.sh` §4 permutes `impl`
-blocks, and nothing in the tree permutes predicate order in a signature.
+way), and **no gate can see it**: `test/diff_compiler_dict_semantics_permute.sh` permutes
+`impl` blocks, and nothing in the tree permutes predicate order in a signature.
 ⚠️ Read what that licenses. Because the prediction is one-directional, the refutation says
 the GAP verdict was wrong about **reachability** for legs 2–3 — *not* that the mechanism
 analysis was wrong. Legs 1–3 are described correctly; what the row could not know is that
@@ -1164,7 +1164,7 @@ claim above survived contact with the implementation. `funConstraintArgsRef` is 
 the 1-ary path is byte-identical **by construction**; `constraintVarArgMonos` resolves the
 arguments with `fromAstType tvMap`; `substArgVec` substitutes with `substMono`. Arity
 neutrality is now pinned STRUCTURALLY by two emitted-IR rows in
-`test/diff_compiler_dict_semantics.sh` (`useIx` at arity 2 and arity 3) — no behavioural
+`test/diff_compiler_dict_semantics_ir.sh` (`useIx` at arity 2 and arity 3) — no behavioural
 assertion can see an arity move, which is why the value rows alone were not enough.
 ⚠️ **Two residuals were left SCALAR and are named at `declaredConstraintArgs`**, not
 covered by anything: the cross-module qual table (there is no `(definer, name)`-keyed

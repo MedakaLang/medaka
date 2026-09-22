@@ -8,14 +8,14 @@
 # Three permutation differentials already exist here and NONE moves this axis:
 #
 #   * test/diff_compiler_import_order.sh  permutes the entry's IMPORT CLAUSES.
-#   * test/diff_compiler_dict_semantics.sh Section 4 permutes `impl` BLOCKS.
+#   * test/diff_compiler_dict_semantics_permute.sh permutes `impl` BLOCKS.
 #   * test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/
 #     spends its control slot on the second `impl`-block ORDER.
 #
 # This gate permutes the `interface` DECLARATIONS THEMSELVES and leaves impls,
 # imports and data declarations exactly where they are. Derive that the axis is new:
 #
-#   grep -rn 'interface' test/diff_compiler_import_order.sh test/diff_compiler_dict_semantics.sh
+#   grep -rn 'interface' test/diff_compiler_import_order.sh test/diff_compiler_dict_semantics_permute.sh
 #
 # ⭐ WHY THIS AXIS, SPECIFICALLY, AND WHY NOW.
 # The Stage B fix (units S and Q) re-keys impl selection from an interface SPELLING to
@@ -548,7 +548,7 @@ for cse in $cases; do
       printf '     by interface NAME can drain one axis and leave another; that is why this\n'
       printf '     corpus exists alongside the impl-order pins. Check the sibling axes too:\n'
       printf '       test/must_fail_fixtures/1182-two-ifaces-same-method-name-order-decides/\n'
-      printf '       test/diff_compiler_dict_semantics.sh (Section 4, impl-block permutation)\n'
+      printf '       test/diff_compiler_dict_semantics_permute.sh (impl-block permutation)\n'
       printf '     Then: 1. close %s  2. DELETE the row from test/IFACE-ORDER-LEDGER.txt\n' "$issue"
       printf '           3. KEEP the fixture — unledgered, it becomes the regression guard.\n'
       printf '     ⚠️ STEP 1 IS NOT AUTOMATIC, and skipping it is a supported outcome. A fix\n'

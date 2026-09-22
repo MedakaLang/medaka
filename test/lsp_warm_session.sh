@@ -1,4 +1,5 @@
 #!/bin/sh
+# blocked-because: interactive-handle — needs to write, read the reply, and write again down one live `medaka lsp` process
 # test/lsp_warm_session.sh — the LSP property that needs a LIVE session.
 #
 # Invoked BY another gate, never by a workflow: `test/diff_compiler_lsp_test.mdk`

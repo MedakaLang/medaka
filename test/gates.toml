@@ -281,7 +281,7 @@ toolchain = []
 [[gate]]
 name = "build_cmd"
 area = "backend"
-shard = "gates_8"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -371,7 +371,7 @@ toolchain = []
 [[gate]]
 name = "gzip/test/inflate_oracle"
 area = "engines"
-shard = "gates_5"
+shard = "gates_4"
 project = "gzip"
 tiers = ["merge"]
 cost = "cheap"
@@ -428,7 +428,7 @@ tiers = ["nightly"]
 # for an `other-job` entry.
 cost = "medium"
 kind = "exec"
-migration = "native-wrap"
+migration = "blocked:detached-process"
 run = "pds/nightly/load_harness.sh"
 oracles = []
 sources = []
@@ -542,7 +542,7 @@ toolchain = ["wasm-tools", "node>=24", "clang"]
 [[gate]]
 name = "pds/test/constant_time_signing"
 area = "engines"
-shard = "gates_8"
+shard = "gates_6"
 project = "pds"
 tiers = ["merge"]
 cost = "medium"
@@ -743,7 +743,7 @@ toolchain = ["wasm-tools", "node>=24"]
 [[gate]]
 name = "pds/test/repo_vectors"
 area = "engines"
-shard = "gates_3"
+shard = "gates_8"
 project = "pds"
 tiers = ["merge"]
 # Was "medium" while this gate was the 948.9s pole of the whole suite — i.e. the
@@ -902,6 +902,15 @@ sources = ["pds/*"]
 corpus = []
 toolchain = []
 
+# `split-first` is still accurate (#2595, PR #3028 slice S-the-ledger-is-a-
+# library): `pds/test/vector_ledger.mdk` now reimplements the ledger lookup
+# natively for the vector_runner-driven rows, but this script's own
+# self-test, `check_corpus`, and `--files-for` CLI entry point stay
+# load-bearing — three sibling shell gates (car_vectors, repo_vectors,
+# mst_vectors) still shell out to `--files-for` rather than calling the
+# native module. The script holds a check AND a shared helper for those
+# siblings until each one migrates off it. 764 lines (not 834, #2595's
+# stated count).
 [[gate]]
 name = "pds/test/vector_provenance"
 area = "engines"
@@ -985,7 +994,7 @@ toolchain = []
 [[gate]]
 name = "sqlite/test/oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1015,7 +1024,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/sql_oracle"
 area = "engines"
-shard = "gates_7"
+shard = "gates_4"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1034,7 +1043,7 @@ toolchain = ["sqlite3"]
 [[gate]]
 name = "sqlite/test/writer_oracle"
 area = "engines"
-shard = "gates_8"
+shard = "gates_6"
 project = "sqlite"
 tiers = ["merge"]
 cost = "medium"
@@ -1395,7 +1404,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check_json"
 area = "types"
-shard = "gates_7"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1425,7 +1434,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_check"
 area = "types"
-shard = "gates_6"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1497,6 +1506,10 @@ sources = ["compiler/backend/*", "compiler/eval/*", "compiler/frontend/marker.md
 corpus = ["test/core_ir_typed_modules_fixtures"]
 toolchain = []
 
+# The verdict + value + diagnostic-code table, and the coverage self-audit that
+# reads it. The module name is what keeps this row's cost history: `baselineKey`
+# strips `_test.mdk` exactly as it strips `.sh`, so the migrated row derives the
+# same key the script carried.
 [[gate]]
 name = "diff_compiler_dict_semantics"
 area = "infra"
@@ -1504,12 +1517,57 @@ shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
-kind = "exec"
-migration = "split-first"
-run = "test/diff_compiler_dict_semantics.sh"
+kind = "native"
+migration = "done"
+run = "test/diff_compiler_dict_semantics_test.mdk"
 oracles = []
-sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics.sh"]
-corpus = ["test/dict_fixtures", "test/must_fail_fixtures", "test/typecheck_error_fixtures"]
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/compiler_cli_test_support.mdk"]
+corpus = ["test/dict_fixtures"]
+toolchain = ["clang"]
+
+# Section 3 of the same conformance suite: `medaka build --keep-ir` and a
+# pinned pattern over the `.ll`, the only section that can see a dead dict slot
+# or an arity skew. Still shell, and `native-rewrite` is a destination rather
+# than an available move: the port needs a precedented native way to read a
+# `--keep-ir` `.ll` back off disk and grade a pattern over it, and no test
+# module in this tree does that yet — building that seam inside one gate
+# instead of in the test library is what epic #2600 exists to stop. The corpus
+# is what the script actually reads: `must_fail_fixtures` and
+# `typecheck_error_fixtures` appear only inside row labels.
+[[gate]]
+name = "diff_compiler_dict_semantics_ir"
+area = "infra"
+shard = "gates_6"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+migration = "native-rewrite"
+run = "test/diff_compiler_dict_semantics_ir.sh"
+oracles = []
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics_ir.sh"]
+corpus = ["test/dict_fixtures"]
+toolchain = ["clang"]
+
+# Section 4: reverse the `impl` blocks of one interface and require check, run
+# and build to answer identically. The one section that needs no ground truth,
+# so it is what catches "the winner is decided by declaration order". Same
+# `native-rewrite` story as the row above, different missing piece: the port
+# needs a precedented native source transform that reverses a `.mdk`'s
+# top-level blocks, and no test module has one.
+[[gate]]
+name = "diff_compiler_dict_semantics_permute"
+area = "infra"
+shard = "gates_5"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+migration = "native-rewrite"
+run = "test/diff_compiler_dict_semantics_permute.sh"
+oracles = []
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics_permute.sh"]
+corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
 
 [[gate]]
@@ -1680,7 +1738,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_fixture_corpus_coverage"
 area = "infra"
-shard = "gates_6"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1710,7 +1768,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_fmt_roundtrip"
 area = "frontend"
-shard = "gates_5"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1785,7 +1843,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_index_oob"
 area = "infra"
-shard = "gates_5"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1875,12 +1933,12 @@ toolchain = ["clang"]
 [[gate]]
 name = "diff_compiler_lint_cache"
 area = "tools"
-shard = "gates_7"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
 kind = "exec"
-migration = "native-wrap"
+migration = "blocked:concurrent-spawn"
 run = "test/diff_compiler_lint_cache.sh"
 oracles = []
 sources = ["compiler/support/cli_targets.mdk", "compiler/tools/lint*.mdk", "compiler/driver/medaka_cli.mdk", "test/diff_compiler_lint_cache.sh"]
@@ -1950,7 +2008,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_comment_shout_diff"
 area = "docs"
-shard = "gates_6"
+shard = "gates_3"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -1984,7 +2042,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_llvm_ffi"
 area = "backend"
-shard = "gates_5"
+shard = "gates_7"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -2161,6 +2219,14 @@ sources = ["test/diff_compiler_perf_stage_census.sh"]
 corpus = []
 toolchain = []
 
+# `inverted-polarity` here is deliberate and current, not a stale carry-over
+# (#2595 asked "its tests are already native; derived discovery may retire
+# it?" — a DIFFERENT claim from this row's actual shape). This gate is a
+# KNOWN-FAILURES pin: test/diff_compiler_ported.sh's KNOWN_FAIL ledger asserts
+# the current, wrong interpreter behavior on purpose, so an accidental fix
+# flips it RED (promote-on-fix), same model as diff_compiler_must_fail.sh. Do
+# not reopen the "retire this row" question without first discharging its
+# pins through the inverted-polarity drain protocol.
 [[gate]]
 name = "diff_compiler_ported"
 area = "infra"
@@ -2344,7 +2410,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_run_stdout_flush"
 area = "infra"
-shard = "gates_6"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2494,7 +2560,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_test_native"
 area = "infra"
-shard = "gates_6"
+shard = "gates_5"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2614,7 +2680,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "effect_builtin_param_domain"
 area = "infra"
-shard = "gates_5"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2749,7 +2815,7 @@ toolchain = []
 [[gate]]
 name = "pr_helper_test"
 area = "infra"
-shard = "gates_7"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -2769,7 +2835,7 @@ project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
 kind = "exec"
-migration = "native-wrap"
+migration = "blocked:interactive-handle"
 run = "test/lsp_warm_session.sh"
 oracles = []
 sources = ["compiler/driver/diagnostics.mdk", "compiler/tools/lsp.mdk", "compiler/types/typecheck.mdk", "test/lsp_warm_session.sh"]
@@ -2794,7 +2860,7 @@ toolchain = []
 [[gate]]
 name = "selfcompile_build_fixpoint"
 area = "backend"
-shard = "gates_3"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -2839,7 +2905,7 @@ toolchain = ["clang"]
 [[gate]]
 name = "selfcompile_lex"
 area = "backend"
-shard = "gates_6"
+shard = "gates_8"
 project = "compiler"
 tiers = ["merge"]
 cost = "heavy"
@@ -3193,7 +3259,7 @@ toolchain = []
 [[gate]]
 name = "diff_compiler_closure_alloc"
 area = "backend"
-shard = "gates_5"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "cheap"
@@ -3253,7 +3319,7 @@ toolchain = ["clang", "valgrind"]
 [[gate]]
 name = "diff_compiler_cli_help_conformance"
 area = "cli"
-shard = "gates_6"
+shard = "gates_4"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
@@ -3352,7 +3418,7 @@ project = "pds"
 tiers = ["merge"]
 cost = "heavy"
 kind = "exec"
-migration = "native-wrap"
+migration = "blocked:detached-process"
 run = "pds/test/serve_e2e.sh"
 oracles = []
 sources = ["pds/*"]
