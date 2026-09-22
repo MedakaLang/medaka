@@ -157,6 +157,22 @@ SESSIONS_MODE=$(stat -c %a "$DATA/sessions" 2>/dev/null || stat -f %Lp "$DATA/se
 [ "$SESSIONS_MODE" = "600" ] \
   || fail "sessions file is mode $SESSIONS_MODE, expected 600"
 
+# ── 2e. a sessions file written before session families is still admitted ──
+# Three fields per row, the format a server that predates families wrote. A
+# startup that refused it would turn an upgrade into an outage, so the row
+# must load and its access token must still verify after the admission.
+LEGACY="$WORK/legacy-sessions"
+mkdir -p "$LEGACY"
+printf '%s %s %s\n' \
+  4f4e4d4c4b4a494847464544434241404f4e4d4c4b4a49484746454443424140 \
+  5f5e5d5c5b5a595857565554535251505f5e5d5c5b5a59585756555453525150 \
+  2000000000 > "$LEGACY/sessions"
+chmod 600 "$LEGACY/sessions"
+"$WORK/driver" sessions-legacy "$LEGACY" > "$WORK/sesslegacy.out" 2> "$WORK/sesslegacy.err"
+require_empty "$WORK/sesslegacy.err" sessions-legacy
+[ "$(tail -1 "$WORK/sesslegacy.out")" = 'SESSIONS LEGACY: PASS' ] \
+  || fail 'legacy sessions file was not admitted'
+
 # ── 3. no persisted file carries the signing key ────────────────────────────
 # `tree_hex` sweeps `$DATA` whole, so the blob half is inside its scope by
 # construction — but only if blob files are actually there, which is asserted

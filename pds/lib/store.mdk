@@ -73,23 +73,39 @@ import map.{Map(..), get, keys, set, entries, entriesFrom}
 import string.{toUtf8}
 
 {- | One open session: the fingerprints of the access and refresh tokens it
-   issued, and the instant its refresh token expires at (seconds since the
-   Unix epoch), past which the record is prunable.
+   issued, the instant it stops verifying (seconds since the Unix epoch), past
+   which the record is prunable, and the family it belongs to.
 
    A session is keyed by token FINGERPRINTS — `sessionFingerprint`, the
    SHA-256 of the token text — rather than by the tokens themselves, so the
    bearer strings a client holds are not a second time stored on the server.
    The constructor is private: a session is opened, rotated, and closed
-   through the operations below and cannot be forged from raw bytes. -}
-data SessionRecord = SessionRecord (Array Int) (Array Int) Int
+   through the operations below and cannot be forged from raw bytes.
+
+   A family is every session one login leads to by rotation. It is named by
+   the fingerprint of the refresh token the login issued, and it ends at an
+   instant fixed when it is opened: a rotation never moves a session's expiry
+   past the end of the family it rotates within. -}
+data SessionRecord = SessionRecord (Array Int) (Array Int) Int (Array Int)
+
+{- | A refresh token a rotation consumed: its fingerprint, its family, the
+   instant it was consumed, and the instant the family ends.
+
+   It is kept until the family ends so that presenting it again can be told
+   apart from presenting a token this server never issued. Soon after the
+   rotation, a replay is a client racing its own refresh; long after it, the
+   token was copied, and the family it belongs to is revoked. -}
+data ConsumedRefresh = ConsumedRefresh (Array Int) (Array Int) Int Int
+
+-- The open sessions, and the refresh tokens their families have consumed.
+data Sessions = Sessions (List SessionRecord) (List ConsumedRefresh)
 
 -- The three secret-bearing parts of a `Store`, kept as one field so the blob
 -- and repository halves are not respelled every time one of them changes.
-data Auth =
-  | Auth (Option (Array Int)) (Option CredentialRecord) (List SessionRecord)
+data Auth = Auth (Option (Array Int)) (Option CredentialRecord) Sessions
 
 emptyAuth : Auth
-emptyAuth = Auth None None []
+emptyAuth = Auth None None (Sessions [] [])
 
 {- | The blob half: verified content-addressed bytes (`BlockStore` — the same
    verification `lib.repo`'s own internal block store uses), an index of the
@@ -249,125 +265,224 @@ export
 sessionFingerprint : String -> Array Int
 sessionFingerprint token = sha256 (toUtf8 token)
 
-hasAccess : Array Int -> List SessionRecord -> Bool
-hasAccess _ [] = False
-hasAccess wanted ((SessionRecord access _ _) :: rest) =
-  ctEq wanted access || hasAccess wanted rest
+recordFamily : SessionRecord -> Array Int
+recordFamily (SessionRecord _ _ _ family) = family
 
-hasRefresh : Array Int -> List SessionRecord -> Bool
-hasRefresh _ [] = False
-hasRefresh wanted ((SessionRecord _ refresh _) :: rest) =
-  ctEq wanted refresh || hasRefresh wanted rest
+consumedFamily : ConsumedRefresh -> Array Int
+consumedFamily (ConsumedRefresh _ family _ _) = family
+
+-- The open session whose refresh token this is, while it still verifies.
+liveRefresh : Int -> Array Int -> List SessionRecord -> Option SessionRecord
+liveRefresh now wanted open =
+  find
+    (record => match record
+      SessionRecord _ refresh expires _ => now < expires && ctEq wanted refresh)
+    open
+
+-- The consumption record of this refresh token, while its family lasts.
+consumedRefresh : Int ->
+  Array Int ->
+  List ConsumedRefresh ->
+  Option ConsumedRefresh
+consumedRefresh now wanted consumed =
+  find
+    (entry => match entry
+      ConsumedRefresh refresh _ _ ends => now < ends && ctEq wanted refresh)
+    consumed
+
+hasAccess : Int -> Array Int -> List SessionRecord -> Bool
+hasAccess _ _ [] = False
+hasAccess now wanted ((SessionRecord access _ expires _) :: rest) =
+  now < expires && ctEq wanted access || hasAccess now wanted rest
 
 withoutRefresh : Array Int -> List SessionRecord -> List SessionRecord
-withoutRefresh _ [] = []
-withoutRefresh wanted ((SessionRecord access refresh expires) :: rest) =
-  if ctEq wanted refresh then
-    withoutRefresh wanted rest
-  else
-    SessionRecord access refresh expires :: withoutRefresh wanted rest
+withoutRefresh wanted open =
+  filter
+    (record => match record
+      SessionRecord _ refresh _ _ => not (ctEq wanted refresh))
+    open
 
-unexpired : Int -> List SessionRecord -> List SessionRecord
-unexpired _ [] = []
-unexpired now ((SessionRecord access refresh expires) :: rest) =
-  if now >= expires then
-    unexpired now rest
-  else
-    SessionRecord access refresh expires :: unexpired now rest
+-- Every session and every consumed token of one family dropped. Nothing of
+-- the family is left that a later replay could find.
+withoutFamily : Array Int -> Sessions -> Sessions
+withoutFamily family (Sessions open consumed) =
+  Sessions
+    (filter (record => not (ctEq family (recordFamily record))) open)
+    (filter (entry => not (ctEq family (consumedFamily entry))) consumed)
 
-{- | Successor store with one more open session: an access-token fingerprint, a
-   refresh-token fingerprint, and the instant the refresh token expires. -}
+withSessions : Sessions -> Store -> Store
+withSessions sessions (Store blocks repo (Auth secret credential _) prefs) =
+  Store blocks repo (Auth secret credential sessions) prefs
+
+storeSessions : Store -> Sessions
+storeSessions (Store _ _ (Auth _ _ sessions) _) = sessions
+
+openIn : Array Int -> Array Int -> Int -> Array Int -> Sessions -> Sessions
+openIn access refresh expires family (Sessions open consumed) =
+  Sessions
+    (SessionRecord (arrayCopy access) (arrayCopy refresh) expires family
+      :: open)
+    consumed
+
+{- | Successor store with one more open session, the first of a new family:
+   an access-token fingerprint, a refresh-token fingerprint, and the instant
+   the family ends. No rotation within the family outlives that instant. -}
 export
 storeSessionOpen : Array Int -> Array Int -> Int -> Store -> Store
-storeSessionOpen access refresh expires (Store blocks repo (Auth secret credential sessions) prefs) =
-  Store
-    blocks
-    repo
-    (Auth
-      secret
-      credential
-      (SessionRecord (arrayCopy access) (arrayCopy refresh) expires
-        :: sessions))
-    prefs
+storeSessionOpen access refresh expires store =
+  withSessions
+    (openIn access refresh expires (arrayCopy refresh) (storeSessions store))
+    store
 
-{- | Whether this access-token fingerprint belongs to an open session. A token
-   this server minted but whose session has since been closed or rotated away
-   answers `False`, which is what makes `deleteSession` revoke an access token
-   that is otherwise still inside its own window.
+{- | Whether this access-token fingerprint belongs to an open session at `now`.
+   A token this server minted but whose session has since been closed, rotated
+   away, revoked, or outlived by its family answers `False`, which is what
+   makes `deleteSession` revoke an access token that is otherwise still inside
+   its own window.
 
    A restart is not one of those: the session set is persisted and read back,
-   so a token survives one. What still answers `False` across a restart is a
-   session whose refresh token expired while nothing was running, which the
-   load-time prune drops. -}
+   so a token survives one. -}
 export
-storeAccessActive : Array Int -> Store -> Bool
-storeAccessActive fingerprint (Store _ _ (Auth _ _ sessions) _) =
-  hasAccess fingerprint sessions
+storeAccessActive : Int -> Array Int -> Store -> Bool
+storeAccessActive now fingerprint store = match storeSessions store
+  Sessions open _ => hasAccess now fingerprint open
 
--- | Whether this refresh-token fingerprint belongs to an open session. One
--- already consumed by a rotation answers `False`.
+{- | Whether this refresh-token fingerprint may be presented to the refresh
+   route at `now`: it belongs to an open session, or a rotation consumed it
+   within a family that has not ended. The second is admitted so that the
+   rotation itself can decide what a replay means (`storeSessionRotate`); a
+   token of a revoked or closed family answers `False`. -}
 export
-storeRefreshActive : Array Int -> Store -> Bool
-storeRefreshActive fingerprint (Store _ _ (Auth _ _ sessions) _) =
-  hasRefresh fingerprint sessions
+storeRefreshActive : Int -> Array Int -> Store -> Bool
+storeRefreshActive now fingerprint store = match storeSessions store
+  Sessions open consumed =>
+    isSome (liveRefresh now fingerprint open)
+      || isSome (consumedRefresh now fingerprint consumed)
 
-{- | Consume a refresh token and reopen its session on a fresh token pair, or
-   `None` when no open session holds that refresh fingerprint.
+{- | What presenting a refresh token to `storeSessionRotate` did.
 
-   The consumed record is REMOVED, not marked: presenting it again finds no
-   session and is refused, which is the reuse detection a rotating refresh
-   token exists for. -}
+   `Rotated` carries the store with the fresh token pair open. `Revoked`
+   carries the store with the presented token's whole family removed: the
+   request is refused, and that removal is still a transition the caller must
+   keep. `NotRotated` means no family this store knows holds the token. -}
+public export data SessionRotation = Rotated Store | Revoked Store | NotRotated
+
+{- | Consume a refresh token at `now` and open a fresh token pair in its family.
+
+   A token of an open session is consumed: its record is replaced by the new
+   pair, and it is remembered as consumed until the family ends. The new
+   session expires at `expires` or the family's end, whichever is sooner, so
+   rotating never extends a family.
+
+   A token already consumed is a replay. Within `graceSeconds` of its
+   consumption it is answered like a first presentation, with a fresh pair in
+   the same family, because a client that refreshed twice in a burst holds
+   both answers' predecessor. Past that window the token has been copied, so
+   the whole family is revoked: every open session in it stops verifying,
+   including the access token its legitimate holder was using. Other families
+   are untouched. -}
 export
 storeSessionRotate : Array Int ->
   Array Int ->
   Array Int ->
   Int ->
+  Int ->
+  Int ->
   Store ->
-  Option Store
-storeSessionRotate consumed access refresh expires (Store blocks repo (Auth secret credential sessions) prefs) =
-  if hasRefresh consumed sessions then
-    Some
-      (storeSessionOpen
-        access
-        refresh
-        expires
-        (Store
-          blocks
-          repo
-          (Auth secret credential (withoutRefresh consumed sessions))
-          prefs))
-  else
-    None
+  SessionRotation
+storeSessionRotate consumed access refresh expires now graceSeconds store =
+  match storeSessions store
+    Sessions open spent => match liveRefresh now consumed open
+      Some (SessionRecord _ _ ends family) =>
+        let record = ConsumedRefresh (arrayCopy consumed) family now ends
+        Rotated
+          (withSessions
+            (openIn
+              access
+              refresh
+              (min expires ends)
+              family
+              (Sessions (withoutRefresh consumed open) (record :: spent)))
+            store)
+      None => match consumedRefresh now consumed spent
+        Some (ConsumedRefresh _ family at ends) =>
+          if now < at + graceSeconds then
+            Rotated
+              (withSessions
+                (openIn
+                  access
+                  refresh
+                  (min expires ends)
+                  family
+                  (storeSessions store))
+                store)
+          else
+            Revoked
+              (withSessions (withoutFamily family (storeSessions store)) store)
+        None => NotRotated
 
-{- | Close the session this refresh fingerprint belongs to, or `None` when no
-   open session holds it. Both of that session's tokens stop verifying: the
-   record they were checked against is gone. -}
+{- | Close the family this refresh fingerprint's session belongs to, or `None`
+   when no open session holds it. Every token of the family stops verifying,
+   and its consumed refresh tokens are forgotten, so a replay inside the grace
+   window cannot reopen what was logged out of. -}
 export
 storeSessionClose : Array Int -> Store -> Option Store
-storeSessionClose fingerprint (Store blocks repo (Auth secret credential sessions) prefs) =
-  if hasRefresh fingerprint sessions then
-    Some
-      (Store
-        blocks
-        repo
-        (Auth secret credential (withoutRefresh fingerprint sessions))
-        prefs)
-  else
-    None
+storeSessionClose fingerprint store = match storeSessions store
+  Sessions open _ =>
+    let found =
+      find
+        (record => match record
+          SessionRecord _ refresh _ _ => ctEq fingerprint refresh)
+        open
+    map
+      (record =>
+        withSessions
+          (withoutFamily (recordFamily record) (storeSessions store))
+          store)
+      found
 
-sessionRows : List SessionRecord -> List (Array Int, Array Int, Int)
-sessionRows [] = []
-sessionRows ((SessionRecord access refresh expires) :: rest) =
-  (arrayCopy access, arrayCopy refresh, expires) :: sessionRows rest
+{- | The persisted form of the session set, one row per record.
 
-rowSessions : List (Array Int, Array Int, Int) -> List SessionRecord
-rowSessions [] = []
-rowSessions ((access, refresh, expires) :: rest) =
-  SessionRecord (arrayCopy access) (arrayCopy refresh) expires
-    :: rowSessions rest
+   `OpenSessionRow` is an open session: access fingerprint, refresh
+   fingerprint, the instant it expires, and its family. `ConsumedRefreshRow`
+   is a consumed refresh token: its fingerprint, its family, the instant it
+   was consumed, and the instant the family ends. -}
+public export data SessionRow =
+  | OpenSessionRow (Array Int) (Array Int) Int (Array Int)
+  | ConsumedRefreshRow (Array Int) (Array Int) Int Int
+  deriving (Eq)
 
-{- | Every open session as a flat row: the access-token fingerprint, the
-   refresh-token fingerprint, and the instant the refresh token expires.
+openRow : SessionRecord -> SessionRow
+openRow (SessionRecord access refresh expires family) =
+  OpenSessionRow
+    (arrayCopy access)
+    (arrayCopy refresh)
+    expires
+    (arrayCopy family)
+
+consumedRow : ConsumedRefresh -> SessionRow
+consumedRow (ConsumedRefresh refresh family at ends) =
+  ConsumedRefreshRow (arrayCopy refresh) (arrayCopy family) at ends
+
+rowSessions : List SessionRow -> Sessions
+rowSessions [] = Sessions [] []
+rowSessions (row :: rest) = match (row, rowSessions rest)
+  (OpenSessionRow access refresh expires family, Sessions open consumed) =>
+    Sessions
+      (SessionRecord
+          (arrayCopy access)
+          (arrayCopy refresh)
+          expires
+          (arrayCopy family)
+        :: open)
+      consumed
+  (ConsumedRefreshRow refresh family at ends, Sessions open consumed) =>
+    Sessions
+      open
+      (ConsumedRefresh (arrayCopy refresh) (arrayCopy family) at ends
+        :: consumed)
+
+{- | Every open session and every consumed refresh token as a flat row.
 
    This is what a caller that persists sessions across a restart needs, and it
    is all of it. `SessionRecord` itself stays private: a row is admitted back
@@ -375,10 +490,11 @@ rowSessions ((access, refresh, expires) :: rest) =
    still not reachable from outside this module, and the fingerprints are
    copied on the way out as they are on the way in. -}
 export
-storeSessionRows : Store -> List (Array Int, Array Int, Int)
-storeSessionRows (Store _ _ (Auth _ _ sessions) _) = sessionRows sessions
+storeSessionRows : Store -> List SessionRow
+storeSessionRows store = match storeSessions store
+  Sessions open consumed => map openRow open ++ map consumedRow consumed
 
-{- | Successor store whose open sessions are exactly these rows, replacing
+{- | Successor store whose session set is exactly these rows, replacing
    whatever it held.
 
    This is a load-time operation: it is how a restart readmits the sessions a
@@ -387,16 +503,28 @@ storeSessionRows (Store _ _ (Auth _ _ sessions) _) = sessionRows sessions
    `storeSessionsPrune` against the current instant rather than trusting the
    file to hold only live rows. -}
 export
-storeWithSessionRows : List (Array Int, Array Int, Int) -> Store -> Store
-storeWithSessionRows rows (Store blocks repo (Auth secret credential _) prefs) =
-  Store blocks repo (Auth secret credential (rowSessions rows)) prefs
+storeWithSessionRows : List SessionRow -> Store -> Store
+storeWithSessionRows rows store = withSessions (rowSessions rows) store
 
--- | Successor store with every session whose refresh token has expired at
--- `now` dropped. An expired session verifies nothing, so it is only memory.
+{- | Successor store with every session that has expired at `now` dropped, and
+   every consumed refresh token whose family has ended. Neither verifies
+   anything any more, so both are only memory: this is what keeps the set
+   bounded by the families still inside their lifetime. -}
 export
 storeSessionsPrune : Int -> Store -> Store
-storeSessionsPrune now (Store blocks repo (Auth secret credential sessions) prefs) =
-  Store blocks repo (Auth secret credential (unexpired now sessions)) prefs
+storeSessionsPrune now store = match storeSessions store
+  Sessions open consumed =>
+    withSessions
+      (Sessions
+        (filter
+          (record => match record
+            SessionRecord _ _ expires _ => now < expires)
+          open)
+        (filter
+          (entry => match entry
+            ConsumedRefresh _ _ _ ends => now < ends)
+          consumed))
+      store
 
 -- | Number of distinct verified blocks in the blob half. The repository half
 -- keeps its own blocks and is not counted here.

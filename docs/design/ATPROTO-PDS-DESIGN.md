@@ -473,17 +473,44 @@ of every window boundary; it lives in `pds/lib/`, so it declares no effect row.
 
 A verified signature inside its window is not on its own a credential here. The store
 holds an allow-list of open sessions — a fingerprint (SHA-256) of each of the pair's
-two tokens, and the refresh token's expiry — and `lib.server_core`'s seam requires the
+two tokens, the session's expiry, and its family — and `lib.server_core`'s seam requires the
 presented token's session to be OPEN as well as its signature to verify. That is what
 makes `deleteSession` a revocation rather than a promise of one: after a logout, an
 access token whose window has hours left is refused from the next request on, and a
 purely stateless check could not do that at all.
 
-Refreshing ROTATES: `refreshSession` removes the record its refresh token named and
-opens a new one on a fresh pair. The consumed token is removed rather than marked, so
-presenting it again finds no session and is refused — reuse detection with no extra
-state. The rotation replaces the whole record, access half included, so a client that
-refreshes is expected to use the access token it was just issued.
+Refreshing ROTATES: `refreshSession` replaces the record its refresh token named with
+a new one on a fresh pair, and remembers the consumed token. The rotation replaces the
+whole record, access half included, so a client that refreshes is expected to use the
+access token it was just issued.
+
+**Every session belongs to a family, and a family ends ninety days after its login.**
+A family is one login and every session it leads to by rotation. It is opened by
+`createSession` with an end instant `sessionFamilyLifetimeSeconds` (ninety days) away,
+and no rotation carries a session in it past that instant, however recently it rotated:
+the seam refuses both tokens of a family that has ended, and the client logs in with
+the password again. This exceeds the reference PDS, which gives every rotation a fresh
+ninety-day window and so lets a chain that keeps refreshing live forever.
+
+**A consumed refresh token presented again is a race inside the grace window and a
+theft after it.** A consumed token is kept, with the instant it was consumed, until its
+family ends. Presented again within `refreshGraceSeconds` (two hours) of that instant,
+it is answered like a first presentation: a fresh pair in the same family, beside the
+pair the first presentation issued, which keeps working. That is what a client firing
+several refreshes in one burst needs, and the reference PDS grants the same window.
+Presented after it, the token can only be a copy, and the whole family is revoked:
+every session in it and every consumed token of it are dropped, so the access token the
+legitimate holder was using stops verifying on its next request, and the replay itself
+is refused. Other families, including other logins on the same account, are untouched.
+The reference PDS never revokes on reuse; this does, deliberately. `deleteSession`
+closes the whole family the same way, so a replay inside the grace window cannot reopen
+a session that was logged out of.
+
+The pair a grace replay returns is newly minted rather than the successor the first
+presentation returned — sessions are keyed by token fingerprint, not by a `jti` the
+store could hand back — so a family can briefly hold more than one open session.
+Consumed tokens and ended families are pruned whenever the session set is written, so
+the set stays bounded by the families still inside their ninety days.
 
 **Sessions are persisted, and a restart does not close them.** The open session set
 is written to `<data>/sessions` and read back at startup, so a token issued before a
@@ -503,8 +530,12 @@ and `pds serve` refuses to start on a wider one (`requirePrivateMode`), so it fa
 closed exactly where the secret files do. **Staleness**: the set is pruned against the
 current instant as it is read, so a row that expired while nothing was running is
 dropped at load rather than readmitted. What the file holds is also not a bearer
-token: a row is a pair of SHA-256 fingerprints (`sessionFingerprint`) and an expiry,
-so the file cannot be replayed against the server that wrote it.
+token: a row is SHA-256 fingerprints (`sessionFingerprint`) and instants, so the file
+cannot be replayed against the server that wrote it. An open session's row carries its
+family, and each consumed refresh token has a row of its own. A row of three fields —
+the format written before families existed — is still admitted, as a family of its own
+named by its refresh fingerprint and ending at its own expiry, so an upgrade does not
+refuse to start on the file its predecessor left.
 
 The credential record is persisted for the older and simpler reason: a server that
 forgot the account password on restart could not accept a login at all.
