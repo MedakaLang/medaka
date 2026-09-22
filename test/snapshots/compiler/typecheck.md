@@ -26644,7 +26644,7 @@ pickMostSpecificEntry goals (e :: rest) =
 -- fired first — the implementation-relative extent §6 C1 rejects for its own
 -- quantifier.  (The suppression was recommended on the premise that
 -- `diff_compiler_dict_semantics_test.mdk` grades the FIRST code; it does not —
--- `grep -q '"code":"$code"'`, presence anywhere.  Verified.)
+-- `contains "\"code\":\"\{c}\"" json`, presence anywhere.  Verified.)
 --
 -- ⚠️ F-3d (#614/#311) changed the OTHER half of that pairing, and the earlier wording
 -- here predicted it wrongly: it said F-3d "deletes (a)", so un-suppression would be

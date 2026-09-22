@@ -50,10 +50,12 @@
    so both remain expressible unchanged.
 
    No row grades `run`'s stderr. The harness grades `check`'s diagnostic
-   code, every engine's stdout and every exit code, but cannot assert a
-   runtime panic's signature (#1130), so a row whose pinned failure is a
-   run-time panic pins the exit code and the stdout reached, never the
-   reason.
+   code, every engine's stdout and `check`/`run`/`build`'s exit codes; the
+   compiled binary's own exit code and stderr (`binCode`/`binErr`) are
+   carried on `Agreement` but not graded here, same hole the retired shell
+   table had. It cannot assert a runtime panic's signature (#1130), so a row
+   whose pinned failure is a run-time panic pins the exit code and the
+   stdout reached, never the reason.
 
    The per-row verdict table is rendered into the failure message rather
    than printed: `medaka test --native` runs a test body inside a probe
