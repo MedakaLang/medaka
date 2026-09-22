@@ -13,7 +13,7 @@ Parsers backtrack: a failed parser never advances the position, and
 `orElse p q` runs `q` from the position where `p` started. The integer
 readers name their byte order and width, as in `beUint 4` for a four-byte
 big-endian unsigned integer and `leSint 2` for a two-byte little-endian
-signed one. `bytebuilder`'s `emit` functions write the same encodings.
+signed one. `bytebuilder`'s emit functions write the same encodings.
 
 ## Results and parsers
 
@@ -62,6 +62,7 @@ exports has this type.
 
 ```
 runBP : ByteParserE e a -> Array Int -> Int -> <e> BResult a
+runBP _ input pos
 ```
 
 Runs `p` on `input` from position `pos` and returns the raw `BResult`.
@@ -72,6 +73,7 @@ Runs `p` on `input` from position `pos` and returns the raw `BResult`.
 
 ```
 onOk : BResult a -> (a -> Int -> <e> BResult b) -> <e> BResult b
+onOk _ k
 ```
 
 Continues from a successful result.
@@ -93,6 +95,7 @@ A parser that always fails, consuming nothing.
 
 ```
 orElse : ByteParserE e a -> ByteParserE e a -> ByteParserE e a
+orElse p q
 ```
 
 Tries `p`, and when it fails, runs `q` from the same starting position.
@@ -108,6 +111,7 @@ Ok 2
 
 ```
 failWith : String -> ByteParser a
+failWith msg
 ```
 
 A parser that always fails with `msg`, consuming nothing.
@@ -116,6 +120,7 @@ A parser that always fails with `msg`, consuming nothing.
 
 ```
 satisfy : (Int -> Bool) -> ByteParser Int
+satisfy pred
 ```
 
 One byte that satisfies `pred`.
@@ -144,6 +149,7 @@ Ok 42
 
 ```
 byte : Int -> ByteParser Int
+byte b
 ```
 
 Exactly the byte `b`.
@@ -185,6 +191,7 @@ end of the input.
 
 ```
 many : ByteParser a -> ByteParser (List a)
+many p
 ```
 
 Zero or more `p`, until it fails.
@@ -201,6 +208,7 @@ Ok [1, 1, 1]
 
 ```
 some : ByteParser a -> ByteParser (List a)
+some p
 ```
 
 One or more `p`.
@@ -216,6 +224,7 @@ Err "unexpected byte at byte 0"
 
 ```
 sepBy1 : ByteParser a -> ByteParser b -> ByteParser (List a)
+sepBy1 p sep
 ```
 
 One or more `p`, separated by `sep`.
@@ -224,6 +233,7 @@ One or more `p`, separated by `sep`.
 
 ```
 sepBy : ByteParser a -> ByteParser b -> ByteParser (List a)
+sepBy p sep
 ```
 
 Zero or more `p`, separated by `sep`.
@@ -232,6 +242,7 @@ Zero or more `p`, separated by `sep`.
 
 ```
 optional : ByteParser a -> ByteParser (Option a)
+optional p
 ```
 
 `Some` the result of `p`, or `None` when `p` fails, consuming nothing.
@@ -247,6 +258,7 @@ Ok None
 
 ```
 between : ByteParser open -> ByteParser close -> ByteParser a -> ByteParser a
+between open close p
 ```
 
 The result of `p` parsed between `open` and `close`.
@@ -264,6 +276,7 @@ the list is empty or every parser fails.
 
 ```
 chainl1 : ByteParser a -> ByteParser (a -> a -> a) -> ByteParser a
+chainl1 p op
 ```
 
 One or more `p` separated by `op`, combined from the left.
@@ -275,6 +288,7 @@ far and the next `p`.
 
 ```
 takeBytes : Int -> ByteParser Bytes
+takeBytes n
 ```
 
 Exactly `n` bytes, as a `Bytes`.
@@ -290,6 +304,7 @@ Ok Bytes "0a141e"
 
 ```
 takeSlice : Int -> ByteParser (Array Int)
+takeSlice n
 ```
 
 Exactly `n` bytes, as an `Array Int`.
@@ -300,6 +315,7 @@ Exactly `n` bytes, as an `Array Int`.
 
 ```
 beUint : Int -> ByteParser Int
+beUint n
 ```
 
 An unsigned integer of `n` bytes, most significant byte first.
@@ -319,6 +335,7 @@ Ok 256
 
 ```
 beSint : Int -> ByteParser Int
+beSint n
 ```
 
 A signed two's-complement integer of `n` bytes, most significant byte
@@ -354,6 +371,7 @@ Ok -2.0
 
 ```
 leUint : Int -> ByteParser Int
+leUint n
 ```
 
 An unsigned integer of `n` bytes, least significant byte first.
@@ -373,6 +391,7 @@ Ok 256
 
 ```
 leSint : Int -> ByteParser Int
+leSint n
 ```
 
 A signed two's-complement integer of `n` bytes, least significant byte
@@ -410,6 +429,7 @@ Ok -2.0
 
 ```
 runByteParser : ByteParser a -> Array Int -> Result String a
+runByteParser p bytes
 ```
 
 The result of running `p` on `bytes` from position `0`.

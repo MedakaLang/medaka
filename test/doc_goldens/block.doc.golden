@@ -4,5 +4,6 @@
 
 ```
 blockFn : Int -> Int
+blockFn x
 ```
 

@@ -12,6 +12,7 @@ Re-exported so a reader of this module finds it here.
 
 ```
 quadruple : Int -> Int
+quadruple x
 ```
 
 A local binding, so the page shows re-exports and own entries together.

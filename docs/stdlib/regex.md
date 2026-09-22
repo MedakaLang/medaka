@@ -111,6 +111,7 @@ Instances: `Eq`, `Debug`
 
 ```
 compile : String -> Result RegexError Regex
+compile pattern
 ```
 
 The pattern compiled, or an `Err` naming what is wrong and where.
@@ -126,6 +127,7 @@ Err RegexError { message = "pattern is missing a closing )", position = 2 }
 
 ```
 mustCompile : String -> Regex
+mustCompile pattern
 ```
 
 The pattern compiled, panicking when it does not compile.
@@ -143,6 +145,7 @@ once, so the pattern compiles one time.
 
 ```
 source : Regex -> String
+source re
 ```
 
 The pattern the regex was compiled from.
@@ -156,6 +159,7 @@ The pattern the regex was compiled from.
 
 ```
 escape : String -> String
+escape s
 ```
 
 The text as a pattern matching exactly itself, with every
@@ -177,6 +181,7 @@ True
 
 ```
 isMatch : Regex -> String -> Bool
+isMatch re s
 ```
 
 Whether the pattern matches anywhere in the subject.
@@ -192,6 +197,7 @@ False
 
 ```
 isFullMatch : Regex -> String -> Bool
+isFullMatch re s
 ```
 
 Whether the pattern matches the whole subject.
@@ -210,6 +216,7 @@ False
 
 ```
 find : Regex -> String -> Option Match
+find re s
 ```
 
 The leftmost match, or `None` when the pattern does not match.
@@ -225,6 +232,7 @@ None
 
 ```
 findFrom : Int -> Regex -> String -> Option Match
+findFrom from re s
 ```
 
 The leftmost match that starts at or after `from`.
@@ -243,6 +251,7 @@ None
 
 ```
 fullMatch : Regex -> String -> Option Match
+fullMatch re s
 ```
 
 The match covering the whole subject, or `None`.
@@ -258,12 +267,13 @@ None
 
 ```
 findAll : Regex -> String -> List Match
+findAll re s
 ```
 
 Every match, left to right, none of them overlapping.
 
 An empty match is kept, except directly at the end of the previous match:
-`\d*` over `"a1b"` reports the empty match before `a`, `"1"`, and the
+`\d*` over `"a1b"` reports the empty match before `"a"`, `"1"`, and the
 empty match at the end.
 
 ```medaka
@@ -279,6 +289,7 @@ empty match at the end.
 
 ```
 isFullMatchBytes : Regex -> Array Int -> Int -> Int -> Bool
+isFullMatchBytes re bytes start end
 ```
 
 Whether the pattern matches the whole of `bytes[start..end)`, each byte
@@ -305,6 +316,7 @@ False
 
 ```
 findBytes : Regex -> Array Int -> Int -> Int -> Option Match
+findBytes re bytes start end
 ```
 
 The leftmost match in `bytes[start..end)`, or `None`.
@@ -330,6 +342,7 @@ None
 
 ```
 replace : Regex -> String -> String -> String
+replace re repl s
 ```
 
 The subject with the first match replaced by `repl`.
@@ -349,6 +362,7 @@ empty string, and a `$` before anything else is itself.
 
 ```
 replaceAll : Regex -> String -> String -> String
+replaceAll re repl s
 ```
 
 The subject with every match replaced by `repl`.
@@ -366,6 +380,7 @@ The subject with every match replaced by `repl`.
 
 ```
 replaceAllWith : Regex -> (Match -> <e> String) -> String -> <e> String
+replaceAllWith re f s
 ```
 
 The subject with every match replaced by `f` applied to it.
@@ -382,6 +397,7 @@ pattern is left alone.
 
 ```
 split : Regex -> String -> List String
+split re s
 ```
 
 The subject cut at every match, with the matches dropped.

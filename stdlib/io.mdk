@@ -75,7 +75,7 @@ readLines : String -> <IO> Result String (List String)
 readLines path = map splitLines (readFile path)
 
 {- | The permission bits of a file only its owner may read or write:
-   `rw-------`, `0600` as `chmod` spells it.
+   `rw-------`, `0600` as the chmod command spells it.
 
    `writeFilePrivate` writes at this mode, and `isPrivateMode` accepts it. -}
 export

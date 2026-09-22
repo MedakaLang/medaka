@@ -4,6 +4,7 @@
 
 ```
 realExample : Int -> Int
+realExample x
 ```
 
 A REAL doctest: the raw comment carries `-- > `, so `medaka test` runs it
@@ -18,6 +19,7 @@ A REAL doctest: the raw comment carries `-- > `, so `medaka test` runs it
 
 ```
 fakeExample : Int -> Int
+fakeExample x
 ```
 
 NOT a doctest: the raw comment is `--> …` (no space after the `--`), which

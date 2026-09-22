@@ -18,6 +18,7 @@ methods of those names unshadowed. Use `stringLength s` and `s == ""`.
 
 ```
 isDigit : Char -> Bool
+isDigit c
 ```
 
 Whether `c` is an ASCII decimal digit, `'0'` to `'9'`.
@@ -33,6 +34,7 @@ False
 
 ```
 isAlpha : Char -> Bool
+isAlpha c
 ```
 
 Whether `c` is an ASCII letter.
@@ -41,6 +43,7 @@ Whether `c` is an ASCII letter.
 
 ```
 isAlphaNum : Char -> Bool
+isAlphaNum c
 ```
 
 Whether `c` is an ASCII letter or digit.
@@ -49,6 +52,7 @@ Whether `c` is an ASCII letter or digit.
 
 ```
 isSpace : Char -> Bool
+isSpace c
 ```
 
 Whether `c` is ASCII whitespace.
@@ -57,6 +61,7 @@ Whether `c` is ASCII whitespace.
 
 ```
 isUpper : Char -> Bool
+isUpper c
 ```
 
 Whether `c` is an ASCII uppercase letter.
@@ -65,6 +70,7 @@ Whether `c` is an ASCII uppercase letter.
 
 ```
 isLower : Char -> Bool
+isLower c
 ```
 
 Whether `c` is an ASCII lowercase letter.
@@ -73,6 +79,7 @@ Whether `c` is an ASCII lowercase letter.
 
 ```
 isPunct : Char -> Bool
+isPunct c
 ```
 
 Whether `c` is ASCII punctuation.
@@ -81,6 +88,7 @@ Whether `c` is ASCII punctuation.
 
 ```
 fromDigit : Char -> Option Int
+fromDigit c
 ```
 
 The value of a hexadecimal digit: `'0'` to `'9'` give `0` to `9`, and
@@ -98,6 +106,7 @@ Some 15
 
 ```
 toDigit : Int -> Option Char
+toDigit n
 ```
 
 The lowercase hexadecimal digit for a value from `0` to `15`, or `None`
@@ -116,6 +125,7 @@ Some 'c'
 
 ```
 fromChar : Char -> String
+fromChar c
 ```
 
 A string holding one character.
@@ -124,6 +134,7 @@ A string holding one character.
 
 ```
 toChars : String -> Array Char
+toChars s
 ```
 
 The codepoints of a string, as an array.
@@ -139,6 +150,7 @@ The codepoints of a string, as an array.
 
 ```
 fromChars : List Char -> String
+fromChars cs
 ```
 
 A string built from a list of characters.
@@ -155,6 +167,7 @@ For an `Array Char`, such as the result of `toChars`, use
 
 ```
 toUtf8 : String -> Array Int
+toUtf8 s
 ```
 
 The UTF-8 encoding of a string, one byte (`0` to `255`) per element.
@@ -171,6 +184,7 @@ codepoints instead.
 
 ```
 fromUtf8 : Array Int -> String
+fromUtf8 bytes
 ```
 
 The string encoded by an array of UTF-8 bytes.
@@ -187,6 +201,7 @@ Only the low eight bits of each element are used. On valid UTF-8,
 
 ```
 utf8ByteLength : String -> Int
+utf8ByteLength s
 ```
 
 The number of bytes in the string's UTF-8 encoding.
@@ -203,6 +218,7 @@ characters.
 
 ```
 toInt : String -> Option Int
+toInt s
 ```
 
 The integer written in decimal in `s`, with an optional leading `-` or
@@ -222,6 +238,7 @@ None
 
 ```
 toFloat : String -> Option Float
+toFloat s
 ```
 
 The floating-point number written in `s`, or `None` when `s` is not
@@ -240,6 +257,7 @@ None
 
 ```
 startsWith : String -> String -> Bool
+startsWith prefix s
 ```
 
 Whether `s` begins with `prefix`.
@@ -255,6 +273,7 @@ False
 
 ```
 endsWith : String -> String -> Bool
+endsWith suffix s
 ```
 
 Whether `s` ends with `suffix`.
@@ -268,6 +287,7 @@ True
 
 ```
 stripPrefix : String -> String -> Option String
+stripPrefix prefix s
 ```
 
 `s` without its leading `prefix`, or `None` when `s` does not begin
@@ -286,6 +306,7 @@ None
 
 ```
 stripSuffix : String -> String -> Option String
+stripSuffix suffix s
 ```
 
 `s` without its trailing `suffix`, or `None` when `s` does not end with
@@ -302,6 +323,7 @@ None
 
 ```
 contains : String -> String -> Bool
+contains needle haystack
 ```
 
 Whether `needle` occurs anywhere in `haystack`.
@@ -319,6 +341,7 @@ False
 
 ```
 indexOf : String -> String -> Option Int
+indexOf needle haystack
 ```
 
 The position of the first occurrence of `needle` in `haystack`, or
@@ -335,6 +358,7 @@ None
 
 ```
 lastIndexOf : String -> String -> Option Int
+lastIndexOf needle haystack
 ```
 
 The position of the last occurrence of `needle` in `haystack`, or
@@ -354,6 +378,7 @@ None
 
 ```
 countOccurrences : String -> String -> Int
+countOccurrences needle haystack
 ```
 
 The number of non-overlapping occurrences of `needle` in `haystack`.
@@ -373,6 +398,7 @@ The number of non-overlapping occurrences of `needle` in `haystack`.
 
 ```
 prepend : String -> String -> String
+prepend pre s
 ```
 
 `pre` followed by `s`.
@@ -386,6 +412,7 @@ prepend : String -> String -> String
 
 ```
 concat : List String -> String
+concat parts
 ```
 
 The strings joined end to end.
@@ -399,6 +426,7 @@ The strings joined end to end.
 
 ```
 join : String -> List String -> String
+join sep parts
 ```
 
 The strings joined with `sep` between each adjacent pair.
@@ -412,6 +440,7 @@ The strings joined with `sep` between each adjacent pair.
 
 ```
 repeat : Int -> String -> String
+repeat n s
 ```
 
 `s` repeated `n` times.
@@ -430,6 +459,7 @@ Empty when `n <= 0`. Safe for large `n`: the call depth grows with
 
 ```
 reverse : String -> String
+reverse s
 ```
 
 The string with its characters in reverse order.
@@ -443,6 +473,7 @@ The string with its characters in reverse order.
 
 ```
 trimLeft : String -> String
+trimLeft s
 ```
 
 The string without its leading whitespace.
@@ -456,6 +487,7 @@ The string without its leading whitespace.
 
 ```
 trimRight : String -> String
+trimRight s
 ```
 
 The string without its trailing whitespace.
@@ -469,6 +501,7 @@ The string without its trailing whitespace.
 
 ```
 trim : String -> String
+trim s
 ```
 
 The string without leading or trailing whitespace.
@@ -482,6 +515,7 @@ The string without leading or trailing whitespace.
 
 ```
 toUpper : String -> String
+toUpper s
 ```
 
 The string with every ASCII letter in uppercase.
@@ -497,6 +531,7 @@ Other characters are unchanged, so `ß` stays `ß`.
 
 ```
 toLower : String -> String
+toLower s
 ```
 
 The string with every ASCII letter in lowercase.
@@ -512,6 +547,7 @@ Other characters are unchanged.
 
 ```
 capitalize : String -> String
+capitalize s
 ```
 
 The string with its first character in uppercase.
@@ -525,6 +561,7 @@ The string with its first character in uppercase.
 
 ```
 replace : String -> String -> String -> String
+replace old new s
 ```
 
 The string with the first occurrence of `old` replaced by `new`.
@@ -540,6 +577,7 @@ Unchanged when `old` is absent or empty.
 
 ```
 replaceAll : String -> String -> String -> String
+replaceAll old new s
 ```
 
 The string with every non-overlapping occurrence of `old` replaced by
@@ -558,6 +596,7 @@ Unchanged when `old` is empty.
 
 ```
 sliceClamped : Int -> Int -> String -> String
+sliceClamped lo hi s
 ```
 
 The characters at positions `[lo, hi)`.
@@ -574,6 +613,7 @@ rather than a panic. `s.[lo..hi]` is the panicking form.
 
 ```
 take : Int -> String -> String
+take n s
 ```
 
 The first `n` characters, or the whole string when it is shorter.
@@ -587,6 +627,7 @@ The first `n` characters, or the whole string when it is shorter.
 
 ```
 drop : Int -> String -> String
+drop n s
 ```
 
 Everything after the first `n` characters.
@@ -600,6 +641,7 @@ Everything after the first `n` characters.
 
 ```
 splitAt : Int -> String -> (String, String)
+splitAt n s
 ```
 
 The first `n` characters, and the rest.
@@ -613,6 +655,7 @@ The first `n` characters, and the rest.
 
 ```
 split : String -> String -> List String
+split sep s
 ```
 
 The pieces of `s` between occurrences of `sep`, with the separators
@@ -631,6 +674,7 @@ An empty separator yields the whole string as the only piece.
 
 ```
 lines : String -> List String
+lines s
 ```
 
 The lines of `s`, split on `\n`.
@@ -646,6 +690,7 @@ A `\r` before the `\n` is removed, so Windows line endings work too.
 
 ```
 stripCR : String -> String
+stripCR line
 ```
 
 The line without one trailing `\r`.
@@ -663,6 +708,7 @@ Unchanged when there is none.
 
 ```
 words : String -> List String
+words s
 ```
 
 The words of `s`: the runs of characters between whitespace.
@@ -678,6 +724,7 @@ Leading, trailing, and repeated whitespace produce no empty words.
 
 ```
 unlines : List String -> String
+unlines parts
 ```
 
 The lines joined with `\n`, with a newline after each one.
@@ -691,6 +738,7 @@ The lines joined with `\n`, with a newline after each one.
 
 ```
 unwords : List String -> String
+unwords parts
 ```
 
 The words joined with single spaces.
@@ -706,6 +754,7 @@ The words joined with single spaces.
 
 ```
 padLeft : Int -> Char -> String -> String
+padLeft n c s
 ```
 
 The string padded on the left with `c` to length `n`.
@@ -721,6 +770,7 @@ Unchanged when it is already at least `n` long.
 
 ```
 padRight : Int -> Char -> String -> String
+padRight n c s
 ```
 
 The string padded on the right with `c` to length `n`.
@@ -736,6 +786,7 @@ Unchanged when it is already at least `n` long.
 
 ```
 center : Int -> Char -> String -> String
+center n c s
 ```
 
 The string centered in a field of width `n`, padded with `c`.
@@ -758,10 +809,10 @@ Unchanged when the string is already at least `n` long.
 impl Index String Int Char
 ```
 
-`s[i]` is the character at codepoint position `i`.
+The character at a codepoint position: `s[i]`.
 
-Panics with an index error when `i` is out of range. Positions count
-codepoints, matching `string.toChars`.
+Panics with an index error when the position is out of range. Positions
+count codepoints, matching `string.toChars`.
 
 ### `Slice String`
 

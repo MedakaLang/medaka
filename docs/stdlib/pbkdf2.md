@@ -10,6 +10,7 @@ draws entropy or performs any I/O.
 
 ```
 pbkdf2HmacSha256 : Array Int -> Array Int -> Int -> Int -> Array Int
+pbkdf2HmacSha256 password salt iterations dkLen
 ```
 
 The `dkLen`-byte key derived from `password` and `salt` over

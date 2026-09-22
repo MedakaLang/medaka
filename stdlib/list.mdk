@@ -117,8 +117,8 @@ iterate n f x
 
 {- | Builds a list from a seed.
 
-   `gen` is called with the current seed. It returns `Some (element, next)` to
-   emit `element` and continue from `next`, or `None` to stop.
+   `gen` is called with the current seed. It returns `Some` of the element to
+   emit and the seed to continue from, or `None` to stop.
 
    > unfold (n => if n > 5 then None else Some (n, n + 1)) 1
    [1, 2, 3, 4, 5] -}
@@ -791,7 +791,7 @@ split sep xs = go xs
 export
 startsWith : Eq a => List a -> List a -> Bool
 startsWith [] _ = True
-startsWith _ [] = False
+startsWith prefix [] = False
 startsWith (p :: ps) (x :: xs) = p == x && startsWith ps xs
 
 -- > startsWith ([] : List Int) [1]

@@ -52,8 +52,8 @@ export
 underRoot : String -> <IO> String
 underRoot rel = "\{medakaRoot}/\{rel}"
 
-{- | The Medaka binary to spawn: `MEDAKA`, or `medaka` in `medakaRoot`
-   when it is unset.
+{- | The Medaka binary to spawn: `MEDAKA`, or the binary named medaka in
+   `medakaRoot` when it is unset.
 
    The default is a path, so an unset `MEDAKA` never resolves to another
    build on `PATH`. -}
@@ -87,8 +87,8 @@ boundedVerb cmd args = boundedVerbSeconds spawnTimeoutSeconds cmd args
 {- | `boundedVerb` with the time limit given as `secs`, for a spawn that
    needs longer than `spawnTimeoutSeconds`.
 
-   `cmd` is looked up on `PATH` through `env`, so a command that does not
-   exist reports exit 127 with `env`'s message on stderr rather than a
+   `cmd` is looked up on `PATH` through the env command, so a command that
+   does not exist reports exit 127 with env's message on stderr rather than a
    spawn that never ran. The wording of that message varies between
    systems.
 

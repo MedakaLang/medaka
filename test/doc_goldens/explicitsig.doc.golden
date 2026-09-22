@@ -4,5 +4,6 @@
 
 ```
 indexed : List a -> List (Int, a)
+indexed xs
 ```
 

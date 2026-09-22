@@ -19,6 +19,7 @@ panics on an out-of-range index; `get` is the `Option`-returning form.
 
 ```
 singleton : a -> Array a
+singleton x
 ```
 
 An array holding one element.
@@ -32,6 +33,7 @@ An array holding one element.
 
 ```
 make : Int -> a -> Array a
+make n x
 ```
 
 An array of `n` copies of `x`.
@@ -45,6 +47,7 @@ An array of `n` copies of `x`.
 
 ```
 makeWith : Int -> (Int -> <e> a) -> <e> Array a
+makeWith n f
 ```
 
 An array of length `n` whose element at each index `i` is `f i`.
@@ -60,6 +63,7 @@ Empty when `n <= 0`.
 
 ```
 fromList : List a -> Array a
+fromList xs
 ```
 
 An array holding the elements of a list, in order.
@@ -73,6 +77,7 @@ An array holding the elements of a list, in order.
 
 ```
 range : Int -> Int -> Array Int
+range lo hi
 ```
 
 The integers from `lo` up to, but not including, `hi`.
@@ -88,6 +93,7 @@ Empty when `hi <= lo`.
 
 ```
 copy : Array a -> Array a
+copy arr
 ```
 
 A new array with the same elements.
@@ -105,6 +111,7 @@ Use it to keep the original before an in-place operation.
 
 ```
 get : Int -> Array a -> Option a
+get i arr
 ```
 
 The element at index `i`, or `None` when `i` is out of range.
@@ -122,6 +129,7 @@ None
 
 ```
 first : Array a -> Option a
+first arr
 ```
 
 The first element, or `None` when the array is empty.
@@ -135,6 +143,7 @@ Some 1
 
 ```
 last : Array a -> Option a
+last arr
 ```
 
 The last element, or `None` when the array is empty.
@@ -150,6 +159,7 @@ Some 3
 
 ```
 reverse : Array a -> Array a
+reverse arr
 ```
 
 A new array with the elements in reverse order.
@@ -163,6 +173,7 @@ A new array with the elements in reverse order.
 
 ```
 sliceClamped : Int -> Int -> Array a -> Array a
+sliceClamped lo hi arr
 ```
 
 A new array of the elements at indices `[lo, hi)`.
@@ -179,6 +190,7 @@ rather than a panic. `arr.[lo..hi]` is the panicking form.
 
 ```
 take : Int -> Array a -> Array a
+take n arr
 ```
 
 A new array of the first `n` elements, or of the whole array when it
@@ -193,6 +205,7 @@ is shorter.
 
 ```
 drop : Int -> Array a -> Array a
+drop n arr
 ```
 
 A new array of everything after the first `n` elements.
@@ -206,6 +219,7 @@ A new array of everything after the first `n` elements.
 
 ```
 concat : Array (Array a) -> Array a
+concat arrs
 ```
 
 The inner arrays joined into one.
@@ -221,6 +235,7 @@ Costs `O(n)` in the total number of elements.
 
 ```
 zip : Array a -> Array b -> Array (a, b)
+zip a b
 ```
 
 The elements of two arrays paired up by position.
@@ -236,6 +251,7 @@ The result is as long as the shorter input.
 
 ```
 zipWith : (a -> b -> <e> c) -> Array a -> Array b -> <e> Array c
+zipWith f a b
 ```
 
 The elements of two arrays combined by position with `f`.
@@ -251,6 +267,7 @@ The result is as long as the shorter input.
 
 ```
 unzip : Array (a, b) -> (Array a, Array b)
+unzip arr
 ```
 
 An array of pairs separated into two arrays. The inverse of `zip`.
@@ -266,6 +283,7 @@ An array of pairs separated into two arrays. The inverse of `zip`.
 
 ```
 setInPlace : Int -> a -> Array a -> Unit
+setInPlace i x arr
 ```
 
 Replaces the element at index `i` with `x`.
@@ -281,6 +299,7 @@ Panics when `i` is out of range.
 
 ```
 swap : Int -> Int -> Array a -> Unit
+swap i j arr
 ```
 
 Exchanges the elements at indices `i` and `j`.
@@ -296,6 +315,7 @@ Both indices must be in range.
 
 ```
 fill : a -> Array a -> Unit
+fill x arr
 ```
 
 Replaces every element with `x`.
@@ -309,6 +329,7 @@ Replaces every element with `x`.
 
 ```
 blit : Array a -> Int -> Array a -> Int -> Int -> Unit
+blit src srcOff dst dstOff len
 ```
 
 Copies `len` elements from `src`, starting at `srcOff`, into `dst`,
@@ -328,6 +349,7 @@ array's end.
 
 ```
 sortInPlaceBy : (a -> a -> <e> Ordering) -> Array a -> <e> Unit
+sortInPlaceBy cmp arr
 ```
 
 Sorts the array in place by `cmp`.
@@ -343,6 +365,7 @@ The sort is stable.
 
 ```
 sortInPlace : Ord a => Array a -> Unit
+sortInPlace arr
 ```
 
 Sorts the array in place in ascending order.
@@ -358,6 +381,7 @@ The sort is stable.
 
 ```
 sortBy : (a -> a -> <e> Ordering) -> Array a -> <e> Array a
+sortBy cmp arr
 ```
 
 A new array of the elements sorted by `cmp`.
@@ -374,6 +398,7 @@ order. It costs `O(n log n)`.
 
 ```
 sort : Ord a => Array a -> Array a
+sort arr
 ```
 
 A new array of the elements in ascending order.
@@ -389,6 +414,7 @@ The sort is stable.
 
 ```
 sortOn : Ord b => (a -> <e> b) -> Array a -> <e> Array a
+sortOn key arr
 ```
 
 A new array of the elements in ascending order of `key`.
@@ -407,6 +433,7 @@ stable.
 
 ```
 find : (a -> <e> Bool) -> Array a -> <e> Option a
+find pred arr
 ```
 
 The first element satisfying `pred`, or `None`.
@@ -420,6 +447,7 @@ Some 2
 
 ```
 findIndex : (a -> <e> Bool) -> Array a -> <e> Option Int
+findIndex pred arr
 ```
 
 The index of the first element satisfying `pred`, or `None`.
@@ -435,6 +463,7 @@ Some 2
 
 ```
 foldWithIndex : (b -> Int -> a -> <e> b) -> b -> Array a -> <e> b
+foldWithIndex f z arr
 ```
 
 A left fold whose step also receives each element's index.
@@ -448,6 +477,7 @@ A left fold whose step also receives each element's index.
 
 ```
 forEachWithIndex : (Int -> a -> <e> Unit) -> Array a -> <e> Unit
+forEachWithIndex f arr
 ```
 
 Runs `f` on each index and element in order, for its effect.
@@ -461,6 +491,7 @@ Runs `f` on each index and element in order, for its effect.
 
 ```
 mapWithIndex : (Int -> a -> <e> b) -> Array a -> <e> Array b
+mapWithIndex f arr
 ```
 
 Like `map`, with `f` also receiving each element's index.

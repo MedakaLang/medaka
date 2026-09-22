@@ -46,6 +46,7 @@ Each call allocates its own set, which is why it takes `Unit`.
 
 ```
 fromList : (Eq a, Hashable a) => List a -> HashSet a
+fromList xs
 ```
 
 A set holding the elements of a list, without duplicates.
@@ -74,6 +75,7 @@ The number of elements, in `O(1)`.
 
 ```
 has : (Eq a, Hashable a) => a -> HashSet a -> Bool
+has x _
 ```
 
 Whether `x` is a member.
@@ -91,6 +93,7 @@ False
 
 ```
 insertInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+insertInPlace x _
 ```
 
 Adds `x` to the set, in place.
@@ -101,6 +104,7 @@ Nothing happens when `x` is already a member. The set grows as needed.
 
 ```
 deleteInPlace : (Eq a, Hashable a) => a -> HashSet a -> Unit
+deleteInPlace x _
 ```
 
 Removes `x` from the set, in place.

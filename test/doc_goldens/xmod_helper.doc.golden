@@ -4,5 +4,6 @@
 
 ```
 double : a -> a
+double x
 ```
 

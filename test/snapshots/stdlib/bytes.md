@@ -1,5 +1,5 @@
 # META
-source_lines=988
+source_lines=990
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -19,8 +19,8 @@ stages=DESUGAR,MARK
    `length` is the byte count, `get` reads one byte as an `Option`, and
    `b[i]` is the panicking form. `slice`, `take`, `drop`, `indexOf`,
    `startsWith` and the rest follow the shapes of `string` and `list`.
-   Byte strings compare lexicographically and can key a `HashMap` or a
-   `HashSet`. `b1 ++ b2` joins two.
+   Byte strings compare lexicographically and can key a `hash_map.HashMap`
+   or a `hash_set.HashSet`. `b1 ++ b2` joins two.
 
    Several names here (`length`, `isEmpty`, `fold`, `map`, `forEach`,
    `any`, `all`) are also prelude names, and others are exported by `list`
@@ -423,7 +423,7 @@ contains needle haystack = isSome (indexOf needle haystack)
    False -}
 export
 startsWith : Bytes -> Bytes -> Bool
-startsWith (Bytes nb) (Bytes bb) =
+startsWith (prefix@(Bytes nb)) (b@(Bytes bb)) =
   let nlen = byteBlockLength nb
   nlen <= byteBlockLength bb && matchesAtGo nb bb 0 0 nlen
 
@@ -440,7 +440,7 @@ startsWith (Bytes nb) (Bytes bb) =
    False -}
 export
 endsWith : Bytes -> Bytes -> Bool
-endsWith (Bytes nb) (Bytes bb) =
+endsWith (suffix@(Bytes nb)) (b@(Bytes bb)) =
   let nlen = byteBlockLength nb
   let hlen = byteBlockLength bb
   nlen <= hlen && matchesAtGo nb bb 0 (hlen - nlen) nlen
@@ -573,7 +573,8 @@ map f (Bytes bb) =
 
 -- # Combining
 
-{- | The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
+{- | The bytes of the left operand followed by the bytes of the right, in a
+   new byte string.
 
    `b1 ++ b2` reaches this instance from every position: infix, in an
    operator section, in a body constrained by `Semigroup`, and bound to a
@@ -690,7 +691,8 @@ hashGo acc bb i n =
     hashGo (acc * 33 + hashInt (byteBlockGetUnsafe i bb)) bb (i + 1) n
 
 {- | A byte string hashes as the `Array Int` of its bytes does, so `Bytes`
-   can key a `HashMap` or a `HashSet`. Two byte strings that are equal under
+   can key a `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings
+   that are equal under
    `Eq Bytes` hash alike.
 
    > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
@@ -1038,9 +1040,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "startsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
+(DFunDef false "startsWith" ((PAs "prefix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
 (DTypeSig true "endsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
+(DFunDef false "endsWith" ((PAs "suffix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DTypeSig true "fold" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyVar "b"))))))
@@ -1164,9 +1166,9 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "contains" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
 (DFunDef false "contains" ((PVar "needle") (PVar "haystack")) (EApp (EVar "isSome") (EApp (EApp (EVar "indexOf") (EVar "needle")) (EVar "haystack"))))
 (DTypeSig true "startsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "startsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
+(DFunDef false "startsWith" ((PAs "prefix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (ELit (LInt 0))) (EVar "nlen"))))))
 (DTypeSig true "endsWith" (TyFun (TyCon "Bytes") (TyFun (TyCon "Bytes") (TyCon "Bool"))))
-(DFunDef false "endsWith" ((PCon "Bytes" (PVar "nb")) (PCon "Bytes" (PVar "bb"))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
+(DFunDef false "endsWith" ((PAs "suffix" (PCon "Bytes" (PVar "nb"))) (PAs "b" (PCon "Bytes" (PVar "bb")))) (EBlock (DoLet false false (PVar "nlen") (EApp (EVar "byteBlockLength") (EVar "nb"))) (DoLet false false (PVar "hlen") (EApp (EVar "byteBlockLength") (EVar "bb"))) (DoExpr (EBinOp "&&" (EBinOp "<=" (EVar "nlen") (EVar "hlen")) (EApp (EApp (EApp (EApp (EApp (EVar "matchesAtGo") (EVar "nb")) (EVar "bb")) (ELit (LInt 0))) (EBinOp "-" (EVar "hlen") (EVar "nlen"))) (EVar "nlen"))))))
 (DTypeSig false "foldGo" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "ByteBlock") (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b"))))))))
 (DFunDef false "foldGo" ((PVar "f") (PVar "acc") (PVar "bb") (PVar "i") (PVar "n")) (EIf (EBinOp ">=" (EVar "i") (EVar "n")) (EVar "acc") (EApp (EApp (EApp (EApp (EApp (EVar "foldGo") (EVar "f")) (EApp (EApp (EVar "f") (EVar "acc")) (EApp (EApp (EVar "byteBlockGetUnsafe") (EVar "i")) (EVar "bb")))) (EVar "bb")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "n"))))
 (DTypeSig true "fold#shadow" (TyFun (TyFun (TyVar "b") (TyFun (TyCon "Int") (TyEffect () (Some "e") (TyVar "b")))) (TyFun (TyVar "b") (TyFun (TyCon "Bytes") (TyEffect () (Some "e") (TyVar "b"))))))

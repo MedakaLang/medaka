@@ -35,6 +35,7 @@ directory, which a test does not control.
 
 ```
 underRoot : String -> <IO> String
+underRoot rel
 ```
 
 The path `rel`, relative to the tree root, resolved under `medakaRoot`.
@@ -45,8 +46,8 @@ The path `rel`, relative to the tree root, resolved under `medakaRoot`.
 medakaBin : <IO> String
 ```
 
-The Medaka binary to spawn: `MEDAKA`, or `medaka` in `medakaRoot`
-when it is unset.
+The Medaka binary to spawn: `MEDAKA`, or the binary named medaka in
+`medakaRoot` when it is unset.
 
 The default is a path, so an unset `MEDAKA` never resolves to another
 build on `PATH`.
@@ -68,6 +69,7 @@ instead of the whole job.
 
 ```
 boundedVerb : String -> List String -> <Exec _> Result String (Int, String, String)
+boundedVerb cmd args
 ```
 
 Runs `cmd` with `args` as `io.runVerb` does, killing it after
@@ -84,13 +86,14 @@ Ok (3, "hi", "")
 
 ```
 boundedVerbSeconds : Int -> String -> List String -> <Exec _> Result String (Int, String, String)
+boundedVerbSeconds secs cmd args
 ```
 
 `boundedVerb` with the time limit given as `secs`, for a spawn that
 needs longer than `spawnTimeoutSeconds`.
 
-`cmd` is looked up on `PATH` through `env`, so a command that does not
-exist reports exit 127 with `env`'s message on stderr rather than a
+`cmd` is looked up on `PATH` through the env command, so a command that
+does not exist reports exit 127 with env's message on stderr rather than a
 spawn that never ran. The wording of that message varies between
 systems.
 
@@ -124,6 +127,7 @@ Ok True
 
 ```
 expectSpawnOk : String -> List String -> <Exec _> Expectation
+expectSpawnOk cmd args
 ```
 
 Passes when running `cmd` with `args` exits 0.
@@ -142,6 +146,7 @@ Fail "`false` exited 1: \"\"" "exit 0" "exit 1"
 
 ```
 expectSpawnFails : String -> List String -> String -> <Exec _> Expectation
+expectSpawnFails cmd args needle
 ```
 
 Passes when running `cmd` with `args` exits nonzero and its output
@@ -162,6 +167,7 @@ Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing \"b
 
 ```
 expectSpawnFailsAll : String -> List String -> List String -> <Exec _> Expectation
+expectSpawnFailsAll cmd args needles
 ```
 
 Passes when running `cmd` with `args` exits nonzero and its output
@@ -185,6 +191,7 @@ Fail "`true` exited 0, expected it to fail" "nonzero exit, output containing [\"
 
 ```
 expectSpawnOkLine : String -> List String -> String -> <Exec _> Expectation
+expectSpawnOkLine cmd args wantLine
 ```
 
 Passes when running `cmd` with `args` exits 0 and one whole line of its
@@ -207,6 +214,7 @@ Fail "`echo said hi` exited 0 but no output line equals \"hi\": \"said hi\\n\"" 
 
 ```
 testFileStem : String -> Option String
+testFileStem name
 ```
 
 The stem of a `*_test.mdk` file name, or `None` when `name` is not one.
@@ -222,6 +230,7 @@ None
 
 ```
 testAssertionCount : String -> List String -> <Exec _, IO> Result String Int
+testAssertionCount path extraArgs
 ```
 
 The number of assertions `medaka test --json` reports as passed for the
@@ -236,6 +245,7 @@ failing run carries the tail of its output.
 
 ```
 unrosteredUnits : (String -> Option String) -> List String -> List String -> List String
+unrosteredUnits namer known entries
 ```
 
 The units `namer` finds among `entries` that are absent from `known`.
@@ -252,6 +262,7 @@ for an entry that is not a unit, which is skipped.
 
 ```
 missingUnits : (String -> Option String) -> List String -> List String -> List String
+missingUnits namer wanted entries
 ```
 
 The names in `wanted` for which `namer` finds no entry in `entries`.
@@ -269,6 +280,7 @@ the entries.
 
 ```
 unrosteredTestFiles : String -> List String -> <FileRead _> Result String (List String)
+unrosteredTestFiles dir known
 ```
 
 The `*_test.mdk` stems in `dir` that are absent from `known`.
@@ -280,6 +292,7 @@ test file in `dir` is accounted for.
 
 ```
 missingTestFiles : String -> List String -> <FileRead _> Result String (List String)
+missingTestFiles dir wanted
 ```
 
 The stems in `wanted` that name no `*_test.mdk` file in `dir`.
@@ -292,6 +305,7 @@ Reports a roster row whose file is no longer present.
 
 ```
 ungradedRosterRows : String -> String -> List String -> List String -> List String
+ungradedRosterRows titlePrefix callOpen roster sourceLines
 ```
 
 The names in `roster` that no `test` block in `sourceLines` both names
@@ -314,6 +328,7 @@ roster comes before the scanned lines, as in `unrosteredUnits`.
 
 ```
 disagreeingFloorBlocks : String -> String -> List String -> List String
+disagreeingFloorBlocks titlePrefix callOpen sourceLines
 ```
 
 The blocks in `sourceLines` whose title and grading call name different

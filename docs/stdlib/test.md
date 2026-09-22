@@ -45,6 +45,7 @@ Pass "" ""
 
 ```
 fail : String -> Expectation
+fail msg
 ```
 
 An assertion that fails with a message.
@@ -88,6 +89,7 @@ Fail "expected False but got True" "False" "True"
 
 ```
 expectSatisfies : Debug a => String -> (a -> Bool) -> a -> Expectation
+expectSatisfies what p x
 ```
 
 Passes when `x` satisfies `p`, naming the property as `what`.
@@ -107,6 +109,7 @@ Fail "expected a positive number but got 0" "a positive number" "0"
 
 ```
 expectEqual : (Eq a, Debug a) => a -> a -> Expectation
+expectEqual expected actual
 ```
 
 Passes when the two values are equal.
@@ -124,6 +127,7 @@ Fail "expected 1 but got 2" "1" "2"
 
 ```
 expectNotEqual : (Eq a, Debug a) => a -> a -> Expectation
+expectNotEqual expected actual
 ```
 
 Passes when the two values differ.
@@ -139,6 +143,7 @@ Fail "expected values to differ but both were 1" "1" "1"
 
 ```
 expectLessThan : (Ord a, Debug a) => a -> a -> Expectation
+expectLessThan expected actual
 ```
 
 Passes when `actual` is less than `expected`.
@@ -154,6 +159,7 @@ Fail "expected 15 < 10" "10" "15"
 
 ```
 expectGreaterThan : (Ord a, Debug a) => a -> a -> Expectation
+expectGreaterThan expected actual
 ```
 
 Passes when `actual` is greater than `expected`.
@@ -169,6 +175,7 @@ Fail "expected 3 > 10" "10" "3"
 
 ```
 expectAtLeast : (Ord a, Debug a) => a -> a -> Expectation
+expectAtLeast floor actual
 ```
 
 Passes when `actual` is at least `floor`.
@@ -188,6 +195,7 @@ Fail "expected 2 >= 3" "3" "2"
 
 ```
 expectAtMost : (Ord a, Debug a) => a -> a -> Expectation
+expectAtMost ceiling actual
 ```
 
 Passes when `actual` is at most `ceiling`.
@@ -203,6 +211,7 @@ Fail "expected 5 <= 3" "3" "5"
 
 ```
 expectOk : (Debug e, Debug a) => Result e a -> Expectation
+expectOk r
 ```
 
 Passes when the result is `Ok`.
@@ -218,6 +227,7 @@ Fail "expected Ok but got Err \"boom\"" "Ok _" "Err \"boom\""
 
 ```
 expectErr : (Debug e, Debug a) => Result e a -> Expectation
+expectErr r
 ```
 
 Passes when the result is `Err`.
@@ -233,6 +243,7 @@ Fail "expected Err but got Ok 1" "Err _" "Ok 1"
 
 ```
 expectErrContains : (Debug e, Debug a, Display e) => String -> Result e a -> Expectation
+expectErrContains needle r
 ```
 
 Passes when the result is an `Err` whose message contains `needle`.
@@ -253,6 +264,7 @@ Fail "expected Err but got Ok 1" "Err containing \"no such column\"" "Ok 1"
 
 ```
 expectOkThen : (Debug e, Display e) => (a -> Expectation) -> Result e a -> Expectation
+expectOkThen k _
 ```
 
 Runs `k` on the `Ok` payload, or fails naming the error.
@@ -272,6 +284,7 @@ Fail "expected Ok but got Err boom" "Ok _" "Err \"boom\""
 
 ```
 expectSome : Debug a => Option a -> Expectation
+expectSome o
 ```
 
 Passes when the option is `Some`.
@@ -287,6 +300,7 @@ Fail "expected Some but got None" "Some _" "None"
 
 ```
 expectNone : Debug a => Option a -> Expectation
+expectNone o
 ```
 
 Passes when the option is `None`.
@@ -302,6 +316,7 @@ Fail "expected None but got Some 1" "None" "Some 1"
 
 ```
 expectWithin : Float -> Float -> Float -> Expectation
+expectWithin expected actual eps
 ```
 
 Passes when `actual` is within `eps` of `expected`.
@@ -317,6 +332,7 @@ Fail "expected 2.0 within 0.01 of 1.0" "1.0" "2.0"
 
 ```
 expectTextContainsAll : List String -> String -> Expectation
+expectTextContainsAll needles actual
 ```
 
 Passes when `actual` contains every string in `needles`.
@@ -335,6 +351,7 @@ missing string, and the operands are the full requirement and the text.
 
 ```
 expectLineContainsAll : List String -> String -> Expectation
+expectLineContainsAll needles actual
 ```
 
 Passes when one line of `actual` contains every string in `needles`.
@@ -354,6 +371,7 @@ in different parts of a report.
 
 ```
 expectTextStartsWithAndContains : String -> List String -> String -> Expectation
+expectTextStartsWithAndContains prefix needles actual
 ```
 
 Passes when `actual` begins with `prefix` and contains every string in
@@ -370,6 +388,7 @@ Passes when `actual` begins with `prefix` and contains every string in
 
 ```
 expectEqualText : String -> String -> Expectation
+expectEqualText expected actual
 ```
 
 Passes when two texts are equal after removing one trailing
@@ -395,6 +414,7 @@ Fail "line 1: expected \"value: 10\" but got \"value: 1\"" "value: 10" "value: 1
 
 ```
 expectEqualLines : String -> String -> Expectation
+expectEqualLines expected actual
 ```
 
 Passes when two texts are equal, naming the first line at which they
@@ -417,6 +437,7 @@ Fail "line 2: expected nothing but got \"b\" (1 line remaining)" "a" "a\nb"
 
 ```
 expectAll : List Expectation -> Expectation
+expectAll es
 ```
 
 Passes when every expectation in the list passes.
@@ -434,6 +455,7 @@ Fail "oops" "" ""
 
 ```
 labelFail : String -> Expectation -> Expectation
+labelFail label _
 ```
 
 The expectation with `label` prefixed onto its message when it is a
@@ -453,6 +475,7 @@ Fail "t1: mismatch" "" ""
 
 ```
 expectEach : List (String, Expectation) -> Expectation
+expectEach rows
 ```
 
 Passes when every labelled expectation passes, naming the first that
@@ -474,6 +497,7 @@ Fail "b: oops" "" ""
 
 ```
 expectNoFindings : String -> Result String (List String) -> Expectation
+expectNoFindings what _
 ```
 
 Passes when a check ran and reported nothing.
@@ -496,6 +520,7 @@ Fail "hardening: could not read pds.service" "no findings" "the check could not 
 
 ```
 expectFindings : String -> Result String (List String) -> Expectation
+expectFindings what _
 ```
 
 Passes when a check ran and reported at least one finding.
@@ -577,6 +602,7 @@ The actual operand as the assertion rendered it.
 
 ```
 runTests : List (String, Unit -> Expectation) -> <IO> Bool
+runTests tests
 ```
 
 Runs a list of named tests, printing each result and a summary.
@@ -590,6 +616,7 @@ Returns `True` when every test passes.
 
 ```
 expectGolden : String -> String -> <FileRead _> Expectation
+expectGolden path actual
 ```
 
 Compares `actual` against the contents of the golden file at `path`,

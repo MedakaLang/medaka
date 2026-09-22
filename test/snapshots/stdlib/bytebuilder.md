@@ -5,8 +5,8 @@ stages=DESUGAR,MARK
 {- | A buffer for building byte arrays.
 
    A `Builder` collects bytes in emission order. Create one with
-   `newBuilder`, append with the `emit` functions, and take the result with
-   `buildArray` or `buildBytes`. Each `emit` function writes the byte order
+   `newBuilder`, append with the emit functions, and take the result with
+   `buildArray` or `buildBytes`. Each emit function writes the byte order
    that `byteparser`'s matching reader expects, so a value written here and
    read there comes back unchanged. -}
 
@@ -31,7 +31,7 @@ import bytes.{
 -- | A byte buffer. Build one with `newBuilder`.
 export data Builder = Builder (Ref ByteBlock) (Ref Int)
 
--- | A new, empty builder. The backing block grows on the first `emit`.
+-- | A new, empty builder. The backing block grows on the first emit.
 export
 newBuilder : Unit -> Builder
 newBuilder _ = Builder (Ref (byteBlockMake 0)) (Ref 0)
@@ -122,8 +122,8 @@ emitBytes src (Builder backing len) =
 
    The byte string is the builder's own block, so it may be longer than the
    count, and bytes at or past the count are unwritten scratch. A later
-   `emit` writes into that block or replaces it, so read the first `len`
-   bytes before emitting again. `buildBytes` is the copying form.
+   emit writes into that block or replaces it, so read the counted bytes
+   before emitting again. `buildBytes` is the copying form.
 
    > let buf = newBuilder () in let _ = emitBytes (encodeUtf8 "hey") buf in let (_, n) = builderParts buf in n
    3 -}

@@ -20,6 +20,7 @@ backend they trap.
 
 ```
 toRadians : Float -> Float
+toRadians deg
 ```
 
 An angle in degrees converted to radians.
@@ -33,6 +34,7 @@ An angle in degrees converted to radians.
 
 ```
 toDegrees : Float -> Float
+toDegrees rad
 ```
 
 An angle in radians converted to degrees.
@@ -48,6 +50,7 @@ An angle in radians converted to degrees.
 
 ```
 isNaN : Float -> Bool
+isNaN x
 ```
 
 Whether `x` is NaN, the one value not equal to itself.
@@ -61,6 +64,7 @@ False
 
 ```
 isInfinite : Float -> Bool
+isInfinite x
 ```
 
 Whether `x` is positive or negative infinity.
@@ -74,6 +78,7 @@ False
 
 ```
 isFinite : Float -> Bool
+isFinite x
 ```
 
 Whether `x` is an ordinary number: neither NaN nor infinite.
@@ -89,6 +94,7 @@ True
 
 ```
 lerp : Float -> Float -> Float -> Float
+lerp a b t
 ```
 
 The point a fraction `t` of the way from `a` to `b`: `a + (b - a) * t`.
@@ -107,6 +113,7 @@ The point a fraction `t` of the way from `a` to `b`: `a + (b - a) * t`.
 
 ```
 approxEq : Float -> Float -> Float -> Bool
+approxEq a b eps
 ```
 
 Whether `a` and `b` differ by at most `eps`.
@@ -128,6 +135,7 @@ False
 
 ```
 logBase : Float -> Float -> Float
+logBase base x
 ```
 
 The logarithm of `x` in base `base`, computed as `log x / log base`.
@@ -146,6 +154,7 @@ exactly `3.0`.
 
 ```
 floorDiv : Int -> Int -> Int
+floorDiv a b
 ```
 
 Division rounding the quotient towards negative infinity.
@@ -164,6 +173,7 @@ operands. This is the form that calendar and index arithmetic want.
 
 ```
 floorMod : Int -> Int -> Int
+floorMod a b
 ```
 
 The remainder that goes with `floorDiv`, taking the sign of the
@@ -183,6 +193,7 @@ the sign of the dividend instead.
 
 ```
 gcd : Int -> Int -> Int
+gcd a b
 ```
 
 The greatest common divisor, never negative.
@@ -198,6 +209,7 @@ The greatest common divisor, never negative.
 
 ```
 lcm : Int -> Int -> Int
+lcm a b
 ```
 
 The least common multiple, never negative.
@@ -213,6 +225,7 @@ The least common multiple, never negative.
 
 ```
 powInt : Int -> Int -> Int
+powInt b n
 ```
 
 `b` raised to the integer power `n`.

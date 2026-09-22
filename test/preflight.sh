@@ -1306,6 +1306,10 @@ while IFS= read -r f; do
     # `_fixture_dir_for` cannot see, and exactly what someone edits ALONE when
     # the wrapper-callers gate reds (S-migrate-tool-consumers-remainder).
     test/CHECK-WRAPPER-CALLERS.txt) add 'diff_compiler_check_wrapper_callers' ;;
+    # Fifth ledger, same shape: the names the stdlib reference may backtick
+    # without showing them on the page, read by the reference gate's
+    # name-visibility check and edited ALONE when that check reds.
+    test/STDLIB-DOC-NAME-EXCEPTIONS.txt) add 'diff_compiler_doc_stdlib_reference' ;;
 
     # #1315: engine value pins (`test/engine_value_pins/<corpus>/<name>.pin`, e.g.
     # `test/engine_value_pins/llvmM/foo.pin`) are the same structural blind spot as

@@ -41,6 +41,7 @@ Instances: [`Index`](#index-mutbytes-int-int), [`Debug`](#debug-mutbytes)
 
 ```
 make : Int -> MutBytes
+make n
 ```
 
 A mutable byte string of `n` zero bytes.
@@ -58,6 +59,7 @@ Some 0
 
 ```
 length : MutBytes -> Int
+length mb
 ```
 
 The number of bytes in `mb`, fixed when it was allocated.
@@ -71,6 +73,7 @@ The number of bytes in `mb`, fixed when it was allocated.
 
 ```
 get : Int -> MutBytes -> Option Int
+get i mb
 ```
 
 The byte at index `i` of `mb`, or `None` when `i` is out of range.
@@ -93,6 +96,7 @@ None
 
 ```
 setInPlace : Int -> Int -> MutBytes -> Unit
+setInPlace i v mb
 ```
 
 Replaces the byte at index `i` of `mb` with `v`.
@@ -109,6 +113,7 @@ Some 65
 
 ```
 fill : Int -> MutBytes -> Unit
+fill v mb
 ```
 
 Replaces every byte of `mb` with `v`.
@@ -124,6 +129,7 @@ Panics when `v` falls outside `0` to `255`.
 
 ```
 blit : MutBytes -> Int -> MutBytes -> Int -> Int -> Unit
+blit src srcOff dst dstOff len
 ```
 
 Copies `len` bytes from `src`, starting at `srcOff`, into `dst`, starting
@@ -148,6 +154,7 @@ Every source byte is read as it was before any byte was written.
 
 ```
 freeze : MutBytes -> Bytes
+freeze mb
 ```
 
 The bytes of `mb` as an immutable `Bytes`.
@@ -165,6 +172,7 @@ The result is a copy, so a write to `mb` afterwards does not reach it.
 
 ```
 thaw : Bytes -> MutBytes
+thaw b
 ```
 
 A mutable copy of `b`.

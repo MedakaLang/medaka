@@ -27,6 +27,7 @@ Instances: [`Mappable`](#mappable-nonempty), [`Foldable`](#foldable-nonempty), `
 
 ```
 singleton : a -> NonEmpty a
+singleton x
 ```
 
 A list holding one element.

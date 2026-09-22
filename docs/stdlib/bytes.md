@@ -17,8 +17,8 @@ sibling, for building a byte string a byte at a time.
 `length` is the byte count, `get` reads one byte as an `Option`, and
 `b[i]` is the panicking form. `slice`, `take`, `drop`, `indexOf`,
 `startsWith` and the rest follow the shapes of `string` and `list`.
-Byte strings compare lexicographically and can key a `HashMap` or a
-`HashSet`. `b1 ++ b2` joins two.
+Byte strings compare lexicographically and can key a `hash_map.HashMap`
+or a `hash_set.HashSet`. `b1 ++ b2` joins two.
 
 Several names here (`length`, `isEmpty`, `fold`, `map`, `forEach`,
 `any`, `all`) are also prelude names, and others are exported by `list`
@@ -57,6 +57,7 @@ Instances: [`Index`](#index-bytes-int-int), [`Slice`](#slice-bytes), [`Semigroup
 
 ```
 fromArray : Array Int -> Option Bytes
+fromArray arr
 ```
 
 The byte string holding the elements of `arr`, or `None` when any element
@@ -75,6 +76,7 @@ None
 
 ```
 fromArrayAssumeByteDomain : Array Int -> Bytes
+fromArrayAssumeByteDomain arr
 ```
 
 The byte string holding the elements of `arr`, keeping only the low eight
@@ -142,6 +144,7 @@ False
 
 ```
 get : Int -> Bytes -> Option Int
+get i _
 ```
 
 The byte at index `i`, or `None` when `i` is out of range.
@@ -162,6 +165,7 @@ None
 
 ```
 sliceClamped : Int -> Int -> Bytes -> Bytes
+sliceClamped lo hi _
 ```
 
 The bytes over `[lo, hi)`, copied into a new byte string, with both
@@ -184,6 +188,7 @@ error.
 
 ```
 take : Int -> Bytes -> Bytes
+take n b
 ```
 
 The first `n` bytes of `b`, or all of them when `b` is shorter. Empty
@@ -202,6 +207,7 @@ The result is a copy, as `slice`'s is.
 
 ```
 drop : Int -> Bytes -> Bytes
+drop n b
 ```
 
 The bytes of `b` after the first `n`. Empty when `n` is at least `b`'s
@@ -220,6 +226,7 @@ The result is a copy, as `slice`'s is.
 
 ```
 splitAt : Int -> Bytes -> (Bytes, Bytes)
+splitAt n b
 ```
 
 The first `n` bytes of `b`, and the rest.
@@ -236,6 +243,7 @@ split clamp into `b`.
 
 ```
 elemIndex : Int -> Bytes -> Option Int
+elemIndex v _
 ```
 
 The index of the first byte equal to `v`, or `None` when no byte is.
@@ -256,6 +264,7 @@ None
 
 ```
 elemIndexWithin : Int -> Int -> Int -> Bytes -> Option Int
+elemIndexWithin lo hi v _
 ```
 
 The index of the first byte equal to `v` within `[lo, hi)`, or `None`
@@ -275,6 +284,7 @@ None
 
 ```
 indexOfWithin : Int -> Int -> Bytes -> Bytes -> Option Int
+indexOfWithin lo hi _ _
 ```
 
 The index of the first occurrence of `needle` within `[lo, hi)`, or
@@ -297,6 +307,7 @@ Some 2
 
 ```
 indexOf : Bytes -> Bytes -> Option Int
+indexOf needle bytes
 ```
 
 The index of the first occurrence of `needle` in `bytes`, or `None`.
@@ -317,6 +328,7 @@ Some 0
 
 ```
 lastIndexOf : Bytes -> Bytes -> Option Int
+lastIndexOf needle haystack
 ```
 
 The index of the last occurrence of `needle` in `haystack`, or `None`.
@@ -335,6 +347,7 @@ None
 
 ```
 contains : Bytes -> Bytes -> Bool
+contains needle haystack
 ```
 
 Whether `needle` occurs anywhere in `haystack`. The empty needle occurs
@@ -351,6 +364,7 @@ False
 
 ```
 startsWith : Bytes -> Bytes -> Bool
+startsWith prefix b
 ```
 
 Whether `b` begins with `prefix`. The empty prefix begins every byte
@@ -367,6 +381,7 @@ False
 
 ```
 endsWith : Bytes -> Bytes -> Bool
+endsWith suffix b
 ```
 
 Whether `b` ends with `suffix`. The empty suffix ends every byte string.
@@ -384,6 +399,7 @@ False
 
 ```
 fold : (b -> Int -> <e> b) -> b -> Bytes -> <e> b
+fold f init _
 ```
 
 The result of applying `f` to an accumulator and each byte of `b` in
@@ -404,6 +420,7 @@ Each byte is passed as an `Int`. This is a plain function, not
 
 ```
 forEach : (Int -> <e> Unit) -> Bytes -> <e> Unit
+forEach f _
 ```
 
 Runs `f` on each byte of `b` in order, for its effect.
@@ -417,6 +434,7 @@ Runs `f` on each byte of `b` in order, for its effect.
 
 ```
 any : (Int -> <e> Bool) -> Bytes -> <e> Bool
+any f _
 ```
 
 Whether at least one byte of `b` satisfies `f`. `False` on an empty byte
@@ -433,6 +451,7 @@ False
 
 ```
 all : (Int -> <e> Bool) -> Bytes -> <e> Bool
+all f _
 ```
 
 Whether every byte of `b` satisfies `f`. `True` on an empty byte string.
@@ -449,6 +468,7 @@ False
 
 ```
 map : (Int -> <e> Int) -> Bytes -> <e> Bytes
+map f _
 ```
 
 The byte string of the same length holding `f` applied to each byte of
@@ -467,6 +487,7 @@ Panics when `f` answers a value outside `0` to `255`.
 
 ```
 concat : List Bytes -> Bytes
+concat parts
 ```
 
 The byte strings joined end to end, in one new byte string.
@@ -484,6 +505,7 @@ Some "héllo"
 
 ```
 encodeUtf8 : String -> Bytes
+encodeUtf8 s
 ```
 
 The UTF-8 encoding of `s`.
@@ -561,6 +583,7 @@ as it is.
 
 ```
 fromByteBlockPrefix : Int -> ByteBlock -> Bytes
+fromByteBlockPrefix n bb
 ```
 
 The first `n` bytes of `bb`, copied into a byte string.
@@ -580,6 +603,7 @@ Panics when `n` is negative or greater than the block's length.
 
 ```
 adoptByteBlockUnsafe : ByteBlock -> Bytes
+adoptByteBlockUnsafe bb
 ```
 
 The byte string holding `bb` itself, with no copy.
@@ -655,7 +679,8 @@ the range runs outside the byte string, as `Slice (Array a)` does.
 impl Semigroup Bytes
 ```
 
-The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
+The bytes of the left operand followed by the bytes of the right, in a
+new byte string.
 
 `b1 ++ b2` reaches this instance from every position: infix, in an
 operator section, in a body constrained by `Semigroup`, and bound to a
@@ -725,7 +750,8 @@ impl Hashable Bytes
 ```
 
 A byte string hashes as the `Array Int` of its bytes does, so `Bytes`
-can key a `HashMap` or a `HashSet`. Two byte strings that are equal under
+can key a `hash_map.HashMap` or a `hash_set.HashSet`. Two byte strings
+that are equal under
 `Eq Bytes` hash alike.
 
 ```medaka

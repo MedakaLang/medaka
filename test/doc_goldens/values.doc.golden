@@ -4,11 +4,13 @@
 
 ```
 id : a -> a
+id x
 ```
 
 ## `addOne`
 
 ```
 addOne : Int -> Int
+addOne x
 ```
 

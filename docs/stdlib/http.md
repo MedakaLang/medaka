@@ -125,6 +125,7 @@ The ceiling on a body kept as raw bytes by `decodeRequestBody`.
 
 ```
 checkHttpRequestBytes : Int -> Result String Unit
+checkHttpRequestBytes size
 ```
 
 `Ok` when `size` is within `maxHttpRequestBytes`, `Err` with the
@@ -139,6 +140,7 @@ True
 
 ```
 checkHttpHeaderBytes : Int -> Result String Unit
+checkHttpHeaderBytes size
 ```
 
 `Ok` when `size` is within `maxHttpHeaderBytes`, `Err` with the
@@ -148,6 +150,7 @@ diagnostic the framer reports otherwise.
 
 ```
 checkHttpBodyBytes : Int -> Result String Unit
+checkHttpBodyBytes size
 ```
 
 `Ok` when `size` is within `maxHttpBodyBytes`, `Err` with the diagnostic
@@ -157,6 +160,7 @@ the framer reports otherwise.
 
 ```
 checkHttpRequestLineBytes : Int -> Result String Unit
+checkHttpRequestLineBytes size
 ```
 
 `Ok` when `size` is within `maxHttpRequestLineBytes`, `Err` with the
@@ -166,6 +170,7 @@ diagnostic the framer reports otherwise.
 
 ```
 checkHttpResponseStatusLineBytes : Int -> Result String Unit
+checkHttpResponseStatusLineBytes size
 ```
 
 `Ok` when `size` is within `maxHttpResponseStatusLineBytes`, `Err` with
@@ -175,6 +180,7 @@ the diagnostic the framer reports otherwise.
 
 ```
 checkHttpResponseChunkBytes : Int -> Result String Unit
+checkHttpResponseChunkBytes size
 ```
 
 `Ok` when `size` is within `maxHttpResponseChunkBytes`, `Err` with the
@@ -184,6 +190,7 @@ diagnostic the framer reports otherwise.
 
 ```
 checkHttpHeaderFields : Int -> Result String Unit
+checkHttpHeaderFields count
 ```
 
 `Ok` when `count` is within `maxHttpHeaderFields`, `Err` with the
@@ -193,6 +200,7 @@ diagnostic the framer reports otherwise.
 
 ```
 checkHttpTrailerFields : Int -> Result String Unit
+checkHttpTrailerFields count
 ```
 
 `Ok` when `count` is within `maxHttpTrailerFields`, `Err` with the
@@ -202,6 +210,7 @@ diagnostic the framer reports otherwise.
 
 ```
 checkHttpChunks : Int -> Result String Unit
+checkHttpChunks count
 ```
 
 `Ok` when `count` is within `maxHttpChunks`, `Err` with the diagnostic
@@ -211,6 +220,7 @@ the framer reports otherwise.
 
 ```
 checkJsonBodyBytes : Int -> Result String Unit
+checkJsonBodyBytes size
 ```
 
 `Ok` when `size` is within `maxJsonBodyBytes`, `Err` with the diagnostic
@@ -225,6 +235,7 @@ True
 
 ```
 checkTextBodyBytes : Int -> Result String Unit
+checkTextBodyBytes size
 ```
 
 `Ok` when `size` is within `maxTextBodyBytes`, `Err` with the diagnostic
@@ -234,6 +245,7 @@ checkTextBodyBytes : Int -> Result String Unit
 
 ```
 checkRawBodyBytes : Int -> Result String Unit
+checkRawBodyBytes size
 ```
 
 `Ok` when `size` is within `maxRawBodyBytes`, `Err` with the diagnostic
@@ -354,12 +366,13 @@ requestKeepAlive : Request -> Bool
 ```
 
 Whether the connection stays open after this request. `False` when a
-`Connection` field lists `close`, otherwise `True`.
+`Connection` field lists `"close"`, otherwise `True`.
 
 ### `isTokenByte`
 
 ```
 isTokenByte : Int -> Bool
+isTokenByte byte
 ```
 
 Whether `byte` is one of the ASCII bytes HTTP allows in a token, such as
@@ -369,6 +382,7 @@ a method or a field name.
 
 ```
 findByte : Array Int -> Int -> Int -> Int -> Option Int
+findByte value pos end wanted
 ```
 
 The index of the first `wanted` in `value[pos, end)`, or `None`. No
@@ -378,6 +392,7 @@ element at or past `end` is read.
 
 ```
 trimLeftOws : Array Int -> Int -> Int -> Int
+trimLeftOws value pos end
 ```
 
 The index of the first byte in `value[pos, end)` that is not a space or
@@ -387,6 +402,7 @@ a tab, or `end` when they all are.
 
 ```
 trimRightOws : Array Int -> Int -> Int -> Int
+trimRightOws value start end
 ```
 
 The index one past the last byte in `value[start, end)` that is not a
@@ -396,6 +412,7 @@ space or a tab, or `start` when they all are.
 
 ```
 parseFields : Bytes -> Int -> Bool -> Result HttpParseFailure (List Header, Int)
+parseFields input pos trailer
 ```
 
 The fields of the header or trailer section starting at `pos`, and the
@@ -410,6 +427,7 @@ not appear in a trailer (`Content-Length`, `Transfer-Encoding`,
 
 ```
 hexDigit : Int -> Option Int
+hexDigit byte
 ```
 
 The value of one ASCII hexadecimal digit, or `None` when `byte` is not
@@ -419,6 +437,7 @@ one. Both letter cases are accepted.
 
 ```
 skipOws : Array Int -> Int -> Int -> Int
+skipOws value pos end
 ```
 
 The index of the first byte in `value[pos, end)` that is not a space or
@@ -428,6 +447,7 @@ a tab, or `end` when they all are. The same as `trimLeftOws`.
 
 ```
 parseChunked : Bytes -> Int -> Result HttpParseFailure (Bytes, List Header, Int)
+parseChunked input pos
 ```
 
 The decoded bytes of the chunked body starting at `pos`, its trailer
@@ -440,6 +460,7 @@ section size are each checked against their `max*` ceiling.
 
 ```
 parseRequestClassified : Bytes -> Result HttpParseFailure Request
+parseRequestClassified input
 ```
 
 The request framed by a buffer that holds exactly one complete request,
@@ -458,7 +479,7 @@ data HttpFrame
 
 The verdict of a scan. `HttpNeedMore` means more bytes could still
 complete the request. `HttpFramedAt n` means a complete request ends at
-`n`, where the next one begins. `HttpFrameFailed` means no further byte
+that offset, where the next one begins. `HttpFrameFailed` means no further byte
 can help.
 
 ### `HttpScan`
@@ -499,6 +520,7 @@ including for a scan that has framed a whole request.
 
 ```
 httpScanBodyRemaining : HttpScan -> Int -> Option Int
+httpScanBodyRemaining _ avail
 ```
 
 How many bytes beyond the first `avail` the request still needs, or
@@ -513,6 +535,7 @@ chunk at a time, the answer is `None`.
 
 ```
 scanRequestBoundaryWithin : Bytes -> Int -> Int -> HttpScan -> (HttpFrame, HttpScan)
+scanRequestBoundaryWithin input avail start _
 ```
 
 The end of the first complete request at or after `start` within the
@@ -531,6 +554,7 @@ state was produced.
 
 ```
 scanRequestBoundaryFrom : Bytes -> Int -> HttpScan -> (HttpFrame, HttpScan)
+scanRequestBoundaryFrom input start scan
 ```
 
 `scanRequestBoundaryWithin` over every byte of `input`.
@@ -539,6 +563,7 @@ scanRequestBoundaryFrom : Bytes -> Int -> HttpScan -> (HttpFrame, HttpScan)
 
 ```
 scanRequestBoundary : Bytes -> Int -> HttpFrame
+scanRequestBoundary input start
 ```
 
 The verdict of `scanRequestBoundaryFrom` started from `httpScanStart`,
@@ -548,6 +573,7 @@ without the state.
 
 ```
 parseRequestAt : Bytes -> Int -> Int -> Result HttpParseFailure Request
+parseRequestAt input start end
 ```
 
 The request framed by `input[start, end)`, parsed as
@@ -558,6 +584,7 @@ buffer fail as `HttpMalformed`.
 
 ```
 parseRequest : Bytes -> Result String Request
+parseRequest input
 ```
 
 `parseRequestClassified` with the failure reduced to its diagnostic.
@@ -631,6 +658,7 @@ The byte length of the decoded body.
 
 ```
 parseResponseClassified : Array Int -> Result HttpParseFailure ParsedResponse
+parseResponseClassified input
 ```
 
 The response framed by a buffer that holds exactly one complete
@@ -645,6 +673,7 @@ buffer, unless its status code (1xx, 204, or 304) forbids a body.
 
 ```
 parseResponse : Array Int -> Result String ParsedResponse
+parseResponse input
 ```
 
 `parseResponseClassified` with the failure reduced to its diagnostic.
@@ -658,6 +687,7 @@ True
 
 ```
 responseBoundaryWithin : Array Int -> Int -> Option Int
+responseBoundaryWithin input avail
 ```
 
 The offset just past the first complete response in `input[0, avail)`,
@@ -671,6 +701,7 @@ when another message follows the response.
 
 ```
 responseBoundary : Array Int -> Option Int
+responseBoundary input
 ```
 
 `responseBoundaryWithin` over all bytes in `input`.
@@ -690,6 +721,7 @@ which checks the status, the reason phrase, and the fields.
 
 ```
 makeHeader : String -> Array Int -> Result String Header
+makeHeader name value
 ```
 
 A response field with `name` lowercased, or `Err` when `name` is not a
@@ -700,6 +732,7 @@ them, are rejected, so a field cannot split the response.
 
 ```
 makeResponse : Int -> String -> List Header -> Array Int -> Result String Response
+makeResponse status reason headers body
 ```
 
 A response with the given status, reason phrase, fields, and body, or
@@ -821,6 +854,7 @@ The lowercased subtype, such as `"plain"` for `text/plain`.
 
 ```
 parseMediaType : Array Int -> Result String MediaType
+parseMediaType value
 ```
 
 The media type in `value`, with type and subtype lowercased, or `Err`

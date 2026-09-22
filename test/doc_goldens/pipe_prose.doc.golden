@@ -26,6 +26,7 @@ Parse an expression.
 
 ```
 otherEntry : Int -> Int
+otherEntry x
 ```
 
 A second marked block, to show the marker is consumed once per BLOCK and

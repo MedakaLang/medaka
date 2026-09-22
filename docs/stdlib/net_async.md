@@ -4,6 +4,7 @@
 
 ```
 connect : String -> Int -> Async <Net _ | e> (Result String Connection)
+connect host port
 ```
 
 Connects to `host` on `port`, parking until the handshake finishes
@@ -18,6 +19,7 @@ before the `Err` is returned, so the caller has nothing to release.
 
 ```
 connectWithin : Duration -> String -> Int -> Async <Clock, Net _ | e> (Result String Connection)
+connectWithin d host port
 ```
 
 `connect` that gives up after `d` with `Err "timed out"`.
@@ -26,6 +28,7 @@ connectWithin : Duration -> String -> Int -> Async <Clock, Net _ | e> (Result St
 
 ```
 accept : Listener -> Async <Net _ | e> (Result String Connection)
+accept lis
 ```
 
 Accepts the next connection, parking until one arrives. The listener
@@ -35,6 +38,7 @@ and the accepted socket are switched to non-blocking mode.
 
 ```
 recv : Connection -> Int -> Async <Net _ | e> (Result String (Array Int))
+recv conn n
 ```
 
 Receives up to `n` bytes, parking until some arrive. An empty array is
@@ -44,6 +48,7 @@ end of stream.
 
 ```
 recvWithin : Duration -> Connection -> Int -> Async <Clock, Net _ | e> (Result String (Array Int))
+recvWithin d conn n
 ```
 
 `recv` that gives up after `d` with `Err "timed out"`.
@@ -52,6 +57,7 @@ recvWithin : Duration -> Connection -> Int -> Async <Clock, Net _ | e> (Result S
 
 ```
 recvBytes : Connection -> Int -> Async <Net _ | e> (Result String Bytes)
+recvBytes conn n
 ```
 
 `recv` delivering the chunk as a `Bytes`.
@@ -64,6 +70,7 @@ result is end of stream.
 
 ```
 recvBytesWithin : Duration -> Connection -> Int -> Async <Clock, Net _ | e> (Result String Bytes)
+recvBytesWithin d conn n
 ```
 
 `recvBytes` that gives up after `d` with `Err "timed out"`.
@@ -72,6 +79,7 @@ recvBytesWithin : Duration -> Connection -> Int -> Async <Clock, Net _ | e> (Res
 
 ```
 send : Connection -> Array Int -> Async <Net _ | e> (Result String Int)
+send conn bytes
 ```
 
 Sends what the socket will take now, parking until it takes some.
@@ -81,6 +89,7 @@ The count may be short; `sendAll` loops.
 
 ```
 sendAll : Connection -> Array Int -> Async <Net _ | e> (Result String Unit)
+sendAll conn bytes
 ```
 
 Sends every byte, parking as needed.
@@ -89,6 +98,7 @@ Sends every byte, parking as needed.
 
 ```
 sendAllWithin : Duration -> Connection -> Array Int -> Async <Clock, Net _ | e> (Result String Unit)
+sendAllWithin d conn bytes
 ```
 
 `sendAll` that gives up after `d` with `Err "timed out"`.
@@ -97,6 +107,7 @@ sendAllWithin : Duration -> Connection -> Array Int -> Async <Clock, Net _ | e> 
 
 ```
 sendString : Connection -> String -> Async <Net _ | e> (Result String Unit)
+sendString conn s
 ```
 
 Sends a string as UTF-8, parking as needed.
@@ -105,6 +116,7 @@ Sends a string as UTF-8, parking as needed.
 
 ```
 close : Connection -> Async <Net _ | e> (Result String Unit)
+close conn
 ```
 
 Closes a connection.
@@ -113,6 +125,7 @@ Closes a connection.
 
 ```
 closeListener : Listener -> Async <Net _ | e> (Result String Unit)
+closeListener lis
 ```
 
 Closes a listener. A task parked in `accept` on it wakes with an error,
@@ -122,6 +135,7 @@ which ends a `serve` loop.
 
 ```
 serve : Listener -> (Connection -> Async <Net _ | e> (Result String Unit)) -> Async <Net _ | e> (Result String Unit)
+serve lis handle
 ```
 
 Accepts connections until `accept` fails, running `handle` on each in

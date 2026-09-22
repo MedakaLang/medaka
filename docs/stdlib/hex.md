@@ -9,7 +9,7 @@ digits, most significant first. Encoding produces lowercase digits and
 decoding accepts either case.
 
 An element outside `0` to `255` is masked to its low eight bits on the way
-in rather than refused, so `-1` and `511` both encode as `ff`.
+in rather than refused, so `-1` and `511` both encode as `"ff"`.
 
 ## Encoding
 
@@ -17,6 +17,7 @@ in rather than refused, so `-1` and `511` both encode as `ff`.
 
 ```
 encodeBytes : Bytes -> String
+encodeBytes b
 ```
 
 The byte string as lowercase hex, two digits per byte.
@@ -30,6 +31,7 @@ The byte string as lowercase hex, two digits per byte.
 
 ```
 encode : Array Int -> String
+encode bytes
 ```
 
 The bytes as lowercase hex, two digits per byte.
@@ -43,6 +45,7 @@ The bytes as lowercase hex, two digits per byte.
 
 ```
 encodeUpper : Array Int -> String
+encodeUpper bytes
 ```
 
 The bytes as uppercase hex, two digits per byte.
@@ -56,6 +59,7 @@ The bytes as uppercase hex, two digits per byte.
 
 ```
 encodeString : String -> String
+encodeString s
 ```
 
 The UTF-8 bytes of a string as lowercase hex.
@@ -71,6 +75,7 @@ The UTF-8 bytes of a string as lowercase hex.
 
 ```
 decodeBytes : String -> Result String Bytes
+decodeBytes s
 ```
 
 The bytes written in a hex string, as a `Bytes`.
@@ -89,6 +94,7 @@ Err "hex.decode: invalid hex digit"
 
 ```
 decode : String -> Result String (Array Int)
+decode s
 ```
 
 The bytes written in a hex string.
@@ -107,6 +113,7 @@ Err "hex.decode: invalid hex digit"
 
 ```
 decodeString : String -> Result String String
+decodeString s
 ```
 
 The string whose UTF-8 bytes are written in a hex string.

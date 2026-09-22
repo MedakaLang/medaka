@@ -139,6 +139,7 @@ Instances: `Eq`, `Debug`
 
 ```
 switch : List String -> String -> FlagSpec
+switch ns s
 ```
 
 A flag that takes no value.
@@ -152,6 +153,7 @@ A flag that takes no value.
 
 ```
 value : List String -> String -> String -> FlagSpec
+value ns m s
 ```
 
 A flag that takes one value, shown in help under the given name.
@@ -165,6 +167,7 @@ A flag that takes one value, shown in help under the given name.
 
 ```
 valueList : List String -> String -> String -> FlagSpec
+valueList ns m s
 ```
 
 A flag whose value is a comma-separated list.
@@ -180,6 +183,7 @@ The parser does not split the list; the caller does.
 
 ```
 oneOf : List String -> List String -> String -> FlagSpec
+oneOf ns ms s
 ```
 
 A flag whose value must be one of a fixed set.
@@ -195,6 +199,7 @@ Help and the error for a bad value both list the set.
 
 ```
 intValue : List String -> String -> String -> FlagSpec
+intValue ns m s
 ```
 
 A flag whose value must be an integer.
@@ -208,6 +213,7 @@ A flag whose value must be an integer.
 
 ```
 internal : FlagSpec -> FlagSpec
+internal f
 ```
 
 The flag hidden from help.
@@ -223,6 +229,7 @@ It is still parsed and still listed in `rosterOf`.
 
 ```
 spec : String -> List FlagSpec -> ArgSpec
+spec v fs
 ```
 
 A specification for the command `v` with the given flags, no trailing
@@ -237,6 +244,7 @@ section, and unknown flags rejected.
 
 ```
 withTrailing : Trailing -> ArgSpec -> ArgSpec
+withTrailing t sp
 ```
 
 The specification with a trailing-section policy.
@@ -245,6 +253,7 @@ The specification with a trailing-section policy.
 
 ```
 withUnknown : Unknown -> ArgSpec -> ArgSpec
+withUnknown u sp
 ```
 
 The specification with an unknown-flag policy.
@@ -253,6 +262,7 @@ The specification with an unknown-flag policy.
 
 ```
 withStrictDash : ArgSpec -> ArgSpec
+withStrictDash sp
 ```
 
 The specification with undeclared single-dash tokens treated as flags.
@@ -270,6 +280,7 @@ Err "medaka x: unrecognized flag '-foo' (known: none)"
 
 ```
 canonical : FlagSpec -> String
+canonical f
 ```
 
 A flag's canonical name, the first in its `names`.
@@ -283,6 +294,7 @@ A flag's canonical name, the first in its `names`.
 
 ```
 rosterOf : ArgSpec -> List String
+rosterOf sp
 ```
 
 Every name of every flag, in declaration order.
@@ -298,6 +310,7 @@ This is the `(known: ...)` list in an unknown-flag error.
 
 ```
 unknownFlagMessage : ArgSpec -> String -> String
+unknownFlagMessage sp tok
 ```
 
 The error for a flag the specification does not know.
@@ -311,6 +324,7 @@ The error for a flag the specification does not know.
 
 ```
 missingValueMessage : ArgSpec -> String -> String
+missingValueMessage sp flg
 ```
 
 The error for a flag given without its value. `flg` is the flag as
@@ -325,6 +339,7 @@ typed.
 
 ```
 invalidValueMessage : ArgSpec -> String -> String -> String
+invalidValueMessage sp flg v
 ```
 
 The error for a value a `OneOf` or `IntValue` flag does not accept.
@@ -340,6 +355,7 @@ The error for a value a `OneOf` or `IntValue` flag does not accept.
 
 ```
 helpBlockOf : ArgSpec -> String
+helpBlockOf sp
 ```
 
 The flag table of a help message: one row per public flag, in two
@@ -356,6 +372,7 @@ columns, with no trailing newline.
 
 ```
 flagLabel : FlagSpec -> String
+flagLabel f
 ```
 
 The left column of a flag's help row: every spelling, then its value
@@ -385,6 +402,7 @@ The exit code for a usage error.
 
 ```
 parseArgs : ArgSpec -> List String -> Result String Args
+parseArgs sp argv
 ```
 
 The arguments parsed against a specification, or `Err` with an error
@@ -406,6 +424,7 @@ Err "medaka fmt: unrecognized flag '--zzz' (known: --write, -w)"
 
 ```
 flag : String -> Args -> Bool
+flag nm a
 ```
 
 Whether the flag was given.
@@ -419,6 +438,7 @@ Ok False
 
 ```
 flagValue : String -> Args -> Option String
+flagValue nm a
 ```
 
 The value of the flag's first occurrence, or `None`.
@@ -432,6 +452,7 @@ Ok Some "a"
 
 ```
 lastValue : String -> Args -> Option String
+lastValue nm a
 ```
 
 The value of the flag's last occurrence, or `None`.
@@ -445,6 +466,7 @@ Ok Some "b"
 
 ```
 flagValues : String -> Args -> List String
+flagValues nm a
 ```
 
 The values of every occurrence of the flag, in order.

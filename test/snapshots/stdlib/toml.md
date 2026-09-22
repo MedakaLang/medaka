@@ -1,5 +1,5 @@
 # META
-source_lines=776
+source_lines=777
 stages=DESUGAR,MARK
 # SOURCE
 {- | A reader for a subset of TOML.
@@ -12,8 +12,9 @@ stages=DESUGAR,MARK
 
    The parsed `Toml` is a flat list of keys and values, with every key
    qualified by its section: `name` under `[package]` is `"package.name"`,
-   and a key under the `i`-th `[[gate]]` header is `"gate.i.name"`. The
-   `get` functions look a value up by that qualified key; `tableCount` and
+   and a key under the `i`-th `[[gate]]` header is `"gate.i.name"`.
+   `getString`, `getInt`, `getBool` and `getArray` look a value up by that
+   qualified key; `tableCount` and
    `tableEntry` work with array-of-table entries. There is no writer. -}
 
 -- This module is the general TOML reader: it knows nothing about
@@ -550,8 +551,8 @@ stripTablePrefix prefix ((k, v) :: rest)
 {- | The `i`-th `[[name]]` entry, counting from `0`, as a document of its
    own, or `None` when `i` is out of range.
 
-   The entry's keys are unqualified, so the `get` functions apply to it
-   directly.
+   The entry's keys are unqualified, so `getString` and its siblings apply
+   to it directly.
 
    > parseTableEntryStr "gate" 1 "name" "[[gate]]\nname = \"a\"\n[[gate]]\nname = \"b\""
    Some "b"

@@ -45,6 +45,7 @@ backing store is allocated on the first `push`.
 
 ```
 fromList : List a -> Vector a
+fromList xs
 ```
 
 A vector holding the elements of a list, in order.
@@ -60,6 +61,7 @@ The capacity equals the length, so the next `push` grows the store.
 
 ```
 fromArray : Array a -> Vector a
+fromArray arr
 ```
 
 A vector holding a copy of an array's elements.
@@ -90,6 +92,7 @@ The size of the backing store, which is at least `length`.
 
 ```
 get : Int -> Vector a -> Option a
+get i _
 ```
 
 The element at index `i`, or `None` when `i` is out of range.
@@ -105,6 +108,7 @@ None
 
 ```
 first : Vector a -> Option a
+first ma
 ```
 
 The first element, or `None` when the vector is empty.
@@ -118,6 +122,7 @@ Some 10
 
 ```
 last : Vector a -> Option a
+last ma
 ```
 
 The last element, or `None` when the vector is empty.
@@ -148,6 +153,7 @@ A new array holding the vector's elements.
 
 ```
 push : a -> Vector a -> Unit
+push x _
 ```
 
 Appends `x` to the end of the vector.
@@ -179,6 +185,7 @@ Some 3
 
 ```
 setInPlace : Int -> a -> Vector a -> Unit
+setInPlace i x _
 ```
 
 Replaces the element at index `i` with `x`.
@@ -194,6 +201,7 @@ Panics when `i` is out of range; `push` extends the vector.
 
 ```
 swap : Int -> Int -> Vector a -> Unit
+swap i j _
 ```
 
 Exchanges the elements at indices `i` and `j`.
@@ -224,6 +232,7 @@ The capacity is kept.
 
 ```
 mapInPlace : (a -> a) -> Vector a -> Unit
+mapInPlace f _
 ```
 
 Replaces every element with `f` applied to it.
@@ -239,6 +248,7 @@ Replaces every element with `f` applied to it.
 
 ```
 insertAtInPlace : Int -> a -> Vector a -> Unit
+insertAtInPlace i x ma
 ```
 
 Inserts `x` at index `i`, shifting the following elements right.
@@ -255,6 +265,7 @@ appends.
 
 ```
 removeAtInPlace : Int -> Vector a -> Unit
+removeAtInPlace i ma
 ```
 
 Removes the element at index `i`.
@@ -270,6 +281,7 @@ Nothing happens when `i` is out of range.
 
 ```
 sortInPlaceBy : (a -> a -> <e> Ordering) -> Vector a -> <e> Unit
+sortInPlaceBy cmp ma
 ```
 
 Sorts the elements in place by `cmp`.
@@ -286,6 +298,7 @@ order.
 
 ```
 sortInPlace : Ord a => Vector a -> Unit
+sortInPlace ma
 ```
 
 Sorts the elements in place in ascending order.
@@ -303,14 +316,15 @@ The sortInPlace is stable.
 
 ```
 pushArray : Array a -> Vector a -> Unit
+pushArray xs _
 ```
 
 Appends every element of `xs`, in order, in one bulk copy.
 
 Amortized `O(1)` per element. The backing store grows at most once, to
-the smallest doubling that holds the result, so appending `n` elements
+the smallest doubling that holds the result, so appending many elements
 costs one copy of the live prefix (when it grows) and one copy of `xs`,
-not `n` single-element grows.
+not one grow per element.
 
 ### `rawParts`
 

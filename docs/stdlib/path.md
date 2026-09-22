@@ -16,6 +16,7 @@ has no extension.
 
 ```
 dirname : String -> String
+dirname path
 ```
 
 The directory part of a path: everything before the last `/`.
@@ -34,6 +35,7 @@ segment before it is still the part removed.
 
 ```
 basename : String -> String
+basename path
 ```
 
 The last component of a path: everything after the last `/`.
@@ -52,6 +54,7 @@ The whole path when it has no `/`, and `""` when it ends in `/`. Apply
 
 ```
 extname : String -> String
+extname path
 ```
 
 The extension of the last component, with its dot.
@@ -70,6 +73,7 @@ dot.
 
 ```
 stem : String -> String
+stem path
 ```
 
 The last component without its extension.
@@ -85,6 +89,7 @@ The last component without its extension.
 
 ```
 hasExtension : String -> String -> Bool
+hasExtension ext path
 ```
 
 Whether the last component has the extension `ext`.
@@ -102,6 +107,7 @@ False
 
 ```
 withExtension : String -> String -> String
+withExtension ext path
 ```
 
 The path with the last component's extension replaced by `ext`.
@@ -122,6 +128,7 @@ The leading dot on `ext` is optional. When the path has no extension,
 
 ```
 joinPath : String -> String -> String
+joinPath a b
 ```
 
 Two path segments joined with a single `/`.
@@ -155,6 +162,7 @@ The segments joined in order with `joinPath`.
 
 ```
 segments : String -> List String
+segments path
 ```
 
 The non-empty components of a path, split on `/`.
@@ -174,6 +182,7 @@ The non-empty components of a path, split on `/`.
 
 ```
 isAbsolute : String -> Bool
+isAbsolute path
 ```
 
 Whether the path starts with `/`.
@@ -189,6 +198,7 @@ False
 
 ```
 stripPrefix : String -> String -> Option String
+stripPrefix prefix path
 ```
 
 The path with `prefix` removed from its front, or `None` when the path
@@ -209,6 +219,7 @@ None
 
 ```
 normalize : String -> String
+normalize path
 ```
 
 The path simplified by its text alone.

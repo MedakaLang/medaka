@@ -36,6 +36,7 @@ Instances: [`Index`](#index-map-k-v-k-v), [`Mappable`](#mappable-map-k), [`Filte
 
 ```
 singleton : k -> v -> Map k v
+singleton k v
 ```
 
 A map with one entry.
@@ -49,6 +50,7 @@ A map with one entry.
 
 ```
 fromList : Ord k => List (k, v) -> Map k v
+fromList xs
 ```
 
 A map holding the pairs of an association list.
@@ -95,6 +97,7 @@ True
 
 ```
 get : Ord k => k -> Map k v -> Option v
+get k _
 ```
 
 The value at `k`, or `None` when the key is absent.
@@ -110,6 +113,7 @@ None
 
 ```
 has : Ord k => k -> Map k v -> Bool
+has k _
 ```
 
 Whether `k` is present.
@@ -125,6 +129,7 @@ False
 
 ```
 findWithDefault : Ord k => v -> k -> Map k v -> v
+findWithDefault d k m
 ```
 
 The value at `k`, or `d` when the key is absent.
@@ -142,6 +147,7 @@ The value at `k`, or `d` when the key is absent.
 
 ```
 set : Ord k => k -> v -> Map k v -> Map k v
+set k v _
 ```
 
 The map with `v` stored at `k`, replacing any existing value.
@@ -155,6 +161,7 @@ The map with `v` stored at `k`, replacing any existing value.
 
 ```
 insertWith : Ord k => (v -> v -> v) -> k -> v -> Map k v -> Map k v
+insertWith f k v _
 ```
 
 The map with `v` stored at `k`, combining with an existing value.
@@ -171,6 +178,7 @@ is absent, `v` is stored as it is.
 
 ```
 adjust : Ord k => (v -> v) -> k -> Map k v -> Map k v
+adjust f k _
 ```
 
 The map with `f` applied to the value at `k`.
@@ -188,6 +196,7 @@ Unchanged when `k` is absent.
 
 ```
 delete : Ord k => k -> Map k v -> Map k v
+delete k _
 ```
 
 The map without the entry at `k`.
@@ -233,6 +242,7 @@ Some (2, "b", fromList [(1, "a")])
 
 ```
 getMin : Map k v -> Option (k, v)
+getMin m
 ```
 
 The entry with the smallest key, or `None` when the map is empty.
@@ -246,6 +256,7 @@ Some (1, 0)
 
 ```
 getMax : Map k v -> Option (k, v)
+getMax m
 ```
 
 The entry with the largest key, or `None` when the map is empty.
@@ -259,6 +270,7 @@ Some (3, 0)
 
 ```
 deleteMin : Map k v -> Map k v
+deleteMin m
 ```
 
 The map without its smallest entry.
@@ -274,6 +286,7 @@ Unchanged when the map is empty.
 
 ```
 deleteMax : Map k v -> Map k v
+deleteMax m
 ```
 
 The map without its largest entry.
@@ -291,6 +304,7 @@ Unchanged when the map is empty.
 
 ```
 foldrWithKey : (k -> v -> b -> <e> b) -> b -> Map k v -> <e> b
+foldrWithKey f z _
 ```
 
 A right fold over the entries in ascending key order.
@@ -304,6 +318,7 @@ A right fold over the entries in ascending key order.
 
 ```
 foldlWithKey : (b -> k -> v -> <e> b) -> b -> Map k v -> <e> b
+foldlWithKey f z _
 ```
 
 A left fold over the entries in ascending key order.
@@ -317,6 +332,7 @@ A left fold over the entries in ascending key order.
 
 ```
 entries : Map k v -> List (k, v)
+entries m
 ```
 
 The entries as pairs, in ascending key order.
@@ -330,6 +346,7 @@ The entries as pairs, in ascending key order.
 
 ```
 entriesFrom : Ord k => Option k -> Option Int -> Map k v -> List (k, v)
+entriesFrom start limit m
 ```
 
 The entries from `start` upwards in ascending key order, at most `limit`
@@ -360,6 +377,7 @@ of `entries`.
 
 ```
 keys : Map k v -> List k
+keys m
 ```
 
 The keys, in ascending order.
@@ -373,6 +391,7 @@ The keys, in ascending order.
 
 ```
 values : Map k v -> List v
+values m
 ```
 
 The values, in ascending order of their keys.
@@ -386,6 +405,7 @@ The values, in ascending order of their keys.
 
 ```
 mapWithKey : (k -> v -> <e> w) -> Map k v -> <e> Map k w
+mapWithKey f _
 ```
 
 The map with `f` applied to every value, where `f` also receives the
@@ -404,6 +424,7 @@ key.
 
 ```
 filterWithKey : Ord k => (k -> v -> <e> Bool) -> Map k v -> <e> Map k v
+filterWithKey p _
 ```
 
 The entries whose key and value satisfy `p`.
@@ -421,6 +442,7 @@ The entries whose key and value satisfy `p`.
 
 ```
 union : Ord k => Map k v -> Map k v -> Map k v
+union a b
 ```
 
 The entries of both maps. On a shared key, the first map's value wins.
@@ -436,6 +458,7 @@ The entries of both maps. On a shared key, the first map's value wins.
 
 ```
 unionWith : Ord k => (v -> v -> v) -> Map k v -> Map k v -> Map k v
+unionWith f a b
 ```
 
 The entries of both maps. On a shared key, the value is `f left right`.
@@ -449,6 +472,7 @@ The entries of both maps. On a shared key, the value is `f left right`.
 
 ```
 difference : Ord k => Map k v -> Map k w -> Map k v
+difference a b
 ```
 
 The entries of the first map whose keys are absent from the second.
@@ -462,6 +486,7 @@ The entries of the first map whose keys are absent from the second.
 
 ```
 intersectionWith : Ord k => (v -> w -> x) -> Map k v -> Map k w -> Map k x
+intersectionWith f a b
 ```
 
 The keys present in both maps, each with the value `f left right`.
@@ -475,6 +500,7 @@ The keys present in both maps, each with the value `f left right`.
 
 ```
 intersection : Ord k => Map k v -> Map k w -> Map k v
+intersection a b
 ```
 
 The keys present in both maps, each with the first map's value.

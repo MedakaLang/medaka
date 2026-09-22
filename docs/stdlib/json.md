@@ -40,6 +40,7 @@ Instances: [`Eq`](#eq-json), [`Debug`](#debug-json), [`Display`](#display-json)
 
 ```
 jArray : List Json -> Json
+jArray xs
 ```
 
 A `JArray` holding the elements of a list.
@@ -53,6 +54,7 @@ A `JArray` holding the elements of a list.
 
 ```
 jObject : List (String, Json) -> Json
+jObject xs
 ```
 
 A `JObject` holding the members of a list of key and value pairs, in
@@ -89,6 +91,7 @@ its decimal point, so the text parses again.
 
 ```
 parse : String -> Result String Json
+parse s
 ```
 
 The value written in JSON text, or `Err` with a message when the text
@@ -111,6 +114,7 @@ Err "invalid literal, expected 'null'"
 
 ```
 get : String -> Json -> Option Json
+get key _
 ```
 
 The value at `key` in a `JObject`, or `None` when the key is absent or
@@ -129,6 +133,7 @@ None
 
 ```
 at : Int -> Json -> Option Json
+at k _
 ```
 
 The element at index `k` of a `JArray`, or `None` when `k` is out of

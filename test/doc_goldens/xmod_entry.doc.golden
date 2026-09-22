@@ -4,5 +4,6 @@
 
 ```
 doublePlusOne : a -> a
+doublePlusOne x
 ```
 

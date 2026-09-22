@@ -29,6 +29,7 @@ Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-duration), [`Semigroup`](#
 
 ```
 millis : Int -> Duration
+millis n
 ```
 
 A duration of `n` milliseconds.
@@ -42,6 +43,7 @@ A duration of `n` milliseconds.
 
 ```
 seconds : Int -> Duration
+seconds n
 ```
 
 A duration of `n` seconds.
@@ -55,6 +57,7 @@ A duration of `n` seconds.
 
 ```
 minutes : Int -> Duration
+minutes n
 ```
 
 A duration of `n` minutes.
@@ -68,6 +71,7 @@ A duration of `n` minutes.
 
 ```
 hours : Int -> Duration
+hours n
 ```
 
 A duration of `n` hours.
@@ -81,6 +85,7 @@ A duration of `n` hours.
 
 ```
 days : Int -> Duration
+days n
 ```
 
 A duration of `n` days.
@@ -198,6 +203,7 @@ Instances: `Eq`, `Ord`, `Debug`, [`Display`](#display-datetime)
 
 ```
 fromEpochSeconds : Int -> DateTime
+fromEpochSeconds secs
 ```
 
 The UTC date and time at a number of seconds since the Unix epoch.
@@ -215,6 +221,7 @@ Negative values, before 1970, work too.
 
 ```
 toEpochSeconds : DateTime -> Int
+toEpochSeconds dt
 ```
 
 The number of seconds since the Unix epoch at a UTC date and time. The
@@ -229,6 +236,7 @@ inverse of `fromEpochSeconds`.
 
 ```
 formatIso : DateTime -> String
+formatIso dt
 ```
 
 The date and time in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`.
@@ -242,13 +250,14 @@ The date and time in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`.
 
 ```
 parseIso : String -> Option DateTime
+parseIso s
 ```
 
 The date and time written in ISO 8601 form, `YYYY-MM-DDThh:mm:ssZ`, or
 `None`.
 
 Exactly the form `formatIso` produces is accepted, and nothing else: no
-other time zone, no missing zero padding, no lowercase `t` or `z`, and no
+other time zone, no missing zero padding, no lowercase `'t'` or `'z'`, and no
 extra trailing characters.
 
 ```medaka
@@ -268,6 +277,7 @@ None
 
 ```
 now : Unit -> <Clock> Float
+now u
 ```
 
 The current wall-clock time in seconds since the Unix epoch.
@@ -276,6 +286,7 @@ The current wall-clock time in seconds since the Unix epoch.
 
 ```
 nowDateTime : Unit -> <Clock> DateTime
+nowDateTime u
 ```
 
 The current UTC date and time, to the second.
@@ -284,6 +295,7 @@ The current UTC date and time, to the second.
 
 ```
 monotonic : Unit -> <Clock> Float
+monotonic u
 ```
 
 A reading of the monotonic clock, in seconds.
@@ -295,6 +307,7 @@ two readings measure an interval. See `elapsedSince`.
 
 ```
 elapsedSince : Float -> <Clock> Float
+elapsedSince start
 ```
 
 The seconds elapsed since an earlier `monotonic` reading.
@@ -306,6 +319,7 @@ Time a computation with `let t0 = monotonic ()`, the computation, then
 
 ```
 sleep : Duration -> <Clock> Unit
+sleep d
 ```
 
 Pauses the program for a duration.
@@ -320,7 +334,7 @@ Pauses the program for a duration.
 impl Display Duration
 ```
 
-`display` renders a duration as its millisecond count with an `ms`
+`display` renders a duration as its millisecond count with an `"ms"`
 suffix.
 
 ### `Display DateTime`

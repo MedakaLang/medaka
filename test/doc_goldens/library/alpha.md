@@ -4,6 +4,7 @@
 
 ```
 double : Int -> Int
+double x
 ```
 
 Double an Int.
