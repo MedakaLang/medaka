@@ -7,6 +7,8 @@ ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
 MEDAKA=${MEDAKA:-"$ROOT/medaka"}
 DRIVER="$ROOT/pds/test/mst_vectors_main.mdk"
 PERF_DRIVER="$ROOT/pds/test/performance_resource_main.mdk"
+COST_CURVE_DRIVER="$ROOT/pds/test/cost_curve_main.mdk"
+SYNTH_REPO_DRIVER="$ROOT/pds/test/synth_repo_main.mdk"
 WASM_EMITTER=${MEDAKA_WASM_EMITTER:-"$ROOT/test/bin/wasm_emit_modules_main"}
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-mst.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT HUP INT TERM
@@ -228,5 +230,104 @@ if [ "$INBOUND_ALLOC" -ge "$INBOUND_ALLOC_THRESHOLD" ]; then
   fail "inbound-alloc footprint regressed: allocBytes=$INBOUND_ALLOC (>= $INBOUND_ALLOC_THRESHOLD)"
 fi
 echo "inbound-alloc: N=4 bodyBytes=256 allocBytes=$INBOUND_ALLOC (< $INBOUND_ALLOC_THRESHOLD)"
+
+# #3309 (a-page-costs-a-page): `listRecords`, `listBlobs`, and the
+# `persistTransition` seam's `blobsMoved` decision each used to cost the
+# repository's size rather than the page/request asked for (#2773, #3262,
+# #3263). `pds/test/cost_curve_main.mdk` already reports a per-request
+# microsecond figure for each named route against a `synth_repo_main.mdk`
+# corpus; these three arms grade that figure's doubling ratio the same way
+# the four arms above grade `performance_resource_main.mdk`'s.
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$COST_CURVE_DRIVER" -o "$WORK/cost-curve-native" > "$WORK/cost-curve-build.log" 2>&1; then
+  cat "$WORK/cost-curve-build.log" >&2
+  fail 'cost curve driver build failed'
+fi
+
+if ! MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$MEDAKA" build "$SYNTH_REPO_DRIVER" -o "$WORK/synth-repo-native" > "$WORK/synth-repo-build.log" 2>&1; then
+  cat "$WORK/synth-repo-build.log" >&2
+  fail 'synth repo corpus builder build failed'
+fi
+
+mkdir -p "$WORK/cost-corpus-small" "$WORK/cost-corpus-large"
+"$WORK/synth-repo-native" build one-collection "$WORK/cost-corpus-small" 1000 200 1 \
+  > "$WORK/cost-corpus-small.log" 2>&1 || fail 'small cost-curve corpus build failed'
+"$WORK/synth-repo-native" build one-collection "$WORK/cost-corpus-large" 10000 12800 1 \
+  > "$WORK/cost-corpus-large.log" 2>&1 || fail 'large cost-curve corpus build failed'
+
+# Pulls one route's `us=` figure out of `cost_curve_main.mdk`'s fixed-format
+# output line, the same way `measure_inbound_alloc` pulls `allocBytes=`.
+route_us() {
+  route=$1
+  file=$2
+  prefix="$route us="
+  line=$(grep "^$prefix" "$file") || fail "cost-curve output missing a $route line"
+  rest=${line#"$prefix"}
+  echo "${rest%% *}"
+}
+
+# Runs `cost-curve-native` with whatever arguments the caller gives it after
+# the result label, and fails on any stderr output.
+run_cost_curve() {
+  label=$1
+  shift
+  MEDAKA_ROOT="$ROOT" MEDAKA_STRICT=1 "$WORK/cost-curve-native" "$@" \
+    > "$WORK/$label.out" 2> "$WORK/$label.err"
+  require_empty "$WORK/$label.err" "cost-curve ($label)"
+}
+
+measure_list_records() {
+  label=$1
+  dir=$2
+  run_cost_curve "$label" "$dir" bulk.synth.record 50
+  route_us listRecords "$WORK/$label.out"
+}
+
+LISTRECORDS_SMALL=$(measure_list_records list-records-small "$WORK/cost-corpus-small")
+LISTRECORDS_LARGE=$(measure_list_records list-records-large "$WORK/cost-corpus-large")
+if ! awk -v small="$LISTRECORDS_SMALL" -v large="$LISTRECORDS_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 6000 && ratio <= 3.0)
+}'; then
+  fail "listRecords scaling exceeded bounds: 1000-record=${LISTRECORDS_SMALL}us 10000-record=${LISTRECORDS_LARGE}us"
+fi
+echo "listRecords scaling: 1000-record=${LISTRECORDS_SMALL}us 10000-record=${LISTRECORDS_LARGE}us"
+
+measure_list_blobs() {
+  label=$1
+  dir=$2
+  run_cost_curve "$label" "$dir" bulk.synth.record 50
+  route_us listBlobs "$WORK/$label.out"
+}
+
+LISTBLOBS_SMALL=$(measure_list_blobs list-blobs-small "$WORK/cost-corpus-small")
+LISTBLOBS_LARGE=$(measure_list_blobs list-blobs-large "$WORK/cost-corpus-large")
+if ! awk -v small="$LISTBLOBS_SMALL" -v large="$LISTBLOBS_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 400 && ratio <= 3.0)
+}'; then
+  fail "listBlobs scaling exceeded bounds: 200-blob=${LISTBLOBS_SMALL}us 12800-blob=${LISTBLOBS_LARGE}us"
+fi
+echo "listBlobs scaling: 200-blob=${LISTBLOBS_SMALL}us 12800-blob=${LISTBLOBS_LARGE}us"
+
+# `persist <dir> <reps>` times the real `persistTransition` seam with the
+# same store on both sides of the comparison, so no half persists and only
+# the decision — `blobsMoved` included — is measured; see the mode's own
+# doc comment in `cost_curve_main.mdk`.
+measure_blobs_moved() {
+  label=$1
+  dir=$2
+  run_cost_curve "$label" persist "$dir" 1000
+  route_us persistTransition "$WORK/$label.out"
+}
+
+BLOBSMOVED_SMALL=$(measure_blobs_moved blobs-moved-small "$WORK/cost-corpus-small")
+BLOBSMOVED_LARGE=$(measure_blobs_moved blobs-moved-large "$WORK/cost-corpus-large")
+if ! awk -v small="$BLOBSMOVED_SMALL" -v large="$BLOBSMOVED_LARGE" 'BEGIN {
+  ratio = large / small
+  exit ! (large <= 60 && ratio <= 4.0)
+}'; then
+  fail "blobsMoved scaling exceeded bounds: 200-blob=${BLOBSMOVED_SMALL}us 12800-blob=${BLOBSMOVED_LARGE}us"
+fi
+echo "blobsMoved scaling: 200-blob=${BLOBSMOVED_SMALL}us 12800-blob=${BLOBSMOVED_LARGE}us"
 
 echo "PASS: MST — 11 official-reference cases; 17 covering-proof rows (13 narrower than the whole tree); 14 hostile routes; 3 lexical controls; $ENGINE_GRADE"

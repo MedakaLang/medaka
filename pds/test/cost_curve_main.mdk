@@ -11,7 +11,12 @@
    resulting store is discarded, so each repetition measures one write against
    a repository of the corpus's size rather than a repository that grows under
    the measurement. The route answers are printed alongside the timings so a
-   reader can see the probe measured a real 200 and not an error path. -}
+   reader can see the probe measured a real 200 and not an error path.
+
+   A second mode, `persist`, times `shell.server`'s `persistTransition` seam
+   directly: it hands the same store as both `before` and `after`, so every
+   half compares equal and persists nothing, leaving only the decision cost —
+   `blobsMoved`'s comparison included — to measure. -}
 
 import bytes as B
 import bytes.{Bytes, encodeUtf8}
@@ -40,6 +45,7 @@ import lib.store.{
 }
 import shell.blobfile.{blobFileRead}
 import shell.persist.{persistLoad}
+import shell.server.{persistTransition}
 
 -- ── the corpus account, matching `synth_repo_main.mdk`'s fixed identity ─────
 
@@ -231,7 +237,37 @@ mustInt : String -> Int
 mustInt text =
   optionOrPanic "cost_curve: malformed integer: \{text}" (toInt text)
 
-main : <IO, Env, Clock, FileRead "_"> Unit
+-- ── the `persistTransition` seam, timed with no half moved ──────────────────
+
+{- | `persistTransition` called `reps` times with the same store on both
+   sides, so every half compares equal and nothing reaches disk — the loop
+   times the decision alone, `blobsMoved` included. -}
+repeatPersist : String -> Store -> Int -> <FileRead "_", FileWrite "_"> Unit
+repeatPersist dir store n =
+  if n <= 0 then
+    ()
+  else match persistTransition dir corpusDid benchInstant store store
+    Ok () => repeatPersist dir store (n - 1)
+    Err message => panic "cost_curve: persistTransition failed: \{message}"
+
+measurePersist : String ->
+  Store ->
+  Int ->
+  <IO, Clock, FileRead "_", FileWrite "_"> Unit
+measurePersist dir store reps =
+  let start = monotonicSec ()
+  let () = repeatPersist dir store reps
+  let elapsed = monotonicSec () - start
+  println
+    "persistTransition us=\{intToString (micros elapsed reps)} reps=\{intToString reps}"
+
+runPersist : String -> Int -> <IO, Clock, FileRead "_", FileWrite "_"> Unit
+runPersist dir reps = measurePersist dir (loadStore dir) reps
+
+main : <IO, Env, Clock, FileRead "_", FileWrite "_"> Unit
 main = match args ()
+  ["persist", dir, repsText] => runPersist dir (mustInt repsText)
   [dir, collection, repsText] => run dir collection (mustInt repsText)
-  _ => panic "usage: cost_curve_main <corpus-dir> <collection> <reps>"
+  _ =>
+    panic
+      "usage: cost_curve_main <corpus-dir> <collection> <reps> | cost_curve_main persist <corpus-dir> <reps>"
