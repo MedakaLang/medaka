@@ -1,5 +1,5 @@
 # META
-source_lines=756
+source_lines=755
 stages=DESUGAR,MARK
 # SOURCE
 {- | Operations on `Array a`.
@@ -36,7 +36,7 @@ stages=DESUGAR,MARK
 -- host runtime.
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
   Debug,
   Display,
@@ -45,7 +45,6 @@ import core.{
   Filterable,
   Semigroup,
   Monoid,
-  Ordering,
   Option,
 }
 
@@ -759,7 +758,7 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
     (mapWithIndex (i x => i * 10 + x) arr)
     (zipWith (i x => i * 10 + x) (range 0 (length arr)) arr)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EArrayLit (EVar "x")))
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))
@@ -878,7 +877,7 @@ prop "mapWithIndex agrees with zipWith over range" (xs : List Int) =
 (DProp false "mapWithIndex hands the callback 0..n-1 in order" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "mapWithIndex") (ELam ((PVar "i") PWild) (EVar "i"))) (EVar "arr"))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "arr")))))))
 (DProp false "mapWithIndex agrees with zipWith over range" ((pp "xs" (TyApp (TyCon "List") (TyCon "Int")))) (EBlock (DoLet false false (PVar "arr") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EVar "mapWithIndex") (ELam ((PVar "i") (PVar "x")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 10))) (EVar "x")))) (EVar "arr"))) (EApp (EApp (EApp (EVar "zipWith") (ELam ((PVar "i") (PVar "x")) (EBinOp "+" (EBinOp "*" (EVar "i") (ELit (LInt 10))) (EVar "x")))) (EApp (EApp (EVar "range") (ELit (LInt 0))) (EApp (EVar "length") (EVar "arr")))) (EVar "arr"))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Option" false))))
 (DTypeSig true "singleton" (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a"))))
 (DFunDef false "singleton" ((PVar "x")) (EArrayLit (EVar "x")))
 (DTypeSig true "make" (TyFun (TyCon "Int") (TyFun (TyVar "a") (TyApp (TyCon "Array") (TyVar "a")))))

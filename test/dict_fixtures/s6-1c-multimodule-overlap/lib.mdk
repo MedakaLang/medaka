@@ -2,7 +2,7 @@
 -- module's own `checkCoherence` (with a real span) AND by the whole-graph
 -- `globalCoherenceConflict` sweep (span-less) -- `cohSoftInScope` is what stops the
 -- second one claiming it, so `run`/`build` print it ONCE, as `check` does.
-import base.{Pair, MkPair, C, cname, D, dname}
+import base.{Pair(..), C, cname, D, dname}
 
 impl C (Pair Int a) where
   cname _ = 1
@@ -21,7 +21,8 @@ impl D (Pair Int a) where
 -- rows could not tell "only the demoted code is surfaced" from "the whole
 -- matchWarnings channel is surfaced", because every other module in the corpus is
 -- clean. Never called from main, so it changes no value.
-export libHue : Colour -> Int
+export
+libHue : Colour -> Int
 libHue c = match c
   LibRed => 1
   LibGreen => 2

@@ -40,7 +40,7 @@ import frontend.parser.{parseResult}
 import frontend.parse_cache.{notePreludeParse}
 import driver.diagnostics.{
   Diag,
-  SevWarning,
+  Severity(..),
   emitDiagExitCode,
   mkDiag,
   parseErrDiag,
@@ -1815,7 +1815,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "SevWarning" false) (mem "emitDiagExitCode" false) (mem "mkDiag" false) (mem "parseErrDiag" false) (mem "ppDiag" false) (mem "ppDiagCliSrc" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "emitDiagExitCode" false) (mem "mkDiag" false) (mem "parseErrDiag" false) (mem "ppDiag" false) (mem "ppDiagCliSrc" false))))
 (DData Public "BuildReport" () ((variant "BuildReport" (ConNamed (field "status" (TyCon "String")) (field "keptIr" (TyApp (TyCon "Option") (TyCon "String"))) (field "emitterStderr" (TyCon "String")) (field "notes" (TyApp (TyCon "List") (TyCon "Diag")))))) ())
 (DTypeSig true "buildOk" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))
 (DFunDef false "buildOk" ((PVar "status")) (EApp (EVar "Ok") (ERecordCreate "BuildReport" ((fa "status" (EVar "status")) (fa "keptIr" (EVar "None")) (fa "emitterStderr" (ELit (LString ""))) (fa "notes" (EListLit))))))
@@ -1976,7 +1976,7 @@ emitRtObjGo cc root outObjPath = match makeTempDir ()
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "chopExt" false) (mem "joinPath" false))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false))))
 (DUse false (UseGroup ("frontend" "parse_cache") ((mem "notePreludeParse" false))))
-(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "SevWarning" false) (mem "emitDiagExitCode" false) (mem "mkDiag" false) (mem "parseErrDiag" false) (mem "ppDiag" false) (mem "ppDiagCliSrc" false))))
+(DUse false (UseGroup ("driver" "diagnostics") ((mem "Diag" false) (mem "Severity" true) (mem "emitDiagExitCode" false) (mem "mkDiag" false) (mem "parseErrDiag" false) (mem "ppDiag" false) (mem "ppDiagCliSrc" false))))
 (DData Public "BuildReport" () ((variant "BuildReport" (ConNamed (field "status" (TyCon "String")) (field "keptIr" (TyApp (TyCon "Option") (TyCon "String"))) (field "emitterStderr" (TyCon "String")) (field "notes" (TyApp (TyCon "List") (TyCon "Diag")))))) ())
 (DTypeSig true "buildOk" (TyFun (TyCon "String") (TyApp (TyApp (TyCon "Result") (TyCon "BuildReport")) (TyCon "BuildReport"))))
 (DFunDef false "buildOk" ((PVar "status")) (EApp (EVar "Ok") (ERecordCreate "BuildReport" ((fa "status" (EVar "status")) (fa "keptIr" (EVar "None")) (fa "emitterStderr" (ELit (LString ""))) (fa "notes" (EListLit))))))

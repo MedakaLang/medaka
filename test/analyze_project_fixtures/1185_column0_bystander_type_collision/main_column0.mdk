@@ -22,7 +22,7 @@
 --   lines flipped the same program to clean -- order-dependent at base.
 --   (`S-ctor-oracle-identity-family-implementer.md`, L1 step 2b-ii.)
 import aat.{T(..)}
-import zzt.{X, Y, Z, mk}
+import zzt.{T(..), mk}
 import byw.{Widget, defaultWidget}
 
 g : Int -> Int

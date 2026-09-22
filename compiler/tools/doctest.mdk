@@ -19,11 +19,11 @@
 -- compiler/tools/test_cmd.mdk.
 
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
-import frontend.ast.{Decl, DUse}
+import frontend.ast.{Decl(..)}
 import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
-import json.{Json, JString}
+import json.{Json(..)}
 import regex.{Regex, mustCompile, isMatch, find}
 
 -- ── Data ──────────────────────────────────────────────────────────────────

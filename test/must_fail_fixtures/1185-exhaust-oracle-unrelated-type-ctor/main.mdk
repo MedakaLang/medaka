@@ -3,7 +3,7 @@
 -- in this graph is non-exhaustive.
 -- ⚠️ Needs `check --json` to surface: human multi-module `check` renders only the ENTRY
 -- module's warnings, and the false positive is raised in util.mdk.
-import doc.{Doc, Nil}
+import doc.{Doc(..)}
 import util.{total}
 
 main = println (total [1, 2, 3])

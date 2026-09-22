@@ -27,7 +27,7 @@
 -- `test/engine_fixtures/ctor_scope_local_ctor_beats_stdlib_import.mdk`, each of which
 -- goes RED when the overlay out-ranks something it should not.
 import hja.{HA}
-import hjz.{HZ, Hit, unHZ}
+import hjz.{HZ(..), unHZ}
 
 v : HZ
 v = Hit "s"

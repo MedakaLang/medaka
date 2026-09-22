@@ -21,7 +21,7 @@
 -- hash_set/hash_map share identical resize/rehash bodies over DISTINCT ADTs; consolidation needs a shared-core refactor (out of scope).
 -- lint-disable-file rule-duplicate-body
 
-import core.{Eq, Ord, Debug, Display, Foldable, Hashable}
+import core.{Ordering(..), Ord, Debug, Display, Foldable, Hashable}
 import list as L
 
 {- | The hash set type. Its fields are the bucket array and the element

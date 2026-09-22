@@ -23,11 +23,11 @@ stages=DESUGAR,MARK
 -- compiler/tools/test_cmd.mdk.
 
 import frontend.lexer.{Comment, collectComments, commentLine, commentText}
-import frontend.ast.{Decl, DUse}
+import frontend.ast.{Decl(..)}
 import frontend.parser.{parseResult, parseErrorMessage}
 import frontend.desugar.{desugar, moduleAliases, qualifyAliasRefsWith}
 import support.util.{listLen, reverseL, joinNl, startsWith, stringTrim, splitNl}
-import json.{Json, JString}
+import json.{Json(..)}
 import regex.{Regex, mustCompile, isMatch, find}
 
 -- ── Data ──────────────────────────────────────────────────────────────────
@@ -508,11 +508,11 @@ isUse (DUse _ _ _) = True
 isUse _ = False
 # DESUGAR
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))
@@ -660,11 +660,11 @@ isUse _ = False
 (DFunDef false "isUse" (PWild) (EVar "False"))
 # MARK
 (DUse false (UseGroup ("frontend" "lexer") ((mem "Comment" false) (mem "collectComments" false) (mem "commentLine" false) (mem "commentText" false))))
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DUse" false))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true))))
 (DUse false (UseGroup ("frontend" "parser") ((mem "parseResult" false) (mem "parseErrorMessage" false))))
 (DUse false (UseGroup ("frontend" "desugar") ((mem "desugar" false) (mem "moduleAliases" false) (mem "qualifyAliasRefsWith" false))))
 (DUse false (UseGroup ("support" "util") ((mem "listLen" false) (mem "reverseL" false) (mem "joinNl" false) (mem "startsWith" false) (mem "stringTrim" false) (mem "splitNl" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true))))
 (DUse false (UseGroup ("regex") ((mem "Regex" false) (mem "mustCompile" false) (mem "isMatch" false) (mem "find" false))))
 (DData Public "Example" () ((variant "Example" (ConPos (TyCon "String") (TyApp (TyCon "Option") (TyCon "String")) (TyCon "Int")))) ())
 (DTypeSig true "exampleInput" (TyFun (TyCon "Example") (TyCon "String")))

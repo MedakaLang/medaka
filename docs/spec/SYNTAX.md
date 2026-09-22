@@ -724,6 +724,11 @@ name an exported effect label directly (`import eff.{Logging, doLog}`) —
 `(..)` on a label is rejected, since a label has no members for `(..)` to bring
 in (`import eff.{Logging(..), doLog}` fails with a diagnostic saying so).
 
+A selective member list may **not** name a `data` constructor directly
+(`import colors.{Red}` is rejected — `Red` is a constructor of `Color`, not a
+type). Bring its constructors in as a set with `Color(..)`, or alias the
+module and write `C.Red` (#3314).
+
 Export forms:
 
 ```medaka-project

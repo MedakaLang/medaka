@@ -30,14 +30,13 @@
 -- lint-disable-file rule-duplicate-body
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
   Debug,
   Display,
   Foldable,
   Semigroup,
   Monoid,
-  Ordering,
   Option,
   FromEntries,
 }

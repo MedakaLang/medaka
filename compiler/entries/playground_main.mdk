@@ -85,8 +85,7 @@ import frontend.parser.{
 import frontend.desugar.{desugar}
 import frontend.desugar_cache.{desugaredPrelude, desugaredPreludeKey}
 import driver.loader.{
-  LoadMsg,
-  LoadParseFailed,
+  LoadError(..),
   loadProgramFilesLocatedCachedE,
   unknownModuleIdOf,
   findImportLoc,
@@ -117,12 +116,7 @@ import driver.main_autoprint.{
   asyncMainShapeError,
 }
 import json.{
-  Json,
-  JNull,
-  JInt,
-  JString,
-  JArray,
-  JObject,
+  Json(..),
   jObject,
   jArray,
   stringify,

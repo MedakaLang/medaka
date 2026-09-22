@@ -65,8 +65,7 @@ import types.typecheck.{
 -- `types/typecheck.mdk`, so the detector's home layer gains no edge to `tools/`.
 import tools.printer.{ppTy}
 import driver.loader.{
-  LoadMsg,
-  LoadParseFailed,
+  LoadError(..),
   loadProgramFilesLocatedCached,
   loadProgramFilesLocatedCachedE,
   loadedSourceOf,
@@ -98,7 +97,7 @@ import support.util.{
   contains,
 }
 import support.timer.{takePerfSink}
-import json.{Json, JInt, JString, JArray, JNull, jObject, stringify}
+import json.{Json(..), jObject, stringify}
 
 -- ── types ──────────────────────────────────────────────────────────────────
 

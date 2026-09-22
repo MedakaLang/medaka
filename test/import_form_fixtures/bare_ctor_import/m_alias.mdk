@@ -1,0 +1,6 @@
+-- CONTROL — an alias-qualified constructor still reaches it, unchanged by
+-- the ruling. Contributes ZERO rows.
+import decl as D
+
+x : D.Color
+x = D.Red

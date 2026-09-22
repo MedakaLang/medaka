@@ -8,7 +8,7 @@
 -- mandatory INTEGER PRIMARY KEY → rowid mapping), then writeFileBytes it.
 
 import lib.dbwriter.{writeDatabase}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat}
+import lib.recordfmt.{Cell(..)}
 
 tableName : String
 tableName = "users"

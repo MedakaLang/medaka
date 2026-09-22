@@ -1,5 +1,5 @@
 # META
-source_lines=1047
+source_lines=1055
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable string of bytes.
@@ -104,7 +104,15 @@ stages=DESUGAR,MARK
 -- why the doc points a caller at it.
 
 import core.{
-  Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Monoid, Hashable
+  Ordering(..),
+  Ord,
+  Debug,
+  Option,
+  Index,
+  Slice,
+  Semigroup,
+  Monoid,
+  Hashable,
 }
 import array.{findIndex, fromList}
 import string.{toDigit}
@@ -1050,7 +1058,7 @@ export
 lendByteBlockUnsafe : Bytes -> ByteBlock
 lendByteBlockUnsafe (Bytes bb) = bb
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Hashable" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Hashable" false))))
 (DUse false (UseGroup ("array") ((mem "findIndex" false) (mem "fromList" false))))
 (DUse false (UseGroup ("string") ((mem "toDigit" false))))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())
@@ -1176,7 +1184,7 @@ lendByteBlockUnsafe (Bytes bb) = bb
 (DTypeSig true "lendByteBlockUnsafe" (TyFun (TyCon "Bytes") (TyCon "ByteBlock")))
 (DFunDef false "lendByteBlockUnsafe" ((PCon "Bytes" (PVar "bb"))) (EVar "bb"))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Ordering" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Hashable" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Option" false) (mem "Index" false) (mem "Slice" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Hashable" false))))
 (DUse false (UseGroup ("array") ((mem "findIndex" false) (mem "fromList" false))))
 (DUse false (UseGroup ("string") ((mem "toDigit" false))))
 (DNewtype true "Bytes" () "Bytes" (TyCon "ByteBlock") ())

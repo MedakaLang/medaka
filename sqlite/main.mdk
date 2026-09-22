@@ -63,7 +63,7 @@ import lib.sqlite.{
   rowCellsWithIpk,
 }
 import lib.btree.{Row, rowRowid, rowCells}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat, cellToString}
+import lib.recordfmt.{Cell(..), cellToString}
 import lib.sqlexec.{execSql, outRows}
 import string.{join, toUpper, words}
 

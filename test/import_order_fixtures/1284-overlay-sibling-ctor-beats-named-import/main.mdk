@@ -1,5 +1,5 @@
-import zmod.{ZZ, Sib, unz}
-import cmod.{CtorOnly, unw}
+import zmod.{ZZ(..), unz}
+import cmod.{Wrap(..), unw}
 
 v : ZZ
 v = Sib "s"

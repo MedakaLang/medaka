@@ -42,7 +42,7 @@
 -- native arm is wrong on its shape today, #1305 — so it is not a sibling directory
 -- here and the path is spelled in full.)
 import omodn.{OT(..), unOT}
-import pmodn.{PU, Wid, unPU}
+import pmodn.{PU(..), unPU}
 
 main : <IO> Unit
 main =

@@ -107,7 +107,7 @@ import lib.overflow.{
   indexMaxLocalPayload as ovflIndexMaxLocalPayload,
 }
 import lib.recordenc.{encodeRecord}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CBlob, CFloat}
+import lib.recordfmt.{Cell(..)}
 
 -- ---------------------------------------------------------------------------
 -- Constants

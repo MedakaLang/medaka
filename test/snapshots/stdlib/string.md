@@ -31,7 +31,7 @@ stages=DESUGAR,MARK
 -- `unwords`) are `List`-typed; `toChars` is the one `Array` function.  No
 -- List/Array duals: `arrayFromList` and `array.toList` convert in one call.
 
-import core.{Eq, Ord, Debug, Foldable, Mappable, Option, Ordering}
+import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option}
 
 -- `Debug String`/`Debug Char` and the other primitive instances live in the
 -- prelude (`core.mdk`), so they resolve without importing `string`.
@@ -825,7 +825,7 @@ centerPad l r c s =
 half : Int -> Int
 half k = if k <= 1 then 0 else 1 + half (k - 2)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Ordering" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))))
 (DTypeSig true "isAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))
@@ -987,7 +987,7 @@ half k = if k <= 1 then 0 else 1 + half (k - 2)
 (DTypeSig false "half" (TyFun (TyCon "Int") (TyCon "Int")))
 (DFunDef false "half" ((PVar "k")) (EIf (EBinOp "<=" (EVar "k") (ELit (LInt 1))) (ELit (LInt 0)) (EBinOp "+" (ELit (LInt 1)) (EApp (EVar "half") (EBinOp "-" (EVar "k") (ELit (LInt 2)))))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false) (mem "Ordering" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Ord" false) (mem "Debug" false) (mem "Foldable" false) (mem "Mappable" false) (mem "Option" false))))
 (DTypeSig true "isDigit" (TyFun (TyCon "Char") (TyCon "Bool")))
 (DFunDef false "isDigit" ((PVar "c")) (EBinOp "&&" (EBinOp ">=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 48))) (EBinOp "<=" (EApp (EVar "charCode") (EVar "c")) (ELit (LInt 57)))))
 (DTypeSig true "isAlpha" (TyFun (TyCon "Char") (TyCon "Bool")))

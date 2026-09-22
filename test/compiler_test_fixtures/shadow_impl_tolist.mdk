@@ -1,4 +1,4 @@
-import core.{Eq, Debug}
+import core.{Ordering(..), Debug}
 
 -- Regression for the MULTI-MODULE eval-path recursion that SIGBUS'd
 -- `medaka test stdlib/map.mdk` even after the flat-path Foldable false-positive

@@ -1,0 +1,8 @@
+-- #3314: a selective member list naming a constructor directly
+-- (`import m.{Ctor}`) is a located reject at resolve time, so check/run/build
+-- must all agree it is REJECTed for the identical reason
+-- (R-BARE-CTOR-IMPORT) — never one engine executing past the bad import.
+import lib.rca3314_colors.{Red}
+
+main : <IO> Unit
+main = println "MUST-NOT-EXECUTE"

@@ -1,5 +1,5 @@
-import amodd.{A1, Dup}
-import zmod.{Z1, Dup, zf}
+import amodd.{A1, Z1(..)}
+import zmod.{Z1(..), zf}
 
 d = Dup 1
 

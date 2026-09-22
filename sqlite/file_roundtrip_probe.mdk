@@ -21,7 +21,7 @@ import lib.dbwriter.{writeDatabase}
 import lib.sqlite.{Db, openDb, scanTableRows}
 import lib.mutate.{delete, update, assign}
 import lib.select.{eColInt, eLitI, eEq, eGt}
-import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 import lib.btree.{Row}
 import demo_support.{printRows}
 

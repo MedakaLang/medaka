@@ -20,14 +20,13 @@
 -- (references_fixtures/iface_collide/) because a second interface declaring
 -- `sizeOf` anywhere in this closure makes the calls below genuinely ambiguous
 -- ("No impl of Weighty for Box") — impls are in dispatch scope transitively.
-import iface.{Sized, sizeOf, Box, Small, Big}
+import iface.{Sized, sizeOf, Box(..)}
 import noimport
 
 -- S0-2: an impl in a DIFFERENT module from its interface. Resolving through the
 -- import must yield `iface`'s key, NOT `main`'s — a regression that keyed on the
 -- impl's own module id would split this off into `main|method|sizeOf`.
-data Crate =
-  | Crate
+data Crate = Crate
 
 impl Sized Crate where
   sizeOf Crate = 7
@@ -36,8 +35,7 @@ impl Sized Crate where
 -- module as the one above. Both heads must coexist under the one key at distinct
 -- Locs — `pushDef`'s dedup must NOT collapse them (it only drops an identical
 -- (uri, span)), because a rename has to edit both.
-data Pallet =
-  | Pallet
+data Pallet = Pallet
 
 impl Sized Pallet where
   sizeOf Pallet = 9
@@ -45,8 +43,7 @@ impl Sized Pallet where
 -- S0-4: an impl of a PRELUDE interface. The head joins `core|method|eq` — a
 -- project-local location under a prelude key, which is F1-correct (it is inside
 -- the project) and is what makes `references` on `eq` show the user's own impls.
-data Tag =
-  | Tag
+data Tag = Tag
 
 impl Eq Tag where
   eq Tag Tag = True
@@ -54,8 +51,10 @@ impl Eq Tag where
 -- Control: `describeBox` is an ordinary single-clause top-level fn, so its ONE
 -- def site proves the golden distinguishes "impl heads recorded" from "extra
 -- entries appearing everywhere".
-export describeBox : Box -> Int
+export
+describeBox : Box -> Int
 describeBox b = sizeOf b
 
-export total : Int
+export
+total : Int
 total = sizeOf Small + sizeOf Crate + sizeOf Pallet

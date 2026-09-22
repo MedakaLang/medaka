@@ -12,13 +12,13 @@
 --
 -- The head below must land on `iface|method|sizeOf`, same as every other impl of
 -- `Sized`, with no method import anywhere in this file.
-import iface.{Sized, Box, Small}
+import iface.{Sized, Box(..)}
 
-data Sack =
-  | Sack
+data Sack = Sack
 
 impl Sized Sack where
   sizeOf Sack = 3
 
-export aBox : Box
+export
+aBox : Box
 aBox = Small

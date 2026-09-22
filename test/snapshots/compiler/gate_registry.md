@@ -22,7 +22,7 @@ stages=DESUGAR,MARK
    shard certifies coverage of a gate that never ran. -}
 
 import toml.{Toml, parse, getString, getArray, getBool, tableCount, tableEntry}
-import json.{Json, JString, JBool, jArray, jObject, stringify}
+import json.{Json(..), jArray, jObject, stringify}
 import tools.gate_cost.{baselineKey}
 import support.util.{splitOnChar}
 import regex.{mustCompile, isFullMatch, escape}
@@ -603,7 +603,7 @@ prop "a trailing * matches any suffix" (n : Int) =
   globMatch "g*" ("g" ++ intToString n)
 # DESUGAR
 (DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getArray" false) (mem "getBool" false) (mem "tableCount" false) (mem "tableEntry" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "baselineKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DUse false (UseGroup ("regex") ((mem "mustCompile" false) (mem "isFullMatch" false) (mem "escape" false))))
@@ -700,7 +700,7 @@ prop "a trailing * matches any suffix" (n : Int) =
 (DProp false "a trailing * matches any suffix" ((pp "n" (TyCon "Int"))) (EApp (EApp (EVar "globMatch") (ELit (LString "g*"))) (EBinOp "++" (ELit (LString "g")) (EApp (EVar "intToString") (EVar "n")))))
 # MARK
 (DUse false (UseGroup ("toml") ((mem "Toml" false) (mem "parse" false) (mem "getString" false) (mem "getArray" false) (mem "getBool" false) (mem "tableCount" false) (mem "tableEntry" false))))
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false))))
 (DUse false (UseGroup ("tools" "gate_cost") ((mem "baselineKey" false))))
 (DUse false (UseGroup ("support" "util") ((mem "splitOnChar" false))))
 (DUse false (UseGroup ("regex") ((mem "mustCompile" false) (mem "isFullMatch" false) (mem "escape" false))))

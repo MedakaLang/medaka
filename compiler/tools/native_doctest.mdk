@@ -54,7 +54,7 @@
 -- covers `compiler/entries/*` but NOT a `compiler/tools/` module that nothing
 -- imports.
 
-import frontend.ast.{Decl, DFunDef, DData, DInterface}
+import frontend.ast.{Decl(..)}
 import driver.build_cmd.{
   ppBuildReport,
   makeTempDir,

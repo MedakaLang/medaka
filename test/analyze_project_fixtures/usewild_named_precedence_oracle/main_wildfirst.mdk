@@ -36,7 +36,7 @@
 -- the program died at runtime on the case nobody warned about.  Swapping the two import
 -- lines reported `Blue` correctly.  Base `c7c879b7` reported `Blue` in BOTH orders.
 import zzcol.*
-import aacol.{Red, Blue, aval}
+import aacol.{Col(..), aval}
 
 f x = match x
   Red => 1

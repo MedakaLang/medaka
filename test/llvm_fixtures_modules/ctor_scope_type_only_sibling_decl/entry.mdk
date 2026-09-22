@@ -25,7 +25,7 @@
 -- green either way — so it is the member `T`, not the mere presence of `Wrap`, that
 -- drives it.  Deleting `Wrap` is NOT a usable control: it also un-exports the name
 -- `T`, so the import fails at RESOLVE with `Module 'pmod' has no exported name 'T'`.
-import pmod.{T, pf}
+import pmod.{Wrap(..), pf}
 
 data Loc = T String
 

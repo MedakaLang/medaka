@@ -1,4 +1,4 @@
-import asyncmod.{Async, Done, Suspend}
+import asyncmod.{Async(..)}
 
 -- `runr`'s effect var `e` is pinned by the Row-kinded slot of the IMPORTED
 -- `Async e a` argument, so it is well-formed and MUST typecheck (accept) — the

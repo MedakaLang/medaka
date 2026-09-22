@@ -16,7 +16,7 @@
 
 import lib.dbwriter.{buildDatabaseMulti}
 import lib.sqlite.{Db, fromBytes}
-import lib.recordfmt.{Cell, CNull, CInt, CText}
+import lib.recordfmt.{Cell(..)}
 import lib.rowtype.{tCells}
 import lib.sqlstmt.{queryString}
 import demo_support.{printRows, showCellRow}

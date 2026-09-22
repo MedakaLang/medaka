@@ -17,7 +17,7 @@ stages=DESUGAR,MARK
 -- prop_runner, results are printed AS each test is evaluated, so a body that
 -- aborts the run does not mask the tests that already passed.
 
-import frontend.ast.{Decl, DAttrib, DExtern, DFunDef, DTest, Expr(..), Loc(..)}
+import frontend.ast.{Decl(..), Expr(..), Loc(..)}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.resolve.{firstExprLoc}
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}
@@ -198,7 +198,7 @@ closureOver graph seen (w :: work)
     let _ = setInPlace w () seen
     closureOver graph seen (findWithDefault [] w graph ++ work)
 # DESUGAR
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DAttrib" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DTest" false) (mem "Expr" true) (mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))
@@ -248,7 +248,7 @@ closureOver graph seen (w :: work)
 (DFunDef false "closureOver" (PWild PWild (PList)) (ELit LUnit))
 (DFunDef false "closureOver" ((PVar "graph") (PVar "seen") (PCons (PVar "w") (PVar "work"))) (EIf (EApp (EApp (EVar "has") (EVar "w")) (EVar "seen")) (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EVar "work")) (EIf (EVar "otherwise") (EBlock (DoLet false false PWild (EApp (EApp (EApp (EVar "setInPlace") (EVar "w")) (ELit LUnit)) (EVar "seen"))) (DoExpr (EApp (EApp (EApp (EVar "closureOver") (EVar "graph")) (EVar "seen")) (EBinOp "++" (EApp (EApp (EApp (EVar "findWithDefault") (EListLit)) (EVar "w")) (EVar "graph")) (EVar "work"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 # MARK
-(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" false) (mem "DAttrib" false) (mem "DExtern" false) (mem "DFunDef" false) (mem "DTest" false) (mem "Expr" true) (mem "Loc" true))))
+(DUse false (UseGroup ("frontend" "ast") ((mem "Decl" true) (mem "Expr" true) (mem "Loc" true))))
 (DUse false (UseGroup ("frontend" "marker") ((mem "declRefs" false) (mem "localBoundNames" false))))
 (DUse false (UseGroup ("frontend" "resolve") ((mem "firstExprLoc" false))))
 (DUse false (UseGroup ("eval" "eval") ((mem "Value" true) (mem "EvalEnv" true) (mem "eval" false) (mem "extendEnv" false) (mem "force" false) (mem "ppValue" false))))

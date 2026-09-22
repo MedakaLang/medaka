@@ -25,12 +25,7 @@
 -- emits a JSON-RPC error object over its transport, so there is nothing to copy.
 
 import json.{
-  Json,
-  JNull,
-  JInt,
-  JString,
-  JBool,
-  JObject,
+  Json(..),
   jObject,
   jArray,
   stringify,

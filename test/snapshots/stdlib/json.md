@@ -27,7 +27,7 @@ stages=DESUGAR,MARK
 -- pair decodes to its astral scalar value, and a lone surrogate is a parse
 -- error, not silent corruption.
 
-import core.{Eq, Debug, Display, Option, Result, Thenable, map}
+import core.{Ordering(..), Debug, Display, Option, Result, Thenable, map}
 import list.{reverse}
 import array
 import string.{join, fromChars, isDigit, toInt}
@@ -778,7 +778,7 @@ prop "at k recovers the k-th element of a JArray" (n : Int) =
 prop "get finds an inserted key" (k : Int) (v : Int) =
   get (intToString k) (jObject [(intToString k, JInt v)]) == Some (JInt v)
 # DESUGAR
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseName ("array")))
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "fromChars" false) (mem "isDigit" false) (mem "toInt" false))))
@@ -966,7 +966,7 @@ prop "get finds an inserted key" (k : Int) (v : Int) =
 (DProp false "at k recovers the k-th element of a JArray" ((pp "n" (TyCon "Int"))) (EBlock (DoLet false false (PVar "k") (EIf (EBinOp "<" (EVar "n") (ELit (LInt 0))) (EBinOp "-" (ELit (LInt 0)) (EVar "n")) (EVar "n"))) (DoExpr (EBinOp "==" (EApp (EApp (EVar "at") (EVar "k")) (EApp (EVar "jArray") (EApp (EApp (EVar "map") (EVar "JInt")) (ERangeList (ELit (LInt 0)) (EVar "k") true)))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "k")))))))
 (DProp false "get finds an inserted key" ((pp "k" (TyCon "Int")) (pp "v" (TyCon "Int"))) (EBinOp "==" (EApp (EApp (EVar "get") (EApp (EVar "intToString") (EVar "k"))) (EApp (EVar "jObject") (EListLit (ETuple (EApp (EVar "intToString") (EVar "k")) (EApp (EVar "JInt") (EVar "v")))))) (EApp (EVar "Some") (EApp (EVar "JInt") (EVar "v")))))
 # MARK
-(DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
+(DUse false (UseGroup ("core") ((mem "Ordering" true) (mem "Debug" false) (mem "Display" false) (mem "Option" false) (mem "Result" false) (mem "Thenable" false) (mem "map" false))))
 (DUse false (UseGroup ("list") ((mem "reverse" false))))
 (DUse false (UseName ("array")))
 (DUse false (UseGroup ("string") ((mem "join" false) (mem "fromChars" false) (mem "isDigit" false) (mem "toInt" false))))

@@ -37,7 +37,7 @@
 -- golden cannot catch an over-widening, only the permutation pair can, and either
 -- cell alone would have read as proof the compiler was fine.
 import pvmod.{Zt(..), unP}
-import pubmod.{Zt, unQ}
+import pubmod.{TQ(..), unQ}
 
 main : <IO> Unit
 main =

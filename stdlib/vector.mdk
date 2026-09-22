@@ -19,9 +19,8 @@
 -- fill, so no dummy value is needed to construct one.
 
 import core.{
-  Eq,
+  Ordering(..),
   Ord,
-  Ordering,
   Debug,
   Display,
   Foldable,

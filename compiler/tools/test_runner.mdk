@@ -13,7 +13,7 @@
 -- prop_runner, results are printed AS each test is evaluated, so a body that
 -- aborts the run does not mask the tests that already passed.
 
-import frontend.ast.{Decl, DAttrib, DExtern, DFunDef, DTest, Expr(..), Loc(..)}
+import frontend.ast.{Decl(..), Expr(..), Loc(..)}
 import frontend.marker.{declRefs, localBoundNames}
 import frontend.resolve.{firstExprLoc}
 import eval.eval.{Value(..), EvalEnv(..), eval, extendEnv, force, ppValue}

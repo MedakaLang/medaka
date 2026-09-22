@@ -16,13 +16,11 @@
    write `V.toResult`. -}
 
 import core.{
-  Result,
-  Ok,
-  Err,
+  Result(..),
   Mappable,
   Applicative,
   Semigroup,
-  Eq,
+  Ordering(..),
   Debug,
   Display,
   Foldable,

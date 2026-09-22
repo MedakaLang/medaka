@@ -21,18 +21,14 @@ import test.{Expectation, expectEqual, fail}
 import lib.writer.{
   TableSchema,
   Column,
-  ColType,
-  TInteger,
-  TText,
-  TReal,
-  TBlob,
+  ColType(..),
   buildTableWithIndexes,
 }
 import lib.sqlite.{Db, fromBytes, scanTableRows}
 import lib.btree.{Row, rowRowid, rowCells}
 import lib.indexlookup.{seekByIndex}
 import lib.dbwriter.{compareCellsSqlite}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat, CBlob}
+import lib.recordfmt.{Cell(..)}
 import list.{sort, get}
 
 -- ---------------------------------------------------------------------------

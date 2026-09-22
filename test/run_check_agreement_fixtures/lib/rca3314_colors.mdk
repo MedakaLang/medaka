@@ -1,0 +1,2 @@
+-- Imported module for the #3314 bare-ctor-import agreement fixture.
+public export data Color = Red | Green

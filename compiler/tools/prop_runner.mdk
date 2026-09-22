@@ -16,14 +16,8 @@
 -- test/diff_compiler_fmt_test.mdk's `testGoldenFailure`.
 
 import frontend.ast.{
-  Decl,
+  Decl(..),
   Expr,
-  DProp,
-  DData,
-  DNewtype,
-  DImpl,
-  DTypeAlias,
-  DAttrib,
   PropParam,
   ImplMethod(..),
   Ty(..),

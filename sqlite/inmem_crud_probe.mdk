@@ -22,7 +22,7 @@
 
 import lib.dbwriter.{buildDatabase}
 import lib.sqlite.{Db, fromBytes, scanTableRows}
-import lib.recordfmt.{Cell, CNull, CInt, CText, CFloat}
+import lib.recordfmt.{Cell(..)}
 import lib.btree.{Row}
 import demo_support.{printRows}
 

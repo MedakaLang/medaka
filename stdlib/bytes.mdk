@@ -100,7 +100,15 @@
 -- why the doc points a caller at it.
 
 import core.{
-  Eq, Ord, Ordering, Debug, Option, Index, Slice, Semigroup, Monoid, Hashable
+  Ordering(..),
+  Ord,
+  Debug,
+  Option,
+  Index,
+  Slice,
+  Semigroup,
+  Monoid,
+  Hashable,
 }
 import array.{findIndex, fromList}
 import string.{toDigit}

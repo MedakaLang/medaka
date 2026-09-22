@@ -33,7 +33,7 @@ stages=DESUGAR,MARK
    non-`other-job` entries' `run` fields is a bijection onto the baseline's 202
    gate names — 0 missing, 0 duplicate keys, 0 unused baseline rows. -}
 
-import json.{JNull, Json, asArray, asBool, asInt, asString, get, parse}
+import json.{Json(..), asArray, asBool, asInt, asString, get, parse}
 import support.util.{contains, joinWith, listLen, splitOnChar, startsWith}
 
 {- | One gate's measured cost.  `medianMs` is the baseline's `medianMs` —
@@ -655,7 +655,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
   gateSetDigest ("a\{intToString n}" :: "b\{intToString n}" :: [])
     /= gateSetDigest ("a\{intToString n}" :: "c\{intToString n}" :: [])
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))
@@ -756,7 +756,7 @@ prop "gateSetDigest separates a same-size swap" (n : Int) =
 (DProp false "gateSetDigest ignores order" ((pp "n" (TyCon "Int"))) (EBinOp "==" (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit)))) (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit))))))
 (DProp false "gateSetDigest separates a same-size swap" ((pp "n" (TyCon "Int"))) (EBinOp "/=" (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "b")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit)))) (EApp (EVar "gateSetDigest") (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "a")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EBinOp "::" (EBinOp "++" (EBinOp "++" (ELit (LString "c")) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "n")))) (ELit (LString ""))) (EListLit))))))
 # MARK
-(DUse false (UseGroup ("json") ((mem "JNull" false) (mem "Json" false) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "asArray" false) (mem "asBool" false) (mem "asInt" false) (mem "asString" false) (mem "get" false) (mem "parse" false))))
 (DUse false (UseGroup ("support" "util") ((mem "contains" false) (mem "joinWith" false) (mem "listLen" false) (mem "splitOnChar" false) (mem "startsWith" false))))
 (DData Public "GateCost" () ((variant "GateCost" (ConNamed (field "name" (TyCon "String")) (field "medianMs" (TyCon "Int")) (field "samples" (TyCon "Int")) (field "ms" (TyApp (TyCon "List") (TyCon "Int"))) (field "sampleRuns" (TyApp (TyCon "List") (TyCon "String")))))) ())
 (DTypeSig true "baselineKey" (TyFun (TyCon "String") (TyCon "String")))

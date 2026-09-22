@@ -1,5 +1,5 @@
 # META
-source_lines=3588
+source_lines=3584
 stages=DESUGAR,MARK
 # SOURCE
 {- gate_cmd.mdk — `medaka gate`, the gate-registry driver (#2176, epic #2182).
@@ -31,11 +31,7 @@ stages=DESUGAR,MARK
    See the `gate run` section below. -}
 
 import json.{
-  Json,
-  JString,
-  JInt,
-  JFloat,
-  JBool,
+  Json(..),
   jArray,
   jObject,
   stringify,
@@ -3591,7 +3587,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
               "medaka gate budget: cannot read cost baseline \{basePath}: \{m}")
         Ok baseSrc => emit (budgetOutput regPath regSrc baseSrc a.commitMessage)
 # DESUGAR
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "joinPath" false))))
@@ -4334,7 +4330,7 @@ budgetCmdBody argv = match parseBudgetArgs argv
 (DTypeSig false "budgetCmdBody" (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyEffect ("IO") None (TyCon "Unit"))))
 (DFunDef false "budgetCmdBody" ((PVar "argv")) (EMatch (EApp (EVar "parseBudgetArgs") (EVar "argv")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EVar "m")))) (arm (PCon "Ok" (PVar "a")) () (EBlock (DoLet false false (PVar "root") (EApp (EApp (EVar "envOr") (ELit (LString "MEDAKA_ROOT"))) (EVar "defaultMedakaRoot"))) (DoLet false false (PVar "regPath") (EApp (EVar "registryPath") (EFieldAccess (EVar "a") "registry"))) (DoLet false false (PVar "basePath") (EApp (EApp (EVar "balBaselinePath") (EFieldAccess (EVar "a") "baseline")) (EVar "root"))) (DoExpr (EMatch (EApp (EVar "readFile") (EVar "regPath")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: cannot read registry: ")) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "regSrc")) () (EMatch (EApp (EVar "readFile") (EVar "basePath")) (arm (PCon "Err" (PVar "m")) () (EApp (EVar "emit") (EApp (EVar "Err") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "medaka gate budget: cannot read cost baseline ")) (EApp (EVar "display") (EVar "basePath"))) (ELit (LString ": "))) (EApp (EVar "display") (EVar "m"))) (ELit (LString "")))))) (arm (PCon "Ok" (PVar "baseSrc")) () (EApp (EVar "emit") (EApp (EApp (EApp (EApp (EVar "budgetOutput") (EVar "regPath")) (EVar "regSrc")) (EVar "baseSrc")) (EFieldAccess (EVar "a") "commitMessage"))))))))))))
 # MARK
-(DUse false (UseGroup ("json") ((mem "Json" false) (mem "JString" false) (mem "JInt" false) (mem "JFloat" false) (mem "JBool" false) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
+(DUse false (UseGroup ("json") ((mem "Json" true) (mem "jArray" false) (mem "jObject" false) (mem "stringify" false) (mem "parse" false "parseJson") (mem "get" false "jsonGet") (mem "asInt" false "jsonAsInt"))))
 (DUse false (UseGroup ("driver" "build_cmd") ((mem "envOr" false) (mem "defaultMedakaRoot" false))))
 (DUse false (UseGroup ("driver" "loader") ((mem "entrySearchRoots" false) (mem "findProjectRootOrSelf" false) (mem "readDeps" false))))
 (DUse false (UseGroup ("support" "path") ((mem "dirOf" false) (mem "joinPath" false))))

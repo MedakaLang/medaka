@@ -82,7 +82,7 @@ import lib.sqlite.{
 }
 import lib.btree.{Row, rowRowid}
 import lib.dbwriter.{buildDatabaseMultiExplicit}
-import lib.recordfmt.{Cell, CNull, CInt}
+import lib.recordfmt.{Cell(..)}
 import lib.schemadef.{
   CreateTable,
   ColDef,

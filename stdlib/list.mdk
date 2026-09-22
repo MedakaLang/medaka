@@ -10,7 +10,7 @@
    `Traversable` interfaces) are defined in the prelude and work on lists
    without an import. This module holds what is specific to lists. -}
 
-import core.{Eq, Ord, Debug, Foldable, Mappable, Ordering, Option, Result}
+import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option, Result}
 
 -- # Re-exports
 

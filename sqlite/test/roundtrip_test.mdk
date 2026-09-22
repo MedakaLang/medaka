@@ -22,7 +22,7 @@ import test.dbfix.{q, qd}
 import byteparser.{runByteParser}
 import lib.varint.{sqVarint, sqVarintBytes}
 import lib.recordenc.{encodeRecord}
-import lib.recordfmt.{Cell, CInt, CText, CNull, parseRecord}
+import lib.recordfmt.{Cell(..), parseRecord}
 import lib.sqlstmt.{parseSelect, renderSelect}
 
 -- ── varint: sqVarintBytes ∘ sqVarint = identity (over the ≤ 8-byte range) ───

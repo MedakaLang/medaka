@@ -27,7 +27,7 @@
 -- `unwords`) are `List`-typed; `toChars` is the one `Array` function.  No
 -- List/Array duals: `arrayFromList` and `array.toList` convert in one call.
 
-import core.{Eq, Ord, Debug, Foldable, Mappable, Option, Ordering}
+import core.{Ordering(..), Ord, Debug, Foldable, Mappable, Option}
 
 -- `Debug String`/`Debug Char` and the other primitive instances live in the
 -- prelude (`core.mdk`), so they resolve without importing `string`.

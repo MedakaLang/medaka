@@ -145,6 +145,11 @@ public export data ResError =
   -- direct `Ctor` import member), owning module.  A `newtype`'s constructor is
   -- unconditionally module-private (no `public newtype` spelling exists), so
   -- unlike NoExportedConstructors there is no `public export` remedy (#1311).
+  | BareCtorImport String String (Option Loc)
+  -- ctor name as written, owning type name: a selective member list names a
+  -- data constructor directly (`import m.{Red}`) rather than its type.
+  -- Ruled a reject, not a warning (#3314) — the fix is `T(..)` to bring the
+  -- type's constructors in as a set, or an aliased `Alias.Ctor` reference.
   | EffectLabelNoMembers String String (Option Loc)
   -- effect label name, owning module: `Label(..)` on an effect label — an
   -- effect label has no constructors or fields to bring, unlike a type, so
@@ -268,6 +273,7 @@ resErrorLoc (ExternWithBody _ l) = l
 resErrorLoc (PrivateNameAccess _ _ l) = l
 resErrorLoc (NoExportedConstructors _ _ l) = l
 resErrorLoc (NewtypeCtorNotExported _ _ l) = l
+resErrorLoc (BareCtorImport _ _ l) = l
 resErrorLoc (EffectLabelNoMembers _ _ l) = l
 resErrorLoc (AbstractFieldAccess _ _ l) = l
 resErrorLoc (UnknownModule _ l) = l
@@ -2410,6 +2416,7 @@ resErrorSexp (NoExportedConstructors n m _) =
   "(NoExportedConstructors \{escStr n} \{escStr m})"
 resErrorSexp (NewtypeCtorNotExported n m _) =
   "(NewtypeCtorNotExported \{escStr n} \{escStr m})"
+resErrorSexp (BareCtorImport n t _) = "(BareCtorImport \{escStr n} \{escStr t})"
 resErrorSexp (EffectLabelNoMembers n m _) =
   "(EffectLabelNoMembers \{escStr n} \{escStr m})"
 resErrorSexp (AbstractFieldAccess t f _) =
@@ -2537,6 +2544,8 @@ ppResError (NoExportedConstructors n m _) =
   "'\{n}' exports no constructors from module '\{m}' (exported abstractly). Remove `(..)`, or export them: declare '\{n}' a `public export data` where it is defined, and name it `\{n}(..)` in any `export import` that re-exports it (`public` is a parse error on `import`)"
 ppResError (NewtypeCtorNotExported n m _) =
   "'\{n}' exports no constructors: a `newtype`'s constructor is always module-private, and `public` is a parse error on `newtype`. Expose it with an accessor function, or declare '\{n}' as a `public export data` with one variant"
+ppResError (BareCtorImport n t _) =
+  "'\{n}' is a constructor of '\{t}'. Import it as `\{t}(..)` to bring in \{t}'s constructors as a set, or alias the module and write `<alias>.\{n}`"
 ppResError (EffectLabelNoMembers n m _) =
   "'\{n}' is an effect label, not a type: `(..)` names constructors to bring into scope, and an effect label has none. Remove `(..)` and import '\{n}' directly"
 ppResError (AbstractFieldAccess t f _) =
@@ -2627,6 +2636,7 @@ resErrorCode (ExternWithBody _ _) = "R-EXTERN-WITH-BODY"
 resErrorCode (PrivateNameAccess _ _ _) = "R-PRIVATE-NAME"
 resErrorCode (NoExportedConstructors _ _ _) = "R-NO-EXPORTED-CTORS"
 resErrorCode (NewtypeCtorNotExported _ _ _) = "R-NEWTYPE-CTOR-PRIVATE"
+resErrorCode (BareCtorImport _ _ _) = "R-BARE-CTOR-IMPORT"
 resErrorCode (EffectLabelNoMembers _ _ _) = "R-EFFECT-LABEL-NO-MEMBERS"
 resErrorCode (AbstractFieldAccess _ _ _) = "R-ABSTRACT-FIELD"
 resErrorCode (UnknownModule _ _) = "R-UNKNOWN-MODULE"
@@ -2784,6 +2794,18 @@ isPubExp exp n =
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeCtorsOf name exp = lookupAssoc name exp.expTypeCtors
 
+-- Reverse of typeCtorsOf: the type a constructor belongs to, if `name` is a
+-- plain (non-newtype) constructor this module exports. Used to refuse a bare
+-- `import m.{Ctor}` member (#3314) — the message needs the owning type's name
+-- for the `T(..)` remedy it offers.
+typeOfCtor : String -> ModuleExports -> Option String
+typeOfCtor name exp = ctorTypeLookup name exp.expTypeCtors
+
+ctorTypeLookup : String -> List (String, List String) -> Option String
+ctorTypeLookup _ [] = None
+ctorTypeLookup name ((ty, ctors) :: rest) =
+  if contains name ctors then Some ty else ctorTypeLookup name rest
+
 -- newtype's type name, if `name` is that newtype's exported ctor (#1311).
 newtypeTypeOfCtor : String -> ModuleExports -> Option String
 newtypeTypeOfCtor name exp = lookupAssoc name exp.expNewtypeCtors
@@ -2915,7 +2937,16 @@ expandMemberNames exp (m@(UseMember name False loc _)) =
     -- the empty arm is the refusal; see expandMemberErrs
     Some _ =>
       if contains name exp.expTypes then [(name, useMemberLocal m, loc)] else []
-    None => [(name, useMemberLocal m, loc)]
+    None =>
+      if contains name exp.expTypes then
+        -- a self-named type/ctor: the plain member binds the TYPE (#3205's
+        -- same reasoning, extended from newtypes to ordinary data)
+        [(name, useMemberLocal m, loc)]
+      else match typeOfCtor name exp
+        -- a bare data constructor, not also a type name of its own: the
+        -- empty arm is the refusal (#3314); see expandMemberErrs
+        Some _ => []
+        None => [(name, useMemberLocal m, loc)]
 expandMemberNames exp (m@(UseMember name True loc _))
   | isNewtypeExport name exp =
     -- keep the TYPE name bound (mirrors abstract `data`: `NT` itself is
@@ -2944,7 +2975,12 @@ expandMemberErrs exp (UseMember name False loc _) =
         []  -- a type import; see expandMemberNames
       else
         [NewtypeCtorNotExported tyName exp.modId (Some loc)]
-    None => []
+    None =>
+      if contains name exp.expTypes then
+        []  -- a self-named type/ctor; see expandMemberNames
+      else match typeOfCtor name exp
+        Some tyName => [BareCtorImport name tyName (Some loc)]
+        None => []
 expandMemberErrs exp (UseMember name True loc _)
   | isNewtypeExport name exp =
     [NewtypeCtorNotExported name exp.modId (Some loc)]
