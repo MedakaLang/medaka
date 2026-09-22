@@ -1525,26 +1525,48 @@ sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compil
 corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
 
-# What is left of that script once the verdict table (S-3) and the scheme
-# lines, per-verb warning surface and diagnostic spans (S-4) moved out: the
-# emitted-IR asserts and the declaration-order permutation. `split-first`
-# because the editorial split is what is still owed — two shapes remain in
-# one file, and they become a native row of their own, after which this row
-# and its file go. The corpus is narrowed to what the script actually reads:
-# `must_fail_fixtures` and `typecheck_error_fixtures` appear only inside row
-# labels.
+# Section 3 of the same conformance suite: `medaka build --keep-ir` and a
+# pinned pattern over the `.ll`, the only section that can see a dead dict slot
+# or an arity skew. Still shell, and `native-rewrite` is a destination rather
+# than an available move: the port needs a precedented native way to read a
+# `--keep-ir` `.ll` back off disk and grade a pattern over it, and no test
+# module in this tree does that yet — building that seam inside one gate
+# instead of in the test library is what epic #2600 exists to stop. The corpus
+# is what the script actually reads: `must_fail_fixtures` and
+# `typecheck_error_fixtures` appear only inside row labels.
 [[gate]]
-name = "diff_compiler_dict_semantics_residue"
+name = "diff_compiler_dict_semantics_ir"
 area = "infra"
 shard = "gates_2"
 project = "compiler"
 tiers = ["merge"]
 cost = "medium"
 kind = "exec"
-migration = "split-first"
-run = "test/diff_compiler_dict_semantics.sh"
+migration = "native-rewrite"
+run = "test/diff_compiler_dict_semantics_ir.sh"
 oracles = []
-sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics.sh"]
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics_ir.sh"]
+corpus = ["test/dict_fixtures"]
+toolchain = ["clang"]
+
+# Section 4: reverse the `impl` blocks of one interface and require check, run
+# and build to answer identically. The one section that needs no ground truth,
+# so it is what catches "the winner is decided by declaration order". Same
+# `native-rewrite` story as the row above, different missing piece: the port
+# needs a precedented native source transform that reverses a `.mdk`'s
+# top-level blocks, and no test module has one.
+[[gate]]
+name = "diff_compiler_dict_semantics_permute"
+area = "infra"
+shard = "gates_2"
+project = "compiler"
+tiers = ["merge"]
+cost = "medium"
+kind = "exec"
+migration = "native-rewrite"
+run = "test/diff_compiler_dict_semantics_permute.sh"
+oracles = []
+sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compiler/frontend/ast.mdk", "compiler/frontend/desugar.mdk", "compiler/frontend/marker.mdk", "compiler/frontend/parser.mdk", "compiler/frontend/resolve.mdk", "compiler/ir/*", "compiler/ir/core_ir_eval.mdk", "compiler/tools/*test*", "compiler/tools/doctest.mdk", "compiler/tools/prop_runner.mdk", "compiler/types/*", "test/diff_compiler_dict_semantics_permute.sh"]
 corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
 

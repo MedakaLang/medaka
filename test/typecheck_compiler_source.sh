@@ -523,7 +523,7 @@ echo "  ok: scopes_test.mdk only observes OriginUnresolved"
 #   * `implKeyTc` no longer mints a ROUTE. After `b1` its ONLY callers are
 #     `keyEntryOf`/`keyEntryOfRow`, which write `KeyEntry`'s 4th field — a field with
 #     NO READER (measured: stamping a literal `"__DEAD__"` at both sites builds,
-#     passes `make check-self`, and passes all of `diff_compiler_dict_semantics.sh`).
+#     passes `make check-self`, and passes all three dict-semantics gates).
 #     The live route words are minted from the winning ROW's own `irOrigin` at
 #     `keyForSite`/`keyForSiteByIface`, which is what carries identity.
 #   * It constructs no NODE. `OriginUnresolved` here is an ARGUMENT to a word mint

@@ -1164,7 +1164,7 @@ claim above survived contact with the implementation. `funConstraintArgsRef` is 
 the 1-ary path is byte-identical **by construction**; `constraintVarArgMonos` resolves the
 arguments with `fromAstType tvMap`; `substArgVec` substitutes with `substMono`. Arity
 neutrality is now pinned STRUCTURALLY by two emitted-IR rows in
-`test/diff_compiler_dict_semantics.sh` (`useIx` at arity 2 and arity 3) — no behavioural
+`test/diff_compiler_dict_semantics_ir.sh` (`useIx` at arity 2 and arity 3) — no behavioural
 assertion can see an arity move, which is why the value rows alone were not enough.
 ⚠️ **Two residuals were left SCALAR and are named at `declaredConstraintArgs`**, not
 covered by anything: the cross-module qual table (there is no `(definer, name)`-keyed

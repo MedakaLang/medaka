@@ -11,7 +11,7 @@
 -- F-3d's coherence reject is deferred and `pickMostSpecificEntry` commits to the HEAD
 -- of the candidate list -- the value is decided by which `impl Sh` block is written
 -- first. This is test/dict_fixtures/s6-2-t4-open-goal-deferred.mdk's shape, carried in
--- test/diff_compiler_dict_semantics.sh §4 as a KNOWN-BAD permutation row against
+-- test/diff_compiler_dict_semantics_permute.sh as a KNOWN-BAD permutation row against
 -- #1183, plus a second interface so this gate's permuter has two chunks to move.
 --
 -- ⚠️ THE #1182 SHAPE IS NOT MERELY MOVED, IT IS GONE FROM THIS CORPUS. Its

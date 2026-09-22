@@ -12,7 +12,7 @@ top-level import clauses, so this gate's permuter tries both 2! = 2 orderings.
 
 ## WHY THIS FIXTURE EXISTS WHERE IT DOES
 
-The `dict_fixtures/` copy is graded by `test/diff_compiler_dict_semantics.sh`, whose two
+The `dict_fixtures/` copy is graded by `test/diff_compiler_dict_semantics_ir.sh`, whose two
 structural rows for this shape (`^define i64 @mdk_lefty__widget\(i64 %arg0, i64 %arg1\)`
 and `^define i64 @mdk_righty__widget\(i64 %arg0\)`) read the EMIT path. `runEmitWith` runs
 `mangleUnits` BEFORE `elaborateModules`, which makes the emitter's bare keys accidentally
