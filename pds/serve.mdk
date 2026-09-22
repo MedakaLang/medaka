@@ -165,6 +165,7 @@ import shell.server.{
   defaultStatsInterval,
   makeServing,
   runServer,
+  servingStopping,
 }
 import string.{
   drop, indexOf, lines, startsWith, stripSuffix, take, toInt, toLower, trim
@@ -1045,16 +1046,18 @@ announce : String ->
   Serving ->
   Option RelayTarget ->
   Duration ->
+  Int ->
   Async <Clock, Env, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> Unit
-announce bind port lis store dir server serving relay statsInterval = defer
-  _ <- liftIO (u => ready bind port)
-  _ <- match relay
-    None => deferPure ()
-    Some target =>
-      spawn (announceToRelay target (accountHostname (serverAccount server)))
-  storeRef <- liftIO (u => Ref store)
-  outcome <- runServer server dir storeRef lis serving statsInterval
-  liftIO (u => reportOutcome outcome)
+announce bind port lis store dir server serving relay statsInterval signalFd =
+  defer
+    _ <- liftIO (u => ready bind port)
+    _ <- match relay
+      None => deferPure ()
+      Some target =>
+        spawn (announceToRelay target (accountHostname (serverAccount server)))
+    storeRef <- liftIO (u => Ref store)
+    outcome <- runServer server dir storeRef lis serving statsInterval signalFd
+    liftIO (u => reportOutcome outcome)
 
 bound : String ->
   Server ->
@@ -1072,8 +1075,23 @@ bound bind server store dir serving relay statsInterval (Ok lis) = defer
   match port
     Err message =>
       liftIO (u => abort "serve: listener port unavailable: \{message}")
-    Ok given =>
-      announce bind given lis store dir server serving relay statsInterval
+    Ok given => defer
+      installed <- liftIO (u => pdsSignalStart ())
+      match installed
+        Err message =>
+          liftIO (u => abort "serve: SIGTERM readiness failed: \{message}")
+        Ok signalFd =>
+          announce
+            bind
+            given
+            lis
+            store
+            dir
+            server
+            serving
+            relay
+            statsInterval
+            signalFd
 
 {- | Keep saying, for as long as this process runs, that it is the one holding
    the data directory. `shell.dirlock` grades a lock by whether this moves, so
@@ -1086,15 +1104,19 @@ bound bind server store dir serving relay statsInterval (Ok lis) = defer
    which parks this one task, and not `time.sleep`, which blocks the thread
    every other task shares. -}
 lockBeatLoop : DataLock ->
+  Ref Bool ->
   Async <Clock, FileRead "_", FileWrite "_", Stderr | e> Unit
-lockBeatLoop lock = defer
-  beat <- liftIO (u => holdDataLock lock)
-  match beat
-    LockLost message => liftIO (u => abort "serve: \{message}")
-    _ => defer
-      () <- liftIO (u => reportBeat beat)
-      () <- sleep lockBeatInterval
-      lockBeatLoop lock
+lockBeatLoop lock stopping = defer
+  if !stopping then
+    deferPure ()
+  else defer
+    beat <- liftIO (u => holdDataLock lock)
+    match beat
+      LockLost message => liftIO (u => abort "serve: \{message}")
+      _ => defer
+        () <- liftIO (u => reportBeat beat)
+        () <- sleep lockBeatInterval
+        lockBeatLoop lock stopping
 
 -- A heartbeat this process cannot write is reported and is not fatal: the
 -- server is up and answering, and ending a run over one missed beat would turn
@@ -1119,7 +1141,7 @@ start (Ok (server, store, dir, port, bind, serving, relay, statsInterval, lock, 
   defer
     _ <- liftIO (u => banner ())
     _ <- liftIO (u => startupLines lines)
-    _ <- spawn (lockBeatLoop lock)
+    _ <- spawn (lockBeatLoop lock (servingStopping serving))
     listener <- liftIO (u => bindAddress bind port)
     bound bind server store dir serving relay statsInterval listener
 

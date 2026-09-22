@@ -662,6 +662,24 @@ drill (criterion D5) is a manual exercise on a machine that holds the private
 key, and it is the only thing that proves a backup is good.** Run it before the
 first real post, and on a stated interval after.
 
+## Stopping the server
+
+`systemctl stop pds` sends SIGTERM. The native PDS alone installs an opt-in
+self-pipe signal wake after binding; it logs admission stop, finishes active
+requests or their existing timeouts, sends close frames to subscribers and
+logs the drained exit. Budget up to **95 seconds after admission stops** for
+the PDS's own deadline, plus any synchronous filesystem step already running;
+the checked-in `pds/pds.service` pins `TimeoutStopSec=110s`, leaving 15 seconds
+of margin after the app deadline rather than relying on systemd's 90-second
+default. Keep this directive when installing the unit; `daemon-reload` it so
+systemd does not kill the app before its logged deadline. Inspect the
+journal for `serve: shutdown complete; connections drained` (exit 0). A
+`shutdown deadline (95s)` line is a forced stop, not a drained one: inspect
+and verify event-log recovery on restart as in the runbook's
+[graceful stop](PDS-RUNBOOK.md#graceful-stop-during-a-soak). Do not infer
+backup behavior from this section; the backup deployment must be reconciled
+separately from the checked-in stop/start script.
+
 ## Down-detection: two mechanisms, deliberately
 
 Criterion E5 wants a down or crash-looping service to reach you within minutes.
