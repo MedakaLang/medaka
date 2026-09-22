@@ -326,6 +326,36 @@ The entries as pairs, in ascending key order.
 [(1, 10), (2, 20), (3, 30)]
 ```
 
+### `entriesFrom`
+
+```
+entriesFrom : Ord k => Option k -> Option Int -> Map k v -> List (k, v)
+```
+
+The entries from `start` upwards in ascending key order, at most `limit`
+of them.
+
+A `start` of `None` begins at the smallest key and a `limit` of `None` reads
+to the end, so `entriesFrom None None` is `entries`. The start key is
+inclusive and need not be present: the read begins at the next key above it.
+A `limit` of zero or less reads nothing.
+
+The read descends to `start` and stops as soon as the limit is met, without
+visiting the entries on either side of what it returns, so a page of a large
+map costs the page: `O(log n + limit)`, against the `O(n)` of taking a prefix
+of `entries`.
+
+```medaka
+> entriesFrom (Some "b") (Some 2) (fromList [("a", 1), ("b", 2), ("c", 3), ("d", 4)])
+[("b", 2), ("c", 3)]
+> entriesFrom (Some "b") (Some 0) (fromList [("a", 1), ("b", 2)])
+[]
+> entriesFrom (Some "z") None (fromList [("a", 1), ("b", 2)])
+[]
+> entriesFrom None None (fromList [("b", 2), ("a", 1)])
+[("a", 1), ("b", 2)]
+```
+
 ### `keys`
 
 ```

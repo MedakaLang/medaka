@@ -21,6 +21,7 @@ import lib.cid.{Cid, cidEqual, cidForDagCbor, cidToBytes}
 import lib.dagcbor.{DagCbor(..), dagCborDecode, dagCborEncode}
 import lib.mst.{
   Mst,
+  MstRangeQuery,
   mstDelete,
   mstEmpty,
   mstEntries,
@@ -28,6 +29,7 @@ import lib.mst.{
   mstInsert,
   mstLookup,
   mstNodeBlocks,
+  mstRange,
   mstReplace,
   mstRootCid,
   mstValidateBlocks,
@@ -602,6 +604,16 @@ repoLookup path (Repo _ _ _ tree store _) = do
 export
 repoEntries : Repo -> List (Array Int, Cid)
 repoEntries (Repo _ _ _ tree _ _) = mstEntries tree
+
+{- | The entries one bounded key range names, in the direction the query asks
+   for, without reading or decoding a record.
+
+   This is `repoEntries` for a route that answers with one page: the range
+   costs the entries it returns plus one node per tree layer, so the cost of a
+   page does not grow with the repository behind it. -}
+export
+repoEntriesRange : MstRangeQuery -> Repo -> List (Array Int, Cid)
+repoEntriesRange query (Repo _ _ _ tree _ _) = mstRange query tree
 
 -- | Strictly decode the record one `repoEntries` entry names.
 export

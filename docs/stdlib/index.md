@@ -617,6 +617,7 @@ An immutable map from keys to values, ordered by key.
 - [`foldrWithKey`](map.md#foldrwithkey)
 - [`foldlWithKey`](map.md#foldlwithkey)
 - [`entries`](map.md#entries)
+- [`entriesFrom`](map.md#entriesfrom)
 - [`keys`](map.md#keys)
 - [`values`](map.md#values)
 - [`mapWithKey`](map.md#mapwithkey)
