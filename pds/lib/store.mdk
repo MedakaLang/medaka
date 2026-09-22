@@ -110,33 +110,49 @@ emptyAuth = Auth None None []
    STORED and not what it has uploaded: re-uploading identical bytes leaves it
    where it was, exactly as it leaves the block store where it was. Keeping it
    here is what lets the account-usage check cost the same on a store of one
-   blob and a store of ten thousand. -}
-data BlobHalf = BlobHalf BlockStore (Map String (Cid, Option String)) Int
+   blob and a store of ten thousand.
+
+   The version counts the successful inserts this half has taken, and exists
+   so a caller can tell two blob halves apart without walking either: `set` in
+   `blobHalfPut` is unconditional, so every insert that admits a blob at all
+   advances the counter, and two halves sharing a counter value are two names
+   for one insert sequence. It may separate halves the index cannot — the same
+   bytes re-declared under the type they already had moves it — which costs a
+   caller a write it did not owe and never a change it failed to see. -}
+data BlobHalf = BlobHalf BlockStore (Map String (Cid, Option String)) Int Int
 
 blobHalfEmpty : BlobHalf
-blobHalfEmpty = BlobHalf blockStoreEmpty Tip 0
+blobHalfEmpty = BlobHalf blockStoreEmpty Tip 0 0
 
 -- The declared type recorded for a blob, or `None` for one that has no entry
 -- at all as well as one inserted without a type.
 declaredTypeOf : Cid -> BlobHalf -> Option String
-declaredTypeOf cid (BlobHalf _ index _) = match get (cidToString cid) index
+declaredTypeOf cid (BlobHalf _ index _ _) = match get (cidToString cid) index
   Some (_, declared) => declared
   None => None
 
 -- Insert one verified blob under an already-decided declared type. The byte
 -- total moves only when the block store gains a row: `blockStorePut` accepts
 -- an identical duplicate without storing it a second time, and a store that
--- counted such a re-upload would refuse an account its own quota.
+-- counted such a re-upload would refuse an account its own quota. The version
+-- moves on every insert the block store accepts, duplicate bytes included,
+-- because the declared type recorded for them can differ from the one they
+-- already carried.
 blobHalfPut : Cid ->
   Option String ->
   Array Int ->
   BlobHalf ->
   Result String BlobHalf
-blobHalfPut cid declared bytes (BlobHalf blocks index total) =
+blobHalfPut cid declared bytes (BlobHalf blocks index total version) =
   let stored =
     if blockStoreHas cid blocks then total else total + arrayLength bytes
   map
-    (next => BlobHalf next (set (cidToString cid) (cid, declared) index) stored)
+    (next =>
+      BlobHalf
+        next
+        (set (cidToString cid) (cid, declared) index)
+        stored
+        (version + 1))
     (blockStorePut cid bytes blocks)
 
 -- | Immutable verified protocol state. Its representation is private.
@@ -386,7 +402,23 @@ storeSessionsPrune now (Store blocks repo (Auth secret credential sessions) pref
 -- keeps its own blocks and is not counted here.
 export
 storeSize : Store -> Int
-storeSize (Store (BlobHalf blocks _ _) _ _ _) = blockStoreSize blocks
+storeSize (Store (BlobHalf blocks _ _ _) _ _ _) = blockStoreSize blocks
+
+{- | How many blobs have been inserted into the blob half, counting a blob
+   whose bytes were already there. The number itself names nothing; comparing
+   it either side of a transition is the whole of its use.
+
+   Paired with `storeSize` it separates two blob halves at a fixed cost. Every
+   other way of asking reads the half: `storeBlobMimeIndex` pairs up its whole
+   declared-type index and `storeBlobEntries` copies every blob's bytes, so a
+   caller that only needs to know whether anything moved would pay for the
+   account it is asking about. It never misses a change — the insert is the
+   only thing that moves this half, and it always advances this — and it may
+   report one where the recorded state is identical, which re-declaring a
+   blob's existing type is. -}
+export
+storeBlobVersion : Store -> Int
+storeBlobVersion (Store (BlobHalf _ _ _ version) _ _ _) = version
 
 {- | The total length of the distinct blobs the blob half holds, without
    walking one of them.
@@ -396,17 +428,18 @@ storeSize (Store (BlobHalf blocks _ _) _ _ _) = blockStoreSize blocks
    cap would otherwise read the whole account to decide one request. -}
 export
 storeBlobBytes : Store -> Int
-storeBlobBytes (Store (BlobHalf _ _ total) _ _ _) = total
+storeBlobBytes (Store (BlobHalf _ _ total _) _ _ _) = total
 
 -- | Whether the blob half already holds a blob, without copying its bytes.
 export
 storeHasBlob : Cid -> Store -> Bool
-storeHasBlob cid (Store (BlobHalf blocks _ _) _ _ _) = blockStoreHas cid blocks
+storeHasBlob cid (Store (BlobHalf blocks _ _ _) _ _ _) =
+  blockStoreHas cid blocks
 
 -- | Look up a blob-half block, returning a defensive copy.
 export
 storeGet : Cid -> Store -> Option (Array Int)
-storeGet cid (Store (BlobHalf blocks _ _) _ _ _) = blockStoreGet cid blocks
+storeGet cid (Store (BlobHalf blocks _ _ _) _ _ _) = blockStoreGet cid blocks
 
 -- | Verify and immutably insert a blob-half block, returning the successor
 -- store. No MIME type is recorded — this is the byte-only primitive
@@ -443,7 +476,8 @@ storeBlobMimeType cid (Store half _ _ _) = declaredTypeOf cid half
 -- `storeBlobCids`/`storeBlobCidTexts`/`storeBlobBytes` instead.
 export
 storeBlobEntries : Store -> List (Cid, Array Int)
-storeBlobEntries (Store (BlobHalf blocks _ _) _ _ _) = blockStoreEntries blocks
+storeBlobEntries (Store (BlobHalf blocks _ _ _) _ _ _) =
+  blockStoreEntries blocks
 
 {- | Every distinct verified CID in the blob half, in canonical CID order and
    carrying no bytes — what `sync.listBlobs` pages over.
@@ -453,7 +487,7 @@ storeBlobEntries (Store (BlobHalf blocks _ _) _ _ _) = blockStoreEntries blocks
    the whole blob half. -}
 export
 storeBlobCids : Store -> List Cid
-storeBlobCids (Store (BlobHalf blocks _ _) _ _ _) = blockStoreCids blocks
+storeBlobCids (Store (BlobHalf blocks _ _ _) _ _ _) = blockStoreCids blocks
 
 {- | Every distinct blob's base32 CID TEXT, ascending in that text's own
    order and carrying no bytes — what a cursor compared as base32 text pages
@@ -464,7 +498,7 @@ storeBlobCids (Store (BlobHalf blocks _ _) _ _ _) = blockStoreCids blocks
    holding a base32 cursor has to sort that one and cannot sort this one. -}
 export
 storeBlobCidTexts : Store -> List String
-storeBlobCidTexts (Store (BlobHalf _ index _) _ _ _) = keys index
+storeBlobCidTexts (Store (BlobHalf _ index _ _) _ _ _) = keys index
 
 {- | One page of that same listing: the blob CID texts from `start` upwards,
    at most `limit` of them, in the same base32-text order.
@@ -477,7 +511,7 @@ storeBlobCidTexts (Store (BlobHalf _ index _) _ _ _) = keys index
    costs. -}
 export
 storeBlobCidTextsFrom : Option String -> Option Int -> Store -> List String
-storeBlobCidTextsFrom start limit (Store (BlobHalf _ index _) _ _ _) =
+storeBlobCidTextsFrom start limit (Store (BlobHalf _ index _ _) _ _ _) =
   map fst (entriesFrom start limit index)
 
 {- | The blob half's declared-type index: every CID text that has a declared
@@ -491,7 +525,7 @@ storeBlobCidTextsFrom start limit (Store (BlobHalf _ index _) _ _ _) =
    module exposes no way to remove one. -}
 export
 storeBlobMimeIndex : Store -> List (String, String)
-storeBlobMimeIndex (Store (BlobHalf _ index _) _ _ _) =
+storeBlobMimeIndex (Store (BlobHalf _ index _ _) _ _ _) =
   declaredPairs (entries index)
 
 -- The declared-type index's rows that HAVE a declared type, in the index's
