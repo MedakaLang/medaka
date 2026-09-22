@@ -61,15 +61,15 @@
 # (unenrolled gate scripts, which scans the WHOLE real tree via `git
 # ls-files`) with hundreds of irrelevant violations, which is exactly the
 # practical problem the "no fixture corpus for checks 1-7" decision above was
-# avoiding. Checks 9, 10 and 11 join check 8 on the same grounds and in the same
-# shape, one red fixture each against the shared `valid_cost.toml` control.
+# avoiding. Checks 9 through 12 join check 8 on the same grounds and in the same
+# shape, one red fixture per arm against the shared `valid_cost.toml` control.
 #
 # Every fixture registry declares TWO entries — `tidy` (test/tidy.sh, no header)
-# and `anchored` (test/anchored.sh, carrying `shell-because: instrumentation`) —
-# because check 11 needs both a script that states no reason and one that states
-# a specific reason to compare against. Both scripts are written into the
-# throwaway root below, so check 1 stays clean and each fixture's red is about
-# the one field it mutates.
+# and `anchored` (test/anchored.sh, carrying one header per pairing check) —
+# because checks 11 and 12 each need both a script that states no class and one
+# that states a specific class to compare against. Both scripts are written into
+# the throwaway root below, so check 1 stays clean and each fixture's red is
+# about the one field it mutates.
 #
 # Usage:  sh test/diff_compiler_gate_registry.sh
 # Exit:   0 medaka gate verify reports zero violations; 1 it reds; 2 no native
@@ -92,10 +92,12 @@ trap 'rm -rf "$FIXTMP"' EXIT
 mkdir -p "$FIXTMP/test/gate_shards"
 printf '#!/bin/sh\ntrue\n' >"$FIXTMP/test/tidy.sh"
 chmod +x "$FIXTMP/test/tidy.sh"
-# The check-11 counterpart: a script that DOES state a reason class, so a
-# fixture can name a different one and exercise the mismatch arm rather than
-# only the missing-header arm.
-printf '#!/bin/sh\n# shell-because: instrumentation — synthetic fixture script\ntrue\n' \
+# The counterpart for both pairing checks: a script that DOES state a class, so
+# a fixture can name a different one and exercise the mismatch arm rather than
+# only the missing-header arm. It carries one header per pairing check — check
+# 11 reads only `shell-because:` lines and check 12 only `blocked-because:`
+# ones, and no entry is ever both — so the two fixtures can share one script.
+printf '#!/bin/sh\n# shell-because: instrumentation — synthetic fixture script\n# blocked-because: concurrent-spawn — synthetic fixture script\ntrue\n' \
   >"$FIXTMP/test/anchored.sh"
 chmod +x "$FIXTMP/test/anchored.sh"
 printf 'a\n' >"$FIXTMP/test/gate_shards/a.txt"
@@ -193,6 +195,40 @@ elif ! grep -q "states 'shell-because: instrumentation'" "$FIXTMP/mismatched.out
   verify_rc=1
 else
   echo "OK    check 11 regression: mismatched_shell_because.toml reds with the class-mismatch message"
+fi
+
+# ── check 12's own regression (#2595), both arms. `blocked:<capability>` is a
+#    WAIT, not an exemption: the label expires when the capability lands, and
+#    only the pairing makes that expiry findable. The MISSING arm first: a
+#    `blocked:*` entry whose script names no capability. ────────────────────
+if MEDAKA_ROOT="$FIXTMP" "$MEDAKA" gate verify \
+    --registry "$ROOT/test/gate_registry_fixtures/unpaired_blocked_because.toml" \
+    >"$FIXTMP/unpaired_blocked.out" 2>&1; then
+  echo "diff_compiler_gate_registry: FAIL — unpaired_blocked_because.toml did not red:"
+  cat "$FIXTMP/unpaired_blocked.out"
+  verify_rc=1
+elif ! grep -q "carries no 'blocked-because: interactive-handle' header line" "$FIXTMP/unpaired_blocked.out"; then
+  echo "diff_compiler_gate_registry: FAIL — unpaired_blocked_because.toml reds for the wrong reason:"
+  cat "$FIXTMP/unpaired_blocked.out"
+  verify_rc=1
+else
+  echo "OK    check 12 regression: unpaired_blocked_because.toml reds with the missing-header message"
+fi
+
+# ── The MISMATCH arm: the script names `concurrent-spawn`, the entry claims
+#    `detached-process`. Both well-formed; only the comparison catches it. ───
+if MEDAKA_ROOT="$FIXTMP" "$MEDAKA" gate verify \
+    --registry "$ROOT/test/gate_registry_fixtures/mismatched_blocked_because.toml" \
+    >"$FIXTMP/mismatched_blocked.out" 2>&1; then
+  echo "diff_compiler_gate_registry: FAIL — mismatched_blocked_because.toml did not red:"
+  cat "$FIXTMP/mismatched_blocked.out"
+  verify_rc=1
+elif ! grep -q "states 'blocked-because: concurrent-spawn'" "$FIXTMP/mismatched_blocked.out"; then
+  echo "diff_compiler_gate_registry: FAIL — mismatched_blocked_because.toml reds for the wrong reason:"
+  cat "$FIXTMP/mismatched_blocked.out"
+  verify_rc=1
+else
+  echo "OK    check 12 regression: mismatched_blocked_because.toml reds with the class-mismatch message"
 fi
 
 exit "$verify_rc"

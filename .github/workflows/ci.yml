@@ -822,7 +822,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/field_vectors' 'pds/test/mst_vectors' 'pds/test/repo_vectors' 'cross_project_deps' 'diff_compiler_error_quality_baseline' 'diff_compiler_import_order' 'diff_compiler_ir_scaling' 'diff_compiler_llvm_modules' 'diff_compiler_prelude_obj' 'diff_compiler_prelude_shadow_census' 'diff_async' 'selfcompile_build_fixpoint' 'diff_compiler_guide_render'"
+            pattern: "'pds/test/field_vectors' 'pds/test/mst_vectors' 'cross_project_deps' 'diff_compiler_error_quality_baseline' 'diff_compiler_fmt_roundtrip' 'diff_compiler_import_order' 'diff_compiler_index_oob' 'diff_compiler_ir_scaling' 'diff_compiler_comment_shout_diff' 'diff_compiler_llvm_modules' 'diff_compiler_prelude_obj' 'diff_compiler_prelude_shadow_census' 'diff_async' 'diff_compiler_guide_render'"
             wasm_arm: "1"
           - name: gates_4
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
@@ -839,7 +839,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'lsp_harness' 'pds/test/inlang_test_oracle' 'pds/test/sha256_vectors' 'sqlite/test/overflow_oracle' 'diff_compiler_argtag_matrix' 'diff_compiler_eval_scaling' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_internal_extern' 'diff_compiler_ir_size' 'diff_compiler_llvm' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_mcp' 'diff_compiler_project_enrolment' 'diff_compiler_slice_oob' 'diff_native_stack' 'diff_compiler_emitted_code_floor'"
+            pattern: "'build_cmd' 'lsp_harness' 'gzip/test/inflate_oracle' 'pds/test/inlang_test_oracle' 'pds/test/sha256_vectors' 'sqlite/test/overflow_oracle' 'sqlite/test/sql_oracle' 'diff_compiler_check_json' 'diff_compiler_argtag_matrix' 'diff_compiler_eval_scaling' 'diff_compiler_flat_vs_onemodule' 'diff_compiler_iface_order' 'diff_compiler_internal_extern' 'diff_compiler_ir_size' 'diff_compiler_lint_cache' 'diff_compiler_llvm' 'diff_compiler_llvm_symbol_collision' 'diff_compiler_mcp' 'diff_compiler_project_enrolment' 'diff_compiler_run_stdout_flush' 'diff_compiler_slice_oob' 'diff_native_stack' 'effect_builtin_param_domain' 'pr_helper_test' 'diff_compiler_closure_alloc' 'diff_compiler_emitted_code_floor' 'diff_compiler_cli_help_conformance'"
           - name: gates_5
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -855,7 +855,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'gzip/test/deflate_oracle' 'gzip/test/inflate_oracle' 'pds/test/ecdsa_vectors' 'diff_compiler_build' 'diff_compiler_fmt_roundtrip' 'diff_compiler_index_oob' 'diff_compiler_llvm_ffi' 'diff_compiler_shadow_semantics' 'diff_compiler_tmc_parity' 'diff_native_cli' 'effect_builtin_param_domain' 'diff_compiler_closure_alloc' 'pds/test/serve_e2e'"
+            pattern: "'gzip/test/deflate_oracle' 'pds/test/ecdsa_vectors' 'diff_compiler_build' 'diff_compiler_check' 'diff_compiler_dict_semantics_permute' 'diff_compiler_shadow_semantics' 'diff_compiler_test_native' 'diff_compiler_tmc_parity' 'diff_native_cli' 'pds/test/serve_e2e'"
           - name: gates_6
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -871,7 +871,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/store_persistence' 'pds/test/trust_boundary_guards' 'sqlite/test/dml_oracle' 'check_syntax_examples' 'diff_compiler_check_cli_modules' 'diff_compiler_check' 'diff_compiler_eval' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_lint_baseline' 'diff_compiler_comment_shout_diff' 'diff_compiler_perf_scaling' 'diff_compiler_run_stdout_flush' 'diff_compiler_snapshot_frontend' 'diff_compiler_test_native' 'selfcompile_lex' 'diff_compiler_tier_drift' 'diff_compiler_check_ir_floor' 'diff_compiler_cli_help_conformance'"
+            pattern: "'pds/test/constant_time_signing' 'pds/test/store_persistence' 'pds/test/trust_boundary_guards' 'sqlite/test/dml_oracle' 'sqlite/test/oracle' 'sqlite/test/writer_oracle' 'check_syntax_examples' 'diff_compiler_check_cli_modules' 'diff_compiler_dict_semantics_ir' 'diff_compiler_eval' 'diff_compiler_lint_baseline' 'diff_compiler_perf_scaling' 'diff_compiler_snapshot_frontend' 'diff_compiler_tier_drift' 'diff_compiler_check_ir_floor'"
           - name: gates_7
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -887,7 +887,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'pds/test/secp256k1_point_vectors' 'sqlite/test/inlang_test_oracle' 'sqlite/test/sql_oracle' 'build_construct_coverage' 'diff_compiler_call_arity' 'diff_compiler_check_json' 'diff_compiler_fmt' 'diff_compiler_lint_cache' 'diff_compiler_rt_obj' 'diff_compiler_run_check_agreement' 'diff_compiler_selfproc' 'pr_helper_test' 'selfcompile_emit'"
+            pattern: "'pds/test/secp256k1_point_vectors' 'sqlite/test/inlang_test_oracle' 'build_construct_coverage' 'diff_compiler_call_arity' 'diff_compiler_fixture_corpus_coverage' 'diff_compiler_fmt' 'diff_compiler_llvm_ffi' 'diff_compiler_rt_obj' 'diff_compiler_run_check_agreement' 'diff_compiler_selfproc' 'selfcompile_emit'"
           - name: gates_8
             # ROW IDENTITY, NOT PLACEMENT. Which gates run here is DERIVED
             # (`medaka gate balance`, #2178) from test/gate_cost_baseline.json and
@@ -906,7 +906,7 @@ jobs:
             # is a ruleset change, not an edit here. It is a bare executor number by
             # construction (#2178): a name that cannot describe contents cannot lie
             # about them. What failed is reported by AREA, from the registry.
-            pattern: "'build_cmd' 'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/constant_time_signing' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'sqlite/test/index_write_oracle' 'sqlite/test/oracle' 'sqlite/test/writer_oracle' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_stage_ir_scaling' 'diff_net'"
+            pattern: "'pds/test/car_vectors' 'pds/test/constant_time_parity' 'pds/test/constant_time_reductions' 'pds/test/dagcbor_cid_vectors' 'pds/test/did_key_all_engines' 'pds/test/repo_vectors' 'pds/test/scalar_vectors' 'pds/test/signing_parity' 'sqlite/test/index_write_oracle' 'diff_compiler_core_ir_typed_modules' 'diff_compiler_stage_ir_scaling' 'diff_net' 'selfcompile_build_fixpoint' 'selfcompile_lex'"
             wasm_arm: "1"
           # GENERATED:END gates-matrix
     # The job name IS the required status-check context. It is a bare executor

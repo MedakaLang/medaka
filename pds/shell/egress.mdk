@@ -263,7 +263,7 @@ decodeUpstream buffer = match parseResponse buffer
    `upstreamSilenceTimeout` and reports a read failure over an answer already
    in hand (#3097). The boundary is what ends such an exchange, and the
    silence budget is left to the peer that really has stopped. -}
-collectUpstream : Wait ->
+collectUpstream : Wait <Clock, Net "_" | e> ->
   Connection ->
   Vector Int ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
@@ -275,7 +275,7 @@ collectUpstream deadline conn acc = defer
     received <- A.recvWithin upstreamSilenceTimeout conn upstreamChunkBytes
     collectStep deadline conn acc received
 
-collectStep : Wait ->
+collectStep : Wait <Clock, Net "_" | e> ->
   Connection ->
   Vector Int ->
   Result String (Array Int) ->

@@ -2398,7 +2398,7 @@ module-qualified identity.
 
 ## 10. How to read the recurring defects against this spec
 
-> ### ⚙️ This spec now EXECUTES: `test/diff_compiler_dict_semantics.sh` (#616)
+> ### ⚙️ This spec now EXECUTES: three gates over `test/dict_fixtures` (#616)
 >
 > Until 2026-07-30 nothing mechanically checked the implementation against this
 > document — the conformance reviewer was the sole enforcement mechanism, which is
@@ -2416,10 +2416,15 @@ module-qualified identity.
 >
 > ⚠️ **It pins CURRENT BEHAVIOUR, not this spec.** Divergences are pinned with the
 > issue number annotated, so the gate doubles as the conformance ledger and goes
-> **red the day a fix lands** — which is the signal to re-pin the row. Its header
-> carries the live ledger and an explicit **NOT YET COVERED** punch-list; read
-> both before concluding a clause is enforced. Whichever clause you are editing
-> here, check whether it has a row there, and add one if it does not.
+> **red the day a fix lands** — which is the signal to re-pin the row.
+> `test/dict_fixtures/README.md` carries the live ledger and an explicit
+> **NOT YET COVERED** punch-list; read both before concluding a clause is
+> enforced. Whichever clause you are editing here, check whether it has a row
+> in `test/diff_compiler_dict_semantics_test.mdk` (the verdict/value/code
+> table, scheme lines, per-verb warnings, diagnostic spans),
+> `test/diff_compiler_dict_semantics_ir.sh` (emitted IR), or
+> `test/diff_compiler_dict_semantics_permute.sh` (declaration-order
+> permutation), and add one to whichever fits if it does not.
 >
 > **Building it found two S0s that no existing gate could see**, both `verified`
 > and both pinned as ledger rows: **#1127** (§6.1.4/C2 — a dictionary reached by

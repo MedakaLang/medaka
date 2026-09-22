@@ -1639,7 +1639,7 @@ predicted:
    `impl`-block order at exit 0 (`1`, or `2` with the blocks swapped). The warning is
    what keeps that from being a loud→silent transition; it does not make the answer
    order-free. Tracked at **#1183**, pinned as a KNOWN-BAD permutation row in
-   `test/diff_compiler_dict_semantics.sh` §4. **Closing it is §6.2 T4's own work — a
+   `test/diff_compiler_dict_semantics_permute.sh`. **Closing it is §6.2 T4's own work — a
    quiescence post-pass — which T4 forbids landing before I5.**
 
 ### I — Inference (kept structurally intact)

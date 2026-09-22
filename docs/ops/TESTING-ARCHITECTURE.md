@@ -224,16 +224,28 @@ migration's own bookkeeping lives where `verify` reads it:
 ```toml
 migration = "native-wrap"      # native-wrap | native-rewrite | shell:trust-anchor |
                                #   shell:instrumentation | shell:external-harness |
-                               #   split-first | inverted-polarity | done
+                               #   blocked:interactive-handle | blocked:concurrent-spawn |
+                               #   blocked:detached-process | split-first |
+                               #   inverted-polarity | done
 ```
 
-`gate verify` fails when a `kind = "exec"` entry has no `migration` value, and when a
-`shell:*` entry's script lacks a `shell-because:` header line naming the same reason.
-That is the mechanism behind "shell stays only with a stated reason" (#2298). **The
-release valve is stated, not implied:** while the vehicle is being built, a needed
-fixture-run-compare gate written in shell enrols with `migration = "native-wrap"`; that
-is a debt row the waves drain, not a violation, and it needs no header. The closed
-`shell:*` enum is for scripts that will never migrate.
+`gate verify` fails when a `kind = "exec"` entry has no `migration` value, when a
+`shell:*` entry's script lacks a `shell-because:` header line naming the same reason,
+and when a `blocked:*` entry's script lacks a `blocked-because:` header line naming the
+same capability. That is the mechanism behind "shell stays only with a stated reason"
+(#2298). **The release valve is stated, not implied:** while the vehicle is being built,
+a needed fixture-run-compare gate written in shell enrols with `migration =
+"native-wrap"`; that is a debt row the waves drain, not a violation, and it needs no
+header. The closed `shell:*` enum is for scripts that will never migrate.
+
+**`blocked:*` is the third thing, and it is not debt the waves can drain** (#2595): the
+row would migrate, but a runner capability the native vehicle does not have yet — several
+turns down one live process, several processes in flight at once, or a spawn that
+outlives its call and is killed later — is what holds it in shell. Labelling those
+`native-wrap` inflated the migratable pool by exactly the rows a wave could never take,
+so the selector, not anyone's memory, now answers which rows are capability-blocked and
+by what. The capability stays open as its own issue; relabelling reclassifies it, it does
+not discharge it.
 
 **This field and its `verify` pairing land first, alone, before any of §4.1.** They need
 nothing from the native arm, they are the only brake on the 174-scripts-per-60-days

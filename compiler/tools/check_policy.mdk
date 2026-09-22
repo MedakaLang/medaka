@@ -56,10 +56,16 @@ import types.repr.{
   effrowLabels,
   atomLabel,
   atomParam,
+  normHole,
   drender,
 }
 import types.typecheck.{
-  checkOneSchemeFull, dsub, decodeProductParam, decodeSetParam
+  checkOneSchemeFull,
+  checkModulesEntryFullSplitK,
+  dsub,
+  decodeProductParam,
+  decodeSetParam,
+  TcDiag,
 }
 import eval.eval.{Value(..), evalModulesRootEnv, apply, outputRef, ppValue}
 import support.util.{
@@ -592,7 +598,7 @@ listIsEmpty _ = False
 atomToToml : Atom -> String
 atomToToml a =
   let label = atomLabel a
-  match atomParam a
+  match normHole (atomParam a)
     PPrefix (Some s) => "\{label} = \"\{s}\""
     PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
     PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table
@@ -644,33 +650,53 @@ joinTomlLines (x :: xs) = "\{x}\n\{joinTomlLines xs}"
 -- differs from check-policy's "transform" which is the plugin convention).
 public export data ManifestArgs = ManifestArgs (Option String) String
 
--- Run manifest extraction: typecheck the file, read the named fn's inferred
--- effect row, return TOML.
--- Returns (toml, fnEffects) so the caller can also drive round-trip validation.
+-- Outcome of a manifest lookup over an ELABORATED (already loader-resolved)
+-- program: type errors REFUSE before `fnName` is ever looked up, and a name
+-- absent from the scheme list refuses distinctly from a name whose scheme
+-- carries no effect row (a pure/value binding, S-4's case — that one still
+-- emits `ManifestOk "[package.capabilities]\n"`, not a refusal).
+public export data ManifestResult =
+  | ManifestOk String
+  | ManifestTypeErrors (List TcDiag)
+  | ManifestNoSuchFn String
+
+-- Run manifest extraction over an elaborated program: `modsD` is the loader's
+-- module list, each module's decls already DESUGARED, dependency-first with
+-- the entry last (`lastModPair`'s convention in medaka_cli.mdk) — the same
+-- shape `checkRoute`'s multi-module arm builds as `modsD`.  Resolve-phase
+-- errors (bad/missing import) are the CALLER's job: `runManifestArgs` gates on
+-- `resolveModulesErrorsByFile` before ever reaching this function, exactly
+-- like `checkRoute` does, so `modsD` here is always resolve-clean.
 export
-runManifest : String -> String -> String -> String -> String
-runManifest rtSrc coreSrc src fnName =
-  let rawUser = parse src
-  let userD = desugar rawUser
-  let rtD = desugaredPrelude rtSrc
-  let coreD = desugaredPrelude coreSrc
+runManifest : Option (Int, Int) ->
+  List Decl ->
+  List Decl ->
+  List (String, List Decl) ->
+  String ->
+  ManifestResult
+runManifest preludeKey rtD coreD modsD fnName =
   -- Module arm, via the full-environment entry (S-full-env-scheme-entry, #1116).
-  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in effTable
+  -- `--fn <name>` is arbitrary CLI input looked up DIRECTLY in the scheme list
   -- (lookupAssoc fnName), never routed through buildCallGraph's userD-restricted
   -- traversal, so the schemes MUST include prelude names: `--fn println` missing
-  -- from the table would make the policy check silently ACCEPT an <IO> function as
-  -- pure. `checkOneScheme` alone returns only the terminal module's OWN schemes,
-  -- which is why this site was parked on the Flat wrapper until #1116 grew
-  -- `checkOneSchemeFull`. OWN FIRST: `lookupAssoc` is a first-match scan, so a
-  -- plugin that redefines a prelude name must win its own lookup.
-  let (preludeSchemes, ownSchemes) =
-    checkOneSchemeFull rtD coreD ("__user__", userD)
-  let schemes = ownSchemes ++ preludeSchemes
-  let effTable = fnEffectsTable schemes
-  let fnEffects = match lookupAssoc fnName effTable
-    None => []
-    Some e => e
-  manifestToml fnEffects
+  -- from the table would make manifest extraction silently answer "no effects" for
+  -- an <IO> function. `checkModulesEntryFullSplitK` returns the ENTRY module's own
+  -- schemes (terminal in `modsD`) separate from the prelude's, so this concats
+  -- OWN FIRST: `lookupAssoc` is a first-match scan, and an entry redefinition of a
+  -- prelude name must win its own lookup.
+  let (coreSchemes, entrySchemes, errs, _warns) =
+    checkModulesEntryFullSplitK preludeKey rtD coreD modsD
+  match errs
+    [] =>
+      let schemes = entrySchemes ++ coreSchemes
+      -- Existence is checked against the FULL scheme list, never `fnEffectsTable`
+      -- (see `runCheckPolicy`'s identical comment above): `fnEffectsTable`
+      -- deliberately omits verified-pure/arrowless bindings, so using it as a name
+      -- index would refuse a real pure entry exactly like an absent one.
+      match lookupAssoc fnName schemes
+        None => ManifestNoSuchFn fnName
+        Some sch => ManifestOk (manifestToml (schemeEffects sch))
+    _ => ManifestTypeErrors errs
 
 -- Render the manifest as --allow tokens for round-trip through check-policy.
 -- PPrefix (Some s) → "Label=s"

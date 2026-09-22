@@ -68,7 +68,7 @@ srcNameFromArgs (_ :: _ :: entry :: _) = entry
 srcNameFromArgs _ = ""
 
 main : <IO> Unit
-main = driveModulesLocated (runEmitWith "runAsyncIOMain" emitTail)
+main = driveModulesLocated (runEmitWith "runAsyncMain" emitTail)
 
 -- COMPOSITE-MAIN AUTO-PRINT: the shared elaborate+auto-print-wrap+mangle glue
 -- (design §10) lives once in entry_support.runEmitWith, parameterized by this

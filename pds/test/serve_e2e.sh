@@ -1,4 +1,5 @@
 #!/bin/sh
+# blocked-because: detached-process — the server and its stub appviews must keep running while the client talks to them, then be killed by pid
 # Gate A (#2481, #2525): drive `pds/serve.mdk` end to end over its real
 # loopback socket with a plain synchronous client (`pds/test/
 # serve_client_main.mdk`, over `stdlib/net` — not `net_async`, which is the

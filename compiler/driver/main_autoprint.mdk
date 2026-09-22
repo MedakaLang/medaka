@@ -259,9 +259,9 @@ underivedMainDiags runtimeDecls coreDecls modules = match entryPair modules
 -- it, so forcing it alone runs nothing (#2506).  Every engine drives it through
 -- the same rewrite the auto-print wrap uses:
 --   main = <e>   ⟶   main = 0runasync <e>
--- where `0runasync` is the `async` module's own entry driver (`runAsyncIOMain`,
--- or `runAsyncMain` on a target with no clock; each declares a `Unit` result so
--- no backend auto-prints it) re-bound under an unspellable name and
+-- where `0runasync` is the `async` module's own entry driver (`runAsyncMain` on
+-- every target; it declares a `Unit` result so no backend auto-prints it)
+-- re-bound under an unspellable name and
 -- imported into the entry module by a synthesized `import async.{0runasync}`.
 -- The pinned copy is a DECLARATION OF THE ASYNC MODULE, so its body resolves
 -- in that module's scope and no user name can capture the reference — the

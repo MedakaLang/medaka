@@ -157,7 +157,7 @@ suites : List (String, (Int, Engine))
 suites = [
   ("args", (44, EvalAndNative)),
   ("array", (53, EvalAndNative)),
-  ("async", (11, Eval)),
+  ("async", (10, Eval)),
   -- The RFC 4648 vectors and the canonical-rejection checks. Neither of the
   -- two vehicles named in the header reaches this module, so without this
   -- row nothing would run them.
@@ -346,7 +346,7 @@ test "stdlib/args.mdk executed >= 44 assertions" = floorExpectation "args"
 
 test "stdlib/array.mdk executed >= 53 assertions" = floorExpectation "array"
 
-test "stdlib/async.mdk executed >= 11 assertions" = floorExpectation "async"
+test "stdlib/async.mdk executed >= 10 assertions" = floorExpectation "async"
 
 test "stdlib/base32.mdk executed >= 28 assertions" = floorExpectation "base32"
 

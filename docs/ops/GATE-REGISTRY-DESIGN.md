@@ -118,6 +118,16 @@ migration   = "native-rewrite" # where this check ENDS UP under the testing-arch
                                #     shell:external-harness stays shell: its SUBJECT is a
                                #                            shell/python/browser harness or
                                #                            live `gh` state.
+                               #     blocked:interactive-handle
+                               #     blocked:concurrent-spawn
+                               #     blocked:detached-process
+                               #                            a runner capability the native
+                               #                            vehicle lacks holds this row in
+                               #                            shell — several turns down one
+                               #                            process, several processes in
+                               #                            flight, or a spawn that outlives
+                               #                            its call. NOT the release valve:
+                               #                            a wave cannot draw on these.
                                #     split-first            one script holding a check AND a
                                #                            shared helper, or several
                                #                            unrelated sections; the editorial
@@ -128,8 +138,9 @@ migration   = "native-rewrite" # where this check ENDS UP under the testing-arch
                                #     done                   already migrated.
                                #   Seeded 2026-09-03 by classifying every entry against
                                #   docs/ops/TESTING-INVENTORY.md. Value checked by
-                               #   `gate verify`; a `shell:*` value is additionally PAIRED
-                               #   with its run script — see the fourth rule below.
+                               #   `gate verify`; a `shell:*` or `blocked:*` value is
+                               #   additionally PAIRED with its run script — see the
+                               #   fourth rule below.
 run         = "test/diff_compiler_check_test.mdk"   # exec: the script; native: module path
 oracles     = ["parse_result_main"]   # test/bin/* names this gate reads (drives oracle builds)
 sources     = ["compiler/frontend/parser.mdk"]   # what SELECTS this gate (preflight/
@@ -159,15 +170,21 @@ Four rules the reader enforces, each because the alternative fails quietly:
   pilot for this reason: its fixtures pin OPEN bugs, so RED is its healthy state
   ([G-MUST-FAIL]), and no field in an entry claims otherwise. Whatever runs a gate
   keeps owning what its exit code means.
-- **A `shell:*` migration is PAIRED with its own script, not taken on the
-  registry's word.** `migration = "shell:<class>"` is an exemption — this gate is
-  never going native — so the run script must carry a header line
+- **A `shell:*` or `blocked:*` migration is PAIRED with its own script, not taken
+  on the registry's word.** `migration = "shell:<class>"` is an exemption — this
+  gate is never going native — so the run script must carry a header line
   `# shell-because: <class> …` naming the same class, and `gate verify` reds when
-  it is missing or names a different one. Otherwise the exemption is a claim one
-  side grants itself and nothing reads: a script that stopped being a trust anchor
-  and became an ordinary differential would keep its exemption forever, with no
-  file anywhere disagreeing. Every other `migration` value needs no header —
-  `native-wrap` in particular is the release valve and requires nothing.
+  it is missing or names a different one (check 11). Otherwise the exemption is a
+  claim one side grants itself and nothing reads: a script that stopped being a
+  trust anchor and became an ordinary differential would keep its exemption
+  forever, with no file anywhere disagreeing. `migration = "blocked:<capability>"`
+  is paired the same way, by `# blocked-because: <capability> …` (check 12), and
+  for the mirror-image reason: it is not an exemption but a WAIT, so the label
+  expires the day the capability lands, and only the pairing makes that findable.
+  Every other `migration` value needs no header — `native-wrap` in particular is
+  the release valve and requires nothing. `blocked:*` is deliberately not
+  `native-wrap`: the release valve says the port needs nothing built first, so a
+  blocked row must not sit in the pool a wave draws from.
 
 Notes on the load-bearing fields:
 

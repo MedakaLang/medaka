@@ -1,5 +1,5 @@
 # META
-source_lines=46713
+source_lines=46717
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -9025,8 +9025,8 @@ mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
     _ => False
   None => False
 
--- Stage 2 query: is the `Async` main's payload `Unit`?  The entry drivers
--- (`runAsyncIOMain`/`runAsyncMain`) take `Async e Unit`, so any other payload
+-- Stage 2 query: is the `Async` main's payload `Unit`?  The entry driver
+-- (`runAsyncMain`) takes `Async e Unit`, so any other payload
 -- is rejected with a diagnostic before the rewrite rather than by the driver's
 -- unification failure.
 export
@@ -9504,7 +9504,7 @@ scopeFrameStats _ = Scopes.scopeFrameStats (currentScopeStore ())
 -- not a record of which table it came from.  MEASURED: merging the two tables with no
 -- such field loses `test/eval_typed_modules_fixtures/impl_requires_nonfunctor_sibling`
 -- to `runtime error [E-PANIC]: no matching impl for dispatch` — every other route
--- golden in `diff_compiler_dict_semantics` (352 assertions) stays green, so an
+-- golden in the dict-semantics conformance gates stays green, so an
 -- undifferentiated merge is a SILENT re-widening on every path that fixture does not
 -- cover.  See `GivenMatch`.
 data GivenEntry = GivenEntry {
@@ -13205,8 +13205,8 @@ callArgVecsV ((s, v) :: rest) subst = match lookupAssocI s.csId subst
 -- this closes, at a different shape.  ⚠️ F-3c cannot catch that class either:
 -- `pickMostSpecificEntry []` returns None, not the ambiguity arm.  Regression:
 -- test/dict_fixtures/s3-nary-sig-constraint-structured-arg.mdk, graded on its
--- value by diff_compiler_dict_semantics.sh section 1 and on its order-freedom by
--- that gate's section 4 (which permutes the impl blocks, no _swapped file needed).
+-- value by diff_compiler_dict_semantics_test.mdk and on its order-freedom by
+-- diff_compiler_dict_semantics_permute.sh (no _swapped file needed).
 substArgVec : List (Int, Mono) -> Mono -> List Mono -> List Mono
 substArgVec _ m [] = [m]
 substArgVec subst _ v = map (substMono subst []) v
@@ -26285,8 +26285,8 @@ headlessBucketKey = regKeyNTab []
 -- interface name, and it is the mint for exactly ONE thing: `KeyEntry`'s 4th field,
 -- written by `keyEntryOfRow` and READ BY NOBODY (measured, not grepped:
 -- replacing the word at both sites with a literal `"__DEAD__"` builds, passes
--- `make check-self` and passes all 163 assertions of
--- `test/diff_compiler_dict_semantics.sh`).  The LIVE route words — the ones that
+-- `make check-self` and passes every assertion of the three dict-semantics
+-- conformance gates).  The LIVE route words — the ones that
 -- reach a dict cell and an emitted symbol — are minted at `keyForSite` /
 -- `predicateRouteKeyForRow` from the winning ROW's own `irOrigin`, so they carry the
 -- interface's identity and this one does not.  Do not "unify" them without first
@@ -26462,8 +26462,8 @@ goalHeadCon [] = None
 -- tie-break.  Concatenating buckets would make that tie-break "concrete first"
 -- irrespective of where the impls appear in the source — an arbitrary internal
 -- constant, and one the declaration-order permutation differential
--- (diff_compiler_dict_semantics.sh §4) is STRUCTURALLY BLIND to, because it permutes
--- source order while bucket order stays put.  Merging on the declaration index makes
+-- (diff_compiler_dict_semantics_permute.sh) is STRUCTURALLY BLIND to, because
+-- it permutes source order while bucket order stays put.  Merging on the declaration index makes
 -- the tie-break DECLARATION ORDER, which is what the rest of this file documents as
 -- the fallback and which that gate CAN see.
 --
@@ -26596,7 +26596,7 @@ pickMostSpecificEntry goals (e :: rest) =
 --     `2`), under a warning rather than in silence.  §6.2 T4's actual answer is to
 --     DEFER such a goal to quiescence, which this compiler has no pass for; the
 --     residue is pinned as a KNOWN-BAD row in
---     `test/diff_compiler_dict_semantics.sh` §4 and tracked at #1183.
+--     `test/diff_compiler_dict_semantics_permute.sh` and tracked at #1183.
 --
 --  🚦 ONE INTERFACE.  `ieEntriesForMethod` used to filter by METHOD NAME alone, so
 --     two impls of two DIFFERENT interfaces that happen to share a method name could
@@ -26643,8 +26643,8 @@ pickMostSpecificEntry goals (e :: rest) =
 -- did.  Suppressing would make this rule's extent depend on whether another rule
 -- fired first — the implementation-relative extent §6 C1 rejects for its own
 -- quantifier.  (The suppression was recommended on the premise that
--- `diff_compiler_dict_semantics.sh` §1 grades the FIRST code; it does not —
--- `grep -q '"code":"$code"'`, presence anywhere.  Verified.)
+-- `diff_compiler_dict_semantics_test.mdk` grades the FIRST code; it does not —
+-- `contains "\"code\":\"\{c}\"" json`, presence anywhere.  Verified.)
 --
 -- ⚠️ F-3d (#614/#311) changed the OTHER half of that pairing, and the earlier wording
 -- here predicted it wrongly: it said F-3d "deletes (a)", so un-suppression would be
@@ -31430,7 +31430,7 @@ checkCallObligationsU deferNonGround univ (o :: rest) =
   -- `checkOneCallObligation` returns on `isEmptyL args` — which is SILENT.  Measured:
   -- with this line reading the field, `test/dict_fixtures/s6-2-t3-closed-goal-reported`
   -- flipped from its `T-AMBIGUOUS-INSTANCE` reject to an ACCEPT printing an
-  -- order-decided 1-or-2, and `diff_compiler_dict_semantics`'s section-4 permutation
+  -- order-decided 1-or-2, and `diff_compiler_dict_semantics_permute`'s
   -- differential was the only thing in the tree that caught it.
   let occs = uOblArgs o
   let loc = o.loc
@@ -44646,6 +44646,10 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- the module's own entry for the same bare name.
 -- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
 -- `None` = unkeyed, no memo.
+-- Exported (S-2, #3321) for `check_policy.mdk`'s `runManifest`: the one consumer
+-- outside this file that needs BOTH halves (errs to refuse before a name lookup,
+-- schemes to satisfy one) over a graph that may carry more than one module.
+export
 checkModulesEntryFullSplitK : Option (Int, Int) ->
   List Decl ->
   List Decl ->
@@ -53610,7 +53614,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModulesEntryFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")))
 (DTypeSig false "checkModulesEntryFullK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "checkModulesEntryFullK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "schemes") (EVar "errs") (EVar "warns")))))
-(DTypeSig false "checkModulesEntryFullSplitK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DTypeSig true "checkModulesEntryFullSplitK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "checkModulesEntryFullSplitK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "effectivePreludeKey") (PVar "effectiveCoreDecls0") (PVar "effectiveModules0")) (EMatch (EVar "modules0") (arm (PList (PTuple PWild (PVar "prog"))) () (EIf (EApp (EVar "programIsCore") (EVar "prog")) (ETuple (EVar "None") (EListLit) (EListLit (ETuple (ELit (LString "core")) (EVar "prog")))) (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0")))) (arm PWild () (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0"))))) (DoLet false false (PVar "g") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveGraphK") (EVar "GOutDiags")) (EVar "DrainRollback")) (EVar "effectivePreludeKey")) (EVar "runtimeDecls")) (EVar "effectiveCoreDecls0")) (EVar "effectiveModules0"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EVar "checkModulesEntryFromDiags") (EFieldAccess (EVar "g") "gdPerMod"))) (DoExpr (ETuple (EFieldAccess (EVar "g") "gdCoreSchemes") (EVar "schemes") (EVar "errs") (EVar "warns")))))
 (DTypeSig false "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))
@@ -60752,7 +60756,7 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "checkModulesEntryFull" ((PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullK") (EVar "None")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules")))
 (DTypeSig false "checkModulesEntryFullK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "checkModulesEntryFullK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls") (PVar "modules")) (EBlock (DoLet false false (PTuple PWild (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EApp (EApp (EApp (EVar "checkModulesEntryFullSplitK") (EVar "preludeKey")) (EVar "runtimeDecls")) (EVar "coreDecls")) (EVar "modules"))) (DoExpr (ETuple (EVar "schemes") (EVar "errs") (EVar "warns")))))
-(DTypeSig false "checkModulesEntryFullSplitK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
+(DTypeSig true "checkModulesEntryFullSplitK" (TyFun (TyApp (TyCon "Option") (TyTuple (TyCon "Int") (TyCon "Int"))) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyCon "Decl")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyApp (TyCon "List") (TyCon "Decl")))) (TyTuple (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "Scheme"))) (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "checkModulesEntryFullSplitK" ((PVar "preludeKey") (PVar "runtimeDecls") (PVar "coreDecls0") (PVar "modules0")) (EBlock (DoLet false false (PTuple (PVar "effectivePreludeKey") (PVar "effectiveCoreDecls0") (PVar "effectiveModules0")) (EMatch (EVar "modules0") (arm (PList (PTuple PWild (PVar "prog"))) () (EIf (EApp (EVar "programIsCore") (EVar "prog")) (ETuple (EVar "None") (EListLit) (EListLit (ETuple (ELit (LString "core")) (EVar "prog")))) (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0")))) (arm PWild () (ETuple (EVar "preludeKey") (EVar "coreDecls0") (EVar "modules0"))))) (DoLet false false (PVar "g") (EApp (EApp (EApp (EApp (EApp (EApp (EVar "driveGraphK") (EVar "GOutDiags")) (EVar "DrainRollback")) (EVar "effectivePreludeKey")) (EVar "runtimeDecls")) (EVar "effectiveCoreDecls0")) (EVar "effectiveModules0"))) (DoLet false false (PTuple (PVar "schemes") (PVar "errs") (PVar "warns")) (EApp (EVar "checkModulesEntryFromDiags") (EFieldAccess (EVar "g") "gdPerMod"))) (DoExpr (ETuple (EFieldAccess (EVar "g") "gdCoreSchemes") (EVar "schemes") (EVar "errs") (EVar "warns")))))
 (DTypeSig false "prependDiagOpt" (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "Option") (TyCon "String")) (TyFun (TyApp (TyCon "List") (TyCon "TcDiag")) (TyApp (TyCon "List") (TyCon "TcDiag"))))))))
 (DFunDef false "prependDiagOpt" (PWild PWild PWild (PCon "None") (PVar "ds")) (EVar "ds"))

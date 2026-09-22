@@ -35,6 +35,9 @@
 # it: the blob area is stamped either side of a single upload into an account
 # that already holds 99 blobs, and only the blob being uploaded may have been
 # written (#2692).
+# Case 14 grades the one blob-half change a block COUNT cannot see: bytes
+# already stored, uploaded again under a different declared MIME type, which
+# must still reach the disk (#3263).
 set -eu
 
 ROOT=${MEDAKA_ROOT:?set MEDAKA_ROOT to the repo root}
@@ -1076,5 +1079,44 @@ BLOB_SIZE=$(awk '/^BLOB-CHURN-ADD size /{ print $3 }' "$WORK/churn-add.out")
 
 echo "case 13: the hundredth upload wrote $WRITTEN_FILES file(s), $WRITTEN_BYTES bytes, for a blob of $BLOB_SIZE (cap ${BLOB_SIZE}x3); the other 99 blobs' inodes did not move"
 
+# ── 14. a re-declared type at an unchanged block count still persists ──────
+# The one blob-half change a block COUNT cannot see: bytes the account already
+# holds, uploaded again under a different declared MIME type. The seed route
+# publishes the blob as text/plain; a SEPARATE process republishes it as
+# application/json, and the sidecar on disk has to have followed. A transition
+# graded on the count alone writes nothing here, and the account then reads
+# back after a restart under a type it no longer declares (#3263).
+RETYPE="$WORK/retype"
+mkdir -p "$RETYPE"
 
-echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in, with the blob half of one transition promoted before the commit that can name it and every shard barrier of one commit taken after all of its block promotes; one upload writing its own blob and no other; key absent'
+"$WORK/driver" blob-retype-seed "$RETYPE" \
+  > "$WORK/retype-seed.out" 2> "$WORK/retype-seed.err"
+require_empty "$WORK/retype-seed.err" blob-retype-seed
+[ "$(tail -1 "$WORK/retype-seed.out")" = 'BLOB-RETYPE-SEED: PASS' ] \
+  || fail 'case 14: the retype seed route did not pass'
+
+SIDECARS=$(find "$RETYPE/blobs" -type f -name '*.mime' | LC_ALL=C sort)
+[ "$(printf '%s\n' "$SIDECARS" | wc -l | tr -d ' ')" -eq 1 ] \
+  || fail 'case 14: the seed left more than one blob sidecar to grade'
+SEEDED_TYPE=$(cat "$SIDECARS")
+[ "$SEEDED_TYPE" = 'text/plain' ] \
+  || fail "case 14: the seeded sidecar declares $SEEDED_TYPE, not text/plain"
+RETYPE_BEFORE=$(find "$RETYPE/blobs" -type f | wc -l | tr -d ' ')
+
+"$WORK/driver" blob-retype-add "$RETYPE" \
+  > "$WORK/retype-add.out" 2> "$WORK/retype-add.err"
+require_empty "$WORK/retype-add.err" blob-retype-add
+[ "$(tail -1 "$WORK/retype-add.out")" = 'BLOB-RETYPE-ADD: PASS' ] \
+  || fail 'case 14: the retype add route did not pass'
+
+RETYPE_AFTER=$(find "$RETYPE/blobs" -type f | wc -l | tr -d ' ')
+[ "$RETYPE_AFTER" -eq "$RETYPE_BEFORE" ] \
+  || fail "case 14: the re-declared upload moved the blob file count from $RETYPE_BEFORE to $RETYPE_AFTER; the test wants a pure type change"
+DECLARED_TYPE=$(cat "$SIDECARS")
+[ "$DECLARED_TYPE" = 'application/json' ] \
+  || fail "case 14: the sidecar still declares $DECLARED_TYPE; the re-declared type never reached the disk"
+
+echo "case 14: re-declaring a stored blob persisted ($SEEDED_TYPE -> $DECLARED_TYPE) at an unchanged $RETYPE_AFTER blob file(s)"
+
+
+echo 'PASS: store persistence — cross-process resume (repository and blobs); tamper rejected in both halves; oversize blob refused before any write; every constructed half-written state served the previous value or refused; a staged event anchored to no commit finished while planning wrote nothing; a genesis quartet interrupted at any of its four points finished on the next start and not again, while a lost last-promoted pointer over surviving entries was refused rather than re-minted; every entry no store wrote skipped or refused as its module states, at every listed level; every promote barriered before and after, and every directory a store created barriered into the directory it named it in, with the blob half of one transition promoted before the commit that can name it and every shard barrier of one commit taken after all of its block promotes; one upload writing its own blob and no other; a stored blob re-declared under a different type still reaching the disk; key absent'

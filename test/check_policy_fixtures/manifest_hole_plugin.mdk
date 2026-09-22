@@ -1,0 +1,13 @@
+-- WS-1c #3322 regression fixture.
+-- `entry`'s WRITTEN signature carries the inferred-hole marker directly
+-- (`<Net "_">`, `effHoleSrc` in `compiler/types/repr.mdk`) rather than a
+-- call-site fill, so the atom `medaka manifest` sees for `Net` is
+-- `PPrefix (Some "_")` unchanged.  The manifest renderer must fold that back
+-- to the bare ⊤ grant `Net = true`, matching every other ⊤ atom, not print
+-- the literal hole string `Net = "_"`.
+effect Net Prefix
+
+extern netGet : String -> <FFI, Net "_"> String
+
+entry : String -> <FFI, Net "_"> String
+entry req = netGet req

@@ -17,7 +17,7 @@ whose §0 decisions D1–D8 remain authoritative and are *inherited*, not reopen
 | **R3** | Readiness syscall: **`poll(2)` only** in v2, wrapped by one extern. | POSIX — ONE code path satisfies the dual-platform (Linux + macOS) invariant; O(n) scan is irrelevant below ~1k fds. epoll/kqueue becomes a drop-in optimization behind the same extern later, zero API change (§6.4). |
 | **R4** | v2 scope: **I/O overlap only.** `sleep`, `awaitReadable`/`awaitWritable`, async accept/recv/send, the real scheduler. **No `spawn`/`Task`, no cancellation — and therefore no `race`/`timeout`.** DNS (`getaddrinfo`), file I/O, and `netTcpConnect` (which resolves internally) stay blocking, documented. | Race without cancellation silently leaks the loser — exactly the trap D8's structured-first stance exists to prevent. Cancellation is the hardest open semantic question (fd/effect lifecycle of a dropped task) and must not block the overlap payoff; §6.1 names its seam. Blocking DNS/file matches libuv's own history (thread pool came later) — §6.3. |
 | **R5** | Engine posture: **native-first, with capability-matrix ledger rows.** | The interpreter implements zero net externs today (the T7 family in `test/CAPABILITY-EXCEPTIONS.txt`); wasm rejects net as PERMANENT (`wasm_emit.mdk` gapL). The five new externs join those families with explicit rows — stated, never silent (G9). The A1 scheduler + `sleep` are pure Medaka over existing externs and work on **all three engines**. |
-| **R6** | Effect-row honesty: **two drivers.** `runAsync : Async e a -> <e> a` stays exactly the v1 pure trampoline; new `runAsyncIO : Async e a -> <e, Clock, Net _> a` engages the scheduler; the `main : Async _` driver dispatch switches to `runAsyncIO`. | The scheduler statically performs `<Clock>` (timer sleep) and `<Net _>` (`ioPoll`) even when a given program never parks — widening `runAsync` itself would tax every pure async program's manifest with capabilities it never exercises. Driver-level application is not user source, so `main : Async` programs' manifests don't widen either. `runAsync` hitting an `Await` panics with a message naming `runAsyncIO` (§4.4). |
+| **R6** | Effect-row honesty: **one driver.** `runAsync : Async e a -> <e> a` IS the scheduler, and `main : Async _` dispatch applies it on every target. Amended 2026-09-21 (#3320); the original two-driver form is below. | A driver must perform the program's row and nothing wider. The scheduler reaches that by never naming a clock or a poll extern itself: a `Wait` carries the capability whoever built it already performs (`sleep` and `deadlineAfter` are already `<Clock>`, `waitRead`/`waitWrite` already `<Net _>`), and the scheduler calls through the parked wait. A compute-only program therefore drives at `<>`, a sleep-only program at `<Clock>`, and no caller gains an atom its own program does not perform. **Superseded:** two drivers — `runAsync` as the v1 pure trampoline, plus a second one typed `Async e a -> <e, Clock, Net _> a` for the scheduler — because the scheduler statically performed `<Clock>`/`<Net _>` for programs that never parked, and folding that into `runAsync` would have taxed every pure async program's manifest. Carrying the capability on the wait removes the premise, so the split, and the `Await` panic that named the second driver, are both gone (§4.4). |
 
 Inherited and **not reopened** (v1 D1–D8): value-level monad; no `<Async>` effect;
 cooperative contract — interleave-at-yield, single thread, no observable parallelism;
@@ -37,10 +37,10 @@ API relied on.
 
 | # | Amendment | Replaces |
 |---|---|---|
-| **M1** | `Await` takes a **list** of waits (`Await (List Wait) k`), woken by any one. A deadline is the wait set `[WaitRead fd, WaitUntil t]`; the task itself decides what to do when the timer fires, so nothing is ever dropped. | §4.1's single `Wait` |
+| **M1** | `Await` takes a **list** of waits (`Await (List (Wait e)) k`), woken by any one. A deadline is the wait set `[waitRead fd, deadline]`; the task itself decides what to do when the timer fires, so nothing is ever dropped. `Wait` is indexed by an effect row and abstract outside `async`: a wait is built, not constructed, and each builder fixes `e` to the row its own extern performs — `waitRead`/`waitWrite` to `<Net "_" \| e>`, `deadlineAfter` to `<Clock \| e>`, `waitFlag` to any `e`, a flag being set by another task rather than polled. The poll and the clock read therefore happen under a parked wait's own capability, never under one the driver names for itself (R6, #3320). | §4.1's single, unindexed `Wait` |
 | **M2** | A `Spawn (Async e Unit) k` arm with `spawn`, `spawnTask : Async e a -> Async e (Task a)`, and `await`. `Task a` is two `Ref`s the child fills; `await` parks on `WaitFlag`. The driver returns only when every spawned task has finished (structured: the root is the scope). A program whose remaining tasks can never be woken panics rather than hangs. `concurrent` is built on spawn, so nested fan-out is free and every child is scheduled independently (G7). | R4's "no spawn/Task", D8's deferral |
 | **M3** | Per-operation deadlines on the net surface (`recvWithin`, `sendAllWithin`: `Err` on expiry, the shape the blocking `setTimeout` produced). **General cancellation, `race`, and `timeout` of an arbitrary task stay out**: dropping a parked task needs a cleanup story (the language has no catchable exit) and gets its own design. | R4, unchanged in spirit |
-| **M4** | `main : Async _` dispatch goes through the driver on **every** engine (#2506: `medaka build` used to force the inert value and print a heap pointer). The rewrite is `main_autoprint.asyncWrapModules`: the `async` module's driver is pinned under an unspellable name and imported into the entry module. Native and the interpreter apply `runAsyncIO`; the WasmGC target, which has no clock host-imports, applies the sequential `runAsync`. | §4.4's interpreter-only dispatch |
+| **M4** | `main : Async _` dispatch goes through the driver on **every** engine (#2506: `medaka build` used to force the inert value and print a heap pointer). The rewrite is `main_autoprint.asyncWrapModules`: the `async` module's driver is pinned under an unspellable name and imported into the entry module. Every target applies the same name, `runAsyncMain` — including the WasmGC target, which has no clock host-imports and no longer needs a driver of its own, because the scheduler names no clock extern (R6, #3320). | §4.4's interpreter-only dispatch |
 
 Also: `sleep` takes a `Duration` (`time.mdk`), matching `net.setTimeout`;
 `concurrent : List (Async e a) -> Async e (List a)` has a pure arrow; the async net
@@ -220,22 +220,37 @@ loop:
 order collection, return-when-all-done) is unchanged. The v1 doctests must pass
 byte-identically (G1) — for compute-only programs this loop *is* v1 round-robin.
 
-### 4.4 The drivers (R6)
+### 4.4 The driver (R6, amended #3320)
 
 ```
-runAsync   : Async e a -> <e> a                 -- v1, unchanged: pure trampoline.
-                                                -- Await -> panic naming runAsyncIO.
-runAsyncIO : Async e a -> <e, Clock, Net _> a   -- the scheduler loop above
+runAsync     : Async e a    -> <e> a            -- the scheduler loop above
+runAsyncMain : Async e Unit -> <e> Unit         -- what `main : Async _` dispatch applies
 ```
 
-Why two: the scheduler *statically* performs `<Clock>`/`<Net _>` even for programs that
-never park; folding that into `runAsync` would widen every pure async program's manifest.
-The `main : Async _` dispatch (`evalModulesOutputAsync` / the CLI run arm) drives through
-`runAsyncIO` — the driver's application is not user source, so user manifests still
-reflect only what the *program* does. The `runAsync (sleep 5)` failure mode (typechecks —
-`Clock` rides `e` — then panics at the `Await`) is accepted and documented; the panic
-message names the fix. ⚠️ Validate the `runAsyncIO` row typing on the binary at A1 before
-building on it — the v1 rule stands: decide empirically, not on paper.
+One driver, performing the program's own row and nothing wider. It gets there by owning
+no capability of its own: a `Wait` carries one.
+
+```
+Wait e = WaitRead  Int   (Poller e)   -- built by waitRead / waitWrite, already <Net _>
+       | WaitWrite Int   (Poller e)
+       | WaitUntil Float (Timer  e)   -- built by sleep / deadlineAfter, already <Clock>
+       | WaitFlag  (Ref Bool)         -- a spawned task's completion flag: no capability
+```
+
+`Timer e` is a pair of closures (read "now", sleep for N ms) and `Poller e` is one
+(`ioPoll`), each built at a site that already performs the row it closes over. The
+scheduler reads "now" from the nearest parked deadline's own `Timer`, and polls through a
+parked descriptor wait's own `Poller` — so a park table holding nothing but task flags,
+or nothing at all, costs no clock read and no poll. That is what makes the row honest
+rather than merely narrow: `Wait` is invariant in `e`, so a wait built under one row
+cannot be forced by a driver call typed in a narrower one.
+
+Consequences: `runAsync (sleep 5)` now works instead of panicking, so the `Await` panic
+that named the retired IO driver is gone; the deadlock panic stays. The WasmGC target runs the same
+driver as native, because the scheduler itself references no clock and no poll extern —
+only `sleep`/`deadlineAfter`/`waitRead`/`waitWrite` do, and a program that calls none of
+them links none of them. ⚠️ The rule from v1 stands: validate a row claim on the binary,
+not on paper (`medaka check --types` on a driver call is the probe).
 
 ### 4.5 The user surface (A1 + A3)
 
@@ -283,7 +298,7 @@ works; it just doesn't overlap, and the docs say so (R4/G9).
 
 | Stage | Issue | Content | New C | Engines | Key gate |
 |---|---|---|---|---|---|
-| A1 ✅ DONE 2026-09-02 | #496 | `Await`/`Spawn` arms + `Wait`; run queue + park table; `sleep`; `spawn`/`spawnTask`/`await`; `concurrent` over spawn; `runAsyncIO`; `main : Async` dispatch on all three engines (#2506) | none | eval + native; wasm runs the sequential driver, so compute-only programs work there and `sleep` does not (no clock host-imports, `WASM-GAP`) | v1 doctests byte-identical; 3×`sleep 100ms` concurrent in 0.15s wall, 0.00s CPU; `test/engine_fixtures/async_main_dispatch.mdk` |
+| A1 ✅ DONE 2026-09-02 | #496 | `Await`/`Spawn` arms + `Wait`; run queue + park table; `sleep`; `spawn`/`spawnTask`/`await`; `concurrent` over spawn; the scheduler; `main : Async` dispatch on all three engines (#2506) | none | eval + native; at A1 wasm ran a sequential driver, so compute-only programs worked there and `sleep` did not (no clock host-imports, `WASM-GAP`) | v1 doctests byte-identical; 3×`sleep 100ms` concurrent in 0.15s wall, 0.00s CPU; `test/engine_fixtures/async_main_dispatch.mdk` |
 | A2 ✅ DONE 2026-09-02 | #497 | `ioPoll` (parallel fd/interest arrays, readiness word per fd) + `netSetNonblock` + `netTry{Accept,Recv,Send}` | ~110 lines (`runtime/medaka_rt.c`) | native (+ ledger rows) | capability matrix green; would-block, poll-timeout, readiness-bit and EOF paths exercised by a native probe |
 | A3 ✅ DONE 2026-09-02 | #498 | fd parking (`ioPoll` from `wakeParked`); `awaitAny`/`deadlineAfter`/`expired` in `async.mdk`; `stdlib/net_async.mdk` (`accept`/`recv`/`send`/`sendAll`/`recvWithin`/`sendAllWithin`/`sendString`/`close`/`closeListener`/`serve`) | none | native | `test/async_fixtures/echo_overlap.mdk`: a slow client does not stall a fast one, a deadline fires, closing the listener ends `serve` — 0.40 s wall, 0.00 s CPU |
 | A4 ✅ DONE 2026-09-02 | #499 | `test/diff_async.sh` build-and-run gate over `test/async_fixtures/` (self-timed overlap fixture, order-of-magnitude margin); v1 determinism = the byte-identical v1 doctests + `engine_fixtures/async_main_dispatch.mdk`; doc sweep; this doc → IMPLEMENTED | none | — | CI green across the board |

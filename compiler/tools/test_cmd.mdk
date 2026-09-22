@@ -593,7 +593,7 @@ data Prepared =
 --
 -- THE GATE MUST NOT READ THE DOCTEST-INJECTED TREE.  A doctest EXPRESSION is not
 -- required to type-check as a pure top-level binding — `stdlib/async.mdk`'s
--- `runAsyncIO (…)` examples perform `<Clock>`, so the synthesized
+-- `runAsync (sleep …)` examples perform `<Clock>`, so the synthesized
 -- `__dt_i__ = debug (…)` bindings are an effectful value where `<>` is allowed —
 -- and a module's doctests are not part of what `medaka check` accepts.  Reading
 -- the injected tree would therefore reject modules `check` accepts.

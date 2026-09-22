@@ -1,4 +1,5 @@
 #!/bin/sh
+# blocked-because: concurrent-spawn — scenario 6 needs four `medaka lint --cache` runs in flight at once, which `runCommand` (one command, run to completion) cannot express
 # `medaka lint --cache` differential gate (#395).
 #
 # A cache without a gate is a silent-wrongness generator: every bug it can have
