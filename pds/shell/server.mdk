@@ -135,8 +135,8 @@ import lib.server_core.{
 import lib.store.{
   Store,
   storeBlobCids,
-  storeBlobMimeIndex,
   storeBlobMimeType,
+  storeBlobVersion,
   storeCredential,
   storeGet,
   storeHasBlob,
@@ -859,15 +859,22 @@ emitUnanchored dir nowSeconds build = do
 
    Block COUNTS decide the byte half exactly: a blob's name is its content and
    `lib.store` exposes no way to remove one, so two blob halves of equal size
-   hold equal blocks. The declared-type index is compared outright because it
-   moves on its own — re-uploading identical bytes under a different declared
-   MIME type leaves the count where it was — and `storeBlobMimeIndex` answers
-   that without copying every blob's bytes, which `storeBlobEntries` would do
-   on every read request. -}
+   hold equal blocks. The count alone is not the whole answer, because the
+   declared type moves on its own — re-uploading identical bytes under a
+   different declared MIME type leaves the count where it was — and the insert
+   counter answers THAT at a fixed cost, where reading the declared-type index
+   out to compare it costs the account's every blob on every read request
+   (#3263).
+
+   The counter can differ where the recorded state does not, since the insert
+   advances it whether or not it changed anything. That direction spends a
+   persist nothing owed; the direction that would lose a blob's declared type
+   until the next restart is a change this cannot fail to see, because the
+   insert is the only thing that moves the half. -}
 blobsMoved : Store -> Store -> Bool
 blobsMoved before after =
   storeSize before /= storeSize after
-    || storeBlobMimeIndex before /= storeBlobMimeIndex after
+    || storeBlobVersion before /= storeBlobVersion after
 
 {- | The type declared for a stored blob.
 

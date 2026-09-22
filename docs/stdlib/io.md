@@ -82,11 +82,12 @@ The permission bits of a file only its owner may read or write:
 isPrivateMode : Int -> Bool
 ```
 
-Whether permission bits keep a file to its owner: no group and no other
-bit is set. `fileMode` reports the bits to grade.
+Whether permission bits keep a file to its owner, with no group or
+other bit set.
 
 A secret at any wider mode is readable by another account on the same
-host, so a program that reads one should refuse it rather than warn.
+host, so a program that reads one should refuse it. `fileMode` reads a
+path's bits.
 
 ```medaka
 > isPrivateMode ownerOnlyMode
@@ -106,9 +107,8 @@ writeFilePrivate : String -> String -> <FileWrite _> Result String Unit
 Writes a string to a file that only its owner may read or write, at
 `ownerOnlyMode`.
 
-The contents never exist at a wider mode, and an existing file at a wider
-one is narrowed before they are written, so this is the way to write a
-secret.
+The contents never exist at a wider mode: an existing file at a wider one
+is narrowed before they are written. Use it for a secret.
 
 ## Commands
 
@@ -136,15 +136,13 @@ Ok ("", "")
 runVerb : String -> List String -> <Exec _> Result String (Int, String, String)
 ```
 
-Runs a program with arguments and waits for it, keeping the exit code,
-stdout, and stderr as three distinct fields instead of folding a nonzero
-exit into an `Err` the way `runCommandOk` does.
+Runs a program with arguments and waits for it, returning the exit
+code, stdout, and stderr.
 
-Only a spawn failure (the program could not be started) is `Err`, with
-the host's message. A nonzero exit is still `Ok`: a caller asserting on
-failure output needs the exit code and stderr in hand, not conflated
-into a rejected `Result` or silently dropped the way comparing stdout
-alone would drop it.
+Only a failure to start the program is `Err`, with the host's message. A
+nonzero exit is still `Ok`, so a caller can assert on the exit code and
+stderr of a failing run. `runCommandOk` folds a nonzero exit into `Err`
+instead.
 
 ```medaka
 > runVerb "true" []

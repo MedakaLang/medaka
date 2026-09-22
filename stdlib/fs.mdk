@@ -112,18 +112,16 @@ filesOnly (p :: rest) = match isFile p
   Ok True => map (p :: _) (filesOnly rest)
   Ok False => filesOnly rest
 
-{- | Every regular file under `root`, depth first: `walkDir` with
-   directories filtered out and an anti-vacuity floor. A directory that
-   reads cleanly but holds zero files is still `Err`, since a fixture-file
-   gate iterating zero fixtures would otherwise report success having
-   tested nothing.
+{- | Every regular file under `root`, depth first, or `Err` when there are
+   none.
+
+   `walkDir` with directories filtered out. A directory that reads cleanly
+   but holds no files is an `Err`, so a test that iterates over a fixture
+   directory cannot pass by iterating over nothing. Every result is a path
+   under `root`.
 
    > fixtureFiles "stdlib/no-such-fixture-doctest-dir"
    Err "No such file or directory"
-
-   Every result is a path under `root`. The shape is asserted rather than
-   the count, for the same reason as `fixtureDirs`' doctest below.
-
    > map (all (contains "/effect_set_fixtures/")) (fixtureFiles "test/effect_set_fixtures")
    Ok True -}
 export
@@ -142,19 +140,15 @@ dirsOnly (p :: rest) = match isDir p
   Ok True => map (p :: _) (dirsOnly rest)
   Ok False => dirsOnly rest
 
-{- | Every top-level subdirectory of `root`, non-recursive, with the same
-   anti-vacuity floor as `fixtureFiles`. For a corpus where each fixture unit
-   is a whole directory (several files under one name) rather than a single
-   file — `fixtureFiles` filters directories out, so a directory-shaped
-   corpus needs this instead.
+{- | Every top-level subdirectory of `root`, or `Err` when there are none.
+
+   Not recursive. For a corpus where each fixture is a whole directory
+   rather than a single file; `fixtureFiles` filters directories out. A
+   directory with no subdirectories is an `Err`, as for `fixtureFiles`.
+   Every result is a path under `root`.
 
    > fixtureDirs "stdlib/no-such-fixture-doctest-dir"
    Err "No such file or directory"
-
-   Every result is a path under `root`. The shape is asserted rather than
-   the count: a count of somebody else's corpus written down here breaks
-   this module every time that corpus grows.
-
    > map (all (contains "/import_order_fixtures/")) (fixtureDirs "test/import_order_fixtures")
    Ok True -}
 export
@@ -166,15 +160,16 @@ fixtureDirs root = match listDir root
     Ok [] => Err "\{root}: no fixture directories found"
     Ok ds => Ok ds
 
-{- | `Err` unless `units` has exactly `want` elements — the weaker floor for
-   a corpus with no wired roster to check against: it catches a corpus that
-   grew or shrank, but not which unit changed. Prefer `unrosteredUnits` /
-   `missingUnits` (`test_process.mdk`) whenever a roster exists to check
-   against instead.
+{- | `Ok` when `units` has exactly `want` elements, otherwise an `Err`
+   naming both counts.
+
+   A floor for a corpus with no roster to check against: it catches a
+   corpus that grew or shrank, but not which unit changed. When a roster
+   exists, `test_process.unrosteredUnits` and `test_process.missingUnits`
+   say which.
 
    > expectUnitCount 2 ["a", "b"]
    Ok ()
-
    > expectUnitCount 3 ["a", "b"]
    Err "expected 3 units, found 2" -}
 export

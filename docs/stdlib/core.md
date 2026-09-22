@@ -425,25 +425,18 @@ interface DeferredMappable (f : Effect -> Type -> Type)
   deferMap : (a -> <e> b) -> f e a -> f e b
 ```
 
-The DEFERRED family (EFFECTS-SEMANTICS §6, "graded interfaces").  `Mappable`
-/ `Applicative` / `Thenable` above charge the callback's effect row on the
-method's own arrow: the effect happens NOW, at the call, which is right for a
-strict container.  The `Deferred*` family instead records the effect in the
-container's `Effect`-kinded INDEX: nothing happens at `deferMap`/`deferThen`;
-the registered effects fire later, at the container's own eliminator
-(`runAsync` for `Async`).  Construction is therefore genuinely pure — a
-`Async <IO> Int` can be built inside a function typed `<>`.
+Containers that record an effect to perform later.
 
-The two families are peers, not a general and a special case (§6.6), so the
-method names are distinct on purpose: sharing `map`/`andThen` would make
-`do`-notation pick one interface for both.  `defer` blocks desugar to
-`deferThen`/`deferPure` the way `do` blocks desugar to `andThen`/`pure`.
+`Mappable`, `Applicative`, and `Thenable` perform a callback's effects at
+the call. The `Deferred` family instead records them in the container's
+`Effect` index: `deferMap` and `deferThen` perform nothing, and the
+recorded effects run when the container is eliminated (`runAsync` for
+`Async`). An `Async <IO> Int` can therefore be built inside a function
+typed `<>`.
 
-The grade is graded-lite: one shared effect variable per signature.  An
-impl MUST store its callback under the container's own `<e>` thunk rather
-than apply it (`deferMap g (Done a) = Suspend (u => Done (g a))`, never
-`Done (g a)`); applying it eagerly performs `<e>` on an arrow the signature
-declares pure and is rejected (`T-EFFECT-INDEX-EAGER`).
+The method names differ from `map` and `andThen` so that each block form
+picks one family: a `defer` block desugars to `deferThen` and `deferPure`
+the way a `do` block desugars to `andThen` and `pure`.
 
 ### `DeferredApplicative`
 
@@ -453,12 +446,22 @@ interface DeferredApplicative (f : Effect -> Type -> Type)
   deferAp : f e (a -> b) -> f e a -> f e b
 ```
 
+Deferred containers with a pure injection and application.
+
+`deferPure` wraps a value and records no effect. `deferAp` applies a
+deferred function to a deferred argument.
+
 ### `DeferredThenable`
 
 ```
 interface DeferredThenable (f : Effect -> Type -> Type)
   deferThen : f e a -> (a -> <e> f e b) -> f e b
 ```
+
+Deferred containers that can be sequenced.
+
+`deferThen ma f` records `f` to run on the value of `ma`. A `defer` block
+desugars to it.
 
 ### `deferFlatMap`
 
@@ -959,12 +962,11 @@ The value inside a `Some`, or the default for `None`.
 optionOrPanic : String -> Option a -> a
 ```
 
-The value inside a `Some`, or a panic carrying `context` for `None`.
+The value inside a `Some`, or a panic with `context` as its message
+for `None`.
 
-For an invariant the caller believes cannot fail, where `context` says why
-it cannot. There is no form that omits `context`: a panic a reader cannot
-place is worse than the failure it reports. `optionOr` is the form that
-recovers instead.
+For an invariant the caller knows holds, where `context` says why. There
+is no form without `context`. `optionOr` recovers with a default instead.
 
 ```medaka
 > optionOrPanic "the table is installed before any read" (Some 42)
@@ -1056,14 +1058,12 @@ The value inside an `Ok`, or the default for `Err`.
 resultOrPanic : Display e => String -> Result e a -> a
 ```
 
-The value inside an `Ok`, or a panic carrying `context` and the error
-for `Err`.
+The value inside an `Ok`, or a panic for `Err` whose message is
+`context`, a colon, and the error.
 
-For an invariant the caller believes cannot fail. The message is
-`context`, a colon, and the error, so `context` says why the `Err` cannot
-happen and the error says what did. There is no form that omits
-`context`: a panic a reader cannot place is worse than the failure it
-reports. `resultOr` is the form that recovers instead.
+For an invariant the caller knows holds, where `context` says why and the
+error says what happened. There is no form without `context`. `resultOr`
+recovers with a default instead.
 
 ```medaka
 > resultOrPanic "this name and value are literals" (Ok 42)
@@ -1261,25 +1261,22 @@ interface Arbitrary a
 Types that can generate random values for property tests.
 
 `arbitrary` draws a value in the `<Rand>` effect. `shrink` lists smaller
-candidates, tried in order to reduce a failing example for code that
-shrinks by hand; it defaults to none.
+candidates, tried in order, for code that shrinks a failing example by
+hand; it defaults to none.
 
 `medaka test` draws each `prop` parameter from its declared type. A
-user-defined type that takes no type arguments is drawn through its
-`Arbitrary` instance when one is in scope, and built from its constructors
-otherwise — wherever it appears, as the parameter's own type or as a field
-of another type. An instance the runner cannot draw through, because it is
-constrained (`requires`) or stands at an applied head, is reported rather
-than ignored. Every other parameter type the runner builds itself: `Int`,
+user-defined type with no type arguments is drawn through its `Arbitrary`
+instance when one is in scope, and built from its constructors otherwise,
+whether it is the parameter's own type or a field of another. An instance
+the runner cannot draw through, because it is constrained with `requires`
+or stands at an applied head, is reported rather than ignored. `Int`,
 `Bool`, `Float`, `Char`, `String`, `Unit`, `List`, `Array`, `Option`,
-`Result`, tuples, and any type applied to arguments, so an instance at one
-of those is not consulted for drawing either.
+`Result`, tuples, and any applied type are built by the runner itself, so
+an instance at one of those is not consulted.
 
-A failing counterexample is shrunk by the runner's own built-in strategy,
-never by calling `shrink` — for any type, built-in or user-defined.
-`shrink` is for property code that shrinks values by hand, outside the
-runner; an instance's `shrink` has no effect on what `medaka test`
-reports.
+The runner shrinks a failing counterexample with its own strategy and
+never calls `shrink`, so an instance's `shrink` has no effect on what
+`medaka test` reports.
 
 ### `arbitraryString`
 

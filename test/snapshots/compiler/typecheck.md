@@ -1,5 +1,5 @@
 # META
-source_lines=46670
+source_lines=46713
 stages=DESUGAR,MARK
 # SOURCE
 -- The typecheck stage: Hindley-Milner inference, interface/impl constraint solving,
@@ -20413,6 +20413,44 @@ callOblMonoIds (iface, monos, _) =
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 
+-- #3204 / #3317 — the OPERATOR-SITE pin channel, windowed to this binding's own
+-- inference exactly as dictForwardedPairs is.  An operator on the method seam is a
+-- method occurrence wearing surface syntax (binopMethod: `++`/`==`/`<`/…; unopMethod:
+-- unary `-`), and a local binding is never dict-abstracted — so when the group
+-- generalizes over an operand var whose head is still unknown, that var is still
+-- unbound at resolveOpSites time and the route stays RNone.  What RNone lowers to is
+-- an untyped builtin: `@mdk_append` walks a user constructor cell as a Cons chain,
+-- `mdk_value_eq` compares it structurally instead of by its `Eq` instance, and
+-- `negate` has no non-numeric arm at all — a crash, a wrong answer, and a panic, none
+-- of them the instance the program named.  Pinning the var is what the method
+-- SPELLING (`let f = append`, `let f = eq`) already gets from the two method channels
+-- above; this gives the OPERATOR spelling the same grounding, so both reach the
+-- instance.  `(++)` and `(==)` desugar to the same lambda shape as a hand-written
+-- `x y => x ++ y`, so one channel covers the section and the lambda together.
+--
+-- SKOp SITES ONLY, which is what confines this to the seam's own methods
+-- (`eq`/`lt`/`gt`/`lte`/`gte`/`append`/`negate`).  Arithmetic shares the GKBinopSite
+-- kind but records SKPredicateOp, carrying a fixed prelude `Num` predicate that
+-- numeric defaulting grounds on its own schedule; pinning those operands would put
+-- this channel in front of that machinery for no gap it closes.
+--
+-- HEAD-UNKNOWN ONLY.  An operand that already has a head tycon needs no pin: a
+-- builtin head routes to the structural primitive (binopBuiltinHead), a concrete user
+-- head routes RKey to the instance, and a TRigid — a declared `Semigroup a =>` slot —
+-- routes RDict through enclDictVarOf.  Pinning on `monoUnboundIds` alone would
+-- additionally pin a generic `acc ++ [y]` on its ELEMENT var, whose head `List` is
+-- already ground and whose builtin route is already right.
+opSitePairs : Int -> List (Int, String)
+opSitePairs dictN0 =
+  flatMap opSiteIdPairs (siteGoals GKBinopSite dictN0)
+    ++ flatMap opSiteIdPairs (siteGoals GKUnopSite dictN0)
+
+opSiteIdPairs : PendingEntry -> List (Int, String)
+opSiteIdPairs (PendingEntry method _ m _ (SKOp _) _ _ _)
+  | isSome (headTyconNameMono m) = []
+  | otherwise = monoIdsWithIface (m, optionOr "" (ifaceOfMethodName method))
+opSiteIdPairs _ = []
+
 -- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
 -- `where`/`let`-GROUP site processLetGroup, and the four genRestricted sites via
 -- pinLocalIfDictForwarded) consult exactly this, so one judgment is made in one place.
@@ -20422,13 +20460,17 @@ monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 -- (#1052).  Rung 1 makes the five agree; WHAT the agreed answer should be is rung 2's
 -- question, not this predicate's.
 --
--- Three channels, in the order their comments appear above:
+-- Four channels, in the order their comments appear above:
 --   methodConstrainedPairs  emit-path arg stamps (pendingArgStamps), UNWINDOWED.
 --   methodOccArgPairs       the entry-point-neutral obligation channel (#2026),
 --                           UNWINDOWED — this is what keeps `check` and `build` at the
 --                           same pin decision.
 --   dictForwardedPairs      constrained-callee dict routes, WINDOWED to this binding's
 --                           own inference (#866).
+--   opSitePairs             head-unknown operator sites on the method seam, WINDOWED
+--                           the same way (#3204, #3317).  Entry-point-neutral by
+--                           construction: the site is recorded during ordinary
+--                           inference, not by the mark pass.
 -- UNION, never substitution: each channel covers sites the others structurally cannot
 -- see (see each function's own note).  Duplicate ids are free — recordPinnedLocals
 -- dedups by tyvar id.
@@ -20490,6 +20532,7 @@ localPinPairs callN0 dictN0
     methodConstrainedPairs ()
       ++ methodOccArgPairs ()
       ++ dictForwardedPairs callN0 dictN0
+      ++ opSitePairs dictN0
 
 -- #866: the pin decision AND the note pinnedLocalExplain needs, in one pass, so the
 -- two can never disagree about whether a binding was pinned.  [name]/[loc]
@@ -50039,10 +50082,15 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblMonoIds" ((PTuple (PVar "iface") (PVar "monos") PWild)) (EApp (EApp (EVar "flatMap") (ELam ((PVar "m")) (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EFieldAccess (EVar "iface") "irName"))))) (EVar "monos")))
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EVar "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
+(DTypeSig false "opSitePairs" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "opSitePairs" ((PVar "dictN0")) (EBinOp "++" (EApp (EApp (EVar "flatMap") (EVar "opSiteIdPairs")) (EApp (EApp (EVar "siteGoals") (EVar "GKBinopSite")) (EVar "dictN0"))) (EApp (EApp (EVar "flatMap") (EVar "opSiteIdPairs")) (EApp (EApp (EVar "siteGoals") (EVar "GKUnopSite")) (EVar "dictN0")))))
+(DTypeSig false "opSiteIdPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "opSiteIdPairs" ((PCon "PendingEntry" (PVar "method") PWild (PVar "m") PWild (PCon "SKOp" PWild) PWild PWild PWild)) (EIf (EApp (EVar "isSome") (EApp (EVar "headTyconNameMono") (EVar "m"))) (EListLit) (EIf (EVar "otherwise") (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "ifaceOfMethodName") (EVar "method"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "opSiteIdPairs" (PWild) (EListLit))
 (DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EApp (EApp (EVar "map") (EVar "fst")) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef") "value") (EListLit) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef") "value") (EListLit) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EApp (EVar "opSitePairs") (EVar "dictN0"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
@@ -57176,10 +57224,15 @@ schemeLines ((n, s) :: rest) = "\{n} : \{ppSchemeNamed n s}" :: schemeLines rest
 (DFunDef false "callOblMonoIds" ((PTuple (PVar "iface") (PVar "monos") PWild)) (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "m")) (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EFieldAccess (EVar "iface") "irName"))))) (EVar "monos")))
 (DTypeSig false "monoIdsWithIface" (TyFun (TyTuple (TyCon "Mono") (TyCon "String")) (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
 (DFunDef false "monoIdsWithIface" ((PTuple (PVar "m") (PVar "iface"))) (EApp (EApp (EMethodRef "map") (ELam ((PVar "id")) (ETuple (EVar "id") (EVar "iface")))) (EApp (EVar "monoUnboundIds") (EVar "m"))))
+(DTypeSig false "opSitePairs" (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "opSitePairs" ((PVar "dictN0")) (EBinOp "++" (EApp (EApp (EDictApp "flatMap") (EVar "opSiteIdPairs")) (EApp (EApp (EVar "siteGoals") (EVar "GKBinopSite")) (EVar "dictN0"))) (EApp (EApp (EDictApp "flatMap") (EVar "opSiteIdPairs")) (EApp (EApp (EVar "siteGoals") (EVar "GKUnopSite")) (EVar "dictN0")))))
+(DTypeSig false "opSiteIdPairs" (TyFun (TyCon "PendingEntry") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String")))))
+(DFunDef false "opSiteIdPairs" ((PCon "PendingEntry" (PVar "method") PWild (PVar "m") PWild (PCon "SKOp" PWild) PWild PWild PWild)) (EIf (EApp (EVar "isSome") (EApp (EVar "headTyconNameMono") (EVar "m"))) (EListLit) (EIf (EVar "otherwise") (EApp (EVar "monoIdsWithIface") (ETuple (EVar "m") (EApp (EApp (EVar "optionOr") (ELit (LString ""))) (EApp (EVar "ifaceOfMethodName") (EVar "method"))))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "opSiteIdPairs" (PWild) (EListLit))
 (DTypeSig false "localPinIds" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyCon "Int")))))
 (DFunDef false "localPinIds" ((PVar "callN0") (PVar "dictN0")) (EApp (EApp (EMethodRef "map") (EVar "fst")) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))))
 (DTypeSig false "localPinPairs" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))))))
-(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef") "value") (EListLit) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
+(DFunDef false "localPinPairs" ((PVar "callN0") (PVar "dictN0")) (EIf (EFieldAccess (EFieldAccess (EFieldAccess (EVar "driverState") "value") "localPinDisabledRef") "value") (EListLit) (EIf (EVar "otherwise") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EApp (EVar "methodConstrainedPairs") (ELit LUnit)) (EApp (EVar "methodOccArgPairs") (ELit LUnit))) (EApp (EApp (EVar "dictForwardedPairs") (EVar "callN0")) (EVar "dictN0"))) (EApp (EVar "opSitePairs") (EVar "dictN0"))) (EApp (EVar "__fallthrough__") (ELit LUnit)))))
 (DTypeSig false "pinLocalIfDictForwarded" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyCon "Mono") (TyCon "Bool")))))))
 (DFunDef false "pinLocalIfDictForwarded" ((PVar "callN0") (PVar "dictN0") (PVar "name") (PVar "loc") (PVar "t")) (EApp (EApp (EApp (EApp (EApp (EVar "recordPinnedLocals") (EVar "name")) (EVar "loc")) (EApp (EApp (EVar "freeGenVars") (EFieldAccess (EFieldAccess (EFieldAccess (EVar "perRun") "value") "currentLevel") "value")) (EVar "t"))) (EApp (EApp (EVar "localPinPairs") (EVar "callN0")) (EVar "dictN0"))) (EVar "t")))
 (DTypeSig false "recordPinnedLocals" (TyFun (TyCon "String") (TyFun (TyApp (TyCon "Option") (TyCon "Loc")) (TyFun (TyApp (TyCon "List") (TyCon "Int")) (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "String"))) (TyFun (TyCon "Mono") (TyCon "Bool")))))))

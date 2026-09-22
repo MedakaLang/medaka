@@ -45,6 +45,7 @@ import core.{
   FromEntries,
   Index,
 }
+import list.{reverse, take}
 
 {- | The map type.
 
@@ -384,6 +385,80 @@ export
 entries : Map k v -> List (k, v)
 entries m = foldrWithKey (k v acc => (k, v) :: acc) [] m
 
+{- | The entries from `start` upwards in ascending key order, at most `limit`
+   of them.
+
+   A `start` of `None` begins at the smallest key and a `limit` of `None` reads
+   to the end, so `entriesFrom None None` is `entries`. The start key is
+   inclusive and need not be present: the read begins at the next key above it.
+   A `limit` of zero or less reads nothing.
+
+   The read descends to `start` and stops as soon as the limit is met, without
+   visiting the entries on either side of what it returns, so a page of a large
+   map costs the page: `O(log n + limit)`, against the `O(n)` of taking a prefix
+   of `entries`.
+
+   > entriesFrom (Some "b") (Some 2) (fromList [("a", 1), ("b", 2), ("c", 3), ("d", 4)])
+   [("b", 2), ("c", 3)]
+   > entriesFrom (Some "b") (Some 0) (fromList [("a", 1), ("b", 2)])
+   []
+   > entriesFrom (Some "z") None (fromList [("a", 1), ("b", 2)])
+   []
+   > entriesFrom None None (fromList [("b", 2), ("a", 1)])
+   [("a", 1), ("b", 2)] -}
+export
+entriesFrom : Ord k => Option k -> Option Int -> Map k v -> List (k, v)
+entriesFrom start limit m =
+  let (Scan taken _ _) = scanFrom start m (scanStart limit)
+  reverse taken
+
+{- The entries taken so far in reverse traversal order, how many more the limit
+   still allows, and whether the limit is filled. Every later step is a no-op
+   once it is. -}
+data Scan k v = Scan (List (k, v)) (Option Int) Bool
+
+scanDone : Scan k v -> Bool
+scanDone (Scan _ _ done) = done
+
+-- A limit of no entries at all leaves the scan with nothing to do.
+scanStart : Option Int -> Scan k v
+scanStart None = Scan [] None False
+scanStart (Some limit) = Scan [] (Some limit) (limit <= 0)
+
+-- Take one in-range entry, ending the scan when it was the last the limit
+-- allows.
+takeEntry : k -> v -> Scan k v -> Scan k v
+takeEntry k v (Scan taken remaining _) =
+  let kept = (k, v) :: taken
+  match remaining
+    None => Scan kept None False
+    Some left => Scan kept (Some (left - 1)) (left <= 1)
+
+belowBound : Ord k => k -> Option k -> Bool
+belowBound _ None = False
+belowBound k (Some bound) = lt k bound
+
+{- Walk from `start` in key order, entering a subtree only when it can still
+   hold an entry the read wants. A node below the bound puts its whole left
+   subtree below the bound too, by the search invariant, so that subtree is
+   discarded without one of its nodes being visited; at or above the bound the
+   bound is discharged, because every key right of an in-range key is in range
+   as well. A filled limit ends the descent where it stands rather than
+   trimming a larger result. -}
+scanFrom : Ord k => Option k -> Map k v -> Scan k v -> Scan k v
+scanFrom _ Tip scan = scan
+scanFrom lo (Bin _ k v l r) scan =
+  if scanDone scan then
+    scan
+  else if belowBound k lo then
+    scanFrom lo r scan
+  else
+    let afterLeft = scanFrom lo l scan
+    if scanDone afterLeft then
+      afterLeft
+    else
+      scanFrom None r (takeEntry k v afterLeft)
+
 {- | The keys, in ascending order.
 
    > keys (fromList [(2, 0), (3, 0), (1, 0)])
@@ -603,9 +678,9 @@ export impl Filterable (Map k) where
       Some w => link k w l2 r2
       None => link2 l2 r2
 
-{- | The `Foldable` methods visit values in ascending order of their keys, so
-   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
-   over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+{- | The `Foldable` methods visit the values in ascending key order, so
+   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` fold over
+   the values, not the `(k, v)` pairs. `entries` gives the pairs.
 
    > toList (fromList [(2, 20), (1, 10)])
    [10, 20]
@@ -676,7 +751,7 @@ export impl FromEntries (Map k v) (k, v) requires Ord k where
 -- `empty` is nullary and so dispatches on its result type; the impl's
 -- `requires Ord k` carries no dict here because `Tip` needs none, so a
 -- return-position `empty : Map k v` grounds cleanly.
-{- | `empty` is the map with no entries.
+{- | The map with no entries.
 
    > isEmpty (empty : Map Int Int)
    True -}
@@ -861,3 +936,17 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
   let (below, above) = splitAt k (fromList xs)
   let rebuilt = link2 below above
   wellFormed rebuilt && eq (entries rebuilt) (entries (delete k (fromList xs)))
+
+prop "entriesFrom is the limited run of entries from the start key" (k : Int) (n : Int) (xs : List (Int, Int)) =
+  let m = fromList xs
+  eq
+    (entriesFrom (Some k) (Some n) m)
+    (take n (filter ((key, _) => gte key k) (entries m)))
+
+prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) (n : Int) (xs : List (Int, Int)) =
+  let m = fromList xs
+  eq (entriesFrom None None m) (entries m)
+    && eq (entriesFrom None (Some n) m) (take n (entries m))
+    && eq
+      (entriesFrom (Some k) None m)
+      (filter ((key, _) => gte key k) (entries m))

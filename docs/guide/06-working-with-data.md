@@ -71,12 +71,13 @@ Qualify, or select with `import <mod>.{get}`
 
 `import array as A` gives you a prefix and avoids the question.
 
-> **The alias qualifies the type too.** `import map as M` lets you write both
-> `M.get` and `M.Map String Int`, and `M.Map String Int` is the same type as the
-> `Map String Int` you would get from `import map.{Map}` — a value built one way
-> fits a signature written the other. What an alias does *not* reach is a
-> CONSTRUCTOR: `M.Tip` is not a spelling the grammar has, so pattern-matching a
-> map's constructors still needs `import map.{Map(..)}`.
+> **The alias qualifies the whole module.** `import map as M` lets you write
+> `M.get` in an expression, `M.Map String Int` in a signature, and `M.Tip` or
+> `M.Bin` in a pattern. `M.Map String Int` is the same type as the
+> `Map String Int` you would get from `import map.{Map}`, so a value built one
+> way fits a signature written the other. Constructors are reachable through
+> the alias only when their module exports them, with `public export data`;
+> a type exported abstractly has none to reach either way.
 
 ## `map`, `filter`, and `fold`
 

@@ -19,7 +19,7 @@ in rather than refused, so `-1` and `511` both encode as `ff`.
 encodeBytes : Bytes -> String
 ```
 
-`b` as lowercase hex, two digits per byte.
+The byte string as lowercase hex, two digits per byte.
 
 ```medaka
 > encodeBytes (fromArrayAssumeByteDomain [|255, 0, 16|])
@@ -73,7 +73,7 @@ The UTF-8 bytes of a string as lowercase hex.
 decodeBytes : String -> Result String Bytes
 ```
 
-The bytes written in a hex string.
+The bytes written in a hex string, as a `Bytes`.
 
 `Err` when the string has an odd length or any character that is not a
 hex digit. Whitespace is not skipped.

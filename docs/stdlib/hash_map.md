@@ -198,10 +198,10 @@ The values, in unspecified order.
 impl Foldable (HashMap k)
 ```
 
-The `Foldable` methods visit values in unspecified order (`keys` and
-`entries` above make the same guarantee), so `toList`, `length`, `elem`,
-`sum`, and `any` all work on a table but their element order is not
-something a caller can rely on.
+The `Foldable` methods fold over the values, in the same unspecified
+order as `keys` and `entries`. `toList`, `length`, `elem`, `sum`, and
+`any` all work on a table, but the order they see the elements in is not
+one a caller can rely on.
 
 ```medaka
 > toList (fromList [(5, 50)])

@@ -2,63 +2,34 @@
 
 An immutable string of bytes.
 
-`Bytes` wraps a sequence of byte values, each `0` to `255`, and hands out
-no way to change it once built. Use it for data that is bytes, such as a
-file's contents, a hash digest, or a UTF-8 encoding, and `Array Int` for a
-sequence of numbers that happen to be small.
+`Bytes` holds a sequence of byte values, each `0` to `255`, that cannot
+be changed once built. Use it for data that is bytes, such as a file's
+contents, a hash digest, or a UTF-8 encoding, and `Array Int` for a
+sequence of numbers that happen to be small. A byte string of `n` bytes
+occupies `n` bytes.
 
-The bytes are packed one per byte rather than one per machine word, so a
-byte string of `n` bytes occupies `n` bytes.
+`fromArray` builds a byte string from an `Array Int` and answers `None`
+when an element is outside `0` to `255`, so no `Bytes` value holds
+anything else. `encodeUtf8` builds one from a `String`. `toArray` and
+`decodeUtf8` go the other way. `mut_bytes.MutBytes` is the mutable
+sibling, for building a byte string a byte at a time.
 
-The `0` to `255` domain is enforced at the way in. `fromArray` answers
-`None` on an element outside it, so no `Bytes` value holds anything else,
-and `get`, `b[i]`, `eq`, and `compare` all read a byte back.
-`fromArrayAssumeByteDomain` is the unchecked way in, for a caller that has
-already established the range.
+`length` is the byte count, `get` reads one byte as an `Option`, and
+`b[i]` is the panicking form. `slice`, `take`, `drop`, `indexOf`,
+`startsWith` and the rest follow the shapes of `string` and `list`.
+Byte strings compare lexicographically and can key a `HashMap` or a
+`HashSet`. `b1 ++ b2` joins two.
 
-`fromArray` and `toArray` convert; `length` is the byte count and
-`get` reads one byte. `b[i]` panics on an out-of-range index; `get` is the
-`Option`-returning form. `slice` copies out a sub-range and panics on a
-range that runs outside the byte string, `sliceClamped` clamps the range
-instead. `elemIndex` finds the first byte equal to a given value, and
-`indexOf` finds the first occurrence of a byte-string needle -- `contains`
-and `lastIndexOf` are the same shape as `String`'s. Two byte strings compare lexicographically,
-as the arrays of their bytes do, and hash as the arrays of their bytes do,
-so `Bytes` is a `HashMap`/`HashSet` key.
+Several names here (`length`, `isEmpty`, `fold`, `map`, `forEach`,
+`any`, `all`) are also prelude names, and others are exported by `list`
+(`take`, `drop`, `splitAt`, `startsWith`, `endsWith`) or by `string` and
+`array` (`concat`). Import the module qualified, as `import bytes as B`,
+in a file that also imports one of those modules.
 
-`append` joins two byte strings, and `b1 ++ b2` reaches it: `++` is
-`Semigroup`'s `append`, so it dispatches on `Bytes` and allocates the
-joined length once. Applied where the operand type is known -- infix, in
-a section, or under a `Semigroup` constraint -- it dispatches. Bound to a
-name first, as `let f = (++)` or `let f = (x y => x ++ y)`, it does not:
-it falls through to the runtime's untyped concatenation, which has no
-byte-buffer case, and fails at run time. Bind `append` instead, which
-dispatches from either position.
-
-`mut_bytes` holds `MutBytes`, the mutable, fixed-length sibling, and the
-way to build a byte string a byte at a time: its `freeze` hands back a
-`Bytes` and its `thaw` goes the other way, both by copy.
-
-The list vocabulary is here monomorphically: `empty` and `isEmpty`,
-`take`, `drop` and `splitAt`, `startsWith` and `endsWith`, `concat`, and
-the walks `fold`, `forEach`, `any`, `all` and `map`. `Bytes` has no
-element parameter, so it cannot be a `Foldable`, `Mappable` or
-`Filterable` instance, and each of these is a plain function. `empty`,
-`isEmpty`, `fold` and `map` share a name with a prelude interface method,
-and `forEach`, `any` and `all` with a plain prelude function -- naming any
-of the seven in an import list shadows it for the whole importing module,
-as `length` already does. The other six (`take`, `drop`, `splitAt`,
-`startsWith`, `endsWith`, `concat`) name nothing in the prelude, but do
-collide with `list`'s exports of the same name if both modules are
-imported unaliased into one file. All thirteen are reached through the
-same alias (`import bytes as B`, then `B.fold`) for that consistency, not
-because every one of them provokes a warning on its own.
-
-Under the interpreter (`medaka run`, `medaka test`), a walk over a byte
-string costs one evaluator frame per byte and the evaluator's call depth
-is capped at 25,000, so a walk over a byte string that long exits with
-`E-STACK-OVERFLOW` instead of answering. The cap is the interpreter's, not
-the byte string's: compiled code (`medaka build`) has none.
+Under the interpreter (`medaka run`, `medaka test`), an operation that
+walks the bytes, `==` included, fails with `E-STACK-OVERFLOW` on a byte
+string longer than about 25,000 bytes. Compiled programs have no such
+limit.
 
 ### `Bytes`
 
@@ -68,12 +39,10 @@ newtype Bytes = Bytes ByteBlock
 
 The byte-string type.
 
-The constructor is module-private, so `fromArray`,
-`fromArrayAssumeByteDomain`, `fromByteBlockPrefix`, `adoptByteBlockUnsafe`
-and `encodeUtf8` are the ways in and `toArray`, `lendByteBlockUnsafe`,
-`decodeUtf8` and `decodeUtf8Lossy` are the ways out. The three named here
-with a `ByteBlock` in their signature are the kernel doors, gathered in
-the `# Kernel doors` section at the end of this module.
+The constructor is private. Build a value with `fromArray`,
+`fromArrayAssumeByteDomain` or `encodeUtf8`, and read it back with
+`toArray`, `decodeUtf8` or `decodeUtf8Lossy`. The functions under Runtime interop
+doors cross to and from the runtime's `ByteBlock` without a conversion.
 
 ```medaka
 > option 0 length (fromArray [|1, 2, 3|])
@@ -111,14 +80,10 @@ fromArrayAssumeByteDomain : Array Int -> Bytes
 The byte string holding the elements of `arr`, keeping only the low eight
 bits of each.
 
-Every element of `arr` must already be in `0` to `255`. Nothing here checks
-that, and an element outside the range is silently masked rather than
-refused, so `-1` and `511` both store as `255`. Prefer `fromArray` unless
-the elements come from a source that already guarantees the range.
-
-This is transitional. It exists so that callers holding bytes by
-construction move to `Bytes` without paying a scan, and it is removed once
-the domain-checked door is the only one, alongside `toUtf8`/`fromUtf8`.
+Nothing here checks the range. An element outside `0` to `255` is masked
+rather than refused, so `-1` and `511` both store as `255`. Prefer
+`fromArray` unless the elements come from a source that already
+guarantees the range.
 
 ```medaka
 > toArray (fromArrayAssumeByteDomain [|104, 105|])
@@ -150,12 +115,8 @@ length : Bytes -> Int
 
 The number of bytes in `b`.
 
-This is a function rather than `Foldable`'s method: that interface ranges
-over a container of some element type, and `Bytes` has no element
-parameter, so it cannot implement `Foldable`. Named in an import list it
-shadows the prelude's method for the whole importing module, so reach it
-through an alias -- `import bytes as B`, then `B.length` -- from a module
-that uses both.
+This is a plain function, not `Foldable`'s method. Named in an import
+list it shadows the prelude's `length` for the whole importing module.
 
 ```medaka
 > length (encodeUtf8 "héllo")
@@ -169,10 +130,6 @@ isEmpty : Bytes -> Bool
 ```
 
 Whether `b` holds no bytes.
-
-Like `length`, this is a function rather than `Foldable`'s method, and
-shadows that method for a module that names it in an import list, so
-reach it through an alias from a module that uses both.
 
 ```medaka
 > isEmpty (fromArrayAssumeByteDomain [||])
@@ -210,9 +167,9 @@ sliceClamped : Int -> Int -> Bytes -> Bytes
 The bytes over `[lo, hi)`, copied into a new byte string, with both
 bounds clamped into the byte string.
 
-`slice`'s non-panicking form, and `array.sliceClamped`'s counterpart: a
-range running outside `b` yields a shorter byte string, or an empty one,
-where `b.[lo..hi]` raises a slice error.
+The non-panicking form of `slice`. A range running outside `b` yields a
+shorter byte string, or an empty one, where `b.[lo..hi]` raises a slice
+error.
 
 ```medaka
 > toArray (sliceClamped 1 3 (fromArrayAssumeByteDomain [|10, 20, 30, 40|]))
@@ -283,10 +240,8 @@ elemIndex : Int -> Bytes -> Option Int
 
 The index of the first byte equal to `v`, or `None` when no byte is.
 
-The needle is one byte, where `indexOf` takes a whole `Bytes` needle:
-`Bytes` is a sequence of byte values, and this is the search for one of
-them, as `list.elemIndex` is for a list element. A `v` outside `0` to
-`255` equals no byte, so the answer is `None`.
+The needle is a single byte; `indexOf` searches for a whole byte string.
+A `v` outside `0` to `255` equals no byte, so the answer is `None`.
 
 ```medaka
 > elemIndex 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
@@ -304,9 +259,10 @@ elemIndexWithin : Int -> Int -> Int -> Bytes -> Option Int
 ```
 
 The index of the first byte equal to `v` within `[lo, hi)`, or `None`
-when no byte in that range is. `lo`/`hi` clamp into the byte string, as
-`sliceClamped`'s do, and the answer is an index into `bytes`, not one
-relative to `lo`.
+when no byte in that range is.
+
+`lo` and `hi` are clamped into the byte string, as in `sliceClamped`. The
+answer is an index into the whole byte string, not one relative to `lo`.
 
 ```medaka
 > elemIndexWithin 2 5 9 (fromArrayAssumeByteDomain [|7, 9, 8, 9, 9|])
@@ -321,10 +277,12 @@ None
 indexOfWithin : Int -> Int -> Bytes -> Bytes -> Option Int
 ```
 
-The index of the first occurrence of `needle` within `bytes[lo, hi)`, or
-`None`. `lo`/`hi` clamp into `bytes`, as `sliceClamped`'s do, and the
-answer is an index into `bytes`, not one relative to `lo`. The empty
-needle occurs at `lo`.
+The index of the first occurrence of `needle` within `[lo, hi)`, or
+`None`.
+
+`lo` and `hi` are clamped into the byte string, as in `sliceClamped`. The
+answer is an index into the whole byte string, not one relative to `lo`.
+The empty needle occurs at `lo`.
 
 ```medaka
 > indexOfWithin 0 6 (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9, 8, 7|])
@@ -342,9 +300,9 @@ indexOf : Bytes -> Bytes -> Option Int
 ```
 
 The index of the first occurrence of `needle` in `bytes`, or `None`.
-The needle is a whole `Bytes` value, where `elemIndex` searches for a
-single byte. The empty needle occurs at index `0`, matching
-`string.indexOf ""`.
+
+The needle is a whole byte string; `elemIndex` searches for a single
+byte. The empty needle occurs at index `0`.
 
 ```medaka
 > indexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|7, 9, 8, 9|])
@@ -361,8 +319,10 @@ Some 0
 lastIndexOf : Bytes -> Bytes -> Option Int
 ```
 
-The index of the last occurrence of `needle` in `bytes`, or `None`.
-Occurrences may overlap. An empty needle is found at the end of `bytes`.
+The index of the last occurrence of `needle` in `haystack`, or `None`.
+
+Occurrences may overlap. The empty needle is found at the end of
+`haystack`.
 
 ```medaka
 > lastIndexOf (fromArrayAssumeByteDomain [|9, 8|]) (fromArrayAssumeByteDomain [|9, 8, 7, 9, 8|])
@@ -426,14 +386,12 @@ False
 fold : (b -> Int -> <e> b) -> b -> Bytes -> <e> b
 ```
 
-`f` applied to an accumulator and each byte of `b` in turn, from `init`
-and left to right.
+The result of applying `f` to an accumulator and each byte of `b` in
+turn, starting from `init` and reading left to right.
 
-`Foldable`'s method over the bytes, monomorphically: the element type is
-`Int` because a byte is one, and `Bytes` has no element parameter to make
-it an instance. Named in an import list it shadows the prelude's method
-for the whole importing module, exactly as `length` does, so reach it
-through an alias -- `import bytes as B`, then `B.fold`.
+Each byte is passed as an `Int`. This is a plain function, not
+`Foldable`'s method, and named in an import list it shadows the prelude's
+`fold` for the whole importing module.
 
 ```medaka
 > fold (acc b => acc + b) 0 (fromArrayAssumeByteDomain [|1, 2, 3|])
@@ -496,8 +454,7 @@ map : (Int -> <e> Int) -> Bytes -> <e> Bytes
 The byte string of the same length holding `f` applied to each byte of
 `b`.
 
-Panics when `f` answers a value outside `0` to `255`, the same domain
-check `mutBytes.setInPlace` applies, so no `Bytes` holds anything else.
+Panics when `f` answers a value outside `0` to `255`.
 
 ```medaka
 > toArray (map (x => x + 1) (fromArrayAssumeByteDomain [|7, 8, 9|]))
@@ -521,8 +478,6 @@ The byte strings joined end to end, in one new byte string.
 Some "héllo"
 ```
 
-## Comparison
-
 ## Text
 
 ### `encodeUtf8`
@@ -533,8 +488,8 @@ encodeUtf8 : String -> Bytes
 
 The UTF-8 encoding of `s`.
 
-A codepoint outside ASCII contributes several bytes, so the byte count is
-at least the codepoint count and often larger.
+A codepoint outside ASCII encodes to several bytes, so the byte count is
+at least the codepoint count.
 
 ```medaka
 > length (encodeUtf8 "héllo")
@@ -550,13 +505,11 @@ decodeUtf8 : Bytes -> Option String
 The string `b` encodes, read as UTF-8, or `None` when `b` is not valid
 UTF-8.
 
-The door out of `Bytes` and into `String`. It refuses every byte sequence
-that is not a canonical UTF-8 encoding of Unicode scalar values: an
-unexpected continuation byte, a truncated sequence, an overlong form, a
-surrogate, and anything above U+10FFFF. `decodeUtf8Lossy` is the form that
-substitutes U+FFFD for each of those instead of refusing.
-
-`decodeUtf8 (encodeUtf8 s)` is `Some s` for every `s`.
+Every byte sequence that is not a well-formed UTF-8 encoding of Unicode
+scalar values is refused: a stray continuation byte, a truncated
+sequence, an overlong form, a surrogate, and anything above U+10FFFF.
+`decodeUtf8Lossy` substitutes U+FFFD for each of those instead of
+refusing. `decodeUtf8 (encodeUtf8 s)` is `Some s` for every `s`.
 
 ```medaka
 > decodeUtf8 (encodeUtf8 "héllo→")
@@ -574,24 +527,18 @@ decodeUtf8Lossy : Bytes -> String
 ```
 
 The string `b` encodes, read as UTF-8, with one U+FFFD replacement
-character substituted for each ill-formed sequence in it.
+character substituted for each ill-formed sequence.
 
-`decodeUtf8`'s never-failing form, for a caller that would rather render
-what it was handed than refuse it. The substitution is WHATWG's: one
-replacement character per maximal subpart, so a truncated three-byte
-sequence costs one and three stray continuation bytes cost three. Nothing
-is ever copied through verbatim, so the result is valid UTF-8 whatever `b`
-holds.
+The non-failing form of `decodeUtf8`. Substitution follows the WHATWG
+rule of one replacement character per maximal subpart, so a truncated
+three-byte sequence becomes one U+FFFD and three stray continuation
+bytes become three. The result is valid UTF-8 whatever `b` holds.
 
 ```medaka
 > decodeUtf8Lossy (encodeUtf8 "héllo→")
 "héllo→"
 > decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xff, 0xfe, 104, 105|])
 "��hi"
-> decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])
-"�"
-> toArray (encodeUtf8 (decodeUtf8Lossy (fromArrayAssumeByteDomain [|0xe2, 0x82|])))
-[|239, 191, 189|]
 ```
 
 ## Output
@@ -602,13 +549,13 @@ holds.
 writeStdoutBytes : Bytes -> <Stdout> Unit
 ```
 
-Writes `b`'s bytes to standard output byte-for-byte.
+Writes the bytes of `b` to standard output, unchanged.
 
-Unlike `putStr`, the bytes are not required to be valid UTF-8: nothing
-here decodes or re-encodes them, so a byte sequence that would mangle or
-get rejected on a `String` path round-trips exactly.
+The bytes need not be valid UTF-8. Nothing decodes or re-encodes them, so
+a sequence that a `String` path would reject or alter is written exactly
+as it is.
 
-## Kernel doors
+## Runtime interop
 
 ### `fromByteBlockPrefix`
 
@@ -618,16 +565,11 @@ fromByteBlockPrefix : Int -> ByteBlock -> Bytes
 
 The first `n` bytes of `bb`, copied into a byte string.
 
-No domain check runs and none is needed: a `ByteBlock` holds one byte per
-element, so every element is already `0` to `255`. `fromArray` scans
-because an `Array Int` element can be anything.
+No range check is needed: a `ByteBlock` holds one byte per element. The
+result is a copy, so a later write to `bb` does not reach it. Taking a
+length lets a caller freeze the live prefix of a larger buffer.
 
-The result is a copy, so a later write to `bb` does not reach it. This is
-how a growable byte buffer freezes its live prefix -- `bytebuilder`'s
-`buildBytes` is the caller -- which is why it takes a length rather than
-the whole block.
-
-Panics when `n` falls outside `0` to the block's length.
+Panics when `n` is negative or greater than the block's length.
 
 ```medaka
 > toArray (fromByteBlockPrefix 2 (byteBlockFromString "hip"))
@@ -642,14 +584,10 @@ adoptByteBlockUnsafe : ByteBlock -> Bytes
 
 The byte string holding `bb` itself, with no copy.
 
-Adopt a block the caller is done with -- one just allocated, or one whose
-owner has finished with it -- or, where the block keeps a writer, one
-whose writer only ever writes where no holder of the byte string reads.
-
-No domain check runs and none is needed: a `ByteBlock` holds one byte per
-element. The whole block becomes the byte string, so a caller whose live
-bytes are a prefix of a larger buffer wants `fromByteBlockPrefix`, or must
-slice afterwards.
+The byte string and `bb` share storage, so a write to `bb` afterwards
+changes the byte string. Adopt only a block that nothing else will write
+to. The whole block becomes the byte string; for the live prefix of a
+larger buffer use `fromByteBlockPrefix`.
 
 ```medaka
 > toArray (adoptByteBlockUnsafe (byteBlockFromString "hi"))
@@ -664,10 +602,10 @@ lendByteBlockUnsafe : Bytes -> ByteBlock
 
 The block `b` is built on, with no copy.
 
-`adoptByteBlockUnsafe`'s counterpart: the way out for a caller that reads
-or blits the bytes and would rather not pay `toArray`'s boxed machine word
-per byte. The block is the byte string's own, so a write to it changes a
-value that hands out no other way to change it. Read it; do not write it.
+The counterpart of `adoptByteBlockUnsafe`, for a caller that reads or
+blits the bytes without paying for `toArray`'s copy. The block is the
+byte string's own storage, so a write to it changes a value that is meant
+to be immutable. Read it; do not write it.
 
 ```medaka
 > byteBlockLength (lendByteBlockUnsafe (encodeUtf8 "héllo"))
@@ -701,11 +639,8 @@ impl Slice Bytes
 The bytes over `[lo, hi)`, copied into a new byte string. The
 `b.[lo..hi]` and `b.[lo..=hi]` syntax dispatches here.
 
-The result is a copy, not a view onto `b`: a byte string is `n` bytes and
-nothing more, so there is no offset and length to share one with.
-
-Panics with a slice error when the range runs outside the byte string,
-exactly as `Slice (Array a)` does.
+The result is a copy, not a view onto `b`. Panics with a slice error when
+the range runs outside the byte string, as `Slice (Array a)` does.
 
 ```medaka
 > toArray (slice (fromArrayAssumeByteDomain [|10, 20, 30, 40, 50|]) 1 3)
@@ -721,7 +656,12 @@ impl Semigroup Bytes
 ```
 
 The bytes of `b1` followed by the bytes of `b2`, in a new byte string.
-Backs `++`.
+
+`b1 ++ b2` reaches this instance from every position: infix, in an
+operator section, in a body constrained by `Semigroup`, and bound to a
+name first, as `let f = (++)` or `let f = (x y => x ++ y)`. A local
+binding cannot carry the constraint, so a name bound to `++` serves one
+type; used at two, it is rejected, as `let f = append` is.
 
 ```medaka
 > toArray (append (fromArrayAssumeByteDomain [|1, 2|]) (fromArrayAssumeByteDomain [|3|]))
@@ -736,8 +676,7 @@ Some "héllo"
 impl Monoid Bytes
 ```
 
-`empty` is the byte string of no bytes, the identity for `append` and
-`++`.
+The byte string of no bytes, the identity for `append` and `++`.
 
 ```medaka
 > toArray (empty : Bytes)
@@ -768,8 +707,8 @@ False
 impl Ord Bytes
 ```
 
-Byte strings compare lexicographically, exactly as the arrays of their
-bytes do: byte by byte from the front, and a prefix sorts before what
+Byte strings compare lexicographically, as the arrays of their bytes
+do: byte by byte from the front, with a prefix sorting before what
 extends it.
 
 ```medaka
@@ -785,11 +724,9 @@ Lt
 impl Hashable Bytes
 ```
 
-The `acc * 33 + hash byte` fold `Hashable (Array a)` runs over elements,
-from `0` and left to right, so a byte string hashes as the `Array Int` or
-`List Int` of its bytes does. `hashInt` is what `Hashable Int` would
-contribute for each byte. Agrees with `Eq Bytes`, which walks the same
-bytes in the same order.
+A byte string hashes as the `Array Int` of its bytes does, so `Bytes`
+can key a `HashMap` or a `HashSet`. Two byte strings that are equal under
+`Eq Bytes` hash alike.
 
 ```medaka
 > hash (fromArrayAssumeByteDomain [|1, 2, 3|]) == hash [|1, 2, 3|]
@@ -802,19 +739,14 @@ True
 impl Debug Bytes
 ```
 
-Renders as `Bytes "<hex>"` -- lowercase, two digits per byte, no
-separator between bytes. Distinct from `debug` of the equivalent
-`Array Int`, so a `debug` dump always tells a byte string apart from an
-array of the same numbers.
+Renders as `Bytes "<hex>"`: lowercase, two digits per byte, with no
+separator between bytes. The rendering differs from that of the
+equivalent `Array Int`, so a `debug` dump tells the two apart.
 
 ```medaka
 > debug (fromArrayAssumeByteDomain [|7, 8, 9|])
 "Bytes \"070809\""
 > debug (fromArrayAssumeByteDomain [||])
 "Bytes \"\""
-> debug (encodeUtf8 "hi") /= debug [|104, 105|]
-True
-> debug (fromArrayAssumeByteDomain (fromList [0..=31]))
-"Bytes \"000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\""
 ```
 

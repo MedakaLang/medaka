@@ -447,6 +447,12 @@ static int mdk_is_byteblock(long long w);
 static long long mdk_byteblock_cmp_bytes(long long a, long long b);
 noreturn static void mdk_byteblock_append_unsupported(void);
 
+/* mdk_append's fail-closed arm: a left operand that is neither String, byte block,
+ * Nil nor Cons must not be walked as a Cons chain.  Both read the reserved ADT tags
+ * MDK_TAG_CONS/MDK_TAG_NIL, so they are defined down beside those. */
+static int mdk_is_list_word(long long w);
+noreturn static void mdk_append_unsupported(void);
+
 /* Count UTF-8 codepoints in the first `n` bytes of `p`: every byte that is not a
  * 0b10xxxxxx continuation byte starts a new codepoint. */
 static long long mdk_utf8_cp_count(const char *p, long long n) {
@@ -1003,24 +1009,26 @@ long long mdk_list_slice(long long xs, long long lo, long long hi) {
 
 /* Runtime header-dispatch fallback for `++` (Medaka concat) whose operand
  * static LTy the emitter cannot recover (census-B gap #3 residual: the
- * scanTriple/splitLines string-builders).  A `++` left operand is always
- * String or List, distinguishable at runtime:
- *   odd immediate           -> Nil (empty list)            -> list append
- *   even boxed, header==1    -> String (MDK_STR_TAG cell)  -> string append
- *   even boxed, header!=1    -> Cons cell                  -> list append
+ * scanTriple/splitLines string-builders).  Every left operand this arm can
+ * legitimately meet is a String or a List, distinguishable at runtime:
+ *   Nil immediate                      -> list append
+ *   even boxed, header==MDK_STR_TAG    -> String cell   -> string append
+ *   even boxed, header==MDK_TAG_CONS   -> Cons cell     -> list append
  * The result VALUE is always correct; the caller's static result LTy only
- * drives downstream instruction/print selection. */
+ * drives downstream instruction/print selection.
+ *
+ * Anything else FAILS CLOSED.  This helper is untyped, so a typechecker gap that
+ * leaves a `++` on a user `Semigroup` type unrouted delivers that type's cell
+ * here; walking it as a Cons chain reads an arbitrary field as a tail pointer
+ * (#3204: a SIGSEGV where the interpreter panicked).  A byte block is the one
+ * such header with its own message, because `stdlib/bytes.mdk`'s `Bytes` is a
+ * newtype over `ByteBlock` and its packed payload is the shape most likely to be
+ * mistaken for cells; every other header takes the generic arm. */
 long long mdk_append(long long a, long long b) {
   if ((a & 1) == 0 && ((const long long *)a)[0] == MDK_STR_TAG)
     return mdk_string_append(a, b);
-  /* A byte block is the third even-boxed header this discriminator can meet,
-   * and it is reachable: `stdlib/bytes.mdk`'s `Bytes` is a newtype over
-   * `ByteBlock` with a Semigroup instance, so a byte block arrives here
-   * whenever a `++` on bytes misses that instance and lands on this untyped
-   * fallback.  The arm fails closed -- mdk_byteblock_append_unsupported exits
-   * 1 with E-BYTEBLOCK-APPEND -- rather than falling to mdk_list_append, which
-   * would walk the packed payload as Cons cells. */
   if (mdk_is_byteblock(a)) mdk_byteblock_append_unsupported();
+  if (!mdk_is_list_word(a)) mdk_append_unsupported();
   return mdk_list_append(a, b);
 }
 
@@ -1446,6 +1454,24 @@ long long mdk_string_to_lower(long long s) {
  * spelling.  The two must be the same word, and the next runtime ADT takes id 5. */
 _Static_assert(MDK_BYTEBLOCK_TAG == MDK_TAG(4, 0),
                "ByteBlock header must be reserved type-id 4, ordinal 0");
+
+/* mdk_append's list discriminator and its fail-closed arm (forward-declared with
+ * the byte-block ones, up beside MDK_STR_TAG): a List word is either the Nil
+ * immediate or a boxed cell whose header is the reserved Cons tag.  A nullary
+ * constructor of some OTHER type is also an odd immediate, and a boxed cell of
+ * some other type also has a header, so both halves test the tag itself rather
+ * than the low bit alone. */
+static int mdk_is_list_word(long long w) {
+  if ((w & 1) == 1) return (w >> 1) == MDK_TAG_NIL;
+  return ((const long long *)w)[0] == MDK_TAG_CONS;
+}
+noreturn static void mdk_append_unsupported(void) {
+  mdk_flush_run_stdout_on_abort();
+  fputs("runtime error [E-APPEND-UNROUTED]: ++ reached the untyped runtime "
+        "fallback on a value that is not a String or a List\n",
+        stderr);
+  exit(1);
+}
 
 /* Nullary ctors — immediate words. */
 long long mdk_none(void) { return (MDK_TAG_NONE << 1) | 1; }

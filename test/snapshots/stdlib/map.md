@@ -1,5 +1,5 @@
 # META
-source_lines=863
+source_lines=952
 stages=DESUGAR,MARK
 # SOURCE
 {- | An immutable map from keys to values, ordered by key.
@@ -49,6 +49,7 @@ import core.{
   FromEntries,
   Index,
 }
+import list.{reverse, take}
 
 {- | The map type.
 
@@ -388,6 +389,80 @@ export
 entries : Map k v -> List (k, v)
 entries m = foldrWithKey (k v acc => (k, v) :: acc) [] m
 
+{- | The entries from `start` upwards in ascending key order, at most `limit`
+   of them.
+
+   A `start` of `None` begins at the smallest key and a `limit` of `None` reads
+   to the end, so `entriesFrom None None` is `entries`. The start key is
+   inclusive and need not be present: the read begins at the next key above it.
+   A `limit` of zero or less reads nothing.
+
+   The read descends to `start` and stops as soon as the limit is met, without
+   visiting the entries on either side of what it returns, so a page of a large
+   map costs the page: `O(log n + limit)`, against the `O(n)` of taking a prefix
+   of `entries`.
+
+   > entriesFrom (Some "b") (Some 2) (fromList [("a", 1), ("b", 2), ("c", 3), ("d", 4)])
+   [("b", 2), ("c", 3)]
+   > entriesFrom (Some "b") (Some 0) (fromList [("a", 1), ("b", 2)])
+   []
+   > entriesFrom (Some "z") None (fromList [("a", 1), ("b", 2)])
+   []
+   > entriesFrom None None (fromList [("b", 2), ("a", 1)])
+   [("a", 1), ("b", 2)] -}
+export
+entriesFrom : Ord k => Option k -> Option Int -> Map k v -> List (k, v)
+entriesFrom start limit m =
+  let (Scan taken _ _) = scanFrom start m (scanStart limit)
+  reverse taken
+
+{- The entries taken so far in reverse traversal order, how many more the limit
+   still allows, and whether the limit is filled. Every later step is a no-op
+   once it is. -}
+data Scan k v = Scan (List (k, v)) (Option Int) Bool
+
+scanDone : Scan k v -> Bool
+scanDone (Scan _ _ done) = done
+
+-- A limit of no entries at all leaves the scan with nothing to do.
+scanStart : Option Int -> Scan k v
+scanStart None = Scan [] None False
+scanStart (Some limit) = Scan [] (Some limit) (limit <= 0)
+
+-- Take one in-range entry, ending the scan when it was the last the limit
+-- allows.
+takeEntry : k -> v -> Scan k v -> Scan k v
+takeEntry k v (Scan taken remaining _) =
+  let kept = (k, v) :: taken
+  match remaining
+    None => Scan kept None False
+    Some left => Scan kept (Some (left - 1)) (left <= 1)
+
+belowBound : Ord k => k -> Option k -> Bool
+belowBound _ None = False
+belowBound k (Some bound) = lt k bound
+
+{- Walk from `start` in key order, entering a subtree only when it can still
+   hold an entry the read wants. A node below the bound puts its whole left
+   subtree below the bound too, by the search invariant, so that subtree is
+   discarded without one of its nodes being visited; at or above the bound the
+   bound is discharged, because every key right of an in-range key is in range
+   as well. A filled limit ends the descent where it stands rather than
+   trimming a larger result. -}
+scanFrom : Ord k => Option k -> Map k v -> Scan k v -> Scan k v
+scanFrom _ Tip scan = scan
+scanFrom lo (Bin _ k v l r) scan =
+  if scanDone scan then
+    scan
+  else if belowBound k lo then
+    scanFrom lo r scan
+  else
+    let afterLeft = scanFrom lo l scan
+    if scanDone afterLeft then
+      afterLeft
+    else
+      scanFrom None r (takeEntry k v afterLeft)
+
 {- | The keys, in ascending order.
 
    > keys (fromList [(2, 0), (3, 0), (1, 0)])
@@ -607,9 +682,9 @@ export impl Filterable (Map k) where
       Some w => link k w l2 r2
       None => link2 l2 r2
 
-{- | The `Foldable` methods visit values in ascending order of their keys, so
-   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` all fold
-   over the values, not the `(k, v)` pairs -- for the pairs, use `entries`.
+{- | The `Foldable` methods visit the values in ascending key order, so
+   `toList`, `length`, `elem`, `sum`, `maximum`, `any`, and `all` fold over
+   the values, not the `(k, v)` pairs. `entries` gives the pairs.
 
    > toList (fromList [(2, 20), (1, 10)])
    [10, 20]
@@ -680,7 +755,7 @@ export impl FromEntries (Map k v) (k, v) requires Ord k where
 -- `empty` is nullary and so dispatches on its result type; the impl's
 -- `requires Ord k` carries no dict here because `Tip` needs none, so a
 -- return-position `empty : Map k v` grounds cleanly.
-{- | `empty` is the map with no entries.
+{- | The map with no entries.
 
    > isEmpty (empty : Map Int Int)
    True -}
@@ -865,8 +940,23 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
   let (below, above) = splitAt k (fromList xs)
   let rebuilt = link2 below above
   wellFormed rebuilt && eq (entries rebuilt) (entries (delete k (fromList xs)))
+
+prop "entriesFrom is the limited run of entries from the start key" (k : Int) (n : Int) (xs : List (Int, Int)) =
+  let m = fromList xs
+  eq
+    (entriesFrom (Some k) (Some n) m)
+    (take n (filter ((key, _) => gte key k) (entries m)))
+
+prop "entriesFrom bounded on one side only still agrees with entries" (k : Int) (n : Int) (xs : List (Int, Int)) =
+  let m = fromList xs
+  eq (entriesFrom None None m) (entries m)
+    && eq (entriesFrom None (Some n) m) (take n (entries m))
+    && eq
+      (entriesFrom (Some k) None m)
+      (filter ((key, _) => gte key k) (entries m))
 # DESUGAR
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
@@ -951,6 +1041,22 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DFunDef false "foldlWithKey" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EApp (EApp (EApp (EVar "f") (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EVar "z")) (EVar "l"))) (EVar "k")) (EVar "v"))) (EVar "r")))
 (DTypeSig true "entries" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
 (DFunDef false "entries" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "acc")))) (EListLit)) (EVar "m")))
+(DTypeSig true "entriesFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))
+(DFunDef false "entriesFrom" ((PVar "start") (PVar "limit") (PVar "m")) (EBlock (DoLet false false (PCon "Scan" (PVar "taken") PWild PWild) (EApp (EApp (EApp (EVar "scanFrom") (EVar "start")) (EVar "m")) (EApp (EVar "scanStart") (EVar "limit")))) (DoExpr (EApp (EVar "reverse") (EVar "taken")))))
+(DData Private "Scan" ("k" "v") ((variant "Scan" (ConPos (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Bool")))) ())
+(DTypeSig false "scanDone" (TyFun (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))
+(DFunDef false "scanDone" ((PCon "Scan" PWild PWild (PVar "done"))) (EVar "done"))
+(DTypeSig false "scanStart" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v"))))
+(DFunDef false "scanStart" ((PCon "None")) (EApp (EApp (EApp (EVar "Scan") (EListLit)) (EVar "None")) (EVar "False")))
+(DFunDef false "scanStart" ((PCon "Some" (PVar "limit"))) (EApp (EApp (EApp (EVar "Scan") (EListLit)) (EApp (EVar "Some") (EVar "limit"))) (EBinOp "<=" (EVar "limit") (ELit (LInt 0)))))
+(DTypeSig false "takeEntry" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "takeEntry" ((PVar "k") (PVar "v") (PCon "Scan" (PVar "taken") (PVar "remaining") PWild)) (EBlock (DoLet false false (PVar "kept") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "taken"))) (DoExpr (EMatch (EVar "remaining") (arm (PCon "None") () (EApp (EApp (EApp (EVar "Scan") (EVar "kept")) (EVar "None")) (EVar "False"))) (arm (PCon "Some" (PVar "left")) () (EApp (EApp (EApp (EVar "Scan") (EVar "kept")) (EApp (EVar "Some") (EBinOp "-" (EVar "left") (ELit (LInt 1))))) (EBinOp "<=" (EVar "left") (ELit (LInt 1)))))))))
+(DTypeSig false "belowBound" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyCon "Bool")))))
+(DFunDef false "belowBound" (PWild (PCon "None")) (EVar "False"))
+(DFunDef false "belowBound" ((PVar "k") (PCon "Some" (PVar "bound"))) (EApp (EApp (EVar "lt") (EVar "k")) (EVar "bound")))
+(DTypeSig false "scanFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "scanFrom" (PWild (PCon "Tip") (PVar "scan")) (EVar "scan"))
+(DFunDef false "scanFrom" ((PVar "lo") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "scan")) (EIf (EApp (EVar "scanDone") (EVar "scan")) (EVar "scan") (EIf (EApp (EApp (EVar "belowBound") (EVar "k")) (EVar "lo")) (EApp (EApp (EApp (EVar "scanFrom") (EVar "lo")) (EVar "r")) (EVar "scan")) (EBlock (DoLet false false (PVar "afterLeft") (EApp (EApp (EApp (EVar "scanFrom") (EVar "lo")) (EVar "l")) (EVar "scan"))) (DoExpr (EIf (EApp (EVar "scanDone") (EVar "afterLeft")) (EVar "afterLeft") (EApp (EApp (EApp (EVar "scanFrom") (EVar "None")) (EVar "r")) (EApp (EApp (EApp (EVar "takeEntry") (EVar "k")) (EVar "v")) (EVar "afterLeft")))))))))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") PWild (PVar "acc")) (EBinOp "::" (EVar "k") (EVar "acc")))) (EListLit)) (EVar "m")))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
@@ -1059,8 +1165,11 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DProp false "splitAt partitions around the key and both halves stay well-formed" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "k")) (EApp (EVar "fromList") (EVar "xs")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "below")) (EApp (EVar "wellFormed") (EVar "above"))) (EApp (EApp (EVar "allKeys") (ELam ((PVar "bk")) (EApp (EApp (EVar "lt") (EVar "bk")) (EVar "k")))) (EVar "below"))) (EApp (EApp (EVar "allKeys") (ELam ((PVar "ak")) (EApp (EApp (EVar "gt") (EVar "ak")) (EVar "k")))) (EVar "above"))))))
 (DProp false "link rebuilds a well-formed map from a split" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "k")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (ELit (LInt 0))) (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "eq") (EApp (EApp (EVar "get") (EVar "k")) (EVar "rebuilt"))) (EApp (EVar "Some") (ELit (LInt 0))))))))
 (DProp false "link2 rejoins a split without its key" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EVar "splitAt") (EVar "k")) (EApp (EVar "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EVar "wellFormed") (EVar "rebuilt")) (EApp (EApp (EVar "eq") (EApp (EVar "entries") (EVar "rebuilt"))) (EApp (EVar "entries") (EApp (EApp (EVar "delete") (EVar "k")) (EApp (EVar "fromList") (EVar "xs")))))))))
+(DProp false "entriesFrom is the limited run of entries from the start key" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
+(DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EVar "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EVar "eq") (EApp (EApp (EApp (EVar "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EVar "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EVar "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
 # MARK
 (DUse false (UseGroup ("core") ((mem "Eq" false) (mem "Ord" false) (mem "Debug" false) (mem "Display" false) (mem "Mappable" false) (mem "Filterable" false) (mem "Semigroup" false) (mem "Monoid" false) (mem "Ordering" false) (mem "Option" false) (mem "FromEntries" false) (mem "Index" false))))
+(DUse false (UseGroup ("list") ((mem "reverse" false) (mem "take" false))))
 (DData Public "Map" ("k" "v") ((variant "Tip" (ConPos)) (variant "Bin" (ConPos (TyCon "Int") (TyVar "k") (TyVar "v") (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v"))))) ())
 (DTypeSig false "bin" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")))))))
 (DFunDef false "bin" ((PVar "k") (PVar "v") (PVar "l") (PVar "r")) (EApp (EApp (EApp (EApp (EApp (EVar "Bin") (EBinOp "+" (EBinOp "+" (EApp (EVar "size") (EVar "l")) (EApp (EVar "size") (EVar "r"))) (ELit (LInt 1)))) (EVar "k")) (EVar "v")) (EVar "l")) (EVar "r")))
@@ -1145,6 +1254,22 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DFunDef false "foldlWithKey" ((PVar "f") (PVar "z") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r"))) (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EApp (EApp (EApp (EVar "f") (EApp (EApp (EApp (EVar "foldlWithKey") (EVar "f")) (EVar "z")) (EVar "l"))) (EVar "k")) (EVar "v"))) (EVar "r")))
 (DTypeSig true "entries" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v")))))
 (DFunDef false "entries" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") (PVar "v") (PVar "acc")) (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "acc")))) (EListLit)) (EVar "m")))
+(DTypeSig true "entriesFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))))))))
+(DFunDef false "entriesFrom" ((PVar "start") (PVar "limit") (PVar "m")) (EBlock (DoLet false false (PCon "Scan" (PVar "taken") PWild PWild) (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "start")) (EVar "m")) (EApp (EVar "scanStart") (EVar "limit")))) (DoExpr (EApp (EVar "reverse") (EVar "taken")))))
+(DData Private "Scan" ("k" "v") ((variant "Scan" (ConPos (TyApp (TyCon "List") (TyTuple (TyVar "k") (TyVar "v"))) (TyApp (TyCon "Option") (TyCon "Int")) (TyCon "Bool")))) ())
+(DTypeSig false "scanDone" (TyFun (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")) (TyCon "Bool")))
+(DFunDef false "scanDone" ((PCon "Scan" PWild PWild (PVar "done"))) (EVar "done"))
+(DTypeSig false "scanStart" (TyFun (TyApp (TyCon "Option") (TyCon "Int")) (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v"))))
+(DFunDef false "scanStart" ((PCon "None")) (EApp (EApp (EApp (EVar "Scan") (EListLit)) (EVar "None")) (EVar "False")))
+(DFunDef false "scanStart" ((PCon "Some" (PVar "limit"))) (EApp (EApp (EApp (EVar "Scan") (EListLit)) (EApp (EVar "Some") (EVar "limit"))) (EBinOp "<=" (EVar "limit") (ELit (LInt 0)))))
+(DTypeSig false "takeEntry" (TyFun (TyVar "k") (TyFun (TyVar "v") (TyFun (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v"))))))
+(DFunDef false "takeEntry" ((PVar "k") (PVar "v") (PCon "Scan" (PVar "taken") (PVar "remaining") PWild)) (EBlock (DoLet false false (PVar "kept") (EBinOp "::" (ETuple (EVar "k") (EVar "v")) (EVar "taken"))) (DoExpr (EMatch (EVar "remaining") (arm (PCon "None") () (EApp (EApp (EApp (EVar "Scan") (EVar "kept")) (EVar "None")) (EVar "False"))) (arm (PCon "Some" (PVar "left")) () (EApp (EApp (EApp (EVar "Scan") (EVar "kept")) (EApp (EVar "Some") (EBinOp "-" (EVar "left") (ELit (LInt 1))))) (EBinOp "<=" (EVar "left") (ELit (LInt 1)))))))))
+(DTypeSig false "belowBound" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyVar "k") (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyCon "Bool")))))
+(DFunDef false "belowBound" (PWild (PCon "None")) (EVar "False"))
+(DFunDef false "belowBound" ((PVar "k") (PCon "Some" (PVar "bound"))) (EApp (EApp (EMethodRef "lt") (EVar "k")) (EVar "bound")))
+(DTypeSig false "scanFrom" (TyConstrained ((cstr "Ord" (TyVar "k"))) (TyFun (TyApp (TyCon "Option") (TyVar "k")) (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyFun (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")) (TyApp (TyApp (TyCon "Scan") (TyVar "k")) (TyVar "v")))))))
+(DFunDef false "scanFrom" (PWild (PCon "Tip") (PVar "scan")) (EVar "scan"))
+(DFunDef false "scanFrom" ((PVar "lo") (PCon "Bin" PWild (PVar "k") (PVar "v") (PVar "l") (PVar "r")) (PVar "scan")) (EIf (EApp (EVar "scanDone") (EVar "scan")) (EVar "scan") (EIf (EApp (EApp (EDictApp "belowBound") (EVar "k")) (EVar "lo")) (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "lo")) (EVar "r")) (EVar "scan")) (EBlock (DoLet false false (PVar "afterLeft") (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "lo")) (EVar "l")) (EVar "scan"))) (DoExpr (EIf (EApp (EVar "scanDone") (EVar "afterLeft")) (EVar "afterLeft") (EApp (EApp (EApp (EDictApp "scanFrom") (EVar "None")) (EVar "r")) (EApp (EApp (EApp (EVar "takeEntry") (EVar "k")) (EVar "v")) (EVar "afterLeft")))))))))
 (DTypeSig true "keys" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "k"))))
 (DFunDef false "keys" ((PVar "m")) (EApp (EApp (EApp (EVar "foldrWithKey") (ELam ((PVar "k") PWild (PVar "acc")) (EBinOp "::" (EVar "k") (EVar "acc")))) (EListLit)) (EVar "m")))
 (DTypeSig true "values" (TyFun (TyApp (TyApp (TyCon "Map") (TyVar "k")) (TyVar "v")) (TyApp (TyCon "List") (TyVar "v"))))
@@ -1253,3 +1378,5 @@ prop "link2 rejoins a split without its key" (k : Int) (xs : List (Int, Int)) =
 (DProp false "splitAt partitions around the key and both halves stay well-formed" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "k")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "below")) (EApp (EDictApp "wellFormed") (EVar "above"))) (EApp (EApp (EVar "allKeys") (ELam ((PVar "bk")) (EApp (EApp (EMethodRef "lt") (EVar "bk")) (EVar "k")))) (EVar "below"))) (EApp (EApp (EVar "allKeys") (ELam ((PVar "ak")) (EApp (EApp (EMethodRef "gt") (EVar "ak")) (EVar "k")))) (EVar "above"))))))
 (DProp false "link rebuilds a well-formed map from a split" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "k")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EApp (EApp (EVar "link") (EVar "k")) (ELit (LInt 0))) (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "rebuilt")) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EDictApp "get") (EVar "k")) (EVar "rebuilt"))) (EApp (EVar "Some") (ELit (LInt 0))))))))
 (DProp false "link2 rejoins a split without its key" ((pp "k" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PTuple (PVar "below") (PVar "above")) (EApp (EApp (EDictApp "splitAt") (EVar "k")) (EApp (EDictApp "fromList") (EVar "xs")))) (DoLet false false (PVar "rebuilt") (EApp (EApp (EVar "link2") (EVar "below")) (EVar "above"))) (DoExpr (EBinOp "&&" (EApp (EDictApp "wellFormed") (EVar "rebuilt")) (EApp (EApp (EMethodRef "eq") (EApp (EVar "entries") (EVar "rebuilt"))) (EApp (EVar "entries") (EApp (EApp (EDictApp "delete") (EVar "k")) (EApp (EDictApp "fromList") (EVar "xs")))))))))
+(DProp false "entriesFrom is the limited run of entries from the start key" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EApp (EMethodRef "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EMethodRef "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))
+(DProp false "entriesFrom bounded on one side only still agrees with entries" ((pp "k" (TyCon "Int")) (pp "n" (TyCon "Int")) (pp "xs" (TyApp (TyCon "List") (TyTuple (TyCon "Int") (TyCon "Int"))))) (EBlock (DoLet false false (PVar "m") (EApp (EDictApp "fromList") (EVar "xs"))) (DoExpr (EBinOp "&&" (EBinOp "&&" (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EVar "None")) (EVar "None")) (EVar "m"))) (EApp (EVar "entries") (EVar "m"))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EVar "None")) (EApp (EVar "Some") (EVar "n"))) (EVar "m"))) (EApp (EApp (EVar "take") (EVar "n")) (EApp (EVar "entries") (EVar "m"))))) (EApp (EApp (EMethodRef "eq") (EApp (EApp (EApp (EDictApp "entriesFrom") (EApp (EVar "Some") (EVar "k"))) (EVar "None")) (EVar "m"))) (EApp (EApp (EMethodRef "filter") (ELam ((PTuple (PVar "key") PWild)) (EApp (EApp (EMethodRef "gte") (EVar "key")) (EVar "k")))) (EApp (EVar "entries") (EVar "m"))))))))

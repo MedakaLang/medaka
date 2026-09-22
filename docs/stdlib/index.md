@@ -154,7 +154,7 @@ A buffer for building byte arrays.
 
 ## [`byteparser`](byteparser.md)
 
-byteparser — a binary parser-combinator library for Medaka.
+Parser combinators over byte arrays.
 
 - [`BResult`](byteparser.md#bresult)
 - [`ByteParserE`](byteparser.md#byteparsere)
@@ -392,7 +392,7 @@ HMAC-SHA-256 (RFC 2104) over byte arrays.
 
 ## [`http`](http.md)
 
-Pure, bounded HTTP/1.1 request framing and response building.
+HTTP/1.1 message framing: request parsing, response building, and response parsing, over bytes the caller supplies.
 
 - [`maxHttpRequestBytes`](http.md#maxhttprequestbytes)
 - [`maxHttpHeaderBytes`](http.md#maxhttpheaderbytes)
@@ -617,6 +617,7 @@ An immutable map from keys to values, ordered by key.
 - [`foldrWithKey`](map.md#foldrwithkey)
 - [`foldlWithKey`](map.md#foldlwithkey)
 - [`entries`](map.md#entries)
+- [`entriesFrom`](map.md#entriesfrom)
 - [`keys`](map.md#keys)
 - [`values`](map.md#values)
 - [`mapWithKey`](map.md#mapwithkey)
@@ -735,7 +736,7 @@ Manipulation of `/`-separated paths as text.
 
 ## [`pbkdf2`](pbkdf2.md)
 
-PBKDF2-HMAC-SHA-256 (RFC 2898 §5.2), the password-hashing key derivation function.
+PBKDF2 key derivation with HMAC-SHA-256 (RFC 2898).
 
 - [`pbkdf2HmacSha256`](pbkdf2.md#pbkdf2hmacsha256)
 
@@ -756,9 +757,9 @@ Regular expressions, matched in linear time.
 - [`find`](regex.md#find)
 - [`findFrom`](regex.md#findfrom)
 - [`fullMatch`](regex.md#fullmatch)
+- [`findAll`](regex.md#findall)
 - [`isFullMatchBytes`](regex.md#isfullmatchbytes)
 - [`findBytes`](regex.md#findbytes)
-- [`findAll`](regex.md#findall)
 - [`replace`](regex.md#replace)
 - [`replaceAll`](regex.md#replaceall)
 - [`replaceAllWith`](regex.md#replaceallwith)
