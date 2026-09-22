@@ -90,7 +90,7 @@ import lib.cid.{
 import lib.dagcbor.{DagCbor, dagCborEncode}
 import lib.did_key.{didKeyMultibase}
 import lib.lexjson.{dagCborToLexJson, lexJsonToDagCbor}
-import lib.mst.{mstCoveringProofBlocks}
+import lib.mst.{MstRangeQuery(..), mstCoveringProofBlocks}
 import lib.query_params as QueryParams
 import lib.repo.{
   Repo,
@@ -103,7 +103,7 @@ import lib.repo.{
   repoDelete,
   repoExportCar,
   repoDecodeEntry,
-  repoEntries,
+  repoEntriesRange,
   repoLatestCommit,
   repoLookup,
   repoPublicKey,
@@ -1041,8 +1041,9 @@ lookupRecord path repo =
 
    Every listing route used to decode the whole repository and then throw the
    tail away, so serving one page cost the account. Selection now happens on
-   `repoEntries`' paths, which name a record's block without reading it, and
-   this is the only place a listing route touches a record's bytes. -}
+   `repoEntriesRange`'s paths, which name a record's block without reading it
+   and stop at the end of the page, and this is the only place a listing route
+   touches a record's bytes. -}
 pageRecords : Repo ->
   List (String, Cid) ->
   Result Response (List (String, DagCbor))
@@ -1058,33 +1059,59 @@ splitRecordPath path = match split "/" (fromUtf8 path)
   [collection, rkey] => Some (collection, rkey)
   _ => None
 
-{- | The `(rkey, block)` pairs of one collection, in the repository's own
-   ascending key order (`lib.mst` keeps entries sorted, so this is already the
-   ascending half of atproto's `reverse` parameter). No record is read: the
-   pairs name blocks, which is all ordering, the cursor and the limit need. -}
-collectionKeys : String -> List (Array Int, Cid) -> List (String, Cid)
-collectionKeys _ [] = []
-collectionKeys wanted ((path, cid) :: rest) = match splitRecordPath path
-  Some (collection, rkey) =>
-    if collection == wanted then
-      (rkey, cid) :: collectionKeys wanted rest
-    else
-      collectionKeys wanted rest
-  None => collectionKeys wanted rest
+-- | The key prefix every path in one collection carries.
+collectionPrefix : String -> Array Int
+collectionPrefix collection = toUtf8 "\{collection}/"
 
-distinctCollections : List (Array Int, Cid) -> List String -> List String
-distinctCollections [] seen = reverseOnto seen []
-distinctCollections ((path, _) :: rest) seen = match splitRecordPath path
-  Some (collection, _) =>
-    if nameSeen collection seen then
-      distinctCollections rest seen
-    else
-      distinctCollections rest (collection :: seen)
-  None => distinctCollections rest seen
+{- | The smallest key sorting after every key that carries `prefix`: the
+   prefix with its last byte raised by one. A collection prefix ends in the
+   '/' a record path splits on, so the raised bound falls between the last key
+   of one collection and the first key of the next. -}
+afterPrefix : Array Int -> Array Int
+afterPrefix prefix =
+  let top = arrayLength prefix - 1
+  arrayMakeWith (arrayLength prefix) (i =>
+    if i == top then prefix[i] + 1 else prefix[i])
 
-nameSeen : String -> List String -> Bool
-nameSeen _ [] = False
-nameSeen wanted (name :: rest) = name == wanted || nameSeen wanted rest
+-- | The smallest key sorting strictly after `key` itself.
+afterKey : Array Int -> Array Int
+afterKey key =
+  let width = arrayLength key
+  arrayMakeWith (width + 1) (i => if i == width then 0 else key[i])
+
+-- | Read the one entry sorting at or after `from`, and nothing behind it.
+seekFrom : Option (Array Int) -> MstRangeQuery
+seekFrom from = MstRangeQuery {
+  start = from,
+  prefix = None,
+  reverse = False,
+  limit = Some 1,
+}
+
+{- | The `(rkey, block)` pairs of a range already bounded to one collection,
+   in the direction that range was read in. No record is read: the pairs name
+   blocks, which is all ordering, the cursor and the limit need. A stored path
+   that is not `collection/rkey` names no record and is passed over. -}
+pageRkeys : List (Array Int, Cid) -> List (String, Cid)
+pageRkeys [] = []
+pageRkeys ((path, cid) :: rest) = match splitRecordPath path
+  Some (_, rkey) => (rkey, cid) :: pageRkeys rest
+  None => pageRkeys rest
+
+{- | Every distinct collection name, ascending, at one seek apiece. Each seek
+   resumes past the whole of the collection it just named, so the walk reads
+   one entry per collection and steps over every record inside one — the cost
+   is the collections, not the repository. -}
+repoCollections : Repo -> Option (Array Int) -> List String -> List String
+repoCollections repo from seen = match repoEntriesRange (seekFrom from) repo
+  [] => reverseOnto seen []
+  (path, _) :: _ => match splitRecordPath path
+    Some (collection, _) =>
+      repoCollections
+        repo
+        (Some (afterPrefix (collectionPrefix collection)))
+        (collection :: seen)
+    None => repoCollections repo (Some (afterKey path)) seen
 
 reverseOnto : List a -> List a -> List a
 reverseOnto [] acc = acc
@@ -1154,21 +1181,16 @@ requireLimit params = do
         else
           Ok limit
 
-orderEntries : Bool -> List (String, a) -> List (String, a)
-orderEntries True entries = entries
-orderEntries False entries = reverseOnto entries []
-
-{- | Drop everything up to and including the cursor. The list is already sorted
-   in the requested direction, so "sorts after the cursor" is exactly the
-   remainder of the page the cursor ended. -}
-afterCursor : Bool -> String -> List (String, a) -> List (String, a)
-afterCursor _ _ [] = []
-afterCursor ascending cursor ((rkey, value) :: rest) =
-  let keep = if ascending then rkey > cursor else rkey < cursor
-  if keep then
-    (rkey, value) :: afterCursor ascending cursor rest
-  else
-    afterCursor ascending cursor rest
+{- | Drop the entry the cursor itself names. A range resumed at the cursor is
+   inclusive, so the page before it ends on the entry the next page opens on
+   whenever the repository still holds that key. A cursor naming a deleted or
+   never-stored rkey drops nothing: a cursor is a position in the order rather
+   than a key, and the range already began past it. -}
+dropCursorEntry : Option String -> List (String, a) -> List (String, a)
+dropCursorEntry None entries = entries
+dropCursorEntry _ [] = []
+dropCursorEntry (Some cursor) (entries@((rkey, _) :: rest)) =
+  if rkey == cursor then rest else entries
 
 lastRkey : String -> List (String, a) -> String
 lastRkey fallback [] = fallback
@@ -1203,14 +1225,19 @@ applyListRecords account store params = do
   limit <- requireLimit params
   ascending <- requireReverse params
   cursor <- optionalParam "cursor" params
-  let ordered =
-    orderEntries ascending (collectionKeys collection (repoEntries repo))
-  let remaining = match cursor
-    None => ordered
-    Some text => afterCursor ascending text ordered
   -- ONE entry past the page settles whether a further page exists, which is
-  -- the only thing the discarded tail was ever asked, so the page plus that
-  -- one entry is as far as selection reaches.
+  -- the only thing the discarded tail was ever asked, and one more than that
+  -- absorbs the cursor's own entry where the repository still holds it. The
+  -- read stops at that bound inside the tree, so selection reaches no further
+  -- into the collection than the page it answers with.
+  let query = MstRangeQuery {
+    start = map (recordPath collection) cursor,
+    prefix = Some (collectionPrefix collection),
+    reverse = not ascending,
+    limit = Some (limit + 2),
+  }
+  let remaining =
+    dropCursorEntry cursor (pageRkeys (repoEntriesRange query repo))
   let probe = take (limit + 1) remaining
   let keys = take limit probe
   page <- pageRecords repo keys
@@ -1244,8 +1271,9 @@ applyDescribeRepo account store params = do
   repo <- requireConfiguredRepo store
   target <- requiredParam "repo" params
   () <- requireHostedIdentifier "repo" account target
-  -- `collections` needs the paths and nothing else, so no record is decoded.
-  let collections = distinctCollections (repoEntries repo) []
+  -- `collections` needs the names and nothing else, so no record is decoded
+  -- and no collection is read past its first entry.
+  let collections = repoCollections repo None []
   Ok
     (jObject [
       ("did", JString (accountDid account)),

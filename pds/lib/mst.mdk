@@ -396,17 +396,37 @@ mstEntries (Mst entries _ _ _) = copyEntries entries
 
 {- | One bounded key-range read. `start` is the inclusive key the read begins
    at — the smallest key an ascending read returns, the largest a descending
-   one returns — `prefix` restricts the read to the keys carrying it, and
-   `reverse` reads descending instead of ascending. -}
+   one returns — `prefix` restricts the read to the keys carrying it,
+   `reverse` reads descending instead of ascending, and `limit` is how many
+   entries the read may return at most. The limit ends the descent rather than
+   trimming its result, so a page of a large collection costs the page. -}
 public export data MstRangeQuery = MstRangeQuery {
   start : Option (Array Int),
   prefix : Option (Array Int),
   reverse : Bool,
+  limit : Option Int,
 }
 
-{- | The entries taken so far, last one first, and whether the scan has passed
-   the far end of the range. Every later step is a no-op once it has. -}
-data RangeScan = RangeScan (List (Array Int, Cid)) Bool
+{- | The entries taken so far in reverse traversal order, how many more the
+   limit still allows, and whether the scan has passed the far end of the
+   range or filled the limit. Every later step is a no-op once it has. -}
+data RangeScan = RangeScan (List (Array Int, Cid)) (Option Int) Bool
+
+scanDone : RangeScan -> Bool
+scanDone (RangeScan _ _ done) = done
+
+-- A limit of no entries at all leaves the scan with nothing to do.
+scanStart : Option Int -> RangeScan
+scanStart None = RangeScan [] None False
+scanStart (Some limit) = RangeScan [] (Some limit) (limit <= 0)
+
+-- Take one in-range key, ending the scan when it was the last the limit allows.
+takeKey : Array Int -> Cid -> RangeScan -> RangeScan
+takeKey key value (RangeScan taken remaining _) =
+  let kept = (arrayCopy key, value) :: taken
+  match remaining
+    None => RangeScan kept None False
+    Some left => RangeScan kept (Some (left - 1)) (left <= 1)
 
 hasBytesPrefix : Array Int -> Array Int -> Bool
 hasBytesPrefix key prefix = commonPrefix key prefix == arrayLength prefix
@@ -430,9 +450,16 @@ outsidePrefix : Array Int -> Option (Array Int) -> Bool
 outsidePrefix _ None = False
 outsidePrefix key (Some prefix) = not (hasBytesPrefix key prefix)
 
-{- | Fold one key into a running scan. Below the low bound the scan has not
-   reached it yet; past the high bound, or past the end of the prefix run,
-   every later key is out of range too, so the scan ends there. -}
+-- A key that neither carries the prefix nor sorts below it sorts above every
+-- key that does, so a descending read has not reached the prefix run yet.
+abovePrefix : Array Int -> Option (Array Int) -> Bool
+abovePrefix _ None = False
+abovePrefix key (Some prefix) =
+  not (hasBytesPrefix key prefix) && bytesCompare key prefix == Gt
+
+{- | Fold one key into a running ascending scan. Below the low bound the scan
+   has not reached it yet; past the high bound, or past the end of the prefix
+   run, every later key is out of range too, so the scan ends there. -}
 scanKey : Option (Array Int) ->
   Option (Array Int) ->
   Option (Array Int) ->
@@ -440,13 +467,32 @@ scanKey : Option (Array Int) ->
   Cid ->
   RangeScan ->
   RangeScan
-scanKey lo hi prefix key value (scan@(RangeScan taken _)) =
+scanKey lo hi prefix key value (scan@(RangeScan taken remaining _)) =
   if belowBound key lo then
     scan
   else if aboveBound key hi || outsidePrefix key prefix then
-    RangeScan taken True
+    RangeScan taken remaining True
   else
-    RangeScan ((arrayCopy key, value) :: taken) False
+    takeKey key value scan
+
+{- | The same fold for a descending scan, with the two ends exchanged: above
+   the high bound the scan has not reached the range yet, and below the low
+   bound — or before the start of the prefix run — it has left it for good. -}
+scanKeyDesc : Option (Array Int) ->
+  Option (Array Int) ->
+  Option (Array Int) ->
+  Array Int ->
+  Cid ->
+  RangeScan ->
+  RangeScan
+scanKeyDesc _ _ _ _ _ (scan@(RangeScan _ _ True)) = scan
+scanKeyDesc lo hi prefix key value (scan@(RangeScan taken remaining _)) =
+  if aboveBound key hi || abovePrefix key prefix then
+    scan
+  else if belowBound key lo || outsidePrefix key prefix then
+    RangeScan taken remaining True
+  else
+    takeKey key value scan
 
 -- A subtree holds only keys below the leaf key bounding it on the right, so an
 -- `upper` that does not exceed the low bound puts the whole subtree below it.
@@ -459,6 +505,21 @@ nextLeafKey : List NodeEntry -> Option (Array Int)
 nextLeafKey ((NodeLeaf key _) :: _) = Some key
 nextLeafKey _ = None
 
+-- A subtree holds only keys above the leaf key bounding it on the left, so a
+-- `lower` at or past the far end of a descending read puts the whole subtree
+-- past it — either above the high bound or beyond the end of the prefix run.
+spanAboveRange : Option (Array Int) ->
+  Option (Array Int) ->
+  Option (Array Int) ->
+  Bool
+spanAboveRange None _ _ = False
+spanAboveRange (Some lower) hi prefix =
+  atOrAboveBound lower hi || abovePrefix lower prefix
+
+atOrAboveBound : Array Int -> Option (Array Int) -> Bool
+atOrAboveBound _ None = False
+atOrAboveBound key (Some bound) = bytesCompare key bound /= Lt
+
 {- | Walk one node's children in key order, entering a subtree only when part
    of its key span can fall inside the range. -}
 scanNode : Option (Array Int) ->
@@ -467,7 +528,7 @@ scanNode : Option (Array Int) ->
   List NodeEntry ->
   RangeScan ->
   RangeScan
-scanNode _ _ _ _ (scan@(RangeScan _ True)) = scan
+scanNode _ _ _ _ (scan@(RangeScan _ _ True)) = scan
 scanNode _ _ _ [] scan = scan
 scanNode lo hi prefix ((NodeLeaf key value) :: rest) scan =
   scanNode lo hi prefix rest (scanKey lo hi prefix key value scan)
@@ -476,6 +537,34 @@ scanNode lo hi prefix ((NodeSubtree (MstNode _ _ children)) :: rest) scan =
     scanNode lo hi prefix rest scan
   else
     scanNode lo hi prefix rest (scanNode lo hi prefix children scan)
+
+{- | The same walk in descending key order: each child is folded in only after
+   everything to its right, so the scan meets the keys in the order it answers
+   in and a limit can end it where it stands. `lower` is the leaf key bounding
+   this run of children on the left — every key under it sorts above that leaf,
+   which is what lets a whole subtree above the range be stepped over. -}
+scanNodeDesc : Option (Array Int) ->
+  Option (Array Int) ->
+  Option (Array Int) ->
+  Option (Array Int) ->
+  List NodeEntry ->
+  RangeScan ->
+  RangeScan
+scanNodeDesc _ _ _ _ [] scan = scan
+scanNodeDesc lo hi prefix _ ((NodeLeaf key value) :: rest) scan =
+  scanKeyDesc
+    lo
+    hi
+    prefix
+    key
+    value
+    (scanNodeDesc lo hi prefix (Some key) rest scan)
+scanNodeDesc lo hi prefix lower ((NodeSubtree (MstNode _ _ children)) :: rest) scan =
+  let above = scanNodeDesc lo hi prefix lower rest scan
+  if scanDone above || spanAboveRange lower hi prefix then
+    above
+  else
+    scanNodeDesc lo hi prefix lower children above
 
 rangeBounds : MstRangeQuery -> (Option (Array Int), Option (Array Int))
 rangeBounds query =
@@ -488,14 +577,20 @@ rangeBounds query =
    descent steps over whole subtrees a walk of the flat entry list would cross,
    so a page costs the page and not the repository behind it: 200 reads of a
    two-entry page at the far end took 0.3 ms at both 1,000 and 16,000 entries,
-   against 3.7 ms and 101 ms for the walk. -}
+   against 3.7 ms and 101 ms for the walk. A descending read descends in its
+   own direction rather than gathering the range and turning it round, so its
+   limit bounds the descent exactly as an ascending one's does. -}
 export
 mstRange : MstRangeQuery -> Mst -> List (Array Int, Cid)
 mstRange query (Mst _ _ _ (MstNode _ _ children)) =
   let (lo, hi) = rangeBounds query
-  let (RangeScan taken _) =
-    scanNode lo hi query.prefix children (RangeScan [] False)
-  if query.reverse then taken else reverse taken
+  let start = scanStart query.limit
+  let (RangeScan taken _ _) =
+    if query.reverse then
+      scanNodeDesc lo hi query.prefix None children start
+    else
+      scanNode lo hi query.prefix children start
+  reverse taken
 
 -- Every caller must guarantee `key` is absent from the list before calling;
 -- `mstInsert` enforces this with an `mstLookup` guard. The `Eq` arm panics

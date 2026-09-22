@@ -2,7 +2,7 @@
    and node bytes remain exclusively in the provenance-ledgered corpus. -}
 
 import array as A
-import list.{filter, reverse}
+import list.{filter, reverse, take}
 import string.{fromUtf8, toUtf8}
 import test.{Expectation, expectEach, expectEqual, expectTrue}
 import lib.cid.{Cid, cidEqual, cidForDagCbor}
@@ -258,12 +258,19 @@ soleTree : Mst
 soleTree = treeOf ["app.bsky.feed.post/b2"]
 
 forwardFrom : Option (Array Int) -> Option (Array Int) -> MstRangeQuery
-forwardFrom start prefix =
-  MstRangeQuery { start = start, prefix = prefix, reverse = False }
+forwardFrom start prefix = MstRangeQuery {
+  start = start,
+  prefix = prefix,
+  reverse = False,
+  limit = None,
+}
 
 backwardFrom : Option (Array Int) -> Option (Array Int) -> MstRangeQuery
 backwardFrom start prefix =
-  MstRangeQuery { start = start, prefix = prefix, reverse = True }
+  MstRangeQuery { start = start, prefix = prefix, reverse = True, limit = None }
+
+withLimit : Option Int -> MstRangeQuery -> MstRangeQuery
+withLimit limit query = { query | limit = limit }
 
 rangeIs : List String -> MstRangeQuery -> Mst -> Expectation
 rangeIs want query tree = expectEqual want (rangeKeys query tree)
@@ -376,11 +383,50 @@ test "degenerate trees range without special-casing" = expectEach [
   ),
 ]
 
+{- | A limit is an early end to the descent, not a trim of its result, so the
+   direction decides which end of the range it keeps: the first keys of a
+   forward read and the last of a backward one. -}
+test "a limit bounds a range to the entries it asks for" = expectEach [
+  (
+    "forward takes the first keys of the range",
+    rangeIs
+      ["app.bsky.feed.post/b1", "app.bsky.feed.post/b2"]
+      (withLimit (Some 2) (forwardFrom None (Some postPrefix)))
+      mixedTree,
+  ),
+  (
+    "backward takes the last keys of the range",
+    rangeIs
+      ["app.bsky.feed.post/b3", "app.bsky.feed.post/b2"]
+      (withLimit (Some 2) (backwardFrom None (Some postPrefix)))
+      mixedTree,
+  ),
+  (
+    "a limit of none takes nothing",
+    rangeIs [] (withLimit (Some 0) (forwardFrom None None)) mixedTree,
+  ),
+  (
+    "a limit past the end of the range takes all of it",
+    rangeIs
+      ["app.bsky.feed.like/a1", "app.bsky.feed.like/a2"]
+      (withLimit (Some 9) (forwardFrom None (Some likePrefix)))
+      mixedTree,
+  ),
+  (
+    "a limit of one seeks the single entry a range opens on",
+    rangeIs
+      ["app.bsky.graph.follow/c1"]
+      (withLimit (Some 1) (forwardFrom (Some (toUtf8 "app.bsky.graph.")) None))
+      mixedTree,
+  ),
+]
+
 {- | The range read against the baseline it exists to avoid: filtering the
    fully materialised entry list by the same bounds. Descending the node tree
-   skips whole subtrees the flat list walks, so the two agreeing over every
-   start key of every corpus tree, in both directions and under every prefix,
-   is what says the skipping drops nothing. -}
+   skips whole subtrees the flat list walks, and a limit ends that descent
+   early, so the two agreeing over every start key of every corpus tree, in
+   both directions, under every prefix and at every limit, is what says
+   neither the skipping nor the early end drops anything it should keep. -}
 
 carriesPrefix : Option (Array Int) -> Array Int -> Bool
 carriesPrefix None _ = True
@@ -395,40 +441,52 @@ selects : MstRangeQuery -> (Array Int, Cid) -> Bool
 selects query (key, _) =
   carriesPrefix query.prefix key && pastStart query.reverse query.start key
 
+bounded : Option Int -> List a -> List a
+bounded None entries = entries
+bounded (Some limit) entries = take limit entries
+
 filteredRange : MstRangeQuery -> Mst -> List String
 filteredRange query tree =
   let kept = map entryKey (filter (selects query) (mstEntries tree))
-  if query.reverse then reverse kept else kept
+  bounded query.limit (if query.reverse then reverse kept else kept)
 
 queryLabel : MstRangeQuery -> String
 queryLabel query =
   let direction = if query.reverse then "reverse" else "forward"
-  "\{direction} start=\{describeBound query.start} prefix=\{describeBound query.prefix}"
+  "\{direction} start=\{describeBound query.start} prefix=\{describeBound query.prefix} limit=\{describeLimit query.limit}"
 
 describeBound : Option (Array Int) -> String
 describeBound None = "-"
 describeBound (Some bytes) = fromUtf8 bytes
 
+describeLimit : Option Int -> String
+describeLimit None = "-"
+describeLimit (Some limit) = intToString limit
+
 queriesOver : List (Option (Array Int)) ->
   List (Option (Array Int)) ->
+  List (Option Int) ->
   List MstRangeQuery
-queriesOver starts prefixes =
+queriesOver starts prefixes limits =
   flatMap
-    (start =>
-      flatMap
-        (prefix => [forwardFrom start prefix, backwardFrom start prefix])
-        prefixes)
-    starts
+    (query => map (limit => withLimit limit query) limits)
+    (flatMap
+      (start =>
+        flatMap
+          (prefix => [forwardFrom start prefix, backwardFrom start prefix])
+          prefixes)
+      starts)
 
 disagreements : Mst -> List String
 disagreements tree =
   let starts = None :: map ((key, _) => Some key) (mstEntries tree)
   let prefixes = [None, Some likePrefix, Some postPrefix]
+  let limits = [None, Some 0, Some 1, Some 2, Some 5]
   map
     queryLabel
     (filter
       (query => rangeKeys query tree /= filteredRange query tree)
-      (queriesOver starts prefixes))
+      (queriesOver starts prefixes limits))
 
 probeTree : Mst
 probeTree =
