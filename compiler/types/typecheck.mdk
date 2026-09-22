@@ -20409,6 +20409,37 @@ callOblMonoIds (iface, monos, _) =
 monoIdsWithIface : (Mono, String) -> List (Int, String)
 monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 
+-- #3204 — the OPERATOR-SITE pin channel, windowed to this binding's own inference
+-- exactly as dictForwardedPairs is.  `++` reaches `Semigroup`'s `append` on the
+-- binop-site seam (binopMethod), and a local binding is never dict-abstracted — so
+-- when the group generalizes over an operand var whose head is still unknown, that
+-- var is still unbound at resolveOpSites time, the route stays RNone, and the emitter
+-- lowers the site to the untyped @mdk_append, which walks a user constructor cell as
+-- a Cons chain.  Pinning the var is what the method SPELLING `let f = append` already
+-- gets from the two method channels above; this gives the OPERATOR spelling
+-- (`let f = (++)`, and the `x y => x ++ y` lambda desugar turns a section into) the
+-- same grounding, so both reach the instance instead of the untyped fallback.
+--
+-- HEAD-UNKNOWN ONLY.  An operand that already has a head tycon needs no pin: a
+-- builtin head (String/List, binopBuiltinHead) routes to the structural append, a
+-- concrete user head routes RKey to the instance, and a TRigid — a declared
+-- `Semigroup a =>` slot — routes RDict through enclDictVarOf.  Pinning on
+-- `monoUnboundIds` alone would additionally pin a generic `acc ++ [y]` on its ELEMENT
+-- var, whose head `List` is already ground and whose builtin route is already right.
+--
+-- `append` ONLY.  The comparison methods on this same seam (`eq`/`lt`/…) and the unop
+-- seam's `negate` reach RNone by the same route, but there RNone is a structural
+-- builtin that ANSWERS rather than crashing, so pinning them would change what
+-- typechecks for programs that run today — a separate acceptance decision.
+opSitePairs : Int -> List (Int, String)
+opSitePairs dictN0 = flatMap opSiteIdPairs (siteGoals GKBinopSite dictN0)
+
+opSiteIdPairs : PendingEntry -> List (Int, String)
+opSiteIdPairs (PendingEntry method _ m _ _ _ _ _)
+  | method /= "append" = []
+  | isSome (headTyconNameMono m) = []
+  | otherwise = monoIdsWithIface (m, optionOr "" (ifaceOfMethodName method))
+
 -- #1986 rung 1 — THE local-pin predicate.  ALL FIVE local-generalization sites (the
 -- `where`/`let`-GROUP site processLetGroup, and the four genRestricted sites via
 -- pinLocalIfDictForwarded) consult exactly this, so one judgment is made in one place.
@@ -20418,13 +20449,16 @@ monoIdsWithIface (m, iface) = map (id => (id, iface)) (monoUnboundIds m)
 -- (#1052).  Rung 1 makes the five agree; WHAT the agreed answer should be is rung 2's
 -- question, not this predicate's.
 --
--- Three channels, in the order their comments appear above:
+-- Four channels, in the order their comments appear above:
 --   methodConstrainedPairs  emit-path arg stamps (pendingArgStamps), UNWINDOWED.
 --   methodOccArgPairs       the entry-point-neutral obligation channel (#2026),
 --                           UNWINDOWED — this is what keeps `check` and `build` at the
 --                           same pin decision.
 --   dictForwardedPairs      constrained-callee dict routes, WINDOWED to this binding's
 --                           own inference (#866).
+--   opSitePairs             head-unknown `++` operator sites, WINDOWED the same way
+--                           (#3204).  Entry-point-neutral by construction: the site is
+--                           recorded during ordinary inference, not by the mark pass.
 -- UNION, never substitution: each channel covers sites the others structurally cannot
 -- see (see each function's own note).  Duplicate ids are free — recordPinnedLocals
 -- dedups by tyvar id.
@@ -20486,6 +20520,7 @@ localPinPairs callN0 dictN0
     methodConstrainedPairs ()
       ++ methodOccArgPairs ()
       ++ dictForwardedPairs callN0 dictN0
+      ++ opSitePairs dictN0
 
 -- #866: the pin decision AND the note pinnedLocalExplain needs, in one pass, so the
 -- two can never disagree about whether a binding was pinned.  [name]/[loc]

@@ -1,0 +1,41 @@
+-- `++` is `Semigroup`'s `append`, and a `let`-bound one has to reach the same
+-- instance the infix spelling does.  The three rows here are the three ways a
+-- name can be bound to it: the bare operator, the hand-written lambda the
+-- operator section desugars to, and `append` itself, which already worked.
+-- Each is applied to a type whose instance is hand-written, so a site that
+-- misses the instance falls to the runtime's untyped concatenation instead --
+-- which walks a user constructor cell as a Cons chain rather than answering.
+--
+-- The `Bytes` row is here because `stdlib/bytes.mdk` is the instance a caller
+-- actually meets: its cell is a packed byte block, not Cons cells, so the same
+-- miss reads its payload as pointers.
+--
+-- Every printed value is a String (`debug` renders it), so no engine has to
+-- agree about a cell's layout, only about which `append` ran.
+
+import bytes as B
+
+data Acc = Acc Int
+
+export impl Semigroup Acc where
+  append (Acc a) (Acc b) = Acc (a + b)
+
+export impl Debug Acc where
+  debug (Acc n) = "Acc \{debug n}"
+
+main =
+  let a1 = Acc 1
+  let a2 = Acc 2
+  let op = (++)
+  let lam = (x y => x ++ y)
+  let named = append
+  let bop = (++)
+  let b1 = B.fromArrayAssumeByteDomain [|1|]
+  let b2 = B.fromArrayAssumeByteDomain [|2|]
+  (
+    debug (op a1 a2),
+    debug (lam a1 a2),
+    debug (named a1 a2),
+    debug (a1 ++ a2),
+    debug (bop b1 b2),
+  )
