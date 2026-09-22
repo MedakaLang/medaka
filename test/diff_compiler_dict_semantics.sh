@@ -473,29 +473,7 @@ bound() { perl -e 'alarm 60; exec @ARGV' "$@"; }
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-: >"$TMP/v2"; : >"$TMP/v3"; : >"$TMP/v4"; : >"$TMP/v5"
-
-# ── Section 2 table: exact `medaka check` scheme lines ────────────────────────
-# entry | label | expected scheme line (must appear VERBATIM in check's stdout)
-#   Bare `medaka check` prints only the user's OWN top-level bindings, which is
-#   why this is legible at all; `--types` would bury it under ~120 prelude lines.
-SCHEMES='s1-nary-predicate-scheme-kept.mdk|§1 the 2-ary constraint SURVIVES into the scheme (#607: printed `a -> b -> Int`, constraint gone, at exit 0)|twoParam : Ix a b => a -> b -> Int
-s4-joint-residual-rdict-native.mdk|#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context|f : Conv c d => a -> b -> String
-s4-gen-sig-declared-context-kept.mdk|§4 `gen-sig` the declared context is DISPLAYED even though the body never dispatches (#610: printed `sz2 : a -> Int`)|sz2 : Sz a => a -> Int
-s4-gen-sig-superclass-redundant-dropped.mdk|§4 `gen-sig` the superclass-entailed `B a` is DROPPED, not merged (pre-#619 displayed `(B a, C a) =>` and propagated it to every caller)|viaC : C a => a -> Int
-s4-gen-sig-superclass-redundant-dropped.mdk|§4 control: the binding that genuinely needs `B a` still shows it, so the row above is not "constraints are never displayed"|useB : B a => a -> Int
-s4-gen-residual-inferred-context.mdk|§4 `gen` the RESIDUAL of a `requires` discharge IS the principal context (issue 1549: printed `nest : a -> String`, the `Tag a` gone, at exit 0)|nest : Tag a => a -> String
-s4-gen-residual-no-requires-control.mdk|§4 `gen` control: with the `requires` gone there is no residual, so the context must stay EMPTY -- the false-reject canary for the row above|nest : a -> String
-s4-gen-sig-residual-covered-control.mdk|§4 `gen-sig` + §3 `super`: the residual `Eq a` entailed by the declared `Ord a` is DROPPED, not merged -- the value is True either way, so only this row can see a residual reducer that widened the displayed context|sig2 : Ord a => a -> Bool
-s4-gen-residual-mixed-no-requires-control.mdk|ISSUE 1560 control: with the `requires` gone the mixed vector leaves NO residual, so the context must stay EMPTY. The false-reject canary for the widened `anyConcreteHead` guard, and the only row that can see a reducer inventing a context|f : a -> b -> String
-s4-gen-rec-inferred-context.mdk|§4 `gen-rec` P` is the GROUP`s, so BOTH bindings generalize over `Sz a` -- not only the one whose body mentions `sz` first|evenSz : Sz a => a -> Int -> Bool
-s4-gen-rec-inferred-context.mdk|§4 `gen-rec` the other half of the group|oddSz : Sz a => a -> Int -> Bool
-s8-xmod-reexport-alias-perm-ab/main.mdk|#1337 PERMUTATION, ORDERING 1 of 2 -- THE "ONE SIGNATURE" HALF (packet Amendment A condition 2). `combine` calls two bindings reached through an ALIAS import of a re-export hub over TWO DIFFERENT definers. Its scheme is the order-invariant this pair asserts: an alias arm that re-bound one definer`s key and not the other`s would leave `H.ga` or `H.gb` unbound and this line would not appear at all|combine : Int -> Int
-s8-xmod-reexport-alias-perm-ba/main.mdk|#1337 PERMUTATION, ORDERING 2 of 2 -- THE SAME SIGNATURE from the EXCHANGED declaration order. ⚠️ The two rows are ONE assertion: identical schemes across all orderings of one spelling. Either row alone is satisfied by an order-decided compiler|combine : Int -> Int
-s-structured-carry-declared-context-kept.mdk|#1937 the STRUCTURED declared context SURVIVES into the scheme -- THE ONLY OBSERVABLE THAT SEES THIS FIX ON AN ACCEPTING PROGRAM (base printed `f : Wrap Int -> Bool -> String`, the context gone, at exit 0 with the right value). ⚠️ The type is still MONOMORPHISED to `Wrap Int -> Bool` by single-impl improvement, a separate mechanism #1937 does not touch and this slice deliberately did not widen -- do NOT re-pin this to a polymorphic scheme. ⚠️ The predicate renders WITHOUT PARENTHESES (`Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`), which reads as four arguments to a two-parameter interface and does not round-trip through the parser: a printer defect (#1952, `S2: misleading`) that is newly REACHABLE rather than newly broken, because until this fix the context was erased and never printed at all. 🚨 #1952 HAS NOW LANDED (sprint/nary-predicate-slots slice 2, as its permitted rider) and this row is re-pinned to the PARENTHESISED form exactly as the previous sentence instructed: `renderConstraintCtx` renders a predicate argument at ARGUMENT precedence (3), not 2, so a structured argument keeps the parens that make the context round-trip through the parser. Bare-tyvar and nullary-`TCon` arguments are atoms at either precedence, so no other scheme row moves|f : Conv (Wrap Int) Bool => Wrap Int -> Bool -> String
-s6-drain-quiescence-inferred-scheme.mdk|§6.3 the QUANTIFIED RECEIVER is the whole claim of the drain pair: `top` generalizes over the very variable the graph-end drain then reports as undetermined. A scheme printed WITHOUT the `Sh a` context would mean the receiver was determined after all and the pair would be measuring nothing|top : Sh a => a -> Int
-s6-drain-quiescence-declared-scheme.mdk|§6.3 the declared-scheme twin: the unannotated `relay` inherits the written context of `nonlead` verbatim, which is what carries the quantified receiver to graph end|relay : (Ixd b a, Shb a) => a -> b -> b
-s-nary-given-declared-vector-selects.mdk|#1952 on a genuinely POLYMORPHIC multi-argument context, which the row above cannot show because single-impl improvement monomorphises its `a`. Both the structured argument`s parens and the second, bare-tyvar argument are asserted here, so a "fix" that parenthesised every argument (`Conv (Wrap a) (b)`) or that dropped back to prec 2 (`Conv Wrap a b`) both go red. At the sprint base `e4587a04` this printed `f : Conv Wrap a b => Wrap a -> b -> String`|f : Conv (Wrap a) b => Wrap a -> b -> String'
+: >"$TMP/v3"; : >"$TMP/v4"
 
 # ── Section 3 table: emitted-LLVM structural assertions ──────────────────────
 # entry | label | HAS|LACKS|COUNT=<n> | extended-regex over the kept .ll
@@ -589,30 +567,6 @@ s-cardinality-signatured.mdk|S-cardinality-conformance (#1869 shape) ARITY PIN, 
 s-cardinality-xmod-accept/main.mdk|S-cardinality-conformance (#1868 shape) CROSS-MODULE ARITY PIN: the definer`s exported `useIx : Ix a b => a -> b -> Int` abstracts arity 3 (1 dict + 2 values) under its OWN definer symbol, reached through the importer`s call -- the widened `crossModuleFunConstraintArgsQualRef` table correctly threads a single vector across the module boundary end to end|HAS|^define i64 @mdk_lib__useIx\(i64 %arg0, i64 %arg1, i64 %arg2\)
 s-shadow-standalone-vector-arity.mdk|FIX-shadow-arity-skew ARITY PIN, the SHADOW half: a DEFINER-SHADOWED standalone with `(Ix a Char, Ix a Bool) =>` must abstract TWO dict slots -- arity 3 (2 dicts + 1 value). 🚨 THIS IS THE ROW THAT SEES THE DEFECT AT ITS SOURCE. The skew was between this DEFINITION arity (which `dictArityOf` already sized from the vector-widened table, so it read 3 even while broken) and the CALL side`s collapsed single slot; the fixture`s value row can only observe the consequence, and observes it differently on each engine. Pre-fix this symbol was already 3 params and the call passed 2 arguments|HAS|^define i64 @mdk_s_shadow_standalone_vector_arity__size\(i64 %arg0, i64 %arg1, i64 %arg2\)
 s-shadow-standalone-vector-arity.mdk|FIX-shadow-arity-skew ARITY PIN, the UNRELATED half: `plain`, a NON-shadow standalone with a single 2-ary predicate `Ix a Char =>`, must still abstract exactly ONE dict slot -- arity 2 (1 dict + 1 value). The scalar arm is what `routesOfMonosTopV` falls back to term-for-term when a slot has no vector, and this row is the tripwire for a widening that over-counts slots on the code BESIDE the one under test|HAS|^define i64 @mdk_s_shadow_standalone_vector_arity__plain\(i64 %arg0, i64 %arg1\)'
-
-# ── Section 2: exact scheme lines ────────────────────────────────────────────
-echo
-echo '=== 2. `medaka check` scheme lines (#607/#610 printed the RIGHT value with the constraint SILENTLY DROPPED) ==='
-printf '%s\n' "$SCHEMES" | while IFS='|' read -r entry label want; do
-  [ -z "$entry" ] && continue
-  entrypath="$FIXDIR/$entry"
-  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')"
-  if [ ! -f "$entrypath" ]; then
-    printf 'FAIL scheme %-44s MISSING FIXTURE FILE\n' "$entry"
-    echo "FAIL" >>"$TMP/v2"
-    continue
-  fi
-  bound "$MEDAKA" check "$entrypath" >"$TMP/$base.sch.out" 2>/dev/null
-  if grep -qxF "$want" "$TMP/$base.sch.out"; then
-    printf 'ok   scheme %-44s %s\n' "$entry" "$want"
-    echo "PASS" >>"$TMP/v2"
-  else
-    printf 'FAIL scheme %-44s want exactly: %s\n' "$entry" "$want"
-    printf '                 got:\n'
-    sed 's/^/                   /' "$TMP/$base.sch.out"
-    echo "FAIL" >>"$TMP/v2"
-  fi
-done
 
 # ── Section 3: emitted-LLVM structural assertions ────────────────────────────
 echo
@@ -994,207 +948,6 @@ done
 # permutation-sensitivity was checked and found absent -- see the empty-section
 # check at the bottom of this file, which fails the whole gate on that.
 
-# ── Section 5: the DEMOTED warning reaches every verb AND every module POSITION,
-# ──            and NOTHING ELSE does ─────────────────────────────────────────────
-# F-3d (#614/#311) turned a hard `T-CONFLICTING-IMPL` into the
-# `W-INCOMPARABLE-IMPLS` warning. A warning that only `check` can see is a
-# loud->silent transition on `run` and `build`, which is the one thing this stage
-# was gated on not doing -- and NOTHING in the suite could see it: sections 1-4
-# above grade stdout, exit codes and diagnostic CODES from `check --json` only;
-# `diff_native_cli` discards stderr on every relevant subtest;
-# `diff_compiler_run_check_agreement` greps run/build stderr for `E-PANIC` alone.
-# The feature could have been reverted wholesale and the suite stayed green.
-#
-# ⚠️ THE `EMPTY` ROWS ARE HALF THE SECTION, and the more easily lost half. The
-# first fix for the silence surfaced the WHOLE `matchWarnings` channel on
-# run/build, which is ~96% false positives: that channel is populated over the
-# module GRAPH, and `checkGuardExhaustivenessWith` takes its constructor oracle
-# from the graph rather than from the scrutinee's own type, so an exhaustive
-# `List` match is told to add a `Text _` case (issue 1185, PRE-EXISTING).
-# Measured: `medaka build compiler/driver/medaka_cli.mdk` went 0 -> 4896 stderr
-# lines. The `EMPTY` rows below pin that a program with no coherence overlap gets
-# NOTHING on run/build stderr -- so re-widening the filter reds this section
-# instead of shipping as a usability regression nobody graded.
-#
-#   entry | label | verb | assertion
-#     verb in {check, run, build, run-json}  (`medaka build` has NO --json flag)
-#     ⚠️ `check` grades STDERR ONLY here, like the others. The ENTRY module's warnings
-#     go to `check`'s STDOUT (`checkRoute`'s multi-module arm bundles them into the scheme dump), so a
-#     stderr row is specifically about an IMPORTED module's -- which is the half that
-#     was silent.
-#     assertion in:
-#       HAS:<ere>   stderr must match
-#       NOT:<ere>   stderr must NOT match
-#       EMPTY       stderr must be entirely empty
-#       JSON:<code> stderr must PARSE as one JSON document (a real parser, not a
-#                   regex -- the bug this catches is `{...}` preceded by caret art,
-#                   which every substring check passes) AND carry that code
-#       ONCE:<ere>  stderr must match EXACTLY ONCE. `HAS` cannot express this, and
-#                   the difference is a real defect: a same-module overlap inside an
-#                   IMPORTED module is seen by that module's own coherence sweep AND
-#                   by the whole-graph one, so it printed TWICE on run/build where
-#                   `check` printed it once (`cohSoftInScope`)
-VERBS='s6-2-t4-open-goal-deferred.mdk|SINGLE-FILE `W-OPEN-GOAL-COMMITTED` on `run`, which NOTHING in the tree graded before this row -- the code is `test/t4_census.sh`s subject and that tool is report-only. ⚠️ NOT a test of the allowlist: single-file `run`/`build` take `allWarnTriples`, the ONE place they widen past `runBuildWarnCodes`, so this row stays green with the allowlist entry deleted (measured). It guards the UNFILTERED arm; the s6-t4-channel-multimodule rows below guard the filtered one, and neither substitutes for the other|run|HAS:Instance for .Sh. chosen by declaration order
-s6-2-t4-open-goal-deferred.mdk|...and on `build`, the sibling verb of the same widened single-file arm|build|HAS:Instance for .Sh. chosen by declaration order
-s6-2-t4-open-goal-deferred.mdk|...and on `check`, whose stderr carries it even for an ENTRY module -- the baseline the two verbs above had to catch up to, and the only one of the three that was ever audible|check|HAS:Instance for .Sh. chosen by declaration order
-s6-t4-channel-multimodule/main.mdk|🚨 THE ROW THE ALLOWLIST NEVER HAD: `run` surfaces `W-OPEN-GOAL-COMMITTED` for a NON-ENTRY module. This is the only assertion in the tree that consults `runBuildWarnCodes` for this code -- MEASURED by deleting `openGoalCommitWarnCode` from that list and rebuilding, which drops exactly this line while leaving `W-INCOMPARABLE-IMPLS` and every single-file row above untouched. ONCE, with lib.mdks own span, for `s6-1c-multimodule-overlap`s reason: an imported modules site is visible to more than one sweep, so a second occurrence is a real defect and not noise|run|ONCE:lib\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order
-s6-t4-channel-multimodule/main.mdk|...and ONLY the allowlisted code: lib.mdk also carries a deliberate `W-NONEXHAUSTIVE`, an imported modules NON-allowlisted warning. Without it the row above could not tell "the allowlist gained this code" from "the whole matchWarnings channel is surfaced" -- #1185s 0 -> 4896 stderr lines|run|NOT:non-exhaustive
-s6-t4-channel-multimodule/main.mdk|...and `build` reports it too, sharing the multi-module arm with `run` -- the verb that had no warning surface at all before F-3d|build|ONCE:lib\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order
-s6-t4-channel-multimodule/main.mdk|...and `build` withholds that imported `W-NONEXHAUSTIVE`, the same negative half|build|NOT:non-exhaustive
-s6-t4-channel-multimodule/main.mdk|`check` reports it for the IMPORTED module on STDERR. The ENTRY modules own warnings go to `check`s STDOUT, so a stderr row here is specifically about the non-entry position -- the half `dropEntryTriple` exists for, and the position the two verbs above are being compared against|check|ONCE:lib\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order
-s6-t4-channel-multimodule/main.mdk|...and `check` withholds the imported `W-NONEXHAUSTIVE` too|check|NOT:non-exhaustive
-s6-t4-channel-multimodule/main.mdk|`run --json` carries the code in a `Diag` envelope that still PARSES -- the machine surface of the same multi-module channel, graded by a real parser rather than by a substring|run-json|JSON:W-OPEN-GOAL-COMMITTED
-s6-2-t4-open-goal-deferred.mdk|the demoted warning is VISIBLE on `run`, located, in human caret form|run|HAS:Overlapping impls of Sh
-s6-2-t4-open-goal-deferred.mdk|...and human means human: `run` must NOT emit the JSON envelope|run|NOT:^\{"files"
-s6-2-t4-open-goal-deferred.mdk|the demoted warning is VISIBLE on `build` too -- the verb that had NO warning surface at all before F-3d|build|HAS:Overlapping impls of Sh
-s6-2-t4-open-goal-deferred.mdk|`run --json` stderr is a `Diag` JSON envelope (AGENTS.md) and must still PARSE -- human text there is worse than silence, and is what diff_compiler_eval_json caught|run-json|JSON:W-INCOMPARABLE-IMPLS
-s6-c1-duplicate-heads-rejected.mdk|the HARD class still rejects LOUDLY on run (it was never demoted)|run|HAS:Overlapping impls of Tag
-s6-1c-multimodule-overlap/main.mdk|🚨 THE REGRESSION `cohSoftInScope` TRADED FOR THE DE-DUPLICATION: human `check` reported the pair for the ENTRY and for the split-across-modules case but NOTHING AT ALL when it sat in an imported module -- 0 occurrences on either channel while --json/run/build all said 1. Measured across all seven graph positions a pair can occupy. `dropEntryTriple` closes it; this row is the only thing that grades `check` for a NON-ENTRY module|check|ONCE:lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C
-s6-1c-multimodule-overlap/main.mdk|...and ONLY the demoted code: lib.mdk also carries a deliberate W-NONEXHAUSTIVE, an IMPORTED module`s non-coherence warning, which `check` must NOT pull onto stderr. This is what makes the multi-module rows able to fail -- every other fixture in the corpus is clean, so an EMPTY row could not tell "one code" from "the whole channel"|check|NOT:non-exhaustive
-s6-1c-multimodule-overlap/main.mdk|...nor may `run` surface that imported W-NONEXHAUSTIVE|run|NOT:non-exhaustive
-s6-1c-multimodule-overlap/main.mdk|...nor `build`|build|NOT:non-exhaustive
-s6-1c-multimodule-overlap/main.mdk|SAME-MODULE pair inside an IMPORTED module: seen by lib`s own sweep AND the whole-graph one, so it printed TWICE on run before `cohSoftInScope`. EXACTLY ONCE, with lib`s own span|run|ONCE:lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C
-s6-1c-multimodule-overlap/main.mdk|CROSS-MODULE pair: no per-module sweep can see it (one `D` impl each), so `globalCoherenceConflict` alone reports it, naming both owners. The ONLY in-tree coverage of that path -- it had none|run|ONCE:Overlapping impls of D .defined in lib and other.
-s6-1c-multimodule-overlap/main.mdk|...and both reach `build` too|build|HAS:Overlapping impls of D .defined in lib and other.
-s6-1c-unrelated-warning-not-surfaced.mdk|S-warning-parity (#2400/F4, this diff): single-file `run` now surfaces the FULL warning channel, not just the coherence allowlist -- #1185`s cross-module constructor-oracle spew this row used to guard against cannot fire single-file (no imported constructor universe to draw from), so `W-NONEXHAUSTIVE` correctly reaches `run` here now. This row FLIPPED from EMPTY; see the fixture`s own header for the updated spec derivation|run|HAS:non-exhaustive match of .Colour.
-s6-1c-unrelated-warning-not-surfaced.mdk|...and the same on `build` -- single-file `build` shares the widened arm, and #1185`s spew (the 0 -> 4896 lines measurement this row`s name refers to) is a MULTI-MODULE-only failure mode, unaffected here|build|HAS:non-exhaustive match of .Colour.
-s3-min-subsumes.mdk|NEGATIVE CONTROL, single-file: a ranked overlap warns about NOTHING on run. ⚠️ WEAK BY CONSTRUCTION -- this program has no channel warning to withhold, so it cannot detect a widened filter; kept only as a total-silence floor|run|EMPTY
-s3-min-subsumes.mdk|NEGATIVE CONTROL, single-file: ...nor on build|build|EMPTY
-s8-i2-global-instance-env/main.mdk|NEGATIVE CONTROL, MULTI-MODULE: a clean 3-module graph must produce NO run stderr. ⚠️ Same weakness as the row above -- it is a floor, not the discriminator|run|EMPTY
-s8-i2-global-instance-env/main.mdk|NEGATIVE CONTROL, MULTI-MODULE: ...nor build stderr|build|EMPTY'
-
-echo
-echo '=== 5. the demoted warning on EVERY VERB (check / run / build / run --json) ==='
-printf '%s\n' "$VERBS" | while IFS='|' read -r entry label verb assertion; do
-  [ -z "$entry" ] && continue
-  entrypath="$FIXDIR/$entry"
-  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')__$verb"
-  if [ ! -f "$entrypath" ]; then
-    printf 'FAIL verb   %-44s MISSING FIXTURE FILE\n' "$entry"
-    echo "FAIL" >>"$TMP/v5"
-    continue
-  fi
-  # STDERR ALONE, exactly as diff_compiler_eval_json captures it. stdout is the
-  # program's own output and is graded by section 1.
-  case "$verb" in
-    check)    bound "$MEDAKA" check "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
-    run)      bound "$MEDAKA" run "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
-    run-json) bound "$MEDAKA" run --json "$entrypath" >/dev/null 2>"$TMP/$base.err" ;;
-    build)    bound "$MEDAKA" build "$entrypath" -o "$TMP/$base.bin" >/dev/null 2>"$TMP/$base.err" ;;
-    *)        printf 'FAIL verb   %-44s unknown verb %s\n' "$entry" "$verb"; echo "FAIL" >>"$TMP/v5"; continue ;;
-  esac
-  ok=1; detail=''
-  case "$assertion" in
-    EMPTY)
-      if [ -s "$TMP/$base.err" ]; then
-        ok=0; detail="stderr NOT empty ($(wc -l <"$TMP/$base.err") lines): $(head -1 "$TMP/$base.err")"
-      fi
-      ;;
-    HAS:*)
-      pat="${assertion#HAS:}"
-      grep -qE "$pat" "$TMP/$base.err" || { ok=0; detail="stderr lacks /$pat/"; }
-      ;;
-    NOT:*)
-      pat="${assertion#NOT:}"
-      if grep -qE "$pat" "$TMP/$base.err"; then ok=0; detail="stderr matches /$pat/ but must not"; fi
-      ;;
-    ONCE:*)
-      pat="${assertion#ONCE:}"
-      # Grade grep's EXIT STATUS as well as its count, for the same reason section 3
-      # does: >=2 means a BROKEN pattern, which prints nothing and would otherwise
-      # read as "0 matches" -- a vacuous verdict either way.
-      n="$(grep -cE "$pat" "$TMP/$base.err" 2>"$TMP/$base.greperr")"; grc=$?
-      [ -n "$n" ] || n=0
-      if [ "$grc" -gt 1 ]; then
-        ok=0; detail="grep FAILED (exit $grc) on /$pat/: $(head -1 "$TMP/$base.greperr")"
-      elif [ "$n" -ne 1 ]; then
-        ok=0; detail="stderr matches /$pat/ $n time(s), want exactly 1"
-      fi
-      ;;
-    JSON:*)
-      code="${assertion#JSON:}"
-      if python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$TMP/$base.err" 2>"$TMP/$base.jsonerr"; then
-        grep -q "\"code\":\"$code\"" "$TMP/$base.err" || { ok=0; detail="parsed, but no \"code\":\"$code\""; }
-      else
-        ok=0; detail="stderr is NOT valid JSON: $(head -1 "$TMP/$base.jsonerr")"
-      fi
-      ;;
-    *)
-      ok=0; detail="unknown assertion $assertion"
-      ;;
-  esac
-  rm -f "$TMP/$base.bin"
-  if [ "$ok" -eq 1 ]; then
-    printf 'ok   verb   %-44s [%-8s] %s\n' "$entry" "$verb" "$assertion"
-    echo "PASS" >>"$TMP/v5"
-  else
-    printf 'FAIL verb   %-44s [%-8s] %s -- %s\n' "$entry" "$verb" "$assertion" "$detail"
-    printf '     %s\n' "$label" >>"$TMP/failnotes"
-    echo "FAIL" >>"$TMP/v5"
-  fi
-done
-
-# ── Section 6: diagnostic SPANS ──────────────────────────────────────────────
-# WHY THIS SECTION EXISTS, AND WHAT IT COST TO LEARN.
-#
-# Section 1 pins the diagnostic CODE; nothing pinned WHERE the caret lands. During
-# adversarial review of issue 1549's fix (PR 1552) a reviewer found that two
-# pre-existing fixtures below had silently changed output between the base and the fix:
-# same verdict, same code, same message prose, caret moved from the `index` call onto
-# the literal `0` -- `29:15` to `29:25`, and `46:15` to `46:25`. THIS GATE WAS GREEN
-# THROUGH THE WHOLE MOVE, because a code is not a span.
-#
-# The mechanism is worth stating, because it says which fixtures belong here: the
-# ambiguity reject reads `goalSiteLoc`, a `Ref` republished by whichever resolver drain
-# ran last, and falls back to `currentLoc` when it is `None`. Any NEW site that poses a
-# goal to the min-most-specific selector -- 1549's residual reducer became the second
-# one, after `checkNestedReqs` -- inherits that fallback, and because the push dedups on
-# the message, the FIRST, badly-located push wins over the well-located one. So a
-# diagnostic's span is a property that a change nowhere near the diagnostic can move.
-#
-# ⚠️ PIN THE SPAN, NOT THE MESSAGE. The prose is free to change (DIAGNOSTIC-CODES-DESIGN
-# and the must-fail suite both make the same split: code + range stable, prose not).
-# The assertion is the literal `<line>:<col>:` prefix `medaka check` prints, matched
-# against the FIRST diagnostic line for that entry.
-#
-# entry | label | expected `line:col`
-SPANS='s6-c1-rigid-goal-no-call-discriminator.mdk|#1155 the rigid-goal ambiguity reject lands on the `index` CALL, not on its literal argument -- the PR-1552 regression pin (moved to 29:25 while every section above stayed green)|29:15
-s6-c1-rigid-goal-no-minimum.mdk|the same span guarantee for the no-minimum sibling (moved to 46:25 in the same regression)|46:15
-s4-gen-residual-unwitnessed-caller-rejected.mdk|issue 1549: a residual that reached the scheme is discharged AT THE CALL SITE, so the reject lands there -- not at the definition, and not on `main`|36:16
-s4-gen-sig-residual-uncovered-rejected.mdk|issue 1549 gen-sig: the uncovered-residual reject lands at the DEFINITION (the body expression that needs it), which is the half a call-site span cannot distinguish|36:15
-s4-gen-sig-num-result-rejected.mdk|#830 numeric result: missing Num is reported at the body literal, without a caller|2:6
-i7-qual4-gate-num.mdk|§8 I7 qual. 4 (#1539): the synthesized `Num` obligation is reported at the OPERATOR`s left operand, not at the definition or at `main`. ⚠️ These four fixture headers are comment-heavy and a fixture`s LINE COUNT is load-bearing -- a comment-only edit moves this span|36:10
-i7-qual4-gate-eq.mdk|§8 I7 qual. 4 (#1539): same span guarantee for the `==` seam|13:11
-i7-qual4-gate-ord.mdk|§8 I7 qual. 4 (#1539): same span guarantee for the `<` seam. The FIRST diagnostic must be the `Ord` one -- if the `Eq` superclass demand were reported first this row would catch it|13:11
-i7-qual4-gate-semigroup.mdk|§8 I7 qual. 4 (#1539): same span guarantee for the `++` seam|11:10
-s4-requires-depth-exceeded-rejected.mdk|issue 1562: the depth reject is attributed to the METHOD CALL that posed the goal (`tagOf …` in `deep`), through the `goalSiteLoc` the reducer republishes -- NOT to whatever `currentLoc` holds at the generalized groups close, which is the failure mode this whole section exists for|33:9
-s4-gen-residual-mixed-vector-rejected.mdk|issue 1560: the mixed-vector residual is discharged AT THE CALL SITE (`f NoConv True`), like its 1549 sibling -- not at `f`s definition, which is legal on its own|45:16'
-
-echo
-echo '=== 6. diagnostic SPANS (a code is not a caret — PR 1552 moved two of these with every other section green) ==='
-printf '%s\n' "$SPANS" | while IFS='|' read -r entry label want; do
-  [ -z "$entry" ] && continue
-  entrypath="$FIXDIR/$entry"
-  base="$(printf '%s' "$entry" | sed 's#/main\.mdk$##' | tr '/.' '__')"
-  if [ ! -f "$entrypath" ]; then
-    printf 'FAIL span   %-44s MISSING FIXTURE FILE\n' "$entry"
-    echo "FAIL" >>"$TMP/v6"
-    continue
-  fi
-  bound "$MEDAKA" check "$entrypath" >"$TMP/$base.span.out" 2>&1
-  # the first `<file>:<line>:<col>:` prefix check printed, reduced to line:col
-  got="$(sed -n 's/^.*\.mdk:\([0-9][0-9]*:[0-9][0-9]*\):.*$/\1/p' "$TMP/$base.span.out" | head -1)"
-  [ -n "$got" ] || got='(no located diagnostic)'
-  if [ "$got" = "$want" ]; then
-    printf 'ok   span   %-44s %s\n' "$entry" "$want"
-    echo "PASS" >>"$TMP/v6"
-  else
-    printf 'FAIL span   %-44s want %s, got %s\n' "$entry" "$want" "$got"
-    printf '                 %s\n' "$label"
-    echo "FAIL" >>"$TMP/v6"
-  fi
-done
-
 # ── Tally ────────────────────────────────────────────────────────────────────
 # The `printf | while read` loops above run in a SUBSHELL under dash/ash (POSIX
 # permits it and dash does fork the last pipeline stage), so shell variables
@@ -1202,21 +955,21 @@ done
 # FILE, which does, and the totals are derived from that -- never from a
 # variable, and never from an exit code.
 #
-# The verdicts are kept in SEVEN files, one per section, because "did this gate
+# The verdicts are kept in TWO files, one per section, because "did this gate
 # run?" is a PER-SECTION question. A single global count cannot tell a gutted
 # section-3 table from a gate that never had one, and would report `checked 36,
 # 0 failed` over an IR section that made zero observations. Counting per section
-# makes the emptiness REACHABLE and therefore testable.
+# makes the emptiness REACHABLE and therefore testable. Sections 2, 5 and 6
+# moved to `test/diff_compiler_dict_semantics_test.mdk` (sprint
+# the-script-is-not-the-unit, slices S-3/S-4); their own v2/v5/v6 bookkeeping
+# moved with them.
 cnt() { c="$(grep -c "^$2\$" "$TMP/$1" 2>/dev/null || true)"; [ -n "$c" ] || c=0; echo "$c"; }
-p2="$(cnt v2 PASS)"; f2="$(cnt v2 FAIL)"
 p3="$(cnt v3 PASS)"; f3="$(cnt v3 FAIL)"
 p4="$(cnt v4 PASS)"; f4="$(cnt v4 FAIL)"
-p5="$(cnt v5 PASS)"; f5="$(cnt v5 FAIL)"
-p6="$(cnt v6 PASS)"; f6="$(cnt v6 FAIL)"
-n2=$((p2+f2)); n3=$((p3+f3)); n4=$((p4+f4)); n5=$((p5+f5)); n6=$((p6+f6))
-pass=$((p2+p3+p4+p5+p6))
-fail=$((f2+f3+f4+f5+f6))
-asserts=$((n2+n3+n4+n5+n6))
+n3=$((p3+f3)); n4=$((p4+f4))
+pass=$((p3+p4))
+fail=$((f3+f4))
+asserts=$((n3+n4))
 
 if [ -s "$TMP/failnotes" ]; then
   echo
@@ -1226,7 +979,7 @@ fi
 
 echo
 printf '%s: checked %d assertions -- %d passed, %d failed\n' "$(basename "$0")" "$asserts" "$pass" "$fail"
-printf '  schemes %d | emitted-IR %d | decl-order-perm %d | per-verb-warning %d | diag-spans %d\n' "$n2" "$n3" "$n4" "$n5" "$n6"
+printf '  emitted-IR %d | decl-order-perm %d\n' "$n3" "$n4"
 
 # ⚠️ AN EMPTY SECTION IS A FAILURE, NOT A PASS. Three gates in this tree once
 # shelled out to a tool that was not installed, printed `skipping`, and exited 0
@@ -1239,11 +992,8 @@ printf '  schemes %d | emitted-IR %d | decl-order-perm %d | per-verb-warning %d 
 # an emptied hand-written table would -- a self-no-op is not distinguishable
 # from "nothing to check" and must not be treated as one.
 empty=0
-[ "$n2" -eq 0 ] && { echo "FAIL: section 2 (schemes) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$n3" -eq 0 ] && { echo "FAIL: section 3 (emitted IR) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$n4" -eq 0 ] && { echo "FAIL: section 4 (decl-order-perm) made ZERO assertions -- the derived qualifying set was empty." >&2; empty=1; }
-[ "$n5" -eq 0 ] && { echo "FAIL: section 5 (per-verb warning surface) made ZERO assertions -- it did not run." >&2; empty=1; }
-[ "$n6" -eq 0 ] && { echo "FAIL: section 6 (diagnostic spans) made ZERO assertions -- it did not run." >&2; empty=1; }
 [ "$empty" -eq 0 ] || exit 1
 
 [ "$fail" -eq 0 ]

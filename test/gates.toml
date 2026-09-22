@@ -1525,13 +1525,14 @@ sources = ["compiler/backend/*", "compiler/driver/*", "compiler/eval/*", "compil
 corpus = ["test/dict_fixtures"]
 toolchain = ["clang"]
 
-# What is left of that script once the table above moved out: the scheme lines,
-# the emitted-IR asserts, the declaration-order permutation, the per-verb
-# warning surface, and the diagnostic spans. `split-first` because the editorial
-# split is what is still owed — five shapes remain in one file, and the last two
-# become scripts and rows of their own, after which this row and its file go.
-# The corpus is narrowed to what the script actually reads: `must_fail_fixtures`
-# and `typecheck_error_fixtures` appear only inside row labels.
+# What is left of that script once the verdict table (S-3) and the scheme
+# lines, per-verb warning surface and diagnostic spans (S-4) moved out: the
+# emitted-IR asserts and the declaration-order permutation. `split-first`
+# because the editorial split is what is still owed — two shapes remain in
+# one file, and they become a native row of their own, after which this row
+# and its file go. The corpus is narrowed to what the script actually reads:
+# `must_fail_fixtures` and `typecheck_error_fixtures` appear only inside row
+# labels.
 [[gate]]
 name = "diff_compiler_dict_semantics_residue"
 area = "infra"

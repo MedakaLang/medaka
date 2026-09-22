@@ -67,11 +67,18 @@ import compiler_cli_test_support.{
   Agreement(..), checkRunBuild, runMedaka, summarizeSweep, sweepUnits, verdictOf
 }
 import fs.{expectUnitCount, fixtureDirs}
+import io.{runVerb}
+import json.{Json(..), get, parse}
 import list.{somes, sort}
 import path.{basename}
-import string.{contains, endsWith, padRight, replaceAll, stripSuffix, unwords}
+import regex.{Regex, compile, find, findAll, isMatch, mustCompile}
+import string.{
+  contains, endsWith, lines, padRight, replaceAll, stripSuffix, trim, unwords
+}
 import test.{Expectation, fail, pass}
-import test_process.{medakaRoot, testAssertionCount, unrosteredUnits}
+import test_process.{
+  boundedVerb, medakaBin, medakaRoot, testAssertionCount, unrosteredUnits
+}
 
 -- Fixtures are located through MEDAKA_ROOT rather than the working
 -- directory: `medaka gate run` exports it and inherits whatever cwd the
@@ -2486,3 +2493,686 @@ test "the closed test-body defaulting fixture's own cases run natively" =
 
 test "check, run and build agree with every row's verdict, value and codes" =
   sweep
+
+-- # Section 2 -- exact `medaka check` scheme lines
+--
+-- Lifted from the shell gate's `SCHEMES` table. Bare `medaka check` prints
+-- only the user's own top-level bindings, which is why a scheme is legible
+-- at all -- `--types` would bury it under ~120 prelude lines. `want` must
+-- appear VERBATIM as a whole line of `check`'s stdout.
+
+{- | One scheme-line pin: the entry, why the line reads as it does, and the
+   exact line `medaka check`'s stdout must contain. -}
+data SchemeRow = SchemeRow { entry : String, label : String, want : String }
+
+{- | How many rows `schemeTable` owes -- see `tableRows`'s header for why
+   this is written down rather than discovered. -}
+schemeRows : Int
+schemeRows = 17
+
+schemeTable : List SchemeRow
+schemeTable = [
+  SchemeRow {
+    entry = "s1-nary-predicate-scheme-kept.mdk",
+    label =
+      "§1 the 2-ary constraint SURVIVES into the scheme (#607: printed `a -> b -> Int`, constraint gone, at exit 0)",
+    want = "twoParam : Ix a b => a -> b -> Int",
+  },
+  SchemeRow {
+    entry = "s4-joint-residual-rdict-native.mdk",
+    label =
+      "#1560 TYPED SHAPE: reducing the conditional impl leaves exactly one joint two-argument predicate in `f`s principal context",
+    want = "f : Conv c d => a -> b -> String",
+  },
+  SchemeRow {
+    entry = "s4-gen-sig-declared-context-kept.mdk",
+    label =
+      "§4 `gen-sig` the declared context is DISPLAYED even though the body never dispatches (#610: printed `sz2 : a -> Int`)",
+    want = "sz2 : Sz a => a -> Int",
+  },
+  SchemeRow {
+    entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
+    label =
+      "§4 `gen-sig` the superclass-entailed `B a` is DROPPED, not merged (pre-#619 displayed `(B a, C a) =>` and propagated it to every caller)",
+    want = "viaC : C a => a -> Int",
+  },
+  SchemeRow {
+    entry = "s4-gen-sig-superclass-redundant-dropped.mdk",
+    label =
+      "§4 control: the binding that genuinely needs `B a` still shows it, so the row above is not \"constraints are never displayed\"",
+    want = "useB : B a => a -> Int",
+  },
+  SchemeRow {
+    entry = "s4-gen-residual-inferred-context.mdk",
+    label =
+      "§4 `gen` the RESIDUAL of a `requires` discharge IS the principal context (issue 1549: printed `nest : a -> String`, the `Tag a` gone, at exit 0)",
+    want = "nest : Tag a => a -> String",
+  },
+  SchemeRow {
+    entry = "s4-gen-residual-no-requires-control.mdk",
+    label =
+      "§4 `gen` control: with the `requires` gone there is no residual, so the context must stay EMPTY -- the false-reject canary for the row above",
+    want = "nest : a -> String",
+  },
+  SchemeRow {
+    entry = "s4-gen-sig-residual-covered-control.mdk",
+    label =
+      "§4 `gen-sig` + §3 `super`: the residual `Eq a` entailed by the declared `Ord a` is DROPPED, not merged -- the value is True either way, so only this row can see a residual reducer that widened the displayed context",
+    want = "sig2 : Ord a => a -> Bool",
+  },
+  SchemeRow {
+    entry = "s4-gen-residual-mixed-no-requires-control.mdk",
+    label =
+      "ISSUE 1560 control: with the `requires` gone the mixed vector leaves NO residual, so the context must stay EMPTY. The false-reject canary for the widened `anyConcreteHead` guard, and the only row that can see a reducer inventing a context",
+    want = "f : a -> b -> String",
+  },
+  SchemeRow {
+    entry = "s4-gen-rec-inferred-context.mdk",
+    label =
+      "§4 `gen-rec` P` is the GROUP`s, so BOTH bindings generalize over `Sz a` -- not only the one whose body mentions `sz` first",
+    want = "evenSz : Sz a => a -> Int -> Bool",
+  },
+  SchemeRow {
+    entry = "s4-gen-rec-inferred-context.mdk",
+    label = "§4 `gen-rec` the other half of the group",
+    want = "oddSz : Sz a => a -> Int -> Bool",
+  },
+  SchemeRow {
+    entry = "s8-xmod-reexport-alias-perm-ab/main.mdk",
+    label =
+      "#1337 PERMUTATION, ORDERING 1 of 2 -- THE \"ONE SIGNATURE\" HALF (packet Amendment A condition 2). `combine` calls two bindings reached through an ALIAS import of a re-export hub over TWO DIFFERENT definers. Its scheme is the order-invariant this pair asserts: an alias arm that re-bound one definer`s key and not the other`s would leave `H.ga` or `H.gb` unbound and this line would not appear at all",
+    want = "combine : Int -> Int",
+  },
+  SchemeRow {
+    entry = "s8-xmod-reexport-alias-perm-ba/main.mdk",
+    label =
+      "#1337 PERMUTATION, ORDERING 2 of 2 -- THE SAME SIGNATURE from the EXCHANGED declaration order. ⚠️ The two rows are ONE assertion: identical schemes across all orderings of one spelling. Either row alone is satisfied by an order-decided compiler",
+    want = "combine : Int -> Int",
+  },
+  SchemeRow {
+    entry = "s-structured-carry-declared-context-kept.mdk",
+    label =
+      "#1937 the STRUCTURED declared context SURVIVES into the scheme -- THE ONLY OBSERVABLE THAT SEES THIS FIX ON AN ACCEPTING PROGRAM (base printed `f : Wrap Int -> Bool -> String`, the context gone, at exit 0 with the right value). ⚠️ The type is still MONOMORPHISED to `Wrap Int -> Bool` by single-impl improvement, a separate mechanism #1937 does not touch and this slice deliberately did not widen -- do NOT re-pin this to a polymorphic scheme. ⚠️ The predicate renders WITHOUT PARENTHESES (`Conv Wrap Int Bool` for `Conv (Wrap Int) Bool`), which reads as four arguments to a two-parameter interface and does not round-trip through the parser: a printer defect (#1952, `S2: misleading`) that is newly REACHABLE rather than newly broken, because until this fix the context was erased and never printed at all. 🚨 #1952 HAS NOW LANDED (sprint/nary-predicate-slots slice 2, as its permitted rider) and this row is re-pinned to the PARENTHESISED form exactly as the previous sentence instructed: `renderConstraintCtx` renders a predicate argument at ARGUMENT precedence (3), not 2, so a structured argument keeps the parens that make the context round-trip through the parser. Bare-tyvar and nullary-`TCon` arguments are atoms at either precedence, so no other scheme row moves",
+    want = "f : Conv (Wrap Int) Bool => Wrap Int -> Bool -> String",
+  },
+  SchemeRow {
+    entry = "s6-drain-quiescence-inferred-scheme.mdk",
+    label =
+      "§6.3 the QUANTIFIED RECEIVER is the whole claim of the drain pair: `top` generalizes over the very variable the graph-end drain then reports as undetermined. A scheme printed WITHOUT the `Sh a` context would mean the receiver was determined after all and the pair would be measuring nothing",
+    want = "top : Sh a => a -> Int",
+  },
+  SchemeRow {
+    entry = "s6-drain-quiescence-declared-scheme.mdk",
+    label =
+      "§6.3 the declared-scheme twin: the unannotated `relay` inherits the written context of `nonlead` verbatim, which is what carries the quantified receiver to graph end",
+    want = "relay : (Ixd b a, Shb a) => a -> b -> b",
+  },
+  SchemeRow {
+    entry = "s-nary-given-declared-vector-selects.mdk",
+    label =
+      "#1952 on a genuinely POLYMORPHIC multi-argument context, which the row above cannot show because single-impl improvement monomorphises its `a`. Both the structured argument`s parens and the second, bare-tyvar argument are asserted here, so a \"fix\" that parenthesised every argument (`Conv (Wrap a) (b)`) or that dropped back to prec 2 (`Conv Wrap a b`) both go red. At the sprint base `e4587a04` this printed `f : Conv Wrap a b => Wrap a -> b -> String`",
+    want = "f : Conv (Wrap a) b => Wrap a -> b -> String",
+  },
+]
+
+-- # Section 5 -- the DEMOTED warning reaches every verb, and NOTHING ELSE does
+--
+-- Lifted from the shell gate's `VERBS` table (F-3d / #614/#311: a hard
+-- `T-CONFLICTING-IMPL` became the `W-INCOMPARABLE-IMPLS` warning, and a
+-- warning only `check` can see is a loud-to-silent transition on `run` and
+-- `build`). `verb` names which spawn a row grades; `assertion` grades that
+-- spawn's STDERR ALONE -- an imported module's warnings, since the entry
+-- module's own warnings land on `check`'s stdout instead (`checkRoute`'s
+-- multi-module arm), which Section 1 already grades. `AEmpty` rows are half
+-- the section and the more easily lost half: the first fix for the silence
+-- surfaced the whole `matchWarnings` channel (issue 1185's cross-module
+-- constructor-oracle spew, measured 0 -> 4896 stderr lines on
+-- `compiler/driver/medaka_cli.mdk`), so a clean program getting NOTHING on
+-- run/build stderr is what pins that the filter stayed narrow.
+
+data VAssertion =
+  | AEmpty
+  | AHas String
+  | ANot String
+  | AJson String
+  | AOnce String
+
+{- | One per-verb warning-surface pin: the entry, why the row reads as it
+   does, which verb to spawn, and what its stderr owes.
+
+   `verb` is one of `"check"`, `"run"`, `"run-json"`, `"build"` --
+   `medaka build` has no `--json` flag. `AJson` parses stderr as ONE JSON
+   document with a real parser (the bug it catches is `{...}` preceded by
+   caret art, which a substring check cannot see) and requires that code.
+   `AOnce` matches exactly once, which `AHas` cannot express: a same-module
+   overlap inside an imported module is seen by both that module's own
+   coherence sweep and the whole-graph one. -}
+data VerbRow = VerbRow {
+  ventry : String,
+  vlabel : String,
+  verb : String,
+  assertion : VAssertion,
+}
+
+{- | How many rows `verbTable` owes -- see `tableRows`'s header for why this
+   is written down rather than discovered. -}
+verbRows : Int
+verbRows = 28
+
+verbTable : List VerbRow
+verbTable = [
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "SINGLE-FILE `W-OPEN-GOAL-COMMITTED` on `run`, which NOTHING in the tree graded before this row -- the code is `test/t4_census.sh`s subject and that tool is report-only. ⚠️ NOT a test of the allowlist: single-file `run`/`build` take `allWarnTriples`, the ONE place they widen past `runBuildWarnCodes`, so this row stays green with the allowlist entry deleted (measured). It guards the UNFILTERED arm; the s6-t4-channel-multimodule rows below guard the filtered one, and neither substitutes for the other",
+    verb = "run",
+    assertion = AHas "Instance for .Sh. chosen by declaration order",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "...and on `build`, the sibling verb of the same widened single-file arm",
+    verb = "build",
+    assertion = AHas "Instance for .Sh. chosen by declaration order",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "...and on `check`, whose stderr carries it even for an ENTRY module -- the baseline the two verbs above had to catch up to, and the only one of the three that was ever audible",
+    verb = "check",
+    assertion = AHas "Instance for .Sh. chosen by declaration order",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "🚨 THE ROW THE ALLOWLIST NEVER HAD: `run` surfaces `W-OPEN-GOAL-COMMITTED` for a NON-ENTRY module. This is the only assertion in the tree that consults `runBuildWarnCodes` for this code -- MEASURED by deleting `openGoalCommitWarnCode` from that list and rebuilding, which drops exactly this line while leaving `W-INCOMPARABLE-IMPLS` and every single-file row above untouched. ONCE, with lib.mdks own span, for `s6-1c-multimodule-overlap`s reason: an imported modules site is visible to more than one sweep, so a second occurrence is a real defect and not noise",
+    verb = "run",
+    assertion =
+      AOnce
+        "lib\\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "...and ONLY the allowlisted code: lib.mdk also carries a deliberate `W-NONEXHAUSTIVE`, an imported modules NON-allowlisted warning. Without it the row above could not tell \"the allowlist gained this code\" from \"the whole matchWarnings channel is surfaced\" -- #1185s 0 -> 4896 stderr lines",
+    verb = "run",
+    assertion = ANot "non-exhaustive",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "...and `build` reports it too, sharing the multi-module arm with `run` -- the verb that had no warning surface at all before F-3d",
+    verb = "build",
+    assertion =
+      AOnce
+        "lib\\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "...and `build` withholds that imported `W-NONEXHAUSTIVE`, the same negative half",
+    verb = "build",
+    assertion = ANot "non-exhaustive",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "`check` reports it for the IMPORTED module on STDERR. The ENTRY modules own warnings go to `check`s STDOUT, so a stderr row here is specifically about the non-entry position -- the half `dropEntryTriple` exists for, and the position the two verbs above are being compared against",
+    verb = "check",
+    assertion =
+      AOnce
+        "lib\\.mdk:[0-9]+:[0-9]+: Instance for .Sh. chosen by declaration order",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel = "...and `check` withholds the imported `W-NONEXHAUSTIVE` too",
+    verb = "check",
+    assertion = ANot "non-exhaustive",
+  },
+  VerbRow {
+    ventry = "s6-t4-channel-multimodule/main.mdk",
+    vlabel =
+      "`run --json` carries the code in a `Diag` envelope that still PARSES -- the machine surface of the same multi-module channel, graded by a real parser rather than by a substring",
+    verb = "run-json",
+    assertion = AJson "W-OPEN-GOAL-COMMITTED",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "the demoted warning is VISIBLE on `run`, located, in human caret form",
+    verb = "run",
+    assertion = AHas "Overlapping impls of Sh",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel = "...and human means human: `run` must NOT emit the JSON envelope",
+    verb = "run",
+    assertion = ANot "^\\{\"files\"",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "the demoted warning is VISIBLE on `build` too -- the verb that had NO warning surface at all before F-3d",
+    verb = "build",
+    assertion = AHas "Overlapping impls of Sh",
+  },
+  VerbRow {
+    ventry = "s6-2-t4-open-goal-deferred.mdk",
+    vlabel =
+      "`run --json` stderr is a `Diag` JSON envelope (AGENTS.md) and must still PARSE -- human text there is worse than silence, and is what diff_compiler_eval_json caught",
+    verb = "run-json",
+    assertion = AJson "W-INCOMPARABLE-IMPLS",
+  },
+  VerbRow {
+    ventry = "s6-c1-duplicate-heads-rejected.mdk",
+    vlabel =
+      "the HARD class still rejects LOUDLY on run (it was never demoted)",
+    verb = "run",
+    assertion = AHas "Overlapping impls of Tag",
+  },
+  VerbRow {
+    ventry = "s6-1c-multimodule-overlap/main.mdk",
+    vlabel =
+      "🚨 THE REGRESSION `cohSoftInScope` TRADED FOR THE DE-DUPLICATION: human `check` reported the pair for the ENTRY and for the split-across-modules case but NOTHING AT ALL when it sat in an imported module -- 0 occurrences on either channel while --json/run/build all said 1. Measured across all seven graph positions a pair can occupy. `dropEntryTriple` closes it; this row is the only thing that grades `check` for a NON-ENTRY module",
+    verb = "check",
+    assertion = AOnce "lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C",
+  },
+  VerbRow {
+    ventry = "s6-1c-multimodule-overlap/main.mdk",
+    vlabel =
+      "...and ONLY the demoted code: lib.mdk also carries a deliberate W-NONEXHAUSTIVE, an IMPORTED module`s non-coherence warning, which `check` must NOT pull onto stderr. This is what makes the multi-module rows able to fail -- every other fixture in the corpus is clean, so an EMPTY row could not tell \"one code\" from \"the whole channel\"",
+    verb = "check",
+    assertion = ANot "non-exhaustive",
+  },
+  VerbRow {
+    ventry = "s6-1c-multimodule-overlap/main.mdk",
+    vlabel = "...nor may `run` surface that imported W-NONEXHAUSTIVE",
+    verb = "run",
+    assertion = ANot "non-exhaustive",
+  },
+  VerbRow {
+    ventry = "s6-1c-multimodule-overlap/main.mdk",
+    vlabel = "...nor `build`",
+    verb = "build",
+    assertion = ANot "non-exhaustive",
+  },
+  VerbRow {
+    ventry = "s6-1c-multimodule-overlap/main.mdk",
+    vlabel =
+      "SAME-MODULE pair inside an IMPORTED module: seen by lib`s own sweep AND the whole-graph one, so it printed TWICE on run before `cohSoftInScope`. EXACTLY ONCE, with lib`s own span",
+    verb = "run",
+    assertion = AOnce "lib.mdk:[0-9]+:[0-9]+: Overlapping impls of C",
+  },
+  VerbRow {
+    ventry = "s6-1c-multimodule-overlap/main.mdk",
+    vlabel =
+      "CROSS-MODULE pair: no per-module sweep can see it (one `D` impl each), so `globalCoherenceConflict` alone reports it, naming both owners. The ONLY in-tree coverage of that path -- it had none",
+    verb = "run",
+    assertion = AOnce "Overlapping impls of D .defined in lib and other.",
+  },
+  VerbRow {
+    ventry = "s6-1c-multimodule-overlap/main.mdk",
+    vlabel = "...and both reach `build` too",
+    verb = "build",
+    assertion = AHas "Overlapping impls of D .defined in lib and other.",
+  },
+  VerbRow {
+    ventry = "s6-1c-unrelated-warning-not-surfaced.mdk",
+    vlabel =
+      "S-warning-parity (#2400/F4, this diff): single-file `run` now surfaces the FULL warning channel, not just the coherence allowlist -- #1185`s cross-module constructor-oracle spew this row used to guard against cannot fire single-file (no imported constructor universe to draw from), so `W-NONEXHAUSTIVE` correctly reaches `run` here now. This row FLIPPED from EMPTY; see the fixture`s own header for the updated spec derivation",
+    verb = "run",
+    assertion = AHas "non-exhaustive match of .Colour.",
+  },
+  VerbRow {
+    ventry = "s6-1c-unrelated-warning-not-surfaced.mdk",
+    vlabel =
+      "...and the same on `build` -- single-file `build` shares the widened arm, and #1185`s spew (the 0 -> 4896 lines measurement this row`s name refers to) is a MULTI-MODULE-only failure mode, unaffected here",
+    verb = "build",
+    assertion = AHas "non-exhaustive match of .Colour.",
+  },
+  VerbRow {
+    ventry = "s3-min-subsumes.mdk",
+    vlabel =
+      "NEGATIVE CONTROL, single-file: a ranked overlap warns about NOTHING on run. ⚠️ WEAK BY CONSTRUCTION -- this program has no channel warning to withhold, so it cannot detect a widened filter; kept only as a total-silence floor",
+    verb = "run",
+    assertion = AEmpty,
+  },
+  VerbRow {
+    ventry = "s3-min-subsumes.mdk",
+    vlabel = "NEGATIVE CONTROL, single-file: ...nor on build",
+    verb = "build",
+    assertion = AEmpty,
+  },
+  VerbRow {
+    ventry = "s8-i2-global-instance-env/main.mdk",
+    vlabel =
+      "NEGATIVE CONTROL, MULTI-MODULE: a clean 3-module graph must produce NO run stderr. ⚠️ Same weakness as the row above -- it is a floor, not the discriminator",
+    verb = "run",
+    assertion = AEmpty,
+  },
+  VerbRow {
+    ventry = "s8-i2-global-instance-env/main.mdk",
+    vlabel = "NEGATIVE CONTROL, MULTI-MODULE: ...nor build stderr",
+    verb = "build",
+    assertion = AEmpty,
+  },
+]
+
+-- # Section 6 -- diagnostic SPANS
+--
+-- Section 1 pins the diagnostic CODE; nothing pins WHERE the caret lands. A
+-- diagnostic's span is a property a change nowhere near the diagnostic can
+-- move: PR 1552 moved two of these fixtures' spans (`29:15` -> `29:25`,
+-- `46:15` -> `46:25`) while every code/value/verdict assertion in the tree
+-- stayed green, because `goalSiteLoc` falls back to `currentLoc` and a
+-- dedup-on-message push lets a badly-located site win. PIN THE SPAN, NOT THE
+-- MESSAGE -- prose is free to change (`DIAGNOSTIC-CODES-DESIGN.md`); `want`
+-- is matched against the FIRST `<file>:<line>:<col>:` prefix `medaka check`
+-- prints for the entry.
+
+{- | One diagnostic-span pin: the entry, why the span lands where it does,
+   and the expected `line:col`. -}
+data SpanRow = SpanRow { entry : String, label : String, want : String }
+
+{- | How many rows `spanTable` owes -- see `tableRows`'s header for why this
+   is written down rather than discovered. -}
+spanRows : Int
+spanRows = 11
+
+spanTable : List SpanRow
+spanTable = [
+  SpanRow {
+    entry = "s6-c1-rigid-goal-no-call-discriminator.mdk",
+    label =
+      "#1155 the rigid-goal ambiguity reject lands on the `index` CALL, not on its literal argument -- the PR-1552 regression pin (moved to 29:25 while every section above stayed green)",
+    want = "29:15",
+  },
+  SpanRow {
+    entry = "s6-c1-rigid-goal-no-minimum.mdk",
+    label =
+      "the same span guarantee for the no-minimum sibling (moved to 46:25 in the same regression)",
+    want = "46:15",
+  },
+  SpanRow {
+    entry = "s4-gen-residual-unwitnessed-caller-rejected.mdk",
+    label =
+      "issue 1549: a residual that reached the scheme is discharged AT THE CALL SITE, so the reject lands there -- not at the definition, and not on `main`",
+    want = "36:16",
+  },
+  SpanRow {
+    entry = "s4-gen-sig-residual-uncovered-rejected.mdk",
+    label =
+      "issue 1549 gen-sig: the uncovered-residual reject lands at the DEFINITION (the body expression that needs it), which is the half a call-site span cannot distinguish",
+    want = "36:15",
+  },
+  SpanRow {
+    entry = "s4-gen-sig-num-result-rejected.mdk",
+    label =
+      "#830 numeric result: missing Num is reported at the body literal, without a caller",
+    want = "2:6",
+  },
+  SpanRow {
+    entry = "i7-qual4-gate-num.mdk",
+    label =
+      "§8 I7 qual. 4 (#1539): the synthesized `Num` obligation is reported at the OPERATOR`s left operand, not at the definition or at `main`. ⚠️ These four fixture headers are comment-heavy and a fixture`s LINE COUNT is load-bearing -- a comment-only edit moves this span",
+    want = "36:10",
+  },
+  SpanRow {
+    entry = "i7-qual4-gate-eq.mdk",
+    label = "§8 I7 qual. 4 (#1539): same span guarantee for the `==` seam",
+    want = "13:11",
+  },
+  SpanRow {
+    entry = "i7-qual4-gate-ord.mdk",
+    label =
+      "§8 I7 qual. 4 (#1539): same span guarantee for the `<` seam. The FIRST diagnostic must be the `Ord` one -- if the `Eq` superclass demand were reported first this row would catch it",
+    want = "13:11",
+  },
+  SpanRow {
+    entry = "i7-qual4-gate-semigroup.mdk",
+    label = "§8 I7 qual. 4 (#1539): same span guarantee for the `++` seam",
+    want = "11:10",
+  },
+  SpanRow {
+    entry = "s4-requires-depth-exceeded-rejected.mdk",
+    label =
+      "issue 1562: the depth reject is attributed to the METHOD CALL that posed the goal (`tagOf …` in `deep`), through the `goalSiteLoc` the reducer republishes -- NOT to whatever `currentLoc` holds at the generalized groups close, which is the failure mode this whole section exists for",
+    want = "33:9",
+  },
+  SpanRow {
+    entry = "s4-gen-residual-mixed-vector-rejected.mdk",
+    label =
+      "issue 1560: the mixed-vector residual is discharged AT THE CALL SITE (`f NoConv True`), like its 1549 sibling -- not at `f`s definition, which is legal on its own",
+    want = "45:16",
+  },
+]
+
+{- | One row's graded outcome, shared by Sections 2, 5 and 6: none of the
+   three shapes has verdict/value/code columns of its own to report, so
+   they share this instead of each inventing a narrower `Graded`. -}
+data SimpleGraded = SimpleGraded { sentry : String, sok : Bool, snote : String }
+
+simpleFailure : SimpleGraded -> Option String
+simpleFailure g =
+  if g.sok then None else Some "  \{padRight 60 ' ' g.sentry}\{g.snote}"
+
+-- # Section 2 grading
+
+gradeScheme : String -> SchemeRow -> <Exec "_", FileRead "_", IO> SimpleGraded
+gradeScheme _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
+  Err e => SimpleGraded {
+    sentry = r.entry,
+    sok = False,
+    snote = " could not run `medaka check`: \{e}",
+  }
+  Ok (code, out, _) =>
+    if code /= 0 then
+      SimpleGraded {
+        sentry = r.entry,
+        sok = False,
+        snote =
+          " `medaka check` exited \{intToString code}, want 0 (every scheme row is an ACCEPT fixture)",
+      }
+    else if elem r.want (lines out) then
+      SimpleGraded { sentry = r.entry, sok = True, snote = "" }
+    else
+      SimpleGraded {
+        sentry = r.entry,
+        sok = False,
+        snote = " want exactly line \{debug r.want} -- not in stdout",
+      }
+
+summarizeSchemes : Int -> List String -> Expectation
+summarizeSchemes graded failures =
+  if graded /= schemeRows then
+    fail
+      "swept \{intToString graded} rows, want exactly \{intToString schemeRows}"
+  else
+    summarizeSweep graded failures
+
+schemeSweep : <Exec "_", FileRead "_", IO> Expectation
+schemeSweep = sweepUnits schemeTable gradeScheme simpleFailure summarizeSchemes
+
+-- # Section 5 grading
+
+spawnVerb : String ->
+  String ->
+  String ->
+  <Exec "_", IO> Result String (Int, String, String)
+spawnVerb _ "check" entrypath = boundedVerb medakaBin ["check", entrypath]
+spawnVerb _ "run" entrypath = boundedVerb medakaBin ["run", entrypath]
+spawnVerb _ "run-json" entrypath =
+  boundedVerb medakaBin ["run", "--json", entrypath]
+-- A `build` row grades only the SPAWN's stderr -- it never runs or re-reads
+-- the binary -- so it mints and removes its OWN scratch dir around the one
+-- call rather than sharing `sweepUnits`'s outer one, which this section's
+-- other three verbs never touch at all. It mints that directory through
+-- `freshScratchDir` (below), NOT the stdlib `scratchDir` -- `scratchDir` is a
+-- nullary top-level binding, so under Medaka's lazy-toplevel-nullary rule its
+-- one `mktemp -d` runs ONCE and every later reference (including one already
+-- forced and removed by an earlier sweep in this same process) replays that
+-- same, since-deleted path.
+spawnVerb _ "build" entrypath = match freshScratchDir entrypath
+  Err e => Err "could not make a scratch directory: \{e}"
+  Ok own =>
+    let r =
+      boundedVerb medakaBin ["build", entrypath, "-o", "\{own}/probe.vbin"]
+    let _ = runVerb "rm" ["-rf", own]
+    r
+spawnVerb _ v _ = Err "unknown verb \{v}"
+
+-- `scratchDir` (`test_process.mdk`) is a nullary top-level binding, memoized
+-- after its first force for the rest of the process -- fine for every
+-- existing caller, which fetches it exactly ONCE per sweep. A `build` row
+-- needs a FRESH directory per call, so it goes around that binding through a
+-- 1-argument twin instead (the argument only defeats the no-argument
+-- memoization rule; the value itself is unused).
+freshScratchDir : String -> <Exec "_"> Result String String
+freshScratchDir _ = match runVerb "mktemp" ["-d"]
+  Err e => Err e
+  Ok (0, out, _) => Ok (trim out)
+  Ok (code, _, err) => Err "mktemp -d exited \{intToString code}: \{err}"
+
+-- Grading an assertion against one verb's STDERR. `>= 2` from a malformed
+-- pattern is graded FAIL rather than read as "0 matches" -- the same
+-- discipline the shell gate's own grep-exit-status check applied, so a
+-- broken pattern cannot silently pass by looking like an absent one.
+gradeAssertion : VAssertion -> String -> (Bool, String)
+gradeAssertion AEmpty err =
+  if err == "" then
+    (True, "")
+  else
+    (False, " stderr not empty: \{debug (firstLine err)}")
+gradeAssertion (AHas pat) err = match compile pat
+  Err e => (False, " bad pattern /\{pat}/: \{e.message}")
+  Ok re =>
+    if isMatch re err then (True, "") else (False, " stderr lacks /\{pat}/")
+gradeAssertion (ANot pat) err = match compile pat
+  Err e => (False, " bad pattern /\{pat}/: \{e.message}")
+  Ok re =>
+    if isMatch re err then
+      (False, " stderr matches /\{pat}/ but must not")
+    else
+      (True, "")
+gradeAssertion (AOnce pat) err = match compile pat
+  Err e => (False, " bad pattern /\{pat}/: \{e.message}")
+  Ok re =>
+    let n = length (findAll re err)
+    if n == 1 then
+      (True, "")
+    else
+      (
+        False,
+        " stderr matches /\{pat}/ \{intToString n} time(s), want exactly 1",
+      )
+gradeAssertion (AJson code) err = match parse err
+  Err e => (False, " stderr is NOT valid JSON: \{e}")
+  Ok doc =>
+    if elem code (diagCodes doc) then
+      (True, "")
+    else
+      (False, " parsed, but no diagnostic carries code \{debug code}")
+
+firstLine : String -> String
+firstLine s = match lines s
+  l :: _ => l
+  [] => ""
+
+diagCodes : Json -> List String
+diagCodes doc = match get "files" doc
+  Some (JArray files) => flatMap fileDiagCodes (toList files)
+  _ => []
+
+fileDiagCodes : Json -> List String
+fileDiagCodes f = match get "diagnostics" f
+  Some (JArray diags) => somes (map diagCode (toList diags))
+  _ => []
+
+diagCode : Json -> Option String
+diagCode d = match get "code" d
+  Some (JString c) => Some c
+  _ => None
+
+gradeVerbRow : String -> VerbRow -> <Exec "_", IO> SimpleGraded
+gradeVerbRow scratch r =
+  let entrypath = "\{corpus}/\{r.ventry}"
+  match spawnVerb scratch r.verb entrypath
+    Err e => SimpleGraded {
+      sentry = "\{r.ventry} [\{r.verb}]",
+      sok = False,
+      snote = " could not run `medaka \{r.verb}`: \{e}",
+    }
+    Ok (_, _, err) =>
+      let (ok, note) = gradeAssertion r.assertion err
+      SimpleGraded {
+        sentry = "\{r.ventry} [\{r.verb}]",
+        sok = ok,
+        snote = note,
+      }
+
+summarizeVerbs : Int -> List String -> Expectation
+summarizeVerbs graded failures =
+  if graded /= verbRows then
+    fail
+      "swept \{intToString graded} rows, want exactly \{intToString verbRows}"
+  else
+    summarizeSweep graded failures
+
+verbSweep : <Exec "_", FileRead "_", IO> Expectation
+verbSweep = sweepUnits verbTable gradeVerbRow simpleFailure summarizeVerbs
+
+-- # Section 6 grading
+
+spanRe : Regex
+spanRe = mustCompile "\\.mdk:([0-9]+):([0-9]+):"
+
+firstSpan : String -> String
+firstSpan out = match find spanRe out
+  Some m => match m.groups
+    (Some g1) :: (Some g2) :: _ => "\{g1.text}:\{g2.text}"
+    _ => "(no located diagnostic)"
+  None => "(no located diagnostic)"
+
+gradeSpan : String -> SpanRow -> <Exec "_", IO> SimpleGraded
+gradeSpan _ r = match boundedVerb medakaBin ["check", "\{corpus}/\{r.entry}"]
+  Err e => SimpleGraded {
+    sentry = r.entry,
+    sok = False,
+    snote = " could not run `medaka check`: \{e}",
+  }
+  Ok (code, out, err) =>
+    if code == 0 then
+      SimpleGraded {
+        sentry = r.entry,
+        sok = False,
+        snote =
+          " `medaka check` exited 0, want nonzero (every span row is a REJECT fixture)",
+      }
+    else
+      let got = firstSpan (out ++ err)
+      if got == r.want then
+        SimpleGraded { sentry = r.entry, sok = True, snote = "" }
+      else
+        SimpleGraded {
+          sentry = r.entry,
+          sok = False,
+          snote = " want \{r.want}, got \{got}",
+        }
+
+summarizeSpans : Int -> List String -> Expectation
+summarizeSpans graded failures =
+  if graded /= spanRows then
+    fail
+      "swept \{intToString graded} rows, want exactly \{intToString spanRows}"
+  else
+    summarizeSweep graded failures
+
+spanSweep : <Exec "_", FileRead "_", IO> Expectation
+spanSweep = sweepUnits spanTable gradeSpan simpleFailure summarizeSpans
+
+test "medaka check prints every pinned scheme line verbatim" = schemeSweep
+
+test "the demoted warning reaches every verb, and only the demoted warning" =
+  verbSweep
+
+test "every pinned diagnostic lands at its exact line:col" = spanSweep
