@@ -1,16 +1,17 @@
 -- Sibling test module for `compiler/frontend/resolve.mdk` ([P-TEST-SIBLING]).
 --
 -- #1685: `ModuleExports` carried nine export-namespace fields and only
--- seven had a `reExp<Field>From` re-export companion — the gap this sprint's
--- earlier slices closed instance by instance (`UseWild`'s missing
--- interfaces, the constructor/field re-export hop). A hand-copied roster of
--- "these nine fields need these seven companions" would have re-asserted
--- that exact fact and gone stale the same way the original count did, so
--- this test instead PARSES `resolve.mdk`'s own current source with the
--- compiler's own frontend, derives `ModuleExports`' field list and the set
--- of top-level function names from that parse, and checks the naming
--- convention generically — a tenth field added later without its
--- `reExp<Field>From` companion reds this test without anyone updating it.
+-- seven had a re-export rule — a gap closed instance by instance
+-- (`UseWild`'s missing interfaces, the constructor/field re-export hop).
+-- Each field's projection, direct builder and carriage rule now live on one
+-- `exp<Suffix>` → `ns<Suffix>` descriptor in `resolve.mdk`'s
+-- export-namespace table. A hand-copied roster of "these nine fields need
+-- these nine descriptors" would go stale the same way the original count
+-- did, so this test instead parses `resolve.mdk`'s own current source with
+-- the compiler's own frontend, derives `ModuleExports`' field list and the
+-- set of top-level binding names from that parse, and checks the naming
+-- convention generically — a tenth field added later with no descriptor
+-- reds this test without anyone updating it.
 --
 -- `--native`: deriving the field list from the LIVE file needs `readFile`,
 -- an extern the interpreter's test capability list (`testCapableExterns`,
@@ -46,43 +47,37 @@ flatMapVariants (_ :: rest) = flatMapVariants rest
 fieldName : Field -> String
 fieldName (Field n _) = n
 
--- Every top-level function name resolve.mdk defines (one entry per clause,
--- duplicates included — only membership is ever asked of this list).
+-- Every top-level binding name resolve.mdk defines (one entry per clause,
+-- duplicates included — only membership is ever asked of this list). A
+-- nullary binding like `nsValues = ExpNs { … }` is a `DFunDef` with no
+-- parameters, so the nine descriptors are in here.
 topLevelFunNames : List Decl -> List String
 topLevelFunNames [] = []
 topLevelFunNames ((DFunDef _ n _ _) :: rest) = n :: topLevelFunNames rest
 topLevelFunNames ((DAttrib _ d) :: rest) = topLevelFunNames (d :: rest)
 topLevelFunNames (_ :: rest) = topLevelFunNames rest
 
--- `expNewtypeCtors` is the one export-namespace field with no
--- `reExp*From` companion BY DESIGN: a `newtype`'s constructor is
--- unconditionally module-private (#1311, `resolve.mdk`'s own comment on
--- `expNewtypeCtors`), so there is nothing for `export import` to re-export
--- and no companion to write.
-fieldsExemptFromCompanion : List String
-fieldsExemptFromCompanion = ["expNewtypeCtors"]
-
 -- A field not prefixed `exp` (just `modId`) names no export namespace and
--- needs no companion; `stripPrefix` returning `None` skips it on its own,
--- with no name needing to be hand-listed.
-requiredCompanion : String -> Option String
-requiredCompanion field =
-  map (suffix => "reExp" ++ suffix ++ "From") (stripPrefix "exp" field)
+-- needs no descriptor; `stripPrefix` returning `None` skips it on its own,
+-- with no name needing to be hand-listed. There are no other exemptions:
+-- every export namespace has a descriptor, `expNewtypeCtors` included —
+-- its carriage rule is `noCarry`, which is how the table states that a
+-- `newtype`'s module-private constructor (#1311) crosses no `export import`
+-- hop.
+requiredNsValue : String -> Option String
+requiredNsValue field = map ("ns" ++ _) (stripPrefix "exp" field)
 
-missingCompanion : List String -> String -> Bool
-missingCompanion funNames field =
-  not (contains field fieldsExemptFromCompanion)
-    && (match requiredCompanion field
-      Some companion => not (contains companion funNames)
-      None => False)
+missingNsValue : List String -> String -> Bool
+missingNsValue funNames field = match requiredNsValue field
+  Some nsValue => not (contains nsValue funNames)
+  None => False
 
-missingCompanions : List String -> List String -> List String
-missingCompanions fields funNames =
-  filterList (missingCompanion funNames) fields
+missingNsValues : List String -> List String -> List String
+missingNsValues fields funNames = filterList (missingNsValue funNames) fields
 
 -- A parse that lands on the wrong file, or a `ModuleExports`/`exp*` rename
 -- the parse no longer matches, makes `fields` silently `[]` — the
--- `expectEqual [] (missingCompanions ...)` below would then pass vacuously.
+-- `expectEqual [] (missingNsValues ...)` below would then pass vacuously.
 -- This floor keeps that failure loud: `ModuleExports` has never had fewer
 -- than nine export-namespace fields.
 test "the field derivation itself is non-vacuous — at least nine ModuleExports fields are found" =
@@ -92,11 +87,11 @@ test "the field derivation itself is non-vacuous — at least nine ModuleExports
       let fields = moduleExportsFields (parse src)
       expectTrue (length fields >= 9)
 
-test "every ModuleExports export-namespace field has a reExp*From companion, derived from resolve.mdk's own source" =
+test "every ModuleExports export-namespace field has an ns* descriptor, derived from resolve.mdk's own source" =
   match readFile resolveSourcePath
     Err e => expectEqual "read \{resolveSourcePath}" "failed: \{e}"
     Ok src =>
       let decls = parse src
       let fields = moduleExportsFields decls
       let funNames = topLevelFunNames decls
-      expectEqual [] (missingCompanions fields funNames)
+      expectEqual [] (missingNsValues fields funNames)
