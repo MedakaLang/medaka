@@ -1,0 +1,6 @@
+-- The single declarer.  `Account` is exported abstractly (`export data`, no
+-- `public`): the type is importable, its constructor is not.  `Palette` is
+-- `public export data` so the CONTROL row below has a working ctor to reach
+-- through the same alias.
+export data Account = Account Int
+public export data Palette = Warm | Cool

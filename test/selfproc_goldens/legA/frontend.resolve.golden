@@ -1,7 +1,12 @@
+abstractlyExportedTypes : ModuleExports -> List String
 addIfaceMethods : String -> List String -> Map String String -> Map String String
 addImportProvenance : Map String (List String) -> String -> List String -> Map String (List String)
 addProvenance : Map String (List String) -> String -> String -> Map String (List String)
 addStrippedCtorProv : Map String (List String) -> UsePath -> List String -> Map String (List String)
+aliasAbstractCtorErrs : Env -> String -> Option Loc -> List ResError
+aliasAbstractCtorMod : Env -> String -> Option String
+aliasAbstractCtors : Map String ModuleExports -> List Decl -> List (String, String)
+aliasAbstractCtorsFrom : Map String ModuleExports -> UsePath -> List (String, String)
 aliasCtx : List String -> Map String TyConOrigin -> AliasCtx
 aliasIfaceMethods : UsePath -> List (String, List String) -> List (String, List String)
 aliasOfUsePath : UsePath -> List String
@@ -107,6 +112,7 @@ dedupResErrors : List ResError -> List ResError
 deleteAllStr : List String -> Map String Unit -> Map String Unit
 directIn : ExpNs a -> List Decl -> List a
 dotDotMemberNames : List UseMember -> List String
+dottedBare : String -> String
 dropLocOfExpanded : (String, String, Loc) -> (String, String)
 dupClauseTail : Option Loc -> String -> Bool -> List FunClause -> List ResError
 dupErr : String -> String -> ResError

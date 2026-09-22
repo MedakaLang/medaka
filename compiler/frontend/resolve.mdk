@@ -315,6 +315,7 @@ public export data Env = Env {
   ambiguous : List (String, List String),
   ctorAmbiguous : List (String, List String),
   ctorAliasShadow : List (String, String),
+  aliasAbstractCtor : List (String, String),
   typeAmbiguous : List (String, List String),
   ifaceAmbiguous : List (String, List String),
   internalGuard : OrdMap Unit,
@@ -808,6 +809,16 @@ checkVar cur env scope n
   -- untrusted module ⇒ compile error (see internalExterns / Env.internalGuard).
   | not (scopeMem n scope) && omHasKey n env.internalGuard =
     [InternalExternAccess n cur]
+  -- `Alias.Ctor` where the aliased module exports `Ctor`'s type ABSTRACTLY
+  -- (#3313), checked BEFORE the `lookupValue` split below: `env.imported`
+  -- binds the dotted spelling once a TYPE of that name is exported (a type
+  -- and a same-named abstract constructor share one string under an alias),
+  -- so `lookupValue` already reports this occurrence bound and the generic
+  -- unbound path below is never reached for it — the alias and the type both
+  -- resolve, only the constructor is hidden, and that is a distinct verdict
+  -- from either "bound" or "generically unbound".
+  | not (scopeMem n scope) && isSome (aliasAbstractCtorMod env n) =
+    aliasAbstractCtorErrs env n cur
   | not (lookupValue env scope n) = unboundVarErrors cur env scope n
   -- use-time ambiguity: resolves, not shadowed by a local, exported by ≥2
   -- non-core modules (same-module top-levels already excluded from the set).
@@ -895,6 +906,34 @@ ctorAmbigMods env n = match lookupAssoc n env.ctorAmbiguous
 -- spelling, so it can only answer at an occurrence the author actually wrote.
 aliasShadowedCtorMod : Env -> String -> Option String
 aliasShadowedCtorMod env n = lookupAssoc n env.ctorAliasShadow
+
+-- The alias-qualified spelling's ABSTRACT-EXPORT peer: the aliased module,
+-- when the DOTTED spelling names a type that module exports abstractly
+-- (`export data`, no `public`) — an occurrence resolve otherwise reports as a
+-- bare `Unbound variable`, though the alias and the type both resolve; only
+-- the constructor is hidden.  Keyed by the dotted spelling for the same
+-- reason as `ctorAliasShadow`: it can only answer at an occurrence the
+-- author actually wrote.
+aliasAbstractCtorMod : Env -> String -> Option String
+aliasAbstractCtorMod env n = lookupAssoc n env.aliasAbstractCtor
+
+-- `checkVar`'s guard for the peer above: reuses `NoExportedConstructors`'s
+-- own wording (`(..)` import path, #1311) rather than minting a second
+-- message for the same underlying fact — the type is exported abstractly, and
+-- `public export data` at the definition is the fix, however the occurrence
+-- was spelled.
+aliasAbstractCtorErrs : Env -> String -> Option Loc -> List ResError
+aliasAbstractCtorErrs env n cur = match aliasAbstractCtorMod env n
+  Some mid => [NoExportedConstructors (dottedBare n) mid cur]
+  None => []
+
+-- The bare suffix of a dotted alias-qualified spelling; `n` itself when there
+-- is no dot (never reached in practice — this is only called once
+-- `aliasAbstractCtorMod` has already matched a dotted key it minted itself).
+dottedBare : String -> String
+dottedBare n = match splitOnChar '.' n
+  [_, bare] => bare
+  _ => n
 
 -- Every way an occurrence of constructor `n` can be contested.  `checkVar` needs
 -- this as a GUARD — its clause ladder decides whether to consult the sets at all,
@@ -1928,6 +1967,7 @@ buildEnv runtimeDecls preludeDecls prog internalGuard =
     ambiguous = [],
     ctorAmbiguous = [],
     ctorAliasShadow = [],
+    aliasAbstractCtor = [],
     typeAmbiguous = [],
     ifaceAmbiguous = [],
     internalGuard = omFromNames internalGuard omEmpty,
@@ -3257,6 +3297,33 @@ aliasShadowedFrom localCtors known p =
       (n => useBaseName p n /= n && omHasKey (useBaseName p n) localCtors)
       (importNamesIn nsCtors known p))
 
+-- The alias-qualified spelling's ABSTRACT-EXPORT peer (#3313): for every
+-- alias import in the program, the dotted spellings `Alias.T` that name a
+-- type the aliased module exports WITHOUT its constructors (`export data`,
+-- no `public`).  `unboundVarErrors` consults this before falling back to a
+-- bare "Unbound variable" — the alias and the type both resolve; only the
+-- constructor is hidden, and the generic fallback said neither.
+aliasAbstractCtors : OrdMap ModuleExports -> List Decl -> List (String, String)
+aliasAbstractCtors known prog =
+  flatMap (aliasAbstractCtorsFrom known) (usePathsOf prog)
+
+aliasAbstractCtorsFrom : OrdMap ModuleExports ->
+  UsePath ->
+  List (String, String)
+aliasAbstractCtorsFrom known (path@(UseAlias _ a)) =
+  match findExports (useModId path) known
+    None => []
+    Some exp =>
+      map (t => (qualifiedLocal a t, exp.modId)) (abstractlyExportedTypes exp)
+aliasAbstractCtorsFrom _ _ = []
+
+-- Types this module exports (`expTypes`) but not through `expTypeCtors` —
+-- `export data` without `public`, the same abstract-export test
+-- `expandMemberErrs`'s `T(..)` arm makes at the selective-import site.
+abstractlyExportedTypes : ModuleExports -> List String
+abstractlyExportedTypes exp =
+  filterList (t => isNone (typeCtorsOf t exp)) exp.expTypes
+
 -- ── type-name / interface-name provenance / ambiguity (#1110) ───────────────
 -- The TYPE and INTERFACE peers of the two blocks above, deliberately built from
 -- the same three parts (`importedNamesMM` → a namespace filter → `keepAmbiguous`)
@@ -3707,6 +3774,7 @@ buildEnvMM ps known prog internalGuard =
     ambiguous = ambiguousSet known prog,
     ctorAmbiguous = ctorAmbiguousSet known prog,
     ctorAliasShadow = aliasShadowedCtors known prog,
+    aliasAbstractCtor = aliasAbstractCtors known prog,
     typeAmbiguous = typeAmbiguousSet known prog,
     ifaceAmbiguous = ifaceAmbiguousSet known prog,
     internalGuard = omFromNames internalGuard omEmpty,

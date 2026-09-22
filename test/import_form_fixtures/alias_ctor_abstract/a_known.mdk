@@ -1,0 +1,9 @@
+-- CONTROL — the alias reaches a REAL, exported constructor of a sibling
+-- type declared in the same module.  Without this row the fixture below
+-- could pass for the wrong reason: a module where every alias-qualified
+-- constructor reference failed would also make `A.Account` fail.  This
+-- module contributes ZERO rows.
+import decl as A
+
+v : A.Palette
+v = A.Warm

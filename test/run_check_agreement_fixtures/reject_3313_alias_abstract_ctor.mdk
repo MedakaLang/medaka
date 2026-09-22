@@ -1,0 +1,12 @@
+-- #3313: a constructor of an abstractly-exported type, reached through a
+-- module alias (`A.Ctor`), must be REJECTed with the same
+-- NoExportedConstructors reason the selective `T(..)` import path already
+-- gives (R-NO-EXPORTED-CTORS), not a bare Unbound-variable — and check/run/
+-- build must all agree, never one engine executing past the bad reference.
+import lib.rca3313_colors as A
+
+badAccount : A.Account
+badAccount = A.Account 1
+
+main : <IO> Unit
+main = println "MUST-NOT-EXECUTE"
