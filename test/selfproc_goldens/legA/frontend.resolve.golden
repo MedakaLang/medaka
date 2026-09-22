@@ -98,6 +98,7 @@ ctorOccurrenceContested : Env -> String -> Bool
 ctorOwnedBy : (String, List String) -> List (String, String)
 ctorOwnerKey : String -> String
 ctorProvenance : Map String ModuleExports -> List UsePath -> Map String (List String)
+ctorTypeLookup : String -> List (String, List String) -> Option String
 dataRecordNames : List Decl -> List String
 dbName : ResError -> String
 declBindNames : Decl -> List String
@@ -379,6 +380,7 @@ typeAmbiguousSet : Map String ModuleExports -> List Decl -> List (String, List S
 typeCtorsAllOf : List Decl -> List (String, List String)
 typeCtorsOf : String -> ModuleExports -> Option (List String)
 typeDeclaredIn : String -> String -> (String, String)
+typeOfCtor : String -> ModuleExports -> Option String
 typeOriginExports : Map String (List (String, String)) -> String -> List Decl -> List (String, String)
 unboundVarErrors : Option Loc -> Env -> Scope -> String -> List ResError
 unionStr : List String -> List String -> List String
