@@ -78,7 +78,7 @@ import http.{
 }
 import hex as Hex
 import json.{Json(..), jArray, jObject, get, stringify}
-import list.{filter, last, take}
+import list.{last, take}
 import string.{fromUtf8, join, split, startsWith, toInt, toLower, toUtf8}
 import lib.atsyntax.{validateAtIdentifier, validateDid, validateHandle}
 import lib.blob.{BlobRef, admitBlob, blobRefCid, blobRefToJson}
@@ -145,7 +145,7 @@ import lib.store.{
   Store,
   sessionFingerprint,
   storeBlobBytes,
-  storeBlobCidTexts,
+  storeBlobCidTextsFrom,
   storeBlobMimeType,
   storeCredential,
   storeGet,
@@ -1420,6 +1420,18 @@ requireStandardLimit params = do
         else
           Ok limit
 
+{- | Drop the CID the cursor itself names — `dropCursorEntry`'s twin for a
+   listing of bare CID texts. The blob index resumes INCLUSIVELY at the cursor
+   while this route's cursor is exclusive, so the CID the previous page ended
+   on is the one this page opens on. A cursor naming a blob the account does
+   not hold drops nothing: a cursor is a position in the order rather than a
+   name, and the range already began past it. -}
+dropCursorCid : Option String -> List String -> List String
+dropCursorCid None cids = cids
+dropCursorCid _ [] = []
+dropCursorCid (Some cursor) (cids@(cid :: rest)) =
+  if cid == cursor then rest else cids
+
 {- | Blobs are also independent of the repository half here; `since` (a
    revision cursor into the repository, not the blob half) is refused as
    unimplemented rather than silently ignored, the same policy
@@ -1431,9 +1443,9 @@ requireStandardLimit params = do
    and hex order and base32-of-the-same-bytes order are different
    relations — pairing one order with a cursor drawn from the other lets a
    client walk past a blob whose text sorts before the cursor, and never
-   see it again. `storeBlobCidTexts` sidesteps the mismatch instead of
+   see it again. `storeBlobCidTextsFrom` sidesteps the mismatch instead of
    sorting around it: it reads the blob index, which is keyed on
-   `cidToString cid` itself, so its `keys` come back already ascending in
+   `cidToString cid` itself, so its rows come back already ascending in
    the cursor's own order with no sort needed here.
 
    The CIDs come without their bytes: this route reports which blobs exist, and
@@ -1445,12 +1457,16 @@ applyListBlobs account store params = do
   () <- rejectUnimplementedParam "since" params
   limit <- requireStandardLimit params
   cursor <- optionalParam "cursor" params
-  let allCids = storeBlobCidTexts store
-  let remaining = match cursor
-    None => allCids
-    Some text => filter (> text) allCids
-  let page = take limit remaining
-  if length remaining > length page then match last page
+  -- ONE CID past the page settles whether a further page exists, which is the
+  -- only thing the discarded tail was ever asked, and one more than that
+  -- absorbs the cursor's own CID where the account still holds that blob. The
+  -- read stops at that bound inside the index, so it reaches no further into
+  -- the blob half than the page it answers with.
+  let remaining =
+    dropCursorCid cursor (storeBlobCidTextsFrom cursor (Some (limit + 2)) store)
+  let probe = take (limit + 1) remaining
+  let page = take limit probe
+  if length probe > length page then match last page
     None => Ok (jObject [("cids", jArray (map JString page))])
     Some cursorCid =>
       Ok

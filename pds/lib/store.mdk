@@ -69,7 +69,7 @@ import lib.repo.{Repo}
 import hmac.{ctEq}
 import sha256.{sha256}
 import json.{Json}
-import map.{Map(..), get, keys, set, entries}
+import map.{Map(..), get, keys, set, entries, entriesFrom}
 import string.{toUtf8}
 
 {- | One open session: the fingerprints of the access and refresh tokens it
@@ -465,6 +465,20 @@ storeBlobCids (Store (BlobHalf blocks _ _) _ _ _) = blockStoreCids blocks
 export
 storeBlobCidTexts : Store -> List String
 storeBlobCidTexts (Store (BlobHalf _ index _) _ _ _) = keys index
+
+{- | One page of that same listing: the blob CID texts from `start` upwards,
+   at most `limit` of them, in the same base32-text order.
+
+   `start` is INCLUSIVE, so a caller resuming at a cursor gets the cursor's own
+   blob back as the first row and drops it itself. The index answers the
+   bounded question rather than handing back every name for the caller to
+   filter, so a page of an account's blobs costs the page and not the whole
+   blob half — which is what `storeBlobCidTexts`, and every pager built on it,
+   costs. -}
+export
+storeBlobCidTextsFrom : Option String -> Option Int -> Store -> List String
+storeBlobCidTextsFrom start limit (Store (BlobHalf _ index _) _ _ _) =
+  map fst (entriesFrom start limit index)
 
 {- | The blob half's declared-type index: every CID text that has a declared
    MIME type, paired with it, in CID-text order and carrying no bytes.
