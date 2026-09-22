@@ -1,0 +1,6 @@
+-- WS-1c manifest gate fixture (S-2, #3321 case 5): the capability-carrying
+-- helper a sibling module imports, to prove `medaka manifest` resolves a
+-- multi-file target instead of reading exactly one file.
+export
+tick : <Clock> Float
+tick = wallTimeSec ()

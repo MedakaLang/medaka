@@ -1,0 +1,8 @@
+-- WS-1c manifest gate fixture (S-2, #3321 case 2): an import naming a binding
+-- the source module does not export.  `medaka manifest` must refuse exactly
+-- like `medaka check` does (a located resolve error on stderr, exit 1), not
+-- silently answer an empty capability manifest.
+-- lint-disable-file rule-dead-code, rule-missing-signature
+import list.{noSuchExport}
+
+transform x = x

@@ -1,14 +1,13 @@
 running doctests in stdlib/async.mdk
-  ok   stdlib/async.mdk:488: runAsync (Done 5)
-  ok   stdlib/async.mdk:491: runAsync (deferMap (x => x + 1) (Done 4))
-  ok   stdlib/async.mdk:494: runAsync (deferAp (Done (x => x * 2)) (Done 21))
-  ok   stdlib/async.mdk:497: runAsync (deferThen (Done 10) (x => Done (x + 5)))
-  ok   stdlib/async.mdk:500: runAsync (deferThen yield (_ => Done 99))
-  ok   stdlib/async.mdk:503: runAsync (liftIO (u => 21 + 21))
-  ok   stdlib/async.mdk:506: runAsync (concurrent [Done 1, Done 2, Done 3])
-  ok   stdlib/async.mdk:509: runAsync (deferThen (spawnTask (Done 7)) await)
-  ok   stdlib/async.mdk:512: runAsyncIO (concurrent [Done 1, Done 2, Done 3])
-  ok   stdlib/async.mdk:515: runAsyncIO (deferThen (spawnTask (deferThen (sleep (millis 5)) (_ => Done 8))) await)
-  ok   stdlib/async.mdk:518: runAsyncIO (deferMap length (concurrent [sleep (millis 5), sleep (millis 5), sleep (millis 5)]))
+  ok   stdlib/async.mdk:509: runAsync (Done 5)
+  ok   stdlib/async.mdk:512: runAsync (deferMap (x => x + 1) (Done 4))
+  ok   stdlib/async.mdk:515: runAsync (deferAp (Done (x => x * 2)) (Done 21))
+  ok   stdlib/async.mdk:518: runAsync (deferThen (Done 10) (x => Done (x + 5)))
+  ok   stdlib/async.mdk:521: runAsync (deferThen yield (_ => Done 99))
+  ok   stdlib/async.mdk:524: runAsync (liftIO (u => 21 + 21))
+  ok   stdlib/async.mdk:527: runAsync (concurrent [Done 1, Done 2, Done 3])
+  ok   stdlib/async.mdk:530: runAsync (deferThen (spawnTask (Done 7)) await)
+  ok   stdlib/async.mdk:533: runAsync (deferThen (spawnTask (deferThen (sleep (millis 5)) (_ => Done 8))) await)
+  ok   stdlib/async.mdk:536: runAsync (deferMap length (concurrent [sleep (millis 5), sleep (millis 5), sleep (millis 5)]))
 
-stdlib/async.mdk: 11/11 passed
+stdlib/async.mdk: 10/10 passed

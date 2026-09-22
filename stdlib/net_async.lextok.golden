@@ -5,9 +5,6 @@ DOT_LBRACE
 UPPER "Async"
 COMMA
 UPPER "Wait"
-LPAREN
-DOTDOT
-RPAREN
 COMMA
 IDENT "liftIO"
 COMMA
@@ -15,9 +12,14 @@ IDENT "spawn"
 COMMA
 IDENT "awaitAny"
 COMMA
+IDENT "waitRead"
+COMMA
+IDENT "waitWrite"
+COMMA
 IDENT "deadlineAfter"
 COMMA
 IDENT "expired"
+COMMA
 RBRACE
 NEWLINE
 IMPORT
@@ -256,7 +258,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitWrite"
+IDENT "waitWrite"
 IDENT "fd"
 RBRACKET
 RPAREN
@@ -354,6 +356,14 @@ NEWLINE
 IDENT "connectFrom"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "String"
@@ -404,6 +414,14 @@ NEWLINE
 IDENT "connectUntilStarted"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Result"
@@ -455,6 +473,14 @@ NEWLINE
 IDENT "connectUntil"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Int"
@@ -506,6 +532,14 @@ NEWLINE
 IDENT "connectUntilStep"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Int"
@@ -568,7 +602,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitWrite"
+IDENT "waitWrite"
 IDENT "fd"
 COMMA
 IDENT "dl"
@@ -826,7 +860,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitRead"
+IDENT "waitRead"
 IDENT "fd"
 RBRACKET
 RPAREN
@@ -1022,7 +1056,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitRead"
+IDENT "waitRead"
 IDENT "fd"
 RBRACKET
 RPAREN
@@ -1125,6 +1159,14 @@ NEWLINE
 IDENT "recvUntil"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Connection"
@@ -1185,6 +1227,14 @@ NEWLINE
 IDENT "recvUntilStep"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Connection"
@@ -1262,7 +1312,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitRead"
+IDENT "waitRead"
 IDENT "fd"
 COMMA
 IDENT "dl"
@@ -1524,7 +1574,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitRead"
+IDENT "waitRead"
 IDENT "fd"
 RBRACKET
 RPAREN
@@ -1627,6 +1677,14 @@ NEWLINE
 IDENT "recvUntilBytes"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Connection"
@@ -1679,6 +1737,14 @@ NEWLINE
 IDENT "recvUntilBytesStep"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Connection"
@@ -1778,6 +1844,14 @@ NEWLINE
 IDENT "recvBytesWake"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Int"
@@ -1828,7 +1902,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitRead"
+IDENT "waitRead"
 IDENT "fd"
 COMMA
 IDENT "dl"
@@ -1991,7 +2065,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitWrite"
+IDENT "waitWrite"
 IDENT "fd"
 RBRACKET
 RPAREN
@@ -2254,7 +2328,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitWrite"
+IDENT "waitWrite"
 IDENT "fd"
 RBRACKET
 RPAREN
@@ -2365,6 +2439,14 @@ NEWLINE
 IDENT "sendUntil"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Connection"
@@ -2458,6 +2540,14 @@ NEWLINE
 IDENT "sendUntilTry"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Connection"
@@ -2525,6 +2615,14 @@ NEWLINE
 IDENT "sendUntilStep"
 COLON
 UPPER "Wait"
+LT
+UPPER "Clock"
+COMMA
+UPPER "Net"
+STRING "_"
+PIPE
+IDENT "e"
+GT
 ARROW
 INDENT
 UPPER "Connection"
@@ -2579,7 +2677,7 @@ IDENT "deferThen"
 LPAREN
 IDENT "awaitAny"
 LBRACKET
-UPPER "WaitWrite"
+IDENT "waitWrite"
 IDENT "fd"
 COMMA
 IDENT "dl"

@@ -42,13 +42,14 @@ import http.{
 }
 import async.{
   Async,
-  Wait(..),
+  Wait,
   awaitAny,
   deadlineAfter,
   expired,
   liftIO,
   sleep,
   spawn,
+  waitFlag,
 }
 import lib.accesslog.{
   AccessEvent(..),
@@ -1131,7 +1132,7 @@ applyRateLimit limiterRef identity classes nowSeconds =
    the whole request's. They travel as a pair rather than as two `Wait`
    arguments so that a call site cannot silently swap them — they have the
    same type and opposite meanings. -}
-data Deadlines = Deadlines Wait Wait
+data Deadlines (e : Effect) = Deadlines (Wait e) (Wait e)
 
 {- | One connection's place in the un-framed census: the process-wide count,
    and whether THIS connection is still one of the connections it counts.
@@ -1176,7 +1177,7 @@ releaseSubscription (SubscriptionCensus open) = open := !open - 1
 {- | One proxied read waiting for a slot.
 
    Two flags and not one. `granted` is what the scheduler parks on
-   (`WaitFlag`) and it is set by the RELEASING call rather than by the waiter,
+   (`waitFlag`) and it is set by the RELEASING call rather than by the waiter,
    because the slot is handed straight over rather than given back and taken
    again: between a decrement and the waiter's next step a fresh arrival would
    find the slot free and barge past a call that has already been waiting.
@@ -1307,7 +1308,7 @@ admitProxiedCall census =
     None => deferPure False
     Some waiter => defer
       limit <- deadlineAfter proxyQueueWait
-      _ <- awaitAny [WaitFlag (waiterGranted waiter), limit]
+      _ <- awaitAny [waitFlag (waiterGranted waiter), limit]
       liftIO (u => settleProxiedCall census waiter)
 
 -- ── the in-flight buffer budget ─────────────────────────────────────────────
@@ -1485,7 +1486,7 @@ admitBufferBytes census bytes =
     None => deferPure False
     Some waiter => defer
       limit <- deadlineAfter bufferQueueWait
-      _ <- awaitAny [WaitFlag (bufferWaiterGranted waiter), limit]
+      _ <- awaitAny [waitFlag (bufferWaiterGranted waiter), limit]
       liftIO (u => settleBufferedRead census waiter)
 
 -- | Retire this connection's un-framed charge, if it still holds one.
@@ -1978,7 +1979,7 @@ frameLoop : Server ->
   Serving ->
   Connection ->
   UnframedSlot ->
-  Deadlines ->
+  Deadlines <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
@@ -2033,7 +2034,7 @@ framePending : Server ->
   Serving ->
   Connection ->
   UnframedSlot ->
-  Deadlines ->
+  Deadlines <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
   HttpScan ->
   Bool ->
@@ -2070,7 +2071,7 @@ readMore : Server ->
   Serving ->
   Connection ->
   UnframedSlot ->
-  Deadlines ->
+  Deadlines <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> ->
   ReadBuffer ->
   HttpScan ->
   Bool ->

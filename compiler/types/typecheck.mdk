@@ -9021,8 +9021,8 @@ mainTypeIsAsync _ = match driverState.value.mainSchemeRef.value
     _ => False
   None => False
 
--- Stage 2 query: is the `Async` main's payload `Unit`?  The entry drivers
--- (`runAsyncIOMain`/`runAsyncMain`) take `Async e Unit`, so any other payload
+-- Stage 2 query: is the `Async` main's payload `Unit`?  The entry driver
+-- (`runAsyncMain`) takes `Async e Unit`, so any other payload
 -- is rejected with a diagnostic before the rewrite rather than by the driver's
 -- unification failure.
 export
@@ -44642,6 +44642,10 @@ checkModulesEntryFullK preludeKey runtimeDecls coreDecls modules =
 -- the module's own entry for the same bare name.
 -- `preludeKey`: the prelude key for the core-check memo (see `checkCoreMemoized`);
 -- `None` = unkeyed, no memo.
+-- Exported (S-2, #3321) for `check_policy.mdk`'s `runManifest`: the one consumer
+-- outside this file that needs BOTH halves (errs to refuse before a name lookup,
+-- schemes to satisfy one) over a graph that may carry more than one module.
+export
 checkModulesEntryFullSplitK : Option (Int, Int) ->
   List Decl ->
   List Decl ->

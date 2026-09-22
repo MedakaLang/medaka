@@ -73,8 +73,8 @@ Operations on `Array a`.
 
 ## [`async`](async.md)
 
-- [`Async`](async.md#async)
 - [`Wait`](async.md#wait)
+- [`Async`](async.md#async)
 - [`Task`](async.md#task)
 - [`liftIO`](async.md#liftio)
 - [`yield`](async.md#yield)
@@ -82,13 +82,14 @@ Operations on `Array a`.
 - [`spawn`](async.md#spawn)
 - [`spawnTask`](async.md#spawntask)
 - [`awaitAny`](async.md#awaitany)
+- [`waitRead`](async.md#waitread)
+- [`waitWrite`](async.md#waitwrite)
+- [`waitFlag`](async.md#waitflag)
 - [`deadlineAfter`](async.md#deadlineafter)
 - [`expired`](async.md#expired)
 - [`await`](async.md#await)
 - [`concurrent`](async.md#concurrent)
 - [`runAsync`](async.md#runasync)
-- [`runAsyncIO`](async.md#runasyncio)
-- [`runAsyncIOMain`](async.md#runasynciomain)
 - [`runAsyncMain`](async.md#runasyncmain)
 
 ## [`base32`](base32.md)
