@@ -262,59 +262,83 @@ decodeUpstream buffer = match parseResponse buffer
    a peer with nothing to say: waiting on its close spends
    `upstreamSilenceTimeout` and reports a read failure over an answer already
    in hand (#3097). The boundary is what ends such an exchange, and the
-   silence budget is left to the peer that really has stopped. -}
+   silence budget is left to the peer that really has stopped.
+
+   `mayHold` is asked, before each chunk is kept, whether the call may hold
+   the total that chunk would bring its buffer to, and `False` abandons the
+   call with nothing more read. Whether a total is affordable is not this
+   module's question: it depends on what every other call in the process
+   holds, which only the caller can see. -}
 collectUpstream : Wait <Clock, Net "_" | e> ->
+  (Int -> Async <Clock, Net "_" | e> Bool) ->
   Connection ->
   Vector Int ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
-collectUpstream deadline conn acc = defer
+collectUpstream deadline mayHold conn acc = defer
   late <- expired deadline
   if late then
     deferPure (Err "egress: the upstream call exceeded its budget")
   else defer
     received <- A.recvWithin upstreamSilenceTimeout conn upstreamChunkBytes
-    collectStep deadline conn acc received
+    collectStep deadline mayHold conn acc received
 
 collectStep : Wait <Clock, Net "_" | e> ->
+  (Int -> Async <Clock, Net "_" | e> Bool) ->
   Connection ->
   Vector Int ->
   Result String (Array Int) ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
-collectStep _ _ _ (Err message) =
+collectStep _ _ _ _ (Err message) =
   deferPure (Err "egress: upstream read failed: \{message}")
-collectStep deadline conn acc (Ok bytes) =
+collectStep deadline mayHold conn acc (Ok bytes) =
   if arrayLength bytes == 0 then
     deferPure (decodeUpstream (V.toArray acc))
-  else
-    let () = V.pushArray bytes acc
-    let (backing, collected) = V.rawParts acc
-    if collected > maxHttpClientWireBytes then
-      deferPure
-        (Err
-          "egress: upstream response exceeds the \{intToString maxHttpClientWireBytes}-byte wire ceiling")
-    else match responseBoundaryWithin backing collected
-      Some _ => deferPure (decodeUpstream (V.toArray acc))
-      None => collectUpstream deadline conn acc
+  else defer
+    let (_, collected) = V.rawParts acc
+    held <- mayHold (collected + arrayLength bytes)
+    if not held then
+      deferPure (Err "egress: no headroom to hold a larger upstream answer")
+    else
+      keepChunk deadline mayHold conn acc bytes
 
-exchange : Connection ->
+keepChunk : Wait <Clock, Net "_" | e> ->
+  (Int -> Async <Clock, Net "_" | e> Bool) ->
+  Connection ->
+  Vector Int ->
   Array Int ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
-exchange conn bytes = defer
+keepChunk deadline mayHold conn acc bytes =
+  let () = V.pushArray bytes acc
+  let (backing, collected) = V.rawParts acc
+  if collected > maxHttpClientWireBytes then
+    deferPure
+      (Err
+        "egress: upstream response exceeds the \{intToString maxHttpClientWireBytes}-byte wire ceiling")
+  else match responseBoundaryWithin backing collected
+    Some _ => deferPure (decodeUpstream (V.toArray acc))
+    None => collectUpstream deadline mayHold conn acc
+
+exchange : (Int -> Async <Clock, Net "_" | e> Bool) ->
+  Connection ->
+  Array Int ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+exchange mayHold conn bytes = defer
   deadline <- deadlineAfter upstreamCallTimeout
   sent <- A.sendAllWithin upstreamWriteTimeout conn bytes
   match sent
     Err message =>
       deferPure (Err "egress: upstream request could not be sent: \{message}")
-    Ok () => collectUpstream deadline conn (V.new ())
+    Ok () => collectUpstream deadline mayHold conn (V.new ())
 
 -- The connection is closed on every path out, success and failure alike, which
 -- is why the exchange's outcome is held and returned after the close rather
 -- than returned from inside it.
-opened : Connection ->
+opened : (Int -> Async <Clock, Net "_" | e> Bool) ->
+  Connection ->
   Array Int ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
-opened conn bytes = defer
-  outcome <- exchange conn bytes
+opened mayHold conn bytes = defer
+  outcome <- exchange mayHold conn bytes
   _ <- A.close conn
   deferPure outcome
 
@@ -328,19 +352,33 @@ opened conn bytes = defer
    configured relay that carries no authorization header at all. Both callers
    share this rather than each opening their own socket, so a fix to the
    silence/deadline/wire-ceiling budgets here reaches every outbound call this
-   shell makes. -}
+   shell makes.
+
+   The relay announce holds whatever it is sent, up to the wire ceiling: it
+   is one call, made once at startup, so no number of callers can multiply
+   what it holds. -}
 export
 egressConnect : String ->
   Int ->
   Array Int ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
-egressConnect host port bytes = defer
+egressConnect host port bytes =
+  egressConnectHolding host port (_ => deferPure True) bytes
+
+-- `egressConnect`, asking `mayHold` before each chunk of the answer is kept
+-- (`collectUpstream`).
+egressConnectHolding : String ->
+  Int ->
+  (Int -> Async <Clock, Net "_" | e> Bool) ->
+  Array Int ->
+  Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
+egressConnectHolding host port mayHold bytes = defer
   connected <- A.connectWithin upstreamConnectTimeout host port
   match connected
     Err message =>
       deferPure
         (Err "egress: could not reach \{host}:\{intToString port}: \{message}")
-    Ok conn => opened conn bytes
+    Ok conn => opened mayHold conn bytes
 
 {- | Make one proxied call and return what the appview answered.
 
@@ -365,14 +403,16 @@ egressConnect host port bytes = defer
    `Err` is every way the call can fail to produce an answer — the token could
    not be minted, the target the client sent is not a serializable origin-form
    target, a relayed field is not serializable, the proxy refused the
-   connection, a budget ran out, the response did not decode. The caller turns
-   all of them into one 502: which of them happened is this server's business
-   and not the client's. -}
+   connection, a budget ran out, the response did not decode, `mayHold`
+   refused the answer room to grow (`collectUpstream`). The caller turns all
+   of them into one 502 but the last, which it asked for and answers itself:
+   which of the rest happened is this server's business and not the client's. -}
 export
 egressCall : Egress ->
+  (Int -> Async <Clock, Net "_" | e> Bool) ->
   ProxyAdmission ->
   Async <Clock, Net "_" | e> (Result String UpstreamAnswer)
-egressCall egress admission =
+egressCall egress mayHold admission =
   match appviewRouteFor (egressAppviews egress) admission.audience
     None =>
       deferPure (Err "egress: the admitted audience is not a configured one")
@@ -387,4 +427,8 @@ egressCall egress admission =
               deferPure
                 (Err "egress: outbound request is not serializable: \{message}")
             Ok bytes =>
-              egressConnect egressAddress (appviewRoutePort route) bytes
+              egressConnectHolding
+                egressAddress
+                (appviewRoutePort route)
+                mayHold
+                bytes
