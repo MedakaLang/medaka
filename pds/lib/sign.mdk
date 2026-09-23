@@ -77,7 +77,9 @@ digestBytesOk digest i =
 
 -- | Sign exactly one public 32-byte SHA-256 digest. Public shape/domain errors
 --   are rejected before the fixed two-candidate producer begins; only its
---   final aggregate validity bit is declassified here.
+--   final aggregate validity bit is declassified here. A produced signature
+--   is verified against the signer's own public key before it is returned;
+--   that check reads only public values (key, digest, signature).
 export
 signDigest : SecretKey -> Array Int -> Result String Signature
 signDigest (SecretKey scalar) digest =
@@ -88,7 +90,11 @@ signDigest (SecretKey scalar) digest =
   else
     let (validBit, signature) = ecdsaSignDigest scalar digest
     if validBit == 1 then
-      Ok (Signature signature)
+      let publicPoint = publicPointForSecret scalar
+      if ecdsaVerifyDigest publicPoint digest signature then
+        Ok (Signature signature)
+      else
+        Err "sign.signDigest: internal signature self-check failed"
     else
       Err "RFC 6979 retry bound exhausted"
 

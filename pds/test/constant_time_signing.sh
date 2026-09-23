@@ -57,7 +57,7 @@ write_source_manifest() {
 expected_internal_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
-1518600487 31160  pds/lib/scalar.mdk
+75163897 32282  pds/lib/scalar.mdk
 229045795 11986  stdlib/sha256.mdk
 2012701912 5886  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
@@ -69,12 +69,12 @@ EOF
 expected_public_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
-1518600487 31160  pds/lib/scalar.mdk
+75163897 32282  pds/lib/scalar.mdk
 229045795 11986  stdlib/sha256.mdk
 2012701912 5886  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
-3175129806 3842  pds/lib/sign.mdk
+2920240123 4200  pds/lib/sign.mdk
 2846312137 3153  pds/test/constant_time_signing_public_main.mdk
 EOF
 }
@@ -535,17 +535,12 @@ pass 'native internal carrier retains the exact signature plus candidate-1/exhau
 
 collect_full_closure mdk_lib_secp256k1__ecdsaSignDigestForTest
 closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
-# Re-derived when SHA-256 and the HMAC schedule moved to stdlib/. Measured
-# against the previous closure, symbol by symbol: 26 lines are a pure 1:1
-# rename (mdk_lib_sha256__X -> mdk_sha256__X, 24 of them, plus the two forced
-# constants h0Init and k); 6 lines left, all of them the old pds-side HMAC
-# privates (copyBytes, fillKeyPad, joined, keyPad and the forced blockBytes and
-# digestBytes); 8 entered -- mdk_hmac__{keyPad,fillKeyPad,hmacSha256FixedBytes},
-# the forced mdk_force_hmac__blockBytes, and array.concat's four definitions,
-# which replace the hand-rolled element-at-a-time joined/copyBytes with a
-# length-summing pass and a bulk arrayBlit. 170 -> 172 definitions. Nothing
-# else entered or left, and no SHA-256 helper dropped out.
-[ "$closure_grade" = '4136339374 4796' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived when reduceFixed moved to the unchecked carry pass. Measured
+# against the previous closure, symbol by symbol: two lines are a pure 1:1
+# rename (mdk_lib_scalar__carryAll -> carryAllUnchecked, carryGo ->
+# carryGoUnchecked). 172 definitions before and after; nothing else entered
+# or left.
+[ "$closure_grade" = '528626005 4814' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the five modules now live in stdlib/, which mangles without the `lib_`
 # segment, so the prefixes are spelled out rather than built from a module name.
 for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_sha256__ mdk_hmac__ \
@@ -569,19 +564,12 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-# Re-derived across two independent changes landing on top of each other: the
-# stdlib hmac/sha256 migration (170 -> 172 shared symbols, same set/order as
-# before) and the emitter's direct-discriminant optimization (deletes the
-# discimm/discbox/disccont triple per constructor match). Measured column-wise
-# against the migration-only manifest over all 172 rows, same set, same order:
-# comparisons, indices, writes, makes, copies and the call total did not move
-# in a single row. The branch column fell by exactly 1 in the same 14 rows the
-# discriminant optimization affects elsewhere in the tree (mdk_core__not,
-# rawFe, rawSc, the four point/select helpers, secretAffine,
-# selectSigningCandidates, signCandidate, and three sha256 internals) and rose
-# in none. No function outside those 14 changed at all; no branch anywhere in
-# the closure tests a byte.
-[ "$control_grade" = '2431464021 7220' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+# Same rename as the closure grade above. Measured column-wise over all 172
+# rows, same order: the two renamed rows are the only change, and
+# carryGoUnchecked has one branch fewer than carryGo had (2 -> 1: the top-limb
+# carry check is gone). Every other column of those rows, and every other row,
+# is unchanged; no branch anywhere in the closure tests a byte.
+[ "$control_grade" = '1217626107 7238' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -701,15 +689,17 @@ done
 write_control_manifest > "$WORK/public-control.manifest"
 public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
-# Same two changes as the secret-side grade above. The closure grade did not
-# move -- the public union reaches the same 176 symbols it did after the
-# migration alone. Only the control grade shifted, and by the same mechanism:
-# measured column-wise over all 176 rows, same set, same order, nothing rose
-# in any column. Branches fell by exactly 1 in 16 rows -- the 14 shared with
-# the secret-side manifest, plus publicKeyForSecret (2->1) and signDigest
-# (5->4), the two public wrappers outside the secret closure that the
-# discriminant optimization also reaches.
-if [ "$public_closure_grade" != '824690028 4915' ] || [ "$public_control_grade" != '3601723552 7395' ]; then
+# Re-derived for signDigest's verify-after-sign and the unchecked carry pass,
+# measured row by row against the previous 176-row union. carryAll/carryGo were
+# replaced by carryAllUnchecked/carryGoUnchecked; carryGoUnchecked has one
+# branch fewer (2 -> 1: no top-limb carry check). Thirteen verify-path
+# definitions entered (176 -> 189): ecdsaVerifyDigest, affineToPoint,
+# pointIsCanonicalInfinity, publicBytesOk, scEqual, equalGo, scIsZero,
+# isZeroGo, scIsHigh, dblGo, gteNGo, feEqualBit and feEqualBorrow. Their
+# branches read only the public signature, digest and key. signDigest went
+# from 4 to 5 branches (the self-check) and from 3 to 5 calls
+# (publicPointForSecret, ecdsaVerifyDigest). No other row moved in any column.
+if [ "$public_closure_grade" != '4058703100 5303' ] || [ "$public_control_grade" != '1565535701 7967' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

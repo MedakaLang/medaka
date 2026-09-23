@@ -22,9 +22,9 @@ fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 # it cannot silently widen the trusted callee set.
 source_closure_ok() {
   tree=$1
-  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '3175129806 3842' ] || return 1
+  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '2920240123 4200' ] || return 1
   [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1691956410 24617' ] || return 1
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '1518600487 31160' ] || return 1
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '75163897 32282' ] || return 1
   [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2128618670 25697' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
@@ -213,7 +213,7 @@ pass 'emitted secret nonzero fold branches only on its public limb index'
 # not its survival as a distinct linked symbol.
 extract_ir_function reduceFixed "$IR" "$WORK/reduceFixed.ll"
 [ "$(grep -c 'br i1' "$WORK/reduceFixed.ll" || true)" -eq 0 ] || fail 'fixed reduction is unconditional'
-[ "$(grep -F -c '@mdk_lib_scalar__carryAll(' "$WORK/reduceFixed.ll" || true)" -eq 5 ] || fail 'fixed reduction runs five carry passes'
+[ "$(grep -F -c '@mdk_lib_scalar__carryAllUnchecked(' "$WORK/reduceFixed.ll" || true)" -eq 5 ] || fail 'fixed reduction runs five carry passes'
 [ "$(grep -F -c '@mdk_lib_scalar__foldOnce(' "$WORK/reduceFixed.ll" || true)" -eq 4 ] || fail 'fixed reduction runs four folds'
 pass 'emitted fixed reduction runs its schedule unconditionally'
 

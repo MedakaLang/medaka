@@ -97,11 +97,12 @@ ir_call_shape_ok() {
   case "$name" in
     canonicalize) expected='444837400 70' ;; carryFoldRound) expected='3889069194 171' ;;
     carryAll) expected='136326906 25' ;; carryGo) expected='2951762016 157' ;;
+    carryAllUnchecked) expected='2496061766 34' ;; carryGoUnchecked) expected='1150039596 166' ;;
     carryPass) expected='2881939388 28' ;; carryPassGo) expected='198870372 274' ;;
     copyLow) expected='2044746140 68' ;;
     foldAccum) expected='2494560624 57' ;; foldAccumRow) expected='2234620271 145' ;;
     foldOnce) expected='856892605 68' ;; reduceCarry) expected='1494584225 93' ;;
-    reduceFixed) expected='4074489195 234' ;; reduceWide) expected='46832935 97' ;;
+    reduceFixed) expected='2618126692 279' ;; reduceWide) expected='46832935 97' ;;
     selectNCandidate) expected='2597000302 98' ;; selectPCandidate) expected='884186827 97' ;;
     subNCandidate) expected='2931902360 217' ;; subNSelect) expected='662374009 80' ;;
     subPCandidate) expected='713947010 394' ;; subPSelect) expected='1367941064 78' ;;
@@ -249,7 +250,7 @@ source_write_shape_ok() {
         [ "$(grep -F -c 'setInPlace i ' "$body" || true)" -eq 1 ] ;;
     selectPCandidate|feSelectGo)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'setInPlace i ' "$body" || true)" -eq 1 ] ;;
-    carryGo|subNCandidate|selectNCandidate|copyLow|scSelectGo|scNegateCtGo)
+    carryGo|carryGoUnchecked|subNCandidate|selectNCandidate|copyLow|scSelectGo|scNegateCtGo)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.setInPlace i ' "$body" || true)" -eq 1 ] ;;
     takeHigh)
       [ "$writes" -eq 2 ] && [ "$(grep -F -c 'A.setInPlace (i - 16) ' "$body" || true)" -eq 1 ] &&
@@ -279,11 +280,12 @@ source_shape_ok() {
   case "$name" in
     canonicalize) expected='1918979222 101' ;; carryAll) expected='3784023453 28' ;;
     carryFoldRound) expected='702085150 126' ;; carryGo) expected='2159207857 267' ;;
+    carryAllUnchecked) expected='2587065717 46' ;; carryGoUnchecked) expected='3140321757 189' ;;
     carryPass) expected='1250453555 31' ;; carryPassGo) expected='1857917920 284' ;;
     copyLow) expected='3444459846 115' ;;
     foldAccum) expected='305940905 111' ;; foldAccumRow) expected='1512181526 160' ;;
     foldOnce) expected='1770996279 84' ;; reduceCarry) expected='2596813441 92' ;;
-    reduceFixed) expected='736687942 206' ;; reduceWide) expected='1389933683 128' ;;
+    reduceFixed) expected='3041539658 251' ;; reduceWide) expected='1389933683 128' ;;
     selectNCandidate) expected='1327350681 214' ;; selectPCandidate) expected='3621980786 212' ;;
     subNCandidate) expected='196465499 230' ;; subNSelect) expected='1155645251 125' ;;
     subPCandidate) expected='714167625 342' ;; subPSelect) expected='764393686 125' ;;
@@ -329,6 +331,8 @@ source_helpers_ok() {
     "rawFe:$field:0" \
     "carryAll:$scalar:0" \
     "carryGo:$scalar:2" \
+    "carryAllUnchecked:$scalar:0" \
+    "carryGoUnchecked:$scalar:1" \
     "foldOnce:$scalar:0" \
     "takeHigh:$scalar:1" \
     "foldAccum:$scalar:1" \
@@ -621,6 +625,19 @@ scalarHighZero raw i =
   else if raw[i] /= 0 then False
   else scalarHighZero raw (i + 1)
 
+-- reduceFixed runs the unchecked carry pass; the checked one is otherwise
+-- unreached. On an admitted workspace (limb 31 zero, every other limb
+-- carrying) the two must agree limb for limb.
+scalarCarryTwinWitness : Bool
+scalarCarryTwinWitness =
+  let checked = arrayMake 32 0x1ffff
+  let unchecked = arrayMake 32 0x1ffff
+  let () = A.setInPlace 31 0 checked
+  let () = A.setInPlace 31 0 unchecked
+  let () = carryAll checked
+  let () = carryAllUnchecked unchecked
+  checked == unchecked && checked[31] == 2
+
 scalarSelectWitness : Bool
 scalarSelectWitness =
   let canonical = reduceWide (arrayMake 32 0)
@@ -641,7 +658,7 @@ scalarCtHelpersWitness =
     && scHighBit scZero == 0
     && scHighBit high == 1
 
-main = if scalarRoundsWitness && scalarSelectWitness && scalarCtHelpersWitness then println "PASS scalar-rounds" else panic "FAIL scalar-rounds"
+main = if scalarRoundsWitness && scalarCarryTwinWitness && scalarSelectWitness && scalarCtHelpersWitness then println "PASS scalar-rounds" else panic "FAIL scalar-rounds"
 EOF
 }
 
@@ -1096,7 +1113,8 @@ cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
-  carryAll:0:0:0:0:0:0:1 carryGo:2:0:1:1:0:0:7 takeHigh:1:0:1:2:0:0:5 foldAccum:1:0:0:0:0:0:2 \
+  carryAll:0:0:0:0:0:0:1 carryGo:2:0:1:1:0:0:7 carryAllUnchecked:0:0:0:0:0:0:1 carryGoUnchecked:1:0:1:1:0:0:7 \
+  takeHigh:1:0:1:2:0:0:5 foldAccum:1:0:0:0:0:0:2 \
   foldAccumRow:1:0:3:1:0:0:6 foldOnce:0:0:0:0:1:0:3 reduceFixed:0:0:0:0:0:0:9 \
   subNCandidate:1:0:2:1:0:0:9 selectNCandidate:1:0:2:1:0:0:4 \
   subNSelect:0:0:0:0:1:0:3 reduceWide:0:0:0:0:1:0:4 copyLow:1:0:1:1:0:0:3 \

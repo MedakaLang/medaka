@@ -72,8 +72,8 @@ Scalar `reduceWide` has exactly five direct producer classes:
 - `scMul`, below `n^2 < 2^512`.
 
 `scSub` and `scInverse` reach them transitively. The existing `< 2^512`
-workspace precondition and carry-out panic remain load-bearing; fixed-count
-reduction does not widen the accepted domain.
+workspace precondition remains load-bearing, and on this path nothing checks it
+at run time (see §4); fixed-count reduction does not widen the accepted domain.
 
 Any new producer or relaxed magnitude bound invalidates this contract until its
 maximum pass count and fixnum headroom are re-derived.
@@ -110,8 +110,13 @@ public `Fe`.
 
 Replace `reduceLoop` and `highIsZero` with:
 
-1. one fixed 32-limb `carryAll`;
-2. exactly four unconditional `foldOnce` plus `carryAll` rounds.
+1. one fixed 32-limb `carryAllUnchecked`;
+2. exactly four unconditional `foldOnce` plus `carryAllUnchecked` rounds.
+
+`carryAllUnchecked` drops a carry out of limb 31 without testing it: every
+admitted workspace is below `2^512`, so that carry is always zero, and its only
+branch is the public limb index. `carryAll` is the checked twin, which panics
+on such a carry; the reduction gate runs the two side by side.
 
 `foldOnce` must reuse a fixed allocation schedule. It may allocate its current
 16-limb high-half buffer once per round because four allocations are
