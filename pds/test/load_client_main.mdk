@@ -406,7 +406,7 @@ writeLoop : Connection ->
   Int ->
   Int ->
   Int ->
-  <Clock, Net "_"> (Array Int, Int, Int, Int, Int, Int)
+  <Clock, IO, Net "_"> (Array Int, Int, Int, Int, Int, Int)
 writeLoop conn pending did collection token clientId t0 budget i requests writes non200 errors =
   if elapsedSince t0 >= budget then
     (pending, requests, writes, non200, errors, i)
@@ -423,6 +423,7 @@ writeLoop conn pending did collection token clientId t0 budget i requests writes
     match responseRoundTrip conn pending request
       Err _ => (pending, requests + 1, writes, non200, errors + 1, i)
       Ok (200, _, rest) =>
+        let () = println "write-path \{collection}/\{rkey}"
         writeLoop
           conn
           rest

@@ -178,10 +178,13 @@ and generated corpus. It concurrently drives read clients, authenticated
 `createRecord` writers and a live `subscribeRepos` consumer. Timestamped
 samples report the loaded `pdsd` process's RSS (`ps`, KiB), the loaded data
 directory's allocated size (`du -sk`, KiB), request/sample errors, and the
-server PID. Initial/final deltas and continuity are printed; an exited server,
-nonzero request errors, lost relay commits, or a configured bound breach fails
-the run. RSS growth is compared as a percentage of initial RSS, and disk
-change as KiB. These are synthetic measurements, not production observations.
+server PID. Initial, peak across all samples, and final values and continuity
+are printed; an exited server, nonzero request errors, an acknowledged writer
+rkey missing from or duplicated in post-attach `#commit` operation paths, an
+unexpected relay operation path, or a configured bound breach fails the run.
+Each bound grades the maximum sampled increase from the initial value, even
+if the final value falls: RSS as a percentage of initial RSS and disk in KiB.
+These are synthetic measurements, not production observations.
 
 A bounded shakeout, not a soak sign-off, can be run off-hours in an isolated
 checkout with the native compiler built:
@@ -216,8 +219,10 @@ MEDAKA_ROOT=<isolated-checkout> MEDAKA=<isolated-checkout>/medaka \
 sh <isolated-checkout>/pds/nightly/load_harness.sh
 ```
 
-The RSS limit is a maximum percentage increase from the initial sample; the
-disk limit is maximum growth in KiB. Set `LOAD_RESOURCE_SAMPLE_SECONDS` to
+The RSS limit grades the highest sampled RSS against the initial sample as a
+percentage; the disk limit grades the highest sampled disk usage against the
+initial sample in KiB. A transient sampled breach is not forgiven by a later
+drop. Set `LOAD_RESOURCE_SAMPLE_SECONDS` to
 an operator-chosen sampling cadence for the observation. No numerical limit,
 production/off-hours authorization, or live-run evidence is supplied by this
 procedure; the full observation and #2957 sign-off remain blocked until those

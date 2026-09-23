@@ -152,37 +152,37 @@ build_one() {
 
 # ── build ───────────────────────────────────────────────────────────────────
 
-export MEDAKA_EMITTER="${MEDAKA_EMITTER:-$ROOT/medaka_emitter}"
-BUILD_START=$(now_seconds)
-build_one "$SERVE_SRC" "$WORK/pdsd"
-build_one "$SYNTH_SRC" "$WORK/synth"
-build_one "$CLIENT_SRC" "$WORK/client"
-build_one "$SUBSCRIBE_SRC" "$WORK/subscriber"
-printf 'phase build seconds=%s\n' "$(($(now_seconds) - BUILD_START))"
+prepare_workload() {
+  export MEDAKA_EMITTER="${MEDAKA_EMITTER:-$ROOT/medaka_emitter}"
+  BUILD_START=$(now_seconds)
+  build_one "$SERVE_SRC" "$WORK/pdsd"
+  build_one "$SYNTH_SRC" "$WORK/synth"
+  build_one "$CLIENT_SRC" "$WORK/client"
+  build_one "$SUBSCRIBE_SRC" "$WORK/subscriber"
+  printf 'phase build seconds=%s\n' "$(($(now_seconds) - BUILD_START))"
 
-# ── corpus ──────────────────────────────────────────────────────────────────
+  # One corpus, built once and copied: the loaded server and the idle control
+  # server must be reading identical repositories, or their latencies are not
+  # comparable and the control proves nothing.
+  CORPUS_START=$(now_seconds)
+  mkdir -p "$WORK/corpus"
+  "$WORK/synth" build "$SHAPE" "$WORK/corpus" "$RECORDS" "$BLOBS" 1 \
+    > "$WORK/corpus.out" 2>&1 || {
+    cat "$WORK/corpus.out" >&2
+    fail 'corpus build failed'
+  }
+  cat "$WORK/corpus.out"
+  cp -R "$WORK/corpus" "$WORK/data-loaded"
+  cp -R "$WORK/corpus" "$WORK/data-control"
+  printf 'phase corpus seconds=%s\n' "$(($(now_seconds) - CORPUS_START))"
 
-# One corpus, built once and copied: the loaded server and the idle control
-# server must be reading identical repositories, or their latencies are not
-# comparable and the control proves nothing.
-CORPUS_START=$(now_seconds)
-mkdir -p "$WORK/corpus"
-"$WORK/synth" build "$SHAPE" "$WORK/corpus" "$RECORDS" "$BLOBS" 1 \
-  > "$WORK/corpus.out" 2>&1 || {
-  cat "$WORK/corpus.out" >&2
-  fail 'corpus build failed'
+  printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
+  printf '%s\n' "$TOKEN_SECRET_HEX" > "$WORK/token.hex"
+  printf '%s\n' "$PASSWORD" > "$WORK/password"
+  # The server refuses a group- or world-readable signing key, session-token
+  # secret or password file before it binds.
+  chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
 }
-cat "$WORK/corpus.out"
-cp -R "$WORK/corpus" "$WORK/data-loaded"
-cp -R "$WORK/corpus" "$WORK/data-control"
-printf 'phase corpus seconds=%s\n' "$(($(now_seconds) - CORPUS_START))"
-
-printf '%s\n' "$SECRET_HEX" > "$WORK/key.hex"
-printf '%s\n' "$TOKEN_SECRET_HEX" > "$WORK/token.hex"
-printf '%s\n' "$PASSWORD" > "$WORK/password"
-# The server refuses a group- or world-readable signing key, session-token
-# secret or password file before it binds.
-chmod 600 "$WORK/key.hex" "$WORK/token.hex" "$WORK/password"
 
 # ── the two servers ─────────────────────────────────────────────────────────
 
@@ -283,36 +283,42 @@ check_resource_evidence() {
         if (pair[1] == "rss_kib") last_rss = pair[2]
         if (pair[1] == "data_kib") last_disk = pair[2]
       }
+      if (last_rss > peak_rss) peak_rss = last_rss
+      if (last_disk > peak_disk) peak_disk = last_disk
     }
-    END { print first_rss, first_disk, last_rss, last_disk }
+    END { print first_rss, first_disk, last_rss, last_disk, peak_rss, peak_disk }
   ' "$RESOURCE_LOG")
   rss_start=$1
   disk_start=$2
   rss_end=$3
   disk_end=$4
+  rss_peak=$5
+  disk_peak=$6
   [ "$rss_start" -gt 0 ] || fail 'initial server RSS sample was zero'
   rss_delta=$((rss_end - rss_start))
   disk_delta=$((disk_end - disk_start))
-  rss_pct=$(awk -v a="$rss_start" -v b="$rss_end" \
+  rss_peak_delta=$((rss_peak - rss_start))
+  disk_peak_delta=$((disk_peak - disk_start))
+  rss_pct=$(awk -v a="$rss_start" -v b="$rss_peak" \
     'BEGIN { printf "%.3f", ((b - a) / a) * 100 }')
-  printf 'soak-delta server_pid=%s rss_initial_kib=%s rss_final_kib=%s rss_delta_kib=%s rss_growth_pct=%s data_initial_kib=%s data_final_kib=%s data_delta_kib=%s samples=%s\n' \
-    "$LOADED_PID" "$rss_start" "$rss_end" "$rss_delta" "$rss_pct" \
-    "$disk_start" "$disk_end" "$disk_delta" "$samples"
+  printf 'soak-delta server_pid=%s rss_initial_kib=%s rss_peak_kib=%s rss_peak_delta_kib=%s rss_peak_growth_pct=%s rss_final_kib=%s rss_final_delta_kib=%s data_initial_kib=%s data_peak_kib=%s data_peak_delta_kib=%s data_final_kib=%s data_final_delta_kib=%s samples=%s\n' \
+    "$LOADED_PID" "$rss_start" "$rss_peak" "$rss_peak_delta" "$rss_pct" "$rss_end" "$rss_delta" \
+    "$disk_start" "$disk_peak" "$disk_peak_delta" "$disk_end" "$disk_delta" "$samples"
   awk -v pid="$LOADED_PID" '
     { found = 0; for (i = 1; i <= NF; i++) { split($i, pair, "="); if (pair[1] == "server_pid") { found = 1; if (pair[2] != pid) exit 1 } } if (!found) exit 1 }
   ' "$RESOURCE_LOG" || fail 'loaded server PID changed or was absent in resource samples'
   printf 'server-continuity pid=%s samples=%s PASS\n' "$LOADED_PID" "$samples"
   if [ -n "$MAX_RSS_GROWTH_PCT" ]; then
-    awk -v actual="$rss_pct" -v limit="$MAX_RSS_GROWTH_PCT" \
-      'BEGIN { exit !(actual <= limit) }' \
-      || fail "RSS growth $rss_pct% exceeded configured limit ${MAX_RSS_GROWTH_PCT}%"
+    awk -v start="$rss_start" -v peak="$rss_peak" -v limit="$MAX_RSS_GROWTH_PCT" \
+      'BEGIN { exit !((peak - start) * 100 <= start * limit) }' \
+      || fail "peak RSS growth $rss_pct% exceeded configured limit ${MAX_RSS_GROWTH_PCT}%"
     printf 'rss-bound limit_pct=%s PASS\n' "$MAX_RSS_GROWTH_PCT"
   else
     printf 'rss-bound not-configured (shakeout only; no limit inferred)\n'
   fi
   if [ -n "$MAX_DISK_GROWTH_KIB" ]; then
-    [ "$disk_delta" -le "$MAX_DISK_GROWTH_KIB" ] \
-      || fail "data growth ${disk_delta}KiB exceeded configured limit ${MAX_DISK_GROWTH_KIB}KiB"
+    [ "$disk_peak_delta" -le "$MAX_DISK_GROWTH_KIB" ] \
+      || fail "peak data growth ${disk_peak_delta}KiB exceeded configured limit ${MAX_DISK_GROWTH_KIB}KiB"
     printf 'disk-bound limit_kib=%s PASS\n' "$MAX_DISK_GROWTH_KIB"
   else
     printf 'disk-bound not-configured (shakeout only; no limit inferred)\n'
@@ -320,6 +326,69 @@ check_resource_evidence() {
   cat "$RESOURCE_LOG"
 }
 
+grade_relay_evidence() {
+  writer_log=$1
+  subscriber_log=$2
+  expected_writes=$3
+  expected_commits=$4
+  awk '/^write-path / { if (NF != 2) exit 1; print $2 }' "$writer_log" \
+    > "$WORK/ack.paths" || fail 'malformed acknowledged write path'
+  awk '/^relay-path / { if (NF != 2) exit 1; print $2 }' "$subscriber_log" \
+    > "$WORK/delivered.paths" || fail 'malformed delivered commit path'
+  ack_count=$(wc -l < "$WORK/ack.paths" | tr -d ' ')
+  delivered_count=$(wc -l < "$WORK/delivered.paths" | tr -d ' ')
+  [ "$ack_count" -eq "$expected_writes" ] \
+    || fail "acknowledged write paths $ack_count did not match writer count $expected_writes"
+  [ "$delivered_count" -eq "$expected_commits" ] \
+    || fail "delivered commit paths $delivered_count did not match subscriber count $expected_commits"
+  LC_ALL=C sort "$WORK/ack.paths" > "$WORK/ack.sorted"
+  LC_ALL=C sort "$WORK/delivered.paths" > "$WORK/delivered.sorted"
+  [ ! -s "$WORK/ack.sorted" ] && fail 'no acknowledged write paths'
+  if [ -n "$(uniq -d "$WORK/ack.sorted")" ]; then
+    fail 'writer reported a duplicate acknowledged path'
+  fi
+  if [ -n "$(uniq -d "$WORK/delivered.sorted")" ]; then
+    fail 'relay delivered a duplicate commit path'
+  fi
+  cmp -s "$WORK/ack.sorted" "$WORK/delivered.sorted" \
+    || fail 'acknowledged write paths differ from delivered post-attach commit paths'
+  printf 'relay-paths acknowledged=%s delivered=%s distinct=%s PASS\n' \
+    "$ack_count" "$delivered_count" "$delivered_count"
+}
+
+if [ "${LOAD_EVIDENCE_SELFTEST:-0}" = 1 ]; then
+  LOADED_PID=4242
+  RESOURCE_LOG="$WORK/selftest.resources"
+  printf 'soak-sample server_pid=4242 rss_kib=1000 data_kib=100\nsoak-sample server_pid=4242 rss_kib=2000 data_kib=200\nsoak-sample server_pid=4242 rss_kib=1100 data_kib=110\n' > "$RESOURCE_LOG"
+  if (MAX_RSS_GROWTH_PCT=20 MAX_DISK_GROWTH_KIB=; check_resource_evidence) > "$WORK/spike.out" 2>&1; then
+    fail 'resource self-test accepted transient RSS spike'
+  fi
+  grep -q 'FAIL: peak RSS growth' "$WORK/spike.out" || fail 'RSS spike rejected for the wrong reason'
+  printf 'resource-spike RSS rejection PASS\n'
+  if (MAX_RSS_GROWTH_PCT= MAX_DISK_GROWTH_KIB=20; check_resource_evidence) > "$WORK/spike.out" 2>&1; then
+    fail 'resource self-test accepted transient disk spike'
+  fi
+  grep -q 'FAIL: peak data growth' "$WORK/spike.out" || fail 'disk spike rejected for the wrong reason'
+  printf 'resource-spike disk rejection PASS\n'
+  printf 'soak-sample server_pid=4242 rss_kib=1000 data_kib=100\nsoak-sample server_pid=4242 rss_kib=1100 data_kib=110\nsoak-sample server_pid=4242 rss_kib=1050 data_kib=105\n' > "$RESOURCE_LOG"
+  (MAX_RSS_GROWTH_PCT=20 MAX_DISK_GROWTH_KIB=20; check_resource_evidence) \
+    > "$WORK/within.out" 2>&1 || fail 'within-limit resource samples were rejected'
+  printf 'resource-within-limit control PASS\n'
+  printf 'write-path bulk.synth.record/soak-129-0\nwrite-path bulk.synth.record/soak-129-1\n' > "$WORK/selftest.writer"
+  printf 'relay-path bulk.synth.record/soak-129-1\nrelay-path bulk.synth.record/soak-129-0\n' > "$WORK/selftest.subscriber"
+  grade_relay_evidence "$WORK/selftest.writer" "$WORK/selftest.subscriber" 2 2
+  printf 'event-set exact control PASS\n'
+  printf 'relay-path bulk.synth.record/soak-129-0\nrelay-path bulk.synth.record/soak-129-0\n' > "$WORK/selftest.subscriber"
+  if (grade_relay_evidence "$WORK/selftest.writer" "$WORK/selftest.subscriber" 2 2) > "$WORK/missing.out" 2>&1; then
+    fail 'event self-test accepted duplicate in place of missing path'
+  fi
+  grep -q 'FAIL: relay delivered a duplicate commit path' "$WORK/missing.out" \
+    || fail 'duplicate/missing event set rejected for the wrong reason'
+  printf 'event-set duplicate/missing rejection PASS\n'
+  exit 0
+fi
+
+prepare_workload
 SERVER_START=$(now_seconds)
 start_server loaded "$WORK/data-loaded"
 start_server control "$WORK/data-control"
@@ -539,7 +608,7 @@ while [ "$i" -le "$CLIENTS" ]; do
   i=$((i + 1))
 done
 WRITE_COUNT=0
-WRITE_REQUESTS=0
+: > "$WORK/writes.out"
 i=1
 while [ "$i" -le "$WRITE_CLIENTS" ]; do
   grep -q ' non200=0 errors=0 ' "$WORK/write$i.out" || {
@@ -554,7 +623,7 @@ while [ "$i" -le "$WRITE_CLIENTS" ]; do
   }
   [ -n "$requests" ] || fail "write generator $i reported no request count"
   WRITE_COUNT=$((WRITE_COUNT + writes))
-  WRITE_REQUESTS=$((WRITE_REQUESTS + requests))
+  cat "$WORK/write$i.out" >> "$WORK/writes.out"
   cat "$WORK/write$i.out"
   i=$((i + 1))
 done
@@ -564,8 +633,9 @@ EVENT_COUNT=$(field_of events "$WORK/subscriber.out")
 RELAY_COMMITS=$(field_of commits "$WORK/subscriber.out")
 [ -n "$EVENT_COUNT" ] && [ "$EVENT_COUNT" -gt 0 ] \
   || fail 'synthetic subscriber received no relay events'
-[ -n "$RELAY_COMMITS" ] && [ "$RELAY_COMMITS" -ge "$WRITE_COUNT" ] \
-  || fail "relay delivered ${RELAY_COMMITS:-missing} commits, fewer than $WRITE_COUNT committed writes"
+[ -n "$RELAY_COMMITS" ] && [ "$RELAY_COMMITS" -gt 0 ] \
+  || fail 'synthetic subscriber received no relay commits'
+grade_relay_evidence "$WORK/writes.out" "$WORK/subscriber.out" "$WRITE_COUNT" "$RELAY_COMMITS"
 printf 'phase load seconds=%s\n' "$(($(now_seconds) - LOAD_START))"
 
 : > "$WORK/metrics.stop"
