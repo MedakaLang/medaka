@@ -191,9 +191,18 @@ on every upload (C6).
 | C4 | A 50 MiB `getRepo` export delays an unrelated concurrent `getRecord` by less than a stated bound; the bound is written into the design doc as accepted. | G-ANNOUNCE | accepted with a number — +586 ms on an unrelated read of an 800-record repository, stated in `docs/design/ATPROTO-PDS-DESIGN.md` §6 under `sync.getRepo` | #2955 |
 | C5 | A burst of concurrent `getBlob` reads (the semi-viral-post shape) is measured; either file I/O is routed off the scheduler thread or the measured degradation is accepted with a number. | G-ANNOUNCE | accepted with a number — a 2,674/s `getBlob` burst raises an unrelated `getRecord` by +1.19 ms; measured and accepted in the design doc rather than routed off-thread | #2956 |
 | C6 | Uploading the account's hundredth blob writes less than 3× that blob's size to disk. | G-ANNOUNCE | missing — every upload rewrites the whole blob half | #2692 |
-| C7 | A soak of stated length under synthetic write + read + relay-subscribe load, run off-hours as an isolated job, shows RSS growth under a stated percentage. | G-ANNOUNCE | missing | #2957 |
+| C7 | A soak of stated length under synthetic write + read + relay-subscribe load, run off-hours as an isolated job, shows RSS growth under a stated percentage. | G-ANNOUNCE | harness instrumented; full observation blocked — requires operator-approved duration and RSS/disk limits, off-hours authorization and a separately observed run | #2957 |
 | C8 | Outbound `getaddrinfo` no longer blocks the scheduler, or the egress proxy is dialed by literal loopback address only (it already is) and this is recorded as the mitigation. | G-ANNOUNCE | open | #2928 |
 | C9 | Block-store growth without GC is bounded by a stated policy (a periodic sweep, or a documented disk budget with the alert in 2.E watching it). | G-MIGRATE | open | #2572 |
+
+The C7 harness reports the loaded server process's timestamped RSS samples,
+loaded data-directory disk size, request errors and PID continuity alongside
+read/write/subscriber counts and initial/final deltas. See
+[`PDS-RUNBOOK.md` §4, "Synthetic mixed-load evidence"](PDS-RUNBOOK.md#synthetic-mixed-load-evidence-c7-2957)
+for the isolated command and operator-set limits. The event-log retention
+sweep is triggered by **256 appends**, not 72h of uptime; neither a bounded
+shakeout nor this instrumentation closes the full-observation or natural-sweep
+criteria.
 
 ### 2.D Deployment
 

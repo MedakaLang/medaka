@@ -150,12 +150,14 @@ soak begins; do not deploy against an assumed number.
 **That is the calendar clock. There is a second one, and it is not a
 calendar.** `PDS-LAUNCH-PLAN.md` §1 states both: the uninterrupted-run clock
 resets on *every* restart — a deploy, a config change, a crash, a reboot —
-whatever the severity. Three properties depend on it and on nothing else:
+whatever the severity. The run clock matters to these observations, but retention also depends
+on an append counter:
 
-| property | uninterrupted run needed |
+| property | observation requirement |
 |---|---|
-| refresh-token rotation against a live token | > 2h |
-| the retention sweep, and a relay reconnecting past it | **> 72h** |
+| refresh-token rotation against a live token | > 2h since a token was issued |
+| relay reconnecting after the retention window | > 72h and a natural sweep after the append trigger |
+| event-log retention sweep | every 256 appends; only entries older than 72h then expire |
 | RSS drift with a readable trend | days |
 
 So during a soak:
@@ -165,10 +167,66 @@ So during a soak:
 - **Record every deploy on #1697** with its date and the severities it carried.
   Two clocks cannot be reconstructed afterwards from a tag list alone.
 - **At least one ≥72h window with no restart must fall inside the soak** before
-  its gate closes. Without it the sweep never fires and `#3005` stays untested,
-  and the soak has demonstrated availability rather than correctness.
+  its gate closes. It is not by itself a sweep: record a natural 256th append
+  after entries have aged past 72h and the relay's reconnect to test `#3005`.
+  Otherwise the run demonstrated availability, not retention correctness.
 
-⚠️ **`systemctl restart` during a soak still costs the 72h window above**, even
+### Synthetic mixed-load evidence (C7 / #2957)
+
+`pds/nightly/load_harness.sh` runs only against its private loopback servers
+and generated corpus. It concurrently drives read clients, authenticated
+`createRecord` writers and a live `subscribeRepos` consumer. Timestamped
+samples report the loaded `pdsd` process's RSS (`ps`, KiB), the loaded data
+directory's allocated size (`du -sk`, KiB), request/sample errors, and the
+server PID. Initial/final deltas and continuity are printed; an exited server,
+nonzero request errors, lost relay commits, or a configured bound breach fails
+the run. RSS growth is compared as a percentage of initial RSS, and disk
+change as KiB. These are synthetic measurements, not production observations.
+
+A bounded shakeout, not a soak sign-off, can be run off-hours in an isolated
+checkout with the native compiler built:
+
+```sh
+LOAD_RECORDS=32 LOAD_BLOBS=2 LOAD_CLIENTS=2 LOAD_WRITE_CLIENTS=1 \
+LOAD_SUBSCRIBER=1 LOAD_DURATION_MS=6000 LOAD_TICKS=30 \
+LOAD_INTERVAL_MS=100 LOAD_WARMUP_SECONDS=1 LOAD_RESOURCE_SAMPLE_SECONDS=1 \
+MEDAKA_ROOT=<isolated-checkout> MEDAKA=<isolated-checkout>/medaka \
+sh <isolated-checkout>/pds/nightly/load_harness.sh
+```
+
+An isolated 32-record, 2-blob shakeout on 2026-09-23 recorded 91 successful
+read requests, 44 authenticated writes, 44 **post-attach** `#commit` events
+(no replay), zero request errors and one server PID across 14 timestamped
+samples. Loaded-server RSS went from 8,928 to 13,212 KiB (+47.984%);
+loaded data-directory size went from 456 to 2,084 KiB (+1,628 KiB). This
+~13-second workload phase is not an RSS/disk bound or a full soak result.
+
+For a full off-hours observation, an operator must first choose and approve
+all three values below; the harness invents no resource bound or duration:
+
+```sh
+LOAD_FULL_SOAK=1 LOAD_DURATION_MS=<operator-approved-ms> \
+LOAD_MAX_RSS_GROWTH_PCT=<operator-approved-percent> \
+LOAD_MAX_DISK_GROWTH_KIB=<operator-approved-KiB> \
+LOAD_RECORDS=<operator-approved-record-count> LOAD_BLOBS=<operator-approved-blob-count> \
+LOAD_CLIENTS=<operator-approved-reader-count> LOAD_WRITE_CLIENTS=<operator-approved-writer-count> \
+LOAD_SUBSCRIBER=1 LOAD_TICKS=<operator-approved-sample-count> \
+LOAD_INTERVAL_MS=<operator-approved-interval-ms> \
+MEDAKA_ROOT=<isolated-checkout> MEDAKA=<isolated-checkout>/medaka \
+sh <isolated-checkout>/pds/nightly/load_harness.sh
+```
+
+The RSS limit is a maximum percentage increase from the initial sample; the
+disk limit is maximum growth in KiB. Set `LOAD_RESOURCE_SAMPLE_SECONDS` to
+an operator-chosen sampling cadence for the observation. No numerical limit,
+production/off-hours authorization, or live-run evidence is supplied by this
+procedure; the full observation and #2957 sign-off remain blocked until those
+are separately approved and observed. The event-log retention sweep is driven
+by **every 256 appends**, not by elapsed uptime: a 72h duration does not itself
+cause a sweep. A natural retention-sweep observation remains pending until the
+append-count trigger is reached and its effects are recorded.
+
+⚠️ **`systemctl restart` during a soak still costs the uninterrupted window above**, even
 when the change is trivial. It no longer costs every session: the open session
 set is persisted and read back at startup, so a restart is not a logout and the
 operator's own use of the service carries across one. A session lost across a
