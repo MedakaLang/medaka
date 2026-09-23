@@ -948,13 +948,67 @@ mustCount : String -> Int
 mustCount text =
   optionOrPanic "serve_subscribe: not a count: \{text}" (toInt text)
 
+soakLoop : Connection ->
+  Array Int ->
+  Float ->
+  Float ->
+  Int ->
+  Int ->
+  <Clock, Net "_"> Result String (Int, Int)
+soakLoop conn buffered t0 budget events commits =
+  if elapsedSince t0 >= budget then
+    Ok (events, commits)
+  else match nextEvent conn buffered
+    Err message =>
+      if message == "Resource temporarily unavailable"
+        || message == "Operation timed out" then
+        soakLoop conn buffered t0 budget events commits
+      else
+        Err message
+    Ok None => Err "serve_subscribe: synthetic soak stream closed"
+    Ok (Some (payload, rest)) => match splitEvent payload
+      Err message => Err message
+      Ok (header, _) =>
+        let kind = eventKind header
+        if kind == "!error" then
+          Err "serve_subscribe: synthetic soak received an error event"
+        else
+          soakLoop conn rest t0 budget (events + 1) (if kind == "#commit" then
+            commits + 1
+          else
+            commits)
+
+runSoak : Int -> Int -> <IO, Net "_", Clock> Unit
+runSoak port durationMs =
+  let conn = mustConnect port
+  let () = armRead conn readBudget
+  let buffered = mustUpgrade conn ""
+  let () = armRead conn (seconds 1)
+  let t0 = monotonic ()
+  let budget = intToFloat durationMs / 1000.0
+  let () = println "subscriber ready"
+  let () = flushStdout ()
+  let () = match soakLoop conn buffered t0 budget 0 0
+    Err message => report "SUBSOAK" False message
+    Ok (events, commits) =>
+      let () =
+        report
+          "SUBSOAK"
+          (events > 0 && commits > 0)
+          "received events=\{intToString events} commits=\{intToString commits} errors=0 over \{floatToString (elapsedSince t0)}s"
+      println
+        "subscriber events=\{intToString events} commits=\{intToString commits} errors=0 seconds=\{floatToString (elapsedSince t0)}"
+  let () = sayGoodbye conn
+  ignoreResult (close conn)
+
 usage : String
 usage =
-  "usage: serve_subscribe <genesis|live|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
+  "usage: serve_subscribe <genesis|live|soak|future-cursor|refused-cursor|outdated-cursor|exact-cursor|ceiling|hold|fragment|stray-continuation|overlapped-message|oversize-message|close-echo|close-malformed> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
   ["genesis", port] => runGenesis (mustPort port)
+  ["soak", port, durationMs] => runSoak (mustPort port) (mustCount durationMs)
   ["live", port, token, did, collection, rkeyPrefix] =>
     runLive (mustPort port) token did collection rkeyPrefix
   ["future-cursor", port, cursor] => runFutureCursor (mustPort port) cursor
