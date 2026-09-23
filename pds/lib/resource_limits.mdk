@@ -182,6 +182,25 @@ export
 maxWritesPerWindow : Int
 maxWritesPerWindow = 60
 
+{- | `app.bsky.actor.putPreferences` persists to the actor store on every
+   call, but it signs no repo commit and touches no MST — folding it into
+   `isWriteNsid` would spend `WritesClass`'s own allowance on it, letting a
+   preferences burst starve `createRecord` out of the same budget (or a
+   write burst starve `putPreferences`). Leaving it inside the shared
+   `RequestsClass` is too coarse the other way: that allowance is sized for
+   read volume, not for a route that writes a document on every call, so a
+   preferences burst there is bounded no differently than a burst of plain
+   reads.
+
+   The ceiling times `maxJsonBodyBytes` (153600) is the request-body volume
+   one identity may write through this route in one window: at 120, that is
+   about 18 MiB per 60-second window, roughly 2 calls/second sustained —
+   comfortably reachable inside one window, so a caller that hits it
+   observes the refusal instead of the count resetting mid-flood. -}
+export
+maxPreferencesPerWindow : Int
+maxPreferencesPerWindow = 120
+
 export
 maxCreateSessionPerWindow : Int
 maxCreateSessionPerWindow = 30

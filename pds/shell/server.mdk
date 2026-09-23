@@ -21,14 +21,12 @@
    divergent answer to a question `http` has already settled. -}
 
 import http.{
-  Header,
   HttpFrame(..),
   HttpParseFailure,
   HttpScan,
   httpScanBodyRemaining,
   httpScanInHeaders,
   httpScanStart,
-  makeHeader,
   maxHttpRequestBytes,
   parseRequestAt,
   Request,
@@ -73,13 +71,15 @@ import lib.ratelimit.{
   RateLimitState,
   RateLimitVerdict(..),
   TrustedProxy,
-  classAllowance,
+  capacityMessage,
+  classMessage,
   directIdentity,
   identifyClient,
   identityLabel,
   initRateLimitState,
   nsidRateLimitClasses,
-  remainingInClass,
+  rateLimitCapacityHeaderList,
+  rateLimitHeaderList,
   step,
 }
 import hex.{encode}
@@ -106,11 +106,7 @@ import lib.sync_event.{
   syncIdentityFrame,
   syncSyncFrame,
 }
-import lib.resource_limits.{
-  maxInFlightRequestBytes,
-  maxRateLimitIdentitiesPerWindow,
-  rateLimitWindowSeconds,
-}
+import lib.resource_limits.{maxInFlightRequestBytes}
 import lib.proxy.{
   UpstreamAnswer,
   proxyUpstreamFailureResponse,
@@ -174,7 +170,6 @@ import shell.persist.{
 }
 import shell.subscribe.{runSubscription}
 import lib.websocket.{handshakeResponseBytes}
-import string.{toUtf8}
 import time.{
   Duration,
   formatIso,
@@ -1040,66 +1035,6 @@ admitClasses state identity nowSeconds (cls :: rest) =
     (next, Refused) => RequestRefused next cls
     (next, RefusedCapacity) => RequestRefusedCapacity next
     (next, Admitted) => admitClasses next identity nowSeconds rest
-
-classMessage : RateLimitClass -> String
-classMessage ConnectionsClass =
-  "too many connections for this identity in the current window"
-classMessage RequestsClass =
-  "too many requests for this identity in the current window"
-classMessage WritesClass =
-  "too many write requests for this identity in the current window"
-classMessage CreateSessionClass =
-  "too many createSession attempts for this identity in the current window"
-classMessage RepoExportClass =
-  "too many repository exports for this identity in the current window"
-classMessage ProxyClass =
-  "too many proxied appview reads for this identity in the current window"
-
--- | What a `RequestRefusedCapacity` refusal is told: this identity has not
--- exceeded anything of its own — the shared per-window table is full of
--- OTHER identities, and `classMessage`/`remainingInClass` would describe a
--- usage this identity never accrued.
-capacityMessage : String
-capacityMessage =
-  "too many distinct client identities tracked in the current window"
-
-intHeader : String -> Int -> Header
-intHeader name value =
-  resultOrPanic
-    "serve: internal rate-limit header error"
-    (makeHeader name (toUtf8 "\{value}"))
-
--- `RateLimit-Reset` needs no state, only `now` and the shared window length:
--- every class resets on the same window boundary.
-rateLimitHeaderList : RateLimitState ->
-  ClientIdentity ->
-  RateLimitClass ->
-  Int ->
-  List Header
-rateLimitHeaderList state identity cls nowSeconds = [
-  intHeader "ratelimit-limit" (classAllowance cls),
-  intHeader
-    "ratelimit-remaining"
-    (remainingInClass state identity cls nowSeconds),
-  intHeader
-    "ratelimit-reset"
-    (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
-]
-
--- | Headers for a `RequestRefusedCapacity` refusal: `ratelimit-limit` names
--- the cardinality cap itself rather than a class allowance, and
--- `ratelimit-remaining` is `0` rather than `remainingInClass`'s answer —
--- this identity has no row and no usage of its own, so the class allowance
--- it would otherwise report is not what refused it, and reporting it would
--- claim full allowance while refusing the request.
-rateLimitCapacityHeaderList : Int -> List Header
-rateLimitCapacityHeaderList nowSeconds = [
-  intHeader "ratelimit-limit" maxRateLimitIdentitiesPerWindow,
-  intHeader "ratelimit-remaining" 0,
-  intHeader
-    "ratelimit-reset"
-    (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
-]
 
 -- | `None` admits; `Some` is the 429 to send instead of doing any real work.
 -- Every buffer that reached the framer is charged, a parse failure included:
