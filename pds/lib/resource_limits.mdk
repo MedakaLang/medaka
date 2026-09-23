@@ -384,6 +384,49 @@ maxHttpClientWireBytes =
     + maxHttpClientBodyBytes
     + maxHttpClientChunks * 16
 
+{- | How many bytes of upstream answer the proxied calls in flight may hold
+   between them past `maxUnchargedEgressBytes` each, summed across all of them
+   (#3264).
+
+   `maxHttpClientWireBytes` above bounds ONE answer and
+   `maxConcurrentProxiedCalls` (`pds/shell/server.mdk`) bounds how many are in
+   flight, but nothing bounded their product, and an answer is not held at one
+   byte a byte: it accumulates one tagged word per byte in a doubling vector,
+   and is then copied, parsed and serialized again for the relay. Eight calls
+   at the wire ceiling measured 810-948 MiB VmRSS, and eight valid answers at
+   the body ceiling 1.6-2.2 GiB, against `pds/pds.service`'s `MemoryMax=512M`.
+
+   One wire ceiling, so a call that reaches the uncharged allowance is charged
+   the whole of it and one such answer is in flight at a time. That is the
+   most the measured multiplier allows: ONE valid answer at the body ceiling,
+   with nothing else in flight, peaked at 298 MiB (58% of `MemoryMax`), and
+   one refused at the wire ceiling at 145 MiB (28%), so two of the first
+   would already be past the limit. The charge is the whole ceiling rather
+   than the bytes held because the rest of an answer's length is not known
+   while it is arriving, and a call that waited for headroom a chunk at a
+   time would wait holding part of an answer, on others doing the same.
+
+   It bounds what is held at once, not the heap a run of large answers leaves
+   behind: eight valid answers at the body ceiling relayed one after another,
+   with no two in flight together, still peaked at 507-751 MiB (#3264). -}
+export
+maxInFlightEgressBytes : Int
+maxInFlightEgressBytes = maxHttpClientWireBytes
+
+{- | How many bytes of upstream answer one proxied call may hold before it is
+   charged to `maxInFlightEgressBytes`.
+
+   Small answers are the ordinary traffic, and they are not charged: a
+   fan-out of them must stay concurrent, since an upstream may answer none of
+   it until all of it has arrived. Four upstream reads (256 KiB) is the
+   allowance. Eight calls each holding a valid answer of that size measured
+   90 MiB VmRSS (17.5% of `MemoryMax`), which with the one charged answer
+   leaves room under the limit, where an allowance of one mebibyte measured
+   265 MiB for the eight and would not. -}
+export
+maxUnchargedEgressBytes : Int
+maxUnchargedEgressBytes = 262144
+
 {- | How many bytes of inbound request every connection on this server may hold
    buffered at once, summed across all of them (#2951).
 
