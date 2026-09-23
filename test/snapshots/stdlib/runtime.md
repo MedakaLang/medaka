@@ -1,5 +1,5 @@
 # META
-source_lines=745
+source_lines=754
 stages=DESUGAR,MARK
 # SOURCE
 {- | The host primitives.
@@ -291,6 +291,15 @@ extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
 -- The async runtime's non-blocking half (`stdlib/async.mdk`, `net_async`).
 -- Would-block is `Ok None`; `Ok (Some x)` carries what the blocking sibling
 -- returns; `Err` is the host's error message.
+
+-- | Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
+-- descriptor readable on shutdown. A binary that never calls this retains
+-- the operating system's default signal behavior. Call once after bind.
+extern pdsSignalStart : Unit -> <Net "_"> Result String Int
+
+-- | Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
+-- the descriptor remains readable. Only call from ordinary task context.
+extern pdsSignalRequested : Unit -> <Net "_"> Bool
 
 -- | Waits until any of the descriptors is ready, or the timeout in
 -- milliseconds passes (`-1` waits forever). The interests are parallel to the
@@ -802,6 +811,8 @@ extern stringToLower : String -> String
 (DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyCon "Bool"))))
 (DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))
@@ -967,6 +978,8 @@ extern stringToLower : String -> String
 (DExtern false "netShutdown" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netClose" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit")))))
 (DExtern false "netSetTimeout" (TyFun (TyCon "Int") (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
+(DExtern false "pdsSignalStart" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Int")))))
+(DExtern false "pdsSignalRequested" (TyFun (TyCon "Unit") (TyEffect ((hole "Net")) None (TyCon "Bool"))))
 (DExtern false "ioPoll" (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyApp (TyCon "Array") (TyCon "Int")) (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Array") (TyCon "Int"))))))))
 (DExtern false "netSetNonblock" (TyFun (TyCon "Int") (TyFun (TyCon "Bool") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyCon "Unit"))))))
 (DExtern false "netTryAccept" (TyFun (TyCon "Int") (TyEffect ((hole "Net")) None (TyApp (TyApp (TyCon "Result") (TyCon "String")) (TyApp (TyCon "Option") (TyCon "Int"))))))

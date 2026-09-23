@@ -26,6 +26,7 @@
    naming route labels that already have builders. -}
 
 import array.{concat, fromList, sliceClamped, sortInPlace}
+import json.{Json(..), get, jObject, parse, stringify}
 import lib.blob.{blobCid}
 import lib.cid.{cidToString}
 import io.{eprintln}
@@ -277,24 +278,26 @@ recvAtLeast conn buf need =
       else
         recvAtLeast conn (appendBytes buf chunk) need
 
-{- | Reads one complete response and reports its status and whatever bytes
-   were buffered past it.
+{- | Reads one complete response: status, body, and bytes buffered past it.
 
-   The body is never copied out. `pds/lib/httpclient.mdk`'s `parseResponse`
-   would decode one, but it refuses input carrying bytes after the framed
-   response, so it cannot frame a keep-alive stream — and a client that
-   copied every body would spend its own time on work the server is not
-   being measured for. -}
+   The writer needs the login body for its access token; GET callers discard
+   their bodies. `pds/lib/httpclient.mdk`'s `parseResponse` refuses input
+   carrying bytes after the framed response, so it cannot frame this
+   keep-alive stream. -}
 readOneResponse : Connection ->
   Array Int ->
-  <Net "_"> Result String (Int, Array Int)
+  <Net "_"> Result String (Int, Array Int, Array Int)
 readOneResponse conn pending = match findHeaderEnd pending 0
   Some headerEnd => do
     let bodyStart = headerEnd + 4
     (status, len) <- parseHeaderBlock (sliceClamped 0 headerEnd pending)
-    let need = bodyStart + len
-    full <- recvAtLeast conn pending need
-    Ok (status, sliceClamped need (arrayLength full) full)
+    let bodyEnd = bodyStart + len
+    full <- recvAtLeast conn pending bodyEnd
+    Ok (
+      status,
+      sliceClamped bodyStart bodyEnd full,
+      sliceClamped bodyEnd (arrayLength full) full,
+    )
   None => match recv conn 65536
     Err message => Err message
     Ok chunk =>
@@ -336,8 +339,142 @@ timedRequest conn pending request =
     Err message => Err message
     Ok () =>
       map
-        ((status, rest) => (status, rest, microsSince t0))
+        ((status, _, rest) => (status, rest, microsSince t0))
         (readOneResponse conn pending)
+
+-- # Authenticated write workload
+
+postJsonRequest : String -> String -> String -> String -> Array Int
+postJsonRequest xff authorization nsid bodyText =
+  let body = toUtf8 bodyText
+  concat [|
+    toUtf8
+      "POST /xrpc/\{nsid} HTTP/1.1\r\nHost: 127.0.0.1\r\nX-Forwarded-For: \{xff}\r\n\{authorization}Content-Type: application/json\r\nContent-Length: \{intToString (arrayLength body)}\r\n\r\n",
+    body,
+  |]
+
+loginBody : String -> String -> String
+loginBody did password =
+  stringify
+    (jObject [
+      ("identifier", JString did),
+      ("password", JString password),
+    ])
+
+accessTokenFrom : Array Int -> String
+accessTokenFrom body = match parse (fromUtf8 body)
+  Err message => panic "load_client: login response was not JSON: \{message}"
+  Ok value => match get "accessJwt" value
+    Some (JString token) => token
+    _ => panic "load_client: login response had no accessJwt"
+
+recordWriteBody : String -> String -> String -> String
+recordWriteBody did collection rkey =
+  stringify
+    (jObject [
+      ("repo", JString did),
+      ("collection", JString collection),
+      ("rkey", JString rkey),
+      (
+        "record",
+        jObject [
+          ("$type", JString collection),
+          ("text", JString "synthetic soak write \{rkey}"),
+          ("createdAt", JString "2026-01-01T00:00:00Z"),
+        ],
+      ),
+    ])
+
+responseRoundTrip : Connection ->
+  Array Int ->
+  Array Int ->
+  <Net "_"> Result String (Int, Array Int, Array Int)
+responseRoundTrip conn pending request = match sendAll conn request
+  Err message => Err message
+  Ok () => readOneResponse conn pending
+
+writeLoop : Connection ->
+  Array Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  Float ->
+  Float ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  <Clock, IO, Net "_"> (Array Int, Int, Int, Int, Int, Int)
+writeLoop conn pending did collection token clientId t0 budget i requests writes non200 errors =
+  if elapsedSince t0 >= budget then
+    (pending, requests, writes, non200, errors, i)
+  else
+    let rkey = "soak-\{intToString clientId}-\{intToString i}"
+    let body = recordWriteBody did collection rkey
+    let xff = identityFor identityBlockSize clientId i
+    let request =
+      postJsonRequest
+        xff
+        "Authorization: Bearer \{token}\r\n"
+        "com.atproto.repo.createRecord"
+        body
+    match responseRoundTrip conn pending request
+      Err _ => (pending, requests + 1, writes, non200, errors + 1, i)
+      Ok (200, _, rest) =>
+        let () = println "write-path \{collection}/\{rkey}"
+        writeLoop
+          conn
+          rest
+          did
+          collection
+          token
+          clientId
+          t0
+          budget
+          (i + 1)
+          (requests + 1)
+          (writes + 1)
+          non200
+          errors
+      Ok (_, _, rest) => (rest, requests + 1, writes, non200 + 1, errors, i)
+
+runWrite : Int ->
+  String ->
+  Int ->
+  Int ->
+  String ->
+  String ->
+  <Clock, Env, IO, Net "_", FileRead "_"> Unit
+runWrite port collection clientId durationMs did passwordPath =
+  let password = match readFile passwordPath
+    Err message =>
+      panic "load_client: cannot read synthetic password file: \{message}"
+    Ok text => trim text
+  let conn = mustConnect port
+  let loginXff = identityFor identityBlockSize clientId 0
+  let loginRequest =
+    postJsonRequest
+      loginXff
+      ""
+      "com.atproto.server.createSession"
+      (loginBody did password)
+  let (loginStatus, loginBodyBytes, pending) =
+    resultOrPanic
+      "load_client: createSession transport failed"
+      (responseRoundTrip conn [||] loginRequest)
+  if loginStatus /= 200 then
+    panic "load_client: createSession answered \{intToString loginStatus}"
+  let token = accessTokenFrom loginBodyBytes
+  let t0 = monotonic ()
+  let budget = intToFloat durationMs / 1000.0
+  let (_, requests, writes, non200, errors, _) =
+    writeLoop conn pending did collection token clientId t0 budget 0 0 0 0 0
+  let elapsed = elapsedSince t0
+  let () = ignoreResult (close conn)
+  println
+    "write client=\{intToString clientId} requests=\{intToString requests} writes=\{intToString writes} non200=\{intToString non200} errors=\{intToString errors} seconds=\{floatToString elapsed}"
 
 -- # Percentiles
 
@@ -568,9 +705,9 @@ mustInt text =
 
 usage : String
 usage =
-  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>"
+  "usage: load_client_main load <port> <scenario> <collection> <recordCount> <blobCount> <clientId> <durationMs>\n       load_client_main sample <port> <controlPort> <scenario> <collection> <recordCount> <blobCount> <requests> <intervalMs>\n       load_client_main write <port> <collection> <clientId> <durationMs> <did> <passwordFile>"
 
-main : <Clock, Env, IO, Net "_"> Unit
+main : <Clock, Env, IO, Net "_", FileRead "_"> Unit
 main = match args ()
   ["load", port, scenario, collection, recordCount, blobCount, clientId, durationMs] =>
     runLoad
@@ -585,4 +722,12 @@ main = match args ()
       (Plan scenario collection (mustInt recordCount) (mustInt blobCount))
       (mustInt requests)
       (mustInt intervalMs)
+  ["write", port, collection, clientId, durationMs, did, passwordPath] =>
+    runWrite
+      (mustInt port)
+      collection
+      (mustInt clientId)
+      (mustInt durationMs)
+      did
+      passwordPath
   _ => panic usage

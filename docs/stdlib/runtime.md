@@ -402,6 +402,25 @@ netSetTimeout : Int -> Int -> <Net _> Result String Unit
 Sets a connection's send and receive timeout in milliseconds. `0`
 means no timeout.
 
+### `pdsSignalStart`
+
+```
+pdsSignalStart : Unit -> <Net _> Result String Int
+```
+
+Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
+descriptor readable on shutdown. A binary that never calls this retains
+the operating system's default signal behavior. Call once after bind.
+
+### `pdsSignalRequested`
+
+```
+pdsSignalRequested : Unit -> <Net _> Bool
+```
+
+Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
+the descriptor remains readable. Only call from ordinary task context.
+
 ### `ioPoll`
 
 ```

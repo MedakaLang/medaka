@@ -52,6 +52,8 @@ ExecStart=/opt/pds/pdsd \
 	--trusted-proxy
 Restart=on-failure
 RestartSec=5
+# The app drains for up to 95s after SIGTERM; keep 15s of supervisor margin.
+TimeoutStopSec=110s
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

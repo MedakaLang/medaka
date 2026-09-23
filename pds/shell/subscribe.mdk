@@ -325,7 +325,21 @@ tailFrom : String ->
   Reassembly ->
   Array Int ->
   Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
-tailFrom dir budget conn lastSeq pending buffered =
+tailFrom dir budget conn lastSeq pending buffered = defer
+  stopping <- liftIO (u => pdsSignalRequested ())
+  if stopping then
+    sendClose budget conn normalCloseCode
+  else
+    tailStep dir budget conn lastSeq pending buffered
+
+tailStep : String ->
+  Duration ->
+  Connection ->
+  Int ->
+  Reassembly ->
+  Array Int ->
+  Async <Clock, FileRead "_", Net "_" | e> (Result String Unit)
+tailStep dir budget conn lastSeq pending buffered =
   let step = clientStep pending buffered
   match step
     ClientFailed code => sendClose budget conn code

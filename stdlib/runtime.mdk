@@ -288,6 +288,15 @@ extern netSetTimeout : Int -> Int -> <Net "_"> Result String Unit
 -- Would-block is `Ok None`; `Ok (Some x)` carries what the blocking sibling
 -- returns; `Err` is the host's error message.
 
+-- | Installs an opt-in SIGTERM handler for a native PDS, returning a pipe
+-- descriptor readable on shutdown. A binary that never calls this retains
+-- the operating system's default signal behavior. Call once after bind.
+extern pdsSignalStart : Unit -> <Net "_"> Result String Int
+
+-- | Whether SIGTERM has been observed since `pdsSignalStart`. Stays true;
+-- the descriptor remains readable. Only call from ordinary task context.
+extern pdsSignalRequested : Unit -> <Net "_"> Bool
+
 -- | Waits until any of the descriptors is ready, or the timeout in
 -- milliseconds passes (`-1` waits forever). The interests are parallel to the
 -- descriptors: bit 1 asks for readable, bit 2 for writable. The result is parallel too: bit 1 readable, bit 2 writable,

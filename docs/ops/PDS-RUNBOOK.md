@@ -105,6 +105,33 @@ gh workflow run nightly.yml --ref <deploy-branch-or-tag>
 
 then re-poll the two commands above once it completes.
 
+## Graceful stop during a soak
+
+A `pdsd` started with `pds serve` opts into SIGTERM handling once it has bound
+its listener. On SIGTERM it logs `serve: SIGTERM received; admission stopped;
+draining connections`, closes the listener, finishes already-framed requests
+(including their synchronous stage/persist/promote sequence), stops accepting
+new requests on kept-alive sockets, and sends WebSocket subscribers a normal
+1000 Close frame. Once connections retire it logs `serve: shutdown complete;
+connections drained` and exits 0. Check both lines and the exit status in
+the journal; a missing completion line is not a clean stop. No signal handler
+runs repository code: a nonblocking POSIX self-pipe wakes the cooperative
+scheduler. Other Medaka binaries retain the ordinary SIGTERM default.
+
+A peer that stops sending a request can use its existing 60-second request
+budget; a response write can take another 30 seconds. The drain has a
+95-second monotonic deadline after admission stops: if it expires, the server
+logs `serve: shutdown deadline (95s); terminating remaining connections` to
+stderr and exits between scheduler steps. This is a forced stop, **not** a
+successful drain; investigate stalled requests and verify the event-log
+recovery line on restart before counting more soak time. A blocking filesystem
+operation inside one synchronous persist step is not preemptible by the
+scheduler; the checked-in `pds/pds.service` pins `TimeoutStopSec=110s`,
+leaving 15 seconds after the app's deadline (systemd's 90-second default is
+too short). Verify the installed unit still carries that setting and treat a
+supervisor-forced kill as a crash/recovery event. A deliberate stop still resets the uninterrupted soak
+clock; do not stitch two windows across it.
+
 ## 4. The soak rule
 
 `docs/ops/PDS-LAUNCH-PLAN.md` names a soak ("G-QUIET closes. Soak begins.",
@@ -123,12 +150,14 @@ soak begins; do not deploy against an assumed number.
 **That is the calendar clock. There is a second one, and it is not a
 calendar.** `PDS-LAUNCH-PLAN.md` §1 states both: the uninterrupted-run clock
 resets on *every* restart — a deploy, a config change, a crash, a reboot —
-whatever the severity. Three properties depend on it and on nothing else:
+whatever the severity. The run clock matters to these observations, but retention also depends
+on an append counter:
 
-| property | uninterrupted run needed |
+| property | observation requirement |
 |---|---|
-| refresh-token rotation against a live token | > 2h |
-| the retention sweep, and a relay reconnecting past it | **> 72h** |
+| refresh-token rotation against a live token | > 2h since a token was issued |
+| relay reconnecting after the retention window | > 72h and a natural sweep after the append trigger |
+| event-log retention sweep | every 256 appends; only entries older than 72h then expire |
 | RSS drift with a readable trend | days |
 
 So during a soak:
@@ -138,10 +167,71 @@ So during a soak:
 - **Record every deploy on #1697** with its date and the severities it carried.
   Two clocks cannot be reconstructed afterwards from a tag list alone.
 - **At least one ≥72h window with no restart must fall inside the soak** before
-  its gate closes. Without it the sweep never fires and `#3005` stays untested,
-  and the soak has demonstrated availability rather than correctness.
+  its gate closes. It is not by itself a sweep: record a natural 256th append
+  after entries have aged past 72h and the relay's reconnect to test `#3005`.
+  Otherwise the run demonstrated availability, not retention correctness.
 
-⚠️ **`systemctl restart` during a soak still costs the 72h window above**, even
+### Synthetic mixed-load evidence (C7 / #2957)
+
+`pds/nightly/load_harness.sh` runs only against its private loopback servers
+and generated corpus. It concurrently drives read clients, authenticated
+`createRecord` writers and a live `subscribeRepos` consumer. Timestamped
+samples report the loaded `pdsd` process's RSS (`ps`, KiB), the loaded data
+directory's allocated size (`du -sk`, KiB), request/sample errors, and the
+server PID. Initial, peak across all samples, and final values and continuity
+are printed; an exited server, nonzero request errors, an acknowledged writer
+rkey missing from or duplicated in post-attach `#commit` operation paths, an
+unexpected relay operation path, or a configured bound breach fails the run.
+Each bound grades the maximum sampled increase from the initial value, even
+if the final value falls: RSS as a percentage of initial RSS and disk in KiB.
+These are synthetic measurements, not production observations.
+
+A bounded shakeout, not a soak sign-off, can be run off-hours in an isolated
+checkout with the native compiler built:
+
+```sh
+LOAD_RECORDS=32 LOAD_BLOBS=2 LOAD_CLIENTS=2 LOAD_WRITE_CLIENTS=1 \
+LOAD_SUBSCRIBER=1 LOAD_DURATION_MS=6000 LOAD_TICKS=30 \
+LOAD_INTERVAL_MS=100 LOAD_WARMUP_SECONDS=1 LOAD_RESOURCE_SAMPLE_SECONDS=1 \
+MEDAKA_ROOT=<isolated-checkout> MEDAKA=<isolated-checkout>/medaka \
+sh <isolated-checkout>/pds/nightly/load_harness.sh
+```
+
+An isolated 32-record, 2-blob shakeout on 2026-09-23 recorded 91 successful
+read requests, 44 authenticated writes, 44 **post-attach** `#commit` events
+(no replay), zero request errors and one server PID across 14 timestamped
+samples. Loaded-server RSS went from 8,928 to 13,212 KiB (+47.984%);
+loaded data-directory size went from 456 to 2,084 KiB (+1,628 KiB). This
+~13-second workload phase is not an RSS/disk bound or a full soak result.
+
+For a full off-hours observation, an operator must first choose and approve
+all three values below; the harness invents no resource bound or duration:
+
+```sh
+LOAD_FULL_SOAK=1 LOAD_DURATION_MS=<operator-approved-ms> \
+LOAD_MAX_RSS_GROWTH_PCT=<operator-approved-percent> \
+LOAD_MAX_DISK_GROWTH_KIB=<operator-approved-KiB> \
+LOAD_RECORDS=<operator-approved-record-count> LOAD_BLOBS=<operator-approved-blob-count> \
+LOAD_CLIENTS=<operator-approved-reader-count> LOAD_WRITE_CLIENTS=<operator-approved-writer-count> \
+LOAD_SUBSCRIBER=1 LOAD_TICKS=<operator-approved-sample-count> \
+LOAD_INTERVAL_MS=<operator-approved-interval-ms> \
+MEDAKA_ROOT=<isolated-checkout> MEDAKA=<isolated-checkout>/medaka \
+sh <isolated-checkout>/pds/nightly/load_harness.sh
+```
+
+The RSS limit grades the highest sampled RSS against the initial sample as a
+percentage; the disk limit grades the highest sampled disk usage against the
+initial sample in KiB. A transient sampled breach is not forgiven by a later
+drop. Set `LOAD_RESOURCE_SAMPLE_SECONDS` to
+an operator-chosen sampling cadence for the observation. No numerical limit,
+production/off-hours authorization, or live-run evidence is supplied by this
+procedure; the full observation and #2957 sign-off remain blocked until those
+are separately approved and observed. The event-log retention sweep is driven
+by **every 256 appends**, not by elapsed uptime: a 72h duration does not itself
+cause a sweep. A natural retention-sweep observation remains pending until the
+append-count trigger is reached and its effects are recorded.
+
+⚠️ **`systemctl restart` during a soak still costs the uninterrupted window above**, even
 when the change is trivial. It no longer costs every session: the open session
 set is persisted and read back at startup, so a restart is not a logout and the
 operator's own use of the service carries across one. A session lost across a
@@ -195,6 +285,25 @@ asleep or otherwise unavailable:
 - If the cause is a regression from the most recent deploy, roll back (step
   5) before investigating further — restoring service takes priority over
   root-causing it live.
+- The first failed-state transition after arming the alert instance attempts
+  one push; later transitions of that same unit are the same incident and
+  are no-ops while the alert instance remains active (exited). Its one-start
+  limit also suppresses retries if the first delivery fails. Check the journal
+  for a failed delivery — there is no automatic retry. A missing push is not
+  proof the service recovered: the separate health-gated dead-man's switch
+  stops receiving pings while the PDS is unhealthy and can still report an
+  ongoing outage. See [Down-detection](PDS-DEPLOY.md#down-detection-two-mechanisms-deliberately).
+- **After** the service is healthy and this incident has been acknowledged,
+  re-arm its push path with `systemctl reset-failed pds-alert@pds.service`
+  **then** `systemctl stop pds-alert@pds.service` (for a backup failure,
+  substitute `pds-alert@pds-backup.service`). Resetting clears a failed-
+  delivery start limit; stopping clears the successful active (exited) state.
+  Do this in that order: after stopping, an inactive instance may unload and
+  `reset-failed` would report "Unit not loaded". Both states must be cleared
+  before a later incident can alert again. Do not re-arm
+  while the source service is flapping; that permits another push for the
+  same outage. A manager reboot also clears this in-memory boundary, so it
+  is not a persistent incident ledger.
 - Any S0/S1 found during recovery restarts the soak clock (step 4) once the
   fix is deployed, not once the service is merely back up.
 

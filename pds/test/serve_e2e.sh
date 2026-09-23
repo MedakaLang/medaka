@@ -3158,4 +3158,142 @@ wait "$SERVER_PID" 2>/dev/null || true
 SERVER_PID=""
 require_empty "$WORK/serve67b.err" 'case 67 (post-run)'
 
+# 68. The idle server must wake out of the scheduler's otherwise indefinite
+# listener poll, close its listener, log the drain and exit well before its
+# 95-second forced-stop budget. Use a fresh directory so this test can tell a
+# clean stop from a restart made safe by an earlier case's crash recovery.
+DATA="$WORK/data-term-idle"
+mkdir -p "$DATA"
+start_server --init "$WORK/serve68.out" "$WORK/serve68.err"
+PORT68=$(wait_for_port "$WORK/serve68.out") || fail 'case 68: idle server did not start'
+kill -TERM "$SERVER_PID" || fail 'case 68: SIGTERM could not be sent'
+i=0
+while kill -0 "$SERVER_PID" 2>/dev/null && [ "$i" -lt 100 ]; do
+  i=$((i + 1))
+  sleep 0.1
+done
+[ "$i" -lt 100 ] || fail 'case 68: idle server did not exit within 10s'
+wait "$SERVER_PID" || fail 'case 68: idle SIGTERM exited nonzero'
+SERVER_PID=""
+grep -Fq 'serve: SIGTERM received; admission stopped; draining connections' "$WORK/serve68.out" \
+  || fail 'case 68: no admission-stop log'
+grep -Fq 'serve: shutdown complete; connections drained' "$WORK/serve68.out" \
+  || fail 'case 68: no drained-exit log'
+require_empty "$WORK/serve68.err" 'case 68 idle shutdown'
+
+# 69. Keep a subscriber open and send all but the last bytes of a signed
+# createRecord request. The client sends SIGTERM itself only after both
+# sockets have been admitted; it then completes the in-flight write. A
+# response 200, a subscriber 1000 Close frame and a post-restart CAR that
+# contains the acknowledged record together rule out dropping work on stop.
+DATA="$WORK/data-term-active"
+mkdir -p "$DATA"
+start_server --init "$WORK/serve69.out" "$WORK/serve69.err"
+PORT69=$(wait_for_port "$WORK/serve69.out") || fail 'case 69: active server did not start'
+LOGIN69=$(client login "$PORT69" "$HANDLE" "$PASSWORD") \
+  || fail 'case 69: login failed'
+TOKEN69=${LOGIN69%% *}
+python3 - "$PORT69" "$SERVER_PID" "$TOKEN69" "$DID" "$COLLECTION" "$RECORD_TEXT" <<'PY' \
+  || fail 'case 69: in-flight write or subscriber close failed'
+import json, os, socket, struct, sys, time
+port, pid, token, did, collection, text = sys.argv[1:]
+port, pid = int(port), int(pid)
+
+def connect():
+    s = socket.create_connection(('127.0.0.1', port), timeout=10)
+    s.settimeout(10)
+    return s
+
+def exact(s, n):
+    out = b''
+    while len(out) < n:
+        part = s.recv(n - len(out))
+        if not part:
+            raise AssertionError('subscriber disconnected without a close frame')
+        out += part
+    return out
+
+sub = connect()
+sub.sendall(b'GET /xrpc/com.atproto.sync.subscribeRepos HTTP/1.1\r\n'
+            b'Host: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n'
+            b'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n'
+            b'Sec-WebSocket-Version: 13\r\n\r\n')
+head = b''
+while b'\r\n\r\n' not in head:
+    head += sub.recv(4096)
+assert head.startswith(b'HTTP/1.1 101'), head[:100]
+assert head.endswith(b'\r\n\r\n'), 'unexpected initial event during handshake'
+body = json.dumps({'repo': did, 'collection': collection,
+                   'rkey': 'term-ack',
+                   'record': {'$type': 'app.bsky.feed.post', 'text': text,
+                              'createdAt': '2026-09-02T00:00:00.000Z'}}).encode()
+write = connect()
+write.sendall((f'POST /xrpc/com.atproto.repo.createRecord HTTP/1.1\r\n'
+               f'Host: 127.0.0.1\r\nAuthorization: Bearer {token}\r\n'
+               f'Content-Type: application/json\r\nContent-Length: {len(body)}\r\n'
+               f'Connection: close\r\n\r\n').encode() + body[:-2])
+time.sleep(0.2)  # the server has time to park on this admitted body
+os.kill(pid, 15)
+write.sendall(body[-2:])
+response = b''
+while True:
+    part = write.recv(4096)
+    if not part:
+        break
+    response += part
+assert response.startswith(b'HTTP/1.1 200'), response[:200]
+write.close()
+# A commit event may precede the close frame; do not mistake that frame for
+# the close handshake. Read frames through the RFC 6455 length encoding.
+for _ in range(10):
+    hdr = exact(sub, 2)
+    size = hdr[1] & 127
+    if size == 126:
+        size = struct.unpack('!H', exact(sub, 2))[0]
+    elif size == 127:
+        size = struct.unpack('!Q', exact(sub, 8))[0]
+    assert size < 16777216
+    payload = exact(sub, size)
+    if hdr[0] & 15 == 8:
+        assert payload[:2] == b'\x03\xe8', payload
+        break
+else:
+    raise AssertionError('subscriber never received a normal Close frame')
+sub.close()
+PY
+i=0
+while kill -0 "$SERVER_PID" 2>/dev/null && [ "$i" -lt 100 ]; do
+  i=$((i + 1))
+  sleep 0.1
+done
+[ "$i" -lt 100 ] || fail 'case 69: active server did not drain within 10s'
+wait "$SERVER_PID" || fail 'case 69: active SIGTERM exited nonzero'
+SERVER_PID=""
+grep -Fq 'serve: SIGTERM received; admission stopped; draining connections' "$WORK/serve69.out" \
+  || fail 'case 69: no admission-stop log'
+grep -Fq 'serve: shutdown complete; connections drained' "$WORK/serve69.out" \
+  || fail 'case 69: no drained-exit log'
+require_empty "$WORK/serve69.err" 'case 69 active shutdown'
+start_server '' "$WORK/serve69restart.out" "$WORK/serve69restart.err"
+PORT69R=$(wait_for_port "$WORK/serve69restart.out") \
+  || fail 'case 69: restart of acknowledged write did not start'
+client sync-get-record "$PORT69R" "$DID" "$COLLECTION" term-ack "$RECORD_TEXT" \
+  || fail 'case 69: acknowledged write absent after restart'
+kill -TERM "$SERVER_PID"
+wait "$SERVER_PID" || fail 'case 69: restarted server did not stop cleanly'
+SERVER_PID=""
+require_empty "$WORK/serve69restart.err" 'case 69 restart'
+
+# 70. A native binary that never calls pdsSignalStart keeps the ordinary
+# SIGTERM disposition (status 128+15), rather than silently intercepting it.
+"$WORK/appview" stall 0 >"$WORK/serve70.out" 2>"$WORK/serve70.err" &
+CONTROL_PID=$!
+wait_for_stub_port "$WORK/serve70.out" "$CONTROL_PID" >/dev/null \
+  || fail 'case 70: non-PDS control did not start'
+kill -TERM "$CONTROL_PID" || fail 'case 70: control SIGTERM failed'
+CONTROL_RC=0
+wait "$CONTROL_PID" || CONTROL_RC=$?
+[ "$CONTROL_RC" -eq 143 ] \
+  || fail "case 70: non-PDS SIGTERM status $CONTROL_RC, expected 143"
+
 echo 'PASS: serve_e2e — query, pipeline, keep-alive, chunked write, every remaining route, login, getSession, wrong-password refusal, session lifecycle, refresh rotation and a grace-window replay, malformed, over-cap, idle timeout, un-framed connection flood answered rather than shutting other callers out, a stalled-body flood (#2815, the body-phase half of #2772) answered rather than shutting other callers out, restart-and-resume, sync.getRecord answering a rooted CAR carrying a record the repository holds and a same-status proof of ABSENCE for a key it does not, sync.getBlocks answering a CAR with an EMPTY roots list carrying exactly the block asked for, and a partly-missing block set refused whole with every absent CID named, a freshly created repository announcing itself with #identity, #account, #commit and #sync at seq 1-4 and nothing else before its first write, a subscribeRepos subscription receiving live events in order, a future cursor refused, a negative and an unparsable one each refused at the handshake under their own distinct wording, and an outdated one told it has a gap before its replay, a cursor at the newest delivered event replaying nothing and then receiving the next event once, the subscription ceiling refusing a 33rd attempt without completing an upgrade while an ordinary route is still answered, a subscriber silent past requestTimeout not reaped, blob upload and cross-restart fetch, blob residue skipped rather than refusing startup, a backup restored into a SEPARATE data directory whose server exports a byte-identical repository, serves both blobs under their declared types, and accepts a new signed write, init-overwrite-refusal, first-run bootstrap, rate limiting refuses one identity per class while a second identity is still served, repository export bounded by its own class, 400-answered traffic charged rather than free, every secret the server writes owner-only, a world-readable signing key refused before the bind, a rejected configuration leaving no generated secret behind, a constant session-token secret refused before the bind, keygen writing an owner-only key and token secret that serve then runs on, keygen refusing to overwrite, a credential re-derived at the shipped iteration count by one successful login and left untouched by a failed one, a non-loopback bind with no credential refused by the existing missing-credential diagnostic rather than an invented one, a non-loopback bind with no --trusted-proxy refused before any secret reaches disk, the accepted non-loopback-plus-trusted-proxy combination actually binding and serving, a proxied read returning a stub appview'"'"'s own status and body under a credential whose aud and lxm the appview itself logged, a header naming a service OF the configured DID proxied with the fragment stripped from aud, a fresh 32-hex jti per call, an unauthenticated proxied read refused 401 without the appview being called at all and the same request with a credential still forwarded, an upper-case nsid authority forwarded under the canonical spelling of the method rather than the client'"'"'s, a confused-deputy refusal for an unconfigured audience and for a method this server neither serves nor forwards — neither reaching the appview, proven live by the call that immediately followed — while a method this server registers is answered locally under the same header, a proxied POST whose body, content-type and accept-language all reached the appview and whose atproto-repo-rev response field came back to the client, a read carrying NO atproto-proxy header forwarded to the configured appview, an appview that accepts and never answers blocking neither an open subscribeRepos subscription nor an unrelated read while still being owed its own 502, the proxied-call class refusing one identity without refusing that identity'"'"'s plain reads or a second identity, a proxy whose accept queue is full leaving a dial stuck without blocking an unrelated read and still being owed its own 502, a ninth concurrent proxied call refused 503 ProxyLimitExceeded once its wait runs out while eight are stuck dialling and ordinary reads are still answered, the slots those eight held given back, a twelve-call fan-out against an upstream that answers none of the first eight until all eight have arrived served in full rather than four of it refused, and a read past the in-flight ceiling AND a full admission queue refused 503 ProxyLimitExceeded within 300ms rather than after the queue'"'"'s own two-second deadline, an unauthenticated requestCrawl announcing this server'"'"'s own hostname to a configured relay, and startup and ordinary service surviving a relay that is unreachable, a SECOND configured audience on its own egress port receiving the reads a header audiences for it while the appview sees none of them and the converse also holding, a chat.bsky.* method routed by the audience the header named rather than by its own namespace, an audience in neither row still refused with neither proxy reached, and an additional audience row missing either half, given without a default pair, or repeating a DID already configured refused before the bind, and a client asking for the credential ITSELF handed one the chat service reads as naming that service and the requested method, which appears nowhere in this server'"'"'s own output, and a stamped build reporting its own commit and build date on --version, and one access-log line per request — a routed 401, an unparsable buffer and a framer-refused over-cap body each logged as surely as a served read, with the query string stripped and neither the account password nor an access token anywhere in the log — under a startup that reports its configuration and its event-log recovery outcome, and a periodic stats line carrying active/un-framed connections, open subscriptions, the account repo'"'"'s revision, and blocks and blobs on disk, at an operator-configurable interval, and a second server over a LIVE data directory refused before its sweep could delete the staged file the live one had in flight while that live one kept answering, a lock its killed holder left behind taken by --force-lock and reclaimed with no flag at all once its heartbeat stopped, and a lost last-promoted pointer over a still-owed staged entry recovered into a clean start rather than refused, which is the startup order the genesis guard depends on, eight servers started at once over a directory whose holder is gone leaving exactly one of them holding it five rounds running, a stray file beside the lock ignored rather than wedging the directory while a .lock that is not a directory at all is refused by a message naming the path and the remedy and then cured by that remedy, and a holder whose lock is forced away under it ending its run rather than going on writing beneath the directory'
