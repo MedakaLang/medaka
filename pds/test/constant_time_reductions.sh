@@ -418,6 +418,14 @@ extract_source_decl() {
 # roster: no line builds an equality from `arrayToList`, and no `ctEq`
 # reference is reached through a dot-qualified name -- only the file's own
 # unaliased, selectively-imported `ctEq` counts toward the roster above.
+#
+# This is a source-text census, and it stays blind to what a call's own
+# arguments are: a `ctEq digest digest` call against two occurrences of the
+# SAME identifier still satisfies its function's stated call count, so any
+# OTHER comparator beside it in that function or file -- a bare `==`, an
+# `(==)` section, `Ord`'s `<`/`>`, `elem`, a hand-written `eq`, or a call into
+# another module -- can still perform the real, non-constant-time comparison
+# undetected. Closing that gap needs the IR level, tracked as #2838.
 secret_comparisons_ok() {
   credential=$1
   jwt=$2
