@@ -17,15 +17,14 @@
    discipline this module also follows: every staged file is `fsync`ed before
    the `rename` that publishes it and the containing directory after, so a
    promotion cannot reach disk ahead of the entry it promotes; and a directory
-   this module creates is barriered into the directory `mkdirAll` wrote its
-   dentry into, since an entry directory whose own entry a crash loses takes
-   every event promoted into it). Unlike the two stores next door, the log
-   barriers its OWN top directory into the data directory rather than leaving
-   that to a persist call: those two are written only through
-   `persistTransition`, which always runs a repo half after them, while an
-   event announcing no repository mutation is appended with no commit beside
-   it at all. Only a creation owes a directory barrier either way, so an
-   append over a log already on disk pays nothing for one. So a caller
+   this module creates is barriered into the directory its dentry was written
+   into, since an entry directory whose own entry a crash loses takes every
+   event promoted into it). Like the two stores next door, the log barriers
+   its OWN top directory into the data directory when it creates it, rather
+   than leaving that to a persist call: an event announcing no repository
+   mutation is appended with no commit beside it at all. Only a creation owes
+   a directory barrier, so an append over a log already on disk pays nothing
+   for one. So a caller
    STAGES the entry, persists the commit, and then
    PROMOTES it, and every crash point in that sequence is recoverable from
    what survives:
@@ -56,7 +55,7 @@
    This module is an effectful shell (P14): it holds no protocol state, and
    its signatures carry no `Repo` and no `SecretKey`. -}
 
-import fs.{isDir, mkdirAll}
+import fs.{isDir, mkdirAllDurably, replaceDurably}
 import list.{reverse}
 import string.{toInt}
 import lib.event_log_record.{
@@ -101,30 +100,12 @@ lastPath dir = "\{eventLogDir dir}/\{lastName}"
 stagingDir : String -> String
 stagingDir dir = "\{eventLogDir dir}/\{stagingName}"
 
--- The log directory itself, created if it is not there, with the dentry that
--- created barriered into the data directory. See the header for why the log
--- owns this one where the two stores next door leave theirs to a persist
--- call.
-ensureLogDir : String -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureLogDir dir =
-  if fileExists (eventLogDir dir) then
-    Ok ()
-  else do
-    () <- mkdirAll (eventLogDir dir)
-    fsync dir
-
 -- One directory beneath the log — `entries` or `.staging` — created if it is
--- not there, with the dentry that created barriered into the log directory.
-ensureUnderLog : String ->
-  String ->
-  <FileRead "_", FileWrite "_"> Result String Unit
-ensureUnderLog dir path = do
-  () <- ensureLogDir dir
-  if fileExists path then
-    Ok ()
-  else do
-    () <- mkdirAll path
-    fsync (eventLogDir dir)
+-- not there, with the dentry that created barriered into the log directory,
+-- and the log directory itself created first and barriered into the data
+-- directory when it is missing. See the header for why the log owns that one.
+ensureUnderLog : String -> <FileRead "_", FileWrite "_"> Result String Unit
+ensureUnderLog path = mkdirAllDurably path
 
 -- Write a small pointer file the way `persist.mdk` writes the head pointer:
 -- into the staging directory, then promoted with `rename`, so a reader never
@@ -134,12 +115,9 @@ promoteText : String ->
   String ->
   <FileRead "_", FileWrite "_"> Result String Unit
 promoteText dir name text = do
-  () <- ensureUnderLog dir (stagingDir dir)
+  () <- ensureUnderLog (stagingDir dir)
   let staged = "\{stagingDir dir}/\{name}"
-  () <- writeFile staged text
-  () <- fsync staged
-  () <- rename staged "\{eventLogDir dir}/\{name}"
-  fsync (eventLogDir dir)
+  replaceDurably staged "\{eventLogDir dir}/\{name}" text
 
 {- | The sequence number of the last PROMOTED entry, or `None` when this
    repository has emitted no event yet.
@@ -209,14 +187,11 @@ writeEntry : String ->
   EventLogEntry ->
   <FileRead "_", FileWrite "_"> Result String Unit
 writeEntry dir entry = do
-  () <- ensureUnderLog dir (entriesDir dir)
-  () <- ensureUnderLog dir (stagingDir dir)
+  () <- ensureUnderLog (entriesDir dir)
+  () <- ensureUnderLog (stagingDir dir)
   let name = eventLogEntryName entry.seq entry.timeSeconds
   let staged = "\{stagingDir dir}/\{name}"
-  () <- writeFile staged (eventLogEncodeEntry entry)
-  () <- fsync staged
-  () <- rename staged "\{entriesDir dir}/\{name}"
-  fsync (entriesDir dir)
+  replaceDurably staged "\{entriesDir dir}/\{name}" (eventLogEncodeEntry entry)
 
 {- | Promote the pending entry, if there is one, and sweep the window.
 

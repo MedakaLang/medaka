@@ -54,6 +54,7 @@
      `--force-lock` covers the other direction — taking a lock immediately
      rather than waiting the window out. -}
 
+import io.{writeFilePrivate}
 import string.{contains, stripPrefix, toInt, trim}
 import time.{Duration, millis, now, sleep}
 
@@ -122,7 +123,7 @@ nowMillis u = floatToInt (now u * 1000.0)
 -- power cut would be a beat on behalf of a process the power cut killed.
 writeBeat : String -> Int -> <Clock, FileWrite "_"> Result String Unit
 writeBeat dir n =
-  match writeFile (ownerPath dir n) "\{intToString (nowMillis ())}\n"
+  match writeFilePrivate (ownerPath dir n) "\{intToString (nowMillis ())}\n"
     Ok () => Ok ()
     Err message => Err (beatFailedMessage dir n message)
 
