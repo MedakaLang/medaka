@@ -1823,14 +1823,28 @@ accessTokenSeconds = 7200
 
 {- | How long a refresh token is good for. Ninety days, again matching a real
    PDS: it is the interval after which a client that has gone quiet has to log
-   in with the password again. -}
+   in with the password again.
+
+   It must be at least `sessionFamilyLifetimeSeconds`. A rotated session
+   expires at the sooner of this lifetime and the expiry of the session it
+   consumed, and `lib.store`'s `storeSessionRotate` reads that expiry as the
+   family's end; a shorter refresh lifetime would leave no session holding the
+   family's end. Shortening it needs the family's end stored with each session
+   row instead. -}
+export
 refreshTokenSeconds : Int
 refreshTokenSeconds = 7776000
 
 {- | How long a session family lasts, counted from the login that opened it.
    A family is that login and every session it leads to by rotation, and no
    rotation carries it past this: ninety days after a password was last
-   presented, the client presents it again. -}
+   presented, the client presents it again.
+
+   It must be at most `refreshTokenSeconds`, because a session records its
+   family's end only as its own expiry, which a rotation clamps to its refresh
+   lifetime. Lengthening it past that needs the family's end stored with each
+   session row instead. -}
+export
 sessionFamilyLifetimeSeconds : Int
 sessionFamilyLifetimeSeconds = 7776000
 
@@ -2028,7 +2042,7 @@ applyDeleteSession : RequestContext ->
   Result Response (Store, Json)
 applyDeleteSession context presented store =
   let pruned = storeSessionsPrune context.nowSeconds store
-  match storeSessionClose presented pruned
+  match storeSessionClose context.nowSeconds presented pruned
     None => Err (invalidToken "Token could not be verified")
     Some next => Ok (next, jObject [])
 
