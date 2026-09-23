@@ -29,8 +29,8 @@
 # deliberately blind to, each within ONE process: which half of a transition
 # reached the disk first (#3057), whether a commit's shard-directory
 # barriers came after its block promotes or in between them (#3058), and
-# whether the blob area's own dentry is barriered on a write that runs no repo
-# half, where the concatenated trace lets another process pay for it.
+# whether the blob area's own dentry is barriered before the first blob it
+# publishes, on a write that runs no repo half.
 # Case 13 grades what one upload COSTS the disk rather than what it leaves on
 # it: the blob area is stamped either side of a single upload into an account
 # that already holds 99 blobs, and only the blob being uploaded may have been
@@ -784,9 +784,10 @@ trace_route() {
   fi
   require_empty "$WORK/trace.$_route.err" "traced $_route"
   # Kept per route as well as concatenated: an ORDER claim about two writes
-  # only holds inside ONE process, and `$WORK/promotes` interleaves five.
+  # only holds inside ONE process, and `$WORK/promotes` concatenates them all.
   normalize_trace "$WORK/trace.$_route" > "$WORK/events.$_route"
   cat "$WORK/events.$_route" >> "$WORK/promotes"
+  TRACED_ROUTES="$TRACED_ROUTES $_route"
 }
 
 # The line number of the first or last normalized event in file $2 matching the
@@ -805,6 +806,7 @@ trace_count() {
 }
 
 : > "$WORK/promotes"
+TRACED_ROUTES=
 TRACED="$PHYS/traced"
 mkdir -p "$TRACED"
 trace_route save "$TRACED/repo"
@@ -881,12 +883,9 @@ echo "case 12b: $SAVED_BLOCKS block promote(s), all before the first shard-direc
 
 # ── 12c. the blob area's own dentry, on a write that runs no repo half ─────
 # `blobs/` is created by `blobfile.mdk`, and its dentry sits one level up, in
-# the data directory. The universal rule below accepts a barrier from anywhere
-# in `$WORK/promotes`, which concatenates five processes — so a data-directory
-# `fsync` some OTHER route performed discharges this creation there, and the
-# route that writes blobs and nothing else goes ungraded across the boundary
-# that a crash actually respects. Read out of the blob-save route's OWN trace
-# for that reason, like 12a.
+# the data directory. The universal rule below accepts that barrier anywhere
+# after the creation; this case also requires it BEFORE the first blob the
+# route promotes. Read out of the blob-save route's OWN trace, like 12a.
 #
 # The route is the one `com.atproto.repo.uploadBlob` takes: it moves blobs and
 # advances no repository, so `persistTransition`'s repo half is skipped and
@@ -915,7 +914,13 @@ FIRST_PROMOTE_AT=$(trace_index first "$BLOBSAVE" '^R ')
 }
 echo "case 12c: blob area created at event $MKBLOBS_AT and barriered into the data directory at event $DATA_FSYNC_AT, before the first promote at event $FIRST_PROMOTE_AT, with no repo half on the route"
 
-awk '
+# ── the universal rule: every promote and every creation, barriered ────────
+# Graded one route at a time, over that route's OWN trace. A later process's
+# `fsync` of the same directory lands after this one has already reported its
+# write durable, and a crash in between loses it; graded over the
+# concatenation, that later `fsync` would discharge the barrier anyway.
+grade_barriers() {
+  awk -v route="$1" '
   { ev[++n] = $0 }
   END {
     for (i = 1; i <= n; i++) {
@@ -978,13 +983,27 @@ awk '
         mkpath[k], mkpar[k]
       bad++
     }
-    printf "graded %d rename(s) and %d directory creation(s), %d unbarriered\n",
-      renames, mk, bad
+    printf "%s: graded %d rename(s) and %d directory creation(s), %d unbarriered\n",
+      route, renames, mk, bad
     exit (bad > 0)
   }
-' "$WORK/promotes" > "$WORK/promotes.verdict" || {
+' "$WORK/events.$1"
+}
+
+: > "$WORK/promotes.verdict"
+UNBARRIERED_ROUTES=
+for ROUTE in $TRACED_ROUTES; do
+  grade_barriers "$ROUTE" >> "$WORK/promotes.verdict" \
+    || UNBARRIERED_ROUTES="$UNBARRIERED_ROUTES $ROUTE"
+done
+# Each route line reads `<route>: graded R rename(s) and M directory
+# creation(s), B unbarriered`, so fields 3, 6 and 9 are the three counts.
+awk '/: graded / { r += $3; m += $6; b += $9 }
+  END { printf "graded %d rename(s) and %d directory creation(s) across all routes, %d unbarriered\n", r, m, b }' \
+  "$WORK/promotes.verdict" >> "$WORK/promotes.verdict"
+[ -z "$UNBARRIERED_ROUTES" ] || {
   cat "$WORK/promotes.verdict" >&2
-  fail 'a rename or a mkdir published a name no barrier had put on disk'
+  fail "a rename or a mkdir published a name no barrier had put on disk, on route(s):$UNBARRIERED_ROUTES"
 }
 cat "$WORK/promotes.verdict"
 
