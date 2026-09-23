@@ -48,13 +48,6 @@ data RoutePolicy = RoutePolicy AuthPolicy (List RateLimitClass) (Option Int)
 {- | The committed table, in registration order: five record writes, five
    session routes, two preference routes, thirteen reads and one subscription.
 
-   `app.bsky.actor.putPreferences` is deliberately spelled with no
-   rate-limit class of its own. It is an authenticated JSON procedure that
-   writes to the store, but `isWriteNsid` names only the five
-   `com.atproto.repo` write procedures, so it clears the shared request
-   allowance alone. That is what the code does today; this row records it
-   rather than hiding it.
-
    The two `com.atproto.sync` reads differ from each other in the same column,
    and the difference is the point: `getBlocks` is `RepoExportClass` because
    the CALLER names the block set and may name the whole graph, so only
@@ -97,7 +90,7 @@ committedPolicies = [
   ("app.bsky.actor.getPreferences", RoutePolicy AuthenticatedRoute [] None),
   (
     "app.bsky.actor.putPreferences",
-    RoutePolicy AuthenticatedRoute [] (Some 153600),
+    RoutePolicy AuthenticatedRoute [PreferencesClass] (Some 153600),
   ),
   ("com.atproto.repo.getRecord", RoutePolicy PublicRoute [] None),
   ("com.atproto.repo.listRecords", RoutePolicy PublicRoute [] None),
@@ -136,6 +129,7 @@ className : RateLimitClass -> String
 className ConnectionsClass = "connections"
 className RequestsClass = "requests"
 className WritesClass = "writes"
+className PreferencesClass = "preferences"
 className CreateSessionClass = "createSession"
 className RepoExportClass = "repoExport"
 className ProxyClass = "proxy"
