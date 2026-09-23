@@ -18,6 +18,7 @@ import bytes.{fromArray}
 import json.{Json(..), asBool, get, jObject, parse, stringify}
 import string.{contains, drop, fromUtf8, indexOf, split, toUtf8}
 import test.{
+  expectAtLeast,
   expectEach,
   expectEqual,
   expectFalse,
@@ -26,7 +27,12 @@ import test.{
   expectTrue,
 }
 import lib.credential.{CredentialRecord, defaultIterations, makeCredential}
-import lib.handlers.{pdsServer, serverLinksEmpty}
+import lib.handlers.{
+  pdsServer,
+  refreshTokenSeconds,
+  serverLinksEmpty,
+  sessionFamilyLifetimeSeconds,
+}
 import lib.server_core.{
   Account,
   RequestContext(..),
@@ -545,6 +551,15 @@ test "a family is refused past ninety days however recently it rotated" =
     ),
   ]
 
+{- | A rotated session expires at the sooner of its own refresh lifetime and
+   the expiry of the session it consumed, and `lib.store`'s
+   `storeSessionRotate` reads that expiry as the family's end. It is the
+   family's end only while a refresh token lasts at least as long as a family:
+   a shorter one would give the rotated session an earlier expiry, and from
+   then on no session would hold the family's end. -}
+test "a refresh token lasts at least as long as its family" =
+  expectAtLeast sessionFamilyLifetimeSeconds refreshTokenSeconds
+
 {- | A client that refreshes twice in a burst presents one refresh token twice.
    The second presentation, inside the grace window, is answered with a pair
    that works, and the first answer's pair keeps working beside it. -}
@@ -780,6 +795,79 @@ test "a write with the deleted session's access token is refused first" =
             ("record", jObject [("text", JString "after logout")]),
           ])))
   expectEqual (outcome response) "401 Unauthorized InvalidToken"
+
+{- | Logging out with the original refresh token after the rotation at +60
+   consumed it, inside the grace window. The token is still admitted, since a
+   replay of it would be, and it ends the family it was consumed in. -}
+consumedClosed : (Store, Array Int)
+consumedClosed =
+  send
+    (contextAt (testInstant + 120) 60)
+    rotatedStore
+    (postNoInput refreshToken deleteSessionNsid)
+
+consumedClosedStore : Store
+consumedClosedStore = match consumedClosed
+  (store, _) => store
+
+test "logging out with a consumed refresh token is 200" = match consumedClosed
+  (_, response) => expectEqual "200 OK" (outcome response)
+
+test "logging out with a consumed refresh token closes the rotated session" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 121) 61)
+      consumedClosedStore
+      (getQuery rotatedAccess getSessionNsid)
+  expectEqual "401 Unauthorized InvalidToken" (outcome response)
+
+-- The consumed token is forgotten with its family, so presenting it again
+-- inside the grace window cannot reopen what was logged out of.
+test "a consumed refresh token logged out with is not replayed afterwards" =
+  let (_, response) =
+    send
+      (contextAt (testInstant + 121) 62)
+      consumedClosedStore
+      (postNoInput refreshToken refreshSessionNsid)
+  expectEqual "401 Unauthorized InvalidToken" (outcome response)
+
+{- | The same logout past the grace window. Family A is rotated a second time
+   at +7000, so its current access token is still inside its own two hours when
+   the original refresh token is presented at +7261; family B is a second login
+   at +7000, which the logout must not touch. -}
+lateConsumedClosed : (Store, String, String, Array Int)
+lateConsumedClosed =
+  let (familyA, currentAccess, _) =
+    rotateAt (testInstant + 7000) 63 rotatedStore rotatedRefresh
+  let (twoFamilies, siblingResponse) = login (testInstant + 7000) 64 familyA
+  let (store, response) =
+    send
+      (contextAt (testInstant + 60 + 7201) 65)
+      twoFamilies
+      (postNoInput refreshToken deleteSessionNsid)
+  (store, currentAccess, field "accessJwt" siblingResponse, response)
+
+test "logging out with a consumed refresh token past its grace is 200" =
+  let (_, _, _, response) = lateConsumedClosed
+  expectEqual "200 OK" (outcome response)
+
+test "logging out past the grace window closes the family's current session" =
+  let (store, access, _, _) = lateConsumedClosed
+  let (_, response) =
+    send
+      (contextAt (testInstant + 7262) 66)
+      store
+      (getQuery access getSessionNsid)
+  expectEqual "401 Unauthorized InvalidToken" (outcome response)
+
+test "logging out with a consumed refresh token leaves a sibling family open" =
+  let (store, _, siblingAccess, _) = lateConsumedClosed
+  let (_, response) =
+    send
+      (contextAt (testInstant + 7262) 67)
+      store
+      (getQuery siblingAccess getSessionNsid)
+  expectEqual "200 OK" (outcome response)
 
 -- # Independence
 

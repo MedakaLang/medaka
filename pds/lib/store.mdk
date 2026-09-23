@@ -453,25 +453,28 @@ storeSessionRotate consumed access refresh expires now graceSeconds store =
               (withSessions (withoutFamily family (storeSessions store)) store)
         None => NotRotated
 
-{- | Close the family this refresh fingerprint's session belongs to, or `None`
-   when no open session holds it. Every token of the family stops verifying,
-   and its consumed refresh tokens are forgotten, so a replay inside the grace
-   window cannot reopen what was logged out of. -}
+{- | Close the family this refresh fingerprint belongs to at `now`, or `None`
+   when no family this store knows holds it. The fingerprint may be an open
+   session's refresh token or one a rotation consumed within a family that
+   has not ended, inside its grace window or past it: any token
+   `storeRefreshActive` admits names its family here. Every token of the
+   family stops verifying, and its consumed refresh tokens are forgotten, so a
+   replay inside the grace window cannot reopen what was logged out of. -}
 export
-storeSessionClose : Array Int -> Store -> Option Store
-storeSessionClose fingerprint store = match storeSessions store
-  Sessions open _ =>
+storeSessionClose : Int -> Array Int -> Store -> Option Store
+storeSessionClose now fingerprint store = match storeSessions store
+  Sessions open consumed =>
     let found =
       find
         (record => match record
           SessionRecord _ refresh _ _ => ctEq fingerprint refresh)
         open
+    let family = match found
+      Some record => Some (recordFamily record)
+      None => map consumedFamily (consumedRefresh now fingerprint consumed)
     map
-      (record =>
-        withSessions
-          (withoutFamily (recordFamily record) (storeSessions store))
-          store)
-      found
+      (ended => withSessions (withoutFamily ended (storeSessions store)) store)
+      family
 
 {- | The persisted form of the session set, one row per record.
 
