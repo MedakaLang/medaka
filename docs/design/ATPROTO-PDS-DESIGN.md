@@ -823,19 +823,34 @@ in the on-disk layout made the window exclusive, so `pds/shell/dirlock.mdk`
 does: `configure` takes `<data>/.lock` after `requireDir` and before the first
 thing that reads or writes anything beneath `--data` — ahead of both `openRepo`
 and the three sweeps — so a second process is refused before it can destroy
-what it was refused for (`#3059`). The lock is a directory because `makeDir` is
-`mkdir(2)`, whose second creation fails rather than succeeding twice; it needs
-no new extern and no capability-matrix row. What `mkdir` does not give is
-release on death, and this server has no shutdown path to release one in (there
-is no signal handling in the runtime), so a killed holder ALWAYS leaves its
-lock behind and lock EXISTENCE cannot be the test. A holder therefore beats a
-heartbeat into the lock for as long as it runs, and a contender grades the
-heartbeat: one that is moving refuses the contender in about one beat, one that
-has stopped for the stale window is taken over and the takeover is reported on
-the startup line. The residual, stated rather than papered over, is that a
-holder stalled longer than the window is indistinguishable from a dead one to
-any test this process can make; `--force-lock` covers the opposite direction,
-taking a lock immediately rather than waiting the window out.
+what it was refused for (`#3059`). `<data>/.lock` itself is not the lock and
+owns nothing: any number of processes may create that directory, and its
+existence says only that some server has been here. What is owned is a
+GENERATION inside it, `.lock/gen.<n>` — a contender reads the generations and
+grades the highest one's heartbeat, and the holder is whoever created that
+highest-numbered generation. `makeDir` is `mkdir(2)`, whose second creation of
+the same name fails rather than succeeding twice, and a generation number is
+never reclaimed or reused: a takeover always creates the NEXT number rather
+than removing or renaming the loser's — reclaiming a name a winner's claim
+depends on is exactly what would let a loser's cleanup delete the winner's
+fresh lock and leave both processes holding one. `mkdir` gives no release on
+death, and this server has no shutdown path to release one in (there is no
+signal handling in the runtime), so a killed holder ALWAYS leaves its
+generation behind and existence cannot be the test. A holder therefore beats a
+heartbeat into its generation for as long as it runs, and a contender grades
+the heartbeat: one that is moving refuses the contender in about one beat, one
+that has stopped for the stale window is taken over by a new, higher generation
+and the takeover is reported on the startup line. `holdDataLock` is not a
+fire-and-forget beat either — it re-reads the generations on every beat and
+reports `LockLost` the moment a higher one exists, so a holder whose lock was
+reclaimed learns so at its next beat and stops rather than writing into a
+directory another server now owns. The guarantee this gives is therefore "no
+two processes write one data directory concurrently," not "no holder is ever
+displaced" — a live holder is detected in about one beat, but a holder stalled
+longer than `lockStaleAfterMillis` is indistinguishable from a dead one to any
+test this process can make, and will find out about its own displacement only
+at its next beat; `--force-lock` covers the opposite direction, taking a lock
+immediately rather than waiting the window out.
 
 **Recovery runs before the genesis quartet, and `completeGenesisEvents` checks
 that it did.** `refuseLostPointer` (`pds/shell/server.mdk`) reads the

@@ -109,7 +109,7 @@ never sets it against anything but Caddy on the same box.
    bootstrap the credential (`--init`, `--password-file`):
 
    ```sh
-   ./pdsd --did <did> --handle <handle> --hostname <hostname> \
+   umask 077 && ./pdsd --did <did> --handle <handle> --hostname <hostname> \
      --key secrets/key.hex --token-secret secrets/token.hex \
      --password-file secrets/password --data data --port 8080 --init
    ```
@@ -117,6 +117,25 @@ never sets it against anything but Caddy on the same box.
    Stop it once it reports readiness (`serve: listening on 127.0.0.1:8080`).
    Every subsequent run omits `--init` and `--password-file`: the data
    directory now holds both the repository and the credential.
+
+   `head`, `preferences`, everything under `events/**` (minus raw block/blob
+   bytes), and every `blobs/**/*.mime` sidecar are written at mode `0600`
+   regardless of umask. `blocks/**` and `blobs/**/<digest>` (the raw block
+   and blob bytes, the paths with no `.mime` suffix) have no explicit-mode
+   write primitive yet and still follow whatever umask was active for this
+   process — matching `pds/pds.service`'s `UMask=0077`, which is why the
+   command above sets the same umask for a one-off run. Directory modes are
+   `0700` already, from step 1's `install -d ... -m 0700`, and are untouched
+   by any of this.
+
+   **Already ran genesis before adding the `umask 077` prefix above?** The
+   gap is closed retroactively with a one-time, files-only chmod over the
+   data directory — it does not touch directory modes, which are already
+   `0700`:
+
+   ```sh
+   find data -type f -exec chmod go-rwx {} +
+   ```
 
 6. **Install the systemd unit** (`pds/pds.service`) — copy it to
    `/etc/systemd/system/pds.service`, replace its placeholders (paths,
