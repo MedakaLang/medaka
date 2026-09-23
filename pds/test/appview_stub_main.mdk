@@ -27,10 +27,11 @@
    driver is an observer, and an observer that refused a call could hide a
    defect behind its own refusal.
 
-   Five modes:
+   Six modes:
 
      appview_stub_main answer <port> <logfile> <status>
      appview_stub_main batch <port> <logfile> <status> <count>
+     appview_stub_main bulk <port> <logfile> <status> <count> <size> <prefix> <holdMs>
      appview_stub_main linger <port> <logfile> <status>
      appview_stub_main stall <port>
      appview_stub_main deaf <port>
@@ -43,7 +44,11 @@
    keeps outstanding gets that number to be its own rather than the scheduler's.
    `linger` answers identically and then holds the connection open instead of
    closing it, which separates "the response is complete" from "the peer has
-   finished with the socket" — two events a reader can confuse for one. `stall`
+   finished with the socket" — two events a reader can confuse for one. `bulk`
+   holds `<count>` calls the way `batch` does and answers each with a
+   `<size>`-byte body, sent as `<prefix>` bytes at once and then a byte at a
+   time for `<holdMs>` before the rest: an answer that is large, in flight,
+   and not yet complete for as long as a case needs one to be. `stall`
    accepts and never answers: it is the head-of-line-blocking case's upstream,
    and the claim under test there is about the PDS's scheduler, not about this
    driver.
@@ -56,7 +61,7 @@
    on stdout names it — the same contract `pds/serve.mdk` has with this gate,
    so neither side has to guess a free port. -}
 
-import array.{concat}
+import array.{concat, make, sliceClamped}
 import base64.{decodeUrlSafe}
 import bytes.{fromArray, toArray}
 import http.{
@@ -76,6 +81,7 @@ import http.{
   serializeResponse,
 }
 import json.{Json(..), get, jObject, parse, stringify}
+import list.{reverse}
 import net.{
   Connection,
   Listener,
@@ -465,6 +471,116 @@ flushHeld ((conn, bytes) :: rest) =
   let _ = close conn
   flushHeld rest
 
+-- A `size`-byte answer. The body is filler: what a case about a large answer
+-- asserts on is its size and status, and a body that also echoed the claims
+-- would be one more thing for the PDS to relay intact without proving more.
+bulkBytes : Int -> Int -> Array Int
+bulkBytes status size =
+  match makeResponse status "OK" [mustJsonHeader] (make size 120)
+    Ok response => serializeResponse response
+    Err message => panic "appview_stub: response error: \{message}"
+
+{- | How long `bulk` waits after each held call's prefix before sending the
+   next one's.
+
+   The call that is sent its prefix first is the one that reaches a size worth
+   charging first, and a case that says which of two calls holds the budget
+   needs that order to be this driver's rather than the PDS's scheduler's. A
+   prefix is read off a loopback socket in milliseconds. -}
+bulkPrefixGapMs : Int
+bulkPrefixGapMs = 300
+
+{- | How often `bulk` sends each held call one more byte while it holds them.
+
+   Far inside any silence budget the PDS keeps on an upstream read, so what
+   holds a call open is this driver not having finished and never the PDS
+   giving up on a peer that went quiet. -}
+bulkTickMs : Int
+bulkTickMs = 500
+
+-- Errors are ignored: a call the PDS has already abandoned is closed on its
+-- side, and what the case asserts is what the PDS answered its own client.
+sendRange : Array Int -> Int -> Int -> Connection -> <Net "_"> Unit
+sendRange bytes lo hi conn =
+  if lo >= hi then
+    ()
+  else
+    let _ = sendAll conn (sliceClamped lo hi bytes)
+    ()
+
+sendPrefixes : Array Int -> Int -> List Connection -> <Clock, Net "_"> Unit
+sendPrefixes _ _ [] = ()
+sendPrefixes bytes prefix (conn :: rest) =
+  let () = sendRange bytes 0 prefix conn
+  let () = sleepMs bulkPrefixGapMs
+  sendPrefixes bytes prefix rest
+
+sendEach : Array Int -> Int -> Int -> List Connection -> <Net "_"> Unit
+sendEach _ _ _ [] = ()
+sendEach bytes lo hi (conn :: rest) =
+  let () = sendRange bytes lo hi conn
+  sendEach bytes lo hi rest
+
+-- One byte to every held call per tick, from `at` until `until`, and returns
+-- where it stopped.
+trickle : Array Int -> Int -> Int -> List Connection -> <Clock, Net "_"> Int
+trickle bytes at until conns =
+  if at >= until then
+    at
+  else
+    let () = sleepMs bulkTickMs
+    let () = sendEach bytes at (at + 1) conns
+    trickle bytes (at + 1) until conns
+
+finishAll : Array Int -> Int -> List Connection -> <Net "_"> Unit
+finishAll _ _ [] = ()
+finishAll bytes from (conn :: rest) =
+  let () = sendRange bytes from (arrayLength bytes) conn
+  let _ = close conn
+  finishAll bytes from rest
+
+{- | Holds `count` calls as `batch` does, then answers every one of them with a
+   `size`-byte body without completing any: `prefix` bytes each, in the order
+   the calls arrived, and then a byte at a time to all of them for `holdMs`.
+   Only then does it send the rest and close. The calls after the held ones
+   are answered singly and at once, at the same size.
+
+   Holding answers part-sent is what makes a case about bytes in flight
+   observable. An answer the PDS has only partly read is one it is holding
+   and has not relayed, and this driver, not the PDS, decides how long that
+   lasts; an upstream that answered at once would let the first call finish
+   before the second held anything, and a budget on answers held together
+   would never be reached. -}
+bulkAnswer : String ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Listener ->
+  <Clock, FileWrite "_", Net "_"> Unit
+bulkAnswer path status count size prefix holdMs lis =
+  let held = holdCalls path status lis count []
+  let conns = reverse (map (pair => let (conn, _) = pair in conn) held)
+  let bytes = bulkBytes status size
+  let sent = min prefix (arrayLength bytes)
+  let () = sendPrefixes bytes sent conns
+  let () = logLine path "bulk prefix-sent \{intToString sent}"
+  let upTo = min (arrayLength bytes) (sent + holdMs / bulkTickMs)
+  let from = trickle bytes sent upTo conns
+  let () = finishAll bytes from conns
+  let () = logLine path "bulk finished"
+  acceptLoop lis (bulkCall path status size)
+
+bulkCall : String ->
+  Int ->
+  Int ->
+  Connection ->
+  <FileWrite "_", Net "_"> Result String Unit
+bulkCall path status size conn =
+  let _ = answerFor path status conn
+  sendAll conn (bulkBytes status size)
+
 mustPort : String -> Int
 mustPort text = optionOrPanic "appview_stub: not a port: \{text}" (toInt text)
 
@@ -477,7 +593,7 @@ mustCount text = optionOrPanic "appview_stub: not a count: \{text}" (toInt text)
 
 usage : String
 usage =
-  "usage: appview_stub_main <answer PORT LOGFILE STATUS|batch PORT LOGFILE STATUS COUNT|linger PORT LOGFILE STATUS|stall PORT|deaf PORT>"
+  "usage: appview_stub_main <answer PORT LOGFILE STATUS|batch PORT LOGFILE STATUS COUNT|bulk PORT LOGFILE STATUS COUNT SIZE PREFIX HOLDMS|linger PORT LOGFILE STATUS|stall PORT|deaf PORT>"
 
 main : <Clock, IO, Env, Net "_"> Unit
 main = match args ()
@@ -491,4 +607,17 @@ main = match args ()
     serve (mustPort port) (lingerCall path (mustStatus status))
   ["stall", port] => serve (mustPort port) stallCall
   ["deaf", port] => deaf (mustPort port)
+  ["bulk", port, path, status, count, size, prefix, holdMs] =>
+    match listen "127.0.0.1" (mustPort port)
+      Err message => panic "appview_stub: listen failed: \{message}"
+      Ok lis =>
+        let _ = ready lis
+        bulkAnswer
+          path
+          (mustStatus status)
+          (mustCount count)
+          (mustCount size)
+          (mustCount prefix)
+          (mustCount holdMs)
+          lis
   _ => panic usage

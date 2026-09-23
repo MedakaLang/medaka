@@ -4,7 +4,9 @@
    derivation from `X-Forwarded-For`. -}
 
 import bytes.{encodeUtf8}
-import http.{Header, makeHeader, parseRequest, requestHeaders}
+import http.{
+  Header, headerName, headerValue, makeHeader, parseRequest, requestHeaders
+}
 import list.{replicate}
 import string.{join, repeat, toUtf8}
 import test.{
@@ -12,6 +14,7 @@ import test.{
 }
 import lib.resource_limits.{
   maxCreateSessionPerWindow,
+  maxPreferencesPerWindow,
   maxRateLimitIdentitiesPerWindow,
   maxRepoExportsPerWindow,
   maxXffHeaderBytes,
@@ -24,14 +27,21 @@ import lib.ratelimit.{
   RateLimitState,
   RateLimitVerdict(..),
   TrustedProxy(..),
+  capacityMessage,
   classAllowance,
+  classMessage,
   directIdentity,
   identifyClient,
   identityLabel,
   initRateLimitState,
   isCreateSessionNsid,
+  isPreferencesNsid,
   isRepoExportNsid,
   isWriteNsid,
+  nsidRateLimitClasses,
+  rateLimitCapacityHeaderList,
+  rateLimitHeaderList,
+  remainingInClass,
   step,
 }
 import lib.xrpc.{
@@ -190,6 +200,60 @@ test "classAllowance is per-class, not one shared counter" = expectAll [
   expectNotEqual
     (classAllowance WritesClass)
     (classAllowance CreateSessionClass),
+]
+
+-- An ordinary class refusal names its own class and reports its own usage:
+-- a fresh identity's remaining allowance is its class's full allowance, and
+-- the reset is the time left in the current window.
+test "an ordinary class refusal renders its own class message and headers" =
+  let now = 25
+  match rateLimitHeaderList initRateLimitState directIdentity WritesClass now
+    [limitH, remainingH, resetH] => expectAll [
+      expectEqual
+        (classMessage WritesClass)
+        "too many write requests for this identity in the current window",
+      expectEqual (headerName limitH) "ratelimit-limit",
+      expectEqual (headerValue limitH) (toUtf8 "\{classAllowance WritesClass}"),
+      expectEqual (headerName remainingH) "ratelimit-remaining",
+      expectEqual
+        (headerValue remainingH)
+        (toUtf8 "\{classAllowance WritesClass}"),
+      expectEqual (headerName resetH) "ratelimit-reset",
+      expectEqual
+        (headerValue resetH)
+        (toUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
+    ]
+    _ => expectTrue False
+
+-- A capacity refusal is a different shape: it names the cardinality cap
+-- rather than any class allowance, and reports zero remaining, because the
+-- identity that hit it has no usage of its own — the shared table was full
+-- of OTHER identities.
+test "a capacity refusal renders capacityMessage and the cardinality cap" =
+  let now = 25
+  match rateLimitCapacityHeaderList now
+    [limitH, remainingH, resetH] => expectAll [
+      expectEqual
+        capacityMessage
+        "too many distinct client identities tracked in the current window",
+      expectEqual (headerName limitH) "ratelimit-limit",
+      expectEqual
+        (headerValue limitH)
+        (toUtf8 "\{maxRateLimitIdentitiesPerWindow}"),
+      expectEqual (headerName remainingH) "ratelimit-remaining",
+      expectEqual (headerValue remainingH) (toUtf8 "0"),
+      expectEqual (headerName resetH) "ratelimit-reset",
+      expectEqual
+        (headerValue resetH)
+        (toUtf8 "\{rateLimitWindowSeconds - now % rateLimitWindowSeconds}"),
+    ]
+    _ => expectTrue False
+
+test "PreferencesClass has its own message and its own allowance" = expectAll [
+  expectEqual
+    (classMessage PreferencesClass)
+    "too many preferences updates for this identity in the current window",
+  expectEqual (classAllowance PreferencesClass) maxPreferencesPerWindow,
 ]
 
 -- (b) a refusal names RateLimitExceeded with status 429.
@@ -582,4 +646,32 @@ test "a repository export is charged as neither a write nor a login" = expectAll
   [
     expectTrue (not (isWriteNsid "com.atproto.sync.getRepo")),
     expectTrue (not (isCreateSessionNsid "com.atproto.sync.getRepo")),
+  ]
+
+isPreferencesOnly : List RateLimitClass -> Bool
+isPreferencesOnly [PreferencesClass] = True
+isPreferencesOnly _ = False
+
+test "putPreferences is classified as PreferencesClass and nothing else" = expectAll
+  [
+    expectTrue
+      (isPreferencesOnly
+        (nsidRateLimitClasses "app.bsky.actor.putPreferences")),
+    expectFalse (isPreferencesNsid "com.atproto.repo.createRecord"),
+  ]
+
+-- The two classes are separate budgets on the same identity: a preferences
+-- burst must not spend WritesClass's allowance, and a write burst must not
+-- spend PreferencesClass's.
+test "a preferences burst and a write burst do not share a budget" =
+  let (afterPreferences, _) =
+    step initRateLimitState directIdentity PreferencesClass 0
+  let (afterWrite, _) = step initRateLimitState directIdentity WritesClass 0
+  expectAll [
+    expectEqual
+      (remainingInClass afterPreferences directIdentity WritesClass 0)
+      (classAllowance WritesClass),
+    expectEqual
+      (remainingInClass afterWrite directIdentity PreferencesClass 0)
+      (classAllowance PreferencesClass),
   ]

@@ -34,7 +34,7 @@ import lib.jwt.{
   serviceTokenLifetimeSeconds,
   verifyToken,
 }
-import lib.nsid.{sameNsidIdentity}
+import lib.nsid.{sameNsidIdentity, validateNsid, nsidErrorMessage}
 import lib.proxy.{
   appviewRouteDid,
   appviewRouteFor,
@@ -944,19 +944,24 @@ admitServiceAudience table raw = match proxyServiceDid raw
 
 {- | The method half: a credential may not name one of the account-management
    methods (`lib.proxy`'s `protectedMethods`), whether or not this server
-   serves it locally.
+   serves it locally. A value that is not even a syntactically valid NSID is
+   refused first — the protected-method list can only be checked against a
+   value shaped like a method name.
 
-   The message is the official implementation's own wording, and it names the
-   value the client itself sent and nothing else. -}
+   The protected-method message is the official implementation's own wording,
+   and it names the value the client itself sent and nothing else. -}
 admitServiceMethod : Option String -> Result Response Unit
 admitServiceMethod None = Ok ()
-admitServiceMethod (Some lxm) =
-  if isProtectedMethod lxm then
-    Err
-      (serviceAuthRefusal
-        "cannot request a service auth token for the following method: \{lxm}")
-  else
-    Ok ()
+admitServiceMethod (Some lxm) = match validateNsid lxm
+  Err cause =>
+    Err (serviceAuthRefusal "service auth lxm: \{nsidErrorMessage cause}")
+  Ok () =>
+    if isProtectedMethod lxm then
+      Err
+        (serviceAuthRefusal
+          "cannot request a service auth token for the following method: \{lxm}")
+    else
+      Ok ()
 
 {- | The expiry half, resolved to an instant.
 

@@ -1,0 +1,148 @@
+{- | Direct unit coverage for the process-wide egress budget
+   (`EgressCensus`, `pds/shell/server.mdk`), which bounds the upstream answers
+   the proxied calls in flight hold between them.
+
+   `maxConcurrentProxiedCalls` counts calls and `maxHttpClientWireBytes`
+   grades one answer, and eight answers at that ceiling are more than
+   `pds/pds.service`'s `MemoryMax=512M` can hold once each is copied on its
+   way through. What is asserted below is the admission decision, which is
+   pure: when a call is charged, what a full budget refuses, what order a
+   release hands headroom on in, and that a call gives back exactly what it
+   was charged. The parking around that decision (`admitEgressBytes`) needs a
+   scheduler and a live upstream, so the memory claim itself is measured
+   against a running server, not here. -}
+
+import lib.resource_limits.{
+  maxHttpClientWireBytes,
+  maxInFlightEgressBytes,
+  maxUnchargedEgressBytes,
+}
+import shell.server.{
+  EgressCensus,
+  EgressCharge(..),
+  claimEgressBytes,
+  egressChargeDue,
+  egressChargedBytes,
+  enqueueEgressBytes,
+  maxConcurrentProxiedCalls,
+  newEgressCensus,
+  releaseEgressBytes,
+  settleEgressCharge,
+  settleEgressWait,
+  waitingEgressCalls,
+}
+import test.{expectAll, expectEqual, expectTrue}
+
+-- | How many of `count` calls, each holding a whole answer, the budget
+-- admitted at once.
+admitAnswers : EgressCensus -> Int -> Int
+admitAnswers census count =
+  fold
+    (taken _ =>
+      if claimEgressBytes census maxHttpClientWireBytes then
+        taken + 1
+      else
+        taken)
+    0
+    [1..=count]
+
+-- # When a call is charged
+
+test "an answer within the uncharged allowance is never charged" = expectAll [
+  expectTrue (not (egressChargeDue EgressUncharged 0)),
+  expectTrue (not (egressChargeDue EgressUncharged maxUnchargedEgressBytes)),
+]
+
+test "an answer past the uncharged allowance is charged" =
+  expectTrue (egressChargeDue EgressUncharged (maxUnchargedEgressBytes + 1))
+
+-- Charged once for a whole answer and never again, however much more of it
+-- arrives: a call asked for more while holding part of an answer could wait
+-- on others doing the same.
+test "a call already charged or refused is never charged again" = expectAll [
+  expectTrue (not (egressChargeDue EgressHeld maxHttpClientWireBytes)),
+  expectTrue (not (egressChargeDue EgressRefused maxHttpClientWireBytes)),
+]
+
+-- # What a full budget refuses
+
+test "a claim within the budget is charged for exactly what it took" =
+  let census = newEgressCensus ()
+  let took = claimEgressBytes census maxHttpClientWireBytes
+  expectAll [
+    expectTrue took,
+    expectEqual maxHttpClientWireBytes (egressChargedBytes census),
+  ]
+
+-- The case the budget exists for: every proxied call the count census admits
+-- holding a whole answer at once. Only as many as the budget has room for
+-- are admitted, and the rest are charged nothing.
+test "a full herd of proxied calls holds no more answers than the budget has room for" =
+  let census = newEgressCensus ()
+  let admitted = admitAnswers census maxConcurrentProxiedCalls
+  let room = maxInFlightEgressBytes / maxHttpClientWireBytes
+  expectAll [
+    expectTrue (room < maxConcurrentProxiedCalls),
+    expectEqual room admitted,
+    expectEqual (room * maxHttpClientWireBytes) (egressChargedBytes census),
+  ]
+
+-- # What a release hands on
+
+-- The release charges the waiter BEFORE it runs again, so nothing arriving in
+-- between can take the bytes ahead of it.
+test "a call refused by a full budget is granted once the holder gives back" =
+  let census = newEgressCensus ()
+  let filled = admitAnswers census maxConcurrentProxiedCalls
+  let waiter = enqueueEgressBytes census maxHttpClientWireBytes
+  let queuedBefore = waitingEgressCalls census
+  let () = releaseEgressBytes census maxHttpClientWireBytes
+  let granted = settleEgressWait census waiter
+  expectAll [
+    expectTrue (filled > 0),
+    expectEqual 1 queuedBefore,
+    expectTrue granted,
+    expectEqual 0 (waitingEgressCalls census),
+    expectEqual (filled * maxHttpClientWireBytes) (egressChargedBytes census),
+  ]
+
+test "a waiter that gave up takes no headroom" =
+  let census = newEgressCensus ()
+  let filled = admitAnswers census maxConcurrentProxiedCalls
+  let first = enqueueEgressBytes census maxHttpClientWireBytes
+  let second = enqueueEgressBytes census maxHttpClientWireBytes
+  let abandoned = settleEgressWait census first
+  let () = releaseEgressBytes census maxHttpClientWireBytes
+  let secondGranted = settleEgressWait census second
+  expectAll [
+    expectTrue (filled > 0),
+    expectTrue (not abandoned),
+    expectTrue secondGranted,
+    expectEqual 0 (waitingEgressCalls census),
+  ]
+
+-- # What a call gives back
+
+test "a call gives back exactly what it was charged, once" =
+  let census = newEgressCensus ()
+  let charge = Ref EgressUncharged
+  let took = claimEgressBytes census maxHttpClientWireBytes
+  let () = charge := EgressHeld
+  let () = settleEgressCharge census charge
+  let afterFirst = egressChargedBytes census
+  let () = settleEgressCharge census charge
+  expectAll [
+    expectTrue took,
+    expectEqual 0 afterFirst,
+    expectEqual 0 (egressChargedBytes census),
+  ]
+
+test "a call that was refused or never charged gives back nothing" =
+  let census = newEgressCensus ()
+  let took = claimEgressBytes census maxHttpClientWireBytes
+  let () = settleEgressCharge census (Ref EgressRefused)
+  let () = settleEgressCharge census (Ref EgressUncharged)
+  expectAll [
+    expectTrue took,
+    expectEqual maxHttpClientWireBytes (egressChargedBytes census),
+  ]

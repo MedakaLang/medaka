@@ -21,14 +21,12 @@
    divergent answer to a question `http` has already settled. -}
 
 import http.{
-  Header,
   HttpFrame(..),
   HttpParseFailure,
   HttpScan,
   httpScanBodyRemaining,
   httpScanInHeaders,
   httpScanStart,
-  makeHeader,
   maxHttpRequestBytes,
   parseRequestAt,
   Request,
@@ -73,13 +71,15 @@ import lib.ratelimit.{
   RateLimitState,
   RateLimitVerdict(..),
   TrustedProxy,
-  classAllowance,
+  capacityMessage,
+  classMessage,
   directIdentity,
   identifyClient,
   identityLabel,
   initRateLimitState,
   nsidRateLimitClasses,
-  remainingInClass,
+  rateLimitCapacityHeaderList,
+  rateLimitHeaderList,
   step,
 }
 import hex.{encode}
@@ -107,9 +107,10 @@ import lib.sync_event.{
   syncSyncFrame,
 }
 import lib.resource_limits.{
+  maxHttpClientWireBytes,
+  maxInFlightEgressBytes,
   maxInFlightRequestBytes,
-  maxRateLimitIdentitiesPerWindow,
-  rateLimitWindowSeconds,
+  maxUnchargedEgressBytes,
 }
 import lib.proxy.{
   UpstreamAnswer,
@@ -174,7 +175,6 @@ import shell.persist.{
 }
 import shell.subscribe.{runSubscription}
 import lib.websocket.{handshakeResponseBytes}
-import string.{toUtf8}
 import time.{
   Duration,
   formatIso,
@@ -359,6 +359,7 @@ maxConcurrentSubscriptions = 32
    slow. A buffer representation that packed bytes as bytes would lower the
    per-call cost without removing the need for a ceiling on the count, which
    is why this is a ceiling rather than a stopgap. -}
+export
 maxConcurrentProxiedCalls : Int
 maxConcurrentProxiedCalls = 8
 
@@ -444,6 +445,21 @@ maxQueuedBufferedReads = 64
    elsewhere may never give back. -}
 bufferQueueWait : Duration
 bufferQueueWait = seconds 5
+
+{- | How long a proxied call waits for `maxInFlightEgressBytes` headroom before
+   it is refused (#3264).
+
+   The headroom comes back when the call holding it has relayed its answer,
+   which `upstreamCallTimeout` (`pds/shell/egress.mdk`, 10 s) and
+   `writeTimeout` bound between them. Five seconds is long enough for an
+   ordinary large answer ahead of the waiter to be relayed, and half the
+   waiter's own call deadline, which has been running since it dialled, so a
+   waiter granted headroom still has time to use it. A holder relaying to a
+   slow reader keeps the others waiting past it, and they are refused rather
+   than held: the bytes that reader is being sent are exactly the memory the
+   budget exists to bound. -}
+egressQueueWait : Duration
+egressQueueWait = seconds 5
 
 {- | How long one request's header section may take to arrive in full (#2772).
 
@@ -949,9 +965,10 @@ persistRepo dir repo = do
 -- One rate-limit decision, taken against every class this request must
 -- clear: `ConnectionsClass` only on a connection's first framed request (a
 -- kept-alive connection is "opened" once, not once per pipelined request),
--- `RequestsClass` always, and `WritesClass`/`CreateSessionClass`/
--- `RepoExportClass` when the routed NSID is one of the write procedures,
--- `createSession`, or a whole-repository export. A refusal at an earlier
+-- `RequestsClass` always, and `WritesClass`/`PreferencesClass`/
+-- `CreateSessionClass`/`RepoExportClass` when the routed NSID is one of the
+-- write procedures, `putPreferences`, `createSession`, or a
+-- whole-repository export. A refusal at an earlier
 -- class in the list short-circuits: a request already being refused should
 -- not also spend a later class's budget it never reached.
 data RateLimitAdmission =
@@ -1040,66 +1057,6 @@ admitClasses state identity nowSeconds (cls :: rest) =
     (next, Refused) => RequestRefused next cls
     (next, RefusedCapacity) => RequestRefusedCapacity next
     (next, Admitted) => admitClasses next identity nowSeconds rest
-
-classMessage : RateLimitClass -> String
-classMessage ConnectionsClass =
-  "too many connections for this identity in the current window"
-classMessage RequestsClass =
-  "too many requests for this identity in the current window"
-classMessage WritesClass =
-  "too many write requests for this identity in the current window"
-classMessage CreateSessionClass =
-  "too many createSession attempts for this identity in the current window"
-classMessage RepoExportClass =
-  "too many repository exports for this identity in the current window"
-classMessage ProxyClass =
-  "too many proxied appview reads for this identity in the current window"
-
--- | What a `RequestRefusedCapacity` refusal is told: this identity has not
--- exceeded anything of its own — the shared per-window table is full of
--- OTHER identities, and `classMessage`/`remainingInClass` would describe a
--- usage this identity never accrued.
-capacityMessage : String
-capacityMessage =
-  "too many distinct client identities tracked in the current window"
-
-intHeader : String -> Int -> Header
-intHeader name value =
-  resultOrPanic
-    "serve: internal rate-limit header error"
-    (makeHeader name (toUtf8 "\{value}"))
-
--- `RateLimit-Reset` needs no state, only `now` and the shared window length:
--- every class resets on the same window boundary.
-rateLimitHeaderList : RateLimitState ->
-  ClientIdentity ->
-  RateLimitClass ->
-  Int ->
-  List Header
-rateLimitHeaderList state identity cls nowSeconds = [
-  intHeader "ratelimit-limit" (classAllowance cls),
-  intHeader
-    "ratelimit-remaining"
-    (remainingInClass state identity cls nowSeconds),
-  intHeader
-    "ratelimit-reset"
-    (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
-]
-
--- | Headers for a `RequestRefusedCapacity` refusal: `ratelimit-limit` names
--- the cardinality cap itself rather than a class allowance, and
--- `ratelimit-remaining` is `0` rather than `remainingInClass`'s answer —
--- this identity has no row and no usage of its own, so the class allowance
--- it would otherwise report is not what refused it, and reporting it would
--- claim full allowance while refusing the request.
-rateLimitCapacityHeaderList : Int -> List Header
-rateLimitCapacityHeaderList nowSeconds = [
-  intHeader "ratelimit-limit" maxRateLimitIdentitiesPerWindow,
-  intHeader "ratelimit-remaining" 0,
-  intHeader
-    "ratelimit-reset"
-    (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
-]
 
 -- | `None` admits; `Some` is the 429 to send instead of doing any real work.
 -- Every buffer that reached the framer is charged, a parse failure included:
@@ -1423,18 +1380,28 @@ firstLiveBufferWaiter (waiter :: rest) =
    resumes — so there is no instant at which freed bytes are unowned for an
    arriving read to take ahead of the queue. -}
 grantBufferHeadroom : BufferCensus -> Unit
-grantBufferHeadroom census = match census
-  BufferCensus buffered waiting queue => match firstLiveBufferWaiter !queue
+grantBufferHeadroom (BufferCensus buffered waiting queue) =
+  grantHeadroomWithin maxInFlightRequestBytes buffered waiting queue
+
+-- `grantBufferHeadroom` against any ceiling, for the two budgets that queue
+-- the same way (`BufferCensus`, `EgressCensus`).
+grantHeadroomWithin : Int ->
+  Ref Int ->
+  Ref Int ->
+  Ref (List BufferWaiter) ->
+  Unit
+grantHeadroomWithin ceiling held waiting queue =
+  match firstLiveBufferWaiter !queue
     None => queue := []
     Some (waiter, rest) =>
-      if !buffered + bufferWaiterBytes waiter > maxInFlightRequestBytes then
+      if !held + bufferWaiterBytes waiter > ceiling then
         queue := waiter :: rest
       else
         let () = queue := rest
         let () = waiting := !waiting - 1
-        let () = buffered := !buffered + bufferWaiterBytes waiter
+        let () = held := !held + bufferWaiterBytes waiter
         let () = bufferWaiterGranted waiter := True
-        grantBufferHeadroom census
+        grantHeadroomWithin ceiling held waiting queue
 
 {- | Give `bytes` back to the budget and pass them on to whoever is waiting.
 
@@ -1466,7 +1433,12 @@ releaseBufferBytes census bytes = match census
    read does not go on occupying a queue place it will never use. -}
 export
 settleBufferedRead : BufferCensus -> BufferWaiter -> Bool
-settleBufferedRead (BufferCensus _ waiting _) (BufferWaiter granted abandoned _) =
+settleBufferedRead (BufferCensus _ waiting _) waiter =
+  settleWaiter waiting waiter
+
+-- `settleBufferedRead` for either budget's queue, given its waiter count.
+settleWaiter : Ref Int -> BufferWaiter -> Bool
+settleWaiter waiting (BufferWaiter granted abandoned _) =
   if !granted then
     True
   else
@@ -1492,6 +1464,145 @@ admitBufferBytes census bytes =
       limit <- deadlineAfter bufferQueueWait
       _ <- awaitAny [waitFlag (bufferWaiterGranted waiter), limit]
       liftIO (u => settleBufferedRead census waiter)
+
+-- ── the in-flight egress budget ─────────────────────────────────────────────
+
+{- | How many bytes of upstream answer the proxied calls in flight hold between
+   them past their uncharged allowance, bounded by `maxInFlightEgressBytes`
+   (`lib.resource_limits`, which also says why it is sized as it is), and how
+   many calls are waiting for headroom.
+
+   `BufferCensus`'s counterpart for the other direction, and a type of its own
+   for the reason given there: the two count opposite directions, so one
+   crossed with the other would bound the wrong resource while still looking
+   like a census. It queues exactly as that one does — the same waiter, the
+   same in-order grant, the same transfer of bytes before the waiter resumes —
+   with one difference: its queue has no bound of its own, because only a call
+   holding a `ProxyCensus` slot can join it, so it never holds more than
+   `maxConcurrentProxiedCalls` waiters.
+
+   A saturated budget is a wait and never a deadlock, for the reason
+   `releaseBufferBytes` gives about its own: a call is charged for the whole of
+   its answer the one time it is charged (`egressMayHold`), so no holder ever
+   waits on the budget again, and every holder gives its charge back within
+   `upstreamCallTimeout` (`pds/shell/egress.mdk`) and `writeTimeout`. -}
+export data EgressCensus =
+  | EgressCensus (Ref Int) (Ref Int) (Ref (List BufferWaiter))
+
+-- | An empty budget, charged by nothing yet.
+export
+newEgressCensus : Unit -> EgressCensus
+newEgressCensus _ = EgressCensus (Ref 0) (Ref 0) (Ref [])
+
+-- | How many bytes the calls in flight are charged for right now.
+export
+egressChargedBytes : EgressCensus -> Int
+egressChargedBytes (EgressCensus charged _ _) = !charged
+
+-- | How many calls are parked on headroom right now.
+export
+waitingEgressCalls : EgressCensus -> Int
+waitingEgressCalls (EgressCensus _ waiting _) = !waiting
+
+-- | Take `bytes` of headroom if that much is free. `False` means the budget is
+-- full and nothing was charged.
+export
+claimEgressBytes : EgressCensus -> Int -> Bool
+claimEgressBytes (EgressCensus charged _ _) bytes =
+  if !charged + bytes > maxInFlightEgressBytes then
+    False
+  else
+    let () = charged := !charged + bytes
+    True
+
+-- | Join the back of the headroom queue. Nothing is charged until a release
+-- grants it.
+export
+enqueueEgressBytes : EgressCensus -> Int -> BufferWaiter
+enqueueEgressBytes (EgressCensus _ waiting queue) bytes =
+  let waiter = BufferWaiter (Ref False) (Ref False) bytes
+  let () = waiting := !waiting + 1
+  let () = queue := !queue ++ [waiter]
+  waiter
+
+-- | Give `bytes` back to the budget and pass them on to whoever is waiting, in
+-- order (`grantBufferHeadroom`).
+export
+releaseEgressBytes : EgressCensus -> Int -> Unit
+releaseEgressBytes (EgressCensus charged waiting queue) bytes =
+  let () = charged := !charged - bytes
+  grantHeadroomWithin maxInFlightEgressBytes charged waiting queue
+
+-- | What a woken waiter holds: `True` when headroom was handed to it, `False`
+-- when its wait ran out first (`settleBufferedRead`).
+export
+settleEgressWait : EgressCensus -> BufferWaiter -> Bool
+settleEgressWait (EgressCensus _ waiting _) waiter = settleWaiter waiting waiter
+
+{- | Take `bytes` of egress headroom, waiting in the queue for it while the
+   budget is full. `False` means the call is refused: `egressQueueWait` ran out
+   before headroom reached it. It parks rather than polling, for the reason
+   `admitProxiedCall` does. -}
+admitEgressBytes : EgressCensus -> Int -> Async <Clock | e> Bool
+admitEgressBytes census bytes =
+  if claimEgressBytes census bytes then
+    deferPure True
+  else defer
+    let waiter = enqueueEgressBytes census bytes
+    limit <- deadlineAfter egressQueueWait
+    _ <- awaitAny [waitFlag (bufferWaiterGranted waiter), limit]
+    liftIO (u => settleEgressWait census waiter)
+
+{- | Where one proxied call stands against the egress budget: not charged yet,
+   charged for a whole answer, or refused the headroom to hold one. The call
+   that asks is the one that gives the charge back, so the answer to "is there
+   anything to give back" travels with the call rather than being re-derived
+   from the census, which cannot tell whose bytes it holds. -}
+public export data EgressCharge = EgressUncharged | EgressHeld | EgressRefused
+
+{- | The `mayHold` a proxied call is made with (`pds/shell/egress.mdk`'s
+   `collectUpstream`): whether it may hold `total` bytes of answer.
+
+   It charges only when `egressChargeDue` says so, and then waits for the
+   headroom if need be. -}
+egressMayHold : EgressCensus ->
+  Ref EgressCharge ->
+  Int ->
+  Async <Clock | e> Bool
+egressMayHold census charge total =
+  if egressChargeDue !charge total then defer
+    admitted <- admitEgressBytes census maxHttpClientWireBytes
+    liftIO (u => recordEgressCharge charge admitted)
+  else match !charge
+    EgressRefused => deferPure False
+    _ => deferPure True
+
+{- | Whether a call standing at `charge` must be charged now that it would
+   hold `total` bytes of answer.
+
+   Nothing is charged up to `maxUnchargedEgressBytes`. Past it the call is
+   charged a whole `maxHttpClientWireBytes` once and never again: the rest of
+   its answer's length is not known while it arrives, and charging it a chunk
+   at a time would leave calls waiting while holding part of an answer, on
+   others doing the same. -}
+export
+egressChargeDue : EgressCharge -> Int -> Bool
+egressChargeDue EgressUncharged total = total > maxUnchargedEgressBytes
+egressChargeDue _ _ = False
+
+recordEgressCharge : Ref EgressCharge -> Bool -> Bool
+recordEgressCharge charge admitted =
+  let () = charge := if admitted then EgressHeld else EgressRefused
+  admitted
+
+-- | Give back whatever one call was charged, on the one path it leaves by.
+export
+settleEgressCharge : EgressCensus -> Ref EgressCharge -> Unit
+settleEgressCharge census charge = match !charge
+  EgressHeld =>
+    let () = charge := EgressUncharged
+    releaseEgressBytes census maxHttpClientWireBytes
+  _ => ()
 
 -- | Retire this connection's un-framed charge, if it still holds one.
 releaseUnframed : UnframedSlot -> Unit
@@ -1698,9 +1809,11 @@ readBufferLive (ReadBuffer b _) =
    counter only the outbound path charges, and this value is already on every
    function between `acceptLoop` and `forwardProxied`. The buffer budget joins
    them on the same argument: it is charged by the inbound read and given back
-   by the connection's retirement, and both of those already hold this. -}
+   by the connection's retirement, and both of those already hold this. The
+   egress budget joins them for the proxied-call census's reason: only the
+   outbound path charges it. -}
 export data Serving =
-  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus (Ref Bool)
+  | Serving TrustedProxy (Option Egress) ProxyCensus BufferCensus EgressCensus (Ref Bool)
 
 export
 makeServing : TrustedProxy -> Option Egress -> Ref Int -> Serving
@@ -1710,24 +1823,28 @@ makeServing trustedProxy egress inFlight =
     egress
     (ProxyCensus inFlight (Ref 0) (Ref []))
     (newBufferCensus ())
+    (newEgressCensus ())
     (Ref False)
 
 export
 servingStopping : Serving -> Ref Bool
-servingStopping (Serving _ _ _ _ stopping) = stopping
+servingStopping (Serving _ _ _ _ _ stopping) = stopping
 
 export
 servingTrustedProxy : Serving -> TrustedProxy
-servingTrustedProxy (Serving trustedProxy _ _ _ _) = trustedProxy
+servingTrustedProxy (Serving trustedProxy _ _ _ _ _) = trustedProxy
 
 servingEgress : Serving -> Option Egress
-servingEgress (Serving _ egress _ _ _) = egress
+servingEgress (Serving _ egress _ _ _ _) = egress
 
 servingProxyCensus : Serving -> ProxyCensus
-servingProxyCensus (Serving _ _ census _ _) = census
+servingProxyCensus (Serving _ _ census _ _ _) = census
 
 servingBufferCensus : Serving -> BufferCensus
-servingBufferCensus (Serving _ _ _ census _) = census
+servingBufferCensus (Serving _ _ _ census _ _) = census
+
+servingEgressCensus : Serving -> EgressCensus
+servingEgressCensus (Serving _ _ _ _ census _) = census
 
 -- ── the stats line ──────────────────────────────────────────────────────────
 
@@ -2894,9 +3011,14 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             trace
             (serializeResponse (withAllowOrigin proxyCeilingResponse))
         else defer
-          answered <- egressCall egress admission
+          let charge = Ref EgressUncharged
+          let budget = servingEgressCensus serving
+          answered <- egressCall egress (egressMayHold budget charge) admission
+          let bytes = proxyAnswerBytes !charge answered
           _ <- liftIO (u => releaseProxiedCall (servingProxyCensus serving))
-          sendAndContinue
+          sent <- A.sendAllWithin writeTimeout conn bytes
+          _ <- liftIO (u => settleEgressCharge budget charge)
+          continueAfterSend
             server
             dir
             storeRef
@@ -2908,7 +3030,9 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             rest
             keepAlive
             trace
-            (proxyAnswerBytes answered)
+            (responseStatusCode bytes)
+            (arrayLength bytes)
+            sent
 
 {- | The bytes a proxied read answers with.
 
@@ -2942,10 +3066,33 @@ proxyCeilingResponse =
     "ProxyLimitExceeded"
     "too many proxied reads are in flight on this server"
 
-proxyAnswerBytes : Result String UpstreamAnswer -> Array Int
-proxyAnswerBytes (Err _) =
+{- | What a proxied read is told when its answer outgrew
+   `maxUnchargedEgressBytes` and `egressQueueWait` ran out before
+   `maxInFlightEgressBytes` had room for it.
+
+   503 rather than the 502 every other failed call gets, and for
+   `proxyCeilingResponse`'s reason: the upstream did answer, and what refused
+   the answer is this server's memory, which a caller that retries later is
+   right to expect back. -}
+egressBudgetResponse : Response
+egressBudgetResponse =
+  xrpcErrorResponse
+    503
+    "Service Unavailable"
+    "ProxyEgressLimitExceeded"
+    "too many large proxied answers are in flight on this server"
+
+-- The call's egress charge is given back only once these bytes have been
+-- written (`forwardProxied`): serializing the answer is one more full copy of
+-- the upstream's bytes, held until the client has read it, so the charge
+-- covers every copy of an answer this server makes and not only the one it
+-- accumulated.
+proxyAnswerBytes : EgressCharge -> Result String UpstreamAnswer -> Array Int
+proxyAnswerBytes EgressRefused _ =
+  serializeResponse (withAllowOrigin egressBudgetResponse)
+proxyAnswerBytes _ (Err _) =
   serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
-proxyAnswerBytes (Ok answer) = match proxyUpstreamResponse answer
+proxyAnswerBytes _ (Ok answer) = match proxyUpstreamResponse answer
   Err _ => serializeResponse (withAllowOrigin proxyUpstreamFailureResponse)
   Ok response => serializeResponse response
 
@@ -3086,11 +3233,46 @@ sendAndContinue : Server ->
 sendAndContinue server dir storeRef limiterRef census serving conn slot rest keepAlive trace responseBytes =
   defer
     sent <- A.sendAllWithin writeTimeout conn responseBytes
+    continueAfterSend
+      server
+      dir
+      storeRef
+      limiterRef
+      census
+      serving
+      conn
+      slot
+      rest
+      keepAlive
+      trace
+      (responseStatusCode responseBytes)
+      (arrayLength responseBytes)
+      sent
+
+-- `sendAndContinue` from the point the write has returned, for the caller
+-- (`forwardProxied`) that has something to give back between the two.
+continueAfterSend : Server ->
+  String ->
+  Ref Store ->
+  Ref RateLimitState ->
+  SubscriptionCensus ->
+  Serving ->
+  Connection ->
+  UnframedSlot ->
+  ReadBuffer ->
+  Bool ->
+  RequestTrace ->
+  Int ->
+  Int ->
+  Result String Unit ->
+  Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
+continueAfterSend server dir storeRef limiterRef census serving conn slot rest keepAlive trace statusCode byteLength sent =
+  defer
     -- Logged after the write and whatever it returned: a response this server
     -- produced and then failed to deliver is exactly what an operator is
     -- looking for, and a line only the successful writes reach would report a
     -- healthier server than the one that is running.
-    _ <- liftIO (u => logAccessBytes trace responseBytes)
+    _ <- liftIO (u => logAccess trace statusCode byteLength)
     match sent
       Err message => deferPure (Err message)
       Ok () =>

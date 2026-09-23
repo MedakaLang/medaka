@@ -414,7 +414,18 @@ extract_source_decl() {
 # ctEq count is its import plus the roster's calls in that file, so a new
 # comparing function the roster does not name fails the census.
 # A `||` across session records stays legal -- it reveals which record matched,
-# never a byte of one.
+# never a byte of one. Two further checks are file-wide, independent of the
+# roster: no line builds an equality from `arrayToList`, and no `ctEq`
+# reference is reached through a dot-qualified name -- only the file's own
+# unaliased, selectively-imported `ctEq` counts toward the roster above.
+#
+# This is a source-text census, and it stays blind to what a call's own
+# arguments are: a `ctEq digest digest` call against two occurrences of the
+# SAME identifier still satisfies its function's stated call count, so any
+# OTHER comparator beside it in that function or file -- a bare `==`, an
+# `(==)` section, `Ord`'s `<`/`>`, `elem`, a hand-written `eq`, or a call into
+# another module -- can still perform the real, non-constant-time comparison
+# undetected. Closing that gap needs the IR level, tracked as #2838.
 secret_comparisons_ok() {
   credential=$1
   jwt=$2
@@ -446,6 +457,13 @@ secret_comparisons_ok() {
       END { print n + 0 }
     ' "$file")
     [ "$leaks" -eq 0 ] || return 1
+    arraytolist_eq=$(awk '
+      /^[[:space:]]*--/ { next }
+      /arrayToList/ && /==|\/=|compare/ { n++ }
+      END { print n + 0 }
+    ' "$file")
+    [ "$arraytolist_eq" -eq 0 ] || return 1
+    if grep -E -q '[A-Za-z_][A-Za-z0-9_]*\.ctEq' "$file"; then return 1; fi
   done
   roster_credential=0
   roster_jwt=0
@@ -832,6 +850,46 @@ if secret_comparisons_ok "$CREDENTIAL" "$JWT" "$WORK/store_loop_mutant.mdk" "$WO
   fail 'session hand-rolled early-exit loop mutation is rejected by the secret-comparison census'
 fi
 pass 'session hand-rolled early-exit loop mutation is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+    next
+  }
+  { print }
+  END {
+    print ""
+    print "sameDigest : Array Int -> Array Int -> Bool"
+    print "sameDigest a b = arrayToList a == arrayToList b"
+  }
+' "$CREDENTIAL" > "$WORK/credential_wrapper_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_wrapper_mutant.mdk"; then
+  fail 'credential wrapper-indirection mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_wrapper_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-wrapper-mutant"; then
+  fail 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
+fi
+pass 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
+
+awk '
+  /^import hmac\.\{ctEq\}$/ {
+    print
+    print "import hmac as H"
+    next
+  }
+  /^      SessionRecord _ refresh expires _ => now < expires && ctEq wanted refresh\)$/ {
+    print "      SessionRecord _ refresh expires _ => now < expires && H.ctEq wanted refresh)"
+    next
+  }
+  { print }
+' "$STORE" > "$WORK/store_alias_mutant.mdk"
+if cmp -s "$STORE" "$WORK/store_alias_mutant.mdk"; then
+  fail 'store import-alias mutation was constructed'
+fi
+if secret_comparisons_ok "$CREDENTIAL" "$JWT" "$WORK/store_alias_mutant.mdk" "$WORK/secret-store-alias-mutant"; then
+  fail 'store dot-qualified-alias ctEq mutation is rejected by the secret-comparison census'
+fi
+pass 'store dot-qualified-alias ctEq mutation is rejected by the secret-comparison census'
 
 # Private same-module witnesses. The mutation copies never touch the worktree.
 cp "$FIELD" "$WORK/field_probe.mdk"
