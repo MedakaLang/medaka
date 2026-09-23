@@ -414,18 +414,23 @@ extract_source_decl() {
 # ctEq count is its import plus the roster's calls in that file, so a new
 # comparing function the roster does not name fails the census.
 # A `||` across session records stays legal -- it reveals which record matched,
-# never a byte of one. Two further checks are file-wide, independent of the
-# roster: no line builds an equality from `arrayToList`, and no `ctEq`
-# reference is reached through a dot-qualified name -- only the file's own
-# unaliased, selectively-imported `ctEq` counts toward the roster above.
+# never a byte of one. Three further checks are file-wide, independent of the
+# roster: no line builds an equality from `arrayToList`, no `ctEq` reference is
+# reached through a dot-qualified name, and no `ctEq` call's two arguments are
+# the same textual identifier or the same textual parenthesized expression --
+# only the file's own unaliased, selectively-imported `ctEq` counts toward the
+# roster above, and only a call whose two argument texts actually differ.
 #
 # This is a source-text census, and it stays blind to what a call's own
-# arguments are: a `ctEq digest digest` call against two occurrences of the
-# SAME identifier still satisfies its function's stated call count, so any
-# OTHER comparator beside it in that function or file -- a bare `==`, an
-# `(==)` section, `Ord`'s `<`/`>`, `elem`, a hand-written `eq`, or a call into
-# another module -- can still perform the real, non-constant-time comparison
-# undetected. Closing that gap needs the IR level, tracked as #2838.
+# arguments EVALUATE to: two textually different expressions that are
+# dynamically equal -- e.g. two calls into a helper that always returns the
+# same secret, or an alias reached through two different field paths -- still
+# satisfy the argument-distinctness check above while comparing a value
+# against itself, so any OTHER comparator beside it in that function or file
+# -- a bare `==`, an `(==)` section, `Ord`'s `<`/`>`, `elem`, a hand-written
+# `eq`, or a call into another module -- can still perform the real,
+# non-constant-time comparison undetected. Closing that gap needs the IR
+# level, tracked as #2838.
 secret_comparisons_ok() {
   credential=$1
   jwt=$2
@@ -464,6 +469,56 @@ secret_comparisons_ok() {
     ' "$file")
     [ "$arraytolist_eq" -eq 0 ] || return 1
     if grep -E -q '[A-Za-z_][A-Za-z0-9_]*\.ctEq' "$file"; then return 1; fi
+    tautologies=$(awk '
+      function skip_ws(s,    i) {
+        i = 1
+        while (i <= length(s) && substr(s, i, 1) ~ /[[:space:]]/) i++
+        return substr(s, i)
+      }
+      function take_arg(s,    depth, i, c) {
+        if (substr(s, 1, 1) == "(") {
+          depth = 0
+          for (i = 1; i <= length(s); i++) {
+            c = substr(s, i, 1)
+            if (c == "(") { depth++ }
+            else if (c == ")") {
+              depth--
+              if (depth == 0) { i++; break }
+            }
+          }
+          arg = substr(s, 1, i - 1)
+          rest = substr(s, i)
+          return
+        }
+        i = 1
+        while (i <= length(s) && substr(s, i, 1) !~ /[[:space:]()]/) { i++ }
+        arg = substr(s, 1, i - 1)
+        rest = substr(s, i)
+      }
+      /^[[:space:]]*--/ { next }
+      {
+        line = $0
+        pos = 1
+        while (1) {
+          idx = index(substr(line, pos), "ctEq")
+          if (idx == 0) { break }
+          idx += pos - 1
+          before = ""
+          if (idx > 1) { before = substr(line, idx - 1, 1) }
+          after = substr(line, idx + 4, 1)
+          if (before !~ /[A-Za-z0-9_\047]/ && after !~ /[A-Za-z0-9_\047]/) {
+            s = skip_ws(substr(line, idx + 4))
+            take_arg(s); a1 = arg
+            s = skip_ws(rest)
+            take_arg(s); a2 = arg
+            if (a1 != "" && a1 == a2) { n++ }
+          }
+          pos = idx + 4
+        }
+      }
+      END { print n + 0 }
+    ' "$file")
+    [ "$tautologies" -eq 0 ] || return 1
   done
   roster_credential=0
   roster_jwt=0
@@ -870,6 +925,56 @@ if secret_comparisons_ok "$WORK/credential_wrapper_mutant.mdk" "$JWT" "$STORE" "
   fail 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
 fi
 pass 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_elem_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_elem_mutant.mdk"; then
+  fail 'credential tautological-ctEq-plus-elem mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_elem_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-elem-mutant"; then
+  fail 'credential tautological ctEq beside an elem comparator is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq beside an elem comparator is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest digest && not (digest < pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_ord_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_ord_mutant.mdk"; then
+  fail 'credential tautological-ctEq-plus-Ord mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_ord_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-ord-mutant"; then
+  fail 'credential tautological ctEq beside an Ord comparator is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq beside an Ord comparator is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+    next
+  }
+  { print }
+  END {
+    print ""
+    print "sameDigest : Array Int -> Array Int -> Bool"
+    print "sameDigest a b = a == b"
+  }
+' "$CREDENTIAL" > "$WORK/credential_tautology_wrapper_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_wrapper_mutant.mdk"; then
+  fail 'credential tautological-ctEq-plus-wrapper mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_wrapper_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-wrapper-mutant"; then
+  fail 'credential tautological ctEq beside a non-arrayToList wrapper comparator is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq beside a non-arrayToList wrapper comparator is rejected by the secret-comparison census'
 
 awk '
   /^import hmac\.\{ctEq\}$/ {
