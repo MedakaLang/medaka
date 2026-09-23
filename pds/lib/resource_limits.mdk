@@ -194,7 +194,7 @@ maxWritesPerWindow = 60
 
    The ceiling times `maxJsonBodyBytes` (153600) is the request-body volume
    one identity may write through this route in one window: at 120, that is
-   about 18 MiB per 60-second window, roughly 2 calls/second sustained —
+   17.6 MiB per 60-second window, roughly 2 calls/second sustained —
    comfortably reachable inside one window, so a caller that hits it
    observes the refusal instead of the count resetting mid-flood. -}
 export

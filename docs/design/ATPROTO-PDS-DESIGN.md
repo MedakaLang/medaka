@@ -976,12 +976,14 @@ opposite half — a limit that KNOWS the caller's identity and the request's
 class, which no reverse proxy in front of it can. `pds/shell/server.mdk`
 charges every request against a `RateLimitState` (`pds/lib/ratelimit.mdk`)
 kept in one fixed window (`rateLimitWindowSeconds`, `pds/lib/
-resource_limits.mdk`) per six independent classes: a `ConnectionsClass`
+resource_limits.mdk`) per seven independent classes: a `ConnectionsClass`
 charge on a connection's first framed request, a `RequestsClass`
-charge on every framed request, and four narrower classes layered
+charge on every framed request, and five narrower classes layered
 on top of `RequestsClass` rather
 than replacing it — `WritesClass` for the write NSIDs (`createRecord`,
 `putRecord`, `deleteRecord`, `applyWrites`, `uploadBlob`),
+`PreferencesClass` for `putPreferences` alone, since it is a write with its
+own, looser allowance (`maxPreferencesPerWindow`) rather than `WritesClass`'s,
 `CreateSessionClass` for `createSession` alone, since login attempts are a
 credential-guessing surface every other route is not, `RepoExportClass`
 for `sync.getRepo` alone, whose single response is a whole-repository CAR

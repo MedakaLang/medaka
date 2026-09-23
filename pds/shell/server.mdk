@@ -965,9 +965,10 @@ persistRepo dir repo = do
 -- One rate-limit decision, taken against every class this request must
 -- clear: `ConnectionsClass` only on a connection's first framed request (a
 -- kept-alive connection is "opened" once, not once per pipelined request),
--- `RequestsClass` always, and `WritesClass`/`CreateSessionClass`/
--- `RepoExportClass` when the routed NSID is one of the write procedures,
--- `createSession`, or a whole-repository export. A refusal at an earlier
+-- `RequestsClass` always, and `WritesClass`/`PreferencesClass`/
+-- `CreateSessionClass`/`RepoExportClass` when the routed NSID is one of the
+-- write procedures, `putPreferences`, `createSession`, or a
+-- whole-repository export. A refusal at an earlier
 -- class in the list short-circuits: a request already being refused should
 -- not also spend a later class's budget it never reached.
 data RateLimitAdmission =
@@ -3029,7 +3030,8 @@ forwardProxied server dir storeRef limiterRef census serving conn slot rest keep
             rest
             keepAlive
             trace
-            bytes
+            (responseStatusCode bytes)
+            (arrayLength bytes)
             sent
 
 {- | The bytes a proxied read answers with.
@@ -3077,7 +3079,7 @@ egressBudgetResponse =
   xrpcErrorResponse
     503
     "Service Unavailable"
-    "ProxyLimitExceeded"
+    "ProxyEgressLimitExceeded"
     "too many large proxied answers are in flight on this server"
 
 -- The call's egress charge is given back only once these bytes have been
@@ -3243,7 +3245,8 @@ sendAndContinue server dir storeRef limiterRef census serving conn slot rest kee
       rest
       keepAlive
       trace
-      responseBytes
+      (responseStatusCode responseBytes)
+      (arrayLength responseBytes)
       sent
 
 -- `sendAndContinue` from the point the write has returned, for the caller
@@ -3259,16 +3262,17 @@ continueAfterSend : Server ->
   ReadBuffer ->
   Bool ->
   RequestTrace ->
-  Array Int ->
+  Int ->
+  Int ->
   Result String Unit ->
   Async <Clock, FileRead "_", FileWrite "_", Net "_", Rand, Stderr, Stdout | e> (Result String Unit)
-continueAfterSend server dir storeRef limiterRef census serving conn slot rest keepAlive trace responseBytes sent =
+continueAfterSend server dir storeRef limiterRef census serving conn slot rest keepAlive trace statusCode byteLength sent =
   defer
     -- Logged after the write and whatever it returned: a response this server
     -- produced and then failed to deliver is exactly what an operator is
     -- looking for, and a line only the successful writes reach would report a
     -- healthier server than the one that is running.
-    _ <- liftIO (u => logAccessBytes trace responseBytes)
+    _ <- liftIO (u => logAccess trace statusCode byteLength)
     match sent
       Err message => deferPure (Err message)
       Ok () =>
