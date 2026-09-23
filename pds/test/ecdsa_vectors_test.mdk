@@ -1,10 +1,11 @@
 {- | Exact native ECDSA signing and Wycheproof verification gate for #1700
    step 3, migrated from the retired `ecdsa_vectors.sh` under #2592.
 
-   Two corpora, named outright rather than through a ledger consumer id: the
-   prehashed signing rows the driver must reproduce exactly, and the
-   Wycheproof accept/reject corpus it must agree with row for row. The
-   driver takes them in that order.
+   Three corpora, named outright rather than through a ledger consumer id:
+   the prehashed signing rows the driver must reproduce exactly, the
+   Wycheproof P1363 accept/reject corpus, and the Wycheproof Bitcoin
+   (strict-DER) corpus's own new-only rows — both verification corpora the
+   driver must agree with row for row. The driver takes them in that order.
 
    `sourceShapes` carries a precondition the value corpora cannot state. A
    secret-dependent branch and an arithmetic select produce the SAME
@@ -31,8 +32,9 @@ row = Row {
   corpus = Explicit [
     "pds/test/vectors/prehashed_signing_corpus.txt",
     "pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt",
+    "pds/test/vectors/wycheproof_secp256k1_sha256_bitcoin.txt",
   ],
-  corpusCount = Exactly 2,
+  corpusCount = Exactly 3,
   sourceShapes = [("pds/lib/secp256k1.mdk", lowSShape)],
   oracle = None,
   arms = [
@@ -51,6 +53,7 @@ row = Row {
         "PUBLIC malformed-digest: PASS sign=4/4 reject verify=4/4 false",
         "Wycheproof: 94 accepts / 148 rejects; 242 unique tcIds",
         "public verification: 242/242 Wycheproof rows",
+        "Wycheproof Bitcoin: 0 accepts / 3 rejects; 3 unique tcIds; public verification: 3/3",
       ],
       lastLine = Some "TOTAL: PASS",
     },

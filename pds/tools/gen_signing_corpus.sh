@@ -17,6 +17,7 @@ K256_COMMIT=5ac8f5d77f11399ff48d87b0554935f6eddda342
 K256_ARCHIVE_SHA=2413c10980e3a2648118953a6468699670d7f03674fe4dcbffa5d3ecc835ec5f
 WYCHEPROOF_COMMIT=cff6adf42662469a1871e57303a0ad1d758ed8c0
 WYCHEPROOF_SHA=6508e9cc99c169c7d59a6891d939387f115491c479088ddcdcec4d137be69f34
+WYCHEPROOF_BITCOIN_SHA=0a0b8066df1e1b6576f2e2da0b1241170e23a5beca7ed127647c48475235693a
 PDS_IMAGE=ghcr.io/bluesky-social/pds@sha256:d95725b24dbe53af9d91dc69750556931ebed6c396f2cfa42b221434db642f12
 PDS_REVISION=374cf1d4ba782d4391bbb73e4e2d3f320d4846d6
 LIBSECP_CONTROL_RUNNER_EXPECTED_SHA=28e2b0e12360e48226c4f4751cee04de517de3899d58cdafca850b465605220d
@@ -295,9 +296,11 @@ else
   fetch "https://github.com/bitcoin-core/secp256k1/archive/$LIBSECP_COMMIT.tar.gz" "$WORK/libsecp.tar.gz"
   fetch "https://github.com/RustCrypto/elliptic-curves/archive/$K256_COMMIT.tar.gz" "$WORK/k256.tar.gz"
   fetch "https://raw.githubusercontent.com/C2SP/wycheproof/$WYCHEPROOF_COMMIT/testvectors_v1/ecdsa_secp256k1_sha256_p1363_test.json" "$WORK/wycheproof.json"
+  fetch "https://raw.githubusercontent.com/C2SP/wycheproof/$WYCHEPROOF_COMMIT/testvectors_v1/ecdsa_secp256k1_sha256_bitcoin_test.json" "$WORK/wycheproof_bitcoin.json"
   check_digest "$WORK/libsecp.tar.gz" "$LIBSECP_ARCHIVE_SHA"
   check_digest "$WORK/k256.tar.gz" "$K256_ARCHIVE_SHA"
   check_digest "$WORK/wycheproof.json" "$WYCHEPROOF_SHA"
+  check_digest "$WORK/wycheproof_bitcoin.json" "$WYCHEPROOF_BITCOIN_SHA"
 
   mkdir "$WORK/libsecp" "$WORK/k256" "$WORK/rust"
   tar -xzf "$WORK/libsecp.tar.gz" -C "$WORK/libsecp" --strip-components=1
@@ -354,16 +357,21 @@ python3 "$HERE/assemble_signing_corpora.py" \
   "$WORK/prehashed_signing_corpus.txt" "$WORK/pds_message_signing_corpus.txt"
 python3 "$HERE/normalize_wycheproof_signing.py" \
   "$WORK/wycheproof.json" "$WORK/wycheproof_secp256k1_sha256_p1363.txt"
+python3 "$HERE/normalize_wycheproof_signing.py" \
+  "$WORK/wycheproof_bitcoin.json" "$WORK/wycheproof_secp256k1_sha256_p1363.txt" \
+  "$WORK/wycheproof_secp256k1_sha256_bitcoin.txt"
 
 if [ "$MODE" = check ]; then
   cmp "$WORK/prehashed_signing_corpus.txt" "$OUT/prehashed_signing_corpus.txt"
   cmp "$WORK/pds_message_signing_corpus.txt" "$OUT/pds_message_signing_corpus.txt"
   cmp "$WORK/wycheproof_secp256k1_sha256_p1363.txt" "$OUT/wycheproof_secp256k1_sha256_p1363.txt"
-  echo "gen_signing_corpus: CHECK PASS — 80 prehashed, 16 PDS-message, 242 Wycheproof"
+  cmp "$WORK/wycheproof_secp256k1_sha256_bitcoin.txt" "$OUT/wycheproof_secp256k1_sha256_bitcoin.txt"
+  echo "gen_signing_corpus: CHECK PASS — 80 prehashed, 16 PDS-message, 242 Wycheproof P1363, 463/181/3 Wycheproof Bitcoin"
 else
   mkdir -p "$OUT"
   cp "$WORK/prehashed_signing_corpus.txt" "$OUT/prehashed_signing_corpus.txt"
   cp "$WORK/pds_message_signing_corpus.txt" "$OUT/pds_message_signing_corpus.txt"
   cp "$WORK/wycheproof_secp256k1_sha256_p1363.txt" "$OUT/wycheproof_secp256k1_sha256_p1363.txt"
-  echo "gen_signing_corpus: wrote 80 prehashed, 16 PDS-message, 242 Wycheproof rows"
+  cp "$WORK/wycheproof_secp256k1_sha256_bitcoin.txt" "$OUT/wycheproof_secp256k1_sha256_bitcoin.txt"
+  echo "gen_signing_corpus: wrote 80 prehashed, 16 PDS-message, 242 Wycheproof P1363, 3 Wycheproof Bitcoin rows"
 fi
