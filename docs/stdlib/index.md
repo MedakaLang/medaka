@@ -813,6 +813,8 @@ The host primitives.
 - [`netShutdown`](runtime.md#netshutdown)
 - [`netClose`](runtime.md#netclose)
 - [`netSetTimeout`](runtime.md#netsettimeout)
+- [`pdsSignalStart`](runtime.md#pdssignalstart)
+- [`pdsSignalRequested`](runtime.md#pdssignalrequested)
 - [`ioPoll`](runtime.md#iopoll)
 - [`netSetNonblock`](runtime.md#netsetnonblock)
 - [`netTryAccept`](runtime.md#nettryaccept)
