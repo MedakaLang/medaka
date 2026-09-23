@@ -948,13 +948,22 @@ mustCount : String -> Int
 mustCount text =
   optionOrPanic "serve_subscribe: not a count: \{text}" (toInt text)
 
+soakCommitPath : DagCbor -> Result String String
+soakCommitPath body = match mapField body "ops"
+  Some (DcArray [op]) =>
+    if textField op "action" == "create" && textField op "path" /= "" then
+      Ok (textField op "path")
+    else
+      Err "serve_subscribe: synthetic soak commit has no create path"
+  _ => Err "serve_subscribe: synthetic soak commit must carry one create op"
+
 soakLoop : Connection ->
   Array Int ->
   Float ->
   Float ->
   Int ->
   Int ->
-  <Clock, Net "_"> Result String (Int, Int)
+  <Clock, IO, Net "_"> Result String (Int, Int)
 soakLoop conn buffered t0 budget events commits =
   if elapsedSince t0 >= budget then
     Ok (events, commits)
@@ -968,15 +977,17 @@ soakLoop conn buffered t0 budget events commits =
     Ok None => Err "serve_subscribe: synthetic soak stream closed"
     Ok (Some (payload, rest)) => match splitEvent payload
       Err message => Err message
-      Ok (header, _) =>
+      Ok (header, body) =>
         let kind = eventKind header
         if kind == "!error" then
           Err "serve_subscribe: synthetic soak received an error event"
+        else if kind == "#commit" then match soakCommitPath body
+          Err message => Err message
+          Ok path =>
+            let () = println "relay-path \{path}"
+            soakLoop conn rest t0 budget (events + 1) (commits + 1)
         else
-          soakLoop conn rest t0 budget (events + 1) (if kind == "#commit" then
-            commits + 1
-          else
-            commits)
+          soakLoop conn rest t0 budget (events + 1) commits
 
 runSoak : Int -> Int -> <IO, Net "_", Clock> Unit
 runSoak port durationMs =
