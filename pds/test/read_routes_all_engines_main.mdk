@@ -1100,6 +1100,34 @@ runServiceAuthCells corpus =
         (serviceAuthTarget "aud=\{configuredAppviewDid}&lxm=\{protectedLxm}"))
       (invalidRequestLine
         "cannot request a service auth token for the following method: \{protectedLxm}")
+  -- A malformed `lxm` is refused on NSID shape alone, before it is ever
+  -- graded against the protected-method list.
+  let lxmTrailingSpace =
+    serviceAuthCell
+      "service-auth-lxm-trailing-space"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{configuredAppviewDid}&lxm=app.bsky.feed.getTimeline%20"))
+      (invalidRequestLine
+        "service auth lxm: invalid collection NSID name characters")
+  let lxmEmbeddedSpace =
+    serviceAuthCell
+      "service-auth-lxm-embedded-space"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget
+          "aud=\{configuredAppviewDid}&lxm=app.bsky.feed.get%20Timeline"))
+      (invalidRequestLine
+        "service auth lxm: invalid collection NSID name characters")
+  let lxmNotAnNsid =
+    serviceAuthCell
+      "service-auth-lxm-not-an-nsid"
+      configuredAudiences
+      (proxyRequestNoHeader
+        (serviceAuthTarget "aud=\{configuredAppviewDid}&lxm=notanlxm"))
+      (invalidRequestLine
+        "service auth lxm: collection must be a valid normalized NSID")
   let farExpiry =
     serviceAuthCell
       "service-auth-exp-beyond-an-hour"
@@ -1115,6 +1143,9 @@ runServiceAuthCells corpus =
     + mintedNoLxm
     + foreignAudience
     + protectedMethod
+    + lxmTrailingSpace
+    + lxmEmbeddedSpace
+    + lxmNotAnNsid
     + farExpiry
     + protectedMethodsCell corpus
 
@@ -1327,8 +1358,8 @@ runCells corpus =
       + originOnly404
   let () =
     println
-      "cells: \{intToString cells}/61 repository-free routes, proxy dispositions and service-auth mints"
-  if cells == 61 then
+      "cells: \{intToString cells}/64 repository-free routes, proxy dispositions and service-auth mints"
+  if cells == 64 then
     println "TOTAL: PASS"
   else
     let () = println "TOTAL: FAIL"
