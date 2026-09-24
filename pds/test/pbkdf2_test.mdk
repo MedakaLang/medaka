@@ -1,4 +1,4 @@
-{- | Vector-graded tests for `stdlib/pbkdf2.mdk` (S-kdf, #2604 password
+{- | Vector-graded tests for `pds/lib/pbkdf2.mdk` (S-kdf, #2604 password
    hashing half).
 
    The two `P`/`S`/`c`/`dkLen` -> output tuples below are hand-transcribed
@@ -18,7 +18,7 @@ import hex.{decode}
 import list.{somes}
 import string.{toInt, trim, words}
 import io.{readLines}
-import pbkdf2.{pbkdf2HmacSha256}
+import lib.pbkdf2.{pbkdf2HmacSha256}
 
 -- "passwd"
 passwd : Array Int

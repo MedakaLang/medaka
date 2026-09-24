@@ -2,7 +2,11 @@
 
    A password, a salt and the derived key are each an `Array Int` with every
    element from `0` to `255`. The caller supplies the salt. Nothing here
-   draws entropy or performs any I/O. -}
+   draws entropy or performs any I/O.
+
+   This is the PDS's password KDF (`docs/design/ATPROTO-PDS-DESIGN.md`
+   §4.2), not a general recommendation, which is why it is not in the
+   stdlib: a new password store should prefer a memory-hard KDF. -}
 
 import array.{blit, concat, copy, make, setInPlace}
 import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
@@ -13,6 +17,7 @@ hashBytes = 32
 
 -- Big-endian 4-byte encoding of the PBKDF2 block index (RFC 2898 §5.2,
 -- `INT (i)`).
+export
 int32Be : Int -> Array Int
 int32Be n = [|
   bitAnd (shiftRight n 24) 255,
