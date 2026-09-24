@@ -2374,9 +2374,12 @@ buildUsage _ =
       "                    it those three read \"\", which is what every other build path\n",
       "                    links; a field that cannot be derived is stamped empty\n",
       "  --emit-rt-obj <p> compile only runtime/medaka_rt.c to a reusable object at <p> (with\n",
-      "                    the same flags a normal link uses) and exit; point MEDAKA_RT_OBJ at\n",
-      "                    it to skip recompiling the runtime on every subsequent build\n",
-      "  --emit-prelude-obj <p>\n",
+      "                    the same flags a normal link uses, including ThinLTO bitcode by\n",
+      "                    default) and exit; point MEDAKA_RT_OBJ at it to skip recompiling\n",
+      "                    the runtime on every subsequent build. MEDAKA_RT_OBJ must be paired\n",
+      "                    with the matching link mode (MEDAKA_NO_LTO set for both, or for\n",
+      "                    neither) — a mismatch either fails to link or silently loses\n",
+      "                    ThinLTO's inlining\n", "  --emit-prelude-obj <p>\n",
       "                    compile only stdlib/core.mdk to a reusable object at <p> (with the\n",
       "                    same flags a normal link uses) and exit; point MEDAKA_PRELUDE_OBJ at\n",
       "                    it to skip re-optimising the prelude on every subsequent build.\n",
@@ -2391,7 +2394,14 @@ buildUsage _ =
       "  MEDAKA_NO_OBJ_CACHE=1  disable the cache; compile medaka_rt.c inline every build\n",
       "  MEDAKA_CACHE_DIR=<d>   put the cache somewhere else (e.g. a per-CI-job scratch dir)\n",
       "  An explicit MEDAKA_RT_OBJ still wins over the cache. Every cache failure is\n",
-      "  fail-open: build falls back to the inline compile, never to an error.\n"
+      "  fail-open: build falls back to the inline compile, never to an error.\n",
+      "\n",
+      "MEDAKA_NO_LTO=1 (any non-empty value): force the plain link instead of the\n",
+      "  default ThinLTO link. For a consumer that needs a NATIVE runtime object\n",
+      "  (which `ld -r` can merge and ThinLTO bitcode cannot), e.g.\n",
+      "  test/diff_compiler_llvm_ffi.sh and the memcheck probe in\n",
+      "  pds/test/constant_time_signing.sh. Set it for both the build that emits\n",
+      "  the object and the build that links it.\n"
     ])
 
 -- Default output path per target: native drops the extension (a bare exe name);
