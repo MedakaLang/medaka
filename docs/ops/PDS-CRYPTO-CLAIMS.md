@@ -184,8 +184,13 @@ claim nothing beyond that.
   [#2659](https://github.com/MedakaLang/medaka/issues/2659); launch criterion
   B12) accepted the previous count of 3,000 for a single-owner server whose
   password never leaves its owner: whoever can read the credential file can
-  also read the signing key. The re-ruling for 60,000 is pending, tracked in
-  [#3373](https://github.com/MedakaLang/medaka/issues/3373).
+  also read the signing key. **Ruling R6** (Val, 2026-09-24, comment on
+  [#3373](https://github.com/MedakaLang/medaka/issues/3373)) re-rules for the
+  raised count: 60,000 is ACCEPTED for a single-owner server, on the same
+  reasoning as R3 — the 10x residual gap to OWASP's floor is a known
+  limitation, not a defect, until a cheaper primitive
+  ([#3367](https://github.com/MedakaLang/medaka/issues/3367)) narrows it
+  further.
 - **Keys at rest are plaintext.** The signing key and the session secret are
   stored unencrypted at mode `0600`. Filesystem permissions are the only
   protection ([ATPROTO-PDS-DESIGN.md](../design/ATPROTO-PDS-DESIGN.md) §4.2.1).
