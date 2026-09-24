@@ -36,7 +36,7 @@
 -- Writes go through `array.setInPlace` rather than the `arr[i] := v` sugar.
 -- The two now emit and inline identically, so migrating is mechanical;
 -- re-measure the hot loops when you do.
-import array.{get, setInPlace, make, blit}
+import array.{setInPlace, make, blit}
 
 -- ── Constants ────────────────────────────────────────────────────────
 
@@ -95,18 +95,14 @@ smallSigma0 x = bitXor (bitXor (rotr32 7 x) (rotr32 18 x)) (shiftRight x 3)
 smallSigma1 : Int -> Int
 smallSigma1 x = bitXor (bitXor (rotr32 17 x) (rotr32 19 x)) (shiftRight x 10)
 
--- In-bounds indexing via the safe `Array.get`, panicking on a miss. Every
--- call site below only ever indexes within a known length, so the `None`
--- arm is unreachable (same idiom as `stdlib/hex.mdk`'s `charAt`).
+-- In-bounds indexing via the panicking `arr[i]` form: every call site below
+-- only ever indexes within a known length, so the panic is unreachable, and
+-- unlike `Array.get` it allocates no `Option` per call.
 byteAt : Array Int -> Int -> Int
-byteAt arr i = match get i arr
-  Some b => b
-  None => panic "sha256: byteAt index out of bounds"
+byteAt arr i = arr[i]
 
 wordAt : Array Int -> Int -> Int
-wordAt arr i = match get i arr
-  Some w => w
-  None => panic "sha256: wordAt index out of bounds"
+wordAt arr i = arr[i]
 
 -- ── Message schedule ─────────────────────────────────────────────────
 
