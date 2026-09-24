@@ -195,6 +195,10 @@ exempt = [
     "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/secp256k1_public_key`",
   ),
   (
+    "hmac_vectors_test",
+    "a vector-corpus gate-test, not a suite: it is one `vector_runner` row, and `test/gates.toml` runs it as `pds/test/hmac_vectors`",
+  ),
+  (
     "lib_boundary_test",
     "a gate-test, not a suite, migrated from shell under #3148: `test/gates.toml` runs it as `pds/test/lib_boundary`",
   ),
@@ -258,6 +262,7 @@ libExempt = [
   ("lexjson", "0 assertions"),
   ("mst", "0 assertions"),
   ("nsid", "0 assertions"),
+  ("pbkdf2", "0 assertions"),
   ("proxy", "0 assertions"),
   ("query_params", "0 assertions"),
   ("ratelimit", "0 assertions"),

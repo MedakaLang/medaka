@@ -1,4 +1,4 @@
-{- | Vector-file driver for `stdlib/sha256.mdk` (S-sha256, #1698).
+{- | Vector-file driver for `stdlib/crypto/sha256.mdk` (S-sha256, #1698).
    Grades our SHA-256 against a corpus of NIST/CAVS-style records — never
    against a self-captured golden (G5).
 
@@ -14,17 +14,27 @@
                              repeated n times; Len is the length of ONE rep
    Any other line (comments, `[L = 32]`, blank lines) is ignored.
 
+   A file whose path contains `Monte` (`SHA256Monte.rsp`) is a CAVS Monte
+   Carlo file instead: one `Seed` line followed by 100 `COUNT`/`MD` pairs,
+   each `MD` the 1000th hash of a chained rolling-window loop over the
+   previous COUNT's answer (SHAVS §6.4) — not a flat Msg->MD pair, so it is
+   parsed and graded separately (`parseMonte`/`checkMonte`).
+
    `--max-bytes N` SKIPS (and counts) any record whose full expanded
    message exceeds N bytes — this is what lets the eval-engine phase of the
    gate run a bounded subset (AGENTS.md: eval is not for a ~210KB corpus).
+   For a Monte file this is compared against the fixed 96-byte per-hash
+   width (three chained 32-byte digests) rather than a message length, since
+   the whole 100000-hash file is one all-or-nothing unit of work.
 
    Exit 1 if any record failed, or if zero records were checked across all
    files (vacuous-green guard). Exit 0 otherwise. -}
 
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 import hex.{decode, encode}
-import array.{take, make, blit}
-import string.{toInt, toLower, trim}
+import array.{take, make, blit, concat}
+import list.{reverse}
+import string.{contains, toInt, toLower, trim}
 import io.{readLines}
 
 -- ── Record parsing ───────────────────────────────────────────────────
@@ -135,6 +145,92 @@ fillRepeats out oneRep lenBytes n i =
 fullByteLength : Record -> Int
 fullByteLength r = r.lenBits / 8 * (if r.repeatN <= 0 then 1 else r.repeatN)
 
+-- ── Monte Carlo records (SHAVS §6.4) ────────────────────────────────
+
+{- | A CAVS Monte Carlo file (`SHA256Monte.rsp`) is one `Seed`, followed by
+   100 `COUNT`/`MD` pairs — NOT a flat Msg->MD pair like the Len/Msg/MD
+   grammar above, so it needs its own parse and its own check. Detected by
+   the file's own path, since the grammar has no `Msg` line to key off of. -}
+isMonteFile : String -> Bool
+isMonteFile path = contains "Monte" path
+
+-- (seed hex, expected MD hexes in COUNT order). `COUNT`'s own numeric value
+-- is not read back — the file's line order is what the algorithm below
+-- walks, and NIST's own generator never reorders it.
+parseMonte : List String -> (Option String, List String)
+parseMonte lns = goMonte lns None []
+
+goMonte : List String ->
+  Option String ->
+  List String ->
+  (Option String, List String)
+goMonte [] seed acc = (seed, reverse acc)
+goMonte (line :: rest) seed acc = match splitKV line
+  None => goMonte rest seed acc
+  Some (key, value) =>
+    if key == "Seed" then
+      goMonte rest (Some (toLower value)) acc
+    else if key == "MD" then
+      goMonte rest seed (toLower value :: acc)
+    else
+      goMonte rest seed acc
+
+-- One Monte Carlo inner loop (SHAVS §6.4): 1000 chained hashes over a
+-- 3-digest rolling window, seeded three-wide from the running checkpoint.
+-- Returns the 1000th hash, which becomes both this COUNT's answer and the
+-- next COUNT's checkpoint.
+monteStep : Array Int -> Array Int -> Array Int -> Int -> Array Int
+monteStep md0 md1 md2 remaining =
+  if remaining <= 0 then
+    md2
+  else
+    let mi = sha256 (concat [|md0, md1, md2|])
+    monteStep md1 md2 mi (remaining - 1)
+
+-- The 100 COUNT answers, each COUNT's checkpoint carried into the next.
+monteRun : Array Int -> Int -> List (Array Int)
+monteRun seed n =
+  if n <= 0 then
+    []
+  else
+    let md = monteStep seed seed seed 1000
+    md :: monteRun md (n - 1)
+
+-- checked, failed, skipped, mirroring `checkRecords`'s tuple — a Monte file
+-- contributes exactly one skip-or-check decision per COUNT, since the
+-- 1000-iteration inner loop cannot be graded one COUNT at a time without
+-- doing the same work `maxBytes` exists to avoid on the fast eval arm. The
+-- per-hash width (96 bytes: three chained 32-byte digests) is what
+-- `maxBytes` is compared against.
+checkMonte : String -> Int -> List String -> <IO> (Int, Int, Int)
+checkMonte path maxBytes lns =
+  let (seedOpt, expected) = parseMonte lns
+  let n = length expected
+  match seedOpt
+    None => panic "sha256_vector_driver: Monte file missing Seed"
+    Some seedHex =>
+      if maxBytes >= 0 && 96 > maxBytes then
+        (0, 0, n)
+      else
+        let seedBytes = match decode seedHex
+          Ok b => b
+          Err e => panic "sha256_vector_driver: bad hex in Seed: \{e}"
+        let actual = map encode (monteRun seedBytes n)
+        let failed = countMonteMismatches path 0 expected actual
+        (n, failed, 0)
+
+countMonteMismatches : String -> Int -> List String -> List String -> <IO> Int
+countMonteMismatches path i [] [] = 0
+countMonteMismatches path i (e :: erest) (a :: arest) =
+  let rest = countMonteMismatches path (i + 1) erest arest
+  if e == a then
+    rest
+  else
+    println "MISMATCH \{path} COUNT=\{intToString i} expected=\{e} actual=\{a}"
+    rest + 1
+countMonteMismatches path i _ _ =
+  panic "sha256_vector_driver: Monte expected/actual count mismatch"
+
 -- ── Grading one file ─────────────────────────────────────────────────
 
 -- checked, failed, skipped — (-1) `maxBytes` means unlimited.
@@ -156,9 +252,12 @@ checkRecords path maxBytes (r :: rest) =
 
 runFile : String -> Int -> <IO, FileRead "_"> Result String (Int, Int, Int)
 runFile path maxBytes =
-  map
-    (lines => checkRecords path maxBytes (parseRecords lines))
-    (readLines path)
+  if isMonteFile path then
+    map (checkMonte path maxBytes) (readLines path)
+  else
+    map
+      (lines => checkRecords path maxBytes (parseRecords lines))
+      (readLines path)
 
 printFileSummary : String -> Int -> Int -> Int -> <IO> Unit
 printFileSummary path checked failed skipped =

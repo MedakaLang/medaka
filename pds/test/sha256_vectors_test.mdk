@@ -1,4 +1,4 @@
-{- | Vector-corpus gate for `stdlib/sha256.mdk` (S-sha256, #1698), migrated
+{- | Vector-corpus gate for `stdlib/crypto/sha256.mdk` (S-sha256, #1698), migrated
    from the retired `sha256_vectors.sh` under #2592.
 
    Grades the pure-Medaka SHA-256 against an externally sourced NIST/CAVS
@@ -20,14 +20,16 @@ import test.vector_runner.{
 }
 import test.{Expectation}
 
-{- | 65 (ShortMsg) + 64 (LongMsg) + 3 (worked examples). Raise it when
-   vectors are added; it is the count committed when this row was written,
-   never a recomputation from whatever the driver printed today. -}
+{- | 65 (ShortMsg) + 64 (LongMsg) + 3 (worked examples) + 100 (Monte Carlo
+   COUNTs). Raise it when vectors are added; it is the count committed when
+   this row was written, never a recomputation from whatever the driver
+   printed today. -}
 nativeFloor : Int
-nativeFloor = 132
+nativeFloor = 232
 
 -- 65 (ShortMsg) + 2 (the worked examples short enough to survive the
--- 64-byte bound). The LongMsg records are all skipped at this bound.
+-- 64-byte bound). The LongMsg records are all skipped at this bound, and so
+-- is the whole Monte Carlo file — its 96-byte-per-hash width exceeds it.
 evalFloor : Int
 evalFloor = 67
 

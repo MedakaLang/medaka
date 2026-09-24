@@ -251,7 +251,7 @@ Vehicles, in the order the `write-tests` skill prefers:
 - **Doctests** on every exported function, run by `medaka test` on the
   module. The module is outside every entry's import closure, so
   the Makefile `test:` target must name it explicitly ([W-MODULE-BLIND]),
-  the same way `stdlib/base32.mdk` and `stdlib/hmac.mdk` are named.
+  the same way `stdlib/base32.mdk` and `stdlib/crypto/hmac.mdk` are named.
 - **A conformance table** in an in-language harness under `test/` (the
   sprint contract names it `regex_conformance_test`; not a `stdlib/`
   sibling, which the stdlib doc and inventory globs would pick up as a

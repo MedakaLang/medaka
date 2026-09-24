@@ -54,6 +54,7 @@
      `--force-lock` covers the other direction — taking a lock immediately
      rather than waiting the window out. -}
 
+import io.{writeFilePrivate}
 import string.{contains, stripPrefix, toInt, trim}
 import time.{Duration, millis, now, sleep}
 
@@ -122,7 +123,7 @@ nowMillis u = floatToInt (now u * 1000.0)
 -- power cut would be a beat on behalf of a process the power cut killed.
 writeBeat : String -> Int -> <Clock, FileWrite "_"> Result String Unit
 writeBeat dir n =
-  match writeFile (ownerPath dir n) "\{intToString (nowMillis ())}\n"
+  match writeFilePrivate (ownerPath dir n) "\{intToString (nowMillis ())}\n"
     Ok () => Ok ()
     Err message => Err (beatFailedMessage dir n message)
 
@@ -278,6 +279,13 @@ contend force dir attempts =
 -- directory again rather than retrying the same number, and grades the winner
 -- with no `force`, since losing means a server started here just now and the
 -- operator asserted nothing about that one.
+--
+-- No parent barrier follows this `mkdir`, unlike every directory the stores
+-- create: a crash that loses this dentry costs nothing but a re-run of
+-- `contend` on the next start, which recomputes the same next-number claim
+-- from whatever generations are actually on disk. Nothing durable is ever
+-- read back FROM a generation directory's existence the way a block's shard
+-- or the event log's own directory is.
 claim : String ->
   Int ->
   String ->

@@ -63,7 +63,7 @@ import lib.store.{
 }
 import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 import string.{contains, fromUtf8, toInt, toUtf8}
 
 mustBytes : Result String (Array Int) -> Array Int
@@ -467,8 +467,11 @@ inboundNonce : Array Int
 inboundNonce = arrayMakeWith 16 (i => (i * 11 + 5) % 256)
 
 inboundContext : RequestContext
-inboundContext =
-  RequestContext { nowSeconds = inboundInstant, nonce = inboundNonce }
+inboundContext = RequestContext {
+  nowSeconds = inboundInstant,
+  nonce = inboundNonce,
+  login = None,
+}
 
 inboundHost : String
 inboundHost = "perf.example"

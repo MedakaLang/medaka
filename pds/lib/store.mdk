@@ -67,8 +67,8 @@ import lib.cid.{Cid, cidToString}
 import lib.credential.{CredentialRecord}
 import lib.jwt.{serverSecretBytes}
 import lib.repo.{Repo}
-import hmac.{ctEq}
-import sha256.{sha256}
+import crypto.hmac.{ctEq}
+import crypto.sha256.{sha256}
 import json.{Json}
 import map.{Map(..), get, keys, set, entries, entriesFrom}
 import string.{toUtf8}

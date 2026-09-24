@@ -1,7 +1,7 @@
 #!/bin/sh
 # Fixed-control regression for #1724's field/scalar reduction contract, and a
 # source census that pds credential, JWT and session comparisons on secret
-# bytes go only through hmac.ctEq (#2953).
+# bytes go only through crypto.hmac.ctEq (#2953).
 # POSIX sh; runs on Linux and macOS. Value correctness remains owned by the
 # 944-row field and 1028-row scalar corpus gates.
 set -eu
@@ -97,11 +97,12 @@ ir_call_shape_ok() {
   case "$name" in
     canonicalize) expected='444837400 70' ;; carryFoldRound) expected='3889069194 171' ;;
     carryAll) expected='136326906 25' ;; carryGo) expected='2951762016 157' ;;
+    carryAllUnchecked) expected='2496061766 34' ;; carryGoUnchecked) expected='1150039596 166' ;;
     carryPass) expected='2881939388 28' ;; carryPassGo) expected='198870372 274' ;;
     copyLow) expected='2044746140 68' ;;
     foldAccum) expected='2494560624 57' ;; foldAccumRow) expected='2234620271 145' ;;
     foldOnce) expected='856892605 68' ;; reduceCarry) expected='1494584225 93' ;;
-    reduceFixed) expected='4074489195 234' ;; reduceWide) expected='46832935 97' ;;
+    reduceFixed) expected='2618126692 279' ;; reduceWide) expected='46832935 97' ;;
     selectNCandidate) expected='2597000302 98' ;; selectPCandidate) expected='884186827 97' ;;
     subNCandidate) expected='2931902360 217' ;; subNSelect) expected='662374009 80' ;;
     subPCandidate) expected='713947010 394' ;; subPSelect) expected='1367941064 78' ;;
@@ -249,7 +250,7 @@ source_write_shape_ok() {
         [ "$(grep -F -c 'setInPlace i ' "$body" || true)" -eq 1 ] ;;
     selectPCandidate|feSelectGo)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'setInPlace i ' "$body" || true)" -eq 1 ] ;;
-    carryGo|subNCandidate|selectNCandidate|copyLow|scSelectGo|scNegateCtGo)
+    carryGo|carryGoUnchecked|subNCandidate|selectNCandidate|copyLow|scSelectGo|scNegateCtGo)
       [ "$writes" -eq 1 ] && [ "$(grep -F -c 'A.setInPlace i ' "$body" || true)" -eq 1 ] ;;
     takeHigh)
       [ "$writes" -eq 2 ] && [ "$(grep -F -c 'A.setInPlace (i - 16) ' "$body" || true)" -eq 1 ] &&
@@ -279,11 +280,12 @@ source_shape_ok() {
   case "$name" in
     canonicalize) expected='1918979222 101' ;; carryAll) expected='3784023453 28' ;;
     carryFoldRound) expected='702085150 126' ;; carryGo) expected='2159207857 267' ;;
+    carryAllUnchecked) expected='2587065717 46' ;; carryGoUnchecked) expected='3140321757 189' ;;
     carryPass) expected='1250453555 31' ;; carryPassGo) expected='1857917920 284' ;;
     copyLow) expected='3444459846 115' ;;
     foldAccum) expected='305940905 111' ;; foldAccumRow) expected='1512181526 160' ;;
     foldOnce) expected='1770996279 84' ;; reduceCarry) expected='2596813441 92' ;;
-    reduceFixed) expected='736687942 206' ;; reduceWide) expected='1389933683 128' ;;
+    reduceFixed) expected='3041539658 251' ;; reduceWide) expected='1389933683 128' ;;
     selectNCandidate) expected='1327350681 214' ;; selectPCandidate) expected='3621980786 212' ;;
     subNCandidate) expected='196465499 230' ;; subNSelect) expected='1155645251 125' ;;
     subPCandidate) expected='714167625 342' ;; subPSelect) expected='764393686 125' ;;
@@ -329,6 +331,8 @@ source_helpers_ok() {
     "rawFe:$field:0" \
     "carryAll:$scalar:0" \
     "carryGo:$scalar:2" \
+    "carryAllUnchecked:$scalar:0" \
+    "carryGoUnchecked:$scalar:1" \
     "foldOnce:$scalar:0" \
     "takeHigh:$scalar:1" \
     "foldAccum:$scalar:1" \
@@ -404,8 +408,163 @@ extract_source_decl() {
   [ -s "$output" ]
 }
 
+# How many `ctEq` calls in $1 compare an argument with itself. The file is read
+# as one token stream with comments dropped, so a call split over continuation
+# lines is still one call; a column-0 line starts a new declaration, and no
+# argument is taken across it. Two arguments match when their tokens match
+# after every parenthesis that wraps a single token or a whole argument is
+# removed, so `(digest)`, `( digest )` and `digest` are one text. A call's
+# arguments are the atoms after `ctEq`; past the `)` of a group in head
+# position, as in `(ctEq a) b`; and, when fewer than two follow, the left
+# operand of a `|>` feeding `ctEq a` or `(ctEq a)`, or the atom applied to a
+# right section `(|> ctEq a)`.
+cteq_tautologies() {
+  awk '
+    function push(t) { ntok++; tok[ntok] = t }
+    function tokenize(s,    c, i, op) {
+      while (length(s) > 0) {
+        if (nest > 0) {
+          if (substr(s, 1, 2) == "-}") { nest--; s = substr(s, 3) }
+          else if (substr(s, 1, 2) == "{-") { nest++; s = substr(s, 3) }
+          else { s = substr(s, 2) }
+          continue
+        }
+        c = substr(s, 1, 1)
+        if (c ~ /[[:space:]]/) { s = substr(s, 2); continue }
+        if (substr(s, 1, 2) == "{-") { nest++; s = substr(s, 3); continue }
+        if (match(s, /^[A-Za-z_][A-Za-z0-9_\047]*(\.[A-Za-z_][A-Za-z0-9_\047]*)*/) ||
+            match(s, /^[0-9][A-Za-z0-9_.]*/)) {
+          push(substr(s, 1, RLENGTH)); s = substr(s, RLENGTH + 1); continue
+        }
+        if (c == "\"") {
+          i = 2
+          while (i <= length(s) && substr(s, i, 1) != "\"") {
+            if (substr(s, i, 1) == "\\") { i++ }
+            i++
+          }
+          push(substr(s, 1, i)); s = substr(s, i + 1); continue
+        }
+        if (c == "\047") {
+          i = (substr(s, 2, 1) == "\\") ? 4 : 3
+          push(substr(s, 1, i)); s = substr(s, i + 1); continue
+        }
+        if (match(s, /^[-!#$%&*+.\/<=>?@\\^|~:]+/)) {
+          op = substr(s, 1, RLENGTH)
+          if (op ~ /^--+$/) { return }
+          push(op); s = substr(s, RLENGTH + 1); continue
+        }
+        push(c); s = substr(s, 2)
+      }
+    }
+    function is_kw(t) {
+      return t ~ /^(if|then|else|let|in|match|with|case|of|do|where|when|import|export|public|data|type|interface|impl)$/
+    }
+    function is_word(t) { return t ~ /^[A-Za-z_0-9"\047]/ && !is_kw(t) }
+    function starts_atom(t) { return is_word(t) || t == "(" || t == "[" || t == "{" }
+    function ends_atom(t) { return is_word(t) || t == ")" || t == "]" || t == "}" }
+    function close_at(i,    d, j) {
+      d = 0
+      for (j = i; j <= ntok; j++) {
+        if (tok[j] == ";") { return 0 }
+        if (tok[j] == "(" || tok[j] == "[" || tok[j] == "{") { d++ }
+        else if (tok[j] == ")" || tok[j] == "]" || tok[j] == "}") {
+          d--
+          if (d == 0) { return j }
+        }
+      }
+      return 0
+    }
+    function open_at(i,    d, j) {
+      d = 0
+      for (j = i; j >= 1; j--) {
+        if (tok[j] == ";") { return 0 }
+        if (tok[j] == ")" || tok[j] == "]" || tok[j] == "}") { d++ }
+        else if (tok[j] == "(" || tok[j] == "[" || tok[j] == "{") {
+          d--
+          if (d == 0) { return j }
+        }
+      }
+      return 0
+    }
+    function atom_end(i) {
+      if (is_word(tok[i])) { return i }
+      if (tok[i] == "(" || tok[i] == "[" || tok[i] == "{") { return close_at(i) }
+      return 0
+    }
+    function norm(a, b,    out, j, e, inner) {
+      while (a + 1 < b && tok[a] == "(" && close_at(a) == b) { a++; b-- }
+      out = ""
+      for (j = a; j <= b; j++) {
+        e = 0
+        if (tok[j] == "(") { e = close_at(j) }
+        if (e > j + 1 && e <= b) {
+          inner = norm(j + 1, e - 1)
+          if (index(inner, " ") > 0) { inner = "( " inner " )" }
+          out = out (out == "" ? "" : " ") inner
+          j = e
+        } else {
+          out = out (out == "" ? "" : " ") tok[j]
+        }
+      }
+      return out
+    }
+    function left_operand(p,    q, s, first) {
+      first = 0
+      q = p - 1
+      while (q >= 1 && ends_atom(tok[q])) {
+        if (is_word(tok[q])) { s = q } else { s = open_at(q) }
+        if (s == 0) { break }
+        first = s
+        q = s - 1
+      }
+      return first ? norm(first, p - 1) : ""
+    }
+    /^[[:space:]]*--/ && nest == 0 { next }
+    {
+      if (nest == 0 && $0 ~ /^[^[:space:]]/) { push(";") }
+      tokenize($0)
+    }
+    END {
+      for (k = 1; k <= ntok; k++) {
+        if (tok[k] != "ctEq") { continue }
+        nargs = 0
+        opens = 0
+        while (k - opens - 1 >= 1 && tok[k - opens - 1] == "(") { opens++ }
+        closed = 0
+        j = k + 1
+        while (nargs < 2 && j <= ntok) {
+          if (starts_atom(tok[j])) {
+            e = atom_end(j)
+            if (e == 0) { break }
+            arg[++nargs] = norm(j, e)
+            j = e + 1
+          } else if (tok[j] == ")" && closed < opens && !ends_atom(tok[k - closed - 2])) {
+            closed++
+            j++
+          } else {
+            break
+          }
+        }
+        p = k - closed - 1
+        if (nargs < 2 && p >= 1 && tok[p] == "|>") {
+          if (p > 1 && tok[p - 1] == "(" && tok[j] == ")" && close_at(p - 1) == j &&
+              !ends_atom(tok[p - 2]) && starts_atom(tok[j + 1])) {
+            e = atom_end(j + 1)
+            if (e > 0) { arg[++nargs] = norm(j + 1, e) }
+          } else {
+            s = left_operand(p)
+            if (s != "") { arg[++nargs] = s }
+          }
+        }
+        if (nargs == 2 && arg[1] != "" && arg[1] == arg[2]) { n++ }
+      }
+      print n + 0
+    }
+  ' "$1"
+}
+
 # The password-digest, JWT-signature and session-fingerprint comparisons reach
-# secret bytes only through hmac.ctEq. Per file: ctEq is the imported one (no
+# secret bytes only through crypto.hmac.ctEq. Per file: ctEq is the imported one (no
 # local definition shadows it), its occurrence count is the call-site roster,
 # and no `==`, `/=` or `compare` line names a secret-bearing identifier except
 # through `arrayLength`, whose value is public. Per comparing function: its
@@ -414,18 +573,27 @@ extract_source_decl() {
 # ctEq count is its import plus the roster's calls in that file, so a new
 # comparing function the roster does not name fails the census.
 # A `||` across session records stays legal -- it reveals which record matched,
-# never a byte of one. Two further checks are file-wide, independent of the
-# roster: no line builds an equality from `arrayToList`, and no `ctEq`
-# reference is reached through a dot-qualified name -- only the file's own
-# unaliased, selectively-imported `ctEq` counts toward the roster above.
+# never a byte of one. Three further checks are file-wide, independent of the
+# roster: no line builds an equality from `arrayToList`, no `ctEq` reference is
+# reached through a dot-qualified name, and no `ctEq` call's two arguments
+# have the same text once whitespace, line breaks and redundant parentheses
+# are set aside, wherever application places them (`cteq_tautologies`) --
+# only the file's own unaliased, selectively-imported `ctEq` counts toward the
+# roster above, and only a call whose two argument texts actually differ.
 #
 # This is a source-text census, and it stays blind to what a call's own
-# arguments are: a `ctEq digest digest` call against two occurrences of the
-# SAME identifier still satisfies its function's stated call count, so any
-# OTHER comparator beside it in that function or file -- a bare `==`, an
-# `(==)` section, `Ord`'s `<`/`>`, `elem`, a hand-written `eq`, or a call into
-# another module -- can still perform the real, non-constant-time comparison
-# undetected. Closing that gap needs the IR level, tracked as #2838.
+# arguments EVALUATE to: two textually different expressions that are
+# dynamically equal -- e.g. a `let`-bound alias beside the name it aliases,
+# one argument wrapped in an identity-like call such as `arrayCopy`, two calls
+# into a helper that always returns the same secret, a value passed through a
+# lambda or a composition, or an alias reached through two different field
+# paths -- still
+# satisfy the argument-distinctness check above while comparing a value
+# against itself, so any OTHER comparator beside it in that function or file
+# -- a bare `==`, an `(==)` section, `Ord`'s `<`/`>`, `elem`, a hand-written
+# `eq`, or a call into another module -- can still perform the real,
+# non-constant-time comparison undetected. Closing that gap needs the IR
+# level, tracked as #2838.
 secret_comparisons_ok() {
   credential=$1
   jwt=$2
@@ -433,7 +601,7 @@ secret_comparisons_ok() {
   dir=$4
   mkdir -p "$dir"
   for spec in \
-    "$credential:2:digest password" \
+    "$credential:3:digest password derived stored" \
     "$jwt:2:secret expected sigSeg" \
     "$store:9:secret wanted access refresh token fingerprint family consumed previous"
   do
@@ -441,7 +609,7 @@ secret_comparisons_ok() {
     rest=${spec#*:}
     expected_calls=${rest%%:*}
     secrets=${rest#*:}
-    [ "$(grep -F -x -c 'import hmac.{ctEq}' "$file" || true)" -eq 1 ] || return 1
+    [ "$(grep -F -x -c 'import crypto.hmac.{ctEq}' "$file" || true)" -eq 1 ] || return 1
     [ "$(grep -c '^ctEq[[:space:]]' "$file" || true)" -eq 0 ] || return 1
     [ "$(count_word ctEq "$file")" -eq "$expected_calls" ] || return 1
     leaks=$(awk -v secrets="$secrets" '
@@ -464,12 +632,14 @@ secret_comparisons_ok() {
     ' "$file")
     [ "$arraytolist_eq" -eq 0 ] || return 1
     if grep -E -q '[A-Za-z_][A-Za-z0-9_]*\.ctEq' "$file"; then return 1; fi
+    [ "$(cteq_tautologies "$file")" -eq 0 ] || return 1
   done
   roster_credential=0
   roster_jwt=0
   roster_store=0
   for spec in \
     "credentialVerify:credential:1" \
+    "digestIs:credential:1" \
     "verifySegments:jwt:1" \
     "liveRefresh:store:1" \
     "consumedRefresh:store:1" \
@@ -566,6 +736,19 @@ scalarHighZero raw i =
   else if raw[i] /= 0 then False
   else scalarHighZero raw (i + 1)
 
+-- reduceFixed runs the unchecked carry pass; the checked one is otherwise
+-- unreached. On an admitted workspace (limb 31 zero, every other limb
+-- carrying) the two must agree limb for limb.
+scalarCarryTwinWitness : Bool
+scalarCarryTwinWitness =
+  let checked = arrayMake 32 0x1ffff
+  let unchecked = arrayMake 32 0x1ffff
+  let () = A.setInPlace 31 0 checked
+  let () = A.setInPlace 31 0 unchecked
+  let () = carryAll checked
+  let () = carryAllUnchecked unchecked
+  checked == unchecked && checked[31] == 2
+
 scalarSelectWitness : Bool
 scalarSelectWitness =
   let canonical = reduceWide (arrayMake 32 0)
@@ -586,7 +769,7 @@ scalarCtHelpersWitness =
     && scHighBit scZero == 0
     && scHighBit high == 1
 
-main = if scalarRoundsWitness && scalarSelectWitness && scalarCtHelpersWitness then println "PASS scalar-rounds" else panic "FAIL scalar-rounds"
+main = if scalarRoundsWitness && scalarCarryTwinWitness && scalarSelectWitness && scalarCtHelpersWitness then println "PASS scalar-rounds" else panic "FAIL scalar-rounds"
 EOF
 }
 
@@ -811,8 +994,8 @@ pass 'field helper conditional-select mutation is rejected by source structure'
 CREDENTIAL="$ROOT/pds/lib/credential.mdk"
 JWT="$ROOT/pds/lib/jwt.mdk"
 STORE="$ROOT/pds/lib/store.mdk"
-secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fail 'credential, JWT and session secret comparisons go only through hmac.ctEq'
-pass 'credential, JWT and session secret comparisons go only through hmac.ctEq'
+secret_comparisons_ok "$CREDENTIAL" "$JWT" "$STORE" "$WORK/secret-current" || fail 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
+pass 'credential, JWT and session secret comparisons go only through crypto.hmac.ctEq'
 
 awk '
   /^  ctEq digest \(pbkdf2HmacSha256 / {
@@ -872,9 +1055,120 @@ fi
 pass 'credential same-file wrapper-indirection mutation is rejected by the secret-comparison census'
 
 awk '
-  /^import hmac\.\{ctEq\}$/ {
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_elem_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_elem_mutant.mdk"; then
+  fail 'credential tautological-ctEq-plus-elem mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_elem_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-elem-mutant"; then
+  fail 'credential tautological ctEq beside an elem comparator is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq beside an elem comparator is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest digest && not (digest < pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_ord_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_ord_mutant.mdk"; then
+  fail 'credential tautological-ctEq-plus-Ord mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_ord_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-ord-mutant"; then
+  fail 'credential tautological ctEq beside an Ord comparator is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq beside an Ord comparator is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest digest && sameDigest digest (pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes)"
+    next
+  }
+  { print }
+  END {
+    print ""
+    print "sameDigest : Array Int -> Array Int -> Bool"
+    print "sameDigest a b = a == b"
+  }
+' "$CREDENTIAL" > "$WORK/credential_tautology_wrapper_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_wrapper_mutant.mdk"; then
+  fail 'credential tautological-ctEq-plus-wrapper mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_wrapper_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-wrapper-mutant"; then
+  fail 'credential tautological ctEq beside a non-arrayToList wrapper comparator is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq beside a non-arrayToList wrapper comparator is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq (digest) ( digest ) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_paren_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_paren_mutant.mdk"; then
+  fail 'credential parenthesized tautological-ctEq mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_paren_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-paren-mutant"; then
+  fail 'credential tautological ctEq with reparenthesized arguments is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq with reparenthesized arguments is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  ctEq digest"
+    print "    digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_multiline_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_multiline_mutant.mdk"; then
+  fail 'credential multi-line tautological-ctEq mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_multiline_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-multiline-mutant"; then
+  fail 'credential tautological ctEq split across lines is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq split across lines is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  (digest |> ctEq digest) && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_pipe_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_pipe_mutant.mdk"; then
+  fail 'credential piped tautological-ctEq mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_pipe_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-pipe-mutant"; then
+  fail 'credential tautological ctEq fed through |> is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq fed through |> is rejected by the secret-comparison census'
+
+awk '
+  /^  ctEq digest \(pbkdf2HmacSha256 \(toUtf8 password\) salt iterations digestBytes\)$/ {
+    print "  (ctEq digest) digest && elem digest [pbkdf2HmacSha256 (toUtf8 password) salt iterations digestBytes]"
+    next
+  }
+  { print }
+' "$CREDENTIAL" > "$WORK/credential_tautology_section_mutant.mdk"
+if cmp -s "$CREDENTIAL" "$WORK/credential_tautology_section_mutant.mdk"; then
+  fail 'credential partially-applied tautological-ctEq mutation was constructed'
+fi
+if secret_comparisons_ok "$WORK/credential_tautology_section_mutant.mdk" "$JWT" "$STORE" "$WORK/secret-credential-tautology-section-mutant"; then
+  fail 'credential tautological ctEq through a partial application is rejected by the secret-comparison census'
+fi
+pass 'credential tautological ctEq through a partial application is rejected by the secret-comparison census'
+
+awk '
+  /^import crypto\.hmac\.\{ctEq\}$/ {
     print
-    print "import hmac as H"
+    print "import crypto.hmac as H"
     next
   }
   /^      SessionRecord _ refresh expires _ => now < expires && ctEq wanted refresh\)$/ {
@@ -991,7 +1285,8 @@ cp "$SCALAR" "$WORK/scalar_emit.mdk"
 append_scalar_probe "$WORK/scalar_emit.mdk"
 MEDAKA_STRICT=1 "$MEDAKA" build "$WORK/scalar_emit.mdk" -o "$WORK/scalar_emit" --keep-ir > "$WORK/build-scalar.log" 2>&1
 check_emitted_helpers "$WORK/scalar_emit.ll" "$WORK/scalar-ir" \
-  carryAll:0:0:0:0:0:0:1 carryGo:2:0:1:1:0:0:7 takeHigh:1:0:1:2:0:0:5 foldAccum:1:0:0:0:0:0:2 \
+  carryAll:0:0:0:0:0:0:1 carryGo:2:0:1:1:0:0:7 carryAllUnchecked:0:0:0:0:0:0:1 carryGoUnchecked:1:0:1:1:0:0:7 \
+  takeHigh:1:0:1:2:0:0:5 foldAccum:1:0:0:0:0:0:2 \
   foldAccumRow:1:0:3:1:0:0:6 foldOnce:0:0:0:0:1:0:3 reduceFixed:0:0:0:0:0:0:9 \
   subNCandidate:1:0:2:1:0:0:9 selectNCandidate:1:0:2:1:0:0:4 \
   subNSelect:0:0:0:0:1:0:3 reduceWide:0:0:0:0:1:0:4 copyLow:1:0:1:1:0:0:3 \
@@ -1156,17 +1451,99 @@ conditional_jump_count() {
 # so a jump-count pin cannot see it. Tracked in #2838; do not reinstate a
 # symbol-addressed check without a predicate that discriminates.
 
-# Native bit helpers are C calls below the generated Medaka helpers. Inspect
-# the linked implementations on the tested target; either helper growing a
-# conditional jump invalidates the arithmetic proof.
-for helper in mdk_bit_and mdk_bit_xor mdk_shift_right; do
-  symbol=$(find_exact_symbol "$WORK/field_emit" "$helper")
-  [ -n "$symbol" ] || fail "final native $helper symbol exists"
-  disassemble "$WORK/field_emit" "$symbol" "$WORK/$helper.asm"
-  jumps=$(conditional_jump_count "$WORK/$helper.asm") || fail "supported native target for $helper disassembly"
-  [ "$jumps" -eq 0 ] || fail "final native $helper has no conditional jumps (got $jumps)"
-  pass "final native $helper has no conditional jumps"
-done
+# The runtime bit helpers are C, below every generated Medaka helper, and a
+# helper that grew a conditional jump would invalidate the arithmetic proof.
+# They are not checked as linked symbols of their own: `medaka build` links the
+# runtime into the program's ThinLTO unit (#3374), which inlines them into each
+# caller, so no such symbol survives. Instead a straight-line witness over
+# exactly the helpers under audit is built, and it is reached only as a function
+# value, so its body survives as a linked symbol. A helper that grew a branch
+# puts a conditional jump into that body wherever it is inlined. Under the plain
+# link (MEDAKA_NO_LTO, or a toolchain without lld) the helpers stay calls, and
+# every function the witness calls is disassembled in turn.
+witness_disassemble() {
+  case $(uname -s) in
+    Darwin) otool -tvV "$1" | awk -v label="_$2:" '$0 == label { p=1; next } p && /^_[A-Za-z0-9_.$]+:$/ { exit } p { print }' > "$3" ;;
+    *) objdump -d --disassemble="$2" "$1" > "$3" ;;
+  esac
+  [ -s "$3" ] || fail "native disassembly exists for $2"
+}
+
+# One line per control transfer: `target <symbol>` for a direct call or tail
+# jump to a named function, `stray <mnemonic>` for anything else (a conditional
+# jump, an indirect transfer, a jump within the function). A straight-line
+# function has no strays.
+witness_transfers() {
+  awk '
+    match($0, /[[:space:]](j[a-z]+|call[a-z]*|b|bl|br|blr|b\.[a-z]+|cbn?z|tbn?z)[[:space:]]/) {
+      op = substr($0, RSTART + 1, RLENGTH - 2)
+      rest = substr($0, RSTART + RLENGTH)
+      if (op ~ /^(jmp[a-z]*|call[a-z]*|b|bl)$/) {
+        if (rest ~ /^[[:space:]]*([0-9a-f]+[[:space:]]+)?<[A-Za-z0-9_.$]+>[[:space:]]*$/) {
+          sub(/^[^<]*</, "", rest); sub(/>.*$/, "", rest); print "target " rest; next
+        }
+        if (rest ~ /^[[:space:]]*_[A-Za-z0-9_.$]+[[:space:]]*$/) {
+          gsub(/[[:space:]]/, "", rest); sub(/^_/, "", rest); print "target " rest; next
+        }
+      }
+      print "stray " op
+    }' "$1"
+}
+
+check_bit_witness() {
+  expr=$1
+  shift
+  helpers=" $* "
+  src="$WORK/bit_witness.mdk"
+  bin="$WORK/bit_witness"
+  printf '%s\n' \
+    'ctBitWitness : Int -> Int -> Int' \
+    "ctBitWitness a b = $expr" \
+    '' \
+    'applyWitness : List (Int -> Int -> Int) -> Int -> Int -> Int' \
+    'applyWitness [] acc _ = acc' \
+    'applyWitness (f :: rest) acc b = applyWitness rest (f acc b) b' \
+    '' \
+    'main = println (applyWitness [ctBitWitness] 12345 678)' > "$src"
+  MEDAKA_STRICT=1 "$MEDAKA" build "$src" -o "$bin" --keep-ir > "$WORK/bit-witness-build.log" 2>&1 || {
+    cat "$WORK/bit-witness-build.log" >&2
+    fail 'bit-helper witness builds'
+  }
+  awk '/^define i64 @[A-Za-z0-9_]*__ctBitWitness\(/ { p=1 } p { print } p && /^}/ { exit }' "$bin.ll" > "$WORK/bit-witness.ll"
+  [ -s "$WORK/bit-witness.ll" ] || fail 'emitted bit-helper witness exists'
+  [ "$(grep -c '^  br ' "$WORK/bit-witness.ll" || true)" -eq 0 ] || fail 'emitted bit-helper witness is straight-line'
+  for helper in $helpers; do
+    grep -F -q "call i64 @$helper(" "$WORK/bit-witness.ll" || fail "emitted bit-helper witness calls $helper"
+  done
+  pass "emitted bit-helper witness is straight-line over $*"
+  pending=$(nm "$bin" | awk '{ name=$3; sub(/^_/, "", name); if (name ~ /^mdk_eta_.*__ctBitWitness/) print name }')
+  [ -n "$pending" ] || fail 'linked bit-helper witness symbol exists'
+  pass 'linked bit-helper witness symbol exists'
+  visited=' '
+  while [ -n "$pending" ]; do
+    next_round=
+    for symbol in $pending; do
+      case $visited in *" $symbol "*) continue ;; esac
+      visited="$visited$symbol "
+      witness_disassemble "$bin" "$symbol" "$WORK/witness-$symbol.asm"
+      witness_transfers "$WORK/witness-$symbol.asm" > "$WORK/witness-$symbol.transfers"
+      strays=$(grep -c '^stray ' "$WORK/witness-$symbol.transfers" || true)
+      [ "$strays" -eq 0 ] || fail "linked $symbol has no conditional jumps (got $strays: $(grep '^stray ' "$WORK/witness-$symbol.transfers" | tr '\n' ' '))"
+      for target in $(sed -n 's/^target //p' "$WORK/witness-$symbol.transfers"); do
+        case "$helpers" in *" $target "*) next_round="$next_round $target"; continue ;; esac
+        case $target in
+          *__ctBitWitness) next_round="$next_round $target" ;;
+          *) fail "linked $symbol calls only the witness and its helpers (found $target)" ;;
+        esac
+      done
+    done
+    pending=$next_round
+  done
+  pass "linked bit-helper witness and every helper it still calls have no conditional jumps"
+}
+
+check_bit_witness 'bitXor (bitAnd a b) (shiftRight a (bitAnd b 7))' \
+  mdk_bit_and mdk_bit_xor mdk_shift_right
 
 printf 'receipt: target=%s %s\n' "$(uname -s)" "$(uname -m)"
 printf 'receipt: compiler=%s\n' "$(clang --version | sed -n '1p')"

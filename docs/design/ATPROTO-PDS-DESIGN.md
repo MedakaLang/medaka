@@ -230,7 +230,7 @@ it against the implementation rather than copying it from here.
 - `pds/lib/scalar.mdk` — arithmetic modulo the group order `n`. Separate from `field`
   on purpose: it runs a few times per signature rather than thousands, so it takes the
   simpler, slower representation and shares no code.
-- `stdlib/sha256.mdk` — straightforward 32-bit-word FIPS 180-4. The easiest module
+- `stdlib/crypto/sha256.mdk` — straightforward 32-bit-word FIPS 180-4. The easiest module
   in this document and the one with the best-published vectors.
 - `pds/lib/secp256k1.mdk` — field arithmetic, point add/double in Jacobian
   coordinates, scalar multiplication, **RFC 6979 deterministic `k`**, low-S
@@ -305,10 +305,10 @@ PDS ever shipping.
 
 Account bootstrap and `createSession` (both landed, §6 Phase 4) need to turn a
 user password into a storable credential without keeping the password itself. Chosen
-algorithm: **PBKDF2-HMAC-SHA-256** (`stdlib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
+algorithm: **PBKDF2-HMAC-SHA-256** (`pds/lib/pbkdf2.mdk`), not scrypt/argon2/bcrypt —
 this server signs and serves one account, so there is no attacker-throughput budget
 that a memory-hard KDF is defending against, and PBKDF2-HMAC-SHA-256 reuses the
-already-audited `stdlib/sha256.mdk` rather than adding a new primitive family. It is
+already-audited `stdlib/crypto/sha256.mdk` rather than adding a new primitive family. It is
 also RFC-vectored (RFC 7914 §11), keeping it inside G1's cross-implementation-agreed
 corpus discipline rather than resting on a self-captured golden (G5).
 
@@ -316,64 +316,120 @@ The salt is always caller-supplied — `pbkdf2HmacSha256` draws no entropy and d
 I/O itself; salt generation is the shell layer's job, in the slice that wires up
 account bootstrap.
 
-**Iteration count: 3,000, against a 500 ms login-latency budget. The OWASP floor is
-not reached, and the residual gap is 200x.**
+**Iteration count: 60,000, against a 500 ms login-latency budget. The OWASP floor is
+not reached, and the residual gap is 10x.**
 
-*Measurement (2026-09-09, this box: Debian 13, 12-core/32GB; `medaka build`, 32-byte
-`dkLen`, one process per sample, three samples per count).* Wall time for a single
-`pbkdf2HmacSha256` over a 28-character password and a 16-byte salt:
+*Measurement (2026-09-24, this box: Debian 13, AMD EPYC 9645, 12 cores/32GB, Debian
+clang 19.1.7; compiler and PDS at `02fbb27de`, the tip after the runtime is linked
+through ThinLTO, the SHA-256 rounds stopped allocating, HMAC precomputes its pad
+blocks and the login derivation moved out of the store transition).* Two
+measurements, both under the unit's own limits in a scratch scope
+(`systemd-run --scope -p CPUWeight=20 -p MemoryMax=512M`, never the live unit):
 
-| iterations | samples (ms) | median ms/iteration |
+- **The primitive**, for continuity with the slice-size figure below: a `medaka
+  build` of a program that times `pbkdf2HmacSha256 "password" "salt" 65000 32` five
+  times in one process with `monotonicSec`. With `GC_MARKERS=1` (see *The GC* below),
+  30 samples per setting read **5.4–7.3 µs per iteration** (about 6.3 typical); with
+  Boehm's default marker count, 7.1–9.6.
+- **The login**, which is what the budget is about: `pdsd` built from this tree, its
+  credential re-derived at the count under test with `serve_client_main.mdk`'s
+  `credential-at`, then timed from outside the client process, ten
+  `login`s (right password: one derivation, no re-derivation, since the record is at
+  the shipped count) and ten `login-refused`s per run:
+
+| count | `GC_MARKERS` | logins, seconds |
 |---|---|---|
-| 1,000 | 246.3 / 222.8 / 209.4 | 0.223 |
-| 2,000 | 469.4 / 514.9 / 317.4 | 0.235 |
-| 4,000 | 560.5 / 601.6 / 859.1 | 0.150 |
-| 8,000 | 1556.8 / 1371.5 / 1352.8 | 0.171 |
-| 16,000 | 2809.6 / 2360.7 / 2166.3 | 0.148 |
+| 50,000 | 1 | 0.24–0.49 (16 samples) |
+| 60,000 | 1 | 0.26–0.52 (56 samples; right-password logins 0.26–0.48) |
+| 60,000 | default | 0.34–0.81 (56 samples) |
+| 70,000 | 1 | 0.42–0.85 (22 samples, 20 of them over 0.5) |
 
-Subtracting the 4,000 median from the 16,000 median removes the fixed per-process
-cost and gives the marginal figure this count is chosen from: **0.147 ms per
-iteration**, ≈6,800 iterations/s. (The small counts read *higher* per iteration
-because process start and heap growth are amortized over fewer iterations, not
-because the loop is superlinear.)
+That is roughly **6–8 µs per iteration** inside a login, the slices and the
+suspensions between them included. The 60,000 samples come from runs half an hour
+apart, and the spread between them is the box's; 70,000 misses the budget in all
+but two samples.
+
+*The GC.* Boehm starts one marker thread per CPU unless `GC_MARKERS` says otherwise,
+and under `CPUWeight=20` those threads wait on each other whenever anything else wants
+the CPUs. The primitive above, with twelve busy loops running in a sibling scope at
+the default weight, two runs of five samples per setting: **20.6–24.8 µs/iteration
+with the default, 4.9–7.9 with `GC_MARKERS=1`**, 5.4–8.9 with 2, 9.4–12.6 with 4. On
+an idle box the default still costs about 20% (7.1–9.6 against 5.4–7.3). So
+`pds/pds.service` sets `Environment=GC_MARKERS=1`, and
+`pds/test/deploy_config_lint_test.mdk` requires it.
 
 *The budget.* 500 ms per derivation, chosen as a **login-latency** budget rather than
-the bootstrap budget the previous count was set against. The derivation now runs
-inside `applyRequest`'s single indivisible sequence (`pds/shell/server.mdk`), so it is
-also the time one `com.atproto.server.createSession` attempt — including a WRONG one —
-blocks every other connection for. `maxCreateSessionPerWindow` is 30 per 60 s per
+the bootstrap budget the previous count was set against. `maxCreateSessionPerWindow` is 30 per 60 s per
 identity (`pds/lib/resource_limits.mdk`), so at the 500 ms budget one identity can
-hold the server for **15 s of each minute**, and at the chosen count's measured
-~440 ms for **~13 s**. Two things sharpen that further, and both are load-bearing:
-the derivation is inside an indivisible sequence, so those seconds are the whole
-single-threaded server, not one connection's share of it; and **without
-`--trusted-proxy` every caller shares the one `"direct"` identity bucket** (see
-"The identity a request is charged against", below), so the 30 are 30 logins *in
-total* — wrong passwords
-included — and any client can spend them. The budget is set where that stays a
-fraction rather than a majority of the window; it does not make it a small one.
+spend **15 s of each minute** of derivation, and at the chosen count's measured
+~0.35 s **~11 s**. **Without `--trusted-proxy` every caller shares the one
+`"direct"` identity bucket** (see "The identity a request is charged against",
+below), so the 30 are 30 logins *in total* — wrong passwords included — and any
+client can spend them.
 
-*The chosen count.* 0.147 ms × 3,000 = **~440 ms**, the largest round count inside the
-budget. `defaultIterations = 3000` (`pds/lib/credential.mdk`), pinned by a cell in
-`pds/test/credential_test.mdk`.
+*Where the derivation runs.* Not inside `applyRequest`'s indivisible sequence: that
+would make each of those seconds the whole single-threaded server's. A login's
+derivations (the password check, and the re-derivation below when the record is
+outdated) run BEFORE `applyRequest`, in Async code that yields to the scheduler
+between slices of `kdfSliceIterations` HMAC calls (`settleLogin`,
+`pds/shell/server.mdk`; the resumable loop is `LoginCheck`, `pds/lib/credential.mdk`).
+At most `maxConcurrentDerivations` = 4 derive at once; a login past that is refused
+429 `RateLimitExceeded` without deriving.
+
+*The slice size.* Measured on this box (2026-09-24, `medaka build`, 5 × 20,000
+iterations of `pbkdf2HmacSha256` in one process, three runs), one HMAC call costs
+**7.0 / 7.1 / 7.5 µs**. Every suspension another request makes waits behind one slice
+of each running derivation, and answering a `getRecord` makes about thirty (the
+latencies below over the slice's duration), so the slice sets how much a login slows
+everything else. Measured on a scratch instance
+under the unit's own limits (`systemd-run --scope -p CPUWeight=20 -p MemoryMax=512M`,
+per `pds/pds.service`), with the account's credential at 100,000 iterations so one
+wrong-password login derives for ~0.75 s, and a `getRecord` sent 100 ms into it
+(`serve_client_main.mdk`'s `kdf-yield`, five runs; `kdf-flood`, eight logins at once
+against the ceiling of four, one run; the 256 row is two such sessions). An idle
+`getRecord` takes 0.9–2.0 ms:
+
+| slice (HMAC calls) | `getRecord` during one login | login | `getRecord` during four | the eight-login flood |
+|---|---|---|---|---|
+| 256 | 41–119 ms | 0.67–1.06 s | 219–249 ms | 3.03–3.13 s |
+| 64 | 13–18 ms | 0.76–0.80 s | 63 ms | 3.22 s |
+| 16 | 3.0–4.9 ms | 0.70–0.82 s | 16 ms | 2.97 s |
+| 4 | 1.0–1.7 ms | 0.73–0.85 s | 3.9 ms | 3.40 s |
+
+The latency a login adds is proportional to the slice; the scheduler pass each slice
+costs first shows at 4, as a longer flood. **`kdfSliceIterations` is 16**, the smallest
+of these at which it does not.
+
+The verdict names the credential record it was computed against, and
+`applyRequest` refuses it (401) if the stored record is no longer that one — a
+concurrent login's re-derivation, or any other replacement, lands between the
+derivation and the store transition — so a stale verdict can neither let a
+password in nor overwrite a newer record.
+
+*The chosen count.* 60,000 iterations, the largest multiple of 10,000 whose measured
+logins stay inside the budget: 0.26–0.52 s with `GC_MARKERS=1`. `defaultIterations =
+60000` (`pds/lib/credential.mdk`), pinned by a cell in `pds/test/credential_test.mdk`.
+The count was 3,000 before this measurement, set on a 0.147 ms/iteration figure
+(2026-09-09) that predates the four changes named above.
 
 *The residual gap.* OWASP's floor for PBKDF2-HMAC-SHA-256 is 600,000 iterations, which
-at 0.147 ms/iteration is **~88 s per login** here — 200x the chosen count, and about
-176x the whole login budget. **The floor is unreachable by tuning and the gap is not
-closed by this change.** What closes it is a native SHA-256 (an `extern`, or an
-emitter that vectorizes the compression function): the gap is entirely the cost of a
-pure-Medaka block function, not of PBKDF2's structure. Until then this count is what
-the implementation can afford, and is not a security recommendation. Anyone deploying
-this behind a public origin should read it as: an attacker who steals
-`<data>/credential` recovers a weak password 200x faster than against a
-floor-compliant server.
+at 6–8 µs/iteration is **3.5–5 s per login** here — 10x the chosen count, and 7–10x
+the whole login budget. **The gap is not closed by this change.** What narrows it
+further is a cheaper compression function (the emitter inlining bit operations,
+#3367, or a native SHA-256 `extern`): the gap is the cost of a pure-Medaka block
+function, not of PBKDF2's structure. Until then this count is what the implementation
+can afford, and is not a security recommendation. Anyone deploying this behind a
+public origin should read it as: an attacker who steals `<data>/credential` recovers
+a weak password 10x faster than against a floor-compliant server.
 
 *Migration.* A record carries the count it was derived at, so raising the constant
 locks nobody out. A stored record derived at any other count is re-derived onto the
-current one by **one successful login** (`credentialUpgrade`, `pds/lib/credential.mdk`;
-called from `applyCreateSession` and persisted by `persistCredentialHalf`). A FAILED
-login never rewrites the record: `credentialUpgrade` grades the password itself and
-returns nothing without it, so the property holds at the function rather than at its
+current one by **one successful login**: the `LoginCheck` that graded the password
+goes on to derive the replacement under a fresh salt, its `LoginVerdict` carries it,
+`applyCreateSession` stores it, and `persistCredentialHalf` persists it. A FAILED
+login never rewrites the record: a `LoginCheck` derives a replacement only after the
+password has verified, so a verdict for a wrong password carries none, and the
+property holds at `loginCheckAdvance` (`pds/lib/credential.mdk`) rather than at its
 call site.
 
 ### 4.2.1 Secrets at rest, through 0.1.0
@@ -531,7 +587,7 @@ archive — that is a forced re-login per restart, which is not the behavior any
 PDS on the network has and not one a client can be asked to absorb.
 
 The two objections that ruling raised are answered rather than dismissed. **Mode**:
-the file is written through `io.writeFilePrivate` at 0600 like the credential record,
+the file is written through `fs.replaceDurably` at 0600 like the credential record,
 and `pds serve` refuses to start on a wider one (`requirePrivateMode`), so it fails
 closed exactly where the secret files do. **Staleness**: the set is pruned against the
 current instant as it is read, so a row that expired while nothing was running is
@@ -548,11 +604,12 @@ The credential record is persisted for the older and simpler reason: a server th
 forgot the account password on restart could not accept a login at all.
 
 **Secrets at rest are owner-only, and a wider one is refused rather than warned
-about.** The generated session secret and the stored credential record are written
-through `io.writeFilePrivate` over the `writeFileMode` primitive, which sets the mode
-on the open descriptor before the first byte is written — so the contents never exist
-at a wider mode, and neither the process umask nor a pre-existing file's own mode can
-widen them. In the other direction, `pds/serve.mdk` grades every hex secret file it
+about.** The generated session secret is written through `io.writeFilePrivate` and
+the stored credential record through `fs.replaceDurably`, both over the same
+`writeFileMode` primitive, which sets the mode on the open descriptor before the
+first byte is written — so the contents never exist at a wider mode, and neither the
+process umask nor a pre-existing file's own mode can widen them. In the other
+direction, `pds/serve.mdk` grades every hex secret file it
 READS (`--key` and `--token-secret`) with `fileMode` and refuses to start when any
 account but the owner can read one: a signing key the rest of the box can read has
 already been exposed, and serving anyway would hide that. The refusal names the path
@@ -823,19 +880,39 @@ in the on-disk layout made the window exclusive, so `pds/shell/dirlock.mdk`
 does: `configure` takes `<data>/.lock` after `requireDir` and before the first
 thing that reads or writes anything beneath `--data` — ahead of both `openRepo`
 and the three sweeps — so a second process is refused before it can destroy
-what it was refused for (`#3059`). The lock is a directory because `makeDir` is
-`mkdir(2)`, whose second creation fails rather than succeeding twice; it needs
-no new extern and no capability-matrix row. What `mkdir` does not give is
-release on death, and this server has no shutdown path to release one in (there
-is no signal handling in the runtime), so a killed holder ALWAYS leaves its
-lock behind and lock EXISTENCE cannot be the test. A holder therefore beats a
-heartbeat into the lock for as long as it runs, and a contender grades the
-heartbeat: one that is moving refuses the contender in about one beat, one that
-has stopped for the stale window is taken over and the takeover is reported on
-the startup line. The residual, stated rather than papered over, is that a
-holder stalled longer than the window is indistinguishable from a dead one to
-any test this process can make; `--force-lock` covers the opposite direction,
-taking a lock immediately rather than waiting the window out.
+what it was refused for (`#3059`). `<data>/.lock` itself is not the lock and
+owns nothing: any number of processes may create that directory, and its
+existence says only that some server has been here. What is owned is a
+GENERATION inside it, `.lock/gen.<n>` — a contender reads the generations and
+grades the highest one's heartbeat, and the holder is whoever created that
+highest-numbered generation. `makeDir` is `mkdir(2)`, whose second creation of
+the same name fails rather than succeeding twice, and a generation number is
+never reclaimed or reused: a takeover always creates the NEXT number rather
+than removing or renaming the loser's — reclaiming a name a winner's claim
+depends on is exactly what would let a loser's cleanup delete the winner's
+fresh lock and leave both processes holding one. Once a claim succeeds, every
+generation strictly below the new one is removed as best-effort cleanup (so a
+directory restarted many times does not accumulate stale generations) — this
+runs only AFTER the claim, never touches the fresh generation just taken, and
+no contender's success depends on it running or on it working. `mkdir` gives
+no release on death, and this server has no shutdown path to release one in
+(there is no
+signal handling in the runtime), so a killed holder ALWAYS leaves its
+generation behind and existence cannot be the test. A holder therefore beats a
+heartbeat into its generation for as long as it runs, and a contender grades
+the heartbeat: one that is moving refuses the contender in about one beat, one
+that has stopped for the stale window is taken over by a new, higher generation
+and the takeover is reported on the startup line. `holdDataLock` is not a
+fire-and-forget beat either — it re-reads the generations on every beat and
+reports `LockLost` the moment a higher one exists, so a holder whose lock was
+reclaimed learns so at its next beat and stops rather than writing into a
+directory another server now owns. The guarantee this gives is therefore "no
+two processes write one data directory concurrently," not "no holder is ever
+displaced" — a live holder is detected in about one beat, but a holder stalled
+longer than `lockStaleAfterMillis` is indistinguishable from a dead one to any
+test this process can make, and will find out about its own displacement only
+at its next beat; `--force-lock` covers the opposite direction, taking a lock
+immediately rather than waiting the window out.
 
 **Recovery runs before the genesis quartet, and `completeGenesisEvents` checks
 that it did.** `refuseLostPointer` (`pds/shell/server.mdk`) reads the

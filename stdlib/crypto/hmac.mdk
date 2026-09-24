@@ -10,7 +10,10 @@
    for a caller whose bytes are already known to be in range. -}
 
 import array.{concat, make, setInPlace}
-import sha256.{sha256, sha256FixedBytes}
+import bytes.{Bytes, fromArrayAssumeByteDomain, toArray}
+import crypto.sha256.{
+  sha256, sha256AssumeByteDomainFrom, sha256FixedBytes, sha256FoldKeyBlock
+}
 
 ctEqAccum : Array Int -> Array Int -> Int -> Int -> Int
 ctEqAccum a b i acc =
@@ -114,3 +117,45 @@ hmacSha256FixedBytes key message =
     if arrayLength key > blockBytes then sha256FixedBytes key else key
   let inner = sha256FixedBytes (concat [|keyPad normalized 0x36, message|])
   sha256FixedBytes (concat [|keyPad normalized 0x5c, inner|])
+
+{- | An HMAC-SHA-256 key with both padded blocks' compressions already
+   folded in.
+
+   Build one with `hmacSha256Key` and compute tags with
+   `hmacSha256WithKey`. Worth it for a caller that computes many tags
+   under the same key, such as PBKDF2's per-iteration folding: each
+   `hmacSha256WithKey` call then costs only the message-dependent tail of
+   the inner and outer hash, two SHA-256 compressions for a message that
+   fits in the tag's own 32 bytes, instead of `hmacSha256`'s four. -}
+export data HmacSha256Key =
+  | HmacSha256Key (Int, Int, Int, Int, Int, Int, Int, Int) (Int, Int, Int, Int, Int, Int, Int, Int)
+
+{- | Precomputes the ipad/opad compressions for `key`, once. -}
+export
+hmacSha256Key : Bytes -> HmacSha256Key
+hmacSha256Key key =
+  let keyArr = toArray key
+  let normalized =
+    if arrayLength keyArr > blockBytes then sha256FixedBytes keyArr else keyArr
+  HmacSha256Key
+    (sha256FoldKeyBlock (keyPad normalized 0x36))
+    (sha256FoldKeyBlock (keyPad normalized 0x5c))
+
+{- | The 32-byte HMAC-SHA-256 tag of `message` under `key`.
+
+   Byte-for-byte the same tag `hmacSha256`/`hmacSha256FixedBytes` give for
+   the same key and message. -}
+export
+hmacSha256WithKey : HmacSha256Key -> Bytes -> Bytes
+hmacSha256WithKey (HmacSha256Key innerStart outerStart) message =
+  let msgArr = toArray message
+  let inner = sha256AssumeByteDomainFrom innerStart blockBytes msgArr
+  let outer = sha256AssumeByteDomainFrom outerStart blockBytes inner
+  fromArrayAssumeByteDomain outer
+
+-- > let key = hmacSha256Key (fromArrayAssumeByteDomain (arrayMake 20 0x0b)) in let msg = fromArrayAssumeByteDomain [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] in toArray (hmacSha256WithKey key msg) == hmacSha256 (arrayMake 20 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
+-- True
+-- > let key = hmacSha256Key (fromArrayAssumeByteDomain [||]) in let msg = fromArrayAssumeByteDomain [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] in toArray (hmacSha256WithKey key msg) == hmacSha256 [||] [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
+-- True
+-- > let key = hmacSha256Key (fromArrayAssumeByteDomain (arrayMake 65 0x0b)) in let msg = fromArrayAssumeByteDomain [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|] in toArray (hmacSha256WithKey key msg) == hmacSha256 (arrayMake 65 0x0b) [|0x48, 0x69, 0x20, 0x54, 0x68, 0x65, 0x72, 0x65|]
+-- True

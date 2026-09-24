@@ -33,7 +33,7 @@ import lib.resource_limits.{
   checkMstTraversalDepth,
   maxMstTraversalDepth,
 }
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 
 -- ── types ───────────────────────────────────────────────────────────────────
 

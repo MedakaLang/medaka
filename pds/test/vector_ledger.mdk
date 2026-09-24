@@ -19,8 +19,8 @@
    substitute for the gate.
 
    The digest MUST come from spawning the external `sha256sum`/`shasum`
-   binary, never `stdlib/sha256.mdk`: this ledger governs the corpus that
-   grades `stdlib/sha256.mdk` itself (`pds/test/sha256_vectors_test.mdk`).
+   binary, never `stdlib/crypto/sha256.mdk`: this ledger governs the corpus that
+   grades `stdlib/crypto/sha256.mdk` itself (`pds/test/sha256_vectors_test.mdk`).
    Verifying the ledger with the implementation under test would make a
    broken SHA-256 self-certifying. -}
 
@@ -197,7 +197,7 @@ isHex64 s =
 isHexChar : Char -> Bool
 isHexChar c = isDigit c || c >= 'a' && c <= 'f'
 
--- ── sha256, spawned — never stdlib/sha256.mdk (see module header) ───────
+-- ── sha256, spawned — never stdlib/crypto/sha256.mdk (see module header) ───────
 
 sha256OfFile : String -> <Exec "_"> Result String String
 sha256OfFile path = match runCommandOk "sha256sum" [path]

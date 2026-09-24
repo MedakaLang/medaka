@@ -38,8 +38,8 @@ MEDAKA="${MEDAKA:-$ROOT/medaka}"
 INVENTORY="$ROOT/docs/stdlib/inventory.json"
 
 if [ ! -f "$INVENTORY" ]; then
-  printf 'FAIL %s does not exist — run: %s doc --out %s/docs/stdlib %s/stdlib/*.mdk\n' \
-    "$INVENTORY" "$MEDAKA" "$ROOT" "$ROOT"
+  printf 'FAIL %s does not exist — run: %s doc --out %s/docs/stdlib %s/stdlib/*.mdk %s/stdlib/*/*.mdk\n' \
+    "$INVENTORY" "$MEDAKA" "$ROOT" "$ROOT" "$ROOT"
   exit 1
 fi
 

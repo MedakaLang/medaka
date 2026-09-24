@@ -78,7 +78,7 @@ import lib.repo.{
   repoMutationState,
   repoRootCid,
 }
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 import lib.resource_limits.{maxBlobBytes}
 import lib.sign.{SecretKey, secretKeyFromBytes}
 import lib.store.{

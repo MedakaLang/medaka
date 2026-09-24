@@ -102,6 +102,7 @@ diff_fixtures_types types_user dir:test/diff_fixtures
 typecheck_fixtures types dir:test/typecheck_fixtures
 typecheck_panic_fixtures types dir:test/typecheck_panic_fixtures
 stdlib desugar,mark dir:stdlib
+stdlib_crypto desugar,mark dir:stdlib/crypto
 prelude types file:stdlib/core.mdk
 compiler desugar,mark compiler
 EOF

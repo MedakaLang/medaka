@@ -310,9 +310,9 @@ obligation of its own. The largest unexported group is `stdlib/http.mdk`'s
 comment (`stdlib/http.mdk:354-361`) says B5 removes; also unexported:
 `stdlib/http.mdk`'s `validBytes`/`headHeaderBytes`/`requestBytesVerdict`/
 `decodeQueryBytes`/`validMediaBytes`, `stdlib/base32.mdk`'s `validBytes`,
-`stdlib/byteparser.mdk`'s `takeBytesGo`, `stdlib/sha256.mdk`'s `digestBytes`,
-`stdlib/bytes.mdk`'s `debugBytesHex`, `stdlib/hmac.mdk`'s `blockBytes`,
-`stdlib/pbkdf2.mdk`'s `hashBytes`, `stdlib/net.mdk`'s `testSentBytes`, and
+`stdlib/byteparser.mdk`'s `takeBytesGo`, `stdlib/crypto/sha256.mdk`'s `digestBytes`,
+`stdlib/bytes.mdk`'s `debugBytesHex`, `stdlib/crypto/hmac.mdk`'s `blockBytes`,
+`stdlib/net.mdk`'s `testSentBytes`, and
 `stdlib/net_async.mdk`'s `pendingRecvBytes`/`tryRecvBytes`/`recvBytesStep`/
 `recvUntilBytes`/`recvUntilBytesStep`/`recvBytesWake`.
 

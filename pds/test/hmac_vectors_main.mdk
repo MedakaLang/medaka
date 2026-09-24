@@ -1,0 +1,119 @@
+{- | Driver for the Wycheproof HMAC-SHA256 corpus (S-hmac, #3362
+   S-more-answer-keys round 2). Grades `stdlib/crypto/hmac.mdk`'s `hmacSha256FixedBytes`
+   against `pds/test/vectors/wycheproof_hmac_sha256.txt` — never a
+   self-captured golden (G5).
+
+   Usage: hmac_vectors_main <vector-file>
+
+   Row grammar (see pds/tools/normalize_wycheproof_hmac.py):
+     wycheproof <tcId> <key-hex-or-'-'> <msg-hex-or-'-'> <tag-hex> <tagBits> <result>
+
+   Every row is graded through `hmac.ctEq`, TRUNCATED to `tagBits / 8` bytes
+   FIRST — never `ctEq` on the full 32-byte computed tag against a shorter
+   given tag, which would fail every valid truncated row on length alone
+   before a single byte is compared. A `tagBits < 256` row is exactly this
+   project's truncated-tag case.
+
+   Every row also computes the untruncated tag a second way, through
+   `hmacSha256Key`/`hmacSha256WithKey`, and requires it byte-for-byte equal
+   to `hmacSha256FixedBytes`'s result on the same key and message (S-hmac-
+   midstate, #3371 Part B). -}
+
+import crypto.hmac.{
+  ctEq, hmacSha256FixedBytes, hmacSha256Key, hmacSha256WithKey
+}
+import bytes.{fromArrayAssumeByteDomain, toArray}
+import hex.{decode}
+import array.{take}
+import list.{somes}
+import string.{toInt, trim, words}
+import io.{readLines}
+
+data Row = Row {
+  tcId : Int,
+  key : Array Int,
+  msg : Array Int,
+  tag : Array Int,
+  tagBits : Int,
+  expectedValid : Bool,
+}
+
+hexField : String -> Array Int
+hexField "-" = [||]
+hexField h = match decode h
+  Ok bytes => bytes
+  Err e => panic "hmac_vectors_main: bad hex \{debug h}: \{e}"
+
+parseLine : String -> Option Row
+parseLine line = match words (trim line)
+  ["wycheproof", tcIdStr, keyHex, msgHex, tagHex, tagBitsStr, result] => match (
+    toInt tcIdStr,
+    toInt tagBitsStr,
+  )
+    (Some tcId, Some tagBits) => Some Row {
+      tcId = tcId,
+      key = hexField keyHex,
+      msg = hexField msgHex,
+      tag = hexField tagHex,
+      tagBits = tagBits,
+      expectedValid = result == "valid",
+    }
+    _ => panic "hmac_vectors_main: bad tcId/tagBits in line: \{line}"
+  [] => None
+  _ => panic "hmac_vectors_main: unparseable line: \{line}"
+
+parseRows : List String -> List Row
+parseRows lns = somes (map parseLine lns)
+
+-- The row's own verdict: the FULL computed tag truncated to `tagBits / 8`
+-- bytes, then `ctEq`'d against the given tag. Truncating before comparing
+-- is the whole point of this driver — see the module doc comment. Also
+-- requires the keyed API to agree with the direct one on the full,
+-- untruncated tag.
+rowHolds : Row -> Bool
+rowHolds r =
+  let full = hmacSha256FixedBytes r.key r.msg
+  let key = hmacSha256Key (fromArrayAssumeByteDomain r.key)
+  let keyed = toArray (hmacSha256WithKey key (fromArrayAssumeByteDomain r.msg))
+  let truncated = take (r.tagBits / 8) full
+  ctEq truncated r.tag == r.expectedValid && keyed == full
+
+checkRow : Row -> <IO> (Int, Int)
+checkRow r =
+  if rowHolds r then
+    (1, 0)
+  else
+    println
+      "MISMATCH tcId=\{intToString r.tcId} tagBits=\{intToString r.tagBits} expectedValid=\{debug r.expectedValid}"
+    (0, 1)
+
+checkAll : List Row -> <IO> (Int, Int, Int)
+checkAll rows =
+  let results = map checkRow rows
+  let ok = sum (map fst results)
+  let failed = sum (map snd results)
+  let truncated = length (filter (r => r.tagBits < 256) rows)
+  (ok, failed, truncated)
+
+main : <IO, Env, FileRead "_"> Unit
+main = match args ()
+  [path] => match readLines path
+    Err e =>
+      println "ERROR reading \{path}: \{e}"
+      exit 1
+    Ok lns =>
+      let rows = parseRows lns
+      let (ok, failed, truncated) = checkAll rows
+      println
+        "\{path}: \{intToString ok} ok, \{intToString failed} failed, 0 skipped"
+      println
+        "Wycheproof HMAC-SHA256: \{intToString (length rows)} unique tcIds; \{intToString truncated} truncated-tag rows checked via ctEq"
+      if failed > 0 || length rows == 0 then
+        println "TOTAL: FAIL"
+        exit 1
+      else
+        println "TOTAL: PASS"
+        exit 0
+  _ =>
+    println "usage: hmac_vectors_main <vector-file>"
+    exit 2

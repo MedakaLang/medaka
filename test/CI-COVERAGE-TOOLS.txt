@@ -397,6 +397,12 @@ pds/tools/gen_signing_corpus   regenerates the 80-row dual-oracle prehashed corp
 pds/tools/gen_did_key_corpus   regenerates the 16-row secp256k1 did:key corpus by calling
                                Secp256k1Keypair.did() in the pinned official-PDS Docker image;
                                the offline checker and vector_provenance gate grade the artifact.
+pds/tools/gen_hmac_corpus      regenerates the normalized 174-row Wycheproof HMAC-SHA256
+                               corpus from the pinned wycheproof artifact. Needs network;
+                               pds/test/hmac_vectors_test.mdk grades the committed artifact.
+pds/tools/gen_pbkdf2_corpus    regenerates the normalized 60-row Wycheproof PBKDF2-HMAC-SHA256
+                               corpus from the pinned wycheproof artifact. Needs network;
+                               pds/test/pbkdf2_test.mdk grades the committed artifact.
 pds/tools/gen_sync_event_corpus
                                regenerates the #identity/#account/#sync event-body corpus and
                                the sync.getRecord/sync.getBlocks CAR-shape corpus by calling

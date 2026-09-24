@@ -19,28 +19,24 @@
    `fsync`ed before its `rename` and the containing directory after: without
    those barriers the kernel is free to make the `rename` visible before the
    block writes it was ordered after, and the head would name a graph that is
-   not there. The credential file is staged and barriered the same way: it is
-   written to a temporary path with `writeFilePrivate` (so the mode is 0600
-   from the moment the bytes land, and stays 0600 across `rename`), `fsync`ed,
-   then `rename`d onto the real path, then the containing directory is
-   `fsync`ed.
+   not there. Every file this module writes (the head, the credential, the
+   preference set and the session set) is replaced that one way, through
+   `stdlib/fs`'s `replaceDurably`: staged at mode 0600 from the moment the
+   bytes land, `fsync`ed, `rename`d onto the real path, then the containing
+   directory `fsync`ed.
 
-   `dir` is the store's root. `blocks/` (`shell.blockfile`) creates itself
-   there and leaves that dentry to the `fsync dir` `persistSave` performs
-   after it, which it can because a block is written through `persistSave` and
-   through nothing else. `blobs/` (`shell.blobfile`) cannot — a blob is also
-   written on its own, with no commit beside it and so no call here at all —
-   and barriers its own dentry. `dir`'s OWN dentry is
+   `dir` is the store's root. `blocks/` (`shell.blockfile`) and `blobs/`
+   (`shell.blobfile`) create themselves there, and each creation barriers its
+   own dentry into `dir` as it is made, so no directory's durability waits on
+   a later call. `dir`'s OWN dentry is
    written into a directory this store does not own, so a creation of `dir`
    barriers the directory above it — and only a creation, which keeps an
    operator's directory off the cost of every commit. -}
 
 import array
-import fs.{mkdirAll}
+import fs.{mkdirAllDurably, replaceDurably}
 import hex.{decode, encode}
-import io.{writeFilePrivate}
 import json.{Json, asArray, jArray, parse, stringify}
-import path.{dirname}
 import string.{join, lines, split, toInt, trim}
 import lib.cid.{Cid, cidFromString, cidToString}
 import lib.credential.{
@@ -58,12 +54,7 @@ blocksDir dir = "\{dir}/blocks"
 -- The store root, created if it is not there, with the dentry that created
 -- barriered into the directory above. See the header's last paragraph.
 ensureRoot : String -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureRoot dir =
-  if fileExists dir then
-    Ok ()
-  else do
-    () <- mkdirAll dir
-    fsync (dirname dir)
+ensureRoot dir = mkdirAllDurably dir
 
 {- | Remove every block file staged beneath `<dir>/blocks/.staging` and never
    promoted or cleaned up — see `blockFileSweepStaging`'s doc comment for what
@@ -95,14 +86,11 @@ export
 persistCredential : String ->
   CredentialRecord ->
   <FileWrite "_"> Result String Unit
-persistCredential dir record = do
+persistCredential dir record =
   let staged = "\{credentialPath dir}.tmp"
-  () <- match writeFilePrivate staged (credentialText record)
+  match replaceDurably staged (credentialPath dir) (credentialText record)
     Err message => Err "unwritable credential \{credentialPath dir}: \{message}"
     Ok () => Ok ()
-  () <- fsync staged
-  () <- rename staged (credentialPath dir)
-  fsync dir
 
 headPath : String -> String
 headPath dir = "\{dir}/head"
@@ -121,10 +109,9 @@ persistHasHead dir = fileExists (headPath dir)
    `dir`. The blocks are written first: the head is the last thing to move, so it
    never names a graph that is not yet on disk.
 
-   The closing `fsync dir` carries two promotions, not one: the head file's
-   `rename`, and the dentry `blockFileWrite` wrote into `dir` on a store whose
-   `blocks/` did not exist yet. That is why it comes after `blockFileWrite`
-   rather than beside the head write it obviously belongs to. -}
+   The head's closing barrier on `dir` publishes only its own `rename`: a
+   `blocks/` that `blockFileWrite` had to create was barriered into `dir` when
+   it was made. -}
 export
 persistSave : String ->
   Cid ->
@@ -134,10 +121,7 @@ persistSave dir head blocks = do
   () <- ensureRoot dir
   () <- blockFileWrite (blocksDir dir) blocks
   let staged = "\{headPath dir}.tmp"
-  () <- writeFile staged (cidToString head)
-  () <- fsync staged
-  () <- rename staged (headPath dir)
-  fsync dir
+  replaceDurably staged (headPath dir) (cidToString head)
 
 {- | Read back the persisted head commit CID and every persisted block row.
 
@@ -169,10 +153,7 @@ persistPreferences : String ->
 persistPreferences dir prefs = do
   () <- ensureRoot dir
   let staged = "\{preferencesPath dir}.tmp"
-  () <- writeFile staged (stringify (jArray prefs))
-  () <- fsync staged
-  () <- rename staged (preferencesPath dir)
-  fsync dir
+  replaceDurably staged (preferencesPath dir) (stringify (jArray prefs))
 
 {- | Read back the persisted preference set, or the empty list when `dir` has
    never had one written — a fresh account, or one that has never called
@@ -291,12 +272,9 @@ persistSessions : String ->
 persistSessions dir rows = do
   () <- ensureRoot dir
   let staged = "\{sessionsPath dir}.tmp"
-  () <- match writeFilePrivate staged (sessionsText rows)
+  match replaceDurably staged (sessionsPath dir) (sessionsText rows)
     Err message => Err "unwritable sessions \{sessionsPath dir}: \{message}"
     Ok () => Ok ()
-  () <- fsync staged
-  () <- rename staged (sessionsPath dir)
-  fsync dir
 
 {- | Read back the persisted session set, or the empty list when `dir` has
    never had one written.

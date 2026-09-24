@@ -63,12 +63,22 @@ ReadWritePaths=/opt/pds/data
 ReadOnlyPaths=/opt/pds/secrets
 CapabilityBoundingSet=
 UMask=0077
+# The heap holds the signing key and the session secret; a core dump would
+# write both to disk in the clear.
+LimitCORE=0
 IPAddressDeny=any
 IPAddressAllow=localhost
 MemoryMax=512M
 TasksMax=256
 LimitNOFILE=65536
 CPUWeight=20
+# One GC marker thread. Boehm's default starts one per CPU, and at this low
+# CPUWeight they wait on each other whenever the box is busy: a login's
+# PBKDF2 measured 21-25 us/iteration with the default against 5-8 with one
+# marker, under a scope with this unit's CPUWeight and MemoryMax beside
+# twelve busy loops, and 7-10 against 5-7 on an idle box
+# (docs/design/ATPROTO-PDS-DESIGN.md §4.2).
+Environment=GC_MARKERS=1
 
 [Install]
 WantedBy=multi-user.target

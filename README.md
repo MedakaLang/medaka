@@ -140,6 +140,18 @@ to a per-job scratch directory in CI. An explicit `MEDAKA_RT_OBJ=<obj>` still
 takes precedence over the cache. Every cache failure is fail-open: the build
 falls back to the inline compile rather than erroring.
 
+By default a native build links the program and the runtime through one
+ThinLTO link, so the runtime's small helpers inline into the program.
+`MEDAKA_NO_LTO=1` (any non-empty value) forces the plain, non-ThinLTO link
+instead — for a consumer that needs a NATIVE runtime object, which `ld -r`
+can merge and ThinLTO bitcode cannot (`test/diff_compiler_llvm_ffi.sh` and
+the memcheck probe in `pds/test/constant_time_signing.sh` are the two
+current consumers). A runtime object produced by `--emit-rt-obj` follows the
+same switch, so `MEDAKA_RT_OBJ` must be paired with the matching link mode:
+set `MEDAKA_NO_LTO` for both the build that emits the object and the build
+that links it, or for neither — a mismatch either fails to link or silently
+loses ThinLTO's inlining.
+
 **Interactive REPL:**
 ```sh
 medaka repl

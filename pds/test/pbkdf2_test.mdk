@@ -1,4 +1,4 @@
-{- | Vector-graded tests for `stdlib/pbkdf2.mdk` (S-kdf, #2604 password
+{- | Vector-graded tests for `pds/lib/pbkdf2.mdk` (S-kdf, #2604 password
    hashing half).
 
    The two `P`/`S`/`c`/`dkLen` -> output tuples below are hand-transcribed
@@ -12,9 +12,13 @@
    they need no provenance row of their own; only the expected output
    bytes are the graded values. -}
 
-import test.{expectEach, expectEqual}
+import test.{Expectation, expectEach, expectEqual}
 import array.{take}
-import pbkdf2.{pbkdf2HmacSha256}
+import hex.{decode}
+import list.{somes}
+import string.{toInt, trim, words}
+import io.{readLines}
+import lib.pbkdf2.{pbkdf2HmacSha256}
 
 -- "passwd"
 passwd : Array Int
@@ -190,3 +194,59 @@ test "does not mutate its Array Int inputs" =
     ("passwd unchanged", expectEqual passwordBefore passwd),
     ("salt1 unchanged", expectEqual saltBefore salt1),
   ]
+
+{- | The Wycheproof PBKDF2-HMAC-SHA256 corpus (S-pbkdf2, #3362
+   S-more-answer-keys round 2), ledgered in `pds/test/VECTOR-PROVENANCE.txt` —
+   never a self-captured golden (G5). 60 rows, all published `valid`; two of
+   them (tcId 1/2) reproduce the RFC 7914 vectors above byte-for-byte under a
+   different, independently-published source — see that corpus's own
+   provenance note. -}
+wycheproofCorpusPath : String
+wycheproofCorpusPath = "pds/test/vectors/wycheproof_pbkdf2_hmac_sha256.txt"
+
+data KdfRow = KdfRow {
+  tcId : Int,
+  password : Array Int,
+  salt : Array Int,
+  iterations : Int,
+  dkLen : Int,
+  dk : Array Int,
+}
+
+kdfHexField : String -> Array Int
+kdfHexField "-" = [||]
+kdfHexField h = match decode h
+  Ok bytes => bytes
+  Err e => panic "pbkdf2_test: bad hex \{debug h}: \{e}"
+
+parseKdfLine : String -> Option KdfRow
+parseKdfLine line = match words (trim line)
+  ["wycheproof", tcIdStr, passwordHex, saltHex, itersStr, dkLenStr, dkHex, _result] =>
+    match (toInt tcIdStr, toInt itersStr, toInt dkLenStr)
+      (Some tcId, Some iterations, Some dkLen) => Some KdfRow {
+        tcId = tcId,
+        password = kdfHexField passwordHex,
+        salt = kdfHexField saltHex,
+        iterations = iterations,
+        dkLen = dkLen,
+        dk = kdfHexField dkHex,
+      }
+      _ => panic "pbkdf2_test: bad tcId/iterationCount/dkLen in line: \{line}"
+  [] => None
+  _ => panic "pbkdf2_test: unparseable line: \{line}"
+
+wycheproofRows : <IO> List KdfRow
+wycheproofRows = match readLines wycheproofCorpusPath
+  Err e => panic "pbkdf2_test: could not read \{wycheproofCorpusPath}: \{e}"
+  Ok lns => somes (map parseKdfLine lns)
+
+kdfRowExpectation : KdfRow -> (String, Expectation)
+kdfRowExpectation r = (
+  "tcId \{intToString r.tcId}",
+  expectEqual r.dk (pbkdf2HmacSha256 r.password r.salt r.iterations r.dkLen),
+)
+
+test "Wycheproof PBKDF2-HMAC-SHA256: 60 rows" =
+  expectEach
+    (("row count == 60", expectEqual 60 (length wycheproofRows))
+      :: map kdfRowExpectation wycheproofRows)

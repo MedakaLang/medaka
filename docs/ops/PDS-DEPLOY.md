@@ -106,17 +106,44 @@ never sets it against anything but Caddy on the same box.
    ```
 
 5. **Genesis run**, on the loopback default, to create the repository and
-   bootstrap the credential (`--init`, `--password-file`):
+   bootstrap the credential (`--init`, `--password-file`). Run it **as the
+   service account**, same as step 3's `keygen` — a root-run genesis leaves
+   `data/`'s contents `root`-owned, which the `pds` user cannot read any
+   better than the wrong-owner signing key step 1 warns about:
 
    ```sh
-   ./pdsd --did <did> --handle <handle> --hostname <hostname> \
+   runuser -u pds -- sh -c 'umask 077 && exec /opt/pds/current/pdsd \
+     --did <did> --handle <handle> --hostname <hostname> \
      --key secrets/key.hex --token-secret secrets/token.hex \
-     --password-file secrets/password --data data --port 8080 --init
+     --password-file secrets/password --data data --port 8080 --init'
    ```
 
    Stop it once it reports readiness (`serve: listening on 127.0.0.1:8080`).
    Every subsequent run omits `--init` and `--password-file`: the data
    directory now holds both the repository and the credential.
+
+   `head`, `preferences`, everything under `events/**` (minus raw block/blob
+   bytes), and every `blobs/**/*.mime` sidecar are written at mode `0600`
+   regardless of umask. `blocks/**` and `blobs/**/<digest>` (the raw block
+   and blob bytes, the paths with no `.mime` suffix) have no explicit-mode
+   write primitive yet and still follow whatever umask was active for this
+   process — matching `pds/pds.service`'s `UMask=0077`, which is why the
+   command above sets the same umask for a one-off run. **Only the top-level
+   `data/` itself is `0700` already, from step 1's `install -d ... -m 0700`.**
+   Every directory genesis creates beneath it — `.lock`, `.lock/gen.<n>`,
+   `blocks`, `blocks/.staging`, the block and blob shards, `events`,
+   `events/.staging`, `events/entries` — has no explicit-mode creation
+   primitive either and follows the same process umask as the raw bytes
+   files, so it is `0755` under a default `022` umask and `0700` only when
+   genesis runs under `umask 077`, exactly like the files above.
+
+   **Already ran genesis before adding the `umask 077` prefix above?** The
+   gap is closed retroactively with a one-time chmod over the data
+   directory, files and the directories genesis created both:
+
+   ```sh
+   find data -mindepth 1 -exec chmod go-rwx {} +
+   ```
 
 6. **Install the systemd unit** (`pds/pds.service`) — copy it to
    `/etc/systemd/system/pds.service`, replace its placeholders (paths,

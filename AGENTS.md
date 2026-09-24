@@ -111,13 +111,14 @@ arms are path globs, so a sibling derives its SUBJECT's gate set. Run one with
 
 `stdlib/` modules: `runtime.mdk` (extern catalog), `core.mdk` (**only auto-prelude**),
 `list`/`string`/`array`, `map`/`set` (ordered trees), `hash_map`/`hash_set` (mutable hash),
-`vector` (growable array), `json`, `byteparser`/`bytebuilder` (parser-combinator libraries
+`vector` (growable array), `json`, `crypto/` (`crypto.sha256`, `crypto.hmac` — the one nested
+namespace; a stdlib subdirectory's modules import dotted), `byteparser`/`bytebuilder` (parser-combinator libraries
 for hand-rolled binary/text parsing and building — `parsec` is a separate, more general
 parser-combinator project under its own manifest, not part of `stdlib/`), `io.mdk` (ergonomic
 layer over `runtime.mdk` IO), `args` (one CLI argument parser — a verb's flag vocabulary is a
 VALUE that the `(known: …)` roster and the parser are unified renderings of;
 `docs/design/ARGS-DESIGN.md`). **For "does the stdlib have X" ask the generated reference,
-[`docs/stdlib/index.md`](docs/stdlib/index.md)** (`./medaka doc --out docs/stdlib stdlib/*.mdk`)
+[`docs/stdlib/index.md`](docs/stdlib/index.md)** (`./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk`)
 — name-by-name, regenerated from source, never hand-maintained. **Writing or
 editing a stdlib doc comment? The register is `stdlib/README.md` § "Writing
 documentation"** — what renders (marked blocks only), what a doc comment
@@ -961,5 +962,5 @@ reached for constantly.
 | `compiler/DIAGNOSTIC-CODES-DESIGN.md` | Diagnostic code taxonomy + `Diag` JSON contract |
 | `compiler/PERF-RESULTS.md` / `PERF-SCOPE.md` | Perf log / ranked hot paths (`test/bench.sh`) |
 | `compiler/STAGE2-DESIGN.md` / `RUNTIME-DESIGN.md` | Backend design: Core IR seam, value rep, GC, per-extern disposition |
-| `docs/stdlib/index.md` | **THE stdlib reference** — generated, name-by-name, per-module signatures/docs/impls for every `stdlib/*.mdk` (`./medaka doc --out docs/stdlib stdlib/*.mdk`). Answer "does the stdlib have X" here, not in `STDLIB.md`. |
+| `docs/stdlib/index.md` | **THE stdlib reference** — generated, name-by-name, per-module signatures/docs/impls for every `stdlib/*.mdk` (`./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk`). Answer "does the stdlib have X" here, not in `STDLIB.md`. |
 | `docs/stdlib/STDLIB.md` / `stdlib/README.md` | Stdlib design rationale, history, and open roadmap (demoted from reference — see `docs/stdlib/index.md`) / conventions for externs |

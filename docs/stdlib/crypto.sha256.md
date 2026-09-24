@@ -1,4 +1,4 @@
-# sha256
+# crypto.sha256
 
 SHA-256 hashing of a byte array (FIPS 180-4).
 
@@ -15,6 +15,20 @@ There is no incremental form. A message is hashed in one call.
 Under the interpreter (`medaka run`, `medaka test`), `sha256` overflows the
 stack on a message longer than about 25 kilobytes. `sha256FixedBytes` and
 native builds hash messages of a megabyte and more.
+
+## `sha256AssumeByteDomainFrom`
+
+```
+sha256AssumeByteDomainFrom : (Int, Int, Int, Int, Int, Int, Int, Int) -> Int -> Array Int -> Array Int
+sha256AssumeByteDomainFrom priorState priorBytes msg
+```
+
+## `sha256FoldKeyBlock`
+
+```
+sha256FoldKeyBlock : Array Int -> (Int, Int, Int, Int, Int, Int, Int, Int)
+sha256FoldKeyBlock block
+```
 
 ## `sha256FixedBytes`
 

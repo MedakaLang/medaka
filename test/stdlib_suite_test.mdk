@@ -172,11 +172,11 @@ suites = [
   -- of the two vehicles named in the header reaches it either.
   ("bytes", (87, EvalAndNative)),
   ("core", (123, Eval)),
+  ("crypto/hmac", (12, EvalAndNative)),
   ("fs", (8, NativeCapability)),
   ("hash_map", (24, EvalAndNative)),
   ("hash_set", (13, EvalAndNative)),
   ("hex", (23, EvalAndNative)),
-  ("hmac", (12, EvalAndNative)),
   -- The resource-limit examples. Neither of the two vehicles named in the
   -- header reaches this module, so without this row nothing would run them.
   ("http", (6, EvalAndNative)),
@@ -216,10 +216,9 @@ rosterNames = map fst suites
    is the outcome an unpinned `exempt` row would have let pass silently. -}
 zeroAssertionModules : List (String, Engine)
 zeroAssertionModules = [
+  ("crypto/sha256", Eval),
   ("net_async", Eval),
-  ("pbkdf2", Eval),
   ("runtime", Eval),
-  ("sha256", Eval),
 ]
 
 zeroAssertionNames : List String
@@ -364,6 +363,9 @@ test "stdlib/bytes.mdk executed >= 87 assertions" = floorExpectation "bytes"
 
 test "stdlib/core.mdk executed >= 123 assertions" = floorExpectation "core"
 
+test "stdlib/crypto/hmac.mdk executed >= 12 assertions" =
+  floorExpectation "crypto/hmac"
+
 test "stdlib/fs.mdk executed >= 8 assertions" = floorExpectation "fs"
 
 test "stdlib/hash_map.mdk executed >= 24 assertions" =
@@ -373,8 +375,6 @@ test "stdlib/hash_set.mdk executed >= 13 assertions" =
   floorExpectation "hash_set"
 
 test "stdlib/hex.mdk executed >= 23 assertions" = floorExpectation "hex"
-
-test "stdlib/hmac.mdk executed >= 12 assertions" = floorExpectation "hmac"
 
 test "stdlib/http.mdk executed >= 6 assertions" = floorExpectation "http"
 
@@ -436,13 +436,12 @@ zeroExpectation name = match lookup name zeroResults
         "0 assertions"
         "\{intToString ran} assertions"
 
+test "stdlib/crypto/sha256.mdk runs 0 assertions" =
+  zeroExpectation "crypto/sha256"
+
 test "stdlib/net_async.mdk runs 0 assertions" = zeroExpectation "net_async"
 
-test "stdlib/pbkdf2.mdk runs 0 assertions" = zeroExpectation "pbkdf2"
-
 test "stdlib/runtime.mdk runs 0 assertions" = zeroExpectation "runtime"
-
-test "stdlib/sha256.mdk runs 0 assertions" = zeroExpectation "sha256"
 
 -- # Non-vacuity
 
@@ -487,10 +486,17 @@ test "stdlib in-language suite ran at least one assertion" =
 moduleStem : String -> Option String
 moduleStem name = stripSuffix ".mdk" name
 
+-- Every `stdlib/` entry, with a subdirectory replaced by its own entries
+-- spelled `dir/name`, so `crypto/hmac.mdk` names the unit `crypto/hmac`.
 stdlibEntries : <FileRead "_", IO> Result String (List String)
 stdlibEntries = match listDir (underRoot "stdlib")
   Err e => Err "could not list stdlib: \{e}"
-  Ok names => Ok names
+  Ok names => Ok (flatMap subdirEntriesOrSelf names)
+
+subdirEntriesOrSelf : String -> <FileRead "_", IO> List String
+subdirEntriesOrSelf name = match listDir (underRoot "stdlib/\{name}")
+  Ok inner => map (n => "\{name}/\{n}") inner
+  Err _ => [name]
 
 unrosteredModules : <FileRead "_", IO> Result String (List String)
 unrosteredModules =

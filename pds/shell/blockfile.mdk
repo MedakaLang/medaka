@@ -22,16 +22,15 @@
    same name.
 
    A DIRECTORY this module creates is barriered the same way, into the
-   directory `mkdirAll` wrote its dentry into: a shard whose own entry a crash
-   loses takes every block beneath it, however durable those blocks' bytes
-   and their entries already are. Only a creation owes that barrier — a
-   directory already on disk wrote no dentry — so a shard costs one fsync
-   once in the life of the store rather than one per block, and a write over
-   shards that all exist pays nothing for this at all. Both directories
-   beneath `dir` are covered by it, the shards and `.staging` alike. What is
-   NOT covered here is `dir`'s own dentry, which sits in the data directory
-   above and is `pds/shell/persist.mdk`'s: `persistSave` barriers that
-   directory after `blockFileWrite` returns, and the order is why `dir` is
+   directory its dentry was written into (`stdlib/fs`'s `mkdirAllDurably`): a
+   shard whose own entry a crash loses takes every block beneath it, however
+   durable those blocks' bytes and their entries already are. Only a creation
+   owes that barrier — a directory already on disk wrote no dentry — so a
+   shard costs one fsync once in the life of the store rather than one per
+   block, and a write over shards that all exist pays nothing for this at
+   all. Every directory this module creates is covered by it: the shards,
+   `.staging`, and `dir` itself, whose dentry is barriered into the data
+   directory above when `.staging` is first created beneath it, so `dir` is
    durable before any block promoted into it is claimed to be.
 
    Nothing here trusts the disk. Bytes read back are returned as raw rows for
@@ -70,7 +69,7 @@
 
 import hex.{decode, encode}
 import string.{take}
-import fs.{isDir, mkdirAll}
+import fs.{isDir, mkdirAllDurably}
 import lib.cid.{Cid, cidDigest, cidFromBytes, cidToBytes}
 
 -- Temporary writes are promoted out of this directory, which is therefore the
@@ -93,14 +92,11 @@ blockFilePath dir cid = "\{blockShardDir dir cid}/\{cidKey cid}"
 -- created barriered into `dir`. See the header's paragraph on directory
 -- barriers for why only a creation owes one.
 ensureShard : String -> Cid -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureShard dir cid =
-  let shard = blockShardDir dir cid
-  if fileExists shard then
-    Ok ()
-  else do
-    () <- mkdirAll shard
-    fsync dir
+ensureShard dir cid = mkdirAllDurably (blockShardDir dir cid)
 
+-- Not `fs.replaceDurably`: `writeFileBytes` has no mode-setting counterpart,
+-- so a block's bytes stay at whatever mode the process umask gives them
+-- (0600 only under `pds.service`'s `UMask=0077`; see `PDS-DEPLOY.md` step 5).
 writeOne : String ->
   Cid ->
   Array Int ->
@@ -135,17 +131,11 @@ fsyncShards (shard :: rest) = match fsync shard
   Err message => Err message
   Ok () => fsyncShards rest
 
--- `.staging` and, on a store that has none yet, `dir` itself. The dentry for
--- `.staging` goes into `dir` and is barriered here; the one for `dir` goes
--- into the data directory above and is `persistSave`'s, per the header.
+-- `.staging` and, on a store that has none yet, `dir` itself, each dentry
+-- barriered into its own parent: `.staging`'s into `dir`, and `dir`'s into
+-- the data directory above.
 ensureStaging : String -> <FileRead "_", FileWrite "_"> Result String Unit
-ensureStaging dir =
-  let staging = "\{dir}/\{stagingName}"
-  if fileExists staging then
-    Ok ()
-  else do
-    () <- mkdirAll staging
-    fsync dir
+ensureStaging dir = mkdirAllDurably "\{dir}/\{stagingName}"
 
 {- | Write every row durably beneath `dir`. Writing a block that is already
    present is idempotent: a block's name is its content, so the promoted file

@@ -485,6 +485,14 @@ intHeader name value =
     "ratelimit: internal rate-limit header error"
     (makeHeader name (toUtf8 "\{value}"))
 
+-- | What a login refused because too many password derivations are already
+-- running is told. It is this server that is busy, not this identity over an
+-- allowance of its own, so no class is named.
+export
+derivationCeilingMessage : String
+derivationCeilingMessage =
+  "too many password derivations are in flight on this server"
+
 -- `RateLimit-Reset` needs no state, only `now` and the shared window length:
 -- every class resets on the same window boundary.
 export
@@ -501,6 +509,18 @@ rateLimitHeaderList state identity cls nowSeconds = [
   intHeader
     "ratelimit-reset"
     (rateLimitWindowSeconds - nowSeconds % rateLimitWindowSeconds),
+]
+
+-- | Headers for a derivation-ceiling refusal: `ratelimit-limit` names the
+-- concurrency ceiling, `ratelimit-remaining` is `0`, and `ratelimit-reset` is
+-- one second, because a slot comes back when a running login finishes, not at
+-- a window boundary.
+export
+derivationCeilingHeaderList : Int -> List Header
+derivationCeilingHeaderList ceiling = [
+  intHeader "ratelimit-limit" ceiling,
+  intHeader "ratelimit-remaining" 0,
+  intHeader "ratelimit-reset" 1,
 ]
 
 -- | Headers for a `RequestRefusedCapacity` refusal: `ratelimit-limit` names

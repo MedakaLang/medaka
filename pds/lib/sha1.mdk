@@ -8,7 +8,7 @@
    opening handshake's `Sec-WebSocket-Accept` as a SHA-1 of the client key
    concatenated with a fixed GUID. That use is a protocol constant, not a
    security claim — the digest authenticates nothing and keeps no secret.
-   Nothing else in this server may hash with it; `stdlib/sha256.mdk` is the
+   Nothing else in this server may hash with it; `stdlib/crypto/sha256.mdk` is the
    hash for every content-addressing and signing path.
 
    `sha1` panics when any element is outside `0` to `255`. Reducing such an
@@ -18,7 +18,7 @@
 
    There is no incremental form. A message is hashed in one call. -}
 
--- Arithmetic contract, identical to `stdlib/sha256.mdk`'s. Every word is an
+-- Arithmetic contract, identical to `stdlib/crypto/sha256.mdk`'s. Every word is an
 -- `Int` in [0, 2^32). `mask32 x = bitAnd x 4294967295`, and every `+`,
 -- `shiftLeft` and `bitNot` result is immediately followed by `mask32`.
 -- `shiftRight` needs no mask: it is logical/unsigned (`stdlib/runtime.mdk`)
@@ -84,7 +84,7 @@ roundF t b c d =
 
 -- In-bounds indexing via the safe `Array.get`, panicking on a miss. Every
 -- call site below only ever indexes within a known length, so the `None`
--- arm is unreachable (same idiom as `stdlib/sha256.mdk`'s `byteAt`).
+-- arm is unreachable (same idiom as `stdlib/crypto/sha256.mdk`'s `byteAt`).
 byteAt : Array Int -> Int -> Int
 byteAt arr i = optionOrPanic "sha1: byteAt index out of bounds" (get i arr)
 

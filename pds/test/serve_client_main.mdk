@@ -18,7 +18,7 @@ import lib.credential.{
   makeCredential,
   saltBytes,
 }
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 import json.{Json(..), get, jArray, jObject, parse, stringify}
 import net.{Connection, close, connect, recv, sendAll, setTimeout}
 import regex.{Regex, find, mustCompile}
@@ -1994,9 +1994,203 @@ runProxyFlood port xff token service path count want =
   let () = ignoreResult (close conn)
   reportRateLimit "RLPROXY" want status headerText body
 
+-- # Login derivations off the store transition (#3372)
+
+-- | How long a case lets a login's derivation run before it sends the request
+-- whose latency it measures, so the measured request arrives mid-derivation.
+derivationHeadStart : Duration
+derivationHeadStart = millis 100
+
+-- | The server's `maxConcurrentDerivations` (`pds/shell/server.mdk`).
+derivationCeiling : Int
+derivationCeiling = 4
+
+-- | The server's `maxConcurrentDerivationsPerIdentity` (`pds/shell/server.mdk`, #3399).
+perIdentityDerivationCeiling : Int
+perIdentityDerivationCeiling = 2
+
+-- | One login request sent on a fresh connection, not yet answered.
+sendLogin : Int -> String -> String -> <Net "_"> Connection
+sendLogin port identifier password =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (postRequest "" createSessionPath (createSessionJson identifier password))
+  conn
+
+-- | `sendLogin`, carrying a forwarded-for identity instead of a bearer
+-- token — lets two logins be attributed to two different callers behind a
+-- trusted proxy (`kdf-flood-xff`).
+sendLoginXff : Int -> String -> String -> String -> <Net "_"> Connection
+sendLoginXff port xff identifier password =
+  let conn = mustConnect port
+  let () =
+    mustSend
+      conn
+      (postRequestXff
+        xff
+        ""
+        createSessionPath
+        (createSessionJson identifier password))
+  conn
+
+statusOnly : Result String (Int, Array Int, Array Int) -> Int
+statusOnly (Ok (status, _, _)) = status
+statusOnly (Err _) = 0
+
+-- | A `getRecord` for `rkey`, sent now: its status and how many seconds it
+-- took to be answered.
+timedGetRecord : Int ->
+  String ->
+  String ->
+  String ->
+  <Net "_", Clock> (Int, Float)
+timedGetRecord port did collection rkey =
+  let conn = mustConnect port
+  let t0 = monotonic ()
+  let () = mustSend conn (getRequest (getRecordPath did collection rkey))
+  let status = statusOnly (readResponse conn [||])
+  let elapsed = elapsedSince t0
+  let () = ignoreResult (close conn)
+  (status, elapsed)
+
+{- | An unrelated `getRecord` answered while a login's password derivation is
+   running, in a small fraction of the time the login takes.
+
+   The login presents a wrong password, so it pays for exactly one derivation
+   at the stored record's count and changes nothing. The read is sent once the
+   derivation has had `derivationHeadStart` to begin: a server that ran the
+   derivation inside its store transition answers the read only when the
+   derivation ends, so the read would take nearly as long as the login. -}
+runKdfYield : Int ->
+  String ->
+  String ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_", Clock> Unit
+runKdfYield port identifier password did collection rkey =
+  let t0 = monotonic ()
+  let login = sendLogin port identifier password
+  let () = sleep derivationHeadStart
+  let (readStatus, readSeconds) = timedGetRecord port did collection rkey
+  let loginStatus = statusOnly (readResponse login [||])
+  let loginSeconds = elapsedSince t0
+  let () = ignoreResult (close login)
+  report
+    "KDFYIELD"
+    (readStatus == 200
+      && loginStatus == 401
+      && loginSeconds >= 0.3
+      && readSeconds * 10.0 <= loginSeconds)
+    "getRecord \{intToString readStatus} in \{floatToString readSeconds}s during a login answered \{intToString loginStatus} in \{floatToString loginSeconds}s (bound: a tenth of the login, which must take at least 0.3s)"
+
+{- | Two logins with the right password against a credential derived at an
+   old count, sent together so that both are graded against that record.
+
+   Whichever verdict lands first re-derives the credential at today's count;
+   the other was computed against the record that replaced, so it is refused
+   rather than applied. Exactly one of the two is let in. -}
+runLoginRace : Int -> String -> String -> <IO, Net "_"> Unit
+runLoginRace port identifier password =
+  let first = sendLogin port identifier password
+  let second = sendLogin port identifier password
+  let firstResult = readResponse first [||]
+  let secondResult = readResponse second [||]
+  let () = ignoreResult (close first)
+  let () = ignoreResult (close second)
+  let results = [firstResult, secondResult]
+  report
+    "LOGINRACE"
+    (length (filter (r => statusOnly r == 200) results) == 1
+      && length (filter isAuthRefusal results) == 1)
+    "statuses \{intToString (statusOnly firstResult)} and \{intToString (statusOnly secondResult)} (wanted one 200 and one 401 AuthenticationRequired)"
+
+isAuthRefusal : Result String (Int, Array Int, Array Int) -> Bool
+isAuthRefusal (Ok (401, body, _)) =
+  contains "\"AuthenticationRequired\"" (fromUtf8 body)
+isAuthRefusal _ = False
+
+-- | Whether a response is the derivation ceiling's refusal: the rate-limit
+-- refusal's status and error code, with the ceiling's own message.
+isCeilingRefusal : Result String (Int, Array Int, Array Int) -> Bool
+isCeilingRefusal (Ok (429, body, _)) =
+  let text = fromUtf8 body
+  contains "\"RateLimitExceeded\"" text && contains "password derivations" text
+isCeilingRefusal _ = False
+
+{- | `count` wrong-password logins at once, past the derivation ceiling.
+
+   The first `derivationCeiling` derive and are refused 401; every one past
+   them is refused 429 at once, without deriving. While they run, an
+   unrelated `getRecord` is answered in a tenth of the time the flood takes. -}
+runKdfFlood : Int ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  String ->
+  <IO, Net "_", Clock> Unit
+runKdfFlood port identifier password count did collection rkey =
+  let t0 = monotonic ()
+  let logins = map (_ => sendLogin port identifier password) [1..=count]
+  let () = sleep derivationHeadStart
+  let (readStatus, readSeconds) = timedGetRecord port did collection rkey
+  let results = map (conn => readResponse conn [||]) logins
+  let floodSeconds = elapsedSince t0
+  let () = closeAll logins
+  let refused = length (filter isCeilingRefusal results)
+  let derived = length (filter isAuthRefusal results)
+  report
+    "KDFFLOOD"
+    (refused == count - derivationCeiling
+      && derived == derivationCeiling
+      && readStatus == 200
+      && readSeconds * 10.0 <= floodSeconds)
+    "\{intToString derived} logins derived and refused 401, \{intToString refused} refused 429 at the ceiling, getRecord \{intToString readStatus} in \{floatToString readSeconds}s of a \{floatToString floodSeconds}s flood"
+
+{- | `count` wrong-password logins flooded from one forwarded-for identity
+   (the attacker), with a legitimate login from a DIFFERENT identity (the
+   owner) sent while the flood is in flight (#3399).
+
+   The attacker's own flood is capped at `perIdentityDerivationCeiling`,
+   never the whole-server `derivationCeiling` — the rest are refused 429
+   without deriving. The owner's login, attributed to its own identity, is
+   never counted against the attacker's share, so it succeeds regardless of
+   how much of the attacker's own cap the flood has claimed. -}
+runKdfFloodOwnerLockout : Int ->
+  String ->
+  String ->
+  String ->
+  Int ->
+  String ->
+  String ->
+  <IO, Net "_", Clock> Unit
+runKdfFloodOwnerLockout port attackerXff identifier wrongPassword count ownerXff ownerPassword =
+  let logins =
+    map
+      (_ => sendLoginXff port attackerXff identifier wrongPassword)
+      [1..=count]
+  let () = sleep derivationHeadStart
+  let ownerLogin = sendLoginXff port ownerXff identifier ownerPassword
+  let ownerResult = readResponse ownerLogin [||]
+  let () = ignoreResult (close ownerLogin)
+  let results = map (conn => readResponse conn [||]) logins
+  let () = closeAll logins
+  let refused = length (filter isCeilingRefusal results)
+  let derived = length (filter isAuthRefusal results)
+  report
+    "KDFFLOODOWNERLOCKOUT"
+    (refused == count - perIdentityDerivationCeiling
+      && derived == perIdentityDerivationCeiling
+      && statusOnly ownerResult == 200)
+    "attacker: \{intToString derived} derived and refused 401, \{intToString refused} refused 429 at the per-identity ceiling; owner login answered \{intToString (statusOnly ownerResult)} (wanted 200)"
+
 usage : String
 usage =
-  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed> ..."
+  "usage: serve_client_main <query|health|pipeline|keepalive|chunked|endpoints|deep-record|malformed|overcap|idle|unframed-flood|body-stall-flood|slow-upload|resume|unauthorized|login|login-refused|refresh|refresh-grace-replay|logout|get-session|write|proxy-read|proxy-read-cors|proxy-fanout|proxy-overload|put-preferences-cors|preflight|cors-get|proxy-write|service-auth|rl-conn|rl-req|rl-write|rl-session|rl-repo|rl-proxy|rl-malformed|kdf-yield|kdf-flood|kdf-flood-xff|login-race> ..."
 
 main : <IO, Env, Net "_", Clock> Unit
 main = match args ()
@@ -2128,6 +2322,28 @@ main = match args ()
       shape
       (mustCount count)
       (mustStatus want)
+  ["kdf-yield", port, identifier, password, did, collection, rkey] =>
+    runKdfYield (mustPort port) identifier password did collection rkey
+  ["kdf-flood", port, identifier, password, count, did, collection, rkey] =>
+    runKdfFlood
+      (mustPort port)
+      identifier
+      password
+      (mustCount count)
+      did
+      collection
+      rkey
+  ["kdf-flood-xff", port, attackerXff, identifier, wrongPassword, count, ownerXff, ownerPassword] =>
+    runKdfFloodOwnerLockout
+      (mustPort port)
+      attackerXff
+      identifier
+      wrongPassword
+      (mustCount count)
+      ownerXff
+      ownerPassword
+  ["login-race", port, identifier, password] =>
+    runLoginRace (mustPort port) identifier password
   ["credential-at", count, password] =>
     runCredentialAt (mustCount count) password
   ["rl-session", port, xff, count, want, identifier, password] =>
