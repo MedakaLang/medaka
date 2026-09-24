@@ -28,6 +28,7 @@ GOLDIR="$ROOT/test/check_policy_fixtures"
 export MEDAKA_ROOT="$ROOT"
 
 pass=0; fail=0
+mdk_require_marker || fail=$((fail+1))
 
 # one_case <label> <file> <allow> <fn> <golden-stem>
 one_case() {
