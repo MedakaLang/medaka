@@ -69,7 +69,7 @@ import lib.credential.{
   loginCheckVerdict,
   saltBytes,
 }
-import hmac.{ctEq}
+import crypto.hmac.{ctEq}
 import lib.ratelimit.{
   ClientIdentity,
   RateLimitClass(..),

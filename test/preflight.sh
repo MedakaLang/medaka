@@ -1259,7 +1259,7 @@ while IFS= read -r f; do
                                    add 'diff_compiler_guide_render'
                                    add 'check_doc_links' ;;
     # S-reference-lands (#2249): docs/stdlib/*.md (+ index.md/inventory.json) is a
-    # GENERATED tree (`./medaka doc --out docs/stdlib stdlib/*.mdk`), not prose —
+    # GENERATED tree (`./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk`), not prose —
     # without this arm it falls through to the generic docs/*.md "nothing to run"
     # path and a hand-edit of a committed page would be invisible locally.
     # (stdlib/*.mdk itself already forces the FULL suite via the blast-radius arm

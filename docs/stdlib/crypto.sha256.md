@@ -1,4 +1,4 @@
-# sha256
+# crypto.sha256
 
 SHA-256 hashing of a byte array (FIPS 180-4).
 

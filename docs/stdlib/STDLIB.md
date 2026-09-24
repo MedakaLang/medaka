@@ -2,7 +2,7 @@
 
 > **Does the stdlib have X?** This is NOT the reference — see
 > [`docs/stdlib/index.md`](index.md) (generated from source via
-> `./medaka doc --out docs/stdlib stdlib/*.mdk`) for the actual, current
+> `./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk`) for the actual, current
 > function/type/impl list. This document is design rationale, history, and the
 > open roadmap.
 

@@ -63,7 +63,7 @@ import lib.store.{
 }
 import lib.tid.{Tid, tidParse, tidToString}
 import list.{reverse}
-import sha256.{sha256}
+import crypto.sha256.{sha256}
 import string.{contains, fromUtf8, toInt, toUtf8}
 
 mustBytes : Result String (Array Int) -> Array Int

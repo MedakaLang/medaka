@@ -67,7 +67,7 @@ Do NOT follow the old advice in stale comments/docs that says otherwise.
    — the ONLY register the published reference accepts (marked `{- | -}`
    blocks render, unmarked `--` comments never do; first sentence stands
    alone; no history, issue numbers, or implementation notes; no em-dashes).
-   Then `./medaka doc --out docs/stdlib stdlib/*.mdk` and commit the
+   Then `./medaka doc --out docs/stdlib stdlib/*.mdk stdlib/*/*.mdk` and commit the
    regenerated pages — `diff_compiler_doc_stdlib_reference.sh` reds on drift.
    Probes: `main = println …` (a zero-arg value, NOT `main () = …`).
 

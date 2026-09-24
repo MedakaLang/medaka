@@ -1,4 +1,4 @@
-# hmac
+# crypto.hmac
 
 HMAC-SHA-256 (RFC 2104) over byte arrays.
 

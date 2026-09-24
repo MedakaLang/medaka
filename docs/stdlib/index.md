@@ -325,6 +325,26 @@ The prelude: the types, interfaces, and functions every Medaka program can use w
 - [`RField`](core.md#rfield)
 - [`Generic`](core.md#generic)
 
+## [`crypto.hmac`](crypto.hmac.md)
+
+HMAC-SHA-256 (RFC 2104) over byte arrays.
+
+- [`ctEq`](crypto.hmac.md#cteq)
+- [`hmacSha256`](crypto.hmac.md#hmacsha256)
+- [`hmacSha256FixedBytes`](crypto.hmac.md#hmacsha256fixedbytes)
+- [`HmacSha256Key`](crypto.hmac.md#hmacsha256key)
+- [`hmacSha256Key`](crypto.hmac.md#hmacsha256key)
+- [`hmacSha256WithKey`](crypto.hmac.md#hmacsha256withkey)
+
+## [`crypto.sha256`](crypto.sha256.md)
+
+SHA-256 hashing of a byte array (FIPS 180-4).
+
+- [`sha256AssumeByteDomainFrom`](crypto.sha256.md#sha256assumebytedomainfrom)
+- [`sha256FoldKeyBlock`](crypto.sha256.md#sha256foldkeyblock)
+- [`sha256FixedBytes`](crypto.sha256.md#sha256fixedbytes)
+- [`sha256`](crypto.sha256.md#sha256)
+
 ## [`fs`](fs.md)
 
 Filesystem helpers built on the host file primitives.
@@ -384,17 +404,6 @@ Hexadecimal encoding and decoding of bytes.
 - [`decodeBytes`](hex.md#decodebytes)
 - [`decode`](hex.md#decode)
 - [`decodeString`](hex.md#decodestring)
-
-## [`hmac`](hmac.md)
-
-HMAC-SHA-256 (RFC 2104) over byte arrays.
-
-- [`ctEq`](hmac.md#cteq)
-- [`hmacSha256`](hmac.md#hmacsha256)
-- [`hmacSha256FixedBytes`](hmac.md#hmacsha256fixedbytes)
-- [`HmacSha256Key`](hmac.md#hmacsha256key)
-- [`hmacSha256Key`](hmac.md#hmacsha256key)
-- [`hmacSha256WithKey`](hmac.md#hmacsha256withkey)
 
 ## [`http`](http.md)
 
@@ -932,15 +941,6 @@ An immutable set of distinct elements, ordered by `Ord`.
 - [`difference`](set.md#difference)
 - [`isSubsetOf`](set.md#issubsetof)
 - [`wellFormed`](set.md#wellformed)
-
-## [`sha256`](sha256.md)
-
-SHA-256 hashing of a byte array (FIPS 180-4).
-
-- [`sha256AssumeByteDomainFrom`](sha256.md#sha256assumebytedomainfrom)
-- [`sha256FoldKeyBlock`](sha256.md#sha256foldkeyblock)
-- [`sha256FixedBytes`](sha256.md#sha256fixedbytes)
-- [`sha256`](sha256.md#sha256)
 
 ## [`string`](string.md)
 

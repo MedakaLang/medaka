@@ -218,7 +218,14 @@ families = [
     stages = "desugar,mark",
     spec = "dir:stdlib",
     corpus = Dir "stdlib",
-    floor = 36,
+    floor = 35,
+  },
+  Family {
+    sub = "stdlib_crypto",
+    stages = "desugar,mark",
+    spec = "dir:stdlib/crypto",
+    corpus = Dir "stdlib/crypto",
+    floor = 2,
   },
   Family {
     sub = "prelude",

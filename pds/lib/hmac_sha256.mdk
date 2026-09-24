@@ -6,7 +6,7 @@
    97 bytes, so both SHA-256 block counts and all allocation sizes are fixed
    for each schedule site.
 
-   The schedule itself is `stdlib/hmac.mdk`'s. This module is the length
+   The schedule itself is `stdlib/crypto/hmac.mdk`'s. This module is the length
    guard, not a second implementation of it. -}
 
 -- The whole point of this declaration is that it shares `hmac.hmacSha256`'s
@@ -14,7 +14,7 @@
 -- version" is the one remedy that cannot apply here.
 -- lint-disable-file rule-stdlib-reimpl
 
-import hmac.{hmacSha256FixedBytes}
+import crypto.hmac.{hmacSha256FixedBytes}
 
 keyBytes : Int
 keyBytes = 32

@@ -50,10 +50,12 @@ import frontend.ast.{
 import types.repr.{Scheme(..), ppScheme}
 import frontend.resolve.{internalExterns}
 import support.util.{
-  joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc
+  joinWith, reverseL, escStr, stringTrim, splitNl, contains, lookupAssoc,
+  startsWith
 }
 import support.path.{baseOf, chopExt}
 import driver.diagnostics.{projectEntrySchemes}
+import driver.loader.{moduleIdOfPath}
 import frontend.desugar.{dataDerivers, newtypeDerivers}
 import json.{Json(..), jObject, jArray}
 import string.{toLower}
@@ -1319,6 +1321,20 @@ isInternalExtern : DocEntry -> Bool
 isInternalExtern (DocEntry name _ _ _ _ _) =
   elem name internalExterns || elem name docOnlyExcluded
 
+-- A page's name. A stdlib module is named by its import id, so
+-- `stdlib/crypto/hmac.mdk` is `crypto.hmac`; any other file keeps its
+-- basename. Both callers append the stdlib directory as the last root.
+docModuleName : List String -> String -> <FileRead "_"> String
+docModuleName roots filename = match reverseL roots
+  stdlibDir :: _ =>
+    let dir = canonicalizePath stdlibDir
+    let path = canonicalizePath filename
+    if startsWith (dir ++ "/") path then
+      moduleIdOfPath [dir] path
+    else
+      chopExt (baseOf filename)
+  [] => chopExt (baseOf filename)
+
 export
 computeModuleDoc : String ->
   String ->
@@ -1333,7 +1349,7 @@ computeModuleDoc runtimeSrc coreSrc src filename roots =
   let comments = collectComments src
   let schemes = docSchemesFor runtimeSrc coreSrc filename roots rawDecls
   let origins = originSchemeTable runtimeSrc coreSrc roots rawDecls
-  let moduleName = chopExt (baseOf filename)
+  let moduleName = docModuleName roots filename
   let tbl = buildCommentTbl comments
   let header = moduleHeaderFrom tbl
   let primitiveLayer = preludeOnlyModule moduleName

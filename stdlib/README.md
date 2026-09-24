@@ -6,9 +6,10 @@
 
 ## Writing documentation
 
-`medaka doc` renders `stdlib/*.mdk` into the published reference
-(`docs/stdlib/`, served at `medaka-lang.dev/stdlib`). The reference is
-generated from the source, so the doc comments *are* the documentation.
+`medaka doc` renders every stdlib module, `stdlib/crypto/` included, into
+the published reference (`docs/stdlib/`, served at `medaka-lang.dev/stdlib`).
+The reference is generated from the source, so the doc comments *are* the
+documentation.
 These rules say what a doc comment is, what goes in it, and how it should
 read.
 
