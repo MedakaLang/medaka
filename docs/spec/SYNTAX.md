@@ -155,7 +155,7 @@ readFile : String -> <IO> String  -- single effect label
 readFile _ = "stub"
 fetch : String -> <Clock, IO> String  -- multiple effect labels
 fetch _ = "stub"
-applyTo : (a -> <e> b) -> a -> b  -- effect variable
+applyTo : (a -> <e> b) -> a -> <e> b  -- effect variable, charged where g runs
 applyTo g v = g v
 run : (Unit -> <IO | e> a) -> <IO | e> a  -- open tail row
 run g = g ()

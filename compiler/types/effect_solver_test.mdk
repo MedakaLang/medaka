@@ -176,6 +176,40 @@ test "outward allowances transfer the connected bound component before solving" 
     expectEqual [] (tailIds local),
   ]
 
+test "an inner scope transfers a relation over an outer allowance to its owner" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let choice = openTail 11
+  let _ = registerValueAllowance solver (tailCell choice)
+  let _ = recordRelation solver False "value" pureRow choice
+  let _ = openSummaryScope solver 20 2
+  let _ = recordRelation solver False "closed-slot" choice pureRow
+  let inner = finish solver Tip
+  let before = tailIds choice
+  let outer = finish solver Tip
+  expectAll [
+    expectEqual 0 (length inner),
+    expectEqual [11] before,
+    expectEqual 0 (length outer),
+    expectEqual "" (rowLabels choice),
+    expectEqual [] (tailIds choice),
+  ]
+
+test "an inner scope transfers a relation over an outer signature root to its owner" =
+  let solver = newSolver ()
+  let _ = openSummaryScope solver 10 1
+  let root = openTail 11
+  let protected = M.set 11 () Tip
+  let _ = openSummaryScope solver 20 2
+  let _ = recordRelation solver False "closed-slot" root pureRow
+  let inner = finish solver protected
+  let outer = finish solver protected
+  expectAll [
+    expectEqual 0 (length inner),
+    expectEqual ["closed-slot"] (failureContexts outer),
+    expectEqual [11] (tailIds root),
+  ]
+
 test "a recursive result summary does not default a retained input" =
   let solver = newSolver ()
   let _ = openSummaryScope solver 40 1

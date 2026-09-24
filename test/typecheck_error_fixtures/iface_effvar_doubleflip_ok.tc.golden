@@ -1,1 +1,1 @@
-probe : a -> ((Unit -> Unit) -> Int) -> Int
+probe : a -> ((Unit -> <b> Unit) -> Int) -> Int

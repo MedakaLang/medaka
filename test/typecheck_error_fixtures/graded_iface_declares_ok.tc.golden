@@ -1,2 +1,2 @@
-chain : Async a b -> (b -> Async a c) -> Async a c
-gandThen : a b c -> (c -> a b d) -> a b d
+chain : Async a b -> (b -> <a> Async a c) -> Async a c
+gandThen : a b c -> (c -> <b> a b d) -> a b d

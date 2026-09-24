@@ -360,6 +360,21 @@ Arrow rendering now preserves row tails using the same naming context as forcing
 rows and type arguments. A printed closed row must not conceal an open allowance;
 the old labels-only arrow rendering obscured this distinction during review.
 
+### Stabilization checkpoint
+
+The continuation session reproduced every red gate of the first full CI run and
+found four defects, each with a general cause: a declared signature variable
+must never be defaulted (the former "shared by every generalizable member" bound
+assumed monomorphic recursion), an expansive sibling that fixes a declared
+universal is the universality guard's third violation form, the Prefix domain's
+empty prefix is canonically top so join and coverage agree, and a relation over
+a leaf a scope does not own transfers to its owner before local solving. An
+ambiguous import now yields a poisoned recovery scheme instead of an
+import-order winner, and poison propagates through variable binding. The
+remaining differences were rendering changes whose goldens were re-derived.
+The [session handoff](../docs/ops/EFFECTS-REARCHITECTURE-HANDOFF.md) records
+each with its evidence.
+
 ### Solver checkpoint verification
 
 Before produced-value joining was added, a fresh compiler passed both binding

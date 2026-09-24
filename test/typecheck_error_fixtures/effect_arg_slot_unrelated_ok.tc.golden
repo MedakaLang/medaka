@@ -4,5 +4,5 @@ idString : String -> String
 inspect : Slot a -> Int
 rewrap : Slot a -> Slot a
 sndOf : Pair a b -> b
-unbare : Bare a -> Unit -> Unit
+unbare : Bare a -> Unit -> <a> Unit
 widen : Slot a -> Slot a

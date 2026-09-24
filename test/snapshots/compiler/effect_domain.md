@@ -1,5 +1,5 @@
 # META
-source_lines=300
+source_lines=305
 stages=DESUGAR,MARK
 # SOURCE
 -- Concrete authority domains and canonical row atoms. Domain operations do not
@@ -25,11 +25,16 @@ export
 isHoleStr : String -> Bool
 isHoleStr s = s == effHoleSrc
 
+-- Canonical form of a parameter. The hole `_` and the empty prefix both denote
+-- the Prefix domain's top: `""` is a prefix of every path, so its join with any
+-- prefix is top and top must cover it. One representation keeps join, coverage,
+-- rendering and a solver's covered-atom skip in agreement; a producer that
+-- abstracts a value to `""` builds the top atom through this function.
 export
-normHole : Param -> Param
-normHole (PPrefix (Some s)) =
-  if isHoleStr s then PPrefix None else PPrefix (Some s)
-normHole p = p
+canonParam : Param -> Param
+canonParam (PPrefix (Some s)) =
+  if isHoleStr s || s == "" then PPrefix None else PPrefix (Some s)
+canonParam p = p
 
 public export data Atom = Atom String Param
 
@@ -56,7 +61,7 @@ lookupAxis name ((k, v) :: rest) =
 
 export
 djoin : Param -> Param -> Param
-djoin p1 p2 = djoinN (normHole p1) (normHole p2)
+djoin p1 p2 = djoinN (canonParam p1) (canonParam p2)
 
 export
 djoinN : Param -> Param -> Param
@@ -131,7 +136,7 @@ commonPrefixLen a b i =
 
 export
 drender : Param -> String
-drender p = drenderN (normHole p)
+drender p = drenderN (canonParam p)
 
 export
 drenderN : Param -> String
@@ -230,7 +235,7 @@ prefixConcrete s =
 
 export
 dsub : Param -> Param -> Bool
-dsub p1 p2 = dsubN (normHole p1) (normHole p2)
+dsub p1 p2 = dsubN (canonParam p1) (canonParam p2)
 
 export
 dsubN : Param -> Param -> Bool
@@ -310,9 +315,9 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DFunDef false "effHoleSrc" () (ELit (LString "_")))
 (DTypeSig true "isHoleStr" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isHoleStr" ((PVar "s")) (EBinOp "==" (EVar "s") (EVar "effHoleSrc")))
-(DTypeSig true "normHole" (TyFun (TyCon "Param") (TyCon "Param")))
-(DFunDef false "normHole" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EApp (EVar "isHoleStr") (EVar "s")) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
-(DFunDef false "normHole" ((PVar "p")) (EVar "p"))
+(DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
+(DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "||" (EApp (EVar "isHoleStr") (EVar "s")) (EBinOp "==" (EVar "s") (ELit (LString "")))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
+(DFunDef false "canonParam" ((PVar "p")) (EVar "p"))
 (DData Public "Atom" () ((variant "Atom" (ConPos (TyCon "String") (TyCon "Param")))) ())
 (DTypeSig true "atomLabel" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "atomLabel" ((PCon "Atom" (PVar "l") PWild)) (EVar "l"))
@@ -327,7 +332,7 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DFunDef false "lookupAxis" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAxis" ((PVar "name") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "k")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "rest"))))
 (DTypeSig true "djoin" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Param"))))
-(DFunDef false "djoin" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "djoinN") (EApp (EVar "normHole") (EVar "p1"))) (EApp (EVar "normHole") (EVar "p2"))))
+(DFunDef false "djoin" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "djoinN") (EApp (EVar "canonParam") (EVar "p1"))) (EApp (EVar "canonParam") (EVar "p2"))))
 (DTypeSig true "djoinN" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Param"))))
 (DFunDef false "djoinN" ((PCon "PUnit") (PCon "PUnit")) (EVar "PUnit"))
 (DFunDef false "djoinN" ((PCon "PPrefix" (PCon "None")) PWild) (EApp (EVar "PPrefix") (EVar "None")))
@@ -361,7 +366,7 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DTypeSig true "commonPrefixLen" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "commonPrefixLen" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "a"))) (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "b")))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "a")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (EApp (EApp (EApp (EVar "commonPrefixLen") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))
 (DTypeSig true "drender" (TyFun (TyCon "Param") (TyCon "String")))
-(DFunDef false "drender" ((PVar "p")) (EApp (EVar "drenderN") (EApp (EVar "normHole") (EVar "p"))))
+(DFunDef false "drender" ((PVar "p")) (EApp (EVar "drenderN") (EApp (EVar "canonParam") (EVar "p"))))
 (DTypeSig true "drenderN" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "drenderN" ((PCon "PUnit")) (ELit (LString "")))
 (DFunDef false "drenderN" ((PCon "PPrefix" (PCon "None"))) (ELit (LString "")))
@@ -411,7 +416,7 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DTypeSig true "prefixConcrete" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "prefixConcrete" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "*")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "dsub" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
-(DFunDef false "dsub" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "dsubN") (EApp (EVar "normHole") (EVar "p1"))) (EApp (EVar "normHole") (EVar "p2"))))
+(DFunDef false "dsub" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "dsubN") (EApp (EVar "canonParam") (EVar "p1"))) (EApp (EVar "canonParam") (EVar "p2"))))
 (DTypeSig true "dsubN" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
 (DFunDef false "dsubN" ((PCon "PUnit") (PCon "PUnit")) (EVar "True"))
 (DFunDef false "dsubN" (PWild (PCon "PPrefix" (PCon "None"))) (EVar "True"))
@@ -458,9 +463,9 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DFunDef false "effHoleSrc" () (ELit (LString "_")))
 (DTypeSig true "isHoleStr" (TyFun (TyCon "String") (TyCon "Bool")))
 (DFunDef false "isHoleStr" ((PVar "s")) (EBinOp "==" (EVar "s") (EVar "effHoleSrc")))
-(DTypeSig true "normHole" (TyFun (TyCon "Param") (TyCon "Param")))
-(DFunDef false "normHole" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EApp (EVar "isHoleStr") (EVar "s")) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
-(DFunDef false "normHole" ((PVar "p")) (EVar "p"))
+(DTypeSig true "canonParam" (TyFun (TyCon "Param") (TyCon "Param")))
+(DFunDef false "canonParam" ((PCon "PPrefix" (PCon "Some" (PVar "s")))) (EIf (EBinOp "||" (EApp (EVar "isHoleStr") (EVar "s")) (EBinOp "==" (EVar "s") (ELit (LString "")))) (EApp (EVar "PPrefix") (EVar "None")) (EApp (EVar "PPrefix") (EApp (EVar "Some") (EVar "s")))))
+(DFunDef false "canonParam" ((PVar "p")) (EVar "p"))
 (DData Public "Atom" () ((variant "Atom" (ConPos (TyCon "String") (TyCon "Param")))) ())
 (DTypeSig true "atomLabel" (TyFun (TyCon "Atom") (TyCon "String")))
 (DFunDef false "atomLabel" ((PCon "Atom" (PVar "l") PWild)) (EVar "l"))
@@ -475,7 +480,7 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DFunDef false "lookupAxis" (PWild (PList)) (EVar "None"))
 (DFunDef false "lookupAxis" ((PVar "name") (PCons (PTuple (PVar "k") (PVar "v")) (PVar "rest"))) (EIf (EBinOp "==" (EVar "name") (EVar "k")) (EApp (EVar "Some") (EVar "v")) (EApp (EApp (EVar "lookupAxis") (EVar "name")) (EVar "rest"))))
 (DTypeSig true "djoin" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Param"))))
-(DFunDef false "djoin" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "djoinN") (EApp (EVar "normHole") (EVar "p1"))) (EApp (EVar "normHole") (EVar "p2"))))
+(DFunDef false "djoin" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "djoinN") (EApp (EVar "canonParam") (EVar "p1"))) (EApp (EVar "canonParam") (EVar "p2"))))
 (DTypeSig true "djoinN" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Param"))))
 (DFunDef false "djoinN" ((PCon "PUnit") (PCon "PUnit")) (EVar "PUnit"))
 (DFunDef false "djoinN" ((PCon "PPrefix" (PCon "None")) PWild) (EApp (EVar "PPrefix") (EVar "None")))
@@ -509,7 +514,7 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DTypeSig true "commonPrefixLen" (TyFun (TyCon "String") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyCon "Int")))))
 (DFunDef false "commonPrefixLen" ((PVar "a") (PVar "b") (PVar "i")) (EIf (EBinOp "||" (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "a"))) (EBinOp ">=" (EVar "i") (EApp (EVar "stringLength") (EVar "b")))) (EVar "i") (EIf (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "a")) (EApp (EApp (EApp (EVar "stringSlice") (EVar "i")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "b"))) (EApp (EApp (EApp (EVar "commonPrefixLen") (EVar "a")) (EVar "b")) (EBinOp "+" (EVar "i") (ELit (LInt 1)))) (EVar "i"))))
 (DTypeSig true "drender" (TyFun (TyCon "Param") (TyCon "String")))
-(DFunDef false "drender" ((PVar "p")) (EApp (EVar "drenderN") (EApp (EVar "normHole") (EVar "p"))))
+(DFunDef false "drender" ((PVar "p")) (EApp (EVar "drenderN") (EApp (EVar "canonParam") (EVar "p"))))
 (DTypeSig true "drenderN" (TyFun (TyCon "Param") (TyCon "String")))
 (DFunDef false "drenderN" ((PCon "PUnit")) (ELit (LString "")))
 (DFunDef false "drenderN" ((PCon "PPrefix" (PCon "None"))) (ELit (LString "")))
@@ -559,7 +564,7 @@ findAtom l (y :: ys) = if l == atomLabel y then Some y else findAtom l ys
 (DTypeSig true "prefixConcrete" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "prefixConcrete" ((PVar "s")) (EBlock (DoLet false false (PVar "n") (EApp (EVar "stringLength") (EVar "s"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "n") (ELit (LInt 0))) (EBinOp "==" (EApp (EApp (EApp (EVar "stringSlice") (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "n")) (EVar "s")) (ELit (LString "*")))) (EApp (EApp (EApp (EVar "stringSlice") (ELit (LInt 0))) (EBinOp "-" (EVar "n") (ELit (LInt 1)))) (EVar "s")) (EVar "s")))))
 (DTypeSig true "dsub" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
-(DFunDef false "dsub" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "dsubN") (EApp (EVar "normHole") (EVar "p1"))) (EApp (EVar "normHole") (EVar "p2"))))
+(DFunDef false "dsub" ((PVar "p1") (PVar "p2")) (EApp (EApp (EVar "dsubN") (EApp (EVar "canonParam") (EVar "p1"))) (EApp (EVar "canonParam") (EVar "p2"))))
 (DTypeSig true "dsubN" (TyFun (TyCon "Param") (TyFun (TyCon "Param") (TyCon "Bool"))))
 (DFunDef false "dsubN" ((PCon "PUnit") (PCon "PUnit")) (EVar "True"))
 (DFunDef false "dsubN" (PWild (PCon "PPrefix" (PCon "None"))) (EVar "True"))

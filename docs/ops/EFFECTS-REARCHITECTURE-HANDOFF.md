@@ -1,17 +1,19 @@
 # Effects rearchitecture session handoff
 
-**Status:** INCOMPLETE — draft PR; not merge-ready. Handoff recorded 2026-09-24.
+**Status:** INCOMPLETE — draft PR; CI stabilized locally, authority work not started.
+Handoff first recorded 2026-09-24; continuation session the same day.
 
 ## Resume here
 
 Continue [PR #3393](https://github.com/MedakaLang/medaka/pull/3393), branch
-`effects-architecture-one-shot`. The source checkpoint is
-`552b7b7ce92b1da8e54b96088880742f10918054`; subsequent handoff edits are documentation
-only. Base is `c8d1ffe38`, already containing PR #3386. Do not enqueue the PR.
+`effects-architecture-one-shot`. The source checkpoint is the branch head; the
+continuation session below is its last commit. `main` is merged in as of
+`9d7fd98ac`. Do not enqueue the PR until a fresh CI run on the stabilized head
+is read to terminal and the named-authority work below has been decided.
 
 Read, in order:
 
-1. This handoff, especially the newly completed red CI results below.
+1. This handoff: the continuation section, then the decision record.
 2. [Effects architecture](../../compiler/EFFECTS-ARCHITECTURE.md): destination,
    delivered checkpoints, invariants, architectural precedents and references.
 3. [Effects semantics](../spec/EFFECTS-SEMANTICS.md): normative behavior.
@@ -19,92 +21,110 @@ Read, in order:
    [shadow semantics](../spec/SHADOW-SEMANTICS.md): shared ownership/publication.
 5. Repository and compiler agent instructions and the typechecker workstream.
 
-The user wants one coherent implementation, **not a sprint**. Keep most
-implementation in the main agent; delegate research, adversarial review or simple
-maintenance. Modular ownership, appropriate maps/sets, and principled treatment
-of edge cases matter. The final system must not admit effect laundering.
-Semantics corrections and prerequisite fixes, including backend/interpreter
-fixes when necessary, are authorized. Do not mistake these permissions for a
-request to expand into unrelated rearchitecture.
+The user wants one coherent implementation, **not a sprint**, and has said
+explicitly that the typechecker's strength must be a resilient architecture: no
+narrow exceptions, no one-off fixes. A run of carve-outs for edge cases is a
+signal that the representation or the judgment is wrong. Keep most implementation
+in the main agent; delegate research, adversarial review or simple maintenance.
+Semantics corrections and prerequisite fixes are authorized. The final system
+must not admit effect laundering.
 
-Suggested first task: reproduce the current CI failures with fresh local probes,
-separate real regressions from intentional output changes, and stabilize the
-solver/recursive carrier before implementing named authorities. Do not simply
-bless the failures or weaken universal checking to make consumers compile.
+## Continuation session: what the red CI was, and what it became
 
-## Latest CI: new, unresolved evidence
+Run 36033795210 had red on every gate shard, inlang, wasm and the must-fail
+step. Every failure was reproduced locally and classified. None was a reason to
+abandon the scoped architecture; four were defects, each with a general cause,
+and the rest were intentional rendering changes whose goldens had not been
+re-derived. What follows is the record, so the next session does not re-derive
+it.
 
-[Run 36033795210](https://github.com/MedakaLang/medaka/actions/runs/36033795210)
-completed **failure** for source head `552b7b7ce`. CI actually checked merge SHA
-`06c9b8230cda2614cce4980876988ceaff43fbc5`, combining that head with main
-`06dc46984a8d61a620582fe0c72aecd1fbd771cd`. Local receipts below concern the branch,
-not this merged tree. Check for concurrent-main integration effects as well as
-branch regressions. No fixes were attempted during this handoff-only turn.
+**Defects fixed (general rules, no carve-outs):**
 
-Passing jobs: soundness, build medaka once, seed-health, ci-gen-drift, gate-cost,
-gate-budget, gate-balance, docs-only detection. Here **soundness is not
-compiler-soundness**; the latter failed its must-fail step. All eight gate shards,
-inlang and wasm failed. These are not explained by the earlier, already-fixed
-retired-symbol documentation failure in run 36033245007.
+- *Signed mutual recursion published `Int -> Int` against a `Num a =>` signature,
+  silently.* The engine fixtures `numlit_recursive_*` and the CI value pins
+  caught it. The cause was on `main`: `sccProtectedSignatureIds` (commit
+  8d83c4414) protected a declared signature variable from Num defaulting only
+  when every SCC member shared it, a bound written for monomorphic recursion.
+  With signed members instantiating their contract afresh at every recursive
+  occurrence, no member shares the variable, so nothing was protected and the
+  too-general guard (which runs before defaulting) never saw the grounding.
+  Rule now: a declared signature variable is a caller-chosen universal and is
+  never defaulted, whatever the group's shape. `sharedGeneralizableSigIds` is
+  deleted. The previously rejected "erased sibling" shape
+  (`ping n = … consume (signed (n - 1))`) now accepts with correct runtime
+  evidence; `test/engine_fixtures/numlit_recursive_erased.mdk` pins it across
+  the three engines.
+- *The gap the old bound was papering over:* a zero-argument expansive sibling
+  (`ping = signed 1`) shares the signed member's declared variable; the group can
+  neither generalize it for the sibling nor default it for the signed member,
+  and it used to surface as a far-away type mismatch, or not at all. This is
+  the third form of the universality guard (`checkSigsFixedByExpansive`,
+  beside grounded and collapsed), reported at the signature.
+- *pds `rename` rejection:* the Prefix domain's empty prefix `""` joined to top
+  (`"" ⊔ "" = ⊤`) but did not cover top under `dsub`, so the solver's covered-atom
+  skip and the row flattener disagreed. `canonParam` (formerly `normHole`) makes
+  the hole and the empty prefix one canonical top; producers build atoms through
+  it. `effect_domain_test.mdk` pins the lattice law.
+- *sqlite `runGrouped` rejection:* a relation whose lower leaf was an allowance
+  owned by the *parent* scope was validated as final inside a child `let` scope.
+  `closeSummaryScope` now transfers every relation over a leaf this scope does
+  not own (`outerRelationLeaves`, whether the leaf is one of its own escaped
+  allowances or a variable the enclosing scope handed in), with its connected
+  component, before solving anything locally. `effect_solver_test.mdk` pins both
+  the allowance and the signature-root case; `effect_bindings_test.mdk` pins the
+  do-bound shape through inference.
+- *`check --json` cascade after an ambiguous import:* the branch's import
+  selection picked the first supplier of a bare name (main picked the last),
+  both by import order, so a name the resolver had already rejected as ambiguous
+  was typed against one definition and cascaded. Import rows now carry the id of
+  the import that binds the name (the resolver's own key, `importNamesIn`), a
+  name two suppliers bind gets a recovery scheme, and the fresh variable it
+  instantiates to is poisoned. Poison now propagates through variable binding
+  (`propagatePoison`), which is what makes an applied occurrence's result
+  variable quiet too. The alias pass's synthesized method admission is
+  recognised by its fingerprint (a second `DUse` of the same module at the
+  alias's own location) and never counts as a supplier.
+- *Diagnostic quality:* the new inclusion judgment had replaced several
+  site-specific laundering messages with one generic sentence. It now has one
+  message that names what escaped (concrete labels, or the caller's whole row)
+  and the two honest repairs (`effectInclusionMsg`). The legacy graded-index
+  check still fires beside it on one fixture; retiring legacy checks stays on
+  the list below.
+- *LSP hover doubled the forcing row* (`main : <IO> <IO> Unit`): the scheme
+  renderer now prints a binding's forcing row itself, so the hover-side
+  workaround that re-read the written leading effect is deleted.
 
-Highest-signal diagnostics, transcribed from the logs:
+**Intentional changes whose goldens were re-derived (each diff read):**
+function arrows render their open row tails (`(a -> <b> c)`), nullary bindings
+render a solved forcing row (`main : <IO> Unit`, no longer `<IO | a>` or
+`<a> Widget …`), written leading effects print as written. That moved the
+boot-typecheck goldens, LEG A and the LEG D probe golden, the typecheck-error
+corpus, the check-module `oracle.tcmod` files, the LSP completion dump, the
+error-quality corpus (line order only), the stdlib doc pages and the catch-all
+ledger (`sourceBindingArity`, a justified catch-all). Two check-module fixtures
+had dishonest signatures (`runIt : … -> Async b c -> c` running the argument's
+row) and now declare `-> <b> c`; the spec example `applyTo` in SYNTAX.md had the
+same shape and is corrected.
 
-- **Recursive numeric/evidence regressions:** engine fixtures
-  `numlit_recursive_controls`, `numlit_recursive_nonlead`, and
-  `numlit_recursive_predicates` fail. Native/Wasm report Float versus Int on
-  `mutualFloat = right 3` and `signedFloat = signedRelay 2`; the nonlead case
-  cannot deduce `Ix a` for `signedValue` from `signedRelay`. The controls value pin
-  expects `True|True|`, but eval returns `True|False|`; the nonlead value pin also
-  fails. This is not cosmetic type rendering. Preserve the absolute pins.
-- **SQLite consumer:** `sqlite/lib/select.mdk:2547`, binding `runGrouped`, call
-  `groupRows gb keyEvals kept`: cannot prove row inclusion `a <= <>` because a
-  caller-chosen row cannot be solved by the body. This recurs across SQLite and
-  Wasm jobs. Determine whether this is a dishonest signature or inference bug;
-  neither explanation has yet been established.
-- **PDS consumer:** `pds/shell/blockfile.mdk:109`,
-  `rename staged (blockFilePath dir cid)`: `<FileWrite>` used where
-  `<FileWrite "">` is allowed. Multiple PDS gates fail at this shared site.
-  Do not add an argument-position exception to the existing hole mechanism.
-- **Native typechecker tests:** `typecheck_test.mdk:913`, arithmetic diagnostic
-  test, expects only `T-NO-IMPL`, gets `T-TYPE-TOO-GENERAL` plus `T-NO-IMPL`.
-  Suite result 74/75. Decide the diagnostic contract before changing expectation.
-- **Must-fail drain:** #825 deferred-callback pin now rejects and its control
-  passes. Reproduce, retain a positive regression vehicle, then drain the old pin
-  and update the issue appropriately. The suite stopping here does not certify
-  the remaining pins. No issue was closed in this handoff.
-- **Maintenance or behavior changes needing classification:** bootstrap type
-  goldens, generated stdlib `list.md`/inventory, one new catch-all census site,
-  hidden-note/hover leading effect (`main : <IO> Unit`), diagnostic baselines,
-  formatter/check/syntax examples, selfprocessing typed-eval `tc_probe`, and
-  playground compiler builds. Do not assume all are harmless golden drift.
+**#825 drained.** The deferred-callback pin now rejects with the inclusion
+diagnostic and its eager control passes. The pin is re-pointed at
+`test/typecheck_error_fixtures/effect_deferred_callback_launder.mdk` and
+`effect_deferred_callback_eager_ok.mdk`; close #825 when the PR merges.
 
-Full failed gate roster (names are registry names, not thematic shard meanings):
-
-| Job | Failed gates |
-|---|---|
-| gates_1 | diff_compiler_engines |
-| gates_2 | bootstrap_typecheck, diff_compiler_catch_all_census, diff_compiler_doc_stdlib_reference |
-| gates_3 | diff_compiler_check_cli_modules, pds_test_mst_vectors, sqlite_test_inlang_test_oracle, sqlite_test_writer_oracle |
-| gates_4 | pds_test_inlang_test_oracle |
-| gates_5 | diff_compiler_lsp, pds_test_serve_e2e, pds_test_store_persistence, sqlite_test_overflow_oracle |
-| gates_6 | diff_compiler_check_json, diff_compiler_error_quality_baseline, diff_compiler_selfproc, lsp_harness, sqlite_test_index_write_oracle, sqlite_test_sql_oracle |
-| gates_7 | check_syntax_examples, diff_compiler_check, diff_compiler_fmt, pds_test_trust_boundary_guards |
-| gates_8 | sqlite_test_dml_oracle, sqlite_test_oracle |
-| wasm | Playground build/probes and SQLite native-build prerequisites fail; inspect full job log |
-
-Useful read-only commands:
-
-```sh
-gh pr view 3393 --json headRefOid,isDraft,state,statusCheckRollup
-gh run view 36033795210 --json jobs
-gh api repos/MedakaLang/medaka/actions/jobs/107750956702/logs
-gh issue list --state open --label known-red
-```
-
-The third command reads the engines shard. Get other job IDs from the second.
-`gh run view --log-failed` returned empty in this session; the job-log API worked.
-Known-red issues at handoff were #3404, #3351, #2794, #2485, #2440 and #2439;
-that roster does **not** establish that the failures above are pre-existing.
+**Verification on the stabilized head** (fresh binary, fresh oracles, this
+worktree): strict CLI closure check; every `compiler/**/*_test.mdk` sibling
+suite (19 files, `typecheck_test` 75/75, `effect_bindings_test` 75/75); the
+thirteen previously red gates (`diff_compiler_check_json`,
+`diff_compiler_error_quality_baseline`, `diff_compiler_check`,
+`diff_compiler_fmt`, `check_syntax_examples`, `diff_compiler_catch_all_census`,
+`diff_compiler_doc_stdlib_reference`, `bootstrap_typecheck`,
+`diff_compiler_check_cli_modules`, `diff_compiler_lsp`, `lsp_harness`,
+`diff_compiler_selfproc`, `diff_compiler_must_fail`) and `diff_compiler_engines`
+(660 fixtures, 0 regressions, 0 pin failures); `make snapshot-check`;
+`make docs-links`; `make agent-doc-symbols`; `sqlite/lib/select.mdk` and
+`pds/shell/blockfile.mdk` check clean. Not run locally: the full sqlite and pds
+gate families, the self-compile fixpoint, and preflight's full expansion. CI is
+the authority for those.
 
 ## Delivered code and invariants to preserve
 
@@ -172,7 +192,8 @@ claiming purity. Keep inference, signatures, docs and snapshots consistent.
 These are tracked by the draft PR and its architecture delivery checklist; this
 list is not a claim that an independent full-head review found nothing else.
 
-1. Current red CI and exact-head, whole-diff adversarial review.
+1. A fresh CI run on the stabilized head read to terminal, and an exact-head,
+   whole-diff adversarial review.
 2. Named authorities, qualified fields and constructor proof sources (#3385).
 3. Retire unchecked quoted underscore and first-argument hole filling: known
    laundering #3382/#3383 still exists. Keep legacy soundness checks until their

@@ -75,6 +75,7 @@ rewriteArgScoped	Expr	33/41
 rewriteBinopExpr	Expr	3/41
 rewriteRPDict	Expr	1/41
 shadowStandaloneHead	Expr	4/41
+sourceBindingArity	Expr	6/41
 spineFirstArg	Expr	3/41
 spineHeadIsApp	Expr	3/41
 stampTailDecl	Decl	1/14

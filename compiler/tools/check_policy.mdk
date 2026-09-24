@@ -1,5 +1,5 @@
 import types.effect_domain.{
-  normHole,
+  canonParam,
   atomLabel,
   atomParam,
   atomsUnion,
@@ -574,7 +574,7 @@ listIsEmpty _ = False
 atomToToml : Atom -> String
 atomToToml a =
   let label = atomLabel a
-  match normHole (atomParam a)
+  match canonParam (atomParam a)
     PPrefix (Some s) => "\{label} = \"\{s}\""
     PSet (Some xs) => "\{label} = [\{joinWith ", " (map quoteTok xs)}]"
     PProduct ax => "\{label} = { \{productTomlInline ax} }"  -- WS-4 inline table

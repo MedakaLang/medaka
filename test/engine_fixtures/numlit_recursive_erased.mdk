@@ -1,0 +1,22 @@
+consume : a -> Int
+consume _ = 1
+
+-- The unsigned sibling instantiates `signed`'s contract afresh, consumes the
+-- result at an erased type, and defaults its own copy to Int; `signed` keeps
+-- its declared universal.
+signed : Num a => Int -> a
+signed n = if ping n == 0 then fromInt n else fromInt (n + 1)
+-- Unsigned on purpose: the missing signature is the shape under test.
+-- lint-disable-next-line rule-missing-signature
+ping n = if n == 0 then 0 else consume (signed (n - 1))
+
+floating : Float
+floating = signed 2
+integer : Int
+integer = signed 2
+
+main =
+  println (floating == 3.0)
+  println (integer == 3)
+  println (ping 0 == 0)
+  println (ping 5 == 1)

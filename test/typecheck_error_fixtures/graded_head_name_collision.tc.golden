@@ -1,2 +1,2 @@
-ga : a b c -> (c -> a b d) -> a b d
-gb : a b c -> (b -> a b c) -> a b c
+ga : a b c -> (c -> <b> a b d) -> a b d
+gb : a b c -> (b -> <c> a b c) -> a b c

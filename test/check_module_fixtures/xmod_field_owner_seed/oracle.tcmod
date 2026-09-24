@@ -1,2 +1,2 @@
 getpx : Pt -> Int
-main : <IO | a> Unit
+main : <IO> Unit

@@ -15,6 +15,22 @@ test "prefix coverage is directed and respects the host boundary" = expectAll [
   expectFalse (dsub (PPrefix None) (PPrefix (Some "good.example/*"))),
 ]
 
+test "the empty prefix is the domain top under join, coverage and rendering" = expectAll
+  [
+    expectTrue (dsub (PPrefix None) (PPrefix (Some ""))),
+    expectTrue (dsub (PPrefix (Some "")) (PPrefix None)),
+    expectEqual
+      (drender (PPrefix None))
+      (drender (djoin (PPrefix (Some "")) (PPrefix (Some "")))),
+    expectEqual (drender (PPrefix None)) (drender (PPrefix (Some ""))),
+    expectEqual
+      "FileWrite"
+      (renderAtoms
+        (atomsUnion
+          [Atom "FileWrite" (PPrefix (Some ""))]
+          [Atom "FileWrite" (PPrefix (Some "/a"))])),
+  ]
+
 test "set coverage includes every possible authority" =
   let joined = djoin (PSet (Some ["HOME"])) (PSet (Some ["PATH"]))
   expectAll [

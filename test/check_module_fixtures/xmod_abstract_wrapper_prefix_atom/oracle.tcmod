@@ -1,4 +1,4 @@
-main : <IO | a> Unit
+main : <IO> Unit
 pureStash : UserSlot <>
 reader : Unit -> <FileRead "x/*"> Unit
-stash : (Unit -> <FileRead "x/*"> Unit) -> UserSlot a
+stash : (Unit -> <FileRead "x/*" | a> Unit) -> UserSlot a

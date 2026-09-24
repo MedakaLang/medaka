@@ -362,6 +362,46 @@ test "fresh reference construction can infer one shared callback allowance" =
             ++ "quiet : Unit -> Unit\nquiet _ = (readRef (choose True)) ()\n"))),
   ]
 
+test "a do-bound function passed to a closed slot inside a let is proved at its owner" =
+  let source =
+    "data Opt a = Nothing | Just a\n"
+      ++ "interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
+      ++ "impl Monad Opt where\n  andThen o k = match o\n    Just x => k x\n    Nothing => Nothing\n"
+      ++ "useFn : (Int -> Int) -> Int\nuseFn f = f 0\n"
+  expectAll [
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "run : Opt (Int -> Int) -> Opt Int\nrun o = do\n  f <- o\n  let out = useFn f\n  Just out\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "run : Opt (Int -> <Audit> Int) -> Opt Int\nrun o = do\n  f <- o\n  let out = useFn f\n  Just out\n"))),
+  ]
+
+test "repeated top-prefix writes inside a continuation stay within a bare contract" =
+  let source =
+    "data Res a = Ok a | Err String\n"
+      ++ "interface Monad m where\n  andThen : m a -> (a -> <e> m b) -> <e> m b\n"
+      ++ "impl Monad Res where\n  andThen r k = match r\n    Ok x => k x\n    Err e => Err e\n"
+      ++ "fsync : String -> <FileWrite \"_\"> Res Unit\nfsync _ = Ok ()\n"
+  expectAll [
+    expectEqual
+      []
+      (errorsFor
+        (source
+          ++ "w : String -> <FileWrite> Res Unit\nw d = do\n  _ <- Ok ()\n  _ <- fsync (\"\" ++ d ++ \"/x\")\n  fsync (\"\" ++ d ++ \"/y\")\n")),
+    expectTrue
+      (contains
+        "T-EFFECT-LEAK"
+        (errorsFor
+          (source
+            ++ "w : String -> <FileWrite \"/tmp\"> Res Unit\nw d = do\n  _ <- Ok ()\n  _ <- fsync (\"\" ++ d ++ \"/x\")\n  fsync (\"\" ++ d ++ \"/y\")\n"))),
+  ]
+
 errorsFor : String -> List String
 errorsFor source =
   let (errors, _) = checkOneDiags [] [] (

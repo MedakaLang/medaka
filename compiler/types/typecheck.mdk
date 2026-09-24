@@ -181,7 +181,7 @@ import types.repr.{
 import types.effect_domain.{
   effHoleSrc,
   isHoleStr,
-  normHole,
+  canonParam,
   atomLabel,
   atomParam,
   subTopOf,
@@ -605,7 +605,7 @@ atomOfWritten (l, Some pat) =
   if isHoleStr pat then
     Atom l (PPrefix (Some pat))
   else match dtopFor l
-    PPrefix None => Atom l (PPrefix (Some pat))
+    PPrefix None => Atom l (canonParam (PPrefix (Some pat)))
     PSet None => Atom l (PSet (Some (decodeSetParam pat)))
     PProduct _ => Atom l (decodeProductParam pat)
     _ => Atom l (dtopFor l)
@@ -891,8 +891,8 @@ holeFillParam : String -> List (String, Expr) -> Option Expr -> Param
 holeFillParam label lets (Some e) = match alpha lets e
   Known s => match dtopFor label
     PSet None => PSet (Some (sortUniqS [s]))
-    PPrefix None => PPrefix (Some s)
-    PProduct _ => productNorm [("Host", PPrefix (Some s))]
+    PPrefix None => canonParam (PPrefix (Some s))
+    PProduct _ => productNorm [("Host", canonParam (PPrefix (Some s)))]
     _ => dtopFor label
   Unknown => dtopFor label
 holeFillParam label _ None = dtopFor label
@@ -1008,15 +1008,47 @@ reportEffectSummaryFailures (failure :: rest) =
     else if isNonEmptyL escaping && isEmptyL upperCells then
       effectLeakCheck escaping upper
     else
-      let rows = ppEachShared (Ref []) (Ref 0) [
-        TEff failure.esfLower,
-        TEff failure.esfUpper,
-      ]
       pushTypeError
         "T-EFFECT-LAUNDER"
-        "Cannot prove effect row inclusion in binding '\{snd failure.esfContext}' (required, allowed): \{joinWith ", " rows}. A caller-chosen effect variable cannot be solved by the body."
+        (effectInclusionMsg
+          (snd failure.esfContext)
+          escaping
+          (ppEachShared (Ref []) (Ref 0) [
+            TEff failure.esfLower,
+            TEff failure.esfUpper,
+          ]))
   currentLoc := saved
   reportEffectSummaryFailures rest
+
+-- The directed judgment `required <= allowed` failed against an allowed row the
+-- body cannot solve: a signature's own row variable, or a row the caller
+-- supplies through an argument or callback. The message names what escaped
+-- (concrete labels, or the caller's whole row) and the two honest repairs,
+-- because the same judgment now covers what several site-specific checks used
+-- to explain separately. [required, allowed] are rendered with one shared
+-- variable-naming context so the two rows spell a shared tail the same way.
+effectInclusionMsg : String -> List Atom -> List String -> String
+effectInclusionMsg name escaping [required, allowed] =
+  if isNonEmptyL escaping then
+    let labels = renderAtoms escaping
+    "Binding '\{name}' performs <\{labels}>, but the row it must fit, \{rowText allowed}, is chosen by its caller: a caller may instantiate that row to <> and would then run <\{labels}> from a value typed pure. \{declareRemedy labels allowed}, or perform it only through an argument whose row the caller sees."
+  else
+    "Binding '\{name}' runs the effect row \{rowText required}, which its caller chooses (an argument's or a callback's row), but only \{rowText allowed} is allowed there: a caller may instantiate \{rowText required} to an effectful row and would then run it from a position typed \{rowText allowed}. Declare that row at the arrow that runs it (write `-> \{rowText required} …`), or defer the value instead of running it."
+effectInclusionMsg name _ rows =
+  "Cannot prove effect row inclusion in binding '\{name}': \{joinWith ", " rows}"
+
+-- A bare tail renders without brackets; the prose reads better with them.
+rowText : String -> String
+rowText s = if stringSlice 0 1 s == "<" then s else "<\{s}>"
+
+-- The repair, spelled against the row as the message rendered it: a bare tail
+-- gains the labels beside its variable; a row that already has labels gains one.
+declareRemedy : String -> String -> String
+declareRemedy labels allowed =
+  if stringSlice 0 1 allowed == "<" then
+    "Declare <\{labels}> among that row's labels"
+  else
+    "Declare <\{labels}> in that row (write `<\{labels} | \{allowed}>` where the signature writes `<\{allowed}>`)"
 
 -- The row walker is DAG-aware. Type trees are visited once per boundary; maps
 -- accumulate roots without quadratic duplicate elimination across a large SCC.
@@ -10585,7 +10617,23 @@ bindVar : Ref Tyvar -> Mono -> Unit
 bindVar cell t =
   perRun.value.occursCheckFailed := False
   let _ = occursAdjust (tyvarId cell) (tyvarLevel cell) t
-  if perRun.value.occursCheckFailed.value then () else cell := Link t
+  if perRun.value.occursCheckFailed.value then
+    ()
+  else
+    let _ = propagatePoison cell t
+    cell := Link t
+
+-- A poisoned variable is one an earlier diagnostic already explained; whatever
+-- it is bound to inherits that, so an obligation on a variable reached only
+-- through the poisoned one (the result of applying it, a field of its shape)
+-- is not reported as a second, unexplained error. The common case has nothing
+-- poisoned and costs one emptiness test.
+propagatePoison : Ref Tyvar -> Mono -> Unit
+propagatePoison cell t = match perRun.value.poisonedVars.value
+  [] => ()
+  poisoned =>
+    if containsI (tyvarId cell) poisoned then
+      perRun.value.poisonedVars := monoUnboundIds t ++ poisoned
 
 -- Chunk A: record the union-find roots of every free var on either side of a
 -- unification failure so a later obligation check can suppress a secondary
@@ -11028,7 +11076,17 @@ instantiate (Forall ids evars _ t) =
 
 freshSubst : List Int -> List (Int, Mono)
 freshSubst [] = []
-freshSubst (id :: rest) = (id, freshVar ()) :: freshSubst rest
+freshSubst (id :: rest) =
+  let v = freshVar ()
+  let _ = if id == ambiguousImportTyvarId then poisonMismatchVars v v
+  (id, v) :: freshSubst rest
+
+-- The one quantified id no allocation ever mints (`newTyvarId` counts up from
+-- zero). A scheme quantifying it is an error-recovery scheme for an ambiguous
+-- import: each occurrence instantiates to a fresh variable that is poisoned on
+-- arrival, so no secondary obligation diagnostic is raised on it.
+ambiguousImportTyvarId : Int
+ambiguousImportTyvarId = 0 - 1
 
 freshEffSubst : List Int -> List (Int, Ref Effvar)
 freshEffSubst [] = []
@@ -18804,6 +18862,11 @@ inferRecursiveValue env name expr =
   let _ = performEffect perRun.value.curEffect immediate
   owned.bsValue
 
+-- Source arity is the count of syntactic lambda parameters under the transparent
+-- wrappers; every other expression is a computation that yields its value when
+-- forced, so it has arity 0 even when that value turns out to be a function
+-- (a conditional between two lambdas is a thunk producing a closure). The
+-- catch-all is that rule, not a set of unhandled constructors.
 sourceBindingArity : Expr -> Int
 sourceBindingArity (ELoc _ expr) = sourceBindingArity expr
 sourceBindingArity (EDoOrigin _ expr) = sourceBindingArity expr
@@ -20961,8 +21024,8 @@ anyIn xs ys = anyList (x => containsI x ys) xs
 --
 -- `monoArgUnboundIds` protects inferred argument channels.  At a top-level SCC,
 -- `processSCC` separately protects declared variables, including result-only and nullary
--- variables. A recursive group retains only roots every member can generalize: the
--- current per-member schemes cannot publish a group's hidden constraint-only variables.
+-- variables; a signed member's recursive occurrences instantiate its contract afresh,
+-- so an unsigned sibling's copy of such a variable is the sibling's own to default.
 -- Lexical binding boundaries require exact level ownership; numeric
 -- expected-result propagation and deeper roots reaching the SCC fallback remain separate
 -- (#2646).
@@ -35168,7 +35231,7 @@ ffiCatalogTopNote missing =
 -- ⊤ in a PARAMETERISED domain (see `ffiCatalogTopNote`): `PUnit` is excluded on
 -- purpose — it is "no parameter", not "any value".
 atomParamIsTop : Atom -> Bool
-atomParamIsTop a = paramIsTopDomain (normHole (atomParam a))
+atomParamIsTop a = paramIsTopDomain (canonParam (atomParam a))
 
 paramIsTopDomain : Param -> Bool
 paramIsTopDomain (PPrefix None) = True
@@ -36294,17 +36357,16 @@ processSCC env sigs grouped0 members =
   perRun.value.rigidEffvarsRef := savedRigidEffects
   perRun.value.groupConstraintMonosRef := []
   let _ = checkSigsTooGeneral sigTvMaps
+  let _ = checkSigsFixedByExpansive env2 groupedStamped scopedMembers sigTvMaps
   let _ = registerConstraintRegs regs
   let _ = exitLevel ()
   -- PLAN.md #11 (locked §0.2): GROUP-LEVEL + per-binding Num defaulting.  Ground
   -- every ambiguous Num-only var to Int before this group generalizes.  A live var
-  -- carried by a declared signature stays caller-determined across both passes when
-  -- every recursive member can abstract it; an argument-reachable var also
-  -- stays polymorphic.  Body-only vars (`n = tag [1,2,3]`) still ground.  Scoped to
+  -- carried by a declared signature stays caller-determined across both passes;
+  -- an argument-reachable var also stays polymorphic.  Body-only vars (`n = tag [1,2,3]`) still ground.  Scoped to
   -- THIS group's newly-added obligations (prepended at the front) so an earlier
   -- group's already-generalized var is never touched.
-  let protectedSigIds =
-    sccProtectedSignatureIds env2 groupedStamped placeholders sigTvMaps
+  let protectedSigIds = sccProtectedSignatureIds sigTvMaps
   let addedObls = wWindow perRun.value.implObls oblN0
   -- #23: also ground an ambiguous Num var that reaches this group ONLY through a
   -- constrained-callee instantiation (its Num obligation lives on the call/dict deltas,
@@ -36570,49 +36632,19 @@ instantiateSigTracked ty =
 sigTvMapUnboundIds : (String, Ty, List (String, Mono)) -> List Int
 sigTvMapUnboundIds (_, _, tvs) = flatMap (p => monoUnboundIds (snd p)) tvs
 
--- The current recursive ABI abstracts each member's own Scheme. A protected root
--- must therefore survive every member's value restriction and generalization. Full
--- group-qualified schemes, including constraint-only quantifiers, need a separate
--- publication/caller contract; this boundary preserves the existing defaulting there.
-sccProtectedSignatureIds : TcEnv ->
-  OrdMap (List (List Pat, Expr)) ->
-  List (String, Mono) ->
-  List (String, Ty, List (String, Mono)) ->
-  OrdMap Unit
-sccProtectedSignatureIds env grouped members sigTvMaps =
-  let declared =
-    omFromNames (map intToString (flatMap sigTvMapUnboundIds sigTvMaps)) omEmpty
-  match members
-    [] => declared
-    [_] => declared
-    _ =>
-      sharedGeneralizableSigIds
-        env
-        grouped
-        perRun.value.currentLevel.value
-        members
-        (omKeys declared)
-
-sharedGeneralizableSigIds : TcEnv ->
-  OrdMap (List (List Pat, Expr)) ->
-  Int ->
-  List (String, Mono) ->
-  List String ->
-  OrdMap Unit
-sharedGeneralizableSigIds _ _ _ _ [] = omEmpty
-sharedGeneralizableSigIds _ _ _ [] ids = omFromNames ids omEmpty
-sharedGeneralizableSigIds env grouped level ((name, mono) :: rest) ids =
-  if allList (memberClauseIsValue env) (clausesOf name grouped) then
-    let available =
-      omFromNames (map intToString (freeGenVars level mono)) omEmpty
-    sharedGeneralizableSigIds
-      env
-      grouped
-      level
-      rest
-      (filterList (id => omHasKey id available) ids)
-  else
-    omEmpty
+-- A declared signature variable is a caller-chosen universal, so Num defaulting
+-- never grounds it, whatever the group's shape. Every recursive occurrence of a
+-- signed member instantiates its written contract afresh (`preunifySigsEx` installs
+-- the declared scheme as `smRecursive`), so a declared variable never appears in
+-- another member's type: an unsigned sibling's copy is its own inference variable
+-- and defaults or generalizes under the ordinary rules. The former "shared by every
+-- generalizable member" bound assumed monomorphic recursion, under which the
+-- declared variable and the sibling's copy were one cell; with fresh contracts that
+-- bound protected nothing, and both members of a signed mutual group defaulted to
+-- Int without any too-general diagnostic.
+sccProtectedSignatureIds : List (String, Ty, List (String, Mono)) -> OrdMap Unit
+sccProtectedSignatureIds sigTvMaps =
+  omFromNames (map intToString (flatMap sigTvMapUnboundIds sigTvMaps)) omEmpty
 
 -- 🚨 ONE ENTRY PER PREDICATE (S-dict-arity-contract, #1318/B-4) — the (iface, bare
 -- tyvar NAMES) pairs of a signature's `=>` constraints, ONE per constraint that has at
@@ -37257,6 +37289,66 @@ reportSigTooGeneral name ty (Some (id, v1, v2)) =
     None => pushTypeError "T-TYPE-TOO-GENERAL" (sigTooGeneralMsg name ty)
     Some (_, bname, iface, loc) =>
       pinnedLocalReport bname iface loc "the signature's '\{v1}' and '\{v2}'"
+
+-- The third way a declared variable stops being universal: a value-restricted
+-- sibling in the same group shares it.  `sccSchemes` keeps that sibling
+-- monomorphic (it is evaluated once, so it has one type), which fixes the signed
+-- member's declared variable to that one evaluation; the group can neither
+-- generalize the variable for the sibling nor default it for the signed member,
+-- and publishing the sibling with the variable free would let a later use pick
+-- the type after the shared value already ran.  Reported at the signature, like
+-- the grounded and collapsed forms, because the contract is what the body fails.
+-- A signed expansive member is `checkSigsOverExpansive`'s case and is skipped here.
+checkSigsFixedByExpansive : TcEnv ->
+  OrdMap (List (List Pat, Expr)) ->
+  List ScopedMember ->
+  List (String, Ty, List (String, Mono)) ->
+  Unit
+checkSigsFixedByExpansive env grouped members sigTvMaps =
+  let fixed =
+    flatMap
+      (member =>
+        if member.smSigned.value
+          || allList
+            (memberClauseIsValue env)
+            (clausesOf member.smName grouped) then
+          []
+        else
+          map (id => (id, member.smName)) (monoUnboundIds member.smMono))
+      members
+  match fixed
+    [] => ()
+    _ => checkSigsFixedBy fixed sigTvMaps
+
+checkSigsFixedBy : List (Int, String) ->
+  List (String, Ty, List (String, Mono)) ->
+  Unit
+checkSigsFixedBy _ [] = ()
+checkSigsFixedBy fixed ((name, ty, tvs) :: rest) =
+  let _ = match sigVarFixedBy fixed tvs
+    Some (vname, sibling) =>
+      pushTypeErrorOnceAt
+        "T-TYPE-TOO-GENERAL"
+        (firstTyLoc ty)
+        "Declared type variable '\{vname}' in '\{name}' must remain universal, but the zero-argument sibling '\{sibling}' shares it and is evaluated once. Give '\{sibling}' a parameter (write '\{sibling} x = … x') or declare its monomorphic type, or make '\{name}' work for every '\{vname}'."
+    None => ()
+  checkSigsFixedBy fixed rest
+
+sigVarFixedBy : List (Int, String) ->
+  List (String, Mono) ->
+  Option (String, String)
+sigVarFixedBy _ [] = None
+sigVarFixedBy fixed ((vname, mono) :: rest) = match normalize mono
+  TVar cell => match fixedSibling (tyvarId cell) fixed
+    Some sibling => Some (vname, sibling)
+    None => sigVarFixedBy fixed rest
+  _ => sigVarFixedBy fixed rest
+
+fixedSibling : Int -> List (Int, String) -> Option String
+fixedSibling _ [] = None
+fixedSibling id ((i, sibling) :: rest)
+  | i == id = Some sibling
+  | otherwise = fixedSibling id rest
 
 -- The declared tyvars that still normalize to a TVar, each paired with its declared
 -- NAME — `sigTvarIds`'s information plus the name the user wrote, which the pinned-local
@@ -41321,21 +41413,63 @@ publicModuleExports prog bindings =
     standalones
     (pickSchemes (publicValNames prog) bindings.mbSchemes)
 
-importedBindingWinners : List (String, ExportBinding) ->
+-- The first row for a name wins, unless a second import supplies the same name:
+-- then the occurrence is the ambiguity the resolver reports (`ambiguousSet`
+-- keys on the supplying import's module id exactly like this, and a local
+-- definition, which it exempts, shadows the seed here anyway). Choosing either
+-- supplier would type the use against a definition the program never named,
+-- and the cascade would change with the order the imports were written.
+importedBindingWinners : List (String, (Option String, ExportBinding)) ->
+  OrdMap Unit ->
   OrdMap Unit ->
   List (String, ExportBinding)
-importedBindingWinners [] _ = []
-importedBindingWinners ((entry@(name, _)) :: rest) seen =
+importedBindingWinners [] _ _ = []
+importedBindingWinners ((name, (_, binding)) :: rest) seen ambiguous =
   if omHasKey name seen then
-    importedBindingWinners rest seen
+    importedBindingWinners rest seen ambiguous
   else
-    entry :: importedBindingWinners rest (omInsert name () seen)
+    let chosen =
+      if omHasKey name ambiguous then ambiguousImportBinding () else binding
+    (name, chosen)
+      :: importedBindingWinners rest (omInsert name () seen) ambiguous
+
+ambiguousImports : List (String, (Option String, a)) -> OrdMap Unit
+ambiguousImports rows = ambiguousImportsGo rows omEmpty omEmpty
+
+ambiguousImportsGo : List (String, (Option String, a)) ->
+  OrdMap String ->
+  OrdMap Unit ->
+  OrdMap Unit
+ambiguousImportsGo [] _ acc = acc
+ambiguousImportsGo ((_, (None, _)) :: rest) firstMid acc =
+  ambiguousImportsGo rest firstMid acc
+ambiguousImportsGo ((name, (Some mid, _)) :: rest) firstMid acc =
+  match omLookup name firstMid
+    None => ambiguousImportsGo rest (omInsert name mid firstMid) acc
+    Some seen => ambiguousImportsGo rest firstMid (if seen == mid then
+      acc
+    else
+      omInsert name () acc)
+
+-- An ambiguous name types as a fresh, poisoned variable at every occurrence
+-- (`freshSubst` recognises the reserved quantifier), so the resolver's
+-- rejection stays the only diagnostic on the drivers that keep typechecking
+-- after a resolve error (`check --json`, the LSP).
+ambiguousImportBinding : Unit -> ExportBinding
+ambiguousImportBinding _ =
+  let cell =
+    Ref (Unbound ambiguousImportTyvarId perRun.value.currentLevel.value)
+  ExportBinding {
+    xbScheme = Forall [ambiguousImportTyvarId] [] pureRow (TVar cell),
+    xbStandalone = None,
+  }
 
 moduleImportSeed : List (String, Scheme) ->
-  List (String, ExportBinding) ->
+  List (String, (Option String, ExportBinding)) ->
   ModuleSeed
 moduleImportSeed base imported =
-  let selected = importedBindingWinners imported omEmpty
+  let selected =
+    importedBindingWinners imported omEmpty (ambiguousImports imported)
   ModuleSeed {
     msSchemes =
       base ++ map ((name, binding) => (name, binding.xbScheme)) selected,
@@ -42257,7 +42391,10 @@ renameAliasedMethodsIn methodsPerMid (mid, prog) =
 --   `import m as A`                  → keep it (its non-method values are still `A.f`)
 --                                      and ADD `import m.{…m's methods…}`, the origin
 --                                      name `resolveAliasMethodSpellings` resolves
---                                      `A.area` to once inference is done.
+--                                      `A.area` to once inference is done. The added
+--                                      decl sits right after the alias at the alias's
+--                                      own location: `importSeedGo` reads that pair as
+--                                      the synthesized admission it is.
 deAliasMethodImports : List (String, List String) -> Decl -> List Decl
 deAliasMethodImports mm (DAttrib attrs d) =
   map (DAttrib attrs) (deAliasMethodImports mm d)
@@ -42645,22 +42782,84 @@ andList (x :: rest) = "\{x}, \{andList rest}"
 -- spelling.  `resolve.mdk`'s `coreAliasNames` binds exactly the same two forms, and the
 -- two must agree: a key bound in scope with no scheme here is a `T-UNBOUND` at the use
 -- site, which is what #95 measured for six years.
+-- Each row carries the id of the import that BINDS its name: the resolver's
+-- ambiguity key (`ambiguousSet` over `importNamesIn`), so `moduleImportSeed` can
+-- refuse to pick a winner by import order for a name the resolver has already
+-- rejected. A row the form admits without binding its name (a bare method row
+-- admitted for dispatch, a mangled twin) carries no supplier, and core is exempt
+-- there as it is in the resolver.
 importSeed : List (String, a) ->
   List Decl ->
   List (String, List (String, a)) ->
-  List (String, a)
-importSeed _ [] _ = []
-importSeed coreV ((DAttrib _ d) :: rest) depEnv =
-  importSeed coreV [d] depEnv ++ importSeed coreV rest depEnv
-importSeed coreV ((DUse _ path _) :: rest) depEnv =
+  List (String, (Option String, a))
+importSeed coreV prog depEnv = importSeedGo coreV None prog depEnv
+
+-- [prev] is the module and location of the alias import walked just before, so
+-- the admission `deAliasMethodImports` appends beside it is recognised.
+importSeedGo : List (String, a) ->
+  Option (String, Loc) ->
+  List Decl ->
+  List (String, List (String, a)) ->
+  List (String, (Option String, a))
+importSeedGo _ _ [] _ = []
+importSeedGo coreV prev ((DAttrib _ d) :: rest) depEnv =
+  importSeedGo coreV prev (d :: rest) depEnv
+importSeedGo coreV prev ((DUse _ path loc) :: rest) depEnv =
   let depId = usePathModuleId path
+  let next = match path
+    UseAlias _ _ => Some (depId, loc)
+    _ => None
   if depId == "core" then
-    coreAliasSchemes path coreV ++ importSeed coreV rest depEnv
+    map (suppliedBy None) (coreAliasSchemes path coreV)
+      ++ importSeedGo coreV next rest depEnv
   else match lookupAssoc depId depEnv
-    None => importSeed coreV rest depEnv
+    None => importSeedGo coreV next rest depEnv
     Some depSchemes =>
-      importFormSchemes depEnv path depSchemes ++ importSeed coreV rest depEnv
-importSeed coreV (_ :: rest) depEnv = importSeed coreV rest depEnv
+      let bound =
+        if admittedBesideAlias prev depId loc then
+          Some omEmpty
+        else
+          boundNames path
+      map
+          (row =>
+            suppliedBy
+              (if bindsName bound (fst row) then Some depId else None)
+              row)
+          (importFormSchemes depEnv path depSchemes)
+        ++ importSeedGo coreV next rest depEnv
+importSeedGo coreV _ (_ :: rest) depEnv = importSeedGo coreV None rest depEnv
+
+suppliedBy : Option String -> (String, a) -> (String, (Option String, a))
+suppliedBy mid (name, row) = (name, (mid, row))
+
+-- `deAliasMethodImports` appends the method admission of `import m as A` as a
+-- second `DUse` of `m` at the alias's own location, immediately after it. Two
+-- written imports never share a location, so that pair identifies the
+-- synthesized one: it admits m's methods for dispatch under their origin names
+-- and binds nothing the resolver counted.
+admittedBesideAlias : Option (String, Loc) -> String -> Loc -> Bool
+admittedBesideAlias (Some (mid, aliasLoc)) depId loc =
+  mid == depId && sameLoc aliasLoc loc
+admittedBesideAlias None _ _ = False
+
+sameLoc : Loc -> Loc -> Bool
+sameLoc (Loc f1 a1 b1 c1 d1) (Loc f2 a2 b2 c2 d2) =
+  f1 == f2 && a1 == a2 && b1 == b2 && c1 == c2 && d1 == d2
+
+-- The names an import form binds, as the resolver counts them
+-- (`importedNamesMM`): a member list binds its locals, a single dotted name its
+-- last component, an alias nothing bare, and a wildcard (`None`) every name it
+-- reaches.
+boundNames : UsePath -> Option (OrdMap Unit)
+boundNames (UseGroup _ ms) = Some (omFromNames (map useMemberLocal ms) omEmpty)
+boundNames (UseName ns) =
+  Some (omFromNames (if listLen ns > 1 then [lastComponent ns] else []) omEmpty)
+boundNames (UseWild _) = None
+boundNames (UseAlias _ _) = Some omEmpty
+
+bindsName : Option (OrdMap Unit) -> String -> Bool
+bindsName None _ = True
+bindsName (Some names) name = omHasKey name names
 
 -- the schemes a `core` use-path binds under a spelling the prelude did not supply.
 coreAliasSchemes : UsePath -> List (String, a) -> List (String, a)

@@ -21,11 +21,16 @@ export
 isHoleStr : String -> Bool
 isHoleStr s = s == effHoleSrc
 
+-- Canonical form of a parameter. The hole `_` and the empty prefix both denote
+-- the Prefix domain's top: `""` is a prefix of every path, so its join with any
+-- prefix is top and top must cover it. One representation keeps join, coverage,
+-- rendering and a solver's covered-atom skip in agreement; a producer that
+-- abstracts a value to `""` builds the top atom through this function.
 export
-normHole : Param -> Param
-normHole (PPrefix (Some s)) =
-  if isHoleStr s then PPrefix None else PPrefix (Some s)
-normHole p = p
+canonParam : Param -> Param
+canonParam (PPrefix (Some s)) =
+  if isHoleStr s || s == "" then PPrefix None else PPrefix (Some s)
+canonParam p = p
 
 public export data Atom = Atom String Param
 
@@ -52,7 +57,7 @@ lookupAxis name ((k, v) :: rest) =
 
 export
 djoin : Param -> Param -> Param
-djoin p1 p2 = djoinN (normHole p1) (normHole p2)
+djoin p1 p2 = djoinN (canonParam p1) (canonParam p2)
 
 export
 djoinN : Param -> Param -> Param
@@ -127,7 +132,7 @@ commonPrefixLen a b i =
 
 export
 drender : Param -> String
-drender p = drenderN (normHole p)
+drender p = drenderN (canonParam p)
 
 export
 drenderN : Param -> String
@@ -226,7 +231,7 @@ prefixConcrete s =
 
 export
 dsub : Param -> Param -> Bool
-dsub p1 p2 = dsubN (normHole p1) (normHole p2)
+dsub p1 p2 = dsubN (canonParam p1) (canonParam p2)
 
 export
 dsubN : Param -> Param -> Bool

@@ -1,2 +1,2 @@
 gets : Local -> Int
-main : <IO | a> Unit
+main : <IO> Unit

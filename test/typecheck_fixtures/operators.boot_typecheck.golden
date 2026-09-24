@@ -10,8 +10,8 @@ orb : Bool -> Bool -> Bool
 derefp : Ref a -> a
 appx : a -> a -> a
 consx : a -> List a -> List a
-pipeIt : a -> (a -> b) -> b
-fwd : (a -> b) -> (b -> c) -> a -> c
-bwd : (a -> b) -> (c -> a) -> c -> b
-applyfn : (a -> b -> c) -> a -> b -> c
+pipeIt : a -> (a -> <b> c) -> <b> c
+fwd : (a -> <b> c) -> (c -> <d> e) -> a -> <b | d> e
+bwd : (a -> <b> c) -> (d -> <e> a) -> d -> <e | b> c
+applyfn : (a -> <b> c -> <d> e) -> a -> c -> <b | d> e
 total : Num a => L a -> a

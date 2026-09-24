@@ -481,7 +481,7 @@ closeSummaryScope solver protected retained borrowed escape makeJoin makeResidua
   let frozen = relationRoots
   let initialAllowances =
     snd (rowFlatMembers [] (M.values scope.essAllowances.value))
-  let outward = leafSet (filter (outwardAllowance scope) initialAllowances)
+  let outward = outerRelationLeaves scope untransferred
   let pending = transferAllowanceRelations solver frozen outward untransferred
   let _ = transferAllowances solver initialAllowances
   let retained2 = collapseInclusionCycles scope frozen retained pending
@@ -546,10 +546,42 @@ closeSummaryScope solver protected retained borrowed escape makeJoin makeResidua
     [] => panic "effect scope stack underflow"
   failures
 
-outwardAllowance : SummaryScope c -> Ref Effvar -> Bool
-outwardAllowance scope cell = match !cell
+-- A flexible leaf created before this scope opened, or at an enclosing level,
+-- belongs to an enclosing scope: an outer allowance, an outer instantiation
+-- choice or a signature root. This scope can neither solve it nor diagnose a
+-- relation over it.
+outerLeaf : SummaryScope c -> Ref Effvar -> Bool
+outerLeaf scope cell = match !cell
   EUnbound id level => level < scope.essLevel || id <= scope.essEffvarFloor
   _ => False
+
+-- Every outer flexible leaf reachable from a pending relation. A relation over
+-- such a leaf is the owner's to prove: it moves outward with its connected
+-- component before anything here is solved, whether the leaf is one of this
+-- scope's own escaped allowances or a variable the enclosing scope handed in.
+-- Validating it here would report an unprovable relation that the owner can
+-- still solve (an outer allowance bounded above by a closed slot takes that
+-- slot as its least solution), or default a choice that is not ours.
+outerRelationLeaves : SummaryScope c -> List (RowRelation c) -> Map Int Unit
+outerRelationLeaves scope relations =
+  fold
+    (acc rel =>
+      outerLeavesInto
+        scope
+        (snd (rowFlat rel.esrUpper))
+        (outerLeavesInto scope (snd (rowFlat rel.esrLower)) acc))
+    Tip
+    relations
+
+outerLeavesInto : SummaryScope c ->
+  List (Ref Effvar) ->
+  Map Int Unit ->
+  Map Int Unit
+outerLeavesInto _ [] acc = acc
+outerLeavesInto scope (cell :: rest) acc = outerLeavesInto
+  scope
+  rest
+  (if outerLeaf scope cell then M.set (effvarId cell) () acc else acc)
 
 -- Moving one obligation also moves its flexible endpoints. Follow the connected
 -- constraint component before solving anything locally, so a sibling bound on
