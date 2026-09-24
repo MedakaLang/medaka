@@ -156,8 +156,9 @@ claim nothing beyond that.
 - **Token and password comparisons have no binary-level check.** Nothing taints
   the session secret or the credential digest through `credentialVerify` and
   `jwt.verifySegments`. That extension was proposed in #3361's "Stretch, same
-  harness" section and not attempted. Those `ctEq` sites are checked at source
-  and IR level only.
+  harness" section and not attempted; tracked separately as
+  [#3392](https://github.com/MedakaLang/medaka/issues/3392). Those `ctEq`
+  sites are checked at source and IR level only.
 - **The comparison census reads source text.** It cannot tell that two
   textually different expressions evaluate to the same value. For example, two
   calls into a helper that always returns the same secret. Such a `ctEq`
