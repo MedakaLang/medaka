@@ -1,0 +1,38 @@
+{- | Native Wycheproof HMAC-SHA256 vector gate (S-hmac, #3362
+   S-more-answer-keys round 2), mirroring `pds/test/ecdsa_vectors_test.mdk`'s
+   shape: one corpus named outright, one native arm, `hmac_vectors_main.mdk`
+   grades it row by row and prints the totals this row checks for.
+
+   The corpus carries truncated-tag rows (`tagBits < 256`) alongside
+   full-width ones; `hmac_vectors_main.mdk`'s own doc comment states why
+   every row goes through `hmac.ctEq` against the tag truncated FIRST. -}
+
+import test.vector_runner.{
+  Arm(..), Bound(..), Corpus(..), Engine(..), Row(..), expectRow
+}
+import test.{Expectation}
+
+row : Row
+row = Row {
+  gate = "pds/test/hmac_vectors",
+  driver = "pds/test/hmac_vectors_main.mdk",
+  corpus = Explicit ["pds/test/vectors/wycheproof_hmac_sha256.txt"],
+  corpusCount = Exactly 1,
+  sourceShapes = [],
+  oracle = None,
+  arms = [
+    Arm {
+      engine = NativeEngine,
+      driverArgs = [],
+      countFloor = Some 174,
+      needs = [
+        "Wycheproof HMAC-SHA256: 174 unique tcIds; 87 truncated-tag rows checked via ctEq",
+      ],
+      lastLine = Some "TOTAL: PASS",
+    },
+  ],
+  parity = False,
+}
+
+test "HMAC-SHA256: 174 Wycheproof rows, truncated tags graded through ctEq" =
+  expectRow row

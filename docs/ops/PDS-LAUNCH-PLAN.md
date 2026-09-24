@@ -344,6 +344,10 @@ Caddy. The language runtime is C with the Boehm collector. The reference
 implementation was the oracle for every corpus, never a dependency. A reader
 who checks will find exactly that, which is the point.
 
+The cryptography's footnotes are
+[PDS-CRYPTO-CLAIMS.md](PDS-CRYPTO-CLAIMS.md): each claim beside the gate that
+checks it, and what is not claimed.
+
 ## 7. Out of scope for this plan
 
 OAuth (#2610). The web view (#2607). Multi-account. Email. Lexicon validation.

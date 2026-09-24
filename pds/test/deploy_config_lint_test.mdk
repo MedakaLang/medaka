@@ -106,6 +106,7 @@ serviceDirectives = [
   ("ProtectHome", "^ProtectHome="),
   ("PrivateDevices", "^PrivateDevices=true"),
   ("UMask", "^UMask="),
+  ("LimitCORE", "^LimitCORE=0$"),
   ("RequiresMountsFor", "^RequiresMountsFor="),
   ("OnFailure-alert", "^OnFailure=pds-alert@%n\\.service$"),
 ]

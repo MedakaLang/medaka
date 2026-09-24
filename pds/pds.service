@@ -63,6 +63,9 @@ ReadWritePaths=/opt/pds/data
 ReadOnlyPaths=/opt/pds/secrets
 CapabilityBoundingSet=
 UMask=0077
+# The heap holds the signing key and the session secret; a core dump would
+# write both to disk in the clear.
+LimitCORE=0
 IPAddressDeny=any
 IPAddressAllow=localhost
 MemoryMax=512M

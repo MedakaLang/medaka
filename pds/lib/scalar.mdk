@@ -79,7 +79,7 @@
                          limb has the same bound (unlike the field's 26/22
                          layout, no narrow limb can make a wider column
                          cheaper). So k = 15 is the unique peak.
-     plus its carry      `carryAll` runs a running carry < 2^36 / 2^16 =
+     plus its carry      the carry pass runs a running carry < 2^36 / 2^16 =
                          2^20, so column-plus-carry < 2^36 + 2^20 < 2^36.0001.
      fold column         `foldOnce` accumulates `h_i * c_j` with `c` only
                          NINE limbs wide, so at most 9 terms < 9 * 2^32 <
@@ -101,10 +101,12 @@
    chain: folding before carrying; and any
    "accumulate several products, reduce once" restructuring.
 
-   `carryAll` additionally PANICS if anything carries out of limb 31, which
-   would mean an internal arithmetic workspace held a value >= 2^512. A
-   CANONICAL product of two values < n is < 2^512, so no public path reaches
-   it. The guard remains a defense against an internal arithmetic regression.
+   A carry out of limb 31 would mean an internal arithmetic workspace held a
+   value >= 2^512. A CANONICAL product of two values < n is < 2^512, so no
+   public path produces one. `reduceFixed` therefore carries with
+   `carryAllUnchecked`, whose top-limb case is a no-op rather than a branch on
+   the secret carry. `carryAll` is its checked twin: it panics on such a carry,
+   and `pds/test/constant_time_reductions.sh` runs the two side by side.
 
    ── Bounds-checked array API, deliberately ───────────────────────────
    This module reads with `arr[i]` and writes with `Array.setInPlace` — the
@@ -206,9 +208,9 @@ scOne = Sc [|1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0|]
 
 -- Carry-propagate the whole 32-limb workspace IN PLACE, leaving every limb
 -- below 2^16. PANICS if anything carries out of limb 31: that would mean the
--- workspace held a value >= 2^512. No CANONICAL-input caller in this module
--- produces that (a product of two values < n is < 2^512). The guard is a live
--- defense against an internal arithmetic regression.
+-- workspace held a value >= 2^512 (module header). The reduction schedule
+-- runs the unchecked twin below instead; this checked pass is the reference
+-- the reductions gate compares that twin against.
 carryAll : Array Int -> Unit
 carryAll w = carryGo w 0 0
 
@@ -222,6 +224,26 @@ carryGo w i carry =
     let () = A.setInPlace i (bitAnd v limbMask) w
     carryGo w (i + 1) (shiftRight v 16)
 
+-- The same pass as `carryAll`, minus the top-limb check: the final carry is
+-- dropped without being inspected. Sound only under the < 2^512 workspace
+-- bound in the module header; the only remaining branch is the public limb
+-- index. On an admitted workspace (limb 31 zero, every other limb carrying)
+-- the two passes agree limb for limb:
+--
+-- > let a = arrayMake 32 0x1ffff in let b = arrayMake 32 0x1ffff in let _ = A.setInPlace 31 0 a in let _ = A.setInPlace 31 0 b in let _ = carryAll a in let _ = carryAllUnchecked b in a == b && a[31] == 2
+-- True
+carryAllUnchecked : Array Int -> Unit
+carryAllUnchecked w = carryGoUnchecked w 0 0
+
+carryGoUnchecked : Array Int -> Int -> Int -> Unit
+carryGoUnchecked w i carry =
+  if i >= nWide then
+    ()
+  else
+    let v = w[i] + carry
+    let () = A.setInPlace i (bitAnd v limbMask) w
+    carryGoUnchecked w (i + 1) (shiftRight v 16)
+
 -- One fold pass: `H * 2^256 + L` becomes `H * c + L`, IN PLACE, with the high
 -- half zeroed. Congruent mod `n` (because `2^256 = c (mod n)`) and STRICTLY
 -- smaller whenever `H > 0` (because `c < 2^256`) — that pair is the whole
@@ -229,7 +251,7 @@ carryGo w i carry =
 --
 -- The highest limb touched is `15 + 8 = 23`, inside the workspace. The
 -- accumulated column is < 2^35.171 (module header), well under the 2^62
--- ceiling; `carryAll` runs immediately after.
+-- ceiling; `carryAllUnchecked` runs immediately after.
 foldOnce : Array Int -> Unit
 foldOnce w =
   let h = arrayMake 16 0
@@ -267,15 +289,15 @@ foldAccumRow w h i j =
 -- below 2^512; the fourth fold executes even when the high half is already 0.
 reduceFixed : Array Int -> Unit
 reduceFixed w =
-  let () = carryAll w
+  let () = carryAllUnchecked w
   let () = foldOnce w
-  let () = carryAll w
+  let () = carryAllUnchecked w
   let () = foldOnce w
-  let () = carryAll w
+  let () = carryAllUnchecked w
   let () = foldOnce w
-  let () = carryAll w
+  let () = carryAllUnchecked w
   let () = foldOnce w
-  carryAll w
+  carryAllUnchecked w
 
 -- Is the workspace's low half >= n? Compared most-significant limb first.
 -- Precondition: limbs 16..31 are zero and limbs 0..15 are each < 2^16.
@@ -324,8 +346,8 @@ subNSelect w =
 -- returning a FRESH 16-limb array. The workspace is consumed (mutated), so
 -- every caller allocates its own.
 --
--- Precondition: every limb non-negative, and the value below 2^512 (see
--- `carryAll`, which panics otherwise).
+-- Precondition: every limb non-negative, and the value below 2^512 (module
+-- header: `carryAllUnchecked` drops a carry out of the top limb unchecked).
 --
 -- After `reduceFixed` the value is < 2^256, and `n > 2^255` gives
 -- `2^256 < 2n`, so one subtract-and-select lands in `[0, n)`.

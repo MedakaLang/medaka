@@ -346,6 +346,15 @@ because the age private key is in a password manager and never on the host
 (`PDS-DEPLOY.md` § "Scheduled encrypted backups"). Restore to a *new* box: the
 old one is evidence and is not trustworthy again without a rebuild.
 
+## 6b. Core dumps are disabled
+
+`pds.service` sets `LimitCORE=0`. The signing key and the session secret
+both live in the `pdsd` process heap for the life of the process (§6a), so a
+core dump on crash would write both to disk in the clear — a second, wholly
+separate way for those secrets to leak that has nothing to do with the
+"box is compromised" scenario above. `pds/test/deploy_config_lint_test.mdk`
+pins the directive; a settings change that drops it fails that gate.
+
 ## 7. The compiler-upgrade procedure
 
 This is separate from a PDS-code upgrade (redeploying `pds/serve.mdk` against

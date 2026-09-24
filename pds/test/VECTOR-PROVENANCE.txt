@@ -430,6 +430,18 @@ consumer:      S3-A-corpora (#1700 secp256k1 compact verification)
 notes:         242 unique tcIds; upstream 163 valid and 79 invalid; valid rows partition into 69 high-S and 94 low-S; project policy accepts 94 and rejects 148
 
 [vector]
+file:          pds/test/vectors/wycheproof_secp256k1_sha256_bitcoin.txt
+local-sha256:  f3f2e66499e00363f8cd22928a092f0e0b48bf301207886e294f83f7e3a52f6f
+kind:          published-artifact
+source:        Google Wycheproof v0.9 ecdsa_secp256k1_sha256_bitcoin_test.json
+source-url:    https://raw.githubusercontent.com/C2SP/wycheproof/cff6adf42662469a1871e57303a0ad1d758ed8c0/testvectors_v1/ecdsa_secp256k1_sha256_bitcoin_test.json
+source-sha256: 0a0b8066df1e1b6576f2e2da0b1241170e23a5beca7ed127647c48475235693a
+extraction:    pds/tools/gen_signing_corpus.sh verifies the artifact digest and tag commit, then pds/tools/normalize_wycheproof_signing.py's `bitcoin_rows` converts each row's strict-DER, in-range signature to 64-byte r||s (a hand-rolled minimal-ASN.1 walker, cross-checked against `cryptography.hazmat...decode_dss_signature`/`encode_dss_signature` round-tripping), then drops only rows whose exact (public key, message, r, s) already appears in the pinned P1363 corpus above
+retrieved:     2026-09-23
+consumer:      S3-A-corpora (#3362 crypto vectors: Bitcoin secp256k1)
+notes:         source has 463 rows; 181 are strict DER with r and s both in range ("convertible" — the rest are the deliberately malformed/BER/wrong-type/out-of-range rows this fixed-width corpus cannot represent). Of those 181, 107 are exact (public key, message, r, s) duplicates of a P1363 row and are dropped; the other 74 are kept here: 68 `valid`/`low`/`accept` and 6 `invalid`/`low`/`reject`. 69 of the 74 (the 68 accepts plus tcId 424, `invalid`/`PointDuplication`) share r with a P1363 row whose s is high and carry its low-S mirror `n - s`; P1363 never exercises those low-S values, because its high-S sibling is rejected by the low-S rule before the verify arithmetic runs. tcIds 98/99 (`invalid`/`ModifiedSignature`) share s with a P1363 row but have a different r; tcIds 140/141/142 (`invalid`/`ModifiedSignature`) match no P1363 row. #3362's body estimated 231 convertible / 77 new (68 valid-low + 9 invalid) from the Wycheproof flag vocabulary alone; this generator's own measurement of the pinned artifact — decoding every signature and cross-referencing against the actual P1363 corpus by exact value, not by flag or tcId — is 181/74, and that is what pds/tools/normalize_wycheproof_signing.py enforces as a hard guard
+
+[vector]
 file:          pds/test/vectors/dagcbor_cid_ipld_vectors.txt
 local-sha256:  fb2ade7dc8d534ee2a92f1a5d743c5b01aca083ccfd3029b27840f7c77259171
 kind:          published-artifact
@@ -821,3 +833,39 @@ extraction:    same single command as the pds_sync_event_bodies_corpus.txt row a
 retrieved:     2026-09-13
 consumer:      S-oracle-answer-keys (#3002 G-QUIET, #2937 first half)
 notes:         drives the exact @atproto/repo primitives getRecord.js/getBlocks.js call (repo.getRecords, repo.blocksToCarStream) over the same FOUR-record repo fixture as pds_sync_event_bodies_corpus.txt (one generator, one fixture, two outputs), plus a real @atproto/xrpc-server InvalidRequestError instance for the refusal shape -- STATUS/ERROR/MESSAGE are read off that instance, not transcribed from source. Six getRecord probes now, not two: one per MST layer (GETRECORD-PRESENT-D0..D3) plus two never-written keys at different positions in the key order (GETRECORD-ABSENT-BELOW/-MID). Each probe names the key it asked about in its own -PATH row, and FIXTURE-RECORD-PATHS/FIXTURE-RECORD-CBORS state the repository itself -- those are the only INPUT rows here; everything else is an answer. Confirms F7 directly: both ABSENT probes succeed (a proof of non-membership, not an error) for paths never written; GETBLOCKS-PRESENT-ROOTS is the literal empty list (getBlocks never sets a CAR root, unlike getRecord's single commit root); GETBLOCKS-PARTLY-MISSING is all-or-nothing -- one missing cid among three requested refuses the whole call (400 InvalidRequest) rather than answering a partial CAR, naming every missing cid. What these getRecord rows ARE is repo.getRecords' output, which reaches MST.cidsForPath -- the root-down descent path carrying the record CID inline -- and NOT getCoveringProof, a separate routine nothing on that call path reaches; a server answering with a covering proof answers a superset in a different order, so pds/test/repo_vectors.sh claims containment against these rows and set equality only on the probes where it measurably holds (#3007). This corpus does not exercise getRecord.js's separate no-root-at-all repo error, which is out of scope for the four required cases.
+
+[vector]
+file:          pds/test/vectors/SHA256Monte.rsp
+local-sha256:  29ea30c6bb4b84e425fb8c1d731c6bb852dac935825f2bd1143e5d3c4f10bfb9
+kind:          published-artifact
+source:        NIST CAVS SHS byte-oriented test vectors, SHA256Monte.rsp (from shabytetestvectors.zip)
+source-url:    https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/shs/shabytetestvectors.zip
+source-sha256: 929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8
+extraction:    unzip shabytetestvectors.zip; copy shabytetestvectors/SHA256Monte.rsp verbatim (CRLF preserved, no edits) — same archive already pinned above for SHA256ShortMsg.rsp/SHA256LongMsg.rsp, so no re-fetch or new source-url/source-sha256 was needed
+retrieved:     2026-09-23
+consumer:      S-sha256 (#1698 sha256 FIPS 180-4)
+notes:         SHAVS §6.4's Monte Carlo test — one Seed plus 100 COUNT/MD pairs, each MD the 1000th hash of a 3-digest rolling-window chain seeded from the previous COUNT's answer (100000 SHA-256 calls total across the file) — a fundamentally different shape from the flat Len/Msg/MD KAT records above, so pds/test/sha256_vector_driver.mdk parses and grades it separately (parseMonte/checkMonte) rather than forcing it through expandMsg.
+
+[vector]
+file:          pds/test/vectors/wycheproof_hmac_sha256.txt
+local-sha256:  152399e94bfc15b9772082c1a0635ca7ee3106a4a66ccd182036f4187368584f
+kind:          published-artifact
+source:        Wycheproof project, testvectors_v1/hmac_sha256_test.json, C2SP/wycheproof commit cff6adf42662469a1871e57303a0ad1d758ed8c0 (tag google-wycheproof/v0.9) — the same pinned commit already used for the ECDSA secp256k1 corpora above
+source-url:    https://raw.githubusercontent.com/C2SP/wycheproof/cff6adf42662469a1871e57303a0ad1d758ed8c0/testvectors_v1/hmac_sha256_test.json
+source-sha256: 1a86eeafc894491322137f4352608e4422670c906e18722e2892dde6ecaba688
+extraction:    pds/tools/gen_hmac_corpus.sh fetches the pinned JSON, verifies its digest, and calls pds/tools/normalize_wycheproof_hmac.py to flatten every testGroup's tests into one row per tcId: `wycheproof <tcId> <key-hex-or-> <msg-hex-or-> <tag-hex> <tagSize-bits> <result>`. `tagSize` carries the per-row truncation width — a `tagSize < 256` row is Wycheproof's own truncated-HMAC test, RFC 2104 truncation of the same 32-byte tag, not a different algorithm.
+retrieved:     2026-09-24
+consumer:      S-hmac (#3362 S-more-answer-keys round 2)
+notes:         174 source rows across 6 testGroups (keySize/tagSize pairs 256/256, 256/128, 128/256, 128/128, 520/256, 520/128); 66 valid, 108 invalid (ModifiedTag bit-flips of the given tag, at both the 256-bit and 128-bit truncated widths). pds/test/hmac_vectors_test.mdk grades every truncated-tag (`tagSize == 128`) row through `hmac.ctEq` against the tag TRUNCATED to 16 bytes first, never against the full 32-byte computed tag — comparing the full tag against a 16-byte given tag would fail every valid truncated row on length alone before a single byte is compared, which is the false negative this stanza's driver note exists to rule out.
+
+[vector]
+file:          pds/test/vectors/wycheproof_pbkdf2_hmac_sha256.txt
+local-sha256:  0ed4d398de038e9af86de8789faf23dea68ea5a2a4dc632d71eceedc4dd6805d
+kind:          published-artifact
+source:        Wycheproof project, testvectors_v1/pbkdf2_hmacsha256_test.json, C2SP/wycheproof commit cff6adf42662469a1871e57303a0ad1d758ed8c0 (tag google-wycheproof/v0.9) — the same pinned commit already used for the ECDSA secp256k1 and HMAC-SHA256 corpora above
+source-url:    https://raw.githubusercontent.com/C2SP/wycheproof/cff6adf42662469a1871e57303a0ad1d758ed8c0/testvectors_v1/pbkdf2_hmacsha256_test.json
+source-sha256: 716230dfb58e248ad57bc81c0fa54e88f629a7cef6a85f72c5dc71457c894f6a
+extraction:    pds/tools/gen_pbkdf2_corpus.sh fetches the pinned JSON, verifies its digest, and calls pds/tools/normalize_wycheproof_pbkdf2.py to flatten the single testGroup's 60 tests into one row per tcId: `wycheproof <tcId> <password-hex> <salt-hex> <iterationCount> <dkLen> <dk-hex> <result>`.
+retrieved:     2026-09-24
+consumer:      S-pbkdf2 (#3362 S-more-answer-keys round 2)
+notes:         60 rows, all `result: valid` (this Wycheproof file carries no adversarial/malformed rows, unlike its HMAC and ECDSA siblings) — iterationCount 4096 (58 rows), 1 and 80000 (1 row each, the latter two matching RFC 7914 §11's two vectors already hand-transcribed in pds/test/pbkdf2_test.mdk under a different, independently-published source). tcId 1 and 2 here reproduce those same two RFC 7914 vectors byte-for-byte, which is retained (not excluded) as cross-source corroboration rather than dropped as a duplicate — see this file's own header note.

@@ -32,6 +32,7 @@ SAMPLE="$ROOT/pds/test/constant_time_signing_main.mdk"
 FULL_DRIVER="$ROOT/pds/test/ecdsa_vectors_main.mdk"
 SIGNING="$ROOT/pds/test/vectors/prehashed_signing_corpus.txt"
 WYCHEPROOF="$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_p1363.txt"
+BITCOIN="$ROOT/pds/test/vectors/wycheproof_secp256k1_sha256_bitcoin.txt"
 WORK=$(mktemp -d "${TMPDIR:-/tmp}/pds-signing-parity.XXXXXX")
 cleanup() {
   if [ "${KEEP_WORK:-0}" = 1 ]; then printf 'kept work directory: %s\n' "$WORK" >&2; else rm -rf "$WORK"; fi
@@ -76,7 +77,7 @@ echo 'PASS: sampled native/Wasm signing values, complete candidate-1/exhaustion,
 # ── merge tier: the whole 322-row corpus, natively ────────────────────────────
 
 MEDAKA_STRICT=1 "$MEDAKA" build "$FULL_DRIVER" -o "$WORK/native-full" > "$WORK/native-full-build.log" 2>&1
-"$WORK/native-full" "$SIGNING" "$WYCHEPROOF" > "$WORK/native-full.out" 2>&1
+"$WORK/native-full" "$SIGNING" "$WYCHEPROOF" "$BITCOIN" > "$WORK/native-full.out" 2>&1
 grep -F -q 'PROBE candidate-1-selection: PASS computations=2' "$WORK/native-full.out"
 grep -F -q 'PROBE two-candidate-exhaustion: PASS computations=2' "$WORK/native-full.out"
 grep -F -q 'WITNESS high-S ' "$WORK/native-full.out"
@@ -86,7 +87,7 @@ grep -F -q 'WITNESS malformed ' "$WORK/native-full.out"
   echo 'FAIL: full native corpus did not end in TOTAL: PASS' >&2
   exit 1
 }
-echo 'PASS: full native ECDSA corpus — 80 signing and 242 verification rows'
+echo 'PASS: full native ECDSA corpus — 80 signing and 245 verification rows'
 
 # ── SIGNING_DEEP: the two interpreted arms, ~23 minutes ───────────────────────
 
@@ -104,7 +105,7 @@ echo 'PASS: sampled eval signing values agree with native'
 
 MEDAKA_WASM_EMITTER="$WASM_EMITTER" MEDAKA_STRICT=1 "$MEDAKA" build --target wasm "$FULL_DRIVER" -o "$WORK/full.wasm" > "$WORK/full-wasm-build.log" 2>&1
 set +e
-MDK_ARGS="$SIGNING $WYCHEPROOF" node "$ROOT/test/wasm/run.js" "$WORK/full.wasm" > "$WORK/full-wasm-raw.out" 2>&1
+MDK_ARGS="$SIGNING $WYCHEPROOF $BITCOIN" node "$ROOT/test/wasm/run.js" "$WORK/full.wasm" > "$WORK/full-wasm-raw.out" 2>&1
 full_wasm_status=$?
 set -e
 [ "$full_wasm_status" -eq 0 ] || {
@@ -125,4 +126,4 @@ cmp "$WORK/native-full.out" "$WORK/full-wasm.out" || {
   echo 'FAIL: full ECDSA corpus output differs between native and Wasm' >&2
   exit 1
 }
-echo 'PASS: full native/Wasm ECDSA corpus parity — 80 signing and 242 verification rows'
+echo 'PASS: full native/Wasm ECDSA corpus parity — 80 signing and 245 verification rows'

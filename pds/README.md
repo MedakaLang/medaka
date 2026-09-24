@@ -528,7 +528,9 @@ reachable by one.
 
 Every module in this section is pure `pds/lib/` code graded against an answer
 key nobody here wrote — see "Vector provenance" for the rule that makes that
-non-negotiable.
+non-negotiable. Each cryptographic claim, the gate that checks it, and what is
+not claimed are listed in
+[docs/ops/PDS-CRYPTO-CLAIMS.md](../docs/ops/PDS-CRYPTO-CLAIMS.md).
 
 ### Encodings
 

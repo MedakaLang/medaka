@@ -1,5 +1,6 @@
-{- | Native S3-C driver for the 80 exact prehashed signing rows and all 242
-   pinned Wycheproof P1363 verification rows. -}
+{- | Native S3-C driver for the 80 exact prehashed signing rows and all
+   Wycheproof verification rows: 242 P1363 plus the Bitcoin (strict-DER)
+   corpus's own new-only rows, run through the same verifier. -}
 
 import lib.scalar.{Sc, scFromBytes}
 import lib.secp256k1.{
@@ -331,103 +332,160 @@ recordMalformedWitness counts compact id =
       let () = bump counts 7
       println "WITNESS malformed tcId=\{id}: compact-parser=reject"
 
-runWycheproofRow : Array Int -> Array Int -> Int -> String -> <IO> Unit
-runWycheproofRow counts seen lineNo text = match split " " (trim text)
-  ["wycheproof", id, keyHex, messageHex, compactHex, _, _, shape, expected] =>
-    let idValue = tcId id
-    if idValue < 1 || idValue > 242 || seen[idValue] /= 0 then
+{- | One Wycheproof-shaped verification row, shared by the P1363 and Bitcoin
+   corpora: `maxId`/`acceptIdx`/`rejectIdx`/`uniqueIdx`/`publicIdx` let each
+   corpus keep its own tcId range and its own tallies while running through
+   the same verifier and the same high-S/malformed witness capture. -}
+runVerificationRow : Array Int ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  String ->
+  <IO> Unit
+runVerificationRow counts seen maxId acceptIdx rejectIdx uniqueIdx publicIdx lineNo text =
+  match split " " (trim text)
+    ["wycheproof", id, keyHex, messageHex, compactHex, _, _, shape, expected] =>
+      let idValue = tcId id
+      if idValue < 1 || idValue > maxId || seen[idValue] /= 0 then
+        let () = bump counts 4
+        println "FAIL Wycheproof tcId=\{id}: duplicate or out of range"
+      else
+        let () = A.setInPlace idValue 1 seen
+        let () = bump counts uniqueIdx
+        let compact = bytes compactHex
+        let digest = sha256 (bytes messageHex)
+        let uncompressed = bytes keyHex
+        match pointFromUncompressedForTest uncompressed
+          Err message =>
+            let () = bump counts 4
+            println "FAIL Wycheproof tcId=\{id}: invalid public key: \{message}"
+          Ok publicPoint =>
+            let actual = verifyCompact publicPoint digest compact
+            let publicActual = verifyPublicCompact uncompressed digest compact
+            let wanted = expected == "accept"
+            let () =
+              if shape == "high" then
+                let () = bump counts 8
+                recordHighWitness counts publicPoint digest compact id
+              else if shape == "malformed" then
+                let () = bump counts 9
+                recordMalformedWitness counts compact id
+            if actual == wanted then
+              if actual then bump counts acceptIdx else bump counts rejectIdx
+            else
+              let () = bump counts 4
+              let actualText = if actual then "true" else "false"
+              println
+                "FAIL Wycheproof tcId=\{id}: expected=\{expected} actual=\{actualText} shape=\{shape}"
+            if publicActual == wanted then
+              bump counts publicIdx
+            else
+              let () = bump counts 4
+              let actualText = if publicActual then "true" else "false"
+              println
+                "FAIL public Wycheproof tcId=\{id}: expected=\{expected} actual=\{actualText} shape=\{shape}"
+    _ =>
       let () = bump counts 4
-      println "FAIL Wycheproof tcId=\{id}: duplicate or out of range"
-    else
-      let () = A.setInPlace idValue 1 seen
-      let () = bump counts 5
-      let compact = bytes compactHex
-      let digest = sha256 (bytes messageHex)
-      let uncompressed = bytes keyHex
-      match pointFromUncompressedForTest uncompressed
-        Err message =>
-          let () = bump counts 4
-          println "FAIL Wycheproof tcId=\{id}: invalid public key: \{message}"
-        Ok publicPoint =>
-          let actual = verifyCompact publicPoint digest compact
-          let publicActual = verifyPublicCompact uncompressed digest compact
-          let wanted = expected == "accept"
-          let () =
-            if shape == "high" then
-              let () = bump counts 8
-              recordHighWitness counts publicPoint digest compact id
-            else if shape == "malformed" then
-              let () = bump counts 9
-              recordMalformedWitness counts compact id
-          if actual == wanted then
-            if actual then bump counts 3 else bump counts 10
-          else
-            let () = bump counts 4
-            let actualText = if actual then "true" else "false"
-            println
-              "FAIL Wycheproof tcId=\{id}: expected=\{expected} actual=\{actualText} shape=\{shape}"
-          if publicActual == wanted then
-            bump counts 13
-          else
-            let () = bump counts 4
-            let actualText = if publicActual then "true" else "false"
-            println
-              "FAIL public Wycheproof tcId=\{id}: expected=\{expected} actual=\{actualText} shape=\{shape}"
-  _ =>
-    let () = bump counts 4
-    println "FAIL Wycheproof line \{intToString lineNo}: malformed row"
+      println "FAIL Wycheproof line \{intToString lineNo}: malformed row"
 
-runWycheproofRows : Array Int -> Array Int -> List String -> Int -> <IO> Unit
-runWycheproofRows _ _ [] _ = ()
-runWycheproofRows counts seen (row :: rest) lineNo =
-  let () = runWycheproofRow counts seen lineNo row
-  runWycheproofRows counts seen rest (lineNo + 1)
+runVerificationRows : Array Int ->
+  Array Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  Int ->
+  List String ->
+  Int ->
+  <IO> Unit
+runVerificationRows _ _ _ _ _ _ _ [] _ = ()
+runVerificationRows counts seen maxId acceptIdx rejectIdx uniqueIdx publicIdx (row :: rest) lineNo =
+  let () =
+    runVerificationRow
+      counts
+      seen
+      maxId
+      acceptIdx
+      rejectIdx
+      uniqueIdx
+      publicIdx
+      lineNo
+      row
+  runVerificationRows
+    counts
+    seen
+    maxId
+    acceptIdx
+    rejectIdx
+    uniqueIdx
+    publicIdx
+    rest
+    (lineNo + 1)
 
 main : <IO, Env, FileRead "_"> Unit
 main = match args ()
-  [signingPath, wycheproofPath] => match readLines signingPath
+  [signingPath, wycheproofPath, bitcoinPath] => match readLines signingPath
     Err message => panic "ecdsa_vectors: cannot read signing corpus: \{message}"
     Ok signingRows => match readLines wycheproofPath
       Err message =>
         panic "ecdsa_vectors: cannot read Wycheproof corpus: \{message}"
-      Ok wycheproofRows =>
-        let counts = arrayMake 16 0
-        let seen = arrayMake 243 0
-        let () = runSigningRows counts signingRows 1
-        let () = runWycheproofRows counts seen wycheproofRows 1
-        let () = println "signing: \{intToString counts[0]}/80 exact rows ok"
-        let () =
-          println
-            "public signing: \{intToString counts[11]}/80 exact rows; self-verify=\{intToString counts[12]}/80"
-        let () =
-          println "exceptional probes: \{intToString counts[2]}/2 routes ok"
-        let () =
-          println
-            "Wycheproof: \{intToString counts[3]} accepts / \{intToString counts[10]} rejects; \{intToString counts[5]} unique tcIds"
-        let () =
-          println
-            "public verification: \{intToString counts[13]}/242 Wycheproof rows"
-        let () =
-          println
-            "Wycheproof classes: high-S=\{intToString counts[8]} malformed=\{intToString counts[9]} witnesses=\{intToString (counts[6] + counts[7])}/2"
-        if counts[0] == 80
-          && counts[1] == 0
-          && counts[2] == 2
-          && counts[3] == 94
-          && counts[10] == 148
-          && counts[4] == 0
-          && counts[5] == 242
-          && counts[6] == 1
-          && counts[7] == 1
-          && counts[11] == 80
-          && counts[12] == 80
-          && counts[13] == 242
-          && counts[14] == 1
-          && counts[15] == 1 then
-          println "TOTAL: PASS"
-        else
-          let () = println "TOTAL: FAIL"
-          exit 1
+      Ok wycheproofRows => match readLines bitcoinPath
+        Err message =>
+          panic
+            "ecdsa_vectors: cannot read Wycheproof Bitcoin corpus: \{message}"
+        Ok bitcoinRows =>
+          let counts = arrayMake 20 0
+          let seen = arrayMake 243 0
+          let bitcoinSeen = arrayMake 464 0
+          let () = runSigningRows counts signingRows 1
+          let () =
+            runVerificationRows counts seen 242 3 10 5 13 wycheproofRows 1
+          let () =
+            runVerificationRows counts bitcoinSeen 463 16 17 18 19 bitcoinRows 1
+          let () = println "signing: \{intToString counts[0]}/80 exact rows ok"
+          let () =
+            println
+              "public signing: \{intToString counts[11]}/80 exact rows; self-verify=\{intToString counts[12]}/80"
+          let () =
+            println "exceptional probes: \{intToString counts[2]}/2 routes ok"
+          let () =
+            println
+              "Wycheproof: \{intToString counts[3]} accepts / \{intToString counts[10]} rejects; \{intToString counts[5]} unique tcIds"
+          let () =
+            println
+              "public verification: \{intToString counts[13]}/242 Wycheproof rows"
+          let () =
+            println
+              "Wycheproof classes: high-S=\{intToString counts[8]} malformed=\{intToString counts[9]} witnesses=\{intToString (counts[6] + counts[7])}/2"
+          let () =
+            println
+              "Wycheproof Bitcoin: \{intToString counts[16]} accepts / \{intToString counts[17]} rejects; \{intToString counts[18]} unique tcIds; public verification: \{intToString counts[19]}/74"
+          if counts[0] == 80
+            && counts[1] == 0
+            && counts[2] == 2
+            && counts[3] == 94
+            && counts[10] == 148
+            && counts[4] == 0
+            && counts[5] == 242
+            && counts[6] == 1
+            && counts[7] == 1
+            && counts[11] == 80
+            && counts[12] == 80
+            && counts[13] == 242
+            && counts[14] == 1
+            && counts[15] == 1
+            && counts[16] == 68
+            && counts[17] == 6
+            && counts[18] == 74
+            && counts[19] == 74 then
+            println "TOTAL: PASS"
+          else
+            let () = println "TOTAL: FAIL"
+            exit 1
   _ =>
     panic
-      "usage: ecdsa_vectors_main <prehashed-signing-corpus> <wycheproof-corpus>"
+      "usage: ecdsa_vectors_main <prehashed-signing-corpus> <wycheproof-corpus> <wycheproof-bitcoin-corpus>"

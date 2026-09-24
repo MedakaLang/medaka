@@ -16,15 +16,17 @@ checked=0
 pass() { checked=$((checked + 1)); printf 'ok %s - %s\n' "$checked" "$1"; }
 fail() { printf 'not ok %s - %s\n' "$((checked + 1))" "$1" >&2; exit 1; }
 
-# The checksums are a deliberately closed source manifest.  The four files are
-# the complete Medaka secret path: ingress -> scalar -> point -> public wrapper.
-# A change requires re-auditing the source, emitted IR, and linked code below;
-# it cannot silently widen the trusted callee set.
+# The checksums are a deliberately closed source manifest covering the
+# arithmetic secret path: ingress -> scalar -> point -> public wrapper. It
+# does not cover stdlib/bytes.mdk or the runtime's byte-block copy, which also
+# hold key material since SecretKey moved to pointer-free storage (#3389).
+# A change to these four files requires re-auditing the source, emitted IR,
+# and linked code below; it cannot silently widen this trusted callee set.
 source_closure_ok() {
   tree=$1
-  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '3175129806 3842' ] || return 1
+  [ "$(cksum "$tree/pds/lib/sign.mdk" | awk '{print $1 " " $2}')" = '1576054259 4921' ] || return 1
   [ "$(cksum "$tree/pds/lib/secp256k1.mdk" | awk '{print $1 " " $2}')" = '1691956410 24617' ] || return 1
-  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '1518600487 31160' ] || return 1
+  [ "$(cksum "$tree/pds/lib/scalar.mdk" | awk '{print $1 " " $2}')" = '75163897 32282' ] || return 1
   [ "$(cksum "$tree/pds/lib/field.mdk" | awk '{print $1 " " $2}')" = '2128618670 25697' ] || return 1
 
   tr -s '[:space:]' ' ' < "$tree/pds/lib/secp256k1.mdk" | grep -F -q 'if i >= 256 then r0' || return 1
@@ -38,7 +40,7 @@ source_closure_ok() {
   grep -F -q 'scanSecretBytes bs safeBytes (i + 1) (validBit * byteBit)' "$tree/pds/lib/scalar.mdk" || return 1
   grep -F -q 'fieldSubCt a b = feAdd a (feNegateCt b)' "$tree/pds/lib/secp256k1.mdk" || return 1
   grep -F -q 'pointSelect opposite afterEqual pointInfinity' "$tree/pds/lib/secp256k1.mdk" || return 1
-  grep -F -q 'publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)' "$tree/pds/lib/sign.mdk" || return 1
+  grep -F -q 'publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))' "$tree/pds/lib/sign.mdk" || return 1
 }
 
 restore_tree() {
@@ -213,7 +215,7 @@ pass 'emitted secret nonzero fold branches only on its public limb index'
 # not its survival as a distinct linked symbol.
 extract_ir_function reduceFixed "$IR" "$WORK/reduceFixed.ll"
 [ "$(grep -c 'br i1' "$WORK/reduceFixed.ll" || true)" -eq 0 ] || fail 'fixed reduction is unconditional'
-[ "$(grep -F -c '@mdk_lib_scalar__carryAll(' "$WORK/reduceFixed.ll" || true)" -eq 5 ] || fail 'fixed reduction runs five carry passes'
+[ "$(grep -F -c '@mdk_lib_scalar__carryAllUnchecked(' "$WORK/reduceFixed.ll" || true)" -eq 5 ] || fail 'fixed reduction runs five carry passes'
 [ "$(grep -F -c '@mdk_lib_scalar__foldOnce(' "$WORK/reduceFixed.ll" || true)" -eq 4 ] || fail 'fixed reduction runs four folds'
 pass 'emitted fixed reduction runs its schedule unconditionally'
 
