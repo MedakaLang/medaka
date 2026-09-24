@@ -207,7 +207,7 @@ import ir.core_ir.{
   CImplBody(..),
   CField(..),
 }
-import list.{replicate}
+import list.{replicate, take, drop}
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -4916,45 +4916,48 @@ emitMethodRef : Prog ->
   List Route ->
   List CExpr ->
   List String
-emitMethodRef prog env d name siteArity (RKey tag _) implRoutes methRoutes args =
-  let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-  -- layer-15 (defaulted-method emission, peer to llvm_emit's emitMethod RKey arm,
-  -- line ~2925): `RKey tag` selects a STATIC impl.  When the type provides a
-  -- CONCRETE impl of [name] at [tag] (`implForW`), call `$mdk_impl_<tag>_<name>`
-  -- directly (the original path).  But an INTERFACE DEFAULT method the type did NOT
-  -- override (`filter` on `Filterable List`, which only impls `filterMap`) has NO
-  -- tagged impl define — calling `$mdk_impl_List_filter` references a never-emitted
-  -- symbol.  Mirror llvm_emit's `None => emitDefaultRKey`: synthesize a per-(method,
-  -- tag, selected declaration arity) default define ONCE from the interface body
-  -- (inner same-iface calls restamped to this tag's concrete impl) and call THAT.
-  match implForWSite prog name tag siteArity
-    -- P3 (dropped-requires-dict over-forwarding, #717): a TERMINAL impl body that IGNORES
-    -- its `requires` dict (`impl S (List a) requires S a where s _ = 2`) has that dict
-    -- DROPPED from the define by the dict-pass (usesImplDict false) — so `$mdk_impl_<tag>_
-    -- <name>` declares FEWER leading dict params than the call-site route forwards.  A flat
-    -- `dictWords ++ argInstrs ++ call` then pushes a surplus dict witness the callee never
-    -- pops ("values remaining on stack at end of block").  Native gets away with it (LLVM
-    -- cdecl silently ignores extra args); wasm's strict types do not.  Forward only the
-    -- leading dicts the concrete define actually declares — a PREFIX of `methRoutes ++
-    -- implRoutes` (method-level dicts, then kept `requires` dicts), so a define that kept
-    -- all its dicts is byte-identical.
-    Some entry =>
-      let keep = implLeadingDictCountOfEntryW entry
-      let keptWords =
-        flatMap
-          (routeWitness prog env d)
-          (takeRoutesW keep (methRoutes ++ implRoutes))
-      keptWords ++ argInstrs ++ ["call $" ++ implFnSymForEntryW prog name entry]
-    None =>
-      emitDefaultRKeyRef
+-- An RKey route is a STATIC direct call, legal only when the call supplies exactly
+-- the method's value arity: every define it can reach (concrete impl, general
+-- instance, synthesized default) takes that many value params after its dicts.  An
+-- UNDER-applied site (`map (map f) xs`, whose inner `map f` supplies 1 of 2) would
+-- push too few operands, so build the method's eta closure and apply the supplied
+-- args through $__mdk_apply, whose under-application arm makes the residual PAP.  An
+-- OVER-applied site (`get (Box inc) 41`, a method whose result is a function) would
+-- leave the surplus on the stack, so make the saturated call and apply its result to
+-- the rest.  This is the peer of llvm_emit's emitImplCallSat and of the RDict arms
+-- below.  The eta closure's own body applies exactly `valArity` args, so it lands on
+-- the direct call.  A method with no recorded value arity (0) keeps the direct call.
+emitMethodRef prog env d name siteArity (route@(RKey tag _)) implRoutes methRoutes args =
+  let valArity = methodValArity prog name siteArity route
+  let nArgs = listLen args
+  if valArity > 0 && nArgs < valArity then
+    emitMethodValueRef prog env d name siteArity route implRoutes methRoutes
+      ++ emitArgsArray prog env d args
+      ++ ["call $__mdk_apply"]
+  else if valArity > 0 && nArgs > valArity then
+    emitMethodRKeyCallRef
         prog
         env
         d
-        (methRoutes ++ implRoutes)
-        argInstrs
         name
         siteArity
         tag
+        implRoutes
+        methRoutes
+        (take valArity args)
+      ++ emitArgsArray prog env d (drop valArity args)
+      ++ ["call $__mdk_apply"]
+  else
+    emitMethodRKeyCallRef
+      prog
+      env
+      d
+      name
+      siteArity
+      tag
+      implRoutes
+      methRoutes
+      args
 emitMethodRef prog env d name siteArity (route@(RDict dpar)) implRoutes methRoutes args =
   if listLen args == siteArity then
     emitMethodDispatchRef prog env d name siteArity dpar args
@@ -5014,6 +5017,57 @@ emitMethodRef prog env d name _ (RScalar _) implRoutes methRoutes args =
   gapLP
     prog
     ("wasm W5: RScalar route for method '" ++ name ++ "' is out of slice")
+
+-- the RKey direct call itself, for a site supplying exactly the value arity.
+emitMethodRKeyCallRef : Prog ->
+  List String ->
+  Int ->
+  String ->
+  Int ->
+  String ->
+  List Route ->
+  List Route ->
+  List CExpr ->
+  List String
+emitMethodRKeyCallRef prog env d name siteArity tag implRoutes methRoutes args =
+  let argInstrs = flatMap (a => emitRefExpr prog env d a) args
+  -- layer-15 (defaulted-method emission, peer to llvm_emit's emitMethod RKey arm,
+  -- line ~2925): `RKey tag` selects a STATIC impl.  When the type provides a
+  -- CONCRETE impl of [name] at [tag] (`implForW`), call `$mdk_impl_<tag>_<name>`
+  -- directly (the original path).  But an INTERFACE DEFAULT method the type did NOT
+  -- override (`filter` on `Filterable List`, which only impls `filterMap`) has NO
+  -- tagged impl define — calling `$mdk_impl_List_filter` references a never-emitted
+  -- symbol.  Mirror llvm_emit's `None => emitDefaultRKey`: synthesize a per-(method,
+  -- tag, selected declaration arity) default define ONCE from the interface body
+  -- (inner same-iface calls restamped to this tag's concrete impl) and call THAT.
+  match implForWSite prog name tag siteArity
+    -- P3 (dropped-requires-dict over-forwarding, #717): a TERMINAL impl body that IGNORES
+    -- its `requires` dict (`impl S (List a) requires S a where s _ = 2`) has that dict
+    -- DROPPED from the define by the dict-pass (usesImplDict false) — so `$mdk_impl_<tag>_
+    -- <name>` declares FEWER leading dict params than the call-site route forwards.  A flat
+    -- `dictWords ++ argInstrs ++ call` then pushes a surplus dict witness the callee never
+    -- pops ("values remaining on stack at end of block").  Native gets away with it (LLVM
+    -- cdecl silently ignores extra args); wasm's strict types do not.  Forward only the
+    -- leading dicts the concrete define actually declares — a PREFIX of `methRoutes ++
+    -- implRoutes` (method-level dicts, then kept `requires` dicts), so a define that kept
+    -- all its dicts is byte-identical.
+    Some entry =>
+      let keep = implLeadingDictCountOfEntryW entry
+      let keptWords =
+        flatMap
+          (routeWitness prog env d)
+          (takeRoutesW keep (methRoutes ++ implRoutes))
+      keptWords ++ argInstrs ++ ["call $" ++ implFnSymForEntryW prog name entry]
+    None =>
+      emitDefaultRKeyRef
+        prog
+        env
+        d
+        (methRoutes ++ implRoutes)
+        argInstrs
+        name
+        siteArity
+        tag
 
 -- RDict/RDictFwd: the dict param `$dpar` is an i31 carrying hashName(tag).  Unbox
 -- it, then if-chain over the method's candidate impls comparing the loaded tag

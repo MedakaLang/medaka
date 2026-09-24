@@ -100,14 +100,18 @@ it.
   renderer now prints a binding's forcing row itself, so the hover-side
   workaround that re-read the written leading effect is deleted.
 
-**WasmGC emitter defect, predating this session:** compiling the compiler to
-Wasm (the `wasm` CI job, `playground/build_playground_wasm.sh`) fails
-validation in the lambda for `declaredEffectsAt` (`typecheck.mdk`): a record
-literal whose field is `map (map f) xs`, the outer callback a partial
-application of `map`, is mis-sequenced by `compiler/backend/wasm_emit.mdk`
-(`struct.new` receives an `i32` where a boxed field belongs). The first full CI
-run failed the same way. It is a backend bug to fix in the emitter as a general
-rule, not by rewriting the source around it.
+**WasmGC emitter defect, predating this session, fixed:** compiling the
+compiler to Wasm (the `wasm` CI job) failed validation in the lambda for
+`declaredEffectsAt`. The record was incidental: any statically routed (`RKey`)
+method call supplying fewer or more arguments than the method's value arity
+(`map (map f) xs`, whose inner `map f` supplies one of two; `get (Box inc) 41`,
+whose result is applied again) was emitted as a bare direct call, while every
+other route already guarded saturation. `compiler/backend/wasm_emit.mdk` now
+applies the saturation rule the LLVM emitter's `emitImplCallSat` applies: an
+under-applied site builds the method's eta closure and applies through
+`$__mdk_apply`; an over-applied site makes the saturated call and applies its
+result to the rest. `test/engine_fixtures/method_rkey_under_over_applied.mdk`
+pins both across the three engines; the playground build validates again.
 
 **Intentional changes whose goldens were re-derived (each diff read):**
 function arrows render their open row tails (`(a -> <b> c)`), nullary bindings

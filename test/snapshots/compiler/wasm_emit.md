@@ -1,5 +1,5 @@
 # META
-source_lines=12627
+source_lines=12681
 stages=DESUGAR,MARK
 # SOURCE
 -- lint-disable-file rule-prefer-assign-op
@@ -211,7 +211,7 @@ import ir.core_ir.{
   CImplBody(..),
   CField(..),
 }
-import list.{replicate}
+import list.{replicate, take, drop}
 import support.ordmap.{
   OrdMap,
   omInsert,
@@ -4920,45 +4920,48 @@ emitMethodRef : Prog ->
   List Route ->
   List CExpr ->
   List String
-emitMethodRef prog env d name siteArity (RKey tag _) implRoutes methRoutes args =
-  let argInstrs = flatMap (a => emitRefExpr prog env d a) args
-  -- layer-15 (defaulted-method emission, peer to llvm_emit's emitMethod RKey arm,
-  -- line ~2925): `RKey tag` selects a STATIC impl.  When the type provides a
-  -- CONCRETE impl of [name] at [tag] (`implForW`), call `$mdk_impl_<tag>_<name>`
-  -- directly (the original path).  But an INTERFACE DEFAULT method the type did NOT
-  -- override (`filter` on `Filterable List`, which only impls `filterMap`) has NO
-  -- tagged impl define — calling `$mdk_impl_List_filter` references a never-emitted
-  -- symbol.  Mirror llvm_emit's `None => emitDefaultRKey`: synthesize a per-(method,
-  -- tag, selected declaration arity) default define ONCE from the interface body
-  -- (inner same-iface calls restamped to this tag's concrete impl) and call THAT.
-  match implForWSite prog name tag siteArity
-    -- P3 (dropped-requires-dict over-forwarding, #717): a TERMINAL impl body that IGNORES
-    -- its `requires` dict (`impl S (List a) requires S a where s _ = 2`) has that dict
-    -- DROPPED from the define by the dict-pass (usesImplDict false) — so `$mdk_impl_<tag>_
-    -- <name>` declares FEWER leading dict params than the call-site route forwards.  A flat
-    -- `dictWords ++ argInstrs ++ call` then pushes a surplus dict witness the callee never
-    -- pops ("values remaining on stack at end of block").  Native gets away with it (LLVM
-    -- cdecl silently ignores extra args); wasm's strict types do not.  Forward only the
-    -- leading dicts the concrete define actually declares — a PREFIX of `methRoutes ++
-    -- implRoutes` (method-level dicts, then kept `requires` dicts), so a define that kept
-    -- all its dicts is byte-identical.
-    Some entry =>
-      let keep = implLeadingDictCountOfEntryW entry
-      let keptWords =
-        flatMap
-          (routeWitness prog env d)
-          (takeRoutesW keep (methRoutes ++ implRoutes))
-      keptWords ++ argInstrs ++ ["call $" ++ implFnSymForEntryW prog name entry]
-    None =>
-      emitDefaultRKeyRef
+-- An RKey route is a STATIC direct call, legal only when the call supplies exactly
+-- the method's value arity: every define it can reach (concrete impl, general
+-- instance, synthesized default) takes that many value params after its dicts.  An
+-- UNDER-applied site (`map (map f) xs`, whose inner `map f` supplies 1 of 2) would
+-- push too few operands, so build the method's eta closure and apply the supplied
+-- args through $__mdk_apply, whose under-application arm makes the residual PAP.  An
+-- OVER-applied site (`get (Box inc) 41`, a method whose result is a function) would
+-- leave the surplus on the stack, so make the saturated call and apply its result to
+-- the rest.  This is the peer of llvm_emit's emitImplCallSat and of the RDict arms
+-- below.  The eta closure's own body applies exactly `valArity` args, so it lands on
+-- the direct call.  A method with no recorded value arity (0) keeps the direct call.
+emitMethodRef prog env d name siteArity (route@(RKey tag _)) implRoutes methRoutes args =
+  let valArity = methodValArity prog name siteArity route
+  let nArgs = listLen args
+  if valArity > 0 && nArgs < valArity then
+    emitMethodValueRef prog env d name siteArity route implRoutes methRoutes
+      ++ emitArgsArray prog env d args
+      ++ ["call $__mdk_apply"]
+  else if valArity > 0 && nArgs > valArity then
+    emitMethodRKeyCallRef
         prog
         env
         d
-        (methRoutes ++ implRoutes)
-        argInstrs
         name
         siteArity
         tag
+        implRoutes
+        methRoutes
+        (take valArity args)
+      ++ emitArgsArray prog env d (drop valArity args)
+      ++ ["call $__mdk_apply"]
+  else
+    emitMethodRKeyCallRef
+      prog
+      env
+      d
+      name
+      siteArity
+      tag
+      implRoutes
+      methRoutes
+      args
 emitMethodRef prog env d name siteArity (route@(RDict dpar)) implRoutes methRoutes args =
   if listLen args == siteArity then
     emitMethodDispatchRef prog env d name siteArity dpar args
@@ -5018,6 +5021,57 @@ emitMethodRef prog env d name _ (RScalar _) implRoutes methRoutes args =
   gapLP
     prog
     ("wasm W5: RScalar route for method '" ++ name ++ "' is out of slice")
+
+-- the RKey direct call itself, for a site supplying exactly the value arity.
+emitMethodRKeyCallRef : Prog ->
+  List String ->
+  Int ->
+  String ->
+  Int ->
+  String ->
+  List Route ->
+  List Route ->
+  List CExpr ->
+  List String
+emitMethodRKeyCallRef prog env d name siteArity tag implRoutes methRoutes args =
+  let argInstrs = flatMap (a => emitRefExpr prog env d a) args
+  -- layer-15 (defaulted-method emission, peer to llvm_emit's emitMethod RKey arm,
+  -- line ~2925): `RKey tag` selects a STATIC impl.  When the type provides a
+  -- CONCRETE impl of [name] at [tag] (`implForW`), call `$mdk_impl_<tag>_<name>`
+  -- directly (the original path).  But an INTERFACE DEFAULT method the type did NOT
+  -- override (`filter` on `Filterable List`, which only impls `filterMap`) has NO
+  -- tagged impl define — calling `$mdk_impl_List_filter` references a never-emitted
+  -- symbol.  Mirror llvm_emit's `None => emitDefaultRKey`: synthesize a per-(method,
+  -- tag, selected declaration arity) default define ONCE from the interface body
+  -- (inner same-iface calls restamped to this tag's concrete impl) and call THAT.
+  match implForWSite prog name tag siteArity
+    -- P3 (dropped-requires-dict over-forwarding, #717): a TERMINAL impl body that IGNORES
+    -- its `requires` dict (`impl S (List a) requires S a where s _ = 2`) has that dict
+    -- DROPPED from the define by the dict-pass (usesImplDict false) — so `$mdk_impl_<tag>_
+    -- <name>` declares FEWER leading dict params than the call-site route forwards.  A flat
+    -- `dictWords ++ argInstrs ++ call` then pushes a surplus dict witness the callee never
+    -- pops ("values remaining on stack at end of block").  Native gets away with it (LLVM
+    -- cdecl silently ignores extra args); wasm's strict types do not.  Forward only the
+    -- leading dicts the concrete define actually declares — a PREFIX of `methRoutes ++
+    -- implRoutes` (method-level dicts, then kept `requires` dicts), so a define that kept
+    -- all its dicts is byte-identical.
+    Some entry =>
+      let keep = implLeadingDictCountOfEntryW entry
+      let keptWords =
+        flatMap
+          (routeWitness prog env d)
+          (takeRoutesW keep (methRoutes ++ implRoutes))
+      keptWords ++ argInstrs ++ ["call $" ++ implFnSymForEntryW prog name entry]
+    None =>
+      emitDefaultRKeyRef
+        prog
+        env
+        d
+        (methRoutes ++ implRoutes)
+        argInstrs
+        name
+        siteArity
+        tag
 
 -- RDict/RDictFwd: the dict param `$dpar` is an i31 carrying hashName(tag).  Unbox
 -- it, then if-chain over the method's candidate impls comparing the loaded tag
@@ -12632,7 +12686,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 # DESUGAR
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
-(DUse false (UseGroup ("list") ((mem "replicate" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
@@ -13487,12 +13541,14 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "localDeclRef" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "localDeclRef" ((PVar "l")) (EBinOp "++" (EBinOp "++" (ELit (LString "(local $")) (EApp (EVar "gname") (EVar "l"))) (ELit (LString " (ref eq))"))))
 (DTypeSig false "emitMethodRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PCon "RKey" (PVar "tag") PWild) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keep") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "entry"))) (DoLet false false (PVar "keptWords") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EVar "takeRoutesW") (EVar "keep")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EApp (EApp (EVar "implFnSymForEntryW") (EVar "prog")) (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDefaultRKeyRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))) (EVar "argInstrs")) (EVar "name")) (EVar "siteArity")) (EVar "tag")))))))
+(DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PAs "route" (PCon "RKey" (PVar "tag") PWild)) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "valArity") (EApp (EApp (EApp (EApp (EVar "methodValArity") (EVar "prog")) (EVar "name")) (EVar "siteArity")) (EVar "route"))) (DoLet false false (PVar "nArgs") (EApp (EVar "listLen") (EVar "args"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "valArity") (ELit (LInt 0))) (EBinOp "<" (EVar "nArgs") (EVar "valArity"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args"))) (EListLit (ELit (LString "call $__mdk_apply")))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "valArity") (ELit (LInt 0))) (EBinOp ">" (EVar "nArgs") (EVar "valArity"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRKeyCallRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "tag")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EVar "take") (EVar "valArity")) (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "drop") (EVar "valArity")) (EVar "args")))) (EListLit (ELit (LString "call $__mdk_apply")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRKeyCallRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "tag")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PAs "route" (PCon "RDict" (PVar "dpar"))) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodDispatchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "dpar")) (EVar "args")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args"))) (EListLit (ELit (LString "call $__mdk_apply"))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PAs "route" (PCon "RDictFwd" (PVar "dpar"))) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodDispatchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "dpar")) (EVar "args")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args"))) (EListLit (ELit (LString "call $__mdk_apply"))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") PWild (PCon "RNone") (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: RNone arg-tag dispatch for '")) (EVar "name")) (ELit (LString "' is out of slice")))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (DoExpr (EIf (EApp (EVar "isEmpty") (EVar "dicts")) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "target")) (EBinOp "/=" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "target")))) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "CVar") (EVar "target")) (EVar "AGlobal"))) (EVar "args")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "target")))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "target")) (EVar "dicts")) (EVar "args"))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") PWild (PCon "RScalar" PWild) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: RScalar route for method '")) (EVar "name")) (ELit (LString "' is out of slice")))))
+(DTypeSig false "emitMethodRKeyCallRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
+(DFunDef false "emitMethodRKeyCallRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PVar "tag") (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keep") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "entry"))) (DoLet false false (PVar "keptWords") (EApp (EApp (EVar "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EVar "takeRoutesW") (EVar "keep")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EApp (EApp (EVar "implFnSymForEntryW") (EVar "prog")) (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDefaultRKeyRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))) (EVar "argInstrs")) (EVar "name")) (EVar "siteArity")) (EVar "tag")))))))
 (DTypeSig false "emitMethodDispatchRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitMethodDispatchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PVar "dpar") (PVar "args")) (EBlock (DoLet false false (PVar "impls") (EApp (EApp (EApp (EApp (EVar "narrowImplsByArityW") (EVar "prog")) (EVar "name")) (EApp (EApp (EVar "methodImpls") (EVar "prog")) (EVar "name"))) (EVar "siteArity"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EVar "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoLet false false (PVar "tagRead") (EApp (EApp (EApp (EVar "readDictParam") (EVar "prog")) (EVar "env")) (EVar "dpar"))) (DoLet false false (PVar "blk") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$disp_")) (EApp (EVar "display") (EVar "name"))) (ELit (LString "_"))) (EApp (EVar "display") (EApp (EVar "intToString") (EVar "d")))) (ELit (LString "")))) (DoLet false false (PVar "concretes") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EBinOp "/=" (EApp (EVar "fst") (EVar "p")) (EVar "noneHeadTag")))) (EVar "impls"))) (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchChain") (EVar "prog")) (EVar "name")) (EVar "concretes")) (EVar "blk")) (EVar "tagRead")) (EVar "dpar")) (EVar "argInstrs")) (EApp (EVar "listLen") (EVar "args"))) (ELit (LInt 0)))) (DoLet false false (PVar "genTail") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGeneralArm") (EVar "prog")) (EVar "name")) (EApp (EVar "firstGeneralImplW") (EVar "impls"))) (EVar "blk")) (EVar "dpar")) (EVar "argInstrs")) (EApp (EVar "listLen") (EVar "args")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "block ")) (EVar "blk")) (ELit (LString " (result (ref eq))")))) (EApp (EVar "indent") (EVar "chain"))) (EApp (EVar "indent") (EVar "genTail"))) (EListLit (ELit (LString "unreachable")) (ELit (LString "end")))))))
 (DTypeSig false "firstGeneralImplW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
@@ -14966,7 +15022,7 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 # MARK
 (DUse false (UseGroup ("frontend" "ast") ((mem "Lit" true) (mem "Pat" true) (mem "Addr" true) (mem "Route" true) (mem "Loc" true) (mem "ifaceIdMatches" false))))
 (DUse false (UseGroup ("ir" "core_ir") ((mem "CProgram" true) (mem "CBind" true) (mem "CClause" true) (mem "CExpr" true) (mem "CStmt" true) (mem "CArm" true) (mem "CGuard" true) (mem "CTree" true) (mem "CTBranch" true) (mem "CHead" true) (mem "CImplEntry" true) (mem "CImplBody" true) (mem "CField" true))))
-(DUse false (UseGroup ("list") ((mem "replicate" false))))
+(DUse false (UseGroup ("list") ((mem "replicate" false) (mem "take" false) (mem "drop" false))))
 (DUse false (UseGroup ("support" "ordmap") ((mem "OrdMap" false) (mem "omInsert" false) (mem "omLookup" false) (mem "omHasKey" false) (mem "omFromNames" false) (mem "omFromPairs" false) (mem "omMapValues" false) (mem "omEmpty" false))))
 (DUse false (UseGroup ("support" "util") ((mem "joinNl" false) (mem "joinWith" false) (mem "reverseL" false) (mem "contains" false) (mem "filterList" false) (mem "anyList" false) (mem "lookupAssoc" false) (mem "listLen" false) (mem "maxI" false) (mem "noneHeadTag" false) (mem "dedupBy" false) (mem "startsWith" false) (mem "splitNl" false) (mem "stringTrimLeft" false))))
 (DUse false (UseGroup ("ir" "core_ir_lower") ((mem "ifaceIdsAtTag" false) (mem "ifaceMethodArityKey" false) (mem "ifaceWordOfKey" false))))
@@ -15821,12 +15877,14 @@ gap msg = panic ("wasm_emit gap — " ++ msg)
 (DTypeSig false "localDeclRef" (TyFun (TyCon "String") (TyCon "String")))
 (DFunDef false "localDeclRef" ((PVar "l")) (EBinOp "++" (EBinOp "++" (ELit (LString "(local $")) (EApp (EVar "gname") (EVar "l"))) (ELit (LString " (ref eq))"))))
 (DTypeSig false "emitMethodRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "Route") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
-(DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PCon "RKey" (PVar "tag") PWild) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keep") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "entry"))) (DoLet false false (PVar "keptWords") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EVar "takeRoutesW") (EVar "keep")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EApp (EApp (EVar "implFnSymForEntryW") (EVar "prog")) (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDefaultRKeyRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))) (EVar "argInstrs")) (EVar "name")) (EVar "siteArity")) (EVar "tag")))))))
+(DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PAs "route" (PCon "RKey" (PVar "tag") PWild)) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "valArity") (EApp (EApp (EApp (EApp (EVar "methodValArity") (EVar "prog")) (EVar "name")) (EVar "siteArity")) (EVar "route"))) (DoLet false false (PVar "nArgs") (EApp (EVar "listLen") (EVar "args"))) (DoExpr (EIf (EBinOp "&&" (EBinOp ">" (EVar "valArity") (ELit (LInt 0))) (EBinOp "<" (EVar "nArgs") (EVar "valArity"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args"))) (EListLit (ELit (LString "call $__mdk_apply")))) (EIf (EBinOp "&&" (EBinOp ">" (EVar "valArity") (ELit (LInt 0))) (EBinOp ">" (EVar "nArgs") (EVar "valArity"))) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRKeyCallRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "tag")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EVar "take") (EVar "valArity")) (EVar "args"))) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "drop") (EVar "valArity")) (EVar "args")))) (EListLit (ELit (LString "call $__mdk_apply")))) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodRKeyCallRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "tag")) (EVar "implRoutes")) (EVar "methRoutes")) (EVar "args")))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PAs "route" (PCon "RDict" (PVar "dpar"))) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodDispatchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "dpar")) (EVar "args")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args"))) (EListLit (ELit (LString "call $__mdk_apply"))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PAs "route" (PCon "RDictFwd" (PVar "dpar"))) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EIf (EBinOp "==" (EApp (EVar "listLen") (EVar "args")) (EVar "siteArity")) (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodDispatchRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "dpar")) (EVar "args")) (EBinOp "++" (EBinOp "++" (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitMethodValueRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "name")) (EVar "siteArity")) (EVar "route")) (EVar "implRoutes")) (EVar "methRoutes")) (EApp (EApp (EApp (EApp (EVar "emitArgsArray") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "args"))) (EListLit (ELit (LString "call $__mdk_apply"))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") PWild (PCon "RNone") (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: RNone arg-tag dispatch for '")) (EVar "name")) (ELit (LString "' is out of slice")))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") PWild (PCon "RLocal" (PVar "sym") (PVar "dicts")) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "target") (EIf (EBinOp "==" (EVar "sym") (ELit (LString ""))) (EVar "name") (EVar "sym"))) (DoExpr (EIf (EApp (EMethodRef "isEmpty") (EVar "dicts")) (EIf (EBinOp "&&" (EApp (EApp (EVar "progFnMemberW") (EVar "prog")) (EVar "target")) (EBinOp "/=" (EApp (EVar "listLen") (EVar "args")) (EApp (EApp (EVar "progFnArity") (EVar "prog")) (EVar "target")))) (EApp (EApp (EApp (EApp (EApp (EVar "emitIndirectApp") (EVar "prog")) (EVar "env")) (EVar "d")) (EApp (EApp (EVar "CVar") (EVar "target")) (EVar "AGlobal"))) (EVar "args")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EBinOp "++" (EVar "argInstrs") (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EVar "gname") (EVar "target")))))))) (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDictRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "target")) (EVar "dicts")) (EVar "args"))))))
 (DFunDef false "emitMethodRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") PWild (PCon "RScalar" PWild) (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EApp (EApp (EVar "gapLP") (EVar "prog")) (EBinOp "++" (EBinOp "++" (ELit (LString "wasm W5: RScalar route for method '")) (EVar "name")) (ELit (LString "' is out of slice")))))
+(DTypeSig false "emitMethodRKeyCallRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "Route")) (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))))))
+(DFunDef false "emitMethodRKeyCallRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PVar "tag") (PVar "implRoutes") (PVar "methRoutes") (PVar "args")) (EBlock (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoExpr (EMatch (EApp (EApp (EApp (EApp (EVar "implForWSite") (EVar "prog")) (EVar "name")) (EVar "tag")) (EVar "siteArity")) (arm (PCon "Some" (PVar "entry")) () (EBlock (DoLet false false (PVar "keep") (EApp (EVar "implLeadingDictCountOfEntryW") (EVar "entry"))) (DoLet false false (PVar "keptWords") (EApp (EApp (EDictApp "flatMap") (EApp (EApp (EApp (EVar "routeWitness") (EVar "prog")) (EVar "env")) (EVar "d"))) (EApp (EApp (EVar "takeRoutesW") (EVar "keep")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))))) (DoExpr (EBinOp "++" (EBinOp "++" (EVar "keptWords") (EVar "argInstrs")) (EListLit (EBinOp "++" (ELit (LString "call $")) (EApp (EApp (EApp (EVar "implFnSymForEntryW") (EVar "prog")) (EVar "name")) (EVar "entry")))))))) (arm (PCon "None") () (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDefaultRKeyRef") (EVar "prog")) (EVar "env")) (EVar "d")) (EBinOp "++" (EVar "methRoutes") (EVar "implRoutes"))) (EVar "argInstrs")) (EVar "name")) (EVar "siteArity")) (EVar "tag")))))))
 (DTypeSig false "emitMethodDispatchRef" (TyFun (TyCon "Prog") (TyFun (TyApp (TyCon "List") (TyCon "String")) (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyCon "Int") (TyFun (TyCon "String") (TyFun (TyApp (TyCon "List") (TyCon "CExpr")) (TyApp (TyCon "List") (TyCon "String"))))))))))
 (DFunDef false "emitMethodDispatchRef" ((PVar "prog") (PVar "env") (PVar "d") (PVar "name") (PVar "siteArity") (PVar "dpar") (PVar "args")) (EBlock (DoLet false false (PVar "impls") (EApp (EApp (EApp (EApp (EVar "narrowImplsByArityW") (EVar "prog")) (EVar "name")) (EApp (EApp (EVar "methodImpls") (EVar "prog")) (EVar "name"))) (EVar "siteArity"))) (DoLet false false (PVar "argInstrs") (EApp (EApp (EDictApp "flatMap") (ELam ((PVar "a")) (EApp (EApp (EApp (EApp (EVar "emitRefExpr") (EVar "prog")) (EVar "env")) (EVar "d")) (EVar "a")))) (EVar "args"))) (DoLet false false (PVar "tagRead") (EApp (EApp (EApp (EVar "readDictParam") (EVar "prog")) (EVar "env")) (EVar "dpar"))) (DoLet false false (PVar "blk") (EBinOp "++" (EBinOp "++" (EBinOp "++" (EBinOp "++" (ELit (LString "$disp_")) (EApp (EMethodRef "display") (EVar "name"))) (ELit (LString "_"))) (EApp (EMethodRef "display") (EApp (EVar "intToString") (EVar "d")))) (ELit (LString "")))) (DoLet false false (PVar "concretes") (EApp (EApp (EVar "filterList") (ELam ((PVar "p")) (EBinOp "/=" (EApp (EVar "fst") (EVar "p")) (EVar "noneHeadTag")))) (EVar "impls"))) (DoLet false false (PVar "chain") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitDispatchChain") (EVar "prog")) (EVar "name")) (EVar "concretes")) (EVar "blk")) (EVar "tagRead")) (EVar "dpar")) (EVar "argInstrs")) (EApp (EVar "listLen") (EVar "args"))) (ELit (LInt 0)))) (DoLet false false (PVar "genTail") (EApp (EApp (EApp (EApp (EApp (EApp (EApp (EVar "emitGeneralArm") (EVar "prog")) (EVar "name")) (EApp (EVar "firstGeneralImplW") (EVar "impls"))) (EVar "blk")) (EVar "dpar")) (EVar "argInstrs")) (EApp (EVar "listLen") (EVar "args")))) (DoExpr (EBinOp "++" (EBinOp "++" (EBinOp "++" (EListLit (EBinOp "++" (EBinOp "++" (ELit (LString "block ")) (EVar "blk")) (ELit (LString " (result (ref eq))")))) (EApp (EVar "indent") (EVar "chain"))) (EApp (EVar "indent") (EVar "genTail"))) (EListLit (ELit (LString "unreachable")) (ELit (LString "end")))))))
 (DTypeSig false "firstGeneralImplW" (TyFun (TyApp (TyCon "List") (TyTuple (TyCon "String") (TyCon "String"))) (TyApp (TyCon "Option") (TyTuple (TyCon "String") (TyCon "String")))))
