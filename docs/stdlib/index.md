@@ -392,6 +392,9 @@ HMAC-SHA-256 (RFC 2104) over byte arrays.
 - [`ctEq`](hmac.md#cteq)
 - [`hmacSha256`](hmac.md#hmacsha256)
 - [`hmacSha256FixedBytes`](hmac.md#hmacsha256fixedbytes)
+- [`HmacSha256Key`](hmac.md#hmacsha256key)
+- [`hmacSha256Key`](hmac.md#hmacsha256key)
+- [`hmacSha256WithKey`](hmac.md#hmacsha256withkey)
 
 ## [`http`](http.md)
 
@@ -940,6 +943,8 @@ An immutable set of distinct elements, ordered by `Ord`.
 
 SHA-256 hashing of a byte array (FIPS 180-4).
 
+- [`sha256AssumeByteDomainFrom`](sha256.md#sha256assumebytedomainfrom)
+- [`sha256FoldKeyBlock`](sha256.md#sha256foldkeyblock)
 - [`sha256FixedBytes`](sha256.md#sha256fixedbytes)
 - [`sha256`](sha256.md#sha256)
 

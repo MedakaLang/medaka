@@ -12,9 +12,15 @@
    FIRST — never `ctEq` on the full 32-byte computed tag against a shorter
    given tag, which would fail every valid truncated row on length alone
    before a single byte is compared. A `tagBits < 256` row is exactly this
-   project's truncated-tag case. -}
+   project's truncated-tag case.
 
-import hmac.{ctEq, hmacSha256FixedBytes}
+   Every row also computes the untruncated tag a second way, through
+   `hmacSha256Key`/`hmacSha256WithKey`, and requires it byte-for-byte equal
+   to `hmacSha256FixedBytes`'s result on the same key and message (S-hmac-
+   midstate, #3371 Part B). -}
+
+import hmac.{ctEq, hmacSha256FixedBytes, hmacSha256Key, hmacSha256WithKey}
+import bytes.{fromArrayAssumeByteDomain, toArray}
 import hex.{decode}
 import array.{take}
 import list.{somes}
@@ -59,12 +65,16 @@ parseRows lns = somes (map parseLine lns)
 
 -- The row's own verdict: the FULL computed tag truncated to `tagBits / 8`
 -- bytes, then `ctEq`'d against the given tag. Truncating before comparing
--- is the whole point of this driver — see the module doc comment.
+-- is the whole point of this driver — see the module doc comment. Also
+-- requires the keyed API to agree with the direct one on the full,
+-- untruncated tag.
 rowHolds : Row -> Bool
 rowHolds r =
   let full = hmacSha256FixedBytes r.key r.msg
+  let key = hmacSha256Key (fromArrayAssumeByteDomain r.key)
+  let keyed = toArray (hmacSha256WithKey key (fromArrayAssumeByteDomain r.msg))
   let truncated = take (r.tagBits / 8) full
-  ctEq truncated r.tag == r.expectedValid
+  ctEq truncated r.tag == r.expectedValid && keyed == full
 
 checkRow : Row -> <IO> (Int, Int)
 checkRow r =

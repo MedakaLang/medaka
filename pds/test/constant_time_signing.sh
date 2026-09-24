@@ -59,8 +59,8 @@ expected_internal_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
-1223290837 11824  stdlib/sha256.mdk
-2012701912 5886  stdlib/hmac.mdk
+462197452 13158  stdlib/sha256.mdk
+1421209466 8360  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 3267398383 4682  pds/test/constant_time_signing_main.mdk
@@ -71,8 +71,8 @@ expected_public_source_manifest() {
   cat <<'EOF'
 2128618670 25697  pds/lib/field.mdk
 75163897 32282  pds/lib/scalar.mdk
-1223290837 11824  stdlib/sha256.mdk
-2012701912 5886  stdlib/hmac.mdk
+462197452 13158  stdlib/sha256.mdk
+1421209466 8360  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
 1576054259 4921  pds/lib/sign.mdk
@@ -536,13 +536,18 @@ pass 'native internal carrier retains the exact signature plus candidate-1/exhau
 
 collect_full_closure mdk_lib_secp256k1__ecdsaSignDigestForTest
 closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
-# Re-derived when byteAt/wordAt moved off `match get` onto the panicking
-# `arr[i]` form (S-sha256-rounds). Measured against the previous closure,
-# symbol by symbol: `mdk_sha256__byteAt` is gone (its body is now a single
-# `arr[i]`, small enough for clang to inline at every call site); every other
-# symbol, including `mdk_sha256__wordAt`, is unchanged. 171 definitions after,
-# 172 before.
-[ "$closure_grade" = '3272426971 4799' ] || fail "emitted transitive closure drifted ($closure_grade)"
+# Re-derived when `sha256AssumeByteDomain` was parameterized into
+# `sha256AssumeByteDomainFrom` (State/prior-byte-count) plus its zero-offset
+# caller (S-hmac-midstate). Measured against the previous closure, symbol by
+# symbol: `mdk_sha256__buildTail` is gone (folded into
+# `mdk_sha256__buildTailWithTotal`, now called directly), and
+# `mdk_sha256__sha256AssumeByteDomainFrom` is new; every other symbol,
+# including `mdk_sha256__sha256AssumeByteDomain` itself, is unchanged.
+# `mdk_sha256__sha256FoldKeyBlock` is NOT in this closure — the direct-call
+# `hmacSha256FixedBytes` path this carrier reaches never calls it, only
+# `hmacSha256Key`/`hmacSha256WithKey` do, and neither is on this route. 172
+# definitions after, 171 before.
+[ "$closure_grade" = '938975143 4847' ] || fail "emitted transitive closure drifted ($closure_grade)"
 # Two of the five modules now live in stdlib/, which mangles without the `lib_`
 # segment, so the prefixes are spelled out rather than built from a module name.
 for prefix in mdk_lib_field__ mdk_lib_scalar__ mdk_sha256__ mdk_hmac__ \
@@ -566,13 +571,12 @@ cp "$WORK/signing-full-closure.lst" "$WORK/full-closure.lst"
 
 write_control_manifest > "$WORK/control.manifest"
 control_grade=$(cksum "$WORK/control.manifest" | awk '{print $1 " " $2}')
-# Same closure change as above (S-sha256-rounds). Measured column-wise over
-# all 171 remaining rows: `mdk_sha256__byteAt`'s row is gone (inlined out of
-# the closure), and `mdk_sha256__wordAt`'s row moved from a `match get`
-# body (branch + Array.get call) to `0 0 1 0 0 0 1` — a single
-# `mdk_impl_Array_index` call, no branch, no comparison. Every other row is
+# Same closure change as above (S-hmac-midstate). Measured row-wise: the
+# `mdk_sha256__buildTail` row is gone, `mdk_sha256__sha256AssumeByteDomainFrom`
+# gains a row identical in shape to the one `mdk_sha256__sha256AssumeByteDomain`
+# already carried (a straight-line fold, no branch), and every other row is
 # unchanged; no branch anywhere in the closure tests a byte.
-[ "$control_grade" = '297925915 7209' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
+[ "$control_grade" = '4200468049 7271' ] || fail "emitted control/index/allocation manifest drifted ($control_grade)"
 pass 'emitted helper bodies retain the audited branch/index/allocation shape; only fixed public controls remain'
 
 for symbol in \
@@ -799,7 +803,13 @@ public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " 
 # same shape as the internal-carrier grades above: `mdk_sha256__byteAt`'s row
 # is gone (191 -> 190, inlined), `mdk_sha256__wordAt` moved to
 # `0 0 1 0 0 0 1`, everything else unchanged.
-if [ "$public_closure_grade" != '3107440075 5334' ] || [ "$public_control_grade" != '524762275 8012' ]; then
+# Re-derived again for the same `sha256AssumeByteDomain` parameterization as
+# the internal-carrier grades above (S-hmac-midstate): `mdk_sha256__buildTail`'s
+# row is gone, `mdk_sha256__sha256AssumeByteDomainFrom` gains a row shaped
+# like `mdk_sha256__sha256AssumeByteDomain`'s own (straight-line, no branch),
+# 190 -> 191. `mdk_sha256__sha256FoldKeyBlock` does not appear — this route
+# never reaches `hmacSha256Key`/`hmacSha256WithKey`, only `hmacSha256FixedBytes`.
+if [ "$public_closure_grade" != '3214628818 5382' ] || [ "$public_control_grade" != '675978239 8074' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

@@ -219,14 +219,16 @@ padLength tailLen = if tailLen + 1 + 8 <= 64 then 64 else 128
 
 -- Synthesize the final one-or-two padded blocks: `tailLen` message bytes
 -- (copied via `blit`, never the whole message), then `0x80`, then zero
--- bytes, then the 64-bit big-endian bit length of the WHOLE message.
-buildTail : Array Int -> Int -> Int -> Array Int
-buildTail msg len tailLen =
+-- bytes, then the 64-bit big-endian bit length of `totalLen`. `totalLen` is
+-- the FULL count the length field must record, which is `len` at offset
+-- zero but includes bytes folded earlier when resuming from a saved state.
+buildTailWithTotal : Array Int -> Int -> Int -> Int -> Array Int
+buildTailWithTotal msg len tailLen totalLen =
   let size = padLength tailLen
   let out = make size 0
   blit msg (len - tailLen) out 0 tailLen
   setInPlace tailLen 0x80 out
-  writeLenGo out (size - 8) (len * 8) 0
+  writeLenGo out (size - 8) (totalLen * 8) 0
   out
 
 processTail : Array Int -> State -> State
@@ -253,15 +255,37 @@ byteDomainOk msg len i =
     let b = msg[i]
     if b < 0 || b > 255 then False else byteDomainOk msg len (i + 1)
 
-sha256AssumeByteDomain : Array Int -> Array Int
-sha256AssumeByteDomain msg =
+-- Folds `msg` into a hash already carrying `priorState`, which reflects
+-- `priorBytes` bytes folded earlier outside `msg` (the final length field
+-- must record the total, not just `arrayLength msg`). Internal machinery
+-- for `hmac`'s keyed entry point, which folds each padded key block once
+-- via `sha256FoldKeyBlock` and resumes from there for every message under
+-- that key; not part of the digest API — reach for `sha256`/
+-- `sha256FixedBytes` to hash an ordinary message.
+export
+sha256AssumeByteDomainFrom : (Int, Int, Int, Int, Int, Int, Int, Int) ->
+  Int ->
+  Array Int ->
+  Array Int
+sha256AssumeByteDomainFrom priorState priorBytes msg =
   let len = arrayLength msg
   let numFull = len / 64
   let tailLen = len - numFull * 64
-  let afterFull = processFullBlocks msg numFull h0Init 0
-  let tail = buildTail msg len tailLen
+  let afterFull = processFullBlocks msg numFull priorState 0
+  let tail = buildTailWithTotal msg len tailLen (priorBytes + len)
   let (h0, h1, h2, h3, h4, h5, h6, h7) = processTail tail afterFull
   digestBytes (h0, h1, h2, h3, h4, h5, h6, h7)
+
+sha256AssumeByteDomain : Array Int -> Array Int
+sha256AssumeByteDomain msg = sha256AssumeByteDomainFrom h0Init 0 msg
+
+-- Folds one already-padded 64-byte block (an HMAC ipad/opad block) starting
+-- from the initial hash state, giving the resume state
+-- `sha256AssumeByteDomainFrom` continues from. Internal machinery for
+-- `hmac`'s keyed entry point; not part of the digest API.
+export
+sha256FoldKeyBlock : Array Int -> (Int, Int, Int, Int, Int, Int, Int, Int)
+sha256FoldKeyBlock block = compressBlock (byteAt block) h0Init
 
 -- This entry exists for `hmac`, whose every input byte comes from a fixed
 -- pad, a SHA-256 digest or caller-canonical scalar bytes. Running the

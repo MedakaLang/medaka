@@ -5,7 +5,8 @@
    draws entropy or performs any I/O. -}
 
 import array.{blit, concat, copy, make, setInPlace}
-import hmac.{hmacSha256}
+import bytes.{fromArray, fromArrayAssumeByteDomain, toArray}
+import hmac.{HmacSha256Key, hmacSha256Key, hmacSha256WithKey}
 
 hashBytes : Int
 hashBytes = 32
@@ -29,24 +30,28 @@ xorInto acc u i =
     xorInto acc u (i + 1)
 
 -- Folds U_2 .. U_iterations into `acc` (already seeded with U_1), each
--- `Uj = HMAC(P, U_{j-1})`, XORing every one in (RFC 2898 §5.2 `F`).
-foldU : Array Int -> Int -> Array Int -> Array Int -> Int -> Array Int
-foldU password iterations acc prevU j =
+-- `Uj = HMAC(P, U_{j-1})`, XORing every one in (RFC 2898 §5.2 `F`). `key`
+-- is `password`'s `HmacSha256Key`, built once by the caller so every
+-- iteration reuses the same precomputed ipad/opad compressions.
+foldU : HmacSha256Key -> Int -> Array Int -> Array Int -> Int -> Array Int
+foldU key iterations acc prevU j =
   if j >= iterations then
     acc
   else
-    let u = hmacSha256 password prevU
+    let u = toArray (hmacSha256WithKey key (fromArrayAssumeByteDomain prevU))
     let () = xorInto acc u 0
-    foldU password iterations acc u (j + 1)
+    foldU key iterations acc u (j + 1)
 
--- One 32-byte PBKDF2 block `T_blockIndex` (RFC 2898 §5.2 `F(P, S, c, i)`).
-pbkdf2Block : Array Int -> Array Int -> Int -> Int -> Array Int
-pbkdf2Block password salt iterations blockIndex =
-  let u1 = hmacSha256 password (concat [|salt, int32Be blockIndex|])
+-- One 32-byte PBKDF2 block `T_blockIndex` (RFC 2898 §5.2 `F(P, S, c, i)`),
+-- under the same `key` `foldU` reuses for every iteration.
+pbkdf2Block : HmacSha256Key -> Array Int -> Int -> Int -> Array Int
+pbkdf2Block key salt iterations blockIndex =
+  let msg = fromArrayAssumeByteDomain (concat [|salt, int32Be blockIndex|])
+  let u1 = toArray (hmacSha256WithKey key msg)
   let acc = copy u1
-  foldU password iterations acc u1 1
+  foldU key iterations acc u1 1
 
-buildBlocks : Array Int ->
+buildBlocks : HmacSha256Key ->
   Array Int ->
   Int ->
   Int ->
@@ -54,16 +59,16 @@ buildBlocks : Array Int ->
   Array Int ->
   Int ->
   Array Int
-buildBlocks password salt iterations dkLen total out blockIndex =
+buildBlocks key salt iterations dkLen total out blockIndex =
   if blockIndex > total then
     out
   else
-    let block = pbkdf2Block password salt iterations blockIndex
+    let block = pbkdf2Block key salt iterations blockIndex
     let offset = (blockIndex - 1) * hashBytes
     let remaining = dkLen - offset
     let take = min remaining hashBytes
     let () = blit block 0 out offset take
-    buildBlocks password salt iterations dkLen total out (blockIndex + 1)
+    buildBlocks key salt iterations dkLen total out (blockIndex + 1)
 
 {- | The `dkLen`-byte key derived from `password` and `salt` over
    `iterations` rounds.
@@ -78,6 +83,15 @@ pbkdf2HmacSha256 password salt iterations dkLen =
   else if dkLen < 1 then
     panic "pbkdf2: dkLen must be >= 1"
   else
+    let passwordBytes =
+      optionOrPanic
+        "pbkdf2: every element of password must be a byte in 0..255"
+        (fromArray password)
+    let _ =
+      optionOrPanic
+        "pbkdf2: every element of salt must be a byte in 0..255"
+        (fromArray salt)
+    let key = hmacSha256Key passwordBytes
     let total = (dkLen + hashBytes - 1) / hashBytes
     let out = make dkLen 0
-    buildBlocks password salt iterations dkLen total out 1
+    buildBlocks key salt iterations dkLen total out 1
