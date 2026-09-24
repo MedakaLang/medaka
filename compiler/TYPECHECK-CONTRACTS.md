@@ -181,6 +181,7 @@ its owning issue must record the concrete API, deletion set, placement and tests
 | Finalized-result caching | #2549 phase 2; #2007 for declaration-cache overlap | Design alongside the report API, land before enabling cached evidence. Own removal of mutable state snapshot/reinstall for migrated results and graph-sensitive invalidation. |
 | Designed module boundaries | #2586 | Follow the contracts/state moves enabling each cut; acyclic APIs and behavioral/performance checks, not purity or file-size counts. |
 | Finalization policy | #2646 + #2665 census, then SC-3 under #2548 | Correct defaulting and goal counts before the owner decides warning-to-error behavior; no implicit default-to-instance fallback. |
+| Authority constraints (effect-parameter variables) | #3385 | After the solver/scoping contract's first vertical migration. Authority wanteds (`p ⊑ κ` over the Prefix/Set/Product domains) are a solver goal family with domain-specific results and no runtime evidence (§3); qualified schemes quantify authority variables alongside type/effect variables (§2). Named authority in effect rows is checked against the body; authority-indexed handle types and callback rows follow. Completion drains the #3382 and #3383 pins and amends the effects spec §1/§3/§4/§9/§11. |
 | Contract verification | #616 with each implementing owner | Tests precede the corresponding semantic/consumer change; the checks below are required evidence for completion. |
 
 #2667 already requires a phase-two issue at closeout. That issue must carry these
