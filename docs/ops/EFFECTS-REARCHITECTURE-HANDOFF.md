@@ -1,7 +1,8 @@
 # Effects rearchitecture session handoff
 
-**Status:** INCOMPLETE — draft PR; CI stabilized locally, authority work not started.
-Handoff first recorded 2026-09-24; continuation session the same day.
+**Status:** INCOMPLETE — draft PR; CI green on head `fbe6d455b`
+(run 36064803849, every job), authority work not started. Handoff first
+recorded 2026-09-24; continuation session the same day.
 
 ## Resume here
 
@@ -211,8 +212,8 @@ claiming purity. Keep inference, signatures, docs and snapshots consistent.
 These are tracked by the draft PR and its architecture delivery checklist; this
 list is not a claim that an independent full-head review found nothing else.
 
-1. A fresh CI run on the stabilized head read to terminal, and an exact-head,
-   whole-diff adversarial review.
+1. An exact-head, whole-diff adversarial review (CI is green on `fbe6d455b`,
+   run 36064803849; a later head owes its own run).
 2. Named authorities, qualified fields and constructor proof sources (#3385).
 3. Retire unchecked quoted underscore and first-argument hole filling: known
    laundering #3382/#3383 still exists. Keep legacy soundness checks until their
