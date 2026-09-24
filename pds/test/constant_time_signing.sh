@@ -75,7 +75,7 @@ expected_public_source_manifest() {
 2012701912 5886  stdlib/hmac.mdk
 4177288074 1203  pds/lib/hmac_sha256.mdk
 1691956410 24617  pds/lib/secp256k1.mdk
-2920240123 4200  pds/lib/sign.mdk
+1576054259 4921  pds/lib/sign.mdk
 2846312137 3153  pds/test/constant_time_signing_public_main.mdk
 EOF
 }
@@ -191,7 +191,7 @@ public_source_routes_ok() {
   do
     grep -F -q "$wrapper" "$driver" || return 1
   done
-  grep -F -q 'publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)' "$sign" || return 1
+  grep -F -q 'publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))' "$sign" || return 1
   grep -F -q 'let (validBit, signature) = ecdsaSignDigest scalar digest' "$sign" || return 1
   if grep -F -q 'ecdsaSignDigestForTest' "$sign"; then return 1; fi
   return 0
@@ -363,8 +363,8 @@ apply_mutation P01 "$WORK/pds/lib/sign.mdk" \
 expect_public_route_red 'P01 public signDigest replaced by fixed compact parsing'
 
 apply_mutation P02 "$WORK/pds/lib/sign.mdk" \
-  'publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)' \
-  's/publicKeyForSecret \(SecretKey scalar\) = PublicKey \(publicPointForSecret scalar\)/publicKeyForSecret (SecretKey _) = match pointFromCompressed (arrayMake 33 0)\n  Ok point => PublicKey point\n  Err message => panic message/'
+  'publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))' \
+  's/publicKeyForSecret key = PublicKey \(publicPointForSecret \(secretScalar key\)\)/publicKeyForSecret _ = match pointFromCompressed (arrayMake 33 0)\n  Ok point => PublicKey point\n  Err message => panic message/'
 expect_public_route_red 'P02 public publicKeyForSecret replaced by fixed public-key parsing'
 
 apply_mutation P03 "$WORK/pds/test/constant_time_signing_public_main.mdk" \
@@ -690,17 +690,15 @@ done
 write_control_manifest > "$WORK/public-control.manifest"
 public_closure_grade=$(cksum "$WORK/full-closure.lst" | awk '{print $1 " " $2}')
 public_control_grade=$(cksum "$WORK/public-control.manifest" | awk '{print $1 " " $2}')
-# Re-derived for signDigest's verify-after-sign and the unchecked carry pass,
-# measured row by row against the previous 176-row union. carryAll/carryGo were
-# replaced by carryAllUnchecked/carryGoUnchecked; carryGoUnchecked has one
-# branch fewer (2 -> 1: no top-limb carry check). Thirteen verify-path
-# definitions entered (176 -> 189): ecdsaVerifyDigest, affineToPoint,
-# pointIsCanonicalInfinity, publicBytesOk, scEqual, equalGo, scIsZero,
-# isZeroGo, scIsHigh, dblGo, gteNGo, feEqualBit and feEqualBorrow. Their
-# branches read only the public signature, digest and key. signDigest went
-# from 4 to 5 branches (the self-check) and from 3 to 5 calls
-# (publicPointForSecret, ecdsaVerifyDigest). No other row moved in any column.
-if [ "$public_closure_grade" != '4058703100 5303' ] || [ "$public_control_grade" != '1565535701 7967' ]; then
+# Re-derived for SecretKey's at-rest Bytes representation, measured row by row
+# against the previous 189-row union. Two definitions entered (189 -> 191):
+# sign.secretScalar (1 branch, the public SecretKey tag; 2 calls, toArray and
+# scFromFixedBytesReduce) and bytes.toArray (1 branch, the public Bytes tag;
+# 1 call, the runtime byte-block copy). publicKeyForSecret went from 1 to 0
+# branches and 1 to 2 calls, and signDigest from 5 to 4 branches and 5 to 6
+# calls: each lost its SecretKey pattern's tag branch and gained the
+# secretScalar call. No other row moved in any column.
+if [ "$public_closure_grade" != '927876025 5349' ] || [ "$public_control_grade" != '250008883 8041' ]; then
   fail "public union exact grades drifted (closure=$public_closure_grade control=$public_control_grade)"
 fi
 pass "public-root LLVM union excludes ForTest and retains the audited signing/key topology ($(wc -l < "$WORK/full-closure.lst") definitions)"

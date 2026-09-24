@@ -1,10 +1,12 @@
 {- | Consumer-facing secret-key ingress for the PDS signing boundary.
 
-   A `SecretKey` stores the scalar candidate, never the caller-owned byte
-   array. `PublicKey` stores the internal affine point; consumers use only the
-   compressed SEC 1 representation. -}
+   A `SecretKey` stores the admitted scalar's canonical 32 big-endian bytes
+   in a `Bytes` block, never the caller-owned byte array. `PublicKey` stores
+   the internal affine point; consumers use only the compressed SEC 1
+   representation. -}
 
-import lib.scalar.{Sc, scSecretCandidate}
+import bytes as B
+import lib.scalar.{Sc, scFromFixedBytesReduce, scSecretCandidate, scToBytes}
 import lib.secp256k1.{
   AffinePoint,
   EcdsaSignature,
@@ -18,7 +20,16 @@ import lib.secp256k1.{
 }
 
 -- | An admitted secp256k1 secret scalar. Its constructor stays module-private.
-export data SecretKey = SecretKey Sc
+--   The bytes live in a pointer-free (atomic) block, so the collector never
+--   scans a long-held key's words as candidate pointers; limbs exist only
+--   transiently, inside `publicKeyForSecret` and `signDigest`.
+export data SecretKey = SecretKey B.Bytes
+
+-- The stored bytes come from `scToBytes` of a canonical scalar, so they are
+-- already in `[1, n)` and the fixed-control reducer returns that scalar
+-- exactly; the public branch-bearing `scFromBytes` validator is not reached.
+secretScalar : SecretKey -> Sc
+secretScalar (SecretKey stored) = scFromFixedBytesReduce (B.toArray stored)
 
 -- | A parsed or derived secp256k1 public key. Its affine carrier and
 --   constructor stay private to this consumer boundary.
@@ -36,7 +47,7 @@ secretKeyFromBytes : Array Int -> Result String SecretKey
 secretKeyFromBytes bs =
   let (validBit, candidate) = scSecretCandidate bs
   if validBit == 1 then
-    Ok (SecretKey candidate)
+    Ok (SecretKey (B.fromArrayAssumeByteDomain (scToBytes candidate)))
   else
     Err "sign.secretKeyFromBytes: expected a 32-byte scalar in 1..n-1"
 
@@ -55,7 +66,7 @@ publicKeyCompressed (PublicKey point) = pointCompressed point
 --   ladder in `secp256k1.mdk`.
 export
 publicKeyForSecret : SecretKey -> PublicKey
-publicKeyForSecret (SecretKey scalar) = PublicKey (publicPointForSecret scalar)
+publicKeyForSecret key = PublicKey (publicPointForSecret (secretScalar key))
 
 -- | Parse exactly 64 public bytes as canonical nonzero low-S P1363 `r || s`.
 export
@@ -82,12 +93,13 @@ digestBytesOk digest i =
 --   that check reads only public values (key, digest, signature).
 export
 signDigest : SecretKey -> Array Int -> Result String Signature
-signDigest (SecretKey scalar) digest =
+signDigest key digest =
   if arrayLength digest /= 32 then
     Err "sign.signDigest: expected 32 digest bytes"
   else if not (digestBytesOk digest 0) then
     Err "sign.signDigest: every digest element must be a byte in 0..255"
   else
+    let scalar = secretScalar key
     let (validBit, signature) = ecdsaSignDigest scalar digest
     if validBit == 1 then
       let publicPoint = publicPointForSecret scalar
