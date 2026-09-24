@@ -262,11 +262,13 @@ start_server() {
   extra=$1
   outfile=$2
   errfile=$3
-  # --password-file is only passed on genesis (--init): a resumed run finds
-  # an existing credential, and passing --password-file against one now
-  # gets refused (F1, #2604) rather than silently keeping the old password.
+  # --password-file is only passed on a genesis (--init) run over a directory
+  # that holds no credential yet: a resumed run, or a genesis run over a
+  # directory `seed_credential` already wrote one into, finds an existing
+  # credential, and passing --password-file against one gets refused (F1,
+  # #2604) rather than silently keeping the old password.
   pwflag=""
-  if [ "$extra" = "--init" ]; then
+  if [ "$extra" = "--init" ] && [ ! -e "$DATA/credential" ]; then
     pwflag="--password-file $WORK/password"
   fi
   # shellcheck disable=SC2086 # $extra/$pwflag are single optional flags, no quoting needed
@@ -283,6 +285,20 @@ client() {
   "$WORK/client" "$@"
 }
 
+# seed_credential <data dir>: write a credential for $PASSWORD, derived at a
+# count of 4, into that directory, in the three lines the server keeps there.
+# A server started over it loads that record instead of deriving one at the
+# shipped count, which is a cost this gate would otherwise pay once per data
+# directory and pay more of with every raise of `defaultIterations`. The first
+# successful login still re-derives the record at the shipped count, once.
+# Only the cases about the bootstrap itself start without one: they pass
+# --password-file, and a server given both refuses to start.
+seed_credential() {
+  client credential-at 4 "$PASSWORD" > "$1/credential" \
+    || fail "could not seed a credential into $1"
+  chmod 600 "$1/credential"
+}
+
 # The event-stream driver. A separate binary rather than more subcommands on
 # `client`: nothing it does is an HTTP request/response exchange, so it shares
 # neither that driver's response reader nor its request builders.
@@ -292,6 +308,7 @@ subclient() {
 
 # ── first instance: genesis, then cases 1-8 ─────────────────────────────────
 
+seed_credential "$DATA"
 start_server --init "$WORK/serve1.out" "$WORK/serve1.err"
 PORT1=$(wait_for_port "$WORK/serve1.out") || {
   cat "$WORK/serve1.err" >&2
@@ -415,10 +432,10 @@ client get-preferences "$PORT1" "$TOKEN" fixture \
 MAIN_SERVER_PID="$SERVER_PID"
 DATACORS="$WORK/data-cors"
 mkdir -p "$DATACORS"
+seed_credential "$DATACORS"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATACORS" --port 0 --init \
   >"$WORK/servecors.out" 2>"$WORK/servecors.err" &
 SERVER_PID=$!
@@ -1269,9 +1286,10 @@ fi
 #    the only proof that keygen and serve agree on the file format and mode.
 DATA28="$WORK/data28"
 mkdir -p "$DATA28"
+seed_credential "$DATA28"
 "$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$KEYGEN_DIR/key.hex" --token-secret "$KEYGEN_DIR/token.hex" \
-  --password-file "$WORK/password" --data "$DATA28" --port 0 --init \
+  --data "$DATA28" --port 0 --init \
   > "$WORK/serve28.out" 2> "$WORK/serve28.err" &
 SERVER_PID=$!
 PORT28=$(wait_for_port "$WORK/serve28.out") \
@@ -1395,9 +1413,10 @@ fi
 #    the refusal didn't fire.
 DATA32="$WORK/data32"
 mkdir -p "$DATA32"
+seed_credential "$DATA32"
 "$WORK/pdsd" --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" --data "$DATA32" --port 0 \
+  --data "$DATA32" --port 0 \
   --bind 0.0.0.0 --trusted-proxy --init \
   >"$WORK/serve32.out" 2>"$WORK/serve32.err" &
 SERVER_PID=$!
@@ -1433,10 +1452,10 @@ require_empty "$WORK/serve32.err" 'case 32 (post-run)'
 
 DATASUB="$WORK/data-subscribe"
 mkdir -p "$DATASUB"
+seed_credential "$DATASUB"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATASUB" --port 0 --init \
   >"$WORK/servesub.out" 2>"$WORK/servesub.err" &
 SERVER_PID=$!
@@ -1595,10 +1614,10 @@ require_empty "$WORK/servesub.err" 'subscription server (post-run)'
 
 DATARL="$WORK/data-ratelimit"
 mkdir -p "$DATARL"
+seed_credential "$DATARL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATARL" --port 0 --init --trusted-proxy \
   >"$WORK/serverl.out" 2>"$WORK/serverl.err" &
 SERVER_PID=$!
@@ -1607,9 +1626,6 @@ PORTRL=$(wait_for_port "$WORK/serverl.out") || {
   fail 'rate-limit server did not report readiness'
 }
 require_empty "$WORK/serverl.err" 'rate-limit server startup'
-
-RLLOGIN=$(client login "$PORTRL" "$HANDLE" "$PASSWORD") || fail 'case 19: rate-limit login'
-RLACCESS=${RLLOGIN%% *}
 
 # Every class below is windowed by the ABSOLUTE Unix-epoch minute
 # (`now / rateLimitWindowSeconds`, `pds/lib/ratelimit.mdk`), not by when
@@ -1627,6 +1643,22 @@ wait_for_window_room() {
 }
 
 wait_for_window_room
+
+# 22. createSession class: login itself is rate-limited, independent of
+#    every other class. It runs before any other login here, and its flood
+#    presents a WRONG password: the class is charged when a request routes to
+#    createSession, before the password is graded, so a refused login spends
+#    the budget exactly as an accepted one does. That keeps every login in the
+#    flood graded against the count-4 record this directory was seeded with.
+#    The second identity's login is the first right-password one, and it is
+#    what re-derives that record at the shipped count.
+client rl-session "$PORTRL" 203.0.113.31 31 429 "$HANDLE" 'not the account password' \
+  || fail 'case 22: createSession class did not refuse at its ceiling'
+client rl-session "$PORTRL" 203.0.113.32 1 200 "$HANDLE" "$PASSWORD" \
+  || fail "case 22: a second identity was refused by the first one's ceiling"
+
+RLLOGIN=$(client login "$PORTRL" "$HANDLE" "$PASSWORD") || fail 'case 19: rate-limit login'
+RLACCESS=${RLLOGIN%% *}
 
 # 19. connections class: one identity opens one connection past its ceiling
 #    and is refused 429 carrying the RateLimit-* headers and RateLimitExceeded;
@@ -1657,13 +1689,6 @@ client rl-write "$PORTRL" 203.0.113.21 61 429 "$RLACCESS" "$DID" "$COLLECTION" r
   || fail 'case 21: writes class did not refuse at its ceiling'
 client rl-write "$PORTRL" 203.0.113.22 1 200 "$RLACCESS" "$DID" "$COLLECTION" rl-b \
   || fail "case 21: a second identity was refused by the first one's ceiling"
-
-# 22. createSession class: login itself is rate-limited, independent of
-#    every other class.
-client rl-session "$PORTRL" 203.0.113.31 31 429 "$HANDLE" "$PASSWORD" \
-  || fail 'case 22: createSession class did not refuse at its ceiling'
-client rl-session "$PORTRL" 203.0.113.32 1 200 "$HANDLE" "$PASSWORD" \
-  || fail "case 22: a second identity was refused by the first one's ceiling"
 
 # 23. repo-export class: `com.atproto.sync.getRepo` serializes the whole
 #    repository, so its cost is bounded by `maxCarBytes` per call and not by
@@ -1716,10 +1741,10 @@ require_empty "$WORK/serverl.err" 'rate-limit server (post-run)'
 # rather than wedging on the oversized value.
 DATAXFF="$WORK/data-xff"
 mkdir -p "$DATAXFF"
+seed_credential "$DATAXFF"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATAXFF" --port 0 --init --trusted-proxy \
   >"$WORK/servexff.out" 2>"$WORK/servexff.err" &
 SERVER_PID=$!
@@ -1856,6 +1881,7 @@ grep -F "$APPVIEW_DID is configured as an audience twice" "$WORK/serve58c.err" \
 
 DATAPX="$WORK/data-proxy"
 mkdir -p "$DATAPX"
+seed_credential "$DATAPX"
 # `--trusted-proxy` is on for case 47 alone, which needs two distinct client
 # identities to show the proxied-read ceiling refuses one without refusing the
 # other. Cases 44-46 send no `X-Forwarded-For` and so share the one `direct`
@@ -1863,7 +1889,6 @@ mkdir -p "$DATAPX"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATAPX" --port 0 --init --trusted-proxy \
   --appview-did "$APPVIEW_DID" --egress-port "$STUBPORT" \
   --proxy-audience "$CHAT_DID=$CHATPORT" \
@@ -2298,10 +2323,10 @@ STALLPORT=$(wait_for_stub_port "$WORK/stall.out" "$STUB_STALL_PID") || {
 
 DATAHOL="$WORK/data-proxy-stall"
 mkdir -p "$DATAHOL"
+seed_credential "$DATAHOL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATAHOL" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$STALLPORT" \
   >"$WORK/servehol.out" 2>"$WORK/servehol.err" &
@@ -2367,10 +2392,10 @@ LINGERPORT=$(wait_for_stub_port "$WORK/linger.out" "$STUB_LINGER_PID") || {
 
 DATALNG="$WORK/data-proxy-linger"
 mkdir -p "$DATALNG"
+seed_credential "$DATALNG"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATALNG" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$LINGERPORT" \
   >"$WORK/servelng.out" 2>"$WORK/servelng.err" &
@@ -2440,10 +2465,10 @@ grep -F -q 'appview-stub: accept queue full' "$WORK/deaf.out" || {
 
 DATADEAF="$WORK/data-proxy-deaf"
 mkdir -p "$DATADEAF"
+seed_credential "$DATADEAF"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATADEAF" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$DEAFPORT" \
   >"$WORK/servedeaf.out" 2>"$WORK/servedeaf.err" &
@@ -2598,10 +2623,10 @@ BULKPORT=$(wait_for_stub_port "$WORK/bulk.out" "$STUB_BULK_PID") || {
 
 DATABULK="$WORK/data-proxy-bulk"
 mkdir -p "$DATABULK"
+seed_credential "$DATABULK"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATABULK" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$BULKPORT" \
   >"$WORK/servebulk.out" 2>"$WORK/servebulk.err" &
@@ -2702,10 +2727,10 @@ QUEUEPORT=$(wait_for_stub_port "$WORK/queue.out" "$STUB_QUEUE_PID") || {
 
 DATAQUEUE="$WORK/data-proxy-queue"
 mkdir -p "$DATAQUEUE"
+seed_credential "$DATAQUEUE"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATAQUEUE" --port 0 --init \
   --appview-did "$APPVIEW_DID" --egress-port "$QUEUEPORT" \
   >"$WORK/servequeue.out" 2>"$WORK/servequeue.err" &
@@ -2760,10 +2785,10 @@ CRAWLPORT=$(wait_for_crawl_stub_port "$WORK/crawl.out" "$CRAWL_STUB_PID") || {
 
 DATACRAWL="$WORK/data-crawl"
 mkdir -p "$DATACRAWL"
+seed_credential "$DATACRAWL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATACRAWL" --port 0 --init --relay-port "$CRAWLPORT" \
   >"$WORK/servecrawl.out" 2>"$WORK/servecrawl.err" &
 SERVER_PID=$!
@@ -2820,10 +2845,10 @@ wait "$DEAD_STUB_PID" 2>/dev/null || true
 
 DATANOCRAWL="$WORK/data-crawl-unreachable"
 mkdir -p "$DATANOCRAWL"
+seed_credential "$DATANOCRAWL"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATANOCRAWL" --port 0 --init --relay-port "$DEADPORT" \
   >"$WORK/servenocrawl.out" 2>"$WORK/servenocrawl.err" &
 SERVER_PID=$!
@@ -2865,10 +2890,10 @@ fi
 #    interval so this case does not wait the 60s default.
 DATASTATS="$WORK/data-stats"
 mkdir -p "$DATASTATS"
+seed_credential "$DATASTATS"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATASTATS" --port 0 --init --stats-interval-ms 200 \
   >"$WORK/servestats.out" 2>"$WORK/servestats.err" &
 SERVER_PID=$!
@@ -2943,10 +2968,10 @@ require_empty "$WORK/servestats.err" 'case 60 (post-run)'
 
 DATALOCK="$WORK/data-lock"
 mkdir -p "$DATALOCK"
+seed_credential "$DATALOCK"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$DATALOCK" --port 0 --init \
   >"$WORK/servelock.out" 2>"$WORK/servelock.err" &
 SERVER_PID=$!
@@ -3145,10 +3170,10 @@ done
 WEDGE="$WORK/data-wedge-dir"
 mkdir -p "$WEDGE/.lock"
 printf 'left by something that is not a server\n' > "$WEDGE/.lock/README"
+seed_credential "$WEDGE"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$WEDGE" --port 0 --init \
   >"$WORK/serve66a.out" 2>"$WORK/serve66a.err" &
 SERVER_PID=$!
@@ -3184,10 +3209,10 @@ grep -Fq -e '--force-lock' "$WORK/serve66b.err" \
   || fail 'case 66: the refusal did not name the remedy'
 [ -f "$FWEDGE/.lock" ] \
   || fail 'case 66: the refused run removed the file it refused over'
+seed_credential "$FWEDGE"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$FWEDGE" --port 0 --init --force-lock \
   >"$WORK/serve66c.out" 2>"$WORK/serve66c.err" &
 SERVER_PID=$!
@@ -3213,10 +3238,10 @@ SERVER_PID=""
 #    at its next beat instead of being written through.
 LOSER="$WORK/data-loser"
 mkdir -p "$LOSER"
+seed_credential "$LOSER"
 "$WORK/pdsd" \
   --did "$DID" --handle "$HANDLE" --hostname "$HOSTNAME" \
   --key "$WORK/key.hex" --token-secret "$WORK/token.hex" \
-  --password-file "$WORK/password" \
   --data "$LOSER" --port 0 --init \
   >"$WORK/serve67a.out" 2>"$WORK/serve67a.err" &
 SERVER_PID=$!
@@ -3265,6 +3290,7 @@ require_empty "$WORK/serve67b.err" 'case 67 (post-run)'
 # clean stop from a restart made safe by an earlier case's crash recovery.
 DATA="$WORK/data-term-idle"
 mkdir -p "$DATA"
+seed_credential "$DATA"
 start_server --init "$WORK/serve68.out" "$WORK/serve68.err"
 PORT68=$(wait_for_port "$WORK/serve68.out") || fail 'case 68: idle server did not start'
 kill -TERM "$SERVER_PID" || fail 'case 68: SIGTERM could not be sent'
@@ -3289,6 +3315,7 @@ require_empty "$WORK/serve68.err" 'case 68 idle shutdown'
 # contains the acknowledged record together rule out dropping work on stop.
 DATA="$WORK/data-term-active"
 mkdir -p "$DATA"
+seed_credential "$DATA"
 start_server --init "$WORK/serve69.out" "$WORK/serve69.err"
 PORT69=$(wait_for_port "$WORK/serve69.out") || fail 'case 69: active server did not start'
 LOGIN69=$(client login "$PORT69" "$HANDLE" "$PASSWORD") \

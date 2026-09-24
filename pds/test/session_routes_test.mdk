@@ -30,11 +30,13 @@ import test.{
 import lib.credential.{
   CredentialRecord,
   LoginCheck,
+  LoginOutcome(..),
   LoginVerdict,
   credentialIterations,
   defaultIterations,
   loginCheckAdvance,
   loginCheckVerdict,
+  loginOutcome,
   makeCredential,
 }
 import lib.handlers.{
@@ -453,6 +455,45 @@ test "a login verdict computed against a replaced credential is refused" =
       expectEqual (outcome fresh) "200 OK",
     ),
   ]
+
+{- | A login naming some other account, with this account's password, against
+   a record below the shipped count.
+
+   The handler refuses any identifier that does not name the account whatever
+   its verdict carries, so neither the refusal nor the untouched record can
+   show whether an upgrade was derived. The verdict can: it was graded with no
+   upgrade offered, so against the record it was computed from it reads as
+   accepted and not as accepted-upgrading. -}
+test "a login naming another identifier is offered no upgrade" =
+  let loginBytes =
+    postJson "" createSessionNsid (loginJson "someone-else.test" password)
+  let verdict = verdictFor upgradeSalt loginBytes outdatedStore
+  let (after, response) = sendWithVerdict verdict outdatedStore loginBytes
+  expectEach [
+    (
+      "the login is refused",
+      expectEqual "401 Unauthorized AuthenticationRequired" (outcome response),
+    ),
+    (
+      "the stored record keeps its count",
+      expectEqual
+        (Some cheapIterations)
+        (map credentialIterations (storeCredential after)),
+    ),
+    (
+      "the verdict carries no upgrade",
+      expectEqual "accepted" (verdictReading verdict outdatedStore),
+    ),
+  ]
+
+-- | What `verdict` says against the record `store` holds, by name.
+verdictReading : Option LoginVerdict -> Store -> String
+verdictReading verdict store = match (verdict, storeCredential store)
+  (Some graded, Some record) => match loginOutcome graded record
+    LoginRefused => "refused"
+    LoginAccepted => "accepted"
+    LoginAcceptedUpgrading _ => "accepted, upgrading"
+  _ => "no verdict"
 
 -- A login that reaches the handler with no verdict at all was never graded,
 -- and is refused the way a wrong password is.
