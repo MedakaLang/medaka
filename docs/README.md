@@ -99,6 +99,7 @@ Cross-cutting process docs: how the test suite is organized, how a build ships, 
 | [`MCP.md`](ops/MCP.md) | MCP.md — `medaka mcp`, the LSP-for-agents | IMPLEMENTED |
 | [`PDS-B14-ATTACK-LIST.md`](ops/PDS-B14-ATTACK-LIST.md) | PDS B14 running-instance attack list | — |
 | [`PDS-CONFORMANCE-WALKTHROUGH.md`](ops/PDS-CONFORMANCE-WALKTHROUGH.md) | PDS-CONFORMANCE-WALKTHROUGH.md — criterion A8, run by hand from the official app | written ahead of the first G-QUIET deploy |
+| [`PDS-CRYPTO-CLAIMS.md`](ops/PDS-CRYPTO-CLAIMS.md) | PDS-CRYPTO-CLAIMS.md — what the PDS cryptography claims, and what it does not | written for G-ANNOUNCE |
 | [`PDS-DEPLOY.md`](ops/PDS-DEPLOY.md) | PDS-DEPLOY.md — deploying `pds serve` behind Caddy under systemd | IMPLEMENTED, not yet DEPLOYED |
 | [`PDS-LAUNCH-PLAN.md`](ops/PDS-LAUNCH-PLAN.md) | PDS-LAUNCH-PLAN.md — the road to "this account runs on a PDS written in Medaka" | OPEN |
 | [`PDS-ORACLE.md`](ops/PDS-ORACLE.md) | PDS-ORACLE.md — running the official Bluesky PDS locally as the Phase 0/1 oracle | IMPLEMENTED |
