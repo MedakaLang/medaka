@@ -17,6 +17,7 @@ ppEffArg : Ref (List (Int, String)) -> Ref Int -> EffRow -> String
 ppEffArgFmt : String -> String -> String
 ppEffAtomTy : (String, Option String) -> String
 ppEffInsideTy : List (String, Option String) -> List String -> String
+ppEffectPrefix : Ref (List (Int, String)) -> Ref Int -> (List Atom, List (Ref Effvar)) -> String
 ppEffvarName : Ref (List (Int, String)) -> Ref Int -> Ref Effvar -> String
 ppFun : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> EffRow -> Mono -> String
 ppGo : Ref (List (Int, String)) -> Ref Int -> Int -> Mono -> String

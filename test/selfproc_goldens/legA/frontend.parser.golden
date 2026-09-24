@@ -13,7 +13,7 @@ allVariantLines : Array Token -> Array Int -> List (Decl, Int, Int) -> List Int
 annotTail : Expr -> ParserE <> Expr
 anyField : List KvItem -> Bool
 anyKV : List KvItem -> Bool
-apPR : ParserE a (b -> c) -> ParserE a b -> Array Token -> Int -> PR c
+apPR : ParserE a (b -> c) -> ParserE a b -> Array Token -> Int -> <a> PR c
 appArg : Bool -> ParserE <> Expr
 appToParams : Expr -> List Pat
 appToPat : Expr -> Pat
@@ -37,7 +37,7 @@ bareMinusSection : ParserE <> Expr
 benchRemovedMsg : String
 binOp : Token -> String -> ParserE <> (Expr -> Expr -> Expr)
 bindAnnot : Expr -> Ty -> Expr -> List DoStmt
-bindPR : ParserE a b -> (b -> ParserE a c) -> Array Token -> Int -> PR c
+bindPR : ParserE a b -> (b -> <a> ParserE a c) -> Array Token -> Int -> <a> PR c
 bindStmts : Expr -> Expr -> List DoStmt
 blockCommentMsg : String
 blockOrExpr : List DoStmt -> Expr
@@ -315,7 +315,7 @@ lowerNameP : ParserE <> String
 many : ParserE <> a -> ParserE <> (List a)
 manyGo : ParserE <> a -> Array Token -> Int -> List a -> PR (List a)
 manyStep : ParserE <> a -> Array Token -> Int -> Int -> List a -> a -> PR (List a)
-mapPR : (a -> b) -> PR a -> PR b
+mapPR : (a -> <b> c) -> PR a -> <b> PR c
 matchArmBarGuardMsg : String
 maxNestDepth : Int
 memberAliasFor : Int -> String -> Bool -> Token -> ParserE <> UseMember
@@ -526,7 +526,7 @@ resultDecls : Array Token -> PR (List Decl) -> List Decl
 resultDeclsResult : String -> Array Token -> Array Int -> Int -> PR (List Decl) -> Result ParseError (List Decl)
 rhsStartIdx : Array Token -> Int -> Int -> Int -> Int
 rngPatRest : Lit -> ParserE <> Lit -> Token -> ParserE <> Pat
-runP : ParserE a b -> Array Token -> Int -> PR b
+runP : ParserE a b -> Array Token -> Int -> <a> PR b
 sameLineWhereIfaceMsg : String
 sameLineWhereImplMsg : String
 scanForLetIn : Array Token -> Int -> Int -> Bool
