@@ -29102,11 +29102,22 @@ rewriteBinopExpr (ENumLit n fref dref _) = match !fref
   Some f => ELit (LFloat f)
   None => match !dref
     RNone => ELit (LInt n)
+    route if fixedWidthLiteralFits route n => ELit (LInt n)
     route =>
       let split = binopRouteSplit route
       EApp
         (EMethodAt "fromInt" "" (mintMethodCellWith 1 (fst split) (snd split)))
         (ELit (LInt n))
+-- A literal routed to a fixed-width head's `fromInt` is that head's word already
+-- when it is in range (the heads share Int's tagged word), so it needs no call.  The
+-- range is checked HERE, on the value, not assumed from the module check: an
+-- out-of-range literal keeps its `fromInt` call, which panics rather than storing it.
+fixedWidthLiteralFits : Route -> Int -> Bool
+fixedWidthLiteralFits (RKey tag _) n = match fixedWidthMask tag
+  Some mask => n >= 0 && n <= mask
+  None => False
+fixedWidthLiteralFits _ _ = False
+
 -- Roadmap #18c: rewrite each *stamped* EUnOp (`-` → `negate`) into its Num
 -- method application via EMethodAt, exactly like the EBinOp arm above.  Only
 -- nodes resolveUnopSites stamped (ground non-primitive operand) carry a
@@ -32216,13 +32227,6 @@ setNumlitFloatsGo ((var, fref, n, dref) :: rest) =
       fref := Some (intToFloat n)
       dref := RNone
     TCon "Int" _ => dref := RNone
-    -- a fixed-width head shares Int's word, so an in-range literal is the plain
-    -- Int literal.  An out-of-range one keeps its `fromInt` route: the module check
-    -- (`checkFixedWidthLiterals`) has already refused it, and if a literal ever
-    -- grounds only here, the checked `fromInt` panics rather than storing it.
-    TCon tag _ => match fixedWidthMask tag
-      Some mask => if n >= 0 && n <= mask then dref := RNone
-      None => ()
     _ => ()
   setNumlitFloatsGo rest
 
