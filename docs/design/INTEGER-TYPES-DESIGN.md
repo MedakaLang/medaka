@@ -1,6 +1,7 @@
 # The integer stack
 
-Status: DESIGN, 2026-09-24. Nothing built. Epic #3417; milestones N1–N6.
+Status: N1 BUILT (the tagged tier: `U8`/`U16`/`U32`, their modules, the literal
+range check and literal patterns); N2–N6 are design. Epic #3417; milestones N1–N6.
 Every ruling in this document was taken by Val on 2026-09-24. Child issues
 cite its sections rather than restating them.
 
